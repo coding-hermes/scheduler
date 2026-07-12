@@ -6,13 +6,13 @@
 - [x] Write systemd unit file (coding-hermes-scheduler.service)
 - [x] Write README.md with architecture overview, build instructions, config reference
 
-## [ ] DB — Implement SQLite data layer
-- [ ] Create internal/database/schema.go — CREATE TABLE projects, ticks, events with indexes
-- [ ] Create internal/database/migrations.go — versioned schema migration, auto-run on startup
-- [ ] Create internal/database/projects.go — CRUD operations for projects table
-- [ ] Create internal/database/ticks.go — insert tick, update outcome, query history, prune old ticks
-- [ ] Create internal/database/events.go — append event, query with filters, pagination
-- [ ] Write tests for all database operations with in-memory SQLite
+## [x] DB — Implement SQLite data layer **✓ 2026-07-12 — e91ab0f**
+- [x] Create internal/database/schema.go — CREATE TABLE projects, ticks, events with indexes
+- [x] Create internal/database/migrations.go — versioned schema migration, auto-run on startup
+- [x] Create internal/database/projects.go — CRUD operations for projects table
+- [x] Create internal/database/ticks.go — insert tick, update outcome, query history, prune old ticks
+- [x] Create internal/database/events.go — append event, query with filters, pagination
+- [x] Write tests for all database operations with in-memory SQLite (29 tests, all pass)
 
 ## [ ] CORE — Implement urgency calculator
 - [ ] Create internal/scheduler/urgency.go — compute urgency from priority, elapsed time, decay rate
