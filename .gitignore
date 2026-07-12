@@ -1,0 +1,14 @@
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# Hilo
+.vfs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,10 +1,10 @@
 # Task Board — coding-hermes-scheduler
 
-## [ ] INIT — Bootstrap project structure
-- [ ] Create Go package layout: cmd/schedulerd/, internal/scheduler/, internal/database/, internal/api/, internal/mcp/, internal/dashboard/
-- [ ] Write Makefile with build, test, run, install targets
-- [ ] Write systemd unit file (coding-hermes-scheduler.service)
-- [ ] Write README.md with architecture overview, build instructions, config reference
+## [x] INIT — Bootstrap project structure **✓ 2026-07-12 — ccbcbcf**
+- [x] Create Go package layout: cmd/schedulerd/, internal/scheduler/, internal/database/, internal/api/, internal/mcp/, internal/dashboard/
+- [x] Write Makefile with build, test, run, install targets
+- [x] Write systemd unit file (coding-hermes-scheduler.service)
+- [x] Write README.md with architecture overview, build instructions, config reference
 
 ## [ ] DB — Implement SQLite data layer
 - [ ] Create internal/database/schema.go — CREATE TABLE projects, ticks, events with indexes
