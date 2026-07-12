@@ -23,12 +23,13 @@ An agent reading these specs must be unable to take a wrong path. Every spec fol
   - [x] Session outcome query: exact command, output parsing, error handling
   - [x] Integration test: exact scenario with mock hermes chat
 
-- [ ] SPEC-S06 — REST API spec (4-5 pages)
-  - OpenAPI 3.0 YAML for all 15 endpoints — exact request/response schemas
-  - Error catalog: every HTTP status code, exact JSON error body shape, when each fires
-  - Middleware stack: logging format, CORS policy, content-type enforcement
-  - Pagination: query params, response envelope, Link headers
-  - Health endpoint: exact response shape, what gets checked
+- [x] SPEC-S06 — REST API spec (4-5 pages) **✓ 438 lines — 10-section template, OpenAPI 3.0.3 YAML, 14 endpoints, error catalog, middleware, pagination, health**
+  - [x] OpenAPI 3.0 YAML for all 14 endpoints — exact request/response schemas
+  - [x] Error catalog: every HTTP status code, exact JSON error body shape, when each fires
+  - [x] Middleware stack: logging format, CORS policy, content-type enforcement
+  - [x] Pagination: query params, response envelope, count envelope
+  - [x] Health endpoint: exact response shape, what gets checked
+  - [x] Identified implementation gaps: JSON tags missing on models, path dispatch bug
 
 - [ ] SPEC-S07 — MCP server spec (2-3 pages)
   - MCP protocol compliance: initialize, tools/list response shape, tools/call envelope
