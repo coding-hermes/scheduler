@@ -1,0 +1,59 @@
+{
+  "task_id": "DB",
+  "task_title": "Implement SQLite data layer",
+  "task_criteria": [
+    "go build ./... compiles cleanly",
+    "go vet ./... passes with zero warnings",
+    "go test ./internal/database/ -count=1 -v \u2014 all tests pass",
+    "CGO_ENABLED=0 go build ./... works (no cgo dependency)",
+    "Schema matches spec: projects table with all columns and constraints",
+    "Schema matches spec: ticks table with status CHECK, outcome CHECK, indexes",
+    "Schema matches spec: events table with level CHECK, indexes",
+    "WAL mode and foreign keys enabled by default in InitDB",
+    "Tick ID format: <project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>",
+    "All CRUD operations for projects table work correctly",
+    "All CRUD operations for ticks table work correctly",
+    "All CRUD operations for events table work correctly",
+    "Tick state transitions (queued\u2192running\u2192completed) work correctly",
+    "Tick pruning keeps N most recent per project",
+    "Event filtering by level and project name works with pagination",
+    "Foreign key constraint prevents orphan ticks",
+    "CHECK constraint violations are properly rejected"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n",
+          "error": ""
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 go build ./... compiles cleanly: go build ./... exited 0 with no errors\n  \u2713 go vet ./... passes with zero warnings: go vet ./... exited 0 with no warnings\n  \u2713 go test ./internal/database/ -count=1 -v \u2014 all tests pass: 28/28 tests passed, exit 0\n  \u2713 CGO_ENABLED=0 go build ./... works (no cgo dependency): CGO_ENABLED=0 go build ./... exited 0 with no errors\n  \u2713 Schema matches spec: projects table with all columns and constraints: migrations.go:14-28 \u2014 correct schema with all columns, defaults, CHECK(weight>=1 AND weight<=100), CHECK(priority>=1 AND priority<=10)\n  \u2713 Schema matches spec: ticks table with status CHECK, outcome CHECK, indexes: migrations.go:30-48 \u2014 status CHECK IN ('queued','running','completed','failed','timeout'), outcome CHECK IN ('committed','dry_run','failed','timeout'), idx_ticks_project_spawned, idx_ticks_status\n  \u2713 Schema matches spec: events table with level CHECK, indexes: migrations.go:50-60 \u2014 level CHECK IN ('info','warn','error','decision'), idx_events_project, idx_events_level\n  \u2713 WAL mode and foreign keys enabled by default in InitDB: schema.go:31-32 \u2014 PRAGMA journal_mode=WAL and PRAGMA foreign_keys=ON; test TestInitDB_WALAndForeignKeys passes\n  \u2713 Tick ID format: <project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>: ticks.go:209-214 \u2014 NextTickID format; test TestNextTickID_Format passes\n  \u2713 All CRUD operations for projects table work correctly: projects.go: CreateProject, GetProject, ListProjects, UpdateProject (partial), DeleteProject (soft); tests pass\n  \u2713 All CRUD operations for ticks table work correctly: ticks.go: CreateTick, GetTick, ListTicks, UpdateTickStatus, CompleteTick, RecordTickMetrics; tests pass\n  \u2713 All CRUD operations for events table work correctly: events.go: LogEvent (INSERT), ListEvents (SELECT with filters/pagination); tests pass\n  \u2713 Tick state transitions (queued\u2192running\u2192completed) work correctly: ticks.go:42-94 UpdateTickStatus/CompleteTick; tests TestTick_LifecycleTransitions, TestTick_FailedTransition, TestTick_TimeoutTransition pass\n  \u2713 Tick pruning keeps N most recent per project: ticks.go:186-200 PruneOldTicks \u2014 subquery with LIMIT keeps N; test TestPruneOldTicks passes\n  \u2713 Event filtering by level and project name works with pagination: events.go:ListEvents \u2014 dynamic WHERE for level/projectName, LIMIT/OFFSET; tests pass\n  \u2713 Foreign key constraint prevents orphan ticks: schema.go:PRAGMA foreign_keys=ON + migrations.go REFERENCES projects(name); test TestTick_ForeignKeyConstraint passes\n  \u2713 CHECK constraint violations are properly rejected: migrations.go CHECK constraints on weight, priority, status, outcome, level; 4 check-constraint tests pass\nAll 17 criteria pass: code builds, vets clean, all 28 tests pass, schema matches spec, CRUD operations work, state transitions work, pruning works, FK and CHECK constraints are enforced.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 go build ./... compiles cleanly: go build ./... exited 0 with no errors\n  \u2713 go vet ./... passes with zero warnings: go vet ./... exited 0 with no warnings\n  \u2713 go test ./internal/database/ -count=1 -v \u2014 all tests pass: 28/28 tests passed, exit 0\n  \u2713 CGO_ENABLED=0 go build ./... works (no cgo dependency): CGO_ENABLED=0 go build ./... exited 0 with no errors\n  \u2713 Schema matches spec: projects table with all columns and constraints: migrations.go:14-28 \u2014 correct schema with all columns, ",
+          "error": ""
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: DB\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 go build ./... compiles cleanly: go build ./... exited 0 with no errors\n  \u2713 go vet ./... passes with zero warnings: go vet ./... exited 0 with no warnings\n  \u2713 go test ./internal/database/ -count=1 -v \u2014 all tests pass: 28/28 tests passed, exit 0\n  \u2713 CGO_ENABLED=0 go build ./... works (no cgo dependency): CGO_ENABLED=0 go build ./... exited 0 with no errors\n  \u2713 Schema matches spec: projects table with all columns and constraints: migrations.go:14-28 \u2014 correct schema with all columns, defaults, CHECK(weight>=1 AND weight<=100), CHECK(priority>=1 AND priority<=10)\n  \u2713 Schema matches spec: ticks table with status CHECK, outcome CHECK, indexes: migrations.go:30-48 \u2014 status CHECK IN ('queued','running','completed','failed','timeout'), outcome CHECK IN ('committed','dry_run','failed','timeout'), idx_ticks_project_spawned, idx_ticks_status\n  \u2713 Schema matches spec: events table with level CHECK, indexes: migrations.go:50-60 \u2014 level CHECK IN ('info','warn','error','decision'), idx_events_project, idx_events_level\n  \u2713 WAL mode and foreign keys enabled by default in InitDB: schema.go:31-32 \u2014 PRAGMA journal_mode=WAL and PRAGMA foreign_keys=ON; test TestInitDB_WALAndForeignKeys passes\n  \u2713 Tick ID format: <project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>: ticks.go:209-214 \u2014 NextTickID format; test TestNextTickID_Format passes\n  \u2713 All CRUD operations for projects table work correctly: projects.go: CreateProject, GetProject, ListProjects, UpdateProject (partial), DeleteProject (soft); tests pass\n  \u2713 All CRUD operations for ticks table work correctly: ticks.go: CreateTick, GetTick, ListTicks, UpdateTickStatus, CompleteTick, RecordTickMetrics; tests pass\n  \u2713 All CRUD operations for events table work correctly: events.go: LogEvent (INSERT), ListEvents (SELECT with filters/pagination); tests pass\n  \u2713 Tick state transitions (queued\u2192running\u2192completed) work correctly: ticks.go:42-94 UpdateTickStatus/CompleteTick; tests TestTick_LifecycleTransitions, TestTick_FailedTransition, TestTick_TimeoutTransition pass\n  \u2713 Tick pruning keeps N most recent per project: ticks.go:186-200 PruneOldTicks \u2014 subquery with LIMIT keeps N; test TestPruneOldTicks passes\n  \u2713 Event filtering by level and project name works with pagination: events.go:ListEvents \u2014 dynamic WHERE for level/projectName, LIMIT/OFFSET; tests pass\n  \u2713 Foreign key constraint prevents orphan ticks: schema.go:PRAGMA foreign_keys=ON + migrations.go REFERENCES projects(name); test TestTick_ForeignKeyConstraint passes\n  \u2713 CHECK constraint violations are properly rejected: migrations.go CHECK constraints on weight, priority, status, outcome, level; 4 check-constraint tests pass\nAll 17 criteria pass: code builds, vets clean, all 28 tests pass, schema matches spec, CRUD operations work, state transitions work, pruning works, FK and CHECK constraints are enforced.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-07-12T17:47:03.169502"
+}

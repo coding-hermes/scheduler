@@ -1,122 +1,121 @@
 # Task Board — coding-hermes-scheduler
 
-## [x] INIT — Bootstrap project structure **✓ 2026-07-12 — ccbcbcf**
-- [x] Create Go package layout: cmd/schedulerd/, internal/scheduler/, internal/database/, internal/api/, internal/mcp/, internal/dashboard/
-- [x] Write Makefile with build, test, run, install targets
-- [x] Write systemd unit file (coding-hermes-scheduler.service)
-- [x] Write README.md with architecture overview, build instructions, config reference
+## [x] INIT — Bootstrap project structure **✓ ccbcbcf**
+- [x] Go package layout, Makefile, systemd unit, README, .gitignore, GitReins guards
 
-## [x] DB — Implement SQLite data layer **✓ 2026-07-12 — e91ab0f**
-- [x] Create internal/database/schema.go — CREATE TABLE projects, ticks, events with indexes
-- [x] Create internal/database/migrations.go — versioned schema migration, auto-run on startup
-- [x] Create internal/database/projects.go — CRUD operations for projects table
-- [x] Create internal/database/ticks.go — insert tick, update outcome, query history, prune old ticks
-- [x] Create internal/database/events.go — append event, query with filters, pagination
-- [x] Write tests for all database operations with in-memory SQLite (29 tests, all pass)
+## [x] DB — Implement SQLite data layer **✓ e91ab0f**
+- [x] Schema, migrations, CRUD for projects/ticks/events — 29 tests passing
 
-## [ ] CORE — Implement urgency calculator
-- [ ] Create internal/scheduler/urgency.go — compute urgency from priority, elapsed time, decay rate
-- [ ] Write unit tests: zero elapsed, normal elapsed, extreme elapsed, custom decay rates, edge cases
+## [ ] SPEC — Write axiom-level implementation specs (BLOCKING all CORE/API/MCP work)
 
-## [ ] CORE — Implement weight-budget greedy packer
-- [ ] Create internal/scheduler/packer.go — sort by urgency, pack greedily into weight budget
-- [ ] Enforce: cooldown check, weight <= remaining budget, max concurrent cap
-- [ ] Write tests: budget exhausted, all fit, cooldown blocks, mixed weights, empty project list
+An agent reading these specs must be unable to take a wrong path. Every spec follows the 10-section template: Overview → Dependencies → Interface → Behavior → Data → States → Errors → Testing → Security → Performance. Standard: "so detailed a blind person could visualize."
 
-## [ ] CORE — Implement spawn engine
-- [ ] Create internal/scheduler/spawn.go — build spawn command, run hermes chat --quiet, capture session_id from stdout
-- [ ] Implement PID tracking and per-tick timeout (30 min default)
-- [ ] Implement process exit handling — update tick outcome in SQLite
-- [ ] Write integration test: spawn a real hermes chat process, capture session_id, verify outcome query
+- [ ] SPEC-S01 — System architecture spec (3-4 pages)
+  - Component diagram (Mermaid), data flow between components, directory tree, dependency graph
+  - Exact Go interfaces at system boundaries, what injects what
+  - Config struct with exact env var names, types, defaults, validation
+  - System failure modes: what breaks, how it manifests, recovery path
 
-## [ ] CORE — Implement tick lifecycle tracker
-- [ ] Create internal/scheduler/lifecycle.go — QUEUED→RUNNING→COMPLETED/FAILED/TIMEOUT state machine
-- [ ] Implement session outcome query (hermes sessions export --dry-run)
-- [ ] Parse outcome: commits, files_changed, tokens, cost, exit_code
-- [ ] Update SQLite tick record on completion
+- [ ] SPEC-S02 — Data model spec (4-5 pages)
+  - Exact DDL: CREATE TABLE projects/ticks/events with every column type, constraint, index
+  - Exact Go model structs with db/sql tags
+  - DuckBrain key schema with exact JSON shapes for /fleet/summary, /fleet/projects/<name>/status, /fleet/events
+  - Migration strategy: version table, up/down scripts, auto-run on startup
+  - Query patterns: exact SQL for every query the scheduler needs
+  - Data retention: 200 ticks per project, compaction strategy, WAL config
 
-## [ ] CORE — Main scheduler loop
-- [ ] Create internal/scheduler/loop.go — 60-second ticker, load projects, compute urgency, pack, spawn, track
-- [ ] Wire all components together
-- [ ] Implement graceful shutdown (SIGTERM/SIGINT — complete running ticks, close DB)
-- [ ] Write integration test: full cycle with mock project data
+- [ ] SPEC-S03 — Urgency calculator spec (3-4 pages)
+  - Exact urgency formula implementation in Go pseudocode with all branches
+  - Geometric interval mapping: exact formula, configurable min/max, runtime recalculation
+  - Edge cases: zero elapsed, negative elapsed (clock skew), decay_rate=0, priority=0, max_interval overflow
+  - Unit test scenarios with exact inputs and expected outputs
 
-## [ ] API — REST HTTP server
-- [ ] Create internal/api/server.go — net/http mux, middleware (logging, CORS-localhost-only, JSON content-type)
-- [ ] GET /api/v1/health — uptime, project count, budget, version
-- [ ] GET /api/v1/projects — list all with optional filtering
-- [ ] GET /api/v1/projects/:name — single project detail + recent ticks
-- [ ] PUT /api/v1/projects/:name — update weight/priority/cooldown/decay/enabled
-- [ ] POST /api/v1/projects — register new project
-- [ ] DELETE /api/v1/projects/:name — soft-delete
-- [ ] GET /api/v1/projects/:name/ticks — paginated tick history
-- [ ] GET /api/v1/fleet/status — budget utilization, running count, urgency snapshot
-- [ ] POST /api/v1/fleet/evaluate — force evaluation cycle
-- [ ] POST /api/v1/fleet/budget — set budget total
-- [ ] GET /api/v1/events — paginated event log
-- [ ] Write HTTP handler tests with httptest
+- [ ] SPEC-S04 — Weight-budget packer spec (2-3 pages)
+  - Greedy packing algorithm: step-by-step with decision tree
+  - Edge cases: empty project list, all projects overweight, budget=0, cooldown blocking, max concurrent reached
+  - Urgency tie-breaking rules
+  - Concurrency pool: claim/release semantics, starvation prevention
+  - Unit test scenarios
 
-## [ ] MCP — MCP server over HTTP
-- [ ] Create internal/mcp/server.go — MCP streamable-http handler, tool registration
-- [ ] Implement all MCP tools from spec (/spec/platform/api-mcp):
-  - fleet_status, fleet_set_weight, fleet_set_priority, fleet_set_cooldown, fleet_set_decay
-  - fleet_pause, fleet_resume, fleet_add_project, fleet_remove_project
-  - fleet_set_budget, fleet_get_project, fleet_get_tick, fleet_force_evaluate, fleet_rebalance
-- [ ] Each tool translates to REST API calls on the scheduler
-- [ ] Write MCP compliance tests (initialize, tools/list, tools/call)
+- [ ] SPEC-S05 — Spawn engine + tick lifecycle spec (3-4 pages)
+  - Exact spawn command template with all flags
+  - Session ID capture: parse stdout format, handle parse failures
+  - PID tracking: data structure, timeout enforcement, cleanup on SIGTERM
+  - Tick state machine: full transition diagram, guard conditions per transition
+  - Session outcome query: exact command, output parsing, error handling
+  - Integration test: exact scenario with mock hermes chat
 
-## [ ] DASH — Dashboard generator
-- [ ] Create internal/dashboard/generator.go — Go html/template with embedded CSS
-- [ ] Fleet overview page: budget bar, project table, running/queued sections
-- [ ] Per-project detail page: tick history table, aggregates, config panel
-- [ ] Session ID links (link to hermes sessions export --format html or transcript viewer URL)
-- [ ] Dark theme, mobile-responsive, auto-refresh
-- [ ] Serve at http://localhost:9090/ and write to ~/coding-hermes-dashboard.html
+- [ ] SPEC-S06 — REST API spec (4-5 pages)
+  - OpenAPI 3.0 YAML for all 15 endpoints — exact request/response schemas
+  - Error catalog: every HTTP status code, exact JSON error body shape, when each fires
+  - Middleware stack: logging format, CORS policy, content-type enforcement
+  - Pagination: query params, response envelope, Link headers
+  - Health endpoint: exact response shape, what gets checked
 
-## [ ] SYNC — DuckBrain read-replica sync
-- [ ] Create internal/sync/duckbrain.go — every 5 minutes, write compact status blobs
-- [ ] Sync /fleet/summary — fleet-wide metrics
-- [ ] Sync /fleet/projects/<name>/status — per-project compact status
-- [ ] Sync /fleet/events — notable events (error, decision level)
-- [ ] Use DuckBrain MCP (or direct git+JSONL if MCP not reachable)
-- [ ] Write test: verify sync output format matches DuckBrain key schema
+- [ ] SPEC-S07 — MCP server spec (2-3 pages)
+  - MCP protocol compliance: initialize, tools/list response shape, tools/call envelope
+  - All 14 tool schemas with exact JSON Schema parameters
+  - Error handling: what MCP errors map to what scheduler errors
+  - Hermes config.yaml snippet for connection
 
-## [ ] CMD — Main entry point
-- [ ] Create cmd/schedulerd/main.go — parse flags (--port, --socket, --db-path, --budget), init DB, start loop + API + MCP
-- [ ] Wire graceful shutdown
-- [ ] Create cmd/schedulerd/config.go — config from flags + env vars + optional config file
+- [ ] SPEC-S08 — Dashboard spec (3-4 pages)
+  - HTML structure: exact element hierarchy, CSS class naming convention
+  - Design tokens: color palette (hex), typography (font, sizes, weights), spacing scale
+  - Fleet overview: weight budget bar component, project table, running/queued sections
+  - Per-project detail: tick history table, aggregate stats card, config edit panel
+  - Session ID links: exact URL template, click behavior
+  - Auto-refresh: polling strategy, error state, loading skeleton
+  - All UI states: loading, empty, error, populated — per component
 
-## [ ] PLUGIN — Hermes plugin
-- [ ] Create plugin.yaml with name, version, description
-- [ ] Create __init__.py — register(ctx) validates scheduler health, registers hooks
-- [ ] Create hooks.py — pre_llm_call hook: parse /fleet slash commands, route to MCP tools
-- [ ] Implement all slash commands from spec
-- [ ] Register pre_verify hook for fleet context injection (Bane sessions)
-- [ ] Write plugin test: simulate slash commands, verify correct MCP calls
+- [ ] SPEC-S09 — Hermes plugin spec (2 pages)
+  - Exact file structure: plugin.yaml content, __init__.py register() logic, hooks.py handler signatures
+  - pre_llm_call hook: slash command parsing regex, argument extraction, MCP tool routing
+  - Error handling: scheduler unreachable, invalid command, MCP timeout
+  - Installation: exact commands, config.yaml snippet
 
-## [ ] MIGR — Migration tool
-- [ ] Create cmd/migrate/main.go — reads existing coding-hermes cron configs from jobs.json
-- [ ] Auto-detects all foreman jobs (skills contain coding-hermes-cron)
-- [ ] Extracts: name, workdir, schedule speed, model, provider
-- [ ] Defaults: weight=10, priority=5, cooldown=extracted from schedule, decay=1.0
-- [ ] Generates import JSON for scheduler POST /api/v1/projects
-- [ ] Dry-run mode: preview without writing
-- [ ] Write test with sample jobs.json fixture
+- [ ] SPEC-S10 — Testing strategy spec (2-3 pages)
+  - Unit test scenarios per component with exact inputs/outputs
+  - Integration test: full scheduler cycle with mock projects
+  - E2E test: scheduler → spawn hermes chat → capture session_id → query outcome
+  - MCP compliance test: initialize, tools/list, tools/call roundtrip
+  - Dashboard rendering test: verify HTML output structure
 
-## [ ] TEST — End-to-end integration
-- [ ] Start scheduler with test projects
-- [ ] Verify 60s loop fires, ticks spawn correctly
-- [ ] Verify session_id captured from spawned hermes chat
-- [ ] Verify dashboard HTML generated
-- [ ] Verify MCP tools respond correctly via Hermes mcp_servers config
-- [ ] Verify slash commands route correctly
-- [ ] Verify graceful shutdown
+- [ ] SPEC-S11 — Deployment + migration spec (2 pages)
+  - systemd unit: exact file content, install commands, log access
+  - Hermes integration: config.yaml entries, plugin enable, trigger cron
+  - Migration from 33 static crons: exact steps, rollback plan
+  - Verification checklist: health check, first tick, dashboard loads, slash commands work
 
-## [ ] DEPLOY — Production setup
-- [ ] Install systemd unit
-- [ ] Start scheduler service
-- [ ] Configure Hermes mcp_servers for coding-hermes
-- [ ] Enable Hermes plugin
-- [ ] Create trigger cron (60s, no_agent script → scheduler health check)
-- [ ] Run migration tool to import existing 33 projects
-- [ ] Verify dashboard accessible at localhost:9090
+## [ ] CORE — Implement from specs (AFTER SPEC complete)
+- [ ] urgency.go — from SPEC-S03
+- [ ] packer.go — from SPEC-S04
+- [ ] spawn.go — from SPEC-S05
+- [ ] lifecycle.go — from SPEC-S05
+- [ ] loop.go — from SPEC-S01 wiring diagram
+
+## [ ] API — Implement from specs (AFTER CORE)
+- [ ] server.go — from SPEC-S06 OpenAPI
+
+## [ ] MCP — Implement from specs (AFTER API)
+- [ ] server.go — from SPEC-S07
+
+## [ ] DASH — Implement from specs (AFTER API)
+- [ ] generator.go — from SPEC-S08
+
+## [ ] SYNC — DuckBrain sync (AFTER CORE)
+- [ ] duckbrain.go — from SPEC-S02 DuckBrain keys
+
+## [ ] CMD — Main entry point (AFTER CORE+API+MCP)
+- [ ] main.go, config.go — from SPEC-S01 config struct
+
+## [ ] PLUGIN — Hermes plugin (AFTER MCP)
+- [ ] plugin.yaml, __init__.py, hooks.py — from SPEC-S09
+
+## [ ] MIGR — Migration tool (AFTER CORE)
+- [ ] main.go — from SPEC-S11
+
+## [ ] TEST — End-to-end (AFTER ALL)
+- [ ] From SPEC-S10 scenarios
+
+## [ ] DEPLOY — Production (AFTER TEST)
+- [ ] From SPEC-S11 checklist
