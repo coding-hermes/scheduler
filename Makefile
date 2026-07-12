@@ -26,10 +26,10 @@ fmt:
 	gofmt -w .
 
 migrate: build
-	./bin/migrate -jobs $(HOME)/.hermes/cron/jobs.json -db $(HOME)/.hermes/scheduler.db
+	./bin/migrate -jobs $(HOME)/.hermes/cron/jobs.json -db $(HOME)/.hermes/coding-hermes/scheduler.db
 
 migrate-dry: build
-	./bin/migrate -jobs $(HOME)/.hermes/cron/jobs.json -db $(HOME)/.hermes/scheduler.db --dry-run
+	./bin/migrate -jobs $(HOME)/.hermes/cron/jobs.json -db $(HOME)/.hermes/coding-hermes/scheduler.db --dry-run
 
 deploy-install:
 	sudo cp deploy/coding-hermes-scheduler.service /etc/systemd/system/

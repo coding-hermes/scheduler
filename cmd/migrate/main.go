@@ -8,26 +8,34 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
-// CronJob mirrors the Hermes cron job config format.
+// CronJob mirrors the actual Hermes cron job config format.
 type CronJob struct {
-	JobID    string   `json:"job_id"`
+	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Skills   []string `json:"skills,omitempty"`
 	Model    string   `json:"model,omitempty"`
 	Provider string   `json:"provider,omitempty"`
-	Workdir  string   `json:"workdir,omitempty"`
 	Enabled  bool     `json:"enabled"`
-	Schedule string   `json:"schedule"`
+	Schedule struct {
+		Kind    string `json:"kind"`
+		Expr    string `json:"expr,omitempty"`
+		Minutes int    `json:"minutes,omitempty"`
+		Display string `json:"display"`
+	} `json:"schedule"`
+	Prompt string `json:"prompt,omitempty"`
 }
+
+var workdirRe = regexp.MustCompile(`[Ww]orkdir:\s*(\S+)`)
 
 func main() {
 	jobsFile := flag.String("jobs", os.ExpandEnv("$HOME/.hermes/cron/jobs.json"), "Path to cron jobs.json")
-	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/scheduler.db"), "SQLite database path")
+	dbFile := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	dryRun := flag.Bool("dry-run", false, "Print what would be imported without writing")
 	flag.Parse()
 
@@ -37,7 +45,7 @@ func main() {
 	}
 	log.Printf("Loaded %d jobs from %s", len(jobs), *jobsFile)
 
-	db, err := database.InitDB(*dbPath)
+	db, err := database.InitDB(*dbFile)
 	if err != nil {
 		log.Fatalf("FATAL: database init: %v", err)
 	}
@@ -48,59 +56,69 @@ func main() {
 	skipped := 0
 
 	for _, j := range jobs {
-		// Only import coding-hermes foreman jobs.
 		if !isCodingHermesJob(j) {
 			skipped++
 			continue
 		}
 
 		name := projectName(j)
+		workdir := extractWorkdir(j)
 
-		// Check if already imported.
-		_, err := database.GetProject(ctx, db, name)
-		if err == nil {
-			log.Printf("SKIP %s: already exists", name)
+		if workdir == "" {
+			log.Printf("SKIP %s: no workdir found in prompt", name)
 			skipped++
 			continue
 		}
 
+		if !*dryRun {
+			// Check if already imported.
+			_, err := database.GetProject(ctx, db, name)
+			if err == nil {
+				log.Printf("SKIP %s: already exists", name)
+				skipped++
+				continue
+			}
+		}
+
+		model := j.Model
+		if model == "" {
+			model = "deepseek-v4-pro"
+		}
+		provider := j.Provider
+		if provider == "" {
+			provider = "deepseek-foreman"
+		}
+
 		if *dryRun {
-			log.Printf("DRY-RUN: would import %s (weight=10, priority=5, workdir=%s, model=%s, provider=%s)",
-				name, j.Workdir, j.Model, j.Provider)
+			log.Printf("DRY-RUN: %s (w=%d p=%d workdir=%s model=%s provider=%s enabled=%v schedule=%s)",
+				name, 10, 5, workdir, model, provider, j.Enabled, j.Schedule.Display)
 			imported++
 			continue
 		}
 
 		p := &database.Project{
-			Name:     name,
-			RepoURL:  fmt.Sprintf("local:%s", j.Workdir),
-			Workdir:  j.Workdir,
-			Weight:   10,
-			Priority: 5,
+			Name:      name,
+			RepoURL:   fmt.Sprintf("local:%s", workdir),
+			Workdir:   workdir,
+			Weight:    10,
+			Priority:  5,
 			CooldownS: 900,
 			DecayRate: 1.0,
-			Model:    "deepseek-v4-pro",
-			Provider: "deepseek-foreman",
-			Enabled:  true,
-		}
-
-		if j.Model != "" {
-			p.Model = j.Model
-		}
-		if j.Provider != "" {
-			p.Provider = j.Provider
+			Model:     model,
+			Provider:  provider,
+			Enabled:   j.Enabled,
 		}
 
 		if err := database.CreateProject(ctx, db, p); err != nil {
 			log.Printf("ERROR importing %s: %v", name, err)
 			continue
 		}
-		log.Printf("IMPORTED %s (weight=%d, priority=%d, model=%s, provider=%s)",
-			name, p.Weight, p.Priority, p.Model, p.Provider)
+		log.Printf("IMPORTED %s (w=%d p=%d workdir=%s schedule=%s)",
+			name, p.Weight, p.Priority, workdir, j.Schedule.Display)
 		imported++
 	}
 
-	log.Printf("Done: %d imported, %d skipped (non-foreman or already exists)", imported, skipped)
+	log.Printf("Done: %d imported, %d skipped", imported, skipped)
 
 	if *dryRun {
 		fmt.Println("\nRun without --dry-run to perform the import.")
@@ -116,7 +134,7 @@ func loadJobs(path string) ([]CronJob, error) {
 		Jobs []CronJob `json:"jobs"`
 	}
 	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse jobs.json: %w", err)
 	}
 	return wrapper.Jobs, nil
 }
@@ -127,21 +145,31 @@ func isCodingHermesJob(j CronJob) bool {
 			return true
 		}
 	}
-	return strings.Contains(j.Name, "foreman") || strings.Contains(j.Name, "coding-hermes")
+	return strings.Contains(strings.ToLower(j.Name), "coding-hermes") ||
+		strings.Contains(strings.ToLower(j.Name), "foreman")
+}
+
+func extractWorkdir(j CronJob) string {
+	matches := workdirRe.FindStringSubmatch(j.Prompt)
+	if len(matches) >= 2 {
+		wd := strings.TrimRight(matches[1], ".,;:")
+		return wd
+	}
+	return ""
 }
 
 func projectName(j CronJob) string {
-	// Derive project name from workdir or job name.
-	if j.Workdir != "" {
-		return filepath.Base(j.Workdir)
+	// Prefer workdir basename for clean project keys.
+	wd := extractWorkdir(j)
+	if wd != "" {
+		return filepath.Base(wd)
 	}
-	// Clean job name.
-	name := strings.ReplaceAll(strings.ToLower(j.Name), " ", "-")
-	name = strings.ReplaceAll(name, "coding-hermes-foreman", "")
-	name = strings.ReplaceAll(name, "coding-hermes", "")
-	name = strings.Trim(name, "- ")
-	if name == "" {
-		name = fmt.Sprintf("unknown-%s", j.JobID[:8])
+	// Fallback: clean the job name.
+	name := strings.TrimSuffix(strings.TrimSuffix(j.Name, " coding-hermes-foreman"), " coding-hermes")
+	name = strings.ReplaceAll(name, " ", "-")
+	name = strings.ToLower(name)
+	if name == "" || name == "coding-hermes" {
+		name = fmt.Sprintf("unknown-%s", j.ID[:8])
 	}
 	return name
 }
