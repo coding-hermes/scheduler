@@ -1,0 +1,416 @@
+# S02 — Data Model
+
+**Status:** Draft  
+**Depends on:** S01  
+
+---
+
+## 1. Overview
+
+Two storage systems with distinct roles:
+
+| System | Role | Authoritative? | Access Pattern |
+|--------|------|---------------|----------------|
+| SQLite (`scheduler.db`) | Operational store | **Yes** | WAL mode, read/write every tick |
+| DuckBrain (`coding-hermes` namespace) | Read replica | No | Overwrite every 5 min, cross-session queries |
+
+SQLite is the source of truth. DuckBrain is a compact snapshot for foremen and Bane's other sessions to read fleet state without touching SQLite.
+
+---
+
+## 2. Dependencies
+
+| Dependency | Version | Purpose |
+|-----------|---------|---------|
+| `github.com/mattn/go-sqlite3` | Latest | SQLite driver (CGo) |
+| `database/sql` | stdlib | Database interface |
+| DuckBrain MCP | Latest | Read-replica sync via `remember` tool |
+
+---
+
+## 3. SQLite DDL
+
+### 3.1 Projects Table
+
+```sql
+CREATE TABLE IF NOT EXISTS projects (
+    name        TEXT PRIMARY KEY NOT NULL,
+    repo_url    TEXT NOT NULL,
+    workdir     TEXT NOT NULL,
+    weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
+    priority    REAL NOT NULL DEFAULT 5.0 CHECK(priority >= 0.5 AND priority <= 10.0),
+    cooldown_s  INTEGER NOT NULL DEFAULT 300 CHECK(cooldown_s >= 0),
+    decay_rate  REAL NOT NULL DEFAULT 1.0 CHECK(decay_rate >= 0),
+    enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### 3.2 Ticks Table
+
+```sql
+CREATE TABLE IF NOT EXISTS ticks (
+    id          TEXT PRIMARY KEY NOT NULL,
+    project     TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
+    session_id  TEXT,
+    status      TEXT NOT NULL DEFAULT 'queued'
+                    CHECK(status IN ('queued', 'running', 'completed', 'failed', 'timeout')),
+    outcome     TEXT CHECK(outcome IN ('committed', 'dry_run', 'failed', 'timeout', NULL)),
+    spawned_at  TEXT,
+    completed_at TEXT,
+    exit_code   INTEGER,
+    commits     INTEGER NOT NULL DEFAULT 0,
+    files_changed INTEGER NOT NULL DEFAULT 0,
+    tokens_in   INTEGER,
+    tokens_out  INTEGER,
+    cost_usd    REAL,
+    urgency     REAL,
+    weight_used INTEGER,
+    error       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticks_project ON ticks(project, spawned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
+```
+
+**Tick ID format:** `<project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>` — ensures sortability and uniqueness.
+
+Example: `muster-2026-07-12-14-03-01`
+
+### 3.3 Events Table
+
+```sql
+CREATE TABLE IF NOT EXISTS events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
+    level       TEXT NOT NULL DEFAULT 'info'
+                    CHECK(level IN ('info', 'warn', 'error', 'decision')),
+    project     TEXT,
+    message     TEXT NOT NULL,
+    detail      TEXT  -- JSON blob for structured data
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_project ON events(project, timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_level ON events(level, timestamp);
+```
+
+### 3.4 Schema Migrations Table
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     INTEGER PRIMARY KEY,
+    applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    description TEXT NOT NULL
+);
+```
+
+### 3.5 WAL Mode and Foreign Keys
+
+```go
+// Applied on every Store initialization, after opening the DB:
+db.Exec("PRAGMA journal_mode=WAL")
+db.Exec("PRAGMA foreign_keys=ON")
+db.Exec("PRAGMA busy_timeout=5000")  // 5 seconds
+```
+
+---
+
+## 4. Go Model Structs
+
+```go
+package database
+
+import "time"
+
+// Project represents a managed coding-hermes project.
+type Project struct {
+    Name       string    `json:"name"`
+    RepoURL    string    `json:"repo_url"`
+    Workdir    string    `json:"workdir"`
+    Weight     int       `json:"weight"`
+    Priority   float64   `json:"priority"`
+    CooldownS  int       `json:"cooldown_s"`
+    DecayRate  float64   `json:"decay_rate"`
+    Enabled    bool      `json:"enabled"`
+    CreatedAt  time.Time `json:"created_at"`
+    UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ProjectPatch is used for partial updates.
+type ProjectPatch struct {
+    Weight     *int     `json:"weight,omitempty"`
+    Priority   *float64 `json:"priority,omitempty"`
+    CooldownS  *int     `json:"cooldown_s,omitempty"`
+    DecayRate  *float64 `json:"decay_rate,omitempty"`
+    Enabled    *bool    `json:"enabled,omitempty"`
+}
+
+// Tick represents one foreman spawn.
+type Tick struct {
+    ID           string     `json:"id"`
+    Project      string     `json:"project"`
+    SessionID    *string    `json:"session_id"`
+    Status       string     `json:"status"`     // queued|running|completed|failed|timeout
+    Outcome      *string    `json:"outcome"`     // committed|dry_run|failed|timeout
+    SpawnedAt    *time.Time `json:"spawned_at"`
+    CompletedAt  *time.Time `json:"completed_at"`
+    ExitCode     *int       `json:"exit_code"`
+    Commits      int        `json:"commits"`
+    FilesChanged int        `json:"files_changed"`
+    TokensIn     *int       `json:"tokens_in"`
+    TokensOut    *int       `json:"tokens_out"`
+    CostUSD      *float64   `json:"cost_usd"`
+    Urgency      *float64   `json:"urgency"`
+    WeightUsed   *int       `json:"weight_used"`
+    Error        *string    `json:"error"`
+}
+
+// TickOutcome is written after a tick completes.
+type TickOutcome struct {
+    Status       string   // completed|failed|timeout
+    Outcome      string   // committed|dry_run|failed|timeout
+    ExitCode     int
+    Commits      int
+    FilesChanged int
+    TokensIn     int
+    TokensOut    int
+    CostUSD      float64
+    Error        string
+}
+
+// Event represents an audit log entry.
+type Event struct {
+    ID        int64     `json:"id"`
+    Timestamp time.Time `json:"timestamp"`
+    Level     string    `json:"level"`    // info|warn|error|decision
+    Project   *string   `json:"project"`
+    Message   string    `json:"message"`
+    Detail    *string   `json:"detail"`   // JSON string
+}
+
+// EventFilter for querying events.
+type EventFilter struct {
+    Level   string // empty = all
+    Project string // empty = all
+    Limit   int    // default 50, max 500
+    Offset  int
+}
+```
+
+---
+
+## 5. Query Patterns
+
+### 5.1 List all enabled projects (called every tick)
+
+```sql
+SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
+       enabled, created_at, updated_at
+FROM projects
+WHERE enabled = 1
+ORDER BY name;
+```
+
+### 5.2 Insert a tick (atomic, uses tick ID as PK)
+
+```sql
+INSERT INTO ticks (id, project, status, urgency, weight_used, spawned_at)
+VALUES (?, ?, 'running', ?, ?, datetime('now'));
+```
+
+### 5.3 Update tick outcome after completion
+
+```sql
+UPDATE ticks
+SET status = ?, outcome = ?, completed_at = datetime('now'),
+    exit_code = ?, commits = ?, files_changed = ?,
+    tokens_in = ?, tokens_out = ?, cost_usd = ?, error = ?
+WHERE id = ?;
+```
+
+### 5.4 Get recent ticks for a project (dashboard, per-project view)
+
+```sql
+SELECT id, session_id, status, outcome, spawned_at, completed_at,
+       exit_code, commits, cost_usd
+FROM ticks
+WHERE project = ?
+ORDER BY spawned_at DESC
+LIMIT ?;  -- typically 20
+```
+
+### 5.5 Count running ticks (concurrency check)
+
+```sql
+SELECT COUNT(*) FROM ticks WHERE status = 'running';
+```
+
+### 5.6 Prune old ticks (keep last 200 per project)
+
+```sql
+DELETE FROM ticks
+WHERE project = ? AND id NOT IN (
+    SELECT id FROM ticks WHERE project = ? ORDER BY spawned_at DESC LIMIT 200
+);
+```
+
+### 5.7 Get last completed tick for a project (cooldown check)
+
+```sql
+SELECT id, completed_at, outcome
+FROM ticks
+WHERE project = ? AND status = 'completed'
+ORDER BY completed_at DESC
+LIMIT 1;
+```
+
+---
+
+## 6. DuckBrain Key Schema
+
+### 6.1 `/fleet/summary` — Fleet-Wide Dashboard Data
+
+```json
+{
+    "updated_at": "2026-07-12T14:05:00Z",
+    "total_projects": 33,
+    "enabled_projects": 31,
+    "budget_total": 100,
+    "budget_used": 72,
+    "active_ticks": 7,
+    "ticks_today": 142,
+    "projects": [
+        {
+            "name": "muster",
+            "weight": 25,
+            "priority": 8.0,
+            "urgency": 12.4,
+            "last_tick": "2026-07-12T14:03:01Z",
+            "last_outcome": "committed",
+            "session_id": "20260712_140301_a1b2c3d4"
+        }
+    ]
+}
+```
+
+### 6.2 `/fleet/projects/<name>/status` — Per-Project Compact Status
+
+```json
+{
+    "name": "muster",
+    "weight": 25,
+    "priority": 8.0,
+    "cooldown_s": 300,
+    "decay_rate": 1.0,
+    "enabled": true,
+    "current_interval": "20m",
+    "last_tick": "2026-07-12T14:03:01Z",
+    "last_outcome": "committed",
+    "last_session_id": "20260712_140301_a1b2c3d4",
+    "last_commits": 2,
+    "last_cost": 0.12,
+    "ticks_today": 8,
+    "commits_today": 5,
+    "cost_today": 0.94,
+    "updated_at": "2026-07-12T14:05:00Z"
+}
+```
+
+### 6.3 `/fleet/events` — Notable Events
+
+```json
+[
+    {
+        "timestamp": "2026-07-12T14:03:00Z",
+        "level": "decision",
+        "project": "muster",
+        "message": "Spawned foreman tick: urgency=12.4, weight=25",
+        "detail": "{\"tick_id\":\"muster-2026-07-12-14-03-01\"}"
+    },
+    {
+        "timestamp": "2026-07-12T14:02:00Z",
+        "level": "warn",
+        "project": null,
+        "message": "DuckBrain sync failed: connection refused (will retry in 5m)",
+        "detail": null
+    }
+]
+```
+
+DuckBrain keys are **overwritten** each sync cycle, not appended. The scheduler writes the full blob each time.
+
+---
+
+## 7. States
+
+### 7.1 Tick State Machine
+
+```
+                    ┌──────────────────────────────┐
+                    │                              │
+                    ▼                              │
+ ┌────────┐    ┌─────────┐    ┌───────────┐       │
+ │ QUEUED │───▶│ RUNNING │───▶│ COMPLETED │       │
+ └────────┘    └─────────┘    └───────────┘       │
+                    │                              │
+                    ├──────────────────────────────┘
+                    │          (timeout — 30 min)
+                    ▼
+              ┌──────────┐
+              │ TIMED_OUT│
+              └──────────┘
+```
+
+Transitions:
+- `QUEUED → RUNNING`: Spawn engine successfully starts hermes chat subprocess
+- `RUNNING → COMPLETED`: Process exits with code 0, session outcome queried successfully
+- `RUNNING → FAILED`: Process exits with non-zero code or outcome query fails
+- `RUNNING → TIMED_OUT`: Process exceeds spawn timeout (default 30 min), SIGKILL sent
+
+### 7.2 Project States
+
+- `enabled=1` + cooldown elapsed → eligible for scheduling
+- `enabled=1` + cooldown not elapsed → skipped this tick
+- `enabled=0` → soft-deleted, never scheduled
+- No row → never registered
+
+---
+
+## 8. Errors
+
+| Operation | Error | Cause |
+|-----------|-------|-------|
+| `CreateProject` | `UNIQUE constraint failed: projects.name` | Duplicate project name |
+| `CreateTick` | `UNIQUE constraint failed: ticks.id` | Tick ID collision (clock went backwards) |
+| `UpdateTickOutcome` | No rows affected | Tick ID not found |
+| `GetProject` | `sql.ErrNoRows` | Project doesn't exist |
+| Any write | `database is locked` | WAL checkpoint in progress; retry with 5s busy_timeout |
+| `PruneOldTicks` | No error (0 rows) | No ticks to prune — success |
+
+---
+
+## 9. Testing
+
+See S10 for full test spec. Key tests for data layer:
+
+1. **Schema creation** — `NewStore(":memory:")` creates all tables and indexes
+2. **Migration** — Running `Migrate()` twice is idempotent
+3. **Project CRUD** — Create, read, update, soft-delete, list with filter
+4. **Tick lifecycle** — Insert queued → transition to running → update outcome to completed
+5. **Tick pruning** — Insert 250 ticks, prune to 200, verify count
+6. **Concurrent access** — WAL mode allows concurrent reads during writes
+7. **Foreign key** — Deleting a project cascades to its ticks
+8. **Check constraints** — Weight 0 rejected, priority -1 rejected, invalid status rejected
+
+---
+
+## 10. Security
+
+| Vector | Mitigation |
+|--------|-----------|
+| SQL injection | All queries use `?` placeholders via `database/sql` |
+| Malicious project name | PK constraint limits length; regex validation in API layer |
+| Tick ID collision | PK constraint catches it; generate with nanosecond precision |
+| DuckBrain write access | Overwrite not append — limits blast radius of bad writes |
+| Data loss | SQLite WAL mode + `PRAGMA synchronous=NORMAL` (balanced safety/perf) |

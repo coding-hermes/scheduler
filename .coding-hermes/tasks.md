@@ -10,32 +10,10 @@
 
 An agent reading these specs must be unable to take a wrong path. Every spec follows the 10-section template: Overview → Dependencies → Interface → Behavior → Data → States → Errors → Testing → Security → Performance. Standard: "so detailed a blind person could visualize."
 
-- [ ] SPEC-S01 — System architecture spec (3-4 pages)
-  - Component diagram (Mermaid), data flow between components, directory tree, dependency graph
-  - Exact Go interfaces at system boundaries, what injects what
-  - Config struct with exact env var names, types, defaults, validation
-  - System failure modes: what breaks, how it manifests, recovery path
-
-- [ ] SPEC-S02 — Data model spec (4-5 pages)
-  - Exact DDL: CREATE TABLE projects/ticks/events with every column type, constraint, index
-  - Exact Go model structs with db/sql tags
-  - DuckBrain key schema with exact JSON shapes for /fleet/summary, /fleet/projects/<name>/status, /fleet/events
-  - Migration strategy: version table, up/down scripts, auto-run on startup
-  - Query patterns: exact SQL for every query the scheduler needs
-  - Data retention: 200 ticks per project, compaction strategy, WAL config
-
-- [ ] SPEC-S03 — Urgency calculator spec (3-4 pages)
-  - Exact urgency formula implementation in Go pseudocode with all branches
-  - Geometric interval mapping: exact formula, configurable min/max, runtime recalculation
-  - Edge cases: zero elapsed, negative elapsed (clock skew), decay_rate=0, priority=0, max_interval overflow
-  - Unit test scenarios with exact inputs and expected outputs
-
-- [ ] SPEC-S04 — Weight-budget packer spec (2-3 pages)
-  - Greedy packing algorithm: step-by-step with decision tree
-  - Edge cases: empty project list, all projects overweight, budget=0, cooldown blocking, max concurrent reached
-  - Urgency tie-breaking rules
-  - Concurrency pool: claim/release semantics, starvation prevention
-  - Unit test scenarios
+- [x] SPEC-S01 — System architecture spec (3-4 pages) **✓ 422 lines — 10-section template, Mermaid diagram, Go interfaces, Config struct, error catalog, directory tree**
+- [x] SPEC-S02 — Data model spec (4-5 pages) **✓ 416 lines — Complete DDL, Go model structs, DuckBrain key schemas, query patterns, migration strategy**
+- [x] SPEC-S03 — Urgency calculator spec (3-4 pages) **✓ 354 lines — Exact formula + Go pseudocode, geometric interval mapping with examples, edge cases, 11 unit test scenarios**
+- [x] SPEC-S04 — Weight-budget packer spec (2-3 pages) **✓ 312 lines — Greedy algorithm + decision tree, tie-breaking rules, edge cases, 11 unit test scenarios**
 
 - [ ] SPEC-S05 — Spawn engine + tick lifecycle spec (3-4 pages)
   - Exact spawn command template with all flags
