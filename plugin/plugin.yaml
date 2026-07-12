@@ -1,0 +1,19 @@
+name: coding-hermes
+version: "1.0.0"
+description: "Coding Hermes fleet scheduler integration — /fleet slash commands with MCP backend"
+author: "totalwindupflightsystems"
+hermes_version: ">=2.0"
+
+mcp_required: true
+mcp_server: "coding-hermes"
+mcp_config:
+  url: "http://localhost:9090/mcp"
+  transport: "streamable-http"
+
+hooks:
+  pre_llm_call:
+    - handler: "hooks.route_fleet_command"
+      priority: 10
+  pre_verify:
+    - handler: "hooks.inject_fleet_context"
+      priority: 5
