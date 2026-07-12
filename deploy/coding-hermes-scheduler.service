@@ -1,0 +1,13 @@
+[Unit]
+Description=Coding-Hermes Scheduler
+After=network.target
+
+[Service]
+Type=simple
+User=kara
+ExecStart=/home/kara/bin/schedulerd --port 9090 --db-path /home/kara/.coding-hermes-scheduler/scheduler.db --budget 100
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
