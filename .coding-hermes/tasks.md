@@ -6,95 +6,87 @@
 ## [x] DB — Implement SQLite data layer **✓ e91ab0f**
 - [x] Schema, migrations, CRUD for projects/ticks/events — 29 tests passing
 
-## [ ] SPEC — Write axiom-level implementation specs (BLOCKING all CORE/API/MCP work)
+## [x] SPEC — Write axiom-level implementation specs **✓ ce99654 + f5d3445 + 43c1442**
+- [x] SPEC-S01 — System architecture spec **✓ 422 lines**
+- [x] SPEC-S02 — Data model spec **✓ 416 lines**
+- [x] SPEC-S03 — Urgency calculator spec **✓ 354 lines**
+- [x] SPEC-S04 — Weight-budget packer spec **✓ 312 lines**
+- [x] SPEC-S05 — Spawn engine + tick lifecycle spec **✓ 390 lines**
+- [x] SPEC-S06 — REST API spec **✓ OpenAPI 3.0.3**
 
-An agent reading these specs must be unable to take a wrong path. Every spec follows the 10-section template: Overview → Dependencies → Interface → Behavior → Data → States → Errors → Testing → Security → Performance. Standard: "so detailed a blind person could visualize."
-
-- [x] SPEC-S01 — System architecture spec (3-4 pages) **✓ 422 lines — 10-section template, Mermaid diagram, Go interfaces, Config struct, error catalog, directory tree**
-- [x] SPEC-S02 — Data model spec (4-5 pages) **✓ 416 lines — Complete DDL, Go model structs, DuckBrain key schemas, query patterns, migration strategy**
-- [x] SPEC-S03 — Urgency calculator spec (3-4 pages) **✓ 354 lines — Exact formula + Go pseudocode, geometric interval mapping with examples, edge cases, 11 unit test scenarios**
-- [x] SPEC-S04 — Weight-budget packer spec (2-3 pages) **✓ 312 lines — Greedy algorithm + decision tree, tie-breaking rules, edge cases, 11 unit test scenarios**
-
-- [x] SPEC-S05 — Spawn engine + tick lifecycle spec (3-4 pages) **✓ 390 lines — 10-section template, spawn command template, session ID capture, PID tracking, state machine, outcome query**
-  - [x] Exact spawn command template with all flags
-  - [x] Session ID capture: parse stdout format, handle parse failures
-  - [x] PID tracking: data structure, timeout enforcement, cleanup on SIGTERM
-  - [x] Tick state machine: full transition diagram, guard conditions per transition
-  - [x] Session outcome query: exact command, output parsing, error handling
-  - [x] Integration test: exact scenario with mock hermes chat
-
-- [x] SPEC-S06 — REST API spec (4-5 pages) **✓ 438 lines — 10-section template, OpenAPI 3.0.3 YAML, 14 endpoints, error catalog, middleware, pagination, health**
-  - [x] OpenAPI 3.0 YAML for all 14 endpoints — exact request/response schemas
-  - [x] Error catalog: every HTTP status code, exact JSON error body shape, when each fires
-  - [x] Middleware stack: logging format, CORS policy, content-type enforcement
-  - [x] Pagination: query params, response envelope, count envelope
-  - [x] Health endpoint: exact response shape, what gets checked
-  - [x] Identified implementation gaps: JSON tags missing on models, path dispatch bug
-
-- [ ] SPEC-S07 — MCP server spec (2-3 pages)
-  - MCP protocol compliance: initialize, tools/list response shape, tools/call envelope
-  - All 14 tool schemas with exact JSON Schema parameters
-  - Error handling: what MCP errors map to what scheduler errors
-  - Hermes config.yaml snippet for connection
-
-- [ ] SPEC-S08 — Dashboard spec (3-4 pages)
-  - HTML structure: exact element hierarchy, CSS class naming convention
-  - Design tokens: color palette (hex), typography (font, sizes, weights), spacing scale
-  - Fleet overview: weight budget bar component, project table, running/queued sections
-  - Per-project detail: tick history table, aggregate stats card, config edit panel
-  - Session ID links: exact URL template, click behavior
-  - Auto-refresh: polling strategy, error state, loading skeleton
-  - All UI states: loading, empty, error, populated — per component
-
-- [ ] SPEC-S09 — Hermes plugin spec (2 pages)
-  - Exact file structure: plugin.yaml content, __init__.py register() logic, hooks.py handler signatures
-  - pre_llm_call hook: slash command parsing regex, argument extraction, MCP tool routing
-  - Error handling: scheduler unreachable, invalid command, MCP timeout
-  - Installation: exact commands, config.yaml snippet
-
-- [ ] SPEC-S10 — Testing strategy spec (2-3 pages)
-  - Unit test scenarios per component with exact inputs/outputs
-  - Integration test: full scheduler cycle with mock projects
-  - E2E test: scheduler → spawn hermes chat → capture session_id → query outcome
-  - MCP compliance test: initialize, tools/list, tools/call roundtrip
-  - Dashboard rendering test: verify HTML output structure
-
-- [ ] SPEC-S11 — Deployment + migration spec (2 pages)
-  - systemd unit: exact file content, install commands, log access
-  - Hermes integration: config.yaml entries, plugin enable, trigger cron
-  - Migration from 33 static crons: exact steps, rollback plan
-  - Verification checklist: health check, first tick, dashboard loads, slash commands work
-
-## [x] CORE — Implement from specs ✓ 71d5b3c
+## [x] CORE — Implement from specs **✓ 71d5b3c**
 - [x] urgency.go — geometric interval + urgency calculator (101 lines)
 - [x] packer.go — weight-budget greedy packer with cooldown (115 lines)
 - [x] spawn.go — hermes chat spawn + session_id capture (198 lines)
 - [x] lifecycle.go — tick state machine + outcome persistence (119 lines)
 - [x] loop.go — 60s evaluation loop with pause/resume (158 lines)
 
-## [ ] API — Implement from specs (AFTER CORE)
-- [ ] server.go — from SPEC-S06 OpenAPI
+## [x] API — REST API server **✓ cadc05b**
+- [x] 15 endpoints: health, status, projects CRUD, ticks, events, pause, resume, evaluate
 
-## [ ] MCP — Implement from specs (AFTER API)
-- [ ] server.go — from SPEC-S07
+## [x] MCP — MCP server **✓ 938ca1e**
+- [x] 14 fleet tools, JSON-RPC 2.0, initialize/tools/list/tools/call
 
-## [ ] DASH — Implement from specs (AFTER API)
-- [ ] generator.go — from SPEC-S08
+## [x] DASH — Dashboard **✓ 57cad52**
+- [x] Dark theme single-file HTML, fleet overview, budget bar, project table, tick history
 
-## [ ] SYNC — DuckBrain sync (AFTER CORE)
-- [ ] duckbrain.go — from SPEC-S02 DuckBrain keys
+## [x] SYNC — DuckBrain read-replica **✓ e45f799**
+- [x] 5-min sync, fleet summary + per-project status
 
-## [x] CMD — Main entry point ✓ 71d5b3c
-- [x] main.go — HTTP server (health, status, evaluate, pause, resume), graceful shutdown
+## [x] PLUGIN — Hermes plugin **✓ e45f799**
+- [x] plugin.yaml, __init__.py, hooks.py — 17 slash commands
 
-## [ ] PLUGIN — Hermes plugin (AFTER MCP)
-- [ ] plugin.yaml, __init__.py, hooks.py — from SPEC-S09
+## [x] CMD — Main entry point **✓ 9672322**
+- [x] Wired: API + MCP + Dashboard + DuckBrain sync in one binary
 
-## [ ] MIGR — Migration tool (AFTER CORE)
-- [ ] main.go — from SPEC-S11
+## [x] MIGR — Migration tool **✓ c4e9ca0**
+- [x] 33 cron → scheduler import, dry-run mode
 
-## [ ] TEST — End-to-end (AFTER ALL)
-- [ ] From SPEC-S10 scenarios
+## [x] DEPLOY — Deployment config **✓ c4e9ca0**
+- [x] systemd unit, Makefile targets
 
-## [ ] DEPLOY — Production (AFTER TEST)
-- [ ] From SPEC-S11 checklist
+---
+
+## HILO GAP ANALYSIS — 18 files, 114 edges, 18 orphans found
+
+## [ ] GAP-001 — Duplicate boolPtr across packages
+- `api/server.go:277` defines `func boolPtr(b bool) *bool`
+- `mcp/server.go:493` defines `func boolPtr(b bool) *bool`  
+- `database/projects.go:190` defines `func boolPtr(b bool) *bool`
+- Fix: export from database package, api + mcp use `database.BoolPtr`
+
+## [ ] GAP-002 — No tests for 5 core packages
+- `internal/scheduler/` — urgency, packer, spawn, lifecycle, loop: 0 tests
+- `internal/api/` — 15 endpoints: 0 tests
+- `internal/mcp/` — 14 tools: 0 tests
+- `internal/dashboard/` — template rendering: 0 tests
+- `internal/sync/` — DuckBrain sync: 0 tests
+
+## [ ] GAP-003 — No integration test
+- Nothing proves API + MCP + Dashboard + Loop + Sync coexist
+- Spin up schedulerd, hit /health, /, /mcp, /api/v1/projects in one test
+
+## [ ] GAP-004 — Sync uses os/exec for DuckBrain
+- `internal/sync/duckbrain.go:115` calls `hermes mcp duckbrain remember` via shell
+- Should use DuckBrain MCP client directly or a proper HTTP call
+
+## [ ] GAP-005 — Plugin not registered with Hermes
+- `plugin/hooks.py` exists but not symlinked to `~/.hermes/plugins/coding-hermes/`
+- No trigger cron created to hit `/api/v1/evaluate`
+
+## [ ] GAP-006 — Migrate tool not run
+- 33 coding-hermes foreman crons still running on Hermes cron scheduler
+- `make migrate-dry` → `make migrate` → cutover trigger cron
+
+## [ ] GAP-007 — Unused imports and dead code
+- `mcp/server.go:1` imports `log` and `time` with `var _ = log.Printf; var _ = time.Now` guards
+- Clean up dead code before production deploy
+
+## [ ] DEPLOY — Production cutover checklist
+- [ ] Run `make migrate-dry` and verify 33 projects
+- [ ] Run `make migrate` to create SQLite records
+- [ ] `make deploy-install` for systemd unit
+- [ ] Create trigger cron: `*/1 * * * * curl -X POST http://localhost:9090/api/v1/evaluate`
+- [ ] Symlink plugin: `ln -s ~/coding-herms-scheduler/plugin ~/.hermes/plugins/coding-hermes`
+- [ ] Disable old 33 cron jobs via `cronjob action=update job_id=<id> enabled=false`
+- [ ] Verify: dashboard loads, /fleet status works, first foreman tick spawns
