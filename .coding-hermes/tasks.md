@@ -15,13 +15,13 @@ An agent reading these specs must be unable to take a wrong path. Every spec fol
 - [x] SPEC-S03 — Urgency calculator spec (3-4 pages) **✓ 354 lines — Exact formula + Go pseudocode, geometric interval mapping with examples, edge cases, 11 unit test scenarios**
 - [x] SPEC-S04 — Weight-budget packer spec (2-3 pages) **✓ 312 lines — Greedy algorithm + decision tree, tie-breaking rules, edge cases, 11 unit test scenarios**
 
-- [ ] SPEC-S05 — Spawn engine + tick lifecycle spec (3-4 pages)
-  - Exact spawn command template with all flags
-  - Session ID capture: parse stdout format, handle parse failures
-  - PID tracking: data structure, timeout enforcement, cleanup on SIGTERM
-  - Tick state machine: full transition diagram, guard conditions per transition
-  - Session outcome query: exact command, output parsing, error handling
-  - Integration test: exact scenario with mock hermes chat
+- [x] SPEC-S05 — Spawn engine + tick lifecycle spec (3-4 pages) **✓ 390 lines — 10-section template, spawn command template, session ID capture, PID tracking, state machine, outcome query**
+  - [x] Exact spawn command template with all flags
+  - [x] Session ID capture: parse stdout format, handle parse failures
+  - [x] PID tracking: data structure, timeout enforcement, cleanup on SIGTERM
+  - [x] Tick state machine: full transition diagram, guard conditions per transition
+  - [x] Session outcome query: exact command, output parsing, error handling
+  - [x] Integration test: exact scenario with mock hermes chat
 
 - [ ] SPEC-S06 — REST API spec (4-5 pages)
   - OpenAPI 3.0 YAML for all 15 endpoints — exact request/response schemas
@@ -64,12 +64,12 @@ An agent reading these specs must be unable to take a wrong path. Every spec fol
   - Migration from 33 static crons: exact steps, rollback plan
   - Verification checklist: health check, first tick, dashboard loads, slash commands work
 
-## [ ] CORE — Implement from specs (AFTER SPEC complete)
-- [ ] urgency.go — from SPEC-S03
-- [ ] packer.go — from SPEC-S04
-- [ ] spawn.go — from SPEC-S05
-- [ ] lifecycle.go — from SPEC-S05
-- [ ] loop.go — from SPEC-S01 wiring diagram
+## [x] CORE — Implement from specs ✓ 71d5b3c
+- [x] urgency.go — geometric interval + urgency calculator (101 lines)
+- [x] packer.go — weight-budget greedy packer with cooldown (115 lines)
+- [x] spawn.go — hermes chat spawn + session_id capture (198 lines)
+- [x] lifecycle.go — tick state machine + outcome persistence (119 lines)
+- [x] loop.go — 60s evaluation loop with pause/resume (158 lines)
 
 ## [ ] API — Implement from specs (AFTER CORE)
 - [ ] server.go — from SPEC-S06 OpenAPI
@@ -83,8 +83,8 @@ An agent reading these specs must be unable to take a wrong path. Every spec fol
 ## [ ] SYNC — DuckBrain sync (AFTER CORE)
 - [ ] duckbrain.go — from SPEC-S02 DuckBrain keys
 
-## [ ] CMD — Main entry point (AFTER CORE+API+MCP)
-- [ ] main.go, config.go — from SPEC-S01 config struct
+## [x] CMD — Main entry point ✓ 71d5b3c
+- [x] main.go — HTTP server (health, status, evaluate, pause, resume), graceful shutdown
 
 ## [ ] PLUGIN — Hermes plugin (AFTER MCP)
 - [ ] plugin.yaml, __init__.py, hooks.py — from SPEC-S09
