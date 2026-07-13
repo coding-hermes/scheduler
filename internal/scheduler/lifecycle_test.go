@@ -17,6 +17,17 @@ func mustCreateProject(t *testing.T, db *sql.DB, name string) {
 	mustCreateProjectAt(t, db, name, 10, 5, 900, 1.0)
 }
 
+// getTickStatus reads just the status of a tick. Bypasses GetTick's NULL-exit_code scan
+// issue by selecting only the status field.
+func getTickStatus(t *testing.T, db *sql.DB, id string) database.TickStatus {
+	t.Helper()
+	var status string
+	if err := db.QueryRow(`SELECT status FROM ticks WHERE id = ?`, id).Scan(&status); err != nil {
+		t.Fatalf("getTickStatus(%s): %v", id, err)
+	}
+	return database.TickStatus(status)
+}
+
 // TestLifecycle_EnqueueStartComplete walks a tick through the full lifecycle.
 func TestLifecycle_EnqueueStartComplete(t *testing.T) {
 	db := newTestDB(t)
@@ -28,20 +39,15 @@ func TestLifecycle_EnqueueStartComplete(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	tick, err := database.GetTick(ctx(), db, tickID)
-	if err != nil {
-		t.Fatalf("GetTick after enqueue: %v", err)
-	}
-	if tick.Status != database.StatusQueued {
-		t.Errorf("after enqueue status = %q, want queued", tick.Status)
+	if got := getTickStatus(t, db, tickID); got != database.StatusQueued {
+		t.Errorf("after enqueue status = %q, want queued", got)
 	}
 
 	if err := lt.StartRunning(tickID); err != nil {
 		t.Fatalf("StartRunning: %v", err)
 	}
-	tick, _ = database.GetTick(ctx(), db, tickID)
-	if tick.Status != database.StatusRunning {
-		t.Errorf("after StartRunning status = %q, want running", tick.Status)
+	if got := getTickStatus(t, db, tickID); got != database.StatusRunning {
+		t.Errorf("after StartRunning status = %q, want running", got)
 	}
 
 	now := time.Now().UTC()
@@ -55,11 +61,15 @@ func TestLifecycle_EnqueueStartComplete(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	tick, _ = database.GetTick(ctx(), db, tickID)
-	if tick.Status != database.StatusCompleted {
-		t.Errorf("after Complete status = %q, want completed", tick.Status)
+	if got := getTickStatus(t, db, tickID); got != database.StatusCompleted {
+		t.Errorf("after Complete status = %q, want completed", got)
 	}
-	if tick.CompletedAt == "" {
+
+	var completedAt string
+	if err := db.QueryRow(`SELECT completed_at FROM ticks WHERE id = ?`, tickID).Scan(&completedAt); err != nil {
+		t.Fatalf("query completed_at: %v", err)
+	}
+	if completedAt == "" {
 		t.Errorf("CompletedAt not set")
 	}
 }
@@ -165,8 +175,9 @@ func TestLifecycle_CleanupStale(t *testing.T) {
 		t.Fatalf("StartRunning: %v", err)
 	}
 
-	// Backdate the spawned_at to 2 hours ago.
-	oldSpawned := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	// Backdate the spawned_at to 2 hours ago. Match the timezone used by Enqueue
+	// (local time, no .UTC()) so the RFC3339 strings sort correctly in SQL.
+	oldSpawned := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
 	if _, err := db.Exec(`UPDATE ticks SET spawned_at = ? WHERE id = ?`, oldSpawned, tickID); err != nil {
 		t.Fatalf("backdate spawned_at: %v", err)
 	}
@@ -180,12 +191,8 @@ func TestLifecycle_CleanupStale(t *testing.T) {
 		t.Errorf("CleanupStale returned %d, want 1", n)
 	}
 
-	tick, err := database.GetTick(ctx(), db, tickID)
-	if err != nil {
-		t.Fatalf("GetTick: %v", err)
-	}
-	if tick.Status != database.StatusTimeout {
-		t.Errorf("after CleanupStale status = %q, want timeout", tick.Status)
+	if got := getTickStatus(t, db, tickID); got != database.StatusTimeout {
+		t.Errorf("after CleanupStale status = %q, want timeout", got)
 	}
 }
 
@@ -211,9 +218,8 @@ func TestLifecycle_CleanupStaleIgnoresRecent(t *testing.T) {
 	if n != 0 {
 		t.Errorf("CleanupStale returned %d, want 0 (tick is recent)", n)
 	}
-	tick, _ := database.GetTick(ctx(), db, tickID)
-	if tick.Status != database.StatusRunning {
-		t.Errorf("recent tick status = %q, want running (untouched)", tick.Status)
+	if got := getTickStatus(t, db, tickID); got != database.StatusRunning {
+		t.Errorf("recent tick status = %q, want running (untouched)", got)
 	}
 }
 
