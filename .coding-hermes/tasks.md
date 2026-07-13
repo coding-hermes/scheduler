@@ -42,12 +42,10 @@
 - api/server.go: duplicate boolPtr
 - mcp/server.go: duplicate boolPtr
 
-### [ ] CUTOVER — Disable old cron jobs
+### [x] CUTOVER — Disable old cron jobs ✓ 20:47 CDT
 **Priority: HIGH. Weight: 15.**
-- 26 projects migrated to scheduler and running
-- Old Hermes cron jobs still running in parallel → double-spawning
-- Disable old cron jobs for all 26 migrated projects
-- Only keep non-foreman crons (daily reports, health checks, etc.)
+- 28 cron jobs paused — only 5 keepers remain (scheduler self-foreman, supervisor, crier, duckbrain-sync, gitreins)
+- Scheduler now the sole authority for per-project foremen
 
 ---
 
@@ -115,3 +113,52 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Create/move monitoring cron jobs into monitoring namespace
 - Set NamespaceMode=true, verify first tick runs with correct allocations
 - Monitor borrowing activity for 24h before declaring stable
+
+---
+
+## OBSERVABILITY & SIMULATION — 2026-07-12
+
+### [ ] OBS-001 — Structured event logging
+**Priority: HIGH. Weight: 15.**
+- Every evaluation cycle writes to `events` table: timestamp, level, message, details JSON
+- Tick state transitions logged: queued→running, running→completed/failed/timeout
+- Scheduler start/stop events
+- Error events with stack traces
+
+### [ ] OBS-002 — Watchdog + health polling
+**Priority: HIGH. Weight: 12.**
+- Script at `~/.hermes/scripts/watchdog.sh` polls `/api/v1/health` every 5m
+- Alerts via Hermes cron (no_agent mode) when unreachable
+- Tracks consecutive failures, escalates after 3 misses
+- Dead-man's switch: alerts if no evaluation in 10+ minutes
+
+### [ ] OBS-003 — Dashboard: tick timeline + outcomes
+**Priority: MEDIUM. Weight: 10.**
+- Tick timeline graph in dashboard HTML
+- Color-coded: green=completed, red=failed, yellow=timeout, blue=running
+- Per-project outcome percentages
+- Clickable session IDs linking to Hermes transcripts
+
+### [ ] OBS-004 — Simulation / dry-run mode
+**Priority: HIGH. Weight: 20.**
+- `--simulate` flag on schedulerd: no real process spawning
+- Simulated foremen complete instantly with randomised outcomes
+- `--simulate-count N` to generate N fake ticks for dashboard testing
+- `--simulate-duration D` to run simulated evaluation loop for D minutes
+- Writes tick history to SQLite, generates realistic dashboard data
+
+### [ ] OBS-005 — Cost tracking per tick
+**Priority: MEDIUM. Weight: 8.**
+- Capture tokens_in, tokens_out, cost_usd from hermes sessions
+- Query `hermes sessions export --dry-run <session_id>` after tick completes
+- Store in ticks table for cost aggregation
+- Dashboard: daily/weekly cost per project, fleet total
+
+### [ ] OBS-006 — Alert escalation rules
+**Priority: LOW. Weight: 6.**
+- Define alert severity matrix: CRITICAL/HIGH/MEDIUM/LOW
+- CRITICAL: scheduler down for 10+ min
+- HIGH: >3 projects failing consecutively
+- MEDIUM: project starved for >2x interval
+- LOW: single failure or elevated error rate
+- Write to events table; watchdog delivers to Telegram

@@ -131,3 +131,25 @@ func (p *Packer) runningCount() int {
 
 // Budget returns the current weight budget.
 func (p *Packer) Budget() int { return p.budget }
+
+// ListEnabled returns all enabled projects as PackedProject for simulation.
+func (p *Packer) ListEnabled(ctx interface{}) ([]PackedProject, error) {
+	rows, err := p.db.Query(`
+		SELECT name, weight, priority, workdir, repo_url
+		FROM projects WHERE enabled = 1
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PackedProject
+	for rows.Next() {
+		var pp PackedProject
+		if err := rows.Scan(&pp.Name, &pp.Weight, &pp.Priority, &pp.Workdir, &pp.RepoURL); err != nil {
+			return nil, err
+		}
+		out = append(out, pp)
+	}
+	return out, rows.Err()
+}

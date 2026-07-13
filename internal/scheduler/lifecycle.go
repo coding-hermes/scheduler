@@ -21,15 +21,20 @@ const (
 
 // TickOutcome holds the result of a completed tick.
 type TickOutcome struct {
-	TickID    string
-	Project   string
-	SessionID string
-	Started   time.Time
-	Finished  time.Time
-	Duration  time.Duration
-	Status    TickStatus
-	ExitCode  int
-	Error     string
+	TickID       string
+	Project      string
+	SessionID    string
+	Started      time.Time
+	Finished     time.Time
+	Duration     time.Duration
+	Status       TickStatus
+	ExitCode     int
+	Error        string
+	TokensIn     int     // simulated or real
+	TokensOut    int     // simulated or real
+	CostUSD      float64 // simulated or real
+	Commits      int     // simulated or real
+	FilesChanged int     // simulated or real
 }
 
 // LifecycleTracker manages the tick state machine and outcome persistence.
