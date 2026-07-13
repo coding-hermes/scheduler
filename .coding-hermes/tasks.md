@@ -25,11 +25,11 @@
 - Replace os/exec with MCP HTTP client in sync/duckbrain.go
 - DuckBrain MCP runs as stdio via wrapper — need HTTP bridge or direct MCP calls
 
-### [ ] GAP-008 — Session ID capture
+### [x] GAP-008 — Session ID capture ✓ `986abb8`
 **Priority: HIGH. Weight: 25.**
-- Spawner launches hermes chat but doesn't capture session_id from stdout
-- Need to parse `session_id: <ID>` from stdout and update tick record
-- Need outcome query: `hermes sessions export --dry-run <session_id>` 
+- Spawner captures session_id from hermes chat stdout and persists to ticks table
+- Session ID parsing + persistence implemented in spawn.go
+- Board was stale — already shipped July 12
 
 ### [ ] GAP-009 — Spawn uses project model/provider
 **Priority: MEDIUM. Weight: 10.**
