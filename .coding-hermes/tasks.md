@@ -48,3 +48,70 @@
 - Old Hermes cron jobs still running in parallel → double-spawning
 - Disable old cron jobs for all 26 migrated projects
 - Only keep non-foreman crons (daily reports, health checks, etc.)
+
+---
+
+## MULTI-NAMESPACE EXTENSION — 2026-07-12 (specs written, implementation pending)
+
+Design: Two-axis weight-budget scheduler. Namespaces are pools with their own weight budgets. 
+Jobs have intra-namespace weight AND effective global weight = namespace_allocation × (w_job / Σw_ns).
+Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
+
+### [ ] NS-001 — Migration v2: namespaces + namespace_ticks tables
+**Priority: HIGH. Weight: 20. Depends on: none.**
+- `internal/database/schema.go`: Add MigrationV2 DDL (namespaces, namespace_ticks, ALTER TABLE projects)
+- `internal/database/migrations.go`: Version gate — only apply v2 when v1 is present
+- `internal/database/store.go`: Add Namespace CRUD methods (List, Get, Create, Update, Delete)
+- `internal/database/namespace_ticks.go`: Insert, query by namespace, query by tick_group
+
+### [ ] NS-002 — NamespaceAllocator (Phase 1 of S07)
+**Priority: HIGH. Weight: 18. Depends on: NS-001.**
+- `internal/scheduler/namespace_alloc.go`: NamespaceAllocator struct + Allocate()
+- Reserved floors + proportional distribution + hard cap enforcement
+- Handle edge cases: Σreserved > B, zero namespaces, all disabled
+- Unit tests: 12+ test cases from S07 section 8
+
+### [ ] NS-003 — MultiPoolPacker (Phases 2-4 of S07)
+**Priority: HIGH. Weight: 22. Depends on: NS-002.**
+- `internal/scheduler/multipool_packer.go`: MultiPoolPacker struct + Pack()
+- Intra-namespace packing with effective weight calculation
+- BorrowingEngine: collect unused, distribute to hungry namespaces
+- One level of re-borrowing after redistribution
+- Fallback to flat WeightPacker when NamespaceMode=false
+- Unit tests: 15+ test cases from S07 section 8
+
+### [ ] NS-004 — Namespace API endpoints
+**Priority: HIGH. Weight: 15. Depends on: NS-001.**
+- `internal/api/namespace_handlers.go`: 6 new handlers (from S06 section 11)
+- GET/POST /namespaces, GET/PUT /namespaces/{id}, GET /namespaces/{id}/projects, POST /namespaces/{id}/move
+- API tests: 11 test cases from S06 section 11.5
+
+### [ ] NS-005 — Scheduler integration + Config toggle
+**Priority: HIGH. Weight: 12. Depends on: NS-003, NS-004.**
+- Wire NamespaceAllocator + MultiPoolPacker + BorrowingEngine into Scheduler
+- `SCHEDULER_NAMESPACE_MODE` env toggle (default false — backward compatible)
+- Evaluation loop branch: if NamespaceMode → multipool path, else → flat path
+- Write namespace_ticks rows after each evaluation cycle
+- DuckBrain sync: write /fleet/namespaces and /fleet/namespaces/{id}/status
+
+### [ ] NS-006 — Tests: namespace unit + integration
+**Priority: MEDIUM. Weight: 14. Depends on: NS-005.**
+- NamespaceAllocator unit tests: reserved floors, hard caps, sum=budget, zero reserved
+- MultiPoolPacker unit tests: effective weight scaling, borrowing, fallback to flat
+- Integration: create 3 namespaces, run evaluation, verify namespace_ticks
+- Integration: starve one ns, surplus to another, verify borrowing
+- Integration: toggle NamespaceMode at runtime, verify smooth transition
+
+### [ ] NS-007 — Dashboard: namespace view
+**Priority: LOW. Weight: 8. Depends on: NS-005.**
+- Add namespace allocation/borrowing table to dashboard HTML
+- Color-coded: green (under-utilized), yellow (at reserved), red (at hard cap)
+- Per-namespace utilization chart (last 20 ticks)
+
+### [ ] NS-008 — Production migration: assign projects to namespaces
+**Priority: MEDIUM. Weight: 10. Depends on: NS-005.**
+- Define namespace configuration (from S07 section 12: coding-hermes, monitoring, data-cleanup, duckbrain-infra, backup)
+- API calls to create namespaces + move each of 26 projects into coding-hermes namespace
+- Create/move monitoring cron jobs into monitoring namespace
+- Set NamespaceMode=true, verify first tick runs with correct allocations
+- Monitor borrowing activity for 24h before declaring stable

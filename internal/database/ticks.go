@@ -115,7 +115,7 @@ WHERE id = ?`
 
 // GetTick loads a single tick by id.
 func GetTick(ctx context.Context, db *sql.DB, id string) (*Tick, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
 FROM ticks WHERE id = ?`
 	var t Tick
 	var status, outcome string
@@ -140,7 +140,7 @@ FROM ticks WHERE id = ?`
 // limit caps the result count; pass 0 for an unbounded query (the caller
 // should usually bound it).
 func ListTicks(ctx context.Context, db *sql.DB, projectName string, limit int) ([]Tick, error) {
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
 FROM ticks`
 	args := []any{}
 	if projectName != "" {

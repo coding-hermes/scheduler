@@ -12,7 +12,7 @@ The scheduler exposes a versioned JSON REST API from the same `net/http` server 
 
 SQLite is authoritative for projects, ticks, and events. Control calls operate on the in-process `scheduler.Loop`. Responses are JSON and use `Content-Type: application/json`. There is no authentication layer, cross-origin API, delete endpoint, offset/cursor pagination, or asynchronous job resource.
 
-The implementation registers ten `ServeMux` patterns representing fourteen method/path operations. This document uses those fourteen operations as the public surface. Empty collections are encoded as arrays, never `null`.
+The implementation registers fifteen `ServeMux` patterns representing twenty method/path operations. This document uses those twenty operations as the public surface. Empty collections are encoded as arrays, never `null`.
 
 ### 1.1 Current implementation conformance
 
@@ -436,3 +436,216 @@ Deploy behind an authenticated local proxy if access beyond localhost is require
 | JSON memory | O(rows returned); slices are fully materialized before encoding |
 
 The API has no response cache, compression, streaming, rate limiting, or pagination cursor. Caller-supplied limits are unbounded, so operators must keep them reasonable; a future hard maximum should preserve the response envelope. Health performs one count query and one DB ping. Status performs an enabled-project list, an active-tick count, and a grouped terminal-status query. No handler should hold a database transaction while invoking scheduler controls.
+
+---
+
+## 11. Namespace API Endpoints (Migration v2)
+
+When `NamespaceMode=true`, the following additional endpoints are available. When `NamespaceMode=false`, they return `{"namespaces":[],"mode":"flat","message":"namespace mode disabled"}`.
+
+### 11.1 OpenAPI — Namespace Paths
+
+```yaml
+  /namespaces:
+    get:
+      operationId: listNamespaces
+      responses:
+        '200':
+          description: All namespaces with project counts and last utilization.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceList' }
+        '405': { $ref: '#/components/responses/GetOrPostOnly' }
+    post:
+      operationId: createNamespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NamespaceCreate' }
+      responses:
+        '201':
+          description: Created namespace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Namespace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '405': { $ref: '#/components/responses/GetOrPostOnly' }
+  /namespaces/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getNamespace
+      responses:
+        '200':
+          description: Namespace detail with recent utilization history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NamespaceDetail' }
+        '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '405': { $ref: '#/components/responses/NamespaceMethods' }
+    put:
+      operationId: updateNamespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NamespaceUpdate' }
+      responses:
+        '200':
+          description: Updated namespace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Namespace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '405': { $ref: '#/components/responses/NamespaceMethods' }
+  /namespaces/{id}/projects:
+    get:
+      operationId: listNamespaceProjects
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Projects in this namespace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+        '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '405': { $ref: '#/components/responses/GetOnly' }
+  /namespaces/{id}/move:
+    post:
+      operationId: moveProjectToNamespace
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project]
+              properties:
+                project: { type: string }
+      responses:
+        '200':
+          description: Project moved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectControl' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '405': { $ref: '#/components/responses/PostOnly' }
+```
+
+### 11.2 Schemas
+
+```yaml
+    Namespace:
+      type: object
+      required: [id, weight, reserved, hard_cap, enabled, created_at, updated_at]
+      properties:
+        id: { type: string }
+        weight: { type: integer, minimum: 1, maximum: 100 }
+        reserved: { type: integer, minimum: 0 }
+        hard_cap: { type: integer, minimum: 0, description: "0 = unlimited" }
+        enabled: { type: boolean }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    NamespaceCreate:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        weight: { type: integer, minimum: 1, maximum: 100, default: 10 }
+        reserved: { type: integer, minimum: 0, default: 1 }
+        hard_cap: { type: integer, minimum: 0, default: 100 }
+        enabled: { type: boolean, default: true }
+        description: { type: string }
+    NamespaceUpdate:
+      type: object
+      properties:
+        weight: { type: integer }
+        reserved: { type: integer }
+        hard_cap: { type: integer }
+        enabled: { type: boolean }
+        description: { type: string }
+    NamespaceList:
+      type: object
+      required: [namespaces, mode]
+      properties:
+        namespaces: { type: array, items: { $ref: '#/components/schemas/Namespace' } }
+        mode: { type: string, enum: [flat, multi-namespace] }
+    NamespaceDetail:
+      type: object
+      required: [namespace, projects, recent_ticks]
+      properties:
+        namespace: { $ref: '#/components/schemas/Namespace' }
+        projects: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        recent_ticks:
+          type: array
+          items:
+            type: object
+            properties:
+              tick_group: { type: string }
+              allocated: { type: integer }
+              used: { type: integer }
+              borrowed: { type: integer }
+              lent: { type: integer }
+              job_count: { type: integer }
+    NamespaceNotFound:
+      description: Namespace absent.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "namespace not found" }
+    NamespaceMethods:
+      description: Wrong method.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "GET, PUT, or POST only" }
+```
+
+### 11.3 Error Messages
+
+|| Status | Message | When |
+||--------|---------|------|
+|| `400` | `"namespace id required"` | Create/update with empty id |
+|| `400` | `"invalid JSON: <decoder error>"` | POST/PUT body decode failure |
+|| `400` | `"project name required"` | Move without project field |
+|| `404` | `"namespace not found"` | GET/PUT/DELETE on absent namespace |
+|| `404` | `"project not found"` | Move references absent project |
+|| `409` | `"namespace already exists"` | Duplicate namespace id |
+|| `405` | `"GET or POST only"` | Wrong method on /namespaces |
+|| `405` | `"GET, PUT, or POST only"` | Wrong method on /namespaces/{id} |
+|| `405` | `"GET only"` | Wrong method on /namespaces/{id}/projects |
+|| `405` | `"POST only"` | Wrong method on /namespaces/{id}/move |
+
+### 11.4 Behavior
+
+- **`GET /namespaces`**: Returns all namespaces with `mode: "multi-namespace"` when enabled. When `NamespaceMode=false`, returns `{"namespaces":[],"mode":"flat"}`.
+- **`POST /namespaces`**: Creates namespace. ID must be unique. Weight defaults to 10, reserved to 1, hard_cap to 100 (unlimited), enabled to true.
+- **`GET /namespaces/{id}`**: Returns namespace detail with its projects and last 20 namespace_ticks rows.
+- **`PUT /namespaces/{id}`**: Partial update. Omitted fields unchanged. `updated_at` auto-set.
+- **`GET /namespaces/{id}/projects`**: Lists all projects assigned to this namespace (same shape as `GET /projects`).
+- **`POST /namespaces/{id}/move`**: Moves a project into this namespace. Body: `{"project":"<name>"}`. Project must exist. Returns `{"status":"moved","namespace":"<id>","project":"<name>"}`.
+- **Namespace deletion**: Not exposed via API. Use SQLite directly or MCP for safety (prevents accidental mass unassignment).
+
+### 11.5 Testing
+
+```text
+1. Create namespace, verify 201 with correct defaults
+2. List namespaces, verify mode field
+3. Get namespace detail with zero projects initially
+4. Create project, move to namespace, verify GET /namespaces/{id}/projects includes it
+5. Update namespace weight, verify 200 and persisted
+6. Disable namespace, verify enabled=false
+7. Verify 409 on duplicate namespace
+8. Verify 404 on absent namespace
+9. Verify 400 on missing required fields
+10. Verify flat mode response when NamespaceMode=false
+11. Verify all wrong-method 405 responses
+```

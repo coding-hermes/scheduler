@@ -86,7 +86,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// Project stats.
 	rows, err := g.db.QueryContext(ctx, `SELECT name, weight, priority, enabled FROM projects ORDER BY name`)
 	if err == nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var r FleetRow
 			if err := rows.Scan(&r.Name, &r.Weight, &r.Priority, &r.Enabled); err != nil {
@@ -98,12 +98,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				data.BudgetUsed += r.Weight
 			}
 			// Running check.
-			g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='running'`, r.Name).Scan(&r.RunningNow)
+			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='running'`, r.Name).Scan(&r.RunningNow)
 			// Last tick.
-			g.db.QueryRowContext(ctx, `SELECT spawned_at, outcome FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.Name).Scan(&r.LastTick, &r.LastOutcome)
+			_ = g.db.QueryRowContext(ctx, `SELECT spawned_at, outcome FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.Name).Scan(&r.LastTick, &r.LastOutcome)
 			// Urgency — simplified: priority * (1 + idle_hours).
 			var lastTime sql.NullString
-			g.db.QueryRowContext(ctx, `SELECT MAX(spawned_at) FROM ticks WHERE project_name=?`, r.Name).Scan(&lastTime)
+			_ = g.db.QueryRowContext(ctx, `SELECT MAX(spawned_at) FROM ticks WHERE project_name=?`, r.Name).Scan(&lastTime)
 			if lastTime.Valid && lastTime.String != "" {
 				if t, err := time.Parse(time.RFC3339, lastTime.String); err == nil {
 					hours := time.Since(t).Hours()

@@ -30,22 +30,42 @@ SQLite is the source of truth. DuckBrain is a compact snapshot for foremen and B
 
 ## 3. SQLite DDL
 
-### 3.1 Projects Table
+### 3.0 Namespaces Table (Migration v2)
 
 ```sql
-CREATE TABLE IF NOT EXISTS projects (
-    name        TEXT PRIMARY KEY NOT NULL,
-    repo_url    TEXT NOT NULL,
-    workdir     TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS namespaces (
+    id          TEXT PRIMARY KEY NOT NULL,
     weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
-    priority    REAL NOT NULL DEFAULT 5.0 CHECK(priority >= 0.5 AND priority <= 10.0),
-    cooldown_s  INTEGER NOT NULL DEFAULT 300 CHECK(cooldown_s >= 0),
-    decay_rate  REAL NOT NULL DEFAULT 1.0 CHECK(decay_rate >= 0),
+    reserved    INTEGER NOT NULL DEFAULT 1 CHECK(reserved >= 0),
+    hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    description TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
+
+### 3.1 Projects Table
+
+```sql
+CREATE TABLE IF NOT EXISTS projects (
+    name         TEXT PRIMARY KEY NOT NULL,
+    repo_url     TEXT NOT NULL,
+    workdir      TEXT NOT NULL,
+    weight       INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
+    priority     REAL NOT NULL DEFAULT 5.0 CHECK(priority >= 0.5 AND priority <= 10.0),
+    cooldown_s   INTEGER NOT NULL DEFAULT 300 CHECK(cooldown_s >= 0),
+    decay_rate   REAL NOT NULL DEFAULT 1.0 CHECK(decay_rate >= 0),
+    enabled      INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    namespace_id TEXT REFERENCES namespaces(id) ON DELETE SET NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_namespace ON projects(namespace_id);
+```
+
+**Migration v2:** `ALTER TABLE projects ADD COLUMN namespace_id TEXT REFERENCES namespaces(id) ON DELETE SET NULL`. Existing projects get `NULL` (unscheduled in namespace mode; backward-compatible — flat mode ignores the column).
 
 ### 3.2 Ticks Table
 
@@ -78,7 +98,28 @@ CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
 
 Example: `muster-2026-07-12-14-03-01`
 
-### 3.3 Events Table
+### 3.3 Namespace Ticks Table (Migration v2)
+
+Records per-namespace utilization for each evaluation cycle. Used for borrowing decisions and dashboard visibility.
+
+```sql
+CREATE TABLE IF NOT EXISTS namespace_ticks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick_group   TEXT NOT NULL,           -- group key: <YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id),
+    allocated    INTEGER NOT NULL,        -- budget given this tick
+    used         INTEGER NOT NULL,        -- budget actually consumed (sum of effective weights)
+    borrowed     INTEGER NOT NULL DEFAULT 0, -- extra budget from other namespaces
+    lent         INTEGER NOT NULL DEFAULT 0, -- budget given to other namespaces
+    job_count    INTEGER NOT NULL,        -- how many jobs ran
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_ticks_group ON namespace_ticks(tick_group);
+CREATE INDEX IF NOT EXISTS idx_namespace_ticks_ns ON namespace_ticks(namespace_id, created_at DESC);
+```
+
+### 3.4 Events Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS events (
@@ -95,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project, timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_level ON events(level, timestamp);
 ```
 
-### 3.4 Schema Migrations Table
+### 3.5 Schema Migrations Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -105,7 +146,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 ```
 
-### 3.5 WAL Mode and Foreign Keys
+Migration versions:
+- **v1**: Initial schema — `projects`, `ticks`, `events`, `schema_migrations`
+- **v2**: Multi-namespace — `namespaces`, `namespace_ticks`, `projects.namespace_id`, indexes
+
+### 3.6 WAL Mode and Foreign Keys
 
 ```go
 // Applied on every Store initialization, after opening the DB:
@@ -125,16 +170,17 @@ import "time"
 
 // Project represents a managed coding-hermes project.
 type Project struct {
-    Name       string    `json:"name"`
-    RepoURL    string    `json:"repo_url"`
-    Workdir    string    `json:"workdir"`
-    Weight     int       `json:"weight"`
-    Priority   float64   `json:"priority"`
-    CooldownS  int       `json:"cooldown_s"`
-    DecayRate  float64   `json:"decay_rate"`
-    Enabled    bool      `json:"enabled"`
-    CreatedAt  time.Time `json:"created_at"`
-    UpdatedAt  time.Time `json:"updated_at"`
+    Name        string    `json:"name"`
+    RepoURL     string    `json:"repo_url"`
+    Workdir     string    `json:"workdir"`
+    Weight      int       `json:"weight"`
+    Priority    float64   `json:"priority"`
+    CooldownS   int       `json:"cooldown_s"`
+    DecayRate   float64   `json:"decay_rate"`
+    Enabled     bool      `json:"enabled"`
+    NamespaceID *string   `json:"namespace_id"` // NULL = unscheduled in namespace mode
+    CreatedAt   time.Time `json:"created_at"`
+    UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ProjectPatch is used for partial updates.
@@ -195,6 +241,40 @@ type EventFilter struct {
     Project string // empty = all
     Limit   int    // default 50, max 500
     Offset  int
+}
+
+// Namespace represents a weight pool for related cron jobs (Migration v2).
+type Namespace struct {
+    ID          string    `json:"id"`
+    Weight      int       `json:"weight"`
+    Reserved    int       `json:"reserved"`
+    HardCap     int       `json:"hard_cap"`
+    Enabled     bool      `json:"enabled"`
+    Description string    `json:"description"`
+    CreatedAt   time.Time `json:"created_at"`
+    UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// NamespacePatch is used for partial updates to a namespace.
+type NamespacePatch struct {
+    Weight      *int    `json:"weight,omitempty"`
+    Reserved    *int    `json:"reserved,omitempty"`
+    HardCap     *int    `json:"hard_cap,omitempty"`
+    Enabled     *bool   `json:"enabled,omitempty"`
+    Description *string `json:"description,omitempty"`
+}
+
+// NamespaceTick records per-namespace utilization per evaluation cycle.
+type NamespaceTick struct {
+    ID          int64     `json:"id"`
+    TickGroup   string    `json:"tick_group"`
+    NamespaceID string    `json:"namespace_id"`
+    Allocated   int       `json:"allocated"`
+    Used        int       `json:"used"`
+    Borrowed    int       `json:"borrowed"`
+    Lent        int       `json:"lent"`
+    JobCount    int       `json:"job_count"`
+    CreatedAt   time.Time `json:"created_at"`
 }
 ```
 
@@ -263,6 +343,48 @@ FROM ticks
 WHERE project = ? AND status = 'completed'
 ORDER BY completed_at DESC
 LIMIT 1;
+```
+
+### 5.8 List all enabled namespaces (called every tick in namespace mode)
+
+```sql
+SELECT id, weight, reserved, hard_cap, enabled, description, created_at, updated_at
+FROM namespaces
+WHERE enabled = 1
+ORDER BY weight DESC;
+```
+
+### 5.9 Get projects by namespace (intra-namespace packing)
+
+```sql
+SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
+       enabled, namespace_id, created_at, updated_at
+FROM projects
+WHERE enabled = 1 AND namespace_id = ?
+ORDER BY name;
+```
+
+### 5.10 Insert namespace tick (after each evaluation cycle)
+
+```sql
+INSERT INTO namespace_ticks (tick_group, namespace_id, allocated, used, borrowed, lent, job_count)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+```
+
+### 5.11 Get namespace utilization history (dashboard)
+
+```sql
+SELECT tick_group, allocated, used, borrowed, lent, job_count, created_at
+FROM namespace_ticks
+WHERE namespace_id = ?
+ORDER BY created_at DESC
+LIMIT ?;  -- typically 20
+```
+
+### 5.12 Move project to namespace
+
+```sql
+UPDATE projects SET namespace_id = ?, updated_at = datetime('now') WHERE name = ?;
 ```
 
 ---
@@ -339,6 +461,59 @@ LIMIT 1;
 ```
 
 DuckBrain keys are **overwritten** each sync cycle, not appended. The scheduler writes the full blob each time.
+
+### 6.4 `/fleet/namespaces` — Namespace Registry
+
+```json
+{
+    "updated_at": "2026-07-12T14:05:00Z",
+    "mode": "multi-namespace",
+    "namespaces": [
+        {
+            "id": "coding-hermes",
+            "weight": 60,
+            "reserved": 25,
+            "hard_cap": 85,
+            "enabled": true,
+            "project_count": 31,
+            "last_allocation": 61,
+            "last_used": 58,
+            "last_borrowed": 0,
+            "last_lent": 3,
+            "last_jobs": 6
+        }
+    ]
+}
+```
+
+### 6.5 `/fleet/namespaces/<id>/status` — Per-Namespace Detail
+
+```json
+{
+    "id": "coding-hermes",
+    "weight": 60,
+    "reserved": 25,
+    "hard_cap": 85,
+    "enabled": true,
+    "description": "Coding Hermes foreman fleet",
+    "project_count": 31,
+    "current_allocation": 61,
+    "current_usage": 58,
+    "borrowing_history": {
+        "last_10_ticks": [
+            {
+                "tick_group": "2026-07-12-14-05-00",
+                "allocated": 61,
+                "used": 58,
+                "borrowed": 0,
+                "lent": 3,
+                "jobs": 6
+            }
+        ]
+    },
+    "updated_at": "2026-07-12T14:05:00Z"
+}
+```
 
 ---
 

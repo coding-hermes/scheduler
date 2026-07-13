@@ -303,10 +303,76 @@ No security concerns — pure in-memory computation with no external I/O during 
 
 ## 10. Performance
 
-| Metric | Target |
-|--------|--------|
-| Sort 33 projects | < 5 µs (Go's pdqsort, O(n log n)) |
-| Pack 33 projects | < 3 µs (single pass, O(n)) |
-| Total | < 10 µs |
+|| Metric | Target |
+||--------|--------|
+|| Sort 33 projects | < 5 µs (Go's pdqsort, O(n log n)) |
+|| Pack 33 projects | < 3 µs (single pass, O(n)) |
+|| Total | < 10 µs |
 
 Zero allocations beyond the result slice. The `PackResult` is stack-friendly for the common case (< 33 projects).
+
+---
+
+## 11. Multi-Namespace Extension
+
+**See S07 for the full specification.** When `NamespaceMode=true`, the flat `WeightPacker` is replaced by a `MultiPoolPacker` with a four-phase algorithm:
+
+### 11.1 MultiPoolPacker Interface
+
+```go
+// MultiPoolPacker replaces WeightPacker when namespace mode is enabled.
+type MultiPoolPacker struct {
+    allocator     *NamespaceAllocator
+    maxConcurrent int
+}
+
+func NewMultiPoolPacker(budget, maxConcurrent int) *MultiPoolPacker
+
+// Pack runs the full four-phase algorithm.
+func (m *MultiPoolPacker) Pack(
+    projects []ProjectWithUrgency,
+    namespaces []Namespace,
+    lastCompleted map[string]time.Time,
+    running []string,
+    now time.Time,
+) PackResult
+```
+
+### 11.2 Four-Phase Algorithm
+
+```
+PHASE 1 — NAMESPACE ALLOCATION
+  reserved_sum = Σ(ns.reserved)
+  remainder = budget - reserved_sum
+  For each namespace:
+    allocation = ns.reserved + (ns.weight / Σweights) × remainder
+    allocation = min(allocation, ns.hard_cap)
+
+PHASE 2 — INTRA-NAMESPACE PACKING
+  For each namespace with allocation > 0:
+    effective_weight = allocation × (project.weight / Σweights_in_ns)
+    Sort by urgency, greedy pack into allocation
+
+PHASE 3 — BORROWING PASS
+  Collect unused budget from satisfied namespaces
+  Distribute to hungry namespaces (up to their hard_caps)
+  Re-pack borrowers with new allocation (one level of re-borrowing)
+
+PHASE 4 — SPAWN
+  Collect all selected projects → run_queue → SpawnEngine (S05)
+  Record namespace_ticks rows
+```
+
+### 11.3 Backward Compatibility
+
+`NamespaceMode=false` (default) uses the flat `WeightPacker` exactly as specified in sections 1–10. No behavior change. Existing deployments continue unchanged.
+
+### 11.4 Two-Axis Weighting
+
+A project's **effective global consumption** is the product of two independent weights:
+
+```
+effective_consumption = namespace_allocation × (w_job / Σw_all_jobs_in_namespace)
+```
+
+This means a job with `weight=60` in the `data-cleanup` namespace (gets ~9 units global) has an effective weight of `9 × (60/200) = 2.7 → 2` units. The same `weight=60` in `coding-hermes` (gets ~61 units global) has an effective weight of `61 × (60/230) = 15.9 → 15` units. Same intra-namespace weight, fundamentally different global impact — exactly the "airline cargo" two-axis model.

@@ -33,8 +33,10 @@ graph TB
         DASH[Dashboard<br/>:9090/]
 
         subgraph "Scheduler Core"
+            NS[Namespace Allocator<br/>two-axis budget distribution]
             URG[Urgency Calculator]
-            PK[Weight-Budget Packer]
+            PK[Multi-Pool Packer<br/>flat or namespaced]
+            BE[Borrowing Engine<br/>idle capacity redistribution]
             SP[Spawn Engine]
             LC[Tick Lifecycle Tracker]
         end
@@ -45,6 +47,7 @@ graph TB
 
     subgraph "DuckBrain"
         DF[/fleet/projects/]
+        DN[/fleet/namespaces/]
         DS[/fleet/summary]
         DE[/fleet/events]
     end
@@ -58,13 +61,15 @@ graph TB
     MCP --> API
     DASH --> DB
 
-    URG --> DB
-    PK --> URG
-    SP --> PK
-    LC --> SP
+    NS --> URG
+    URG --> PK
+    BE --> PK
+    PK --> SP
+    SP --> LC
     LC --> DB
     SYNC --> DB
     SYNC --> DF
+    SYNC --> DN
     SYNC --> DS
     SYNC --> DE
 
@@ -95,8 +100,11 @@ All dependencies are local — no network calls to external services except `her
 // Scheduler is the top-level orchestrator.
 type Scheduler struct {
     db        *database.Store
+    nsAlloc   *NamespaceAllocator
     urgency   *UrgencyCalculator
-    packer    *WeightPacker
+    packer    *WeightPacker        // flat mode (default)
+    multiPool *MultiPoolPacker     // namespace mode
+    borrowing *BorrowingEngine
     spawner   *SpawnEngine
     lifecycle *LifecycleTracker
     syncer    *DuckBrainSyncer
@@ -202,6 +210,7 @@ type Config struct {
     SpawnTimeout  time.Duration `env:"SCHEDULER_SPAWN_TIMEOUT" default:"30m"`
     LoopInterval  time.Duration `env:"SCHEDULER_LOOP_INTERVAL" default:"60s"`
     SyncInterval  time.Duration `env:"SCHEDULER_SYNC_INTERVAL" default:"5m"`
+    NamespaceMode bool          `env:"SCHEDULER_NAMESPACE_MODE" default:"false"`
 }
 
 func (c Config) Validate() error {
