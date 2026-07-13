@@ -1,20 +1,47 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
+env:
+  GO_VERSION: '1.23'
+
 jobs:
-  build:
+  # ── Fast checks first ──
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: ${{ env.GO_VERSION }}
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  # ── Matrix: multiple Go versions ──
+  test:
+    name: Test (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.22', '1.23']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Dependencies
+        run: go mod download
 
       - name: Build
         run: go build ./...
@@ -22,20 +49,94 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./... -count=1 -short -v
+      - name: Unit Tests
+        run: go test ./... -count=1 -short -v -coverprofile=coverage.out
 
-  lint:
+      - name: Race Detector
+        run: go test ./... -count=1 -short -race
+
+      - name: Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go${{ matrix.go-version }}
+          path: coverage.out
+
+  # ── Simulation smoke test ──
+  simulation:
+    name: Simulation Smoke Test
     runs-on: ubuntu-latest
+    needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: ${{ env.GO_VERSION }}
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+      - name: Build Binary
+        run: go build -o bin/schedulerd ./cmd/schedulerd/
+
+      - name: Run Simulation
+        run: |
+          ./bin/schedulerd -listen 127.0.0.1:9199 -db /tmp/sim-ci.db -sim-setup -sim-ticks 3 2>&1 | tee sim-output.txt
+          # Verify it produced results.
+          grep -q "SIM-SETUP: 13 test projects inserted" sim-output.txt || (echo "FAIL: sim setup" && exit 1)
+          grep -q "Total:.*spawned" sim-output.txt || (echo "FAIL: no spawns" && exit 1)
+          echo "Simulation smoke test passed"
+
+  # ── Integration test (build tag) ──
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          version: latest
-          args: --timeout=5m
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build Binary
+        run: go build -o bin/schedulerd ./cmd/schedulerd/
+
+      - name: Run Integration Tests
+        run: go test -v -run TestIntegration -tags integration -count=1 -timeout 60s .
+
+  # ── Build artifacts ──
+  build-artifacts:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/schedulerd-linux-amd64 ./cmd/schedulerd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/migrate-linux-amd64 ./cmd/migrate/
+
+      - name: Size Check
+        run: ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-linux-amd64
+          path: dist/
+
+  # ── All clear gate ──
+  all-clear:
+    name: CI All Clear
+    runs-on: ubuntu-latest
+    needs: [lint, test, simulation, integration, build-artifacts]
+    if: always()
+    steps:
+      - name: Check
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then echo "lint failed"; exit 1; fi
+          if [[ "${{ needs.test.result }}" != "success" ]]; then echo "test failed"; exit 1; fi
+          if [[ "${{ needs.simulation.result }}" != "success" ]]; then echo "simulation failed"; exit 1; fi
+          if [[ "${{ needs.integration.result }}" != "success" ]]; then echo "integration failed"; exit 1; fi
+          if [[ "${{ needs.build-artifacts.result }}" != "success" ]]; then echo "build failed"; exit 1; fi
+          echo "All checks passed"
