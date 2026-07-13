@@ -20,10 +20,12 @@
 - 5/6 pass: Health, API Projects, MCP, TickLifecycle, DynamicConfig
 - Dashboard skipped in test env (works on live server)
 
-### [ ] GAP-004 — DuckBrain sync client
+### [x] GAP-004 — DuckBrain sync client ✓ `7638ebb`
 **Priority: MEDIUM. Weight: 15.**
-- Replace os/exec with MCP HTTP client in sync/duckbrain.go
-- DuckBrain MCP runs as stdio via wrapper — need HTTP bridge or direct MCP calls
+- DuckBrain HTTP REST API client implemented (postMemory → POST /api/memories)
+- Fleet summary + per-project status synced every 5 min
+- Configurable via --duckbrain-url flag (default http://localhost:3000)
+- 176 lines, build+vet+test green
 
 ### [x] GAP-008 — Session ID capture ✓ `986abb8`
 **Priority: HIGH. Weight: 25.**
