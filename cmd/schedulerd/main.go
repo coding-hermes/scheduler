@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,6 +33,8 @@ func main() {
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
+	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
+	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -58,6 +61,22 @@ func main() {
 			log.Fatalf("FATAL: simulation: %v", err)
 		}
 		log.Printf("SIM: generated %d ticks", *simCount)
+		return
+	}
+
+	// Simulation fixture mode: create test projects, run multi-tick, report.
+	if *simSetup {
+		fixture := scheduler.NewSimFixture(db)
+		runner := scheduler.NewSimRunner(loop, fixture)
+
+		simCtx, simCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer simCancel()
+
+		report, err := runner.RunMultiTick(simCtx, *simTicks)
+		if err != nil {
+			log.Fatalf("FATAL: sim setup: %v", err)
+		}
+		fmt.Print(report.Summary())
 		return
 	}
 

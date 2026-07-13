@@ -39,6 +39,7 @@ type scored struct {
 	decayRate     float64
 	cooldownS     int
 	lastCompleted *time.Time
+	lastTickAt    *time.Time
 	createdAt     time.Time
 	workdir       string
 	repoURL       string
@@ -48,7 +49,7 @@ type scored struct {
 func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 	rows, err := p.db.Query(`
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
-		       COALESCE(last_tick_completed, created_at),
+		       last_tick_completed,
 		       created_at, workdir, repo_url
 		FROM projects
 		WHERE enabled = 1
@@ -63,6 +64,7 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 
 	for rows.Next() {
 		var s scored
+		var lastCompleted *time.Time
 		var lastStr sql.NullString
 		var createdAtStr string
 		var enabled bool
@@ -75,10 +77,11 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 		if lastStr.Valid && lastStr.String != "" {
 			t, err := time.Parse(time.RFC3339, lastStr.String)
 			if err == nil {
-				s.lastCompleted = &t
+				lastCompleted = &t
 			}
 		}
-		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, s.lastCompleted, s.createdAt)
+		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
+		s.lastTickAt = lastCompleted
 		list = append(list, s)
 	}
 
@@ -92,8 +95,14 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 	used := 0
 	var packed []PackedProject
 
+	totalChecked := 0
+	totalSkippedBudget := 0
+	totalSkippedCooldown := 0
+
 	for _, s := range list {
+		totalChecked++
 		if used+s.weight > p.budget {
+			totalSkippedBudget++
 			continue
 		}
 		if currentlyRunning >= p.maxConcurrent {
@@ -101,7 +110,8 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 			break
 		}
 		cooldownDur := time.Duration(s.cooldownS) * time.Second
-		if s.lastCompleted != nil && now.Sub(*s.lastCompleted) < cooldownDur {
+		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
+			totalSkippedCooldown++
 			continue
 		}
 		packed = append(packed, PackedProject{
@@ -116,6 +126,10 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 		currentlyRunning++
 	}
 
+	if len(packed) == 0 {
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d, running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, currentlyRunning, p.maxConcurrent)
+	}
 	return packed, nil
 }
 

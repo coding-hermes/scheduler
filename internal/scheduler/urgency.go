@@ -37,7 +37,10 @@ func NewUrgencyCalculator(minI, maxI time.Duration, numLevels int) *UrgencyCalcu
 }
 
 // ComputeInterval maps priority to a geometric tick interval.
-// Formula: interval = minInterval * ratio ^ ((priority - 1) / (numLevels - 1))
+// Higher priority → shorter interval (runs more frequently).
+// Formula: interval = maxInterval / ratio ^ ((priority - 1) / (numLevels - 1))
+//   priority=10 → minInterval   (fastest)
+//   priority=1  → maxInterval   (slowest)
 func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration {
 	p := priority
 	if p < 1 {
@@ -46,8 +49,11 @@ func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration {
 		p = float64(u.numLevels)
 	}
 	position := (p - 1) / float64(u.numLevels-1)
-	multiplier := math.Pow(u.ratio, position)
-	seconds := u.minInterval.Seconds() * multiplier
+	divisor := math.Pow(u.ratio, position)
+	if divisor <= 0 {
+		divisor = 1
+	}
+	seconds := u.maxInterval.Seconds() / divisor
 	return time.Duration(seconds * float64(time.Second))
 }
 

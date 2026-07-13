@@ -57,39 +57,38 @@ func TestNewUrgencyCalculator_InvalidRange(t *testing.T) {
 func TestComputeInterval_Boundaries(t *testing.T) {
 	u := NewUrgencyCalculator(60*time.Second, 60*time.Minute, 10)
 
-	// Priority 1 → minInterval.
-	got := u.ComputeInterval(1)
+	// Priority 10 → minInterval (fastest).
+	got := u.ComputeInterval(10)
 	if got != 60*time.Second {
-		t.Errorf("ComputeInterval(1) = %v, want 60s", got)
+		t.Errorf("ComputeInterval(10) = %v, want 60s", got)
 	}
 
-	// Priority 10 → maxInterval.
-	got = u.ComputeInterval(10)
-	// Allow for floating-point rounding error.
+	// Priority 1 → maxInterval (slowest).
+	got = u.ComputeInterval(1)
 	if got < 59*time.Minute || got > 61*time.Minute {
-		t.Errorf("ComputeInterval(10) = %v, want ~60m", got)
+		t.Errorf("ComputeInterval(1) = %v, want ~60m", got)
 	}
 
 	// Out-of-range priorities are clamped.
 	got = u.ComputeInterval(0)
-	if got != 60*time.Second {
-		t.Errorf("ComputeInterval(0) = %v, want 60s (clamped to priority=1)", got)
+	if got < 59*time.Minute || got > 61*time.Minute {
+		t.Errorf("ComputeInterval(0) = %v, want ~60m (clamped to priority=1)", got)
 	}
 	got = u.ComputeInterval(100)
-	if got < 59*time.Minute || got > 61*time.Minute {
-		t.Errorf("ComputeInterval(100) = %v, want ~60m (clamped to priority=10)", got)
+	if got != 60*time.Second {
+		t.Errorf("ComputeInterval(100) = %v, want 60s (clamped to priority=10)", got)
 	}
 }
 
-// TestComputeInterval_MonotonicInPriority verifies that higher priority yields longer interval.
+// TestComputeInterval_MonotonicInPriority verifies higher priority → shorter interval.
 func TestComputeInterval_MonotonicInPriority(t *testing.T) {
 	u := NewUrgencyCalculator(time.Second, 100*time.Second, 10)
 
-	prev := time.Duration(0)
+	prev := 100 * time.Second // start from max
 	for p := 1.0; p <= 10; p++ {
 		got := u.ComputeInterval(p)
-		if got <= prev {
-			t.Errorf("ComputeInterval(%.0f) = %v not greater than previous %v", p, got, prev)
+		if got > prev {
+			t.Errorf("ComputeInterval(%.0f) = %v not <= previous %v", p, got, prev)
 		}
 		prev = got
 	}
@@ -173,10 +172,10 @@ func TestSetRange_UpdatesRatio(t *testing.T) {
 		t.Errorf("SetRange did not update fields: min=%v max=%v", u.minInterval, u.maxInterval)
 	}
 
-	// New interval should reflect the new range.
-	got := u.ComputeInterval(1)
+	// New interval should reflect the new range: priority 10 = minInterval.
+	got := u.ComputeInterval(10)
 	if got != 10*time.Second {
-		t.Errorf("ComputeInterval(1) after SetRange = %v, want 10s", got)
+		t.Errorf("ComputeInterval(10) after SetRange = %v, want 10s", got)
 	}
 }
 
