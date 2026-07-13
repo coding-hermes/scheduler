@@ -1,7 +1,6 @@
 package scheduler_test
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -9,8 +8,6 @@ import (
 	"github.com/coding-herms/scheduler/internal/database"
 	"github.com/coding-herms/scheduler/internal/scheduler"
 )
-
-func ctx() context.Context { return context.Background() }
 
 func mustCreateProject(t *testing.T, db *sql.DB, name string) {
 	t.Helper()

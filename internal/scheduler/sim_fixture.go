@@ -82,9 +82,8 @@ func (sf *SimFixture) Setup(projects []SimProject) error {
 
 // SimRunner runs multi-tick simulations and collects statistics.
 type SimRunner struct {
-	loop     *Loop
-	fixture  *SimFixture
-	projects []SimProject
+	loop    *Loop
+	fixture *SimFixture
 }
 
 // NewSimRunner creates a runner bound to an existing loop.
@@ -200,33 +199,33 @@ func (sr *SimRunner) runOneTick(tickNum int) SimTickReport {
 
 // SimReport holds the full simulation result.
 type SimReport struct {
-	TickCount      int
-	Budget         int
-	MaxConcur      int
-	Projects       int
-	Enabled        int
-	Elapsed        time.Duration
-	Ticks          []SimTickReport
-	TotalSpawned   int
-	TotalCompleted int
-	TotalFailed    int
-	TotalTimeout   int
+	TickCount       int
+	Budget          int
+	MaxConcur       int
+	Projects        int
+	Enabled         int
+	Elapsed         time.Duration
+	Ticks           []SimTickReport
+	TotalSpawned    int
+	TotalCompleted  int
+	TotalFailed     int
+	TotalTimeout    int
 	TotalBudgetUsed int
-	AvgPerTick     float64
+	AvgPerTick      float64
 }
 
 // SimTickReport holds one tick's statistics.
 type SimTickReport struct {
-	Tick          int
-	Selected      int
-	Spawned       int
-	BudgetUsed    int
-	Completed     int
-	Failed        int
-	Timeout       int
+	Tick           int
+	Selected       int
+	Spawned        int
+	BudgetUsed     int
+	Completed      int
+	Failed         int
+	Timeout        int
 	PriorityPicked []int
-	NamesPicked   []string
-	Error         string
+	NamesPicked    []string
+	Error          string
 }
 
 // Summary returns a human-readable summary of the simulation.

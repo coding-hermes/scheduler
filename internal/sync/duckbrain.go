@@ -102,17 +102,17 @@ func (d *DuckBrainSync) syncFleetSummary(ctx context.Context) error {
 
 // projectStatus is the per-project payload sent to DuckBrain.
 type projectStatus struct {
-	Name            string  `json:"name"`
-	Weight          int     `json:"weight"`
-	Priority        int     `json:"priority"`
-	Enabled         bool    `json:"enabled"`
-	CooldownS       int     `json:"cooldown_s"`
-	DecayRate       float64 `json:"decay_rate"`
-	Model           string  `json:"model"`
-	Provider        string  `json:"provider"`
-	LastTick        string  `json:"last_tick"`
-	LastTickStart   string  `json:"last_tick_start"`
-	SyncedAt        string  `json:"synced_at"`
+	Name          string  `json:"name"`
+	Weight        int     `json:"weight"`
+	Priority      int     `json:"priority"`
+	Enabled       bool    `json:"enabled"`
+	CooldownS     int     `json:"cooldown_s"`
+	DecayRate     float64 `json:"decay_rate"`
+	Model         string  `json:"model"`
+	Provider      string  `json:"provider"`
+	LastTick      string  `json:"last_tick"`
+	LastTickStart string  `json:"last_tick_start"`
+	SyncedAt      string  `json:"synced_at"`
 }
 
 // syncProjectStatuses queries all projects and pushes one memory each to DuckBrain.

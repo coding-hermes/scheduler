@@ -32,17 +32,16 @@ func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int) *
 
 // scored is a project with its computed urgency.
 type scored struct {
-	name          string
-	priority      float64
-	weight        int
-	urgency       float64
-	decayRate     float64
-	cooldownS     int
-	lastCompleted *time.Time
-	lastTickAt    *time.Time
-	createdAt     time.Time
-	workdir       string
-	repoURL       string
+	name       string
+	priority   float64
+	weight     int
+	urgency    float64
+	decayRate  float64
+	cooldownS  int
+	lastTickAt *time.Time
+	createdAt  time.Time
+	workdir    string
+	repoURL    string
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -93,7 +92,7 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 	// Greedy pack: pick projects that fit in budget.
 	currentlyRunning := p.runningCount()
 	used := 0
-	var packed []PackedProject
+	packed := make([]PackedProject, 0, max(1, len(list)/2))
 
 	totalChecked := 0
 	totalSkippedBudget := 0

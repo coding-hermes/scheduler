@@ -21,32 +21,32 @@ func NewGenerator(db *sql.DB) *Generator {
 
 // FleetRow is one project in the fleet overview table.
 type FleetRow struct {
-	Name      string
-	Weight    int
-	Priority  int
-	Enabled   bool
-	LastTick  string
+	Name        string
+	Weight      int
+	Priority    int
+	Enabled     bool
+	LastTick    string
 	LastOutcome string
-	Urgency   float64
-	RunningNow bool
+	Urgency     float64
+	RunningNow  bool
 }
 
 // TickRow is one tick in the history table.
 type TickRow struct {
 	ID, Project, Status, Outcome, SpawnedAt, CompletedAt string
-	Commits, FilesChanged int
+	Commits, FilesChanged                                int
 }
 
 // FleetData holds all data for the dashboard.
 type FleetData struct {
-	GeneratedAt    string
-	BudgetTotal    int
-	BudgetUsed     int
-	ActiveTicks    int
-	TotalProjects  int
+	GeneratedAt     string
+	BudgetTotal     int
+	BudgetUsed      int
+	ActiveTicks     int
+	TotalProjects   int
 	EnabledProjects int
-	Projects       []FleetRow
-	RecentTicks    []TickRow
+	Projects        []FleetRow
+	RecentTicks     []TickRow
 }
 
 // Generate writes the dashboard HTML to w.
@@ -79,8 +79,8 @@ func (g *Generator) Generate(w io.Writer) error {
 
 func (g *Generator) collect(ctx context.Context) FleetData {
 	data := FleetData{
-		GeneratedAt:  time.Now().Format(time.RFC3339),
-		BudgetTotal:  100,
+		GeneratedAt: time.Now().Format(time.RFC3339),
+		BudgetTotal: 100,
 	}
 
 	// Project stats.

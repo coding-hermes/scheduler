@@ -13,14 +13,14 @@ import (
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
-	db             *sql.DB
-	maxConcurrent  int
-	active         map[string]*exec.Cmd // tickID -> running process
-	mu             sync.Mutex
-	timeout        time.Duration
-	model          string
-	provider       string
-	skills         string
+	db            *sql.DB
+	maxConcurrent int
+	active        map[string]*exec.Cmd // tickID -> running process
+	mu            sync.Mutex
+	timeout       time.Duration
+	model         string
+	provider      string
+	skills        string
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -97,14 +97,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	s.mu.Unlock()
 
 	st := &SpawnedTick{
-		TickID:   tickID,
-		Project:  project.Name,
-		PID:      cmd.Process.Pid,
-		Started:  time.Now(),
-		cmd:      cmd,
-		stdout:   stdout,
-		stderr:   stderr,
-		spawner:  s,
+		TickID:  tickID,
+		Project: project.Name,
+		PID:     cmd.Process.Pid,
+		Started: time.Now(),
+		cmd:     cmd,
+		stdout:  stdout,
+		stderr:  stderr,
+		spawner: s,
 	}
 
 	// Parse session ID from first line of stdout and persist it.
@@ -162,7 +162,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	timer := time.AfterFunc(st.spawner.timeout, func() {
 		if st.cmd.Process != nil {
-			st.cmd.Process.Kill()
+			_ = st.cmd.Process.Kill()
 		}
 	})
 	defer timer.Stop()

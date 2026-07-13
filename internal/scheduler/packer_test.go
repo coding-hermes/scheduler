@@ -242,4 +242,3 @@ func TestPick_PopulatesFields(t *testing.T) {
 		t.Errorf("Urgency = %f, want > 0", proj.Urgency)
 	}
 }
-

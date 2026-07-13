@@ -181,7 +181,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string)
 	}
 	tick, _ := getLatestTick(ctx, s.db, name)
 	writeJSON(w, 200, map[string]interface{}{
-		"project":    p,
+		"project":     p,
 		"latest_tick": tick,
 	})
 }
