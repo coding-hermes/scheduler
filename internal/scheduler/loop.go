@@ -125,6 +125,11 @@ func (l *Loop) evaluate() {
 			continue
 		}
 
+		if err := l.lifecycle.StartRunning(tickID); err != nil {
+			log.Printf("EVAL: start %s: %v", proj.Name, err)
+			continue
+		}
+
 		st, err := l.spawner.Spawn(proj, tickID)
 		if err != nil {
 			log.Printf("EVAL: spawn %s: %v", proj.Name, err)

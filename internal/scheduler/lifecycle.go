@@ -44,11 +44,22 @@ func NewLifecycleTracker(db *sql.DB) *LifecycleTracker {
 // Enqueue creates a queued tick entry for the project.
 func (lt *LifecycleTracker) Enqueue(project, tickID string) error {
 	_, err := lt.db.Exec(`
-		INSERT INTO ticks (id, project, status, spawned_at)
-		VALUES (?, ?, ?, ?)
-	`, tickID, project, TickQueued, time.Now().Format(time.RFC3339))
+		INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, tickID, project, TickQueued, time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("enqueue tick %s: %w", tickID, err)
+	}
+	return nil
+}
+
+// StartRunning transitions a tick from queued to running.
+func (lt *LifecycleTracker) StartRunning(tickID string) error {
+	_, err := lt.db.Exec(`
+		UPDATE ticks SET status = ? WHERE id = ?
+	`, TickRunning, tickID)
+	if err != nil {
+		return fmt.Errorf("start tick %s: %w", tickID, err)
 	}
 	return nil
 }

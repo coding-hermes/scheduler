@@ -135,8 +135,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectByID handles GET, PUT, POST on /projects/:name and sub-routes.
 func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 1 {
+	// Strip the /api/v1/projects/ prefix to get the resource path.
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/projects/")
+	parts := splitPath(path)
+	if len(parts) < 1 || parts[0] == "" {
 		writeError(w, 400, "project name required")
 		return
 	}
@@ -366,8 +368,20 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 
 func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.Tick, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT id, project_name, session_id, status, outcome, spawned_at, completed_at,
-		       exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at
+		SELECT id, project_name, COALESCE(session_id,'') as session_id, status,
+		       COALESCE(outcome,'') as outcome,
+		       COALESCE(spawned_at,'') as spawned_at,
+		       COALESCE(completed_at,'') as completed_at,
+		       COALESCE(exit_code,0) as exit_code,
+		       COALESCE(commits,0) as commits,
+		       COALESCE(files_changed,0) as files_changed,
+		       COALESCE(tokens_in,0) as tokens_in,
+		       COALESCE(tokens_out,0) as tokens_out,
+		       COALESCE(cost_usd,0.0) as cost_usd,
+		       COALESCE(urgency,0.0) as urgency,
+		       COALESCE(weight_used,0) as weight_used,
+		       COALESCE(error,'') as error,
+		       created_at
 		FROM ticks WHERE project_name = ? ORDER BY spawned_at DESC LIMIT 1
 	`, project)
 	var t database.Tick
@@ -382,8 +396,20 @@ func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.T
 
 func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT id, project_name, session_id, status, outcome, spawned_at, completed_at,
-		       exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at
+		SELECT id, project_name, COALESCE(session_id,'') as session_id, status,
+		       COALESCE(outcome,'') as outcome,
+		       COALESCE(spawned_at,'') as spawned_at,
+		       COALESCE(completed_at,'') as completed_at,
+		       COALESCE(exit_code,0) as exit_code,
+		       COALESCE(commits,0) as commits,
+		       COALESCE(files_changed,0) as files_changed,
+		       COALESCE(tokens_in,0) as tokens_in,
+		       COALESCE(tokens_out,0) as tokens_out,
+		       COALESCE(cost_usd,0.0) as cost_usd,
+		       COALESCE(urgency,0.0) as urgency,
+		       COALESCE(weight_used,0) as weight_used,
+		       COALESCE(error,'') as error,
+		       created_at
 		FROM ticks WHERE id = ?
 	`, id)
 	var t database.Tick
@@ -397,7 +423,7 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 }
 
 func listTicks(ctx context.Context, db *sql.DB, project string, limit int) ([]database.Tick, error) {
-	q := "SELECT id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at FROM ticks"
+	q := "SELECT id, project_name, COALESCE(session_id,'') as session_id, status, COALESCE(outcome,'') as outcome, COALESCE(spawned_at,'') as spawned_at, COALESCE(completed_at,'') as completed_at, COALESCE(exit_code,0) as exit_code, COALESCE(commits,0) as commits, COALESCE(files_changed,0) as files_changed, COALESCE(tokens_in,0) as tokens_in, COALESCE(tokens_out,0) as tokens_out, COALESCE(cost_usd,0.0) as cost_usd, COALESCE(urgency,0.0) as urgency, COALESCE(weight_used,0) as weight_used, COALESCE(error,'') as error, created_at FROM ticks"
 	var args []interface{}
 	if project != "" {
 		q += " WHERE project_name = ?"
