@@ -1,14 +1,23 @@
-# Go
+# Binaries
 bin/
-*.exe
-*.test
-*.out
 
-# Hilo
-.vfs/
+# Test coverage
+*.out
+*.test
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Goose migrations (if using goose)
+# goose/version/
+
+# Project-local state (not committed)
+.vfs/
+.coding-hermes/
