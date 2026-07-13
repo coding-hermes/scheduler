@@ -107,7 +107,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		spawner:  s,
 	}
 
-	// Parse session ID from first line of stdout.
+	// Parse session ID from first line of stdout and persist it.
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		if scanner.Scan() {
@@ -117,13 +117,17 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				st.mu.Lock()
 				st.SessionID = id
 				st.mu.Unlock()
+				// Persist session_id to the database.
+				if _, err := s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, id, tickID); err != nil {
+					log.Printf("ERROR persisting session_id for %s: %v", tickID, err)
+				}
 			}
 		}
 	}()
 
 	// Update tick to running.
 	_, err = s.db.Exec(`
-		UPDATE ticks SET status = 'running', session_id = '', spawned_at = ?
+		UPDATE ticks SET status = 'running', spawned_at = ?
 		WHERE id = ?
 	`, st.Started.Format(time.RFC3339), tickID)
 	if err != nil {
@@ -167,10 +171,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	finished := time.Now()
 
 	outcome := TickOutcome{
-		TickID:   st.TickID,
-		Project:  st.Project,
-		Started:  st.Started,
-		Finished: finished,
+		TickID:    st.TickID,
+		Project:   st.Project,
+		SessionID: st.SessionID,
+		Started:   st.Started,
+		Finished:  finished,
 	}
 
 	if err != nil {

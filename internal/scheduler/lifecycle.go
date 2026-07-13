@@ -21,14 +21,15 @@ const (
 
 // TickOutcome holds the result of a completed tick.
 type TickOutcome struct {
-	TickID   string
-	Project  string
-	Started  time.Time
-	Finished time.Time
-	Duration time.Duration
-	Status   TickStatus
-	ExitCode int
-	Error    string
+	TickID    string
+	Project   string
+	SessionID string
+	Started   time.Time
+	Finished  time.Time
+	Duration  time.Duration
+	Status    TickStatus
+	ExitCode  int
+	Error     string
 }
 
 // LifecycleTracker manages the tick state machine and outcome persistence.
@@ -71,9 +72,9 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		exitCode = outcome.ExitCode
 	}
 	_, err := lt.db.Exec(`
-		UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?
+		UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?
 		WHERE id = ?
-	`, string(outcome.Status), outcome.Finished.Format(time.RFC3339), exitCode, stringOrNil(outcome.Error), outcome.TickID)
+	`, string(outcome.Status), outcome.Finished.Format(time.RFC3339), exitCode, stringOrNil(outcome.Error), stringOrNil(outcome.SessionID), outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
 	}
