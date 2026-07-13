@@ -30,6 +30,7 @@ func main() {
 	weightBudget := flag.Int("budget", 100, "Weight budget")
 	maxConcurrent := flag.Int("max-concurrent", 8, "Max concurrent foremen")
 	duckbrainNS := flag.String("duckbrain-ns", "coding-hermes", "DuckBrain namespace for sync")
+	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
@@ -127,7 +128,7 @@ func main() {
 
 	// Start DuckBrain sync in background.
 	go func() {
-		duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS)
+		duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 		duckbrain.Run(context.Background())
 	}()
 
