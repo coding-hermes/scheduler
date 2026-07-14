@@ -57,7 +57,7 @@ Design: Two-axis weight-budget scheduler. Namespaces are pools with their own we
 Jobs have intra-namespace weight AND effective global weight = namespace_allocation × (w_job / Σw_ns).
 Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 
-### [ ] NS-001 — Migration v2: namespaces + namespace_ticks tables
+### [x] NS-001 — Migration v2: namespaces + namespace_ticks tables ✓ `9b1d44c`
 **Priority: HIGH. Weight: 20. Depends on: none.**
 - `internal/database/schema.go`: Add MigrationV2 DDL (namespaces, namespace_ticks, ALTER TABLE projects)
 - `internal/database/migrations.go`: Version gate — only apply v2 when v1 is present
