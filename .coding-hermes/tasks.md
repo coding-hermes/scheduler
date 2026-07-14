@@ -177,3 +177,11 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - `.golangci.yml` now has `version: "2"` — golangci-lint `latest` resolves to v2.12.2 which requires it
 - CI run 29348519558: lint job was failing with "unsupported version of the configuration"
 - Fix: added `version: "2"` to `.golangci.yml` top-level
+
+### [ ] CI-002 — Migrate .golangci.yml to v2 full schema
+**Priority: HIGH. Weight: 8.**
+- golangci-lint v2.12.2 rejects v1 config keys: exclude-rules, linters-settings
+- CI lint job fails: additional properties not allowed
+- Need: full v1 to v2 migration per golangci-lint migration guide
+- Pre-existing issue, not caused by OBS-002. Detected 2026-07-14.
+- CI Pipeline also has cache corruption — transient infra issue, self-resolving
