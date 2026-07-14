@@ -11,39 +11,42 @@ import (
 
 // Loop runs the main evaluation cycle.
 type Loop struct {
-	calculator    *UrgencyCalculator
-	packer        *Packer
-	spawner       *Spawner
-	simSpawner    *SimSpawner
-	lifecycle     *LifecycleTracker
-	db            *sql.DB
-	interval      time.Duration
-	weightBudget  int
-	maxConcurrent int
-	running       sync.WaitGroup
-	pauseCh       chan bool
-	stopCh        chan struct{}
-	mu            sync.Mutex
-	lastEval      time.Time
+	calculator   *UrgencyCalculator
+	packer       *Packer
+	spawner      *Spawner
+	simSpawner   *SimSpawner
+	lifecycle    *LifecycleTracker
+	events       *EventLogger
+	db           *sql.DB
+	interval     time.Duration
+	weightBudget int
+	maxConcur    int
 
-	// Simulation mode.
+	mu         sync.Mutex
+	running    sync.WaitGroup
+	ctx        context.Context
+	cancel     context.CancelFunc
+	stopCh     chan struct{}
+	pauseCh    chan bool
+	lastEval   time.Time
 	simulate   bool
 	simSuccess float64
 }
 
 // NewLoop creates the evaluation loop.
-func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcurrent int) *Loop {
+func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int) *Loop {
 	calc := NewUrgencyCalculator(minI, maxI, numLevels)
 	return &Loop{
 		calculator:    calc,
-		packer:        NewPacker(db, calc, budget, maxConcurrent),
-		spawner:       NewSpawner(db, maxConcurrent),
+		packer:        NewPacker(db, calc, budget, maxConcur),
+		spawner:       NewSpawner(db, maxConcur),
 		simSpawner:    NewSimSpawner(db, 0.85),
 		lifecycle:     NewLifecycleTracker(db),
+		events:        NewEventLogger(db),
 		db:            db,
 		interval:      60 * time.Second,
 		weightBudget:  budget,
-		maxConcurrent: maxConcurrent,
+		maxConcur: maxConcur,
 		pauseCh:       make(chan bool, 1),
 		stopCh:        make(chan struct{}),
 	}
@@ -107,7 +110,7 @@ func (l *Loop) Run() {
 		mode = fmt.Sprintf("simulated (success=%.0f%%)", l.simSuccess*100)
 	}
 	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d)",
-		mode, l.interval, l.weightBudget, l.maxConcurrent)
+		mode, l.interval, l.weightBudget, l.maxConcur)
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
 
@@ -160,6 +163,12 @@ func (l *Loop) evaluate() {
 	now := time.Now()
 	l.lastEval = now
 
+	// EVAL_START event.
+	l.events.Emit(context.Background(), SeverityInfo, "loop", "evaluation started", map[string]any{
+		"active_ticks": l.lifecycle.RunningCount(),
+		"budget":       l.weightBudget,
+	})
+
 	// 1. Cleanup stale running ticks.
 	cleaned, err := l.lifecycle.CleanupStale(90 * time.Minute)
 	if err != nil {
@@ -181,6 +190,12 @@ func (l *Loop) evaluate() {
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)
+
+	l.events.Emit(context.Background(), SeverityInfo, "loop", "projects selected", map[string]any{
+		"count":       len(packed),
+		"budget_used": sumWeights(packed),
+		"budget":      l.weightBudget,
+	})
 
 	// 3. Spawn each selected project.
 	for _, proj := range packed {
@@ -222,8 +237,15 @@ func (l *Loop) evaluate() {
 				Status:  TickFailed,
 				Error:   err.Error(),
 			})
+			l.events.Emit(context.Background(), SeverityLow, "spawner", "tick spawned", map[string]any{
+				"project": proj.Name, "tick_id": tickID, "status": "failed",
+			})
 			continue
 		}
+
+		l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick spawned", map[string]any{
+			"project": proj.Name, "tick_id": tickID, "status": "running",
+		})
 
 		// Track completion asynchronously.
 		l.running.Add(1)
@@ -233,6 +255,12 @@ func (l *Loop) evaluate() {
 			if err := l.lifecycle.Complete(outcome); err != nil {
 				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
 			}
+			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
+				"project":  outcome.Project,
+				"tick_id":  outcome.TickID,
+				"status":   string(outcome.Status),
+				"duration": outcome.Duration.String(),
+			})
 		}(st)
 	}
 }

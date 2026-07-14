@@ -120,12 +120,12 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 
 ## OBSERVABILITY & SIMULATION — 2026-07-12
 
-### [ ] OBS-001 — Structured event logging
+### [x] OBS-001 — Structured event logging ✓
 **Priority: HIGH. Weight: 15.**
-- Every evaluation cycle writes to `events` table: timestamp, level, message, details JSON
-- Tick state transitions logged: queued→running, running→completed/failed/timeout
-- Scheduler start/stop events
-- Error events with stack traces
+- EventLogger with 5 severity levels (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+- Events written to events table: EVAL_START, project selection, TICK_SPAWNED, TICK_COMPLETED
+- Non-blocking — errors logged, never breaks hot path
+- Wired into evaluation loop at all key decision points
 
 ### [ ] OBS-002 — Watchdog + health polling
 **Priority: HIGH. Weight: 12.**

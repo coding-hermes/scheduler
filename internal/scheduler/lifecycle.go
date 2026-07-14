@@ -138,3 +138,10 @@ func stringOrNil(s string) interface{} {
 	}
 	return s
 }
+
+// RunningCount returns the number of currently running ticks.
+func (lt *LifecycleTracker) RunningCount() int {
+	var n int
+	lt.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&n)
+	return n
+}
