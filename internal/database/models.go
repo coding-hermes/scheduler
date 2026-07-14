@@ -12,6 +12,7 @@ type Project struct {
 	DecayRate float64 // urgency decay rate (default 1.0)
 	Model     string  // LLM model id passed to the spawned agent
 	Provider  string  // LLM provider id passed to the spawned agent
+	Command   string  // optional: custom spawn command (overrides default hermes chat)
 	Enabled   bool    // disabled projects are never scheduled
 	CreatedAt string  // RFC3339 timestamp
 	UpdatedAt string  // RFC3339 timestamp

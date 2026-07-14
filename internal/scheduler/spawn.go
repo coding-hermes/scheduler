@@ -58,26 +58,35 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		return nil, fmt.Errorf("max concurrency %d reached", s.maxConcurrent)
 	}
 
-	prompt := fmt.Sprintf(
-		"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
-			"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
-			"Workdir: %s. Report result.",
-		project.Workdir,
-	)
+	var cmd *exec.Cmd
 
-	args := []string{
-		"chat", "-q", prompt,
-		"-m", s.model,
-		"--provider", s.provider,
-		"-s", "coding-hermes-foreman",
-		"-s", "coding-hermes-cron",
-		"-s", "hilo-usage",
-		"-s", "gitreins",
-		"--ignore-rules", "--cli", "-Q",
+	if project.Command != "" {
+		// Custom command — split and exec directly.
+		parts := splitCommand(project.Command)
+		cmd = exec.Command(parts[0], parts[1:]...)
+		cmd.Dir = project.Workdir
+	} else {
+		prompt := fmt.Sprintf(
+			"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
+				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
+				"Workdir: %s. Report result.",
+			project.Workdir,
+		)
+
+		args := []string{
+			"chat", "-q", prompt,
+			"-m", s.model,
+			"--provider", s.provider,
+			"-s", "coding-hermes-foreman",
+			"-s", "coding-hermes-cron",
+			"-s", "hilo-usage",
+			"-s", "gitreins",
+			"--ignore-rules", "--cli", "-Q",
+		}
+
+		cmd = exec.Command("hermes", args...)
+		cmd.Dir = project.Workdir
 	}
-
-	cmd := exec.Command("hermes", args...)
-	cmd.Dir = project.Workdir
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -194,4 +203,30 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
 	return outcome
+}
+
+func splitCommand(cmd string) []string {
+	// Simple split for shell commands. Does basic quote handling.
+	var parts []string
+	var current string
+	inQuote := false
+	for _, c := range cmd {
+		switch c {
+		case '"':
+			inQuote = !inQuote
+		case ' ':
+			if inQuote {
+				current += string(c)
+			} else if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		default:
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
 }

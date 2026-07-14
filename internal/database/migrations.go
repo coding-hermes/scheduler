@@ -8,7 +8,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 2
+const latestMigration = 3
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -82,6 +82,13 @@ CREATE INDEX IF NOT EXISTS idx_events_level ON events(level, timestamp);
 		stmt: `
 ALTER TABLE projects ADD COLUMN last_tick_started TEXT;
 ALTER TABLE projects ADD COLUMN last_tick_completed TEXT;
+`,
+	},
+	{
+		version: 3,
+		desc:    "add command column to projects for custom spawn commands",
+		stmt: `
+ALTER TABLE projects ADD COLUMN command TEXT DEFAULT '';
 `,
 	},
 }

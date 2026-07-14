@@ -29,11 +29,11 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		p.UpdatedAt = p.CreatedAt
 	}
 	const q = `INSERT INTO projects
-(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+	(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, enabled, created_at, updated_at)
+	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		p.Name, p.RepoURL, p.Workdir, p.Weight, p.Priority, p.CooldownS,
-		p.DecayRate, p.Model, p.Provider, boolToInt(p.Enabled),
+		p.DecayRate, p.Model, p.Provider, p.Command, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Name, err)
@@ -44,14 +44,13 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, enabled, created_at, updated_at
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &enabled,
-		&p.CreatedAt, &p.UpdatedAt)
+		&p.DecayRate, &p.Model, &p.Provider, &p.Command, &enabled, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -65,7 +64,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, enabled, created_at, updated_at
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -84,7 +83,7 @@ FROM projects`
 		var enabled int
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &enabled,
+			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &enabled,
 			&p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
@@ -109,6 +108,7 @@ type ProjectUpdates struct {
 	DecayRate *float64
 	Model     *string
 	Provider  *string
+	Command   *string
 	Enabled   *bool
 }
 
@@ -149,6 +149,10 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.Provider != nil {
 		setClauses = append(setClauses, "provider = ?")
 		args = append(args, *updates.Provider)
+	}
+	if updates.Command != nil {
+		setClauses = append(setClauses, "command = ?")
+		args = append(args, *updates.Command)
 	}
 	if updates.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")
