@@ -87,7 +87,7 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - GET/POST /namespaces, GET/PUT /namespaces/{id}, GET /namespaces/{id}/projects, POST /namespaces/{id}/move
 - API tests: 11 test cases from S06 section 11.5
 
-### [ ] NS-005 — Scheduler integration + Config toggle
+### [x] NS-005 — Scheduler integration + Config toggle ✓ `a77bf39`
 **Priority: HIGH. Weight: 12. Depends on: NS-003, NS-004.**
 - Wire NamespaceAllocator + MultiPoolPacker + BorrowingEngine into Scheduler
 - `SCHEDULER_NAMESPACE_MODE` env toggle (default false — backward compatible)
