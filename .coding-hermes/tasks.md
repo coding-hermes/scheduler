@@ -71,14 +71,15 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Handle edge cases: Σreserved > B, zero namespaces, all disabled
 - Unit tests: 12+ test cases from S07 section 8
 
-### [ ] NS-003 — MultiPoolPacker (Phases 2-4 of S07)
+### [x] NS-003 — MultiPoolPacker (Phases 2-4 of S07) ✓ `0dc6b59`
 **Priority: HIGH. Weight: 22. Depends on: NS-002.**
 - `internal/scheduler/multipool_packer.go`: MultiPoolPacker struct + Pack()
 - Intra-namespace packing with effective weight calculation
 - BorrowingEngine: collect unused, distribute to hungry namespaces
 - One level of re-borrowing after redistribution
 - Fallback to flat WeightPacker when NamespaceMode=false
-- Unit tests: 15+ test cases from S07 section 8
+- Unit tests: 17 test cases (15 required + 2 bonus concurrency/running)
+- 1,140 lines across 2 files. Judge 8/8 PASS.
 
 ### [ ] NS-004 — Namespace API endpoints
 **Priority: HIGH. Weight: 15. Depends on: NS-001.**
