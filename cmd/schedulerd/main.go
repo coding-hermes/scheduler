@@ -29,6 +29,7 @@ func main() {
 	numLevels := flag.Int("num-levels", 10, "Number of priority levels")
 	weightBudget := flag.Int("budget", 100, "Weight budget")
 	maxConcurrent := flag.Int("max-concurrent", 8, "Max concurrent foremen")
+	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	duckbrainNS := flag.String("duckbrain-ns", "coding-hermes", "DuckBrain namespace for sync")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
@@ -37,6 +38,9 @@ func main() {
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	flag.Parse()
+	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
+		*namespaceMode = true
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -49,7 +53,7 @@ func main() {
 	log.Printf("Database: %s (WAL mode)", *dbPath)
 
 	// Create the evaluation loop.
-	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent)
+	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
 	if *simulate {
 		loop.SetSimulation(*simSuccess)
 	}

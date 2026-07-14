@@ -56,7 +56,7 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 	}
 }
 
-// syncOnce runs one sync cycle: fleet summary + per-project statuses.
+// syncOnce runs one sync cycle: fleet summary + per-project statuses + namespaces.
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
 
@@ -66,6 +66,14 @@ func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 
 	if err := d.syncProjectStatuses(ctx); err != nil {
 		log.Printf("SYNC: project statuses error: %v", err)
+	}
+
+	if err := d.syncNamespaceSummary(ctx); err != nil {
+		log.Printf("SYNC: namespace summary error: %v", err)
+	}
+
+	if err := d.syncNamespaceStatuses(ctx); err != nil {
+		log.Printf("SYNC: namespace statuses error: %v", err)
 	}
 }
 
@@ -164,7 +172,86 @@ func (d *DuckBrainSync) syncProjectStatuses(ctx context.Context) error {
 	return rows.Err()
 }
 
-// postMemory POSTs a memory to the DuckBrain HTTP API.
+// postMemory POSTs a memory to the DuckBrain HTTP API. (rest of method unchanged)
+
+// ---------------------------------------------------------------------------
+// Namespace sync
+// ---------------------------------------------------------------------------
+
+// namespaceSummary is the payload sent for /fleet/namespaces.
+type namespaceSummary struct {
+	Count        int    `json:"count"`
+	TotalWeight  int    `json:"total_weight"`
+	TotalReserved int   `json:"total_reserved"`
+	SyncedAt     string `json:"synced_at"`
+}
+
+// syncNamespaceSummary queries aggregate namespace stats and pushes to DuckBrain.
+func (d *DuckBrainSync) syncNamespaceSummary(ctx context.Context) error {
+	var count, totalWeight, totalReserved int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(weight), 0), COALESCE(SUM(reserved), 0) FROM namespaces`).
+		Scan(&count, &totalWeight, &totalReserved); err != nil {
+		return fmt.Errorf("query namespace summary: %w", err)
+	}
+
+	summary := namespaceSummary{
+		Count:         count,
+		TotalWeight:   totalWeight,
+		TotalReserved: totalReserved,
+		SyncedAt:      time.Now().Format(time.RFC3339),
+	}
+
+	return d.postMemory(ctx, "/fleet/namespaces", "config", summary)
+}
+
+// namespaceStatus is the per-namespace payload sent to DuckBrain.
+type namespaceStatus struct {
+	ID          string `json:"id"`
+	Weight      int    `json:"weight"`
+	Reserved    int    `json:"reserved"`
+	HardCap     int    `json:"hard_cap"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+	SyncedAt    string `json:"synced_at"`
+}
+
+// syncNamespaceStatuses queries all namespaces and pushes one memory each to DuckBrain.
+func (d *DuckBrainSync) syncNamespaceStatuses(ctx context.Context) error {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, weight, reserved, hard_cap, enabled, COALESCE(description, '') FROM namespaces ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("query namespaces: %w", err)
+	}
+	defer rows.Close()
+
+	syncedAt := time.Now().Format(time.RFC3339)
+	for rows.Next() {
+		var id, desc string
+		var weight, reserved, hardCap int
+		var enabledInt int
+		if err := rows.Scan(&id, &weight, &reserved, &hardCap, &enabledInt, &desc); err != nil {
+			log.Printf("SYNC: scan namespace row: %v", err)
+			continue
+		}
+
+		status := namespaceStatus{
+			ID:          id,
+			Weight:      weight,
+			Reserved:    reserved,
+			HardCap:     hardCap,
+			Enabled:     enabledInt != 0,
+			Description: desc,
+			SyncedAt:    syncedAt,
+		}
+
+		key := "/fleet/namespaces/" + id + "/status"
+		if err := d.postMemory(ctx, key, "config", status); err != nil {
+			log.Printf("SYNC: post namespace %s: %v", id, err)
+		}
+	}
+	return rows.Err()
+}
 // URL: {baseURL}/api/memories?namespace={namespace}
 // Body: {"key": key, "domain": domain, "content": <JSON of content>, "attributes": {}}
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {

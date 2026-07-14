@@ -7,20 +7,24 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/database"
 )
 
 // Loop runs the main evaluation cycle.
 type Loop struct {
-	calculator   *UrgencyCalculator
-	packer       *Packer
-	spawner      *Spawner
-	simSpawner   *SimSpawner
-	lifecycle    *LifecycleTracker
-	events       *EventLogger
-	db           *sql.DB
-	interval     time.Duration
-	weightBudget int
-	maxConcur    int
+	calculator     *UrgencyCalculator
+	packer         *Packer
+	multiPoolPacker *MultiPoolPacker
+	spawner        *Spawner
+	simSpawner     *SimSpawner
+	lifecycle      *LifecycleTracker
+	events         *EventLogger
+	db             *sql.DB
+	interval       time.Duration
+	weightBudget   int
+	maxConcur      int
+	namespaceMode  bool
 
 	mu         sync.Mutex
 	running    sync.WaitGroup
@@ -33,23 +37,37 @@ type Loop struct {
 	simSuccess float64
 }
 
-// NewLoop creates the evaluation loop.
-func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int) *Loop {
+// NewLoop creates the evaluation loop. namespaceMode is optional for backward
+// compatibility with existing callers; omitted values default to false.
+func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int, namespaceMode ...bool) *Loop {
 	calc := NewUrgencyCalculator(minI, maxI, numLevels)
-	return &Loop{
-		calculator:    calc,
-		packer:        NewPacker(db, calc, budget, maxConcur),
-		spawner:       NewSpawner(db, maxConcur),
-		simSpawner:    NewSimSpawner(db, 0.85),
-		lifecycle:     NewLifecycleTracker(db),
-		events:        NewEventLogger(db),
-		db:            db,
-		interval:      60 * time.Second,
-		weightBudget:  budget,
-		maxConcur: maxConcur,
-		pauseCh:       make(chan bool, 1),
-		stopCh:        make(chan struct{}),
+	nsMode := false
+	if len(namespaceMode) > 0 {
+		nsMode = namespaceMode[0]
 	}
+	return &Loop{
+		calculator:     calc,
+		packer:         NewPacker(db, calc, budget, maxConcur),
+		multiPoolPacker: NewMultiPoolPacker(budget, maxConcur),
+		spawner:        NewSpawner(db, maxConcur),
+		simSpawner:     NewSimSpawner(db, 0.85),
+		lifecycle:      NewLifecycleTracker(db),
+		events:         NewEventLogger(db),
+		db:             db,
+		interval:       60 * time.Second,
+		weightBudget:   budget,
+		maxConcur:      maxConcur,
+		namespaceMode:  nsMode,
+		pauseCh:        make(chan bool, 1),
+		stopCh:         make(chan struct{}),
+	}
+}
+
+// SetNamespaceMode enables or disables multi-namespace scheduling.
+func (l *Loop) SetNamespaceMode(on bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.namespaceMode = on
 }
 
 // SetSimulation enables simulation/dry-run mode.
@@ -178,10 +196,32 @@ func (l *Loop) evaluate() {
 	}
 
 	// 2. Pick projects to run.
-	packed, err := l.packer.Pick(now)
-	if err != nil {
-		log.Printf("EVAL: packer error: %v", err)
-		return
+	var packed []PackedProject
+	if l.namespaceMode && l.multiPoolPacker != nil {
+		ctx := context.Background()
+		nss, _ := database.ListNamespaces(ctx, l.db, true)
+		if len(nss) > 0 {
+			projs, _ := database.ListProjects(ctx, l.db, false)
+			running, lastComp := l.evalContext(ctx)
+			result := l.multiPoolPacker.Pack(projs, nss, l.calculator, lastComp, running, now)
+			packed = result.Projects
+			tickGroup := now.Format("2006-01-02-15-04-05")
+			for _, nt := range result.NamespaceTicks {
+				_ = database.InsertNamespaceTick(ctx, l.db, &database.NamespaceTick{
+					TickGroup: tickGroup, NamespaceID: nt.NamespaceID,
+					Allocated: nt.Allocated, Used: nt.Used,
+					Borrowed: nt.Borrowed, Lent: nt.Lent, JobCount: nt.JobCount,
+				})
+			}
+		}
+	}
+	if len(packed) == 0 {
+		var err error
+		packed, err = l.packer.Pick(now)
+		if err != nil {
+			log.Printf("EVAL: packer error: %v", err)
+			return
+		}
 	}
 
 	if len(packed) == 0 {
@@ -270,6 +310,39 @@ func (l *Loop) LastEvalTime() time.Time {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.lastEval
+}
+
+// evalContext returns the set of currently-running project names and a map of
+// project → last completed timestamp. Used by the multi-pool packing path.
+func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) {
+	running := make([]string, 0)
+	rrows, err := l.db.QueryContext(ctx, `SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
+	if err == nil {
+		defer rrows.Close()
+		for rrows.Next() {
+			var name string
+			if err := rrows.Scan(&name); err == nil {
+				running = append(running, name)
+			}
+		}
+	}
+
+	lastCompleted := make(map[string]time.Time)
+	crows, err := l.db.QueryContext(ctx,
+		`SELECT project_name, MAX(completed_at) FROM ticks WHERE status = 'completed' GROUP BY project_name`)
+	if err == nil {
+		defer crows.Close()
+		for crows.Next() {
+			var name string
+			var ts string
+			if err := crows.Scan(&name, &ts); err == nil {
+				if t, err2 := time.Parse(time.RFC3339, ts); err2 == nil {
+					lastCompleted[name] = t
+				}
+			}
+		}
+	}
+	return running, lastCompleted
 }
 
 func sumWeights(packed []PackedProject) int {
