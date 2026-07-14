@@ -81,7 +81,7 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Unit tests: 17 test cases (15 required + 2 bonus concurrency/running)
 - 1,140 lines across 2 files. Judge 8/8 PASS.
 
-### [ ] NS-004 — Namespace API endpoints
+### [x] NS-004 — Namespace API endpoints ✓ `a064963`
 **Priority: HIGH. Weight: 15. Depends on: NS-001.**
 - `internal/api/namespace_handlers.go`: 6 new handlers (from S06 section 11)
 - GET/POST /namespaces, GET/PUT /namespaces/{id}, GET /namespaces/{id}/projects, POST /namespaces/{id}/move
