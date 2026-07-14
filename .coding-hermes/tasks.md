@@ -64,7 +64,7 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - `internal/database/store.go`: Add Namespace CRUD methods (List, Get, Create, Update, Delete)
 - `internal/database/namespace_ticks.go`: Insert, query by namespace, query by tick_group
 
-### [ ] NS-002 — NamespaceAllocator (Phase 1 of S07)
+### [x] NS-002 — NamespaceAllocator (Phase 1 of S07) ✓ `60efae6`
 **Priority: HIGH. Weight: 18. Depends on: NS-001.**
 - `internal/scheduler/namespace_alloc.go`: NamespaceAllocator struct + Allocate()
 - Reserved floors + proportional distribution + hard cap enforcement
