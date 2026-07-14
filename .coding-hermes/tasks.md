@@ -33,16 +33,16 @@
 - Session ID parsing + persistence implemented in spawn.go
 - Board was stale — already shipped July 12
 
-### [ ] GAP-009 — Spawn uses project model/provider
+### [x] GAP-009 — Spawn uses project model/provider ✓
 **Priority: MEDIUM. Weight: 10.**
-- Spawner hardcodes deepseek-v4-pro/deepseek-foreman
-- Should read model/provider from project config for per-project model selection
+- Project.Model/Provider override spawner defaults via PackedProject
+- Falls back to spawner defaults when empty (backward compatible)
 
-### [ ] GAP-007 — Dead code cleanup
+### [x] GAP-007 — Dead code cleanup ✓
 **Priority: LOW. Weight: 5.**
-- mcp/server.go: `var _ = log.Printf; var _ = time.Now` guards
-- api/server.go: duplicate boolPtr
-- mcp/server.go: duplicate boolPtr
+- Removed duplicate boolPtr from api/server.go and mcp/server.go
+- Exported database.BoolPtr — single canonical definition
+- Removed dead var _ = log.Printf guards from mcp/server.go
 
 ### [x] CUTOVER — Disable old cron jobs ✓ 20:47 CDT
 **Priority: HIGH. Weight: 15.**

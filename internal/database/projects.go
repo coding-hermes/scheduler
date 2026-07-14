@@ -179,7 +179,7 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 // DeleteProject soft-deletes a project by setting enabled=0. The row is
 // retained so historical ticks remain referentially valid.
 func DeleteProject(ctx context.Context, db *sql.DB, name string) error {
-	return UpdateProject(ctx, db, name, ProjectUpdates{Enabled: boolPtr(false)})
+	return UpdateProject(ctx, db, name, ProjectUpdates{Enabled: BoolPtr(false)})
 }
 
 // boolToInt converts a bool to SQLite's INTEGER representation.
@@ -190,5 +190,5 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// boolPtr returns a pointer to b — a convenience for ProjectUpdates callers.
-func boolPtr(b bool) *bool { return &b }
+// BoolPtr returns a pointer to b — a convenience for ProjectUpdates callers.
+func BoolPtr(b bool) *bool { return &b }

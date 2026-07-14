@@ -205,7 +205,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 }
 
 func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name string) {
-	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: boolPtr(false)}); err != nil {
+	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(false)}); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -213,7 +213,7 @@ func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name string) {
-	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: boolPtr(true)}); err != nil {
+	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(true)}); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -341,7 +341,6 @@ func splitPath(path string) []string {
 	return strings.Split(trimmed, "/")
 }
 
-func boolPtr(b bool) *bool { return &b }
 
 func countActiveTicks(ctx context.Context, db *sql.DB) int {
 	var n int

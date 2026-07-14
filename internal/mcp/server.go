@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -408,7 +407,7 @@ func (s *Server) toolFleetPause(ctx context.Context, args map[string]interface{}
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{Enabled: boolPtr(false)}); err != nil {
+	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(false)}); err != nil {
 		return "", err
 	}
 	return jsonString(map[string]string{"status": "paused", "project": name}), nil
@@ -419,7 +418,7 @@ func (s *Server) toolFleetResume(ctx context.Context, args map[string]interface{
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{Enabled: boolPtr(true)}); err != nil {
+	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(true)}); err != nil {
 		return "", err
 	}
 	return jsonString(map[string]string{"status": "resumed", "project": name}), nil
@@ -548,8 +547,4 @@ func getFloatArg(args map[string]interface{}, key string) float64 {
 	return 1.0
 }
 
-func boolPtr(b bool) *bool { return &b }
 
-// Ensure unused imports compile (for log, time).
-var _ = log.Printf
-var _ = time.Now

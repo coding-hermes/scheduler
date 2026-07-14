@@ -66,6 +66,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		cmd = exec.Command(parts[0], parts[1:]...)
 		cmd.Dir = project.Workdir
 	} else {
+		model := s.model
+		if project.Model != "" {
+			model = project.Model
+		}
+		provider := s.provider
+		if project.Provider != "" {
+			provider = project.Provider
+		}
+
 		prompt := fmt.Sprintf(
 			"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
@@ -75,8 +84,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		args := []string{
 			"chat", "-q", prompt,
-			"-m", s.model,
-			"--provider", s.provider,
+			"-m", model,
+			"--provider", provider,
 			"-s", "coding-hermes-foreman",
 			"-s", "coding-hermes-cron",
 			"-s", "hilo-usage",
