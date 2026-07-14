@@ -104,6 +104,44 @@ FROM projects`
 	return out, nil
 }
 
+// ListProjectsByNamespace returns all projects assigned to the given namespace,
+// ordered by name. Returns an empty slice if no projects match.
+func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, enabled, created_at, updated_at
+FROM projects WHERE namespace_id = ? ORDER BY name ASC`
+
+	rows, err := db.QueryContext(ctx, q, namespaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list projects by namespace %q: %w", namespaceID, err)
+	}
+	defer rows.Close()
+
+	var out []Project
+	for rows.Next() {
+		var p Project
+		var enabled int
+		var nsID sql.NullString
+		if err := rows.Scan(
+			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
+			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &enabled,
+			&p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan project row: %w", err)
+		}
+		p.Enabled = enabled != 0
+		if nsID.Valid {
+			p.NamespaceID = &nsID.String
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate project rows: %w", err)
+	}
+	if out == nil {
+		out = []Project{}
+	}
+	return out, nil
+}
+
 // ProjectUpdates holds the optional fields for a partial project update.
 // Only non-nil fields are written. Pointer types distinguish "unset" from
 // "set to zero value".

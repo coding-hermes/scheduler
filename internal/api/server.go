@@ -36,6 +36,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/status", s.status)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
+	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
+	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)
 	mux.HandleFunc("/api/v1/ticks", s.handleTicks)
 	mux.HandleFunc("/api/v1/ticks/", s.handleTickByID)
 	mux.HandleFunc("/api/v1/evaluate", s.evaluate)
