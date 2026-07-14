@@ -59,11 +59,26 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.PingContext(ctx); err != nil {
 		dbOK = "error: " + err.Error()
 	}
+	lastEval := s.loop.LastEvalTime()
+	// last_evaluation is RFC3339. Zero time serializes as "0001-01-01T00:00:00Z"
+	// when the loop has never evaluated yet — callers can compare against
+	// evaluation_age_seconds (which is 0 in that case) instead.
+	var lastEvalStr string
+	var evalAge float64
+	if lastEval.IsZero() {
+		lastEvalStr = ""
+		evalAge = 0
+	} else {
+		lastEvalStr = lastEval.UTC().Format(time.RFC3339)
+		evalAge = time.Since(lastEval).Seconds()
+	}
 	writeJSON(w, 200, map[string]interface{}{
-		"status":       "ok",
-		"uptime":       time.Since(s.started).String(),
-		"db":           dbOK,
-		"active_ticks": activeTicks,
+		"status":                "ok",
+		"uptime":                time.Since(s.started).String(),
+		"db":                    dbOK,
+		"active_ticks":          activeTicks,
+		"last_evaluation":       lastEvalStr,
+		"evaluation_age_seconds": evalAge,
 	})
 }
 

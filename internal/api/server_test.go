@@ -97,8 +97,10 @@ func mustCreateAPITestProject(t *testing.T, db *sql.DB, name string) {
 
 // --- health ---
 
-func TestAPI_Health(t *testing.T) {
+func TestHealth(t *testing.T) {
 	a := newAPITestServer(t)
+	// last_evaluation should be present and parseable before any evaluation runs,
+	// but evaluation_age_seconds must be > 0 only after an evaluation has fired.
 	status, body := a.do(t, "GET", "/api/v1/health", nil)
 	if status != http.StatusOK {
 		t.Errorf("status = %d, want 200", status)
@@ -111,6 +113,40 @@ func TestAPI_Health(t *testing.T) {
 	}
 	if body["db"] != "connected" {
 		t.Errorf("db = %v, want connected", body["db"])
+	}
+	if _, ok := body["last_evaluation"]; !ok {
+		t.Errorf("last_evaluation missing from response: %v", body)
+	}
+	if _, ok := body["evaluation_age_seconds"]; !ok {
+		t.Errorf("evaluation_age_seconds missing from response: %v", body)
+	}
+
+	// Force an evaluation, then verify last_evaluation + a positive age appear.
+	a.loop.ForceEvaluate()
+
+	// Wait for the evaluation goroutine to populate lastEval.
+	deadline := time.Now().Add(2 * time.Second)
+	var sawPositiveAge bool
+	for time.Now().Before(deadline) {
+		_, b := a.do(t, "GET", "/api/v1/health", nil)
+		ts, ok := b["last_evaluation"].(string)
+		if !ok || ts == "" {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		age, ok := b["evaluation_age_seconds"].(float64)
+		if !ok {
+			t.Errorf("evaluation_age_seconds not a number: %T (%v)", b["evaluation_age_seconds"], b["evaluation_age_seconds"])
+			break
+		}
+		if age > 0 {
+			sawPositiveAge = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !sawPositiveAge {
+		t.Errorf("evaluation_age_seconds never > 0 after ForceEvaluate: %v", body)
 	}
 }
 
