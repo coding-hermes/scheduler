@@ -8,7 +8,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 3
+const latestMigration = 4
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -89,6 +89,41 @@ ALTER TABLE projects ADD COLUMN last_tick_completed TEXT;
 		desc:    "add command column to projects for custom spawn commands",
 		stmt: `
 ALTER TABLE projects ADD COLUMN command TEXT DEFAULT '';
+`,
+	},
+	{
+		version: 4,
+		desc:    "add namespaces, namespace_ticks tables and namespace_id to projects",
+		stmt: `
+CREATE TABLE IF NOT EXISTS namespaces (
+    id          TEXT PRIMARY KEY NOT NULL,
+    weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
+    reserved    INTEGER NOT NULL DEFAULT 1 CHECK(reserved >= 0),
+    hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
+    enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE projects ADD COLUMN namespace_id TEXT REFERENCES namespaces(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_projects_namespace ON projects(namespace_id);
+
+CREATE TABLE IF NOT EXISTS namespace_ticks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick_group   TEXT NOT NULL,
+    namespace_id TEXT NOT NULL REFERENCES namespaces(id),
+    allocated    INTEGER NOT NULL,
+    used         INTEGER NOT NULL,
+    borrowed     INTEGER NOT NULL DEFAULT 0,
+    lent         INTEGER NOT NULL DEFAULT 0,
+    job_count    INTEGER NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_ticks_group ON namespace_ticks(tick_group);
+CREATE INDEX IF NOT EXISTS idx_namespace_ticks_ns ON namespace_ticks(namespace_id, created_at DESC);
 `,
 	},
 }
