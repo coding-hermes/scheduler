@@ -165,3 +165,13 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - MEDIUM: project starved for >2x interval
 - LOW: single failure or elevated error rate
 - Write to events table; watchdog delivers to Telegram
+
+---
+
+## CI INFRA — 2026-07-14
+
+### [ ] CI-001 — golangci-lint v2.x version field
+**Priority: HIGH. Weight: 8.**
+- `.golangci.yml` missing `version: "2"` — golangci-lint `latest` now resolves to v2.12.2 which requires it
+- CI run 29348519558: lint job fails with "unsupported version of the configuration: \"\""
+- Fix: add `version: "2"` to `.golangci.yml` top-level; pin golangci-lint-action to `v2`
