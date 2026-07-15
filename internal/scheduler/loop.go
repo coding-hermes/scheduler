@@ -307,6 +307,12 @@ func (l *Loop) evaluate() {
 			})
 		}(st)
 	}
+
+	// 4. Run alert escalation checks
+	escalator := NewAlertEscalator(l.db, l.events)
+	if err := escalator.RunAll(context.Background(), now); err != nil {
+		log.Printf("EVAL: escalation check error: %v", err)
+	}
 }
 
 // LastEvalTime returns when the last evaluation ran.
