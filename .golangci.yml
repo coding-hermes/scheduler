@@ -40,7 +40,8 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/coding-herms/scheduler
+      local-prefixes:
+        - github.com/coding-herms/scheduler
 
 issues:
   max-issues-per-linter: 0
