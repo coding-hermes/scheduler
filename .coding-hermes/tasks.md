@@ -102,7 +102,7 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Integration: 3 tests (namespace CRUD, project assignment, namespace mode toggle)
 - +423 lines across 2 files. Guard: PASS (secrets, build, lint, tests). Worker: kimi-k2.7 @ kimi-for-coding.
 
-### [ ] NS-007 — Dashboard: namespace view
+### [x] NS-007 — Dashboard: namespace view ✓ `6afca17`
 **Priority: LOW. Weight: 8. Depends on: NS-005.**
 - Add namespace allocation/borrowing table to dashboard HTML
 - Color-coded: green (under-utilized), yellow (at reserved), red (at hard cap)
