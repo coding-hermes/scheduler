@@ -1,0 +1,13 @@
+[Unit]
+Description=coding-hermes scheduler watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/kara/.hermes/scripts/watchdog.sh
+User=kara
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=timers.target

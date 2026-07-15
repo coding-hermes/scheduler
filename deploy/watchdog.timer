@@ -1,0 +1,11 @@
+[Unit]
+Description=coding-hermes scheduler watchdog (every 2m)
+Requires=watchdog.service
+
+[Timer]
+OnCalendar=*:0/2
+Persistent=true
+AccuracySec=10
+
+[Install]
+WantedBy=timers.target

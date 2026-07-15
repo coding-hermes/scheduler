@@ -127,12 +127,14 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Non-blocking — errors logged, never breaks hot path
 - Wired into evaluation loop at all key decision points
 
-### [x] OBS-002 — Watchdog + health polling ✓ `c6079da`
+### [x] OBS-002 — Watchdog + health polling ✓
 **Priority: HIGH. Weight: 12.**
-- Script at `~/.hermes/scripts/watchdog.sh` polls `/api/v1/health` every 5m
-- Alerts via Hermes cron (no_agent mode) when unreachable
-- Tracks consecutive failures, escalates after 3 misses
-- Dead-man's switch: alerts if no evaluation in 10+ minutes
+- watchdog.sh polls health + status every 2m via systemd timer
+- 3-tier escalation: ⚠️→⚠️⚠️→🚨 (CRITICAL after 6m down)
+- Dead-man's switch: alerts if no evaluation in 15+ minutes
+- State file tracks consecutive failures at ~/.hermes/coding-hermes/watchdog.state
+- Deployed: systemd watchdog.timer running on karaHermes
+- Status API extended with last_evaluation field
 - Health endpoint now returns `last_evaluation` (RFC3339) + `evaluation_age_seconds` (float64)
 - Watchdog script pre-existing from July 12 — already complete with all ACs
 - TestHealth verifies both fields present and evaluation_age_seconds > 0 after ForceEvaluate

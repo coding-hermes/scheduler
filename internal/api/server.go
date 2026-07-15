@@ -96,11 +96,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	lastEval := getLastEvalTime(ctx, s.db)
 	writeJSON(w, 200, map[string]interface{}{
 		"budget_total":    100,
 		"active_projects": len(projects),
 		"active_ticks":    activeTicks,
 		"recent_outcomes": recentOutcomes,
+		"last_evaluation": lastEval,
 	})
 }
 
@@ -495,4 +497,11 @@ func listEvents(ctx context.Context, db *sql.DB, level, project string, limit in
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+// getLastEvalTime returns the timestamp of the last evaluation, or empty string.
+func getLastEvalTime(ctx context.Context, db *sql.DB) string {
+	var t string
+	db.QueryRowContext(ctx, `SELECT COALESCE(MAX(created_at), '') FROM events WHERE message = 'evaluation started'`).Scan(&t)
+	return t
 }
