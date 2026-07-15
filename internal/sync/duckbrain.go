@@ -180,10 +180,10 @@ func (d *DuckBrainSync) syncProjectStatuses(ctx context.Context) error {
 
 // namespaceSummary is the payload sent for /fleet/namespaces.
 type namespaceSummary struct {
-	Count        int    `json:"count"`
-	TotalWeight  int    `json:"total_weight"`
-	TotalReserved int   `json:"total_reserved"`
-	SyncedAt     string `json:"synced_at"`
+	Count         int    `json:"count"`
+	TotalWeight   int    `json:"total_weight"`
+	TotalReserved int    `json:"total_reserved"`
+	SyncedAt      string `json:"synced_at"`
 }
 
 // syncNamespaceSummary queries aggregate namespace stats and pushes to DuckBrain.
@@ -252,6 +252,7 @@ func (d *DuckBrainSync) syncNamespaceStatuses(ctx context.Context) error {
 	}
 	return rows.Err()
 }
+
 // URL: {baseURL}/api/memories?namespace={namespace}
 // Body: {"key": key, "domain": domain, "content": <JSON of content>, "attributes": {}}
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {

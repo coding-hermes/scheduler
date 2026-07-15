@@ -462,7 +462,7 @@ func TestBorrowing_HardCapBlocks(t *testing.T) {
 		}, // need 20 total
 	}
 	selectedBudget := map[string]int{
-		"lender":   0,  // used nothing
+		"lender":   0, // used nothing
 		"borrower": 18,
 	}
 

@@ -28,8 +28,6 @@ type Loop struct {
 
 	mu         sync.Mutex
 	running    sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
 	stopCh     chan struct{}
 	pauseCh    chan bool
 	lastEval   time.Time

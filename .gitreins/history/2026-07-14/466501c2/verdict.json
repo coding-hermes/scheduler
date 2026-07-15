@@ -1,0 +1,52 @@
+{
+  "task_id": "ns-004-api",
+  "task_title": "NS-004: Namespace API endpoints \u2014 6 handlers + tests + ListProjectsByNamespace",
+  "task_criteria": [
+    "GET /api/v1/namespaces returns list of all namespaces with empty array for zero results",
+    "POST /api/v1/namespaces creates a new namespace, validates id and weight > 0, returns 409 on duplicate",
+    "GET /api/v1/namespaces/{id} returns a single namespace, 404 if not found",
+    "PUT /api/v1/namespaces/{id} updates namespace via NamespacePatch, 404 if not found",
+    "GET /api/v1/namespaces/{id}/projects returns projects in namespace via ListProjectsByNamespace",
+    "POST /api/v1/namespaces/{id}/move moves a project to namespace via UpdateProject with NamespaceID",
+    "internal/database/projects.go has ListProjectsByNamespace function querying WHERE namespace_id = ?",
+    "internal/api/server.go wires /api/v1/namespaces and /api/v1/namespaces/ routes",
+    "11 tests in namespace_handlers_test.go covering all handlers and edge cases",
+    "go build ./... && go vet ./... && go test ./internal/api/... -count=1 -short all pass"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n",
+          "error": ""
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 GET /api/v1/namespaces returns list of all namespaces with empty array for zero results: internal/api/namespace_handlers.go:21-29 - listNamespaces returns []database.Namespace{} when nil; wired at server.go:39\n  \u2713 POST /api/v1/namespaces creates a new namespace, validates id and weight > 0, returns 409 on duplicate: internal/api/namespace_handlers.go:33-57 - validates id != '' (line 42), weight > 0 (line 45), returns 409 on UNIQUE constraint (line 49)\n  \u2713 GET /api/v1/namespaces/{id} returns a single namespace, 404 if not found: internal/api/namespace_handlers.go:114-124 - getNamespace calls GetNamespace, returns 404 on 'not found'\n  \u2713 PUT /api/v1/namespaces/{id} updates namespace via NamespacePatch, 404 if not found: internal/api/namespace_handlers.go:126-140 - updateNamespace decodes NamespacePatch, returns 404 on 'not found'\n  \u2713 GET /api/v1/namespaces/{id}/projects returns projects in namespace via ListProjectsByNamespace: internal/api/namespace_handlers.go:93-98 (sub-route 'projects') + lines 142-153 listNamespaceProjects calls ListProjectsByNamespace\n  \u2713 POST /api/v1/namespaces/{id}/move moves a project to namespace via UpdateProject with NamespaceID: internal/api/namespace_handlers.go:100-105 (sub-route 'move') + lines 155-178 moveProjectToNamespace calls UpdateProject with NamespaceID: &nsID\n  \u2713 internal/database/projects.go has ListProjectsByNamespace function querying WHERE namespace_id = ?: internal/database/projects.go:109-115 - ListProjectsByNamespace with query 'WHERE namespace_id = ?' at line 111\n  \u2713 internal/api/server.go wires /api/v1/namespaces and /api/v1/namespaces/ routes: internal/api/server.go:39-40 - mux.HandleFunc('/api/v1/namespaces', s.handleNamespaces) and HandleFunc('/api/v1/namespaces/', s.handleNamespaceByID)\n  \u2713 11 tests in namespace_handlers_test.go covering all handlers and edge cases: internal/api/namespace_handlers_test.go: 11 test functions at lines 28,57,73,94,112,129,145,155,174,186,214 - all pass in test run\n  \u2713 go build ./... && go vet ./... && go test ./internal/api/... -count=1 -short all pass: go build exit 0, go vet exit 0, go test exit 0 (ok github.com/coding-herms/scheduler/internal/api 0.092s)\nAll 10 criteria pass: 6 namespace handlers implemented with correct validation and error handling, ListProjectsByNamespace queries WHERE namespace_id = ?, routes wired, 11 tests pass, and build/vet/test all succeed.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 GET /api/v1/namespaces returns list of all namespaces with empty array for zero results: internal/api/namespace_handlers.go:21-29 - listNamespaces returns []database.Namespace{} when nil; wired at server.go:39\n  \u2713 POST /api/v1/namespaces creates a new namespace, validates id and weight > 0, returns 409 on duplicate: internal/api/namespace_handlers.go:33-57 - validates id != '' (line 42), weight > 0 (line 45), returns 409 on UNIQUE constraint (line 49)\n  \u2713 GET /api/v1/namespaces/{id}",
+          "error": ""
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: ns-004-api\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 GET /api/v1/namespaces returns list of all namespaces with empty array for zero results: internal/api/namespace_handlers.go:21-29 - listNamespaces returns []database.Namespace{} when nil; wired at server.go:39\n  \u2713 POST /api/v1/namespaces creates a new namespace, validates id and weight > 0, returns 409 on duplicate: internal/api/namespace_handlers.go:33-57 - validates id != '' (line 42), weight > 0 (line 45), returns 409 on UNIQUE constraint (line 49)\n  \u2713 GET /api/v1/namespaces/{id} returns a single namespace, 404 if not found: internal/api/namespace_handlers.go:114-124 - getNamespace calls GetNamespace, returns 404 on 'not found'\n  \u2713 PUT /api/v1/namespaces/{id} updates namespace via NamespacePatch, 404 if not found: internal/api/namespace_handlers.go:126-140 - updateNamespace decodes NamespacePatch, returns 404 on 'not found'\n  \u2713 GET /api/v1/namespaces/{id}/projects returns projects in namespace via ListProjectsByNamespace: internal/api/namespace_handlers.go:93-98 (sub-route 'projects') + lines 142-153 listNamespaceProjects calls ListProjectsByNamespace\n  \u2713 POST /api/v1/namespaces/{id}/move moves a project to namespace via UpdateProject with NamespaceID: internal/api/namespace_handlers.go:100-105 (sub-route 'move') + lines 155-178 moveProjectToNamespace calls UpdateProject with NamespaceID: &nsID\n  \u2713 internal/database/projects.go has ListProjectsByNamespace function querying WHERE namespace_id = ?: internal/database/projects.go:109-115 - ListProjectsByNamespace with query 'WHERE namespace_id = ?' at line 111\n  \u2713 internal/api/server.go wires /api/v1/namespaces and /api/v1/namespaces/ routes: internal/api/server.go:39-40 - mux.HandleFunc('/api/v1/namespaces', s.handleNamespaces) and HandleFunc('/api/v1/namespaces/', s.handleNamespaceByID)\n  \u2713 11 tests in namespace_handlers_test.go covering all handlers and edge cases: internal/api/namespace_handlers_test.go: 11 test functions at lines 28,57,73,94,112,129,145,155,174,186,214 - all pass in test run\n  \u2713 go build ./... && go vet ./... && go test ./internal/api/... -count=1 -short all pass: go build exit 0, go vet exit 0, go test exit 0 (ok github.com/coding-herms/scheduler/internal/api 0.092s)\nAll 10 criteria pass: 6 namespace handlers implemented with correct validation and error handling, ListProjectsByNamespace queries WHERE namespace_id = ?, routes wired, 11 tests pass, and build/vet/test all succeed.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-07-14T16:10:02.370844"
+}

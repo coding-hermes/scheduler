@@ -1,0 +1,53 @@
+{
+  "task_id": "NS-001",
+  "task_title": "Migration v2: namespaces + namespace_ticks tables",
+  "task_criteria": [
+    "Migration v4 adds namespaces table with columns: id, weight, reserved, hard_cap, enabled, description, created_at, updated_at",
+    "Migration v4 adds namespace_ticks table with columns: id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at",
+    "Migration v4 adds ALTER TABLE projects ADD COLUMN namespace_id + index",
+    "Namespace model struct has all 8 fields with correct types and JSON tags",
+    "NamespaceTick model struct has all 9 fields with correct types and JSON tags",
+    "NamespacePatch model struct has 5 pointer fields for partial updates",
+    "Project model struct has NamespaceID *string field",
+    "CRUD operations: CreateNamespace, GetNamespace, ListNamespaces, UpdateNamespace, DeleteNamespace implemented",
+    "namespace_ticks operations: InsertNamespaceTick, ListNamespaceTicks, ListNamespaceTicksByGroup implemented",
+    "All Project CRUD (Create, Get, List, Update) handles namespace_id column",
+    "go build passes, go vet passes, all existing tests pass"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n",
+          "error": ""
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Migration v4 adds namespaces table with columns: id, weight, reserved, hard_cap, enabled, description, created_at, updated_at: internal/database/migrations.go:105-115 defines CREATE TABLE namespaces with all 8 columns\n  \u2713 Migration v4 adds namespace_ticks table with columns: id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at: internal/database/migrations.go:122-129 defines CREATE TABLE namespace_ticks with all 9 columns\n  \u2713 Migration v4 adds ALTER TABLE projects ADD COLUMN namespace_id + index: internal/database/migrations.go:117 ALTER TABLE, :119-121 CREATE INDEX idx_projects_namespace\n  \u2713 Namespace model struct has all 8 fields with correct types and JSON tags: internal/database/models.go:34-41: Namespace struct with ID(string), Weight(int), Reserved(int), HardCap(int), Enabled(bool), Description(string), CreatedAt(string), UpdatedAt(string) \u2014 all with json tags\n  \u2713 NamespaceTick model struct has all 9 fields with correct types and JSON tags: internal/database/models.go:62-70: NamespaceTick struct with ID(int64), TickGroup(string), NamespaceID(string), Allocated(int), Used(int), Borrowed(int), Lent(int), JobCount(int), CreatedAt(string) \u2014 all with json tags\n  \u2713 NamespacePatch model struct has 5 pointer fields for partial updates: internal/database/models.go:47-55: NamespacePatch struct with Weight(*int), Reserved(*int), HardCap(*int), Enabled(*bool), Description(*string) \u2014 all pointer fields\n  \u2713 Project model struct has NamespaceID *string field: internal/database/models.go:17: Project.NamespaceID *string\n  \u2713 CRUD operations: CreateNamespace, GetNamespace, ListNamespaces, UpdateNamespace, DeleteNamespace implemented: internal/database/namespaces.go:15 CreateNamespace, :38 GetNamespace, :63 ListNamespaces, :95 UpdateNamespace, :136 DeleteNamespace\n  \u2713 namespace_ticks operations: InsertNamespaceTick, ListNamespaceTicks, ListNamespaceTicksByGroup implemented: internal/database/namespace_ticks.go:13 InsertNamespaceTick, :43 ListNamespaceTicks, :78 ListNamespaceTicksByGroup\n  \u2713 All Project CRUD (Create, Get, List, Update) handles namespace_id column: internal/database/projects.go:33 CreateProject inserts namespace_id, :55 GetProject scans via sql.NullString, :79 ListProjects scans via sql.NullString, :112 UpdateProject handles NamespaceID in ProjectUpdates\n  \u2713 go build passes, go vet passes, all existing tests pass: go build ./... exit 0, go vet ./... exit 0, go test ./... all 29 database tests PASS, all other packages PASS\nAll 11 criteria for NS-001 task pass: migration v4 creates namespaces and namespace_ticks tables, adds namespace_id to projects, all Go models and CRUD operations are implemented correctly, and the full build/vet/test suite passes.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Migration v4 adds namespaces table with columns: id, weight, reserved, hard_cap, enabled, description, created_at, updated_at: internal/database/migrations.go:105-115 defines CREATE TABLE namespaces with all 8 columns\n  \u2713 Migration v4 adds namespace_ticks table with columns: id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at: internal/database/migrations.go:122-129 defines CREATE TABLE namespace_ticks with all 9 columns\n  \u2713 Migration v4 adds ALTER T",
+          "error": ""
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: NS-001\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Migration v4 adds namespaces table with columns: id, weight, reserved, hard_cap, enabled, description, created_at, updated_at: internal/database/migrations.go:105-115 defines CREATE TABLE namespaces with all 8 columns\n  \u2713 Migration v4 adds namespace_ticks table with columns: id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at: internal/database/migrations.go:122-129 defines CREATE TABLE namespace_ticks with all 9 columns\n  \u2713 Migration v4 adds ALTER TABLE projects ADD COLUMN namespace_id + index: internal/database/migrations.go:117 ALTER TABLE, :119-121 CREATE INDEX idx_projects_namespace\n  \u2713 Namespace model struct has all 8 fields with correct types and JSON tags: internal/database/models.go:34-41: Namespace struct with ID(string), Weight(int), Reserved(int), HardCap(int), Enabled(bool), Description(string), CreatedAt(string), UpdatedAt(string) \u2014 all with json tags\n  \u2713 NamespaceTick model struct has all 9 fields with correct types and JSON tags: internal/database/models.go:62-70: NamespaceTick struct with ID(int64), TickGroup(string), NamespaceID(string), Allocated(int), Used(int), Borrowed(int), Lent(int), JobCount(int), CreatedAt(string) \u2014 all with json tags\n  \u2713 NamespacePatch model struct has 5 pointer fields for partial updates: internal/database/models.go:47-55: NamespacePatch struct with Weight(*int), Reserved(*int), HardCap(*int), Enabled(*bool), Description(*string) \u2014 all pointer fields\n  \u2713 Project model struct has NamespaceID *string field: internal/database/models.go:17: Project.NamespaceID *string\n  \u2713 CRUD operations: CreateNamespace, GetNamespace, ListNamespaces, UpdateNamespace, DeleteNamespace implemented: internal/database/namespaces.go:15 CreateNamespace, :38 GetNamespace, :63 ListNamespaces, :95 UpdateNamespace, :136 DeleteNamespace\n  \u2713 namespace_ticks operations: InsertNamespaceTick, ListNamespaceTicks, ListNamespaceTicksByGroup implemented: internal/database/namespace_ticks.go:13 InsertNamespaceTick, :43 ListNamespaceTicks, :78 ListNamespaceTicksByGroup\n  \u2713 All Project CRUD (Create, Get, List, Update) handles namespace_id column: internal/database/projects.go:33 CreateProject inserts namespace_id, :55 GetProject scans via sql.NullString, :79 ListProjects scans via sql.NullString, :112 UpdateProject handles NamespaceID in ProjectUpdates\n  \u2713 go build passes, go vet passes, all existing tests pass: go build ./... exit 0, go vet ./... exit 0, go test ./... all 29 database tests PASS, all other packages PASS\nAll 11 criteria for NS-001 task pass: migration v4 creates namespaces and namespace_ticks tables, adds namespace_id to projects, all Go models and CRUD operations are implemented correctly, and the full build/vet/test suite passes.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-07-14T09:50:27.603811"
+}
