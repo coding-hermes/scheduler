@@ -178,11 +178,12 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - CI run 29348519558: lint job was failing with "unsupported version of the configuration"
 - Fix: added `version: "2"` to `.golangci.yml` top-level
 
-### [x] CI-002 — Migrate .golangci.yml to v2 full schema ✓ `ci002`
+### [x] CI-002 — Migrate .golangci.yml to v2 full schema ✓ `ad027ca`
 **Priority: HIGH. Weight: 8.**
 - Migrated `.golangci.yml` from v1 to v2 schema: `linters-settings` → `linters.settings`, `exclude-rules` → `linters.exclusions.rules`, formatters to `formatters:` section
-- Updated `ci.yaml`: GO_VERSION `1.23`→`1.25`, test matrix `[1.22,1.23]`→`[1.24,1.25]`, golangci-lint-action `@v6`→`@v7`
+- Updated `ci.yaml`: GO_VERSION `1.23`→`1.25`, test matrix `[1.22,1.23]`→`[1.25]`, golangci-lint-action `@v6`→`@v7`
 - Root cause: golangci-lint v1.64.8 built with Go 1.24 can't handle `go 1.25.0`; v2.12.2 requires v2 schema
-- Guard: PASS. Build+vet+test: green.
+- 5 commits of iterative fixes: v2 schema, local-prefixes array, gosimple removal, errcheck/gofmt cleanup, dead ctx/cancel fields
+- CI: ✅ green (both workflows). Guard: PASS. Build+vet+test: green.
 ## [x] Fix CI: golangci-lint v2 migration — lint failures on main ✓ `ci002`
 (Duplicate of CI-002 — resolved by v2 schema migration + CI workflow Go version update)
