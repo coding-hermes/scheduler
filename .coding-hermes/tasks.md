@@ -194,3 +194,37 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - CI: ✅ green (both workflows). Guard: PASS. Build+vet+test: green.
 ## [x] Fix CI: golangci-lint v2 migration — lint failures on main ✓ `ci002`
 (Duplicate of CI-002 — resolved by v2 schema migration + CI workflow Go version update)
+
+---
+
+## DISCOVERY SWEEP — 2026-07-15
+
+### [x] CI-003 — gofmt: generator.go + spawn.go ✓ `d817f97`
+**Priority: HIGH. Weight: 5.**
+- CI both workflows failing with 2 gofmt issues: `generator.go:45` (Commits, FilesChanged alignment) + `spawn.go:17` (const block alignment)
+- Fix: `gofmt -w` on both files. Build+vet+test green. Guard PASS.
+- Foreman direct fix — mechanical formatting, no worker needed.
+
+### [ ] INFRA — schedulerd not running, no systemd unit
+**Priority: MEDIUM. Weight: 10.**
+- schedulerd daemon is not running (no systemd unit, port 9100 not responding)
+- NS-008 systemd subtask remains blocked by security scanner in cron context
+- Daemon was previously running manually during namespace-mode testing
+- Needs: systemd unit with `--namespace-mode` flag,enable/start
+
+### [ ] CLEANUP — misplaced pkg/sdk/ directory (Consensus SDK, not scheduler)
+**Priority: LOW. Weight: 3.**
+- Untracked `pkg/sdk/` directory (11 Go files) is an SDK client for the Consensus API — not part of the scheduler project
+- Compiles cleanly but uses only stdlib, no imports from scheduler internal packages
+- Should be moved to the Consensus/DexDat project or removed
+- `go build ./...` passes with it present (not in module graph since untracked)
+
+### SWEEP SUMMARY
+- Build: ✅ green (`go build ./...`)
+- Vet: ✅ green (`go vet ./...`)
+- Tests: ✅ all pass (5 packages, 0 failures)
+- Live endpoint: ❌ schedulerd not running on :9100
+- CI: ❌ 2 gofmt issues → fixed in `d817f97`
+- TODOs: clean
+- Open issues: none
+- Docs: README present and accurate
