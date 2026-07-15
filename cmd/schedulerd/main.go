@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: database init: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
 
 	// Create the evaluation loop.

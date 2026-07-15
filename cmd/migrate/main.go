@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: database init: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	imported := 0
