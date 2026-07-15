@@ -11,6 +11,23 @@ import (
 	"time"
 )
 
+// Cost estimation constants for real ticks where session export is unavailable.
+// These are conservative estimates based on typical foreman tick usage.
+const (
+	estTokensIn      = 8000                          // estimated input tokens per tick
+	estTokensOut     = 2000                          // estimated output tokens per tick
+	estCostPerIn     = 0.000015                      // deepseek-v4-pro input $/token
+	estCostPerOut    = 0.00006                       // deepseek-v4-pro output $/token
+	estCostPerTick   = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
+)
+
+// estimateTickCost returns estimated token counts and cost for a real tick.
+// Real session export (hermes sessions export) is a future task; for now we
+// use fixed estimates so cost aggregation works from day one.
+func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
+	return estTokensIn, estTokensOut, estCostPerTick
+}
+
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
 	db            *sql.DB
@@ -209,6 +226,17 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	outcome.ExitCode = st.cmd.ProcessState.ExitCode()
 	outcome.Duration = finished.Sub(st.Started)
+
+	// Cost estimation: real session export (hermes sessions export) is a future
+	// task. For now we populate estimated token counts and cost so that cost
+	// aggregation works from day one. Only estimate on completed ticks — failed
+	// or timed-out ticks consumed fewer tokens (process exited early).
+	if outcome.Status == TickCompleted {
+		tin, tout, cost := estimateTickCost()
+		outcome.TokensIn = tin
+		outcome.TokensOut = tout
+		outcome.CostUSD = cost
+	}
 
 	log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
 	return outcome

@@ -290,14 +290,20 @@ func (l *Loop) evaluate() {
 		go func(tick *SpawnedTick) {
 			defer l.running.Done()
 			outcome := tick.Wait()
+			// Cost data (TokensIn, TokensOut, CostUSD) is estimated by
+			// SpawnedTick.Wait() for completed ticks and persisted to DB
+			// by lifecycle.Complete() — no extra capture needed here.
 			if err := l.lifecycle.Complete(outcome); err != nil {
 				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
 			}
 			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
-				"project":  outcome.Project,
-				"tick_id":  outcome.TickID,
-				"status":   string(outcome.Status),
-				"duration": outcome.Duration.String(),
+				"project":    outcome.Project,
+				"tick_id":    outcome.TickID,
+				"status":     string(outcome.Status),
+				"duration":   outcome.Duration.String(),
+				"tokens_in":  outcome.TokensIn,
+				"tokens_out": outcome.TokensOut,
+				"cost_usd":   outcome.CostUSD,
 			})
 		}(st)
 	}

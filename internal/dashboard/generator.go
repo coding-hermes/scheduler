@@ -35,6 +35,8 @@ type FleetRow struct {
 	Completed   int
 	Failed      int
 	Timeout     int
+	CostToday   float64
+	CostWeek    float64
 }
 
 // TickRow is one tick in the history table.
@@ -80,6 +82,8 @@ type FleetData struct {
 	RecentTicks     []TickRow
 	Namespaces      []NamespaceRow
 	NamespaceTicks  []NamespaceTickRow
+	CostTodayTotal  float64
+	CostWeekTotal   float64
 }
 
 // Generate writes the dashboard HTML to w.
@@ -184,6 +188,17 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 					r.Urgency = float64(r.Priority) * (1 + hours)
 				}
 			}
+			// Per-project cost: today and last 7 days.
+			dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+			weekAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+			_ = g.db.QueryRowContext(ctx,
+				`SELECT COALESCE(SUM(cost_usd),0) FROM ticks WHERE project_name=? AND status='completed' AND completed_at >= ?`,
+				r.Name, dayAgo).Scan(&r.CostToday)
+			_ = g.db.QueryRowContext(ctx,
+				`SELECT COALESCE(SUM(cost_usd),0) FROM ticks WHERE project_name=? AND status='completed' AND completed_at >= ?`,
+				r.Name, weekAgo).Scan(&r.CostWeek)
+			data.CostTodayTotal += r.CostToday
+			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
 		}
 	}

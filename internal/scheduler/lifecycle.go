@@ -77,9 +77,13 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		exitCode = outcome.ExitCode
 	}
 	_, err := lt.db.Exec(`
-		UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?
+		UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
+			tokens_in = ?, tokens_out = ?, cost_usd = ?
 		WHERE id = ?
-	`, string(outcome.Status), outcome.Finished.Format(time.RFC3339), exitCode, stringOrNil(outcome.Error), stringOrNil(outcome.SessionID), outcome.TickID)
+	`, string(outcome.Status), outcome.Finished.Format(time.RFC3339), exitCode,
+		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
+		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD,
+		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
 	}
