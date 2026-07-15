@@ -91,11 +91,11 @@ func (m *MultiPoolPacker) Pack(
 	globalSelected := 0
 
 	type nsPackState struct {
-		ns          database.Namespace
-		alloc       int
-		selected    []*ProjectUrgency
-		queued      []*ProjectUrgency
-		usedBudget  int
+		ns         database.Namespace
+		alloc      int
+		selected   []*ProjectUrgency
+		queued     []*ProjectUrgency
+		usedBudget int
 	}
 	states := make(map[string]*nsPackState)
 
@@ -219,7 +219,7 @@ func (m *MultiPoolPacker) Pack(
 	newAllocations := borrower.Borrow(allocations, namespaces, queuedJobs, selectedBudget)
 
 	// Re-pack borrowers that received extra budget.
-	lentMap := make(map[string]int)  // how much each ns lent
+	lentMap := make(map[string]int)   // how much each ns lent
 	borrowMap := make(map[string]int) // how much each ns borrowed
 	for id, oldAlloc := range allocations {
 		newAlloc := newAllocations[id]

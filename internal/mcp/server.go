@@ -546,5 +546,3 @@ func getFloatArg(args map[string]interface{}, key string) float64 {
 	}
 	return 1.0
 }
-
-

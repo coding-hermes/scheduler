@@ -13,18 +13,18 @@ import (
 
 // Loop runs the main evaluation cycle.
 type Loop struct {
-	calculator     *UrgencyCalculator
-	packer         *Packer
+	calculator      *UrgencyCalculator
+	packer          *Packer
 	multiPoolPacker *MultiPoolPacker
-	spawner        *Spawner
-	simSpawner     *SimSpawner
-	lifecycle      *LifecycleTracker
-	events         *EventLogger
-	db             *sql.DB
-	interval       time.Duration
-	weightBudget   int
-	maxConcur      int
-	namespaceMode  bool
+	spawner         *Spawner
+	simSpawner      *SimSpawner
+	lifecycle       *LifecycleTracker
+	events          *EventLogger
+	db              *sql.DB
+	interval        time.Duration
+	weightBudget    int
+	maxConcur       int
+	namespaceMode   bool
 
 	mu         sync.Mutex
 	running    sync.WaitGroup
@@ -46,20 +46,20 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		nsMode = namespaceMode[0]
 	}
 	return &Loop{
-		calculator:     calc,
-		packer:         NewPacker(db, calc, budget, maxConcur),
+		calculator:      calc,
+		packer:          NewPacker(db, calc, budget, maxConcur),
 		multiPoolPacker: NewMultiPoolPacker(budget, maxConcur),
-		spawner:        NewSpawner(db, maxConcur),
-		simSpawner:     NewSimSpawner(db, 0.85),
-		lifecycle:      NewLifecycleTracker(db),
-		events:         NewEventLogger(db),
-		db:             db,
-		interval:       60 * time.Second,
-		weightBudget:   budget,
-		maxConcur:      maxConcur,
-		namespaceMode:  nsMode,
-		pauseCh:        make(chan bool, 1),
-		stopCh:         make(chan struct{}),
+		spawner:         NewSpawner(db, maxConcur),
+		simSpawner:      NewSimSpawner(db, 0.85),
+		lifecycle:       NewLifecycleTracker(db),
+		events:          NewEventLogger(db),
+		db:              db,
+		interval:        60 * time.Second,
+		weightBudget:    budget,
+		maxConcur:       maxConcur,
+		namespaceMode:   nsMode,
+		pauseCh:         make(chan bool, 1),
+		stopCh:          make(chan struct{}),
 	}
 }
 

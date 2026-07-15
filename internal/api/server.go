@@ -73,11 +73,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		evalAge = time.Since(lastEval).Seconds()
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"status":                "ok",
-		"uptime":                time.Since(s.started).String(),
-		"db":                    dbOK,
-		"active_ticks":          activeTicks,
-		"last_evaluation":       lastEvalStr,
+		"status":                 "ok",
+		"uptime":                 time.Since(s.started).String(),
+		"db":                     dbOK,
+		"active_ticks":           activeTicks,
+		"last_evaluation":        lastEvalStr,
 		"evaluation_age_seconds": evalAge,
 	})
 }
@@ -357,7 +357,6 @@ func splitPath(path string) []string {
 	}
 	return strings.Split(trimmed, "/")
 }
-
 
 func countActiveTicks(ctx context.Context, db *sql.DB) int {
 	var n int
