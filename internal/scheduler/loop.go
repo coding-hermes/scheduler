@@ -26,7 +26,7 @@ type Loop struct {
 	maxConcur       int
 	namespaceMode   bool
 
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	running    sync.WaitGroup
 	stopCh     chan struct{}
 	pauseCh    chan bool
@@ -305,8 +305,8 @@ func (l *Loop) evaluate() {
 
 // LastEvalTime returns when the last evaluation ran.
 func (l *Loop) LastEvalTime() time.Time {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return l.lastEval
 }
 
