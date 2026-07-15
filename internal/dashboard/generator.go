@@ -42,7 +42,7 @@ type FleetRow struct {
 // TickRow is one tick in the history table.
 type TickRow struct {
 	ID, Project, Status, Outcome, SessionID, SpawnedAt, CompletedAt string
-	Commits, FilesChanged                                            int
+	Commits, FilesChanged                                           int
 }
 
 // NamespaceRow is one namespace in the allocation overview table.

@@ -14,11 +14,11 @@ import (
 // Cost estimation constants for real ticks where session export is unavailable.
 // These are conservative estimates based on typical foreman tick usage.
 const (
-	estTokensIn      = 8000                          // estimated input tokens per tick
-	estTokensOut     = 2000                          // estimated output tokens per tick
-	estCostPerIn     = 0.000015                      // deepseek-v4-pro input $/token
-	estCostPerOut    = 0.00006                       // deepseek-v4-pro output $/token
-	estCostPerTick   = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
+	estTokensIn    = 8000     // estimated input tokens per tick
+	estTokensOut   = 2000     // estimated output tokens per tick
+	estCostPerIn   = 0.000015 // deepseek-v4-pro input $/token
+	estCostPerOut  = 0.00006  // deepseek-v4-pro output $/token
+	estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
 )
 
 // estimateTickCost returns estimated token counts and cost for a real tick.
