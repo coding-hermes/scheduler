@@ -166,7 +166,7 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - [x] Dashboard cost display — generator.go: `CostToday`/`CostWeek` per FleetRow, `CostTodayTotal`/`CostWeekTotal` fleet totals
 - Worker: glm-5.2 @ zai-glm. Real session export (`hermes sessions export`) deferred to future task.
 
-### [ ] OBS-006 — Alert escalation rules
+### [x] OBS-006 — Alert escalation rules ✓ `9179dd4`
 **Priority: LOW. Weight: 6.**
 - Define alert severity matrix: CRITICAL/HIGH/MEDIUM/LOW
 - CRITICAL: scheduler down for 10+ min
