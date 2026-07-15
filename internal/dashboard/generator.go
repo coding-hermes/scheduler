@@ -7,6 +7,8 @@ import (
 	"html/template"
 	"io"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/database"
 )
 
 // Generator produces the fleet dashboard as a single-file HTML page.
@@ -37,6 +39,31 @@ type TickRow struct {
 	Commits, FilesChanged                                int
 }
 
+// NamespaceRow is one namespace in the allocation overview table.
+type NamespaceRow struct {
+	ID           string
+	Weight       int
+	Reserved     int
+	HardCap      int
+	Allocated    int // current budget allocation
+	Used         int
+	Borrowed     int
+	Lent         int
+	ProjectCount int
+	Utilization  float64 // used/allocated * 100 (or 0 if allocated=0)
+}
+
+// NamespaceTickRow is one namespace_tick in the utilization history table.
+type NamespaceTickRow struct {
+	TickGroup   string
+	NamespaceID string
+	Allocated   int
+	Used        int
+	Borrowed    int
+	Lent        int
+	CreatedAt   string
+}
+
 // FleetData holds all data for the dashboard.
 type FleetData struct {
 	GeneratedAt     string
@@ -47,6 +74,8 @@ type FleetData struct {
 	EnabledProjects int
 	Projects        []FleetRow
 	RecentTicks     []TickRow
+	Namespaces      []NamespaceRow
+	NamespaceTicks  []NamespaceTickRow
 }
 
 // Generate writes the dashboard HTML to w.
@@ -68,6 +97,28 @@ func (g *Generator) Generate(w io.Writer) error {
 				return s[11:16]
 			}
 			return s
+		},
+		// utilClass returns a CSS class based on namespace utilization.
+		// Green: used < reserved, Yellow: reserved <= used < hard_cap, Red: used >= hard_cap.
+		// Returns "" if allocated == 0.
+		"utilClass": func(reserved, hardCap, used int) string {
+			if used < reserved {
+				return "util-green"
+			}
+			if hardCap > 0 && used >= hardCap {
+				return "util-red"
+			}
+			return "util-yellow"
+		},
+		// utilColor returns the bar background color based on utilization percentage.
+		"utilColor": func(utilization float64) string {
+			if utilization > 80 {
+				return "var(--red)"
+			}
+			if utilization >= 50 {
+				return "var(--yellow)"
+			}
+			return "var(--green)"
 		},
 	}
 	tmpl, err := template.New("dashboard").Funcs(funcMap).Parse(pageTemplate)
@@ -128,6 +179,44 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		}
 	}
 
+	// Namespaces.
+	namespaces, err := database.ListNamespaces(ctx, g.db, false)
+	if err == nil {
+		for _, ns := range namespaces {
+			row := NamespaceRow{
+				ID:       ns.ID,
+				Weight:   ns.Weight,
+				Reserved: ns.Reserved,
+				HardCap:  ns.HardCap,
+			}
+			// Latest allocation from namespace_ticks.
+			ticks, terr := database.ListNamespaceTicks(ctx, g.db, ns.ID, 1)
+			if terr == nil && len(ticks) > 0 {
+				row.Allocated = ticks[0].Allocated
+				row.Used = ticks[0].Used
+				row.Borrowed = ticks[0].Borrowed
+				row.Lent = ticks[0].Lent
+			}
+			if row.Allocated > 0 {
+				row.Utilization = float64(row.Used) / float64(row.Allocated) * 100
+			}
+			// Count enabled projects in this namespace.
+			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE namespace_id=? AND enabled=1`, ns.ID).Scan(&row.ProjectCount)
+			data.Namespaces = append(data.Namespaces, row)
+		}
+	}
+
+	// Recent namespace ticks (all namespaces, newest first) for the utilization chart.
+	nsTickRows, _ := g.db.QueryContext(ctx, `SELECT tick_group, namespace_id, allocated, used, borrowed, lent, created_at FROM namespace_ticks ORDER BY created_at DESC LIMIT 100`)
+	if nsTickRows != nil {
+		defer nsTickRows.Close()
+		for nsTickRows.Next() {
+			var nt NamespaceTickRow
+			_ = nsTickRows.Scan(&nt.TickGroup, &nt.NamespaceID, &nt.Allocated, &nt.Used, &nt.Borrowed, &nt.Lent, &nt.CreatedAt)
+			data.NamespaceTicks = append(data.NamespaceTicks, nt)
+		}
+	}
+
 	return data
 }
 
@@ -158,6 +247,8 @@ tr:last-child td{border-bottom:none}
 .running-dot{display:inline-block;width:6px;height:6px;background:var(--accent);border-radius:50%;margin-right:4px;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 .disabled{opacity:0.5}
+.util-green{color:var(--green)}.util-yellow{color:var(--yellow)}.util-red{color:var(--red)}
+.utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
 @media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
 </style>
 </head>
@@ -207,5 +298,50 @@ tr:last-child td{border-bottom:none}
 </tr>{{end}}
 </tbody>
 </table>
+
+<h2>Namespaces</h2>
+{{if .Namespaces}}
+<table>
+<thead><tr><th>Namespace</th><th>Weight</th><th>Reserved</th><th>Hard Cap</th><th>Allocated</th><th>Used</th><th>Utilization</th><th>Borrowed</th><th>Lent</th><th>Projects</th></tr></thead>
+<tbody>
+{{range .Namespaces}}
+<tr class="{{utilClass .Reserved .HardCap .Used}}">
+  <td>{{.ID}}</td>
+  <td>{{.Weight}}</td>
+  <td>{{.Reserved}}</td>
+  <td>{{if .HardCap}}{{.HardCap}}{{else}}∞{{end}}</td>
+  <td>{{.Allocated}}</td>
+  <td>{{.Used}}</td>
+  <td><div class="utilization-bar" style="width:{{printf "%.0f" .Utilization}}%;background:{{utilColor .Utilization}}"></div>{{printf "%.0f" .Utilization}}%</td>
+  <td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
+  <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
+  <td>{{.ProjectCount}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="meta">No namespaces configured</p>
+{{end}}
+
+<h2>Namespace Utilization History</h2>
+{{if .NamespaceTicks}}
+<table>
+<thead><tr><th>Namespace</th><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Borrowed</th><th>Lent</th><th>Time</th></tr></thead>
+<tbody>
+{{range .NamespaceTicks}}
+<tr>
+  <td>{{.NamespaceID}}</td>
+  <td>{{.TickGroup}}</td>
+  <td>{{.Allocated}}</td>
+  <td>{{.Used}}</td>
+  <td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
+  <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
+  <td class="meta">{{shortTime .CreatedAt}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="meta">No namespace tick data available</p>
+{{end}}
 </body>
 </html>`

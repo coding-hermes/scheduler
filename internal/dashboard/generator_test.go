@@ -155,3 +155,98 @@ func TestGenerate_PercentFunction_ZeroTotal(t *testing.T) {
 		t.Errorf("expected budget 0/100, got: %s", snippet(out, "budget-bar"))
 	}
 }
+
+// TestGenerate_NamespaceEmptyState verifies that the "Namespaces" heading and
+// empty-state message appear when no namespaces are configured.
+func TestGenerate_NamespaceEmptyState(t *testing.T) {
+	db := newTestDB(t)
+	g := dashboard.NewGenerator(db)
+
+	var buf strings.Builder
+	if err := g.Generate(&buf); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "<h2>Namespaces</h2>") {
+		t.Errorf("expected 'Namespaces' heading, not found in output")
+	}
+	if !strings.Contains(out, "No namespaces configured") {
+		t.Errorf("expected empty-state message, got: %s", snippet(out, "Namespaces"))
+	}
+	if !strings.Contains(out, "No namespace tick data available") {
+		t.Errorf("expected namespace tick empty-state message")
+	}
+}
+
+// TestGenerate_WithNamespaces creates namespaces + namespace ticks and verifies
+// the allocation table renders correctly with color-coded rows.
+func TestGenerate_WithNamespaces(t *testing.T) {
+	db := newTestDB(t)
+
+	// Create two namespaces.
+	ctx := context.Background()
+	if err := database.CreateNamespace(ctx, db, &database.Namespace{
+		ID: "alpha", Weight: 30, Reserved: 10, HardCap: 50, Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateNamespace alpha: %v", err)
+	}
+	if err := database.CreateNamespace(ctx, db, &database.Namespace{
+		ID: "beta", Weight: 20, Reserved: 15, HardCap: 0, Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateNamespace beta: %v", err)
+	}
+
+	// Insert namespace ticks. alpha is over-reserved (used=12 >= reserved=10),
+	// beta is under-reserved (used=5 < reserved=15).
+	if err := database.InsertNamespaceTick(ctx, db, &database.NamespaceTick{
+		TickGroup: "2026-07-15-10-00-00", NamespaceID: "alpha",
+		Allocated: 30, Used: 12, Borrowed: 2, Lent: 0,
+	}); err != nil {
+		t.Fatalf("InsertNamespaceTick alpha: %v", err)
+	}
+	if err := database.InsertNamespaceTick(ctx, db, &database.NamespaceTick{
+		TickGroup: "2026-07-15-10-00-00", NamespaceID: "beta",
+		Allocated: 20, Used: 5, Borrowed: 0, Lent: 3,
+	}); err != nil {
+		t.Fatalf("InsertNamespaceTick beta: %v", err)
+	}
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.Generate(&buf); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := buf.String()
+
+	// Namespace IDs must appear.
+	if !strings.Contains(out, ">alpha<") {
+		t.Errorf("expected namespace 'alpha' in table, got: %s", snippet(out, "Namespaces"))
+	}
+	if !strings.Contains(out, ">beta<") {
+		t.Errorf("expected namespace 'beta' in table")
+	}
+
+	// alpha: used=12 >= reserved=10, hard_cap=50, 12 < 50 → util-yellow
+	if !strings.Contains(out, "util-yellow") {
+		t.Errorf("expected util-yellow class for alpha (at reserved), got: %s", snippet(out, "alpha"))
+	}
+
+	// beta: used=5 < reserved=15 → util-green
+	if !strings.Contains(out, "util-green") {
+		t.Errorf("expected util-green class for beta (under reserved)")
+	}
+
+	// Borrowed/lent rendering.
+	if !strings.Contains(out, ">+2<") {
+		t.Errorf("expected borrowed +2 for alpha")
+	}
+	if !strings.Contains(out, ">-3<") {
+		t.Errorf("expected lent -3 for beta")
+	}
+
+	// Utilization history table should show the tick data.
+	if !strings.Contains(out, "Namespace Utilization History") {
+		t.Errorf("expected utilization history heading")
+	}
+}
