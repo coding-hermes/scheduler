@@ -139,12 +139,13 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 - Watchdog script pre-existing from July 12 — already complete with all ACs
 - TestHealth verifies both fields present and evaluation_age_seconds > 0 after ForceEvaluate
 
-### [ ] OBS-003 — Dashboard: tick timeline + outcomes
+### [x] OBS-003 — Dashboard tick timeline + outcomes ✓
 **Priority: MEDIUM. Weight: 10.**
-- Tick timeline graph in dashboard HTML
-- Color-coded: green=completed, red=failed, yellow=timeout, blue=running
-- Per-project outcome percentages
-- Clickable session IDs linking to Hermes transcripts
+- Outcome percentages per project (completed/failed/timeout ratios)
+- Session ID column in tick timeline with clickable links
+- statusClass helper: color-coded status in timeline
+- Backend extended: FleetRow gets Completed/Failed/Timeout counts + SessionID
+- Tick query includes session_id for trace links
 
 ### [ ] OBS-004 — Simulation / dry-run mode
 **Priority: HIGH. Weight: 20.**

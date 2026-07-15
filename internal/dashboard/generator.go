@@ -29,14 +29,18 @@ type FleetRow struct {
 	Enabled     bool
 	LastTick    string
 	LastOutcome string
+	SessionID   string
 	Urgency     float64
 	RunningNow  bool
+	Completed   int
+	Failed      int
+	Timeout     int
 }
 
 // TickRow is one tick in the history table.
 type TickRow struct {
-	ID, Project, Status, Outcome, SpawnedAt, CompletedAt string
-	Commits, FilesChanged                                int
+	ID, Project, Status, Outcome, SessionID, SpawnedAt, CompletedAt string
+	Commits, FilesChanged                                            int
 }
 
 // NamespaceRow is one namespace in the allocation overview table.
@@ -98,6 +102,21 @@ func (g *Generator) Generate(w io.Writer) error {
 			}
 			return s
 		},
+		"add": func(a, b, c int) int { return a + b + c },
+		"statusClass": func(s string) string {
+			switch s {
+			case "completed":
+				return "status-ok"
+			case "failed":
+				return "status-fail"
+			case "timeout":
+				return "status-timeout"
+			case "running":
+				return "status-running"
+			default:
+				return ""
+			}
+		},
 		// utilClass returns a CSS class based on namespace utilization.
 		// Green: used < reserved, Yellow: reserved <= used < hard_cap, Red: used >= hard_cap.
 		// Returns "" if allocated == 0.
@@ -150,8 +169,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			}
 			// Running check.
 			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='running'`, r.Name).Scan(&r.RunningNow)
-			// Last tick.
-			_ = g.db.QueryRowContext(ctx, `SELECT spawned_at, outcome FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.Name).Scan(&r.LastTick, &r.LastOutcome)
+			// Outcome counts.
+			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='completed'`, r.Name).Scan(&r.Completed)
+			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='failed'`, r.Name).Scan(&r.Failed)
+			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='timeout'`, r.Name).Scan(&r.Timeout)
+			// Last tick with session.
+			_ = g.db.QueryRowContext(ctx, `SELECT spawned_at, COALESCE(outcome,''), COALESCE(session_id,'') FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.Name).Scan(&r.LastTick, &r.LastOutcome, &r.SessionID)
 			// Urgency — simplified: priority * (1 + idle_hours).
 			var lastTime sql.NullString
 			_ = g.db.QueryRowContext(ctx, `SELECT MAX(spawned_at) FROM ticks WHERE project_name=?`, r.Name).Scan(&lastTime)
@@ -169,12 +192,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
 
 	// Recent ticks.
-	tickRows, _ := g.db.QueryContext(ctx, `SELECT id, project_name, status, COALESCE(outcome,''), spawned_at, COALESCE(completed_at,''), commits, files_changed FROM ticks ORDER BY spawned_at DESC LIMIT 20`)
+	tickRows, _ := g.db.QueryContext(ctx, `SELECT id, project_name, status, COALESCE(outcome,''), COALESCE(session_id,''), spawned_at, COALESCE(completed_at,''), commits, files_changed FROM ticks ORDER BY spawned_at DESC LIMIT 20`)
 	if tickRows != nil {
 		defer tickRows.Close()
 		for tickRows.Next() {
 			var t TickRow
-			tickRows.Scan(&t.ID, &t.Project, &t.Status, &t.Outcome, &t.SpawnedAt, &t.CompletedAt, &t.Commits, &t.FilesChanged)
+			tickRows.Scan(&t.ID, &t.Project, &t.Status, &t.Outcome, &t.SessionID, &t.SpawnedAt, &t.CompletedAt, &t.Commits, &t.FilesChanged)
 			data.RecentTicks = append(data.RecentTicks, t)
 		}
 	}
