@@ -8,39 +8,43 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - prealloc
+  settings:
+    errcheck:
+      check-blank: false
+      exclude-functions:
+        - (*database/sql.DB).Exec
+        - (*database/sql.Rows).Close
+        - (*database/sql.Row).Scan
+        - (*database/sql.Rows).Scan
+        - (io.Reader).Read
+        - (*os.File).Close
+        - (*encoding/json.Encoder).Encode
+        - (net/http.ResponseWriter).Write
+        - (*log.Logger).Printf
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unused
+      - path: internal/scheduler/sim_fixture_test\.go
+        linters:
+          - errcheck
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/coding-herms/scheduler
-  errcheck:
-    check-blank: false
-    exclude-functions:
-      - (*database/sql.DB).Exec
-      - (*database/sql.Rows).Close
-      - (*database/sql.Row).Scan
-      - (*database/sql.Rows).Scan
-      - (io.Reader).Read
-      - (*os.File).Close
-      - (*encoding/json.Encoder).Encode
-      - (net/http.ResponseWriter).Write
-      - (*log.Logger).Printf
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: github.com/coding-herms/scheduler
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unused
-    - path: internal/scheduler/sim_fixture_test\.go
-      linters:
-        - errcheck
 
 run:
   timeout: 5m

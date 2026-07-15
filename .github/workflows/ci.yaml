@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.25'
 
 jobs:
   # ── Fast checks first ──
@@ -21,7 +21,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           args: --timeout=5m
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.22', '1.23']
+        go-version: ['1.24', '1.25']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
