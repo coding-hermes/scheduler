@@ -321,15 +321,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := context.Background()
-	level := r.URL.Query().Get("level")
-	project := r.URL.Query().Get("project")
+	severity := r.URL.Query().Get("severity")
+	component := r.URL.Query().Get("component")
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	events, err := listEvents(ctx, s.db, level, project, limit)
+	events, err := listEvents(ctx, s.db, severity, component, limit)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -468,18 +468,18 @@ func listTicks(ctx context.Context, db *sql.DB, project string, limit int) ([]da
 	return ticks, rows.Err()
 }
 
-func listEvents(ctx context.Context, db *sql.DB, level, project string, limit int) ([]database.Event, error) {
-	q := "SELECT id, timestamp, level, project_name, message, detail, created_at FROM events WHERE 1=1"
+func listEvents(ctx context.Context, db *sql.DB, severity, component string, limit int) ([]database.Event, error) {
+	q := "SELECT id, severity, component, message, details, created_at FROM events WHERE 1=1"
 	var args []interface{}
-	if level != "" {
-		q += " AND level = ?"
-		args = append(args, level)
+	if severity != "" {
+		q += " AND severity = ?"
+		args = append(args, severity)
 	}
-	if project != "" {
-		q += " AND project_name = ?"
-		args = append(args, project)
+	if component != "" {
+		q += " AND component = ?"
+		args = append(args, component)
 	}
-	q += " ORDER BY timestamp DESC LIMIT ?"
+	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := db.QueryContext(ctx, q, args...)
@@ -491,9 +491,11 @@ func listEvents(ctx context.Context, db *sql.DB, level, project string, limit in
 	var events []database.Event
 	for rows.Next() {
 		var e database.Event
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Level, &e.ProjectName, &e.Message, &e.Detail, &e.CreatedAt); err != nil {
+		var sevStr string
+		if err := rows.Scan(&e.ID, &sevStr, &e.Component, &e.Message, &e.Details, &e.CreatedAt); err != nil {
 			return nil, err
 		}
+		e.Severity = database.EventSeverity(sevStr)
 		events = append(events, e)
 	}
 	return events, rows.Err()

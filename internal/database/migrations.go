@@ -8,7 +8,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 4
+const latestMigration = 5
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -124,6 +124,24 @@ CREATE TABLE IF NOT EXISTS namespace_ticks (
 
 CREATE INDEX IF NOT EXISTS idx_namespace_ticks_group ON namespace_ticks(tick_group);
 CREATE INDEX IF NOT EXISTS idx_namespace_ticks_ns ON namespace_ticks(namespace_id, created_at DESC);
+`,
+	},
+	{
+		version: 5,
+		desc:    "recreate events table with correct column names (severity, component, details)",
+		stmt: `
+DROP TABLE IF EXISTS events;
+
+CREATE TABLE IF NOT EXISTS events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    severity   TEXT NOT NULL CHECK(severity IN ('CRITICAL','HIGH','MEDIUM','LOW','INFO')),
+    component  TEXT NOT NULL DEFAULT '',
+    message    TEXT NOT NULL,
+    details    TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity, created_at DESC);
 `,
 	},
 }

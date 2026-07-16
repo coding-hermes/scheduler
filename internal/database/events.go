@@ -12,11 +12,11 @@ func LogEvent(ctx context.Context, db *sql.DB, e *Event) error {
 	if e.CreatedAt == "" {
 		e.CreatedAt = nowUTC()
 	}
-	const q = `INSERT INTO events (timestamp, level, project_name, message, detail, created_at)
-VALUES (?,?,?,?,?,?)`
+	const q = `INSERT INTO events (severity, component, message, details, created_at)
+VALUES (?,?,?,?,?)`
 	res, err := db.ExecContext(ctx, q,
-		e.Timestamp, string(e.Level), nullableString(e.ProjectName),
-		e.Message, nullableString(e.Detail), e.CreatedAt)
+		string(e.Severity), e.Component,
+		e.Message, e.Details, e.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("log event: %w", err)
 	}
@@ -29,22 +29,22 @@ VALUES (?,?,?,?,?,?)`
 }
 
 // ListEvents queries the event log with optional filters and pagination.
-// level and projectName may be empty to skip the respective filter. limit
+// severity and component may be empty to skip the respective filter. limit
 // caps the result count (use 0 for unbounded); offset skips leading rows.
 // Results are newest-first.
-func ListEvents(ctx context.Context, db *sql.DB, level string, projectName string, limit, offset int) ([]Event, error) {
+func ListEvents(ctx context.Context, db *sql.DB, severity string, component string, limit, offset int) ([]Event, error) {
 	conds := []string{}
 	args := []any{}
-	if level != "" {
-		conds = append(conds, "level = ?")
-		args = append(args, level)
+	if severity != "" {
+		conds = append(conds, "severity = ?")
+		args = append(args, severity)
 	}
-	if projectName != "" {
-		conds = append(conds, "project_name = ?")
-		args = append(args, projectName)
+	if component != "" {
+		conds = append(conds, "component = ?")
+		args = append(args, component)
 	}
 
-	q := `SELECT id, timestamp, level, COALESCE(project_name,''), message, COALESCE(detail,''), created_at FROM events`
+	q := `SELECT id, severity, component, message, COALESCE(details,'{}'), created_at FROM events`
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -67,12 +67,12 @@ func ListEvents(ctx context.Context, db *sql.DB, level string, projectName strin
 	var out []Event
 	for rows.Next() {
 		var e Event
-		var levelStr string
-		if err := rows.Scan(&e.ID, &e.Timestamp, &levelStr, &e.ProjectName,
-			&e.Message, &e.Detail, &e.CreatedAt); err != nil {
+		var sevStr string
+		if err := rows.Scan(&e.ID, &sevStr, &e.Component,
+			&e.Message, &e.Details, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan event row: %w", err)
 		}
-		e.Level = EventLevel(levelStr)
+		e.Severity = EventSeverity(sevStr)
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {

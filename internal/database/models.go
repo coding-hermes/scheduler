@@ -62,26 +62,26 @@ type Tick struct {
 	CreatedAt    string
 }
 
-// EventLevel enumerates the severity tiers for event log entries.
-type EventLevel string
+// EventSeverity enumerates the severity tiers for event log entries.
+type EventSeverity string
 
 const (
-	LevelInfo     EventLevel = "info"
-	LevelWarn     EventLevel = "warn"
-	LevelError    EventLevel = "error"
-	LevelDecision EventLevel = "decision"
+	SeverityCritical EventSeverity = "CRITICAL"
+	SeverityHigh     EventSeverity = "HIGH"
+	SeverityMedium   EventSeverity = "MEDIUM"
+	SeverityLow      EventSeverity = "LOW"
+	SeverityInfo     EventSeverity = "INFO"
 )
 
 // Event is a single log line in the operational event log. Decisions and
-// errors land here; info/warn capture routine operational notes.
+// errors land here; info captures routine operational notes.
 type Event struct {
-	ID          int64  // AUTOINCREMENT PK
-	Timestamp   string // RFC3339 — when the event occurred (not insertion time)
-	Level       EventLevel
-	ProjectName string // optional — empty for fleet-wide events
-	Message     string
-	Detail      string // free-form context, often JSON
-	CreatedAt   string // RFC3339 — when the row was inserted
+	ID        int64         // AUTOINCREMENT PK
+	Severity  EventSeverity // CRITICAL, HIGH, MEDIUM, LOW, INFO
+	Component string        // system component that emitted the event
+	Message   string
+	Details   string // free-form context, often JSON
+	CreatedAt string // RFC3339 — when the row was inserted
 }
 
 // Namespace represents a weight pool for related cron jobs.

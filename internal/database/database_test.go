@@ -594,10 +594,10 @@ func TestLogEvent_AndList(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 	e := &Event{
-		Timestamp:   "2026-01-01T00:00:00Z",
-		Level:       LevelInfo,
-		ProjectName: "alpha",
-		Message:     "project registered",
+		Severity:  SeverityInfo,
+		Component: "scheduler",
+		Message:   "project registered",
+		Details:   `{"project":"alpha"}`,
 	}
 	if err := LogEvent(ctx, db, e); err != nil {
 		t.Fatalf("LogEvent: %v", err)
@@ -618,15 +618,15 @@ func TestLogEvent_AndList(t *testing.T) {
 	}
 }
 
-func TestListEvents_FilterByLevel(t *testing.T) {
+func TestListEvents_FilterBySeverity(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
 	events := []Event{
-		{Timestamp: nowUTC(), Level: LevelInfo, Message: "info msg"},
-		{Timestamp: nowUTC(), Level: LevelWarn, Message: "warn msg"},
-		{Timestamp: nowUTC(), Level: LevelError, Message: "error msg"},
-		{Timestamp: nowUTC(), Level: LevelDecision, Message: "decision msg"},
+		{Severity: SeverityInfo, Component: "eval", Message: "info msg"},
+		{Severity: SeverityMedium, Component: "eval", Message: "medium msg"},
+		{Severity: SeverityHigh, Component: "eval", Message: "high msg"},
+		{Severity: SeverityCritical, Component: "eval", Message: "critical msg"},
 	}
 	for i := range events {
 		if err := LogEvent(ctx, db, &events[i]); err != nil {
@@ -635,42 +635,42 @@ func TestListEvents_FilterByLevel(t *testing.T) {
 	}
 
 	tests := []struct {
-		level string
-		want  int
+		severity string
+		want     int
 	}{
-		{string(LevelInfo), 1},
-		{string(LevelError), 1},
+		{string(SeverityInfo), 1},
+		{string(SeverityHigh), 1},
 		{"", 4}, // no filter
 	}
 	for _, tc := range tests {
-		got, err := ListEvents(ctx, db, tc.level, "", 0, 0)
+		got, err := ListEvents(ctx, db, tc.severity, "", 0, 0)
 		if err != nil {
-			t.Fatalf("ListEvents level=%q: %v", tc.level, err)
+			t.Fatalf("ListEvents severity=%q: %v", tc.severity, err)
 		}
 		if len(got) != tc.want {
-			t.Errorf("level=%q: got %d, want %d", tc.level, len(got), tc.want)
+			t.Errorf("severity=%q: got %d, want %d", tc.severity, len(got), tc.want)
 		}
 	}
 }
 
-func TestListEvents_FilterByProject(t *testing.T) {
+func TestListEvents_FilterByComponent(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
-	for _, name := range []string{"alpha", "beta", "alpha"} {
+	for _, comp := range []string{"spawner", "packer", "spawner"} {
 		if err := LogEvent(ctx, db, &Event{
-			Timestamp: nowUTC(), Level: LevelInfo, ProjectName: name, Message: "x",
+			Severity: SeverityInfo, Component: comp, Message: "x",
 		}); err != nil {
 			t.Fatalf("LogEvent: %v", err)
 		}
 	}
 
-	got, err := ListEvents(ctx, db, "", "alpha", 0, 0)
+	got, err := ListEvents(ctx, db, "", "spawner", 0, 0)
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
 	if len(got) != 2 {
-		t.Errorf("alpha events = %d, want 2", len(got))
+		t.Errorf("spawner events = %d, want 2", len(got))
 	}
 }
 
@@ -680,7 +680,7 @@ func TestListEvents_Pagination(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		if err := LogEvent(ctx, db, &Event{
-			Timestamp: nowUTC(), Level: LevelInfo, Message: "msg",
+			Severity: SeverityInfo, Component: "test", Message: "msg",
 		}); err != nil {
 			t.Fatalf("LogEvent: %v", err)
 		}
@@ -710,16 +710,15 @@ func TestListEvents_Pagination(t *testing.T) {
 	}
 }
 
-func TestLogEvent_CheckConstraintLevel(t *testing.T) {
+func TestLogEvent_CheckConstraintSeverity(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 	e := &Event{
-		Timestamp: nowUTC(),
-		Level:     EventLevel("bogus"),
-		Message:   "x",
+		Severity: EventSeverity("bogus"),
+		Message:  "x",
 	}
 	err := LogEvent(ctx, db, e)
 	if err == nil {
-		t.Fatal("expected CHECK constraint error for invalid level, got nil")
+		t.Fatal("expected CHECK constraint error for invalid severity, got nil")
 	}
 }
