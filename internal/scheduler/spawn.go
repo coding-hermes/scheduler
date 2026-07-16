@@ -149,10 +149,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		spawner: s,
 	}
 
-	// Parse session ID from first line of stdout and persist it.
+	// Parse session ID from stdout and persist it.
 	go func() {
 		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
+		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "session_id:") {
 				id := strings.TrimSpace(strings.TrimPrefix(line, "session_id:"))
@@ -163,6 +163,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if _, err := s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, id, tickID); err != nil {
 					log.Printf("ERROR persisting session_id for %s: %v", tickID, err)
 				}
+				break
 			}
 		}
 	}()

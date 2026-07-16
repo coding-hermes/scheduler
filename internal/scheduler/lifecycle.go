@@ -19,6 +19,20 @@ const (
 	TickTimeout   TickStatus = "timeout"
 )
 
+// Outcome converts the tick status to the outcome column value.
+func (s TickStatus) Outcome() string {
+	switch s {
+	case TickCompleted:
+		return "committed"
+	case TickFailed:
+		return "failed"
+	case TickTimeout:
+		return "timeout"
+	default:
+		return "dry_run"
+	}
+}
+
 // TickOutcome holds the result of a completed tick.
 type TickOutcome struct {
 	TickID       string
@@ -77,10 +91,10 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		exitCode = outcome.ExitCode
 	}
 	_, err := lt.db.Exec(`
-		UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
+		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?
 		WHERE id = ?
-	`, string(outcome.Status), outcome.Finished.Format(time.RFC3339), exitCode,
+	`, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD,
 		outcome.TickID)
