@@ -20,11 +20,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 		CREATE TABLE IF NOT EXISTS projects (
 			name TEXT PRIMARY KEY,
 			enabled INTEGER DEFAULT 1,
-			min_interval INTEGER DEFAULT 1800,
-			max_interval INTEGER DEFAULT 7200
+			cooldown_s INTEGER DEFAULT 1800
 		);
 		CREATE TABLE IF NOT EXISTS ticks (
-			tick_id TEXT PRIMARY KEY,
+			id TEXT PRIMARY KEY,
 			project_name TEXT,
 			status TEXT DEFAULT 'queued',
 			completed_at TEXT,
@@ -45,10 +44,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func insertProject(t *testing.T, db *sql.DB, name string, minI, maxI int) {
+func insertProject(t *testing.T, db *sql.DB, name string, cooldown int) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO projects (name, enabled, min_interval, max_interval) VALUES (?, 1, ?, ?)`,
-		name, minI, maxI)
+	_, err := db.Exec(`INSERT INTO projects (name, enabled, cooldown_s) VALUES (?, 1, ?)`,
+		name, cooldown)
 	if err != nil {
 		t.Fatalf("insert project %s: %v", name, err)
 	}
@@ -56,7 +55,7 @@ func insertProject(t *testing.T, db *sql.DB, name string, minI, maxI int) {
 
 func insertTick(t *testing.T, db *sql.DB, tickID, project, status string, completedAt time.Time) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO ticks (tick_id, project_name, status, completed_at) VALUES (?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO ticks (id, project_name, status, completed_at) VALUES (?, ?, ?, ?)`,
 		tickID, project, status, completedAt.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("insert tick %s: %v", tickID, err)
@@ -133,12 +132,12 @@ func TestAlertEscalator_CheckSchedulerHealth_Recent(t *testing.T) {
 }
 
 // TestAlertEscalator_CheckStarvation emits MEDIUM for a project with no tick
-// in more than 2x its max_interval.
+// in more than 2x its cooldown.
 func TestAlertEscalator_CheckStarvation(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	insertProject(t, db, "test-proj", 1800, 3600) // 1h max interval
+	insertProject(t, db, "test-proj", 1800) // 1h max interval
 	// Last tick was 3 hours ago (> 2x 3600 = 2h).
 	oldTick := time.Now().Add(-3 * time.Hour)
 	insertTick(t, db, "tick-001", "test-proj", "completed", oldTick)
@@ -162,7 +161,7 @@ func TestAlertEscalator_CheckStarvation_RecentTick(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	insertProject(t, db, "active-proj", 1800, 3600)
+	insertProject(t, db, "active-proj", 1800)
 	recent := time.Now().Add(-10 * time.Minute) // well within 2h threshold
 	insertTick(t, db, "tick-002", "active-proj", "completed", recent)
 
@@ -185,7 +184,7 @@ func TestAlertEscalator_CheckConsecutiveFailures(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	insertProject(t, db, "failing-proj", 1800, 3600)
+	insertProject(t, db, "failing-proj", 1800)
 	now := time.Now()
 	for i := 0; i < 4; i++ {
 		insertTick(t, db, "fail-"+string(rune('0'+i)), "failing-proj", "failed",
@@ -211,7 +210,7 @@ func TestAlertEscalator_CheckConsecutiveFailures_BrokenStreak(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	insertProject(t, db, "recovering-proj", 1800, 3600)
+	insertProject(t, db, "recovering-proj", 1800)
 	now := time.Now()
 	// 2 failures, then 1 success, then 2 more failures.
 	insertTick(t, db, "f-1", "recovering-proj", "failed", now.Add(-5*time.Minute))

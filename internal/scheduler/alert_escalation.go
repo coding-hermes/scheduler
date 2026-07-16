@@ -47,20 +47,20 @@ func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval tim
 func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 	// Query enabled projects with their intervals.
 	prows, err := ae.db.QueryContext(ctx,
-		`SELECT name, min_interval, max_interval FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s FROM projects WHERE enabled = 1`)
 	if err != nil {
 		return fmt.Errorf("query projects: %w", err)
 	}
 	defer prows.Close()
 
 	type projInfo struct {
-		name        string
-		maxInterval int
+		name     string
+		cooldown int
 	}
 	var projects []projInfo
 	for prows.Next() {
 		var p projInfo
-		if err := prows.Scan(&p.name, new(int), &p.maxInterval); err != nil {
+		if err := prows.Scan(&p.name, &p.cooldown); err != nil {
 			log.Printf("ESCALATION: scan project: %v", err)
 			continue
 		}
@@ -106,15 +106,15 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 			continue
 		}
 		age := now.Sub(last)
-		threshold := time.Duration(proj.maxInterval) * time.Second * 2
+		threshold := time.Duration(proj.cooldown) * time.Second * 2
 		if age > threshold {
 			ae.events.Emit(ctx, SeverityMedium, "escalation",
-				fmt.Sprintf("project starved: %s — last tick %v ago, interval %ds",
-					proj.name, age.Round(time.Second), proj.maxInterval),
+				fmt.Sprintf("project starved: %s — last tick %v ago, cooldown %ds",
+					proj.name, age.Round(time.Second), proj.cooldown),
 				map[string]any{
 					"project":     proj.name,
 					"last_tick":   last.Format(time.RFC3339),
-					"interval":    proj.maxInterval,
+					"cooldown":    proj.cooldown,
 					"age_seconds": age.Seconds(),
 				})
 		}
@@ -147,7 +147,7 @@ func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 
 	for _, name := range names {
 		rows, err := ae.db.QueryContext(ctx,
-			`SELECT tick_id, status FROM ticks WHERE project_name = ? ORDER BY completed_at DESC LIMIT 5`,
+			`SELECT id, status FROM ticks WHERE project_name = ? ORDER BY completed_at DESC LIMIT 5`,
 			name)
 		if err != nil {
 			log.Printf("ESCALATION: query ticks for %s: %v", name, err)
