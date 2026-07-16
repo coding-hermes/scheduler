@@ -232,20 +232,20 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 
 ## DISCOVERY SWEEP — 2026-07-16 06:00 CDT
 
-### [ ] INFRA — Systemd unit missing PATH: hermes binary not found
+### [ ] INFRA — Systemd unit missing PATH: hermes binary not found ⚠️ BLOCKED (sudo blocked in cron)
 **Priority: HIGH. Weight: 8.**
 - `hermes` binary at `/home/kara/.local/bin/hermes` not in systemd PATH
 - Systemd unit only has `Environment=HOME=/home/kara`, no PATH
 - Causes ALL spawn attempts to fail: `exec: "hermes": executable file not found in $PATH`
-- 5,163 failed outcomes accumulated from this single issue
+- 5,163+ failed outcomes accumulated from this single issue
 - Fix: add `Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin` to unit, `systemctl daemon-reload`, `systemctl restart coding-hermes-scheduler`
+- **Fix ready at `/tmp/coding-hermes-scheduler.service` — needs manual deployment:**
+  `sudo cp /tmp/coding-hermes-scheduler.service /etc/systemd/system/coding-hermes-scheduler.service && sudo systemctl daemon-reload && sudo systemctl restart coding-hermes-scheduler`
 - Files: `/etc/systemd/system/coding-hermes-scheduler.service`
 
-### [ ] BUG — Events table schema mismatch: level vs severity column
+### [x] BUG — Events table schema mismatch: level vs severity column ✓ `e6afa32`
 **Priority: MEDIUM. Weight: 5.**
-- Migration v1 creates `events.level TEXT` (values: info, warn, error, decision)
-- `events.go:45` INSERTs into `severity` column (CRITICAL, HIGH, MEDIUM, LOW, INFO)
-- `alert_escalation_test.go` also uses `severity TEXT` in test table
-- Every event emission fails: `SQL logic error: table events has no column named severity`
-- Fix: add migration v5 to rename `level` → `severity` in events table (or add new column + drop old)
-- Files: `internal/database/migrations.go`, `internal/scheduler/events.go`
+- Migration v5 recreates events table with severity, component, details columns matching events.go INSERT
+- Database Event struct updated (Severity, Component, Details), old EventLevel type updated to EventSeverity
+- LogEvent, ListEvents, API /api/v1/events handler all updated
+- 91 insertions, 72 deletions across 5 files. Guard: PASS. All tests: PASS.
