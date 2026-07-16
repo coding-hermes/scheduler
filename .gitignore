@@ -21,3 +21,4 @@ Thumbs.db
 # Project-local state (not committed)
 .vfs/
 .coding-hermes/
+.gitreins/history/
