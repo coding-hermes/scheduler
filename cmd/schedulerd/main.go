@@ -30,6 +30,7 @@ func main() {
 	weightBudget := flag.Int("budget", 100, "Weight budget")
 	maxConcurrent := flag.Int("max-concurrent", 8, "Max concurrent foremen")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
+	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	duckbrainNS := flag.String("duckbrain-ns", "coding-hermes", "DuckBrain namespace for sync")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
@@ -51,6 +52,14 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
+
+	// ── Test-verify mode: run correctness checks and exit ──
+	if *testVerifyFlag > 0 {
+		if err := testVerify(*testVerifyFlag); err != nil {
+			log.Fatalf("VERIFY FAILED: %v", err)
+		}
+		return
+	}
 
 	// Create the evaluation loop.
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
