@@ -78,9 +78,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	var cmd *exec.Cmd
 
 	if project.Command != "" {
-		// Custom command — split and exec directly.
-		parts := splitCommand(project.Command)
-		cmd = exec.Command(parts[0], parts[1:]...)
+		// Custom command.
+		if strings.Contains(project.Command, "bash -c") {
+			// Shell one-liner — pass the script string directly to bash -c.
+			script := strings.TrimPrefix(project.Command, "bash -c ")
+			script = strings.TrimSpace(script)
+			cmd = exec.Command("bash", "-c", script)
+		} else {
+			parts := splitCommand(project.Command)
+			cmd = exec.Command(parts[0], parts[1:]...)
+		}
 		cmd.Dir = project.Workdir
 	} else {
 		model := s.model
