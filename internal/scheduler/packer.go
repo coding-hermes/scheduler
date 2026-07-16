@@ -99,15 +99,21 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 
 	// Greedy pack: pick projects that fit in budget.
 	currentlyRunning := p.runningCount()
+	runningSet := p.runningProjectSet()
 	used := 0
 	packed := make([]PackedProject, 0, max(1, len(list)/2))
 
 	totalChecked := 0
 	totalSkippedBudget := 0
 	totalSkippedCooldown := 0
+	totalSkippedRunning := 0
 
 	for _, s := range list {
 		totalChecked++
+		if runningSet[s.name] {
+			totalSkippedRunning++
+			continue
+		}
 		if used+s.weight > p.budget {
 			totalSkippedBudget++
 			continue
@@ -137,8 +143,8 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 	}
 
 	if len(packed) == 0 {
-		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d, running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, currentlyRunning, p.maxConcurrent)
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d, total-running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, currentlyRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }
@@ -151,6 +157,23 @@ func (p *Packer) runningCount() int {
 		return 0
 	}
 	return n
+}
+
+// runningProjectSet returns the set of project names that have at least one running tick.
+func (p *Packer) runningProjectSet() map[string]bool {
+	set := map[string]bool{}
+	rows, err := p.db.Query(`SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
+	if err != nil {
+		log.Printf("ERROR querying running projects: %v", err)
+		return set
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		rows.Scan(&name)
+		set[name] = true
+	}
+	return set
 }
 
 // Budget returns the current weight budget.
