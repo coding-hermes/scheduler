@@ -123,6 +123,10 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 			break
 		}
 		cooldownDur := time.Duration(s.cooldownS) * time.Second
+		if s.cooldownS == 0 {
+			// Dynamic: derive from priority via urgency calculator.
+			cooldownDur = p.calculator.ComputeInterval(s.priority)
+		}
 		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 			totalSkippedCooldown++
 			continue
