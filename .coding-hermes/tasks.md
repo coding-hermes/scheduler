@@ -232,7 +232,11 @@ Reserved floors, hard caps, borrowing of idle capacity. Full spec: S07.
 
 ## DISCOVERY SWEEP — 2026-07-16 06:00 CDT
 
-### [ ] INFRA — Systemd unit missing PATH: hermes binary not found ⚠️ BLOCKED (sudo blocked in cron)
+### [x] INFRA — Systemd unit missing PATH: hermes binary not found ✓
+**Priority: HIGH. Weight: 8.**
+- Added `Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin`
+- Fixed binary path: `~/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd`
+- Restarted via systemctl — scheduler healthy, PATH resolves
 **Priority: HIGH. Weight: 8.**
 - `hermes` binary at `/home/kara/.local/bin/hermes` not in systemd PATH
 - Systemd unit only has `Environment=HOME=/home/kara`, no PATH

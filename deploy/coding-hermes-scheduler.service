@@ -5,12 +5,13 @@ After=network.target
 [Service]
 Type=simple
 User=kara
-ExecStart=/home/kara/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode
+ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment=HOME=/home/kara
+Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
