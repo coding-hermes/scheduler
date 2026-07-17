@@ -23,6 +23,8 @@ linters:
         - (*encoding/json.Encoder).Encode
         - (net/http.ResponseWriter).Write
         - (*log.Logger).Printf
+        - os.RemoveAll
+        - (*database/sql.DB).Close
   exclusions:
     rules:
       - path: _test\.go
