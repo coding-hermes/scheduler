@@ -118,7 +118,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"-s", "coding-hermes-cron",
 			"-s", "hilo-usage",
 			"-s", "gitreins",
-			"--ignore-rules", "--cli", "-Q",
+			"--ignore-rules", "-Q",
 		}
 
 		cmd = exec.Command("hermes", args...)
