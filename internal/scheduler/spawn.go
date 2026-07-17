@@ -103,10 +103,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		}
 
 		prompt := fmt.Sprintf(
-			"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
+			"[Scheduler tick: %s] "+
+				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. Report result.",
-			project.Workdir,
+			tickID, project.Workdir,
 		)
 
 		args := []string{
