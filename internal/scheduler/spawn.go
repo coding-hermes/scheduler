@@ -84,6 +84,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// Shell one-liner — pass the script string directly to bash -c.
 			script := strings.TrimPrefix(project.Command, "bash -c ")
 			script = strings.TrimSpace(script)
+			// Strip surrounding quotes if present.
+			script = strings.Trim(script, "'\"")
 			cmd = exec.Command("bash", "-c", script)
 		} else {
 			parts := splitCommand(project.Command)
