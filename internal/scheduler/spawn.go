@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -119,6 +120,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		cmd = exec.Command("hermes", args...)
 		cmd.Dir = project.Workdir
+		cmd.Env = append(os.Environ(),
+			"CODING_HERMES_TICK="+tickID,
+			"CODING_HERMES_SOURCE=scheduler",
+			"CODING_HERMES_PROJECT="+project.Name,
+		)
 	}
 
 	stdout, err := cmd.StdoutPipe()
