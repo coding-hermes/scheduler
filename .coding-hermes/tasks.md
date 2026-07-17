@@ -41,6 +41,19 @@
 - Host crontab entry: `0 */2 * * *` runs `./bin/schedulerd --test-verify 3` every 2h
 - Verified: `--test-verify 3` passes all 6 checks
 
+### [ ] INFRA-003 — Telegram delivery for scheduler tick outcomes
+**Priority: CRITICAL. Weight: 20.**
+- **Root cause:** Scheduler spawns `hermes chat -q -Q` as a subprocess → stdout only, no delivery.
+  Cron system runs agent *in-process* via `AIAgent` then calls `_deliver_result()` → Telegram.
+- **Fix:** Add `deliver` column to projects table (platform:chat_id:thread_id). After tick
+  completes, capture final_response from stdout, wrap with `[Scheduler tick: ...]` header,
+  and POST to Telegram via bot API or hermes send_message tool.
+- **Pattern:** Cron's `_deliver_result()` wraps with `"Cronjob Response: {name}\n(job_id: {id})"`.
+  Scheduler should wrap with `"🤖 Scheduler Tick: {project} [{tick_id}]"`.
+- **Delivery targets** available from paused cron jobs (extract `deliver` field, map to projects).
+- **Verification:** After deploy, a scheduler tick should produce a Telegram message starting
+  with `🤖 Scheduler Tick:` within 5-15 minutes.
+
 ### [ ] INFRA-002 — TOML config support for project definitions
 **Priority: LOW. Weight: 5.**
 - Want: `schedulerd --config fleet.toml` declarative fleet definition
