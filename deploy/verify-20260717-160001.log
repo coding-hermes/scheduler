@@ -1,0 +1,32 @@
+=== SCHEDULER VERIFY 2026-07-17T21:00:01+00:00 ===
+2026/07/17 16:00:01 main.go:54: Database: /home/kara/.hermes/scheduler.db (WAL mode)
+2026/07/17 16:00:01 loop.go:229: EVAL: 5 project(s) selected, 100/100 budget used
+2026/07/17 16:00:01 spawn.go:189: SPAWN: alpha tick=alpha-2026-07-17-16-00-01 pid=179190 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:01 spawn.go:189: SPAWN: epsilon tick=epsilon-2026-07-17-16-00-01 pid=179192 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:01 spawn.go:189: SPAWN: gamma tick=gamma-2026-07-17-16-00-01 pid=179195 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:01 spawn.go:189: SPAWN: beta tick=beta-2026-07-17-16-00-01 pid=179198 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:01 spawn.go:189: SPAWN: zeta tick=zeta-2026-07-17-16-00-01 pid=179200 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:02 spawn.go:258: TICK: epsilon epsilon-2026-07-17-16-00-01 → completed (1s)
+2026/07/17 16:00:03 spawn.go:258: TICK: alpha alpha-2026-07-17-16-00-01 → completed (2s)
+2026/07/17 16:00:03 spawn.go:258: TICK: beta beta-2026-07-17-16-00-01 → completed (2s)
+2026/07/17 16:00:04 loop.go:229: EVAL: 2 project(s) selected, 25/100 budget used
+2026/07/17 16:00:04 spawn.go:189: SPAWN: delta tick=delta-2026-07-17-16-00-04 pid=179462 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:04 spawn.go:189: SPAWN: eta tick=eta-2026-07-17-16-00-04 pid=179463 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:04 spawn.go:258: TICK: gamma gamma-2026-07-17-16-00-01 → completed (3s)
+2026/07/17 16:00:06 spawn.go:258: TICK: zeta zeta-2026-07-17-16-00-01 → completed (5s)
+2026/07/17 16:00:07 loop.go:229: EVAL: 1 project(s) selected, 10/100 budget used
+2026/07/17 16:00:07 spawn.go:189: SPAWN: epsilon tick=epsilon-2026-07-17-16-00-07 pid=179586 workdir=/tmp/scheduler-verify-3352205477
+2026/07/17 16:00:08 spawn.go:258: TICK: delta delta-2026-07-17-16-00-04 → completed (4s)
+2026/07/17 16:00:08 spawn.go:258: TICK: epsilon epsilon-2026-07-17-16-00-07 → completed (1s)
+2026/07/17 16:00:14 spawn.go:258: TICK: eta eta-2026-07-17-16-00-04 → completed (10s)
+  ✓ No hanging ticks                         0 hanging
+  ✓ All 7 projects got ticks                 7/7
+  ✓ Budget never exceeded                    3 eval groups checked
+  ✓ No duplicate spawns per eval             0 duplicates across 3 evals
+  ✓ Session IDs captured                     0 ticks without session ID
+  ✓ Priority descending within evals         higher priority projects spawned first
+
+---
+6 checks, 0 failures
+✅ SCHEDULER VERIFIED
+✅ SCHEDULER VERIFIED

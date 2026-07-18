@@ -41,6 +41,23 @@
 - Host crontab entry: `0 */2 * * *` runs `./bin/schedulerd --test-verify 3` every 2h
 - Verified: `--test-verify 3` passes all 6 checks
 
+### [ ] BUG-004 — Goroutine/memory leak: 659 tasks, 8GB after 18h uptime
+**Priority: HIGH. Weight: 12.**
+- **Symptom:** After 18h, schedulerd has 659 goroutines, 8GB RAM (22.8GB peak), API unresponsive.
+  Only 15 ticks running, 10K completed — the bloat is in the daemon, not subprocesses.
+- **Likely causes:**
+  1. Goroutine leak in spawn loop or lifecycle tracker — each tick spawns a goroutine to read
+     stdout for session_id; if the goroutine blocks on a dead pipe, it accumulates forever.
+  2. Memory: 10K tick records in SQLite held in-memory via conn pool or unbuffered queries.
+  3. Lifecycle tracker polling every N seconds — builds up timers that never fire on dead ticks.
+- **Fix candidates:**
+  - Add context.WithTimeout to stdout scanner goroutine (kill after tick timeout)
+  - Cap in-memory tick cache / paginate queries
+  - Add `--tick-timeout` flag with default 30m, reap running ticks that exceed it
+  - Periodic goroutine count logging to catch leaks early
+- **Verification:** After restart, goroutine count should stabilize under 50 within 10 minutes.
+  Memory should stay under 1GB for 10K tick records.
+
 ### [ ] INFRA-003 — Telegram delivery for scheduler tick outcomes
 **Priority: CRITICAL. Weight: 20.**
 - **Root cause:** Scheduler spawns `hermes chat -q -Q` as a subprocess → stdout only, no delivery.
