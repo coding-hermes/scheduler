@@ -448,8 +448,11 @@ func (l *Loop) reapZombies() {
 		}
 		// Check if process is alive via /proc/<pid>/stat
 		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
-			l.db.ExecContext(ctx,
-				`UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id)
+			if _, err := l.db.ExecContext(ctx,
+				`UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id); err != nil {
+				log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
+				continue
+			}
 			reaped++
 		}
 		// Process exists → leave it alone (it's doing real work)

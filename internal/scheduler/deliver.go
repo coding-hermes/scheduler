@@ -32,8 +32,8 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 		log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
 		return
 	}
-	defer os.Remove(f.Name())
 	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	if _, err := f.WriteString(body); err != nil {
 		log.Printf("DELIVER: %s tick=%s — write temp file: %v", project, tickID, err)
@@ -124,7 +124,7 @@ func trimToolNoise(raw string) string {
 			// Skip until we see a non-instruction line (blank or markdown)
 			skipUntil := true
 			result = append(result, "…") // indicate skipped content
-			for ; skipUntil && len(lines) > 0; {
+			for skipUntil && len(lines) > 0 {
 				result = append(result, line)
 				if trimmed == "" || strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") {
 					// Keep skipping — still in worker prompt
