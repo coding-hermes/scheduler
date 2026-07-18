@@ -179,9 +179,22 @@ func (l *Loop) Run() {
 	}
 }
 
-// Stop stops the evaluation loop.
+// Stop stops the evaluation loop and waits for in-flight ticks to complete
+// (up to 15s) so that spawned goroutines don't hold resources during HTTP shutdown.
 func (l *Loop) Stop() {
 	close(l.stopCh)
+	// Give spawned ticks a grace period to finish naturally.
+	done := make(chan struct{})
+	go func() {
+		l.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Println("LOOP: all in-flight ticks completed")
+	case <-time.After(15 * time.Second):
+		log.Println("LOOP: timed out waiting for in-flight ticks — forcing shutdown")
+	}
 }
 
 // ForceEvaluate triggers an immediate evaluation.

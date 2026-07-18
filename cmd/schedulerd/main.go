@@ -23,7 +23,7 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/scheduler.db"), "SQLite database path")
+	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
 	minInterval := flag.Duration("min-interval", 20*time.Minute, "Fastest tick interval")
 	maxInterval := flag.Duration("max-interval", 24*time.Hour, "Slowest tick interval")
@@ -175,9 +175,12 @@ func main() {
 	log.Printf("Received %v, shutting down...", sig)
 
 	loop.Stop()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
+	// Wait for in-flight ticks to complete (with a generous timeout).
+	// Spawned ticks can run up to tickTimeout; we give them a chance to
+	// finish naturally before the HTTP server begins its own drain.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("HTTP shutdown: %v", err)
 	}
 	log.Println("Shutdown complete")
