@@ -1,3 +1,28 @@
+### [ ] FEAT-002 — Scheduler MCP Server
+**Priority: HIGH. Weight: 12.**
+**Goal:** Expose scheduler control via MCP so Hermes (foremen, Supervisor) can manage the fleet
+programmatically — no curl commands needed.
+
+**API to expose as MCP tools:**
+- `scheduler_list_projects` — list all projects with status, priority, last tick
+- `scheduler_get_project(name)` — get full project config
+- `scheduler_enable_project(name)` / `scheduler_disable_project(name)` — toggle
+- `scheduler_set_priority(name, priority)` — adjust priority
+- `scheduler_set_cooldown(name, seconds)` — adjust cooldown
+- `scheduler_get_ticks(project, limit)` — recent tick history
+- `scheduler_trigger_evaluation()` — force immediate eval
+- `scheduler_health()` — daemon status, uptime, active ticks
+- `scheduler_get_namespaces()` — namespace budget allocations
+
+**Implementation:**
+- Add to the existing `internal/mcp/` package in this repo
+- Reuse scheduler's own SQLite DB connection for zero-latency queries
+- Expose as a separate MCP transport (stdio or HTTP) so any Hermes instance can connect
+- Wire into `cmd/schedulerd/main.go` as a flag `--mcp-addr` or `--mcp-transport stdio`
+
+**AC:** Supervisor can call `scheduler_enable_project("consensus")` and it works.
+Foremen can call `scheduler_get_ticks("my-project", 5)` during self-heal.
+
 ### [x] BUG — Events table schema mismatch: level vs severity column ✓ `e6afa32`
 **Priority: MEDIUM. Weight: 5.**
 - Migration v5 recreates events table with severity, component, details columns matching events.go INSERT
