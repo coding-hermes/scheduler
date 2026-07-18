@@ -435,9 +435,16 @@ sim_fixture.go, sim_fixture_test.go).
 
 ---
 
-## IDLE TICK — 2026-07-18 17:21
+## IDLE TICK — 2026-07-18 18:48 (#2)
 
 **Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Step 0 self-heal:**
+- Git identity: OK (totalwindupflightsystems)
+- Co-author: OK (Alexis Okuwa)
+- Found uncommitted code: `internal/scheduler/loop.go` — `cleanDanglingOnStartup()` fix to set `last_tick_completed` for cleaned projects
+- Committed `451eb9e` (fix) + `5b0e5bc` (lint errcheck)
+- golangci-lint caught errcheck on first commit, fixed in second
 
 **Discovery sweep:**
 - `go build ./...`: PASS
@@ -447,6 +454,8 @@ sim_fixture.go, sim_fixture_test.go).
 - `govulncheck`: 17 stdlib vulns (known, low exploitability, localhost-only)
 - `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering in goroutine spawns)
 
-**Daemon health:** status=ok, 9 active ticks, uptime=3m (fresh restart), evaluation_age=23s, spawns_http=3, spawns_exec=0
+**Daemon health:** status=ok, 10 active ticks, uptime=3m, evaluation_age=12s, spawns_http=2, spawns_exec=0
+
+**Self-pause:** Idle tick #2 → cooldown 900s → 1800s (30m). API confirmed: `CooldownS: 1800`.
 
 **No action needed.**
