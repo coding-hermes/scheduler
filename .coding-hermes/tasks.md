@@ -88,7 +88,7 @@
   Reset on first non-idle tick.
 - **Shortcut (done):** All 26 projects cooldown doubled (600s→1200s), mythos→14400s.
 
-### [x] TEST-006 — Fix toml_test.go: map-based API → slice-based FleetConfig ✓ `COMMIT_HASH`
+### [x] TEST-006 — Fix toml_test.go: map-based API → slice-based FleetConfig ✓ `2ec8ff6`
 **Priority: HIGH. Weight: 8.**
 **Root cause:** commit `97306ba` changed `FleetConfig.Namespaces`/`Projects` from maps to slices
   but `toml_test.go` still used map access (`cfg.Namespaces["key"]`), map literals, and TOML
