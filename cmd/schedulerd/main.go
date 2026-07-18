@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // registers handlers on DefaultServeMux
 	"os"
 	"os/signal"
 	"strings"
@@ -141,10 +142,15 @@ func main() {
 	mux.Handle("/mcp", mcpServer.Handler())
 	mux.Handle("/mcp/", mcpServer.Handler())
 
-	// Start HTTP server.
+	// Start HTTP server with pprof on DefaultServeMux.
+	// Custom mux handles API/MCP/dashboard. /debug/pprof/ falls through to DefaultServeMux.
+	pprofMux := http.NewServeMux()
+	pprofMux.Handle("/debug/pprof/", http.DefaultServeMux)
+	pprofMux.Handle("/", mux)
+
 	server := &http.Server{
 		Addr:    *listen,
-		Handler: mux,
+		Handler: pprofMux,
 	}
 	go func() {
 		log.Printf("HTTP: listening on %s", *listen)
