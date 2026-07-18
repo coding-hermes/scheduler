@@ -426,3 +426,9 @@ sim_fixture.go, sim_fixture_test.go).
 - `deliver.go:127`: `for ; ...; {` → `for ... {` (gofmt)
 - `loop.go:451`: unchecked `ExecContext` → log error + continue on failure
 - 2 files, +7/-4. Build+vet+gofmt+test green. Pushed.
+
+### [x] MAINT-001 — Remove dead Packer code after BUG-007 SlotPool refactor ✓ `44d6806`
+**Priority: LOW. Weight: 2. Status: COMPLETE.**
+- `packer.go`: remove `runningCount()` and `runningProjectSet()` — dead after
+  SlotPool took over running-project tracking via `RunningSet()`.
+- golangci-lint: 2 issues → 0. Build+vet+tests: PASS. Guard: PASS.
