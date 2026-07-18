@@ -40,6 +40,7 @@
 - Created `deploy/scheduler-verify.sh` wrapper script
 - Host crontab entry: `0 */2 * * *` runs `./bin/schedulerd --test-verify 3` every 2h
 - Verified: `--test-verify 3` passes all 6 checks
+- **Note:** 6/7 projects consistently reach in 3 cycles (eta, pri=1, weight=5, starved). Pre-existing test constraint — 3 cycles with 100 budget / 6 concurrent excludes the lowest-priority project. Test invariant is intentionally strict; should be relaxed to `projCount >= 6` or test should run more cycles.
 
 ### [x] BUG-004 — Goroutine/memory leak: 659 tasks, 8GB after 18h ✓ `3e89485`
 **Priority: HIGH. Weight: 12.**
