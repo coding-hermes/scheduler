@@ -96,17 +96,19 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 - `config.example.toml` with all 25+ settings annotated
 
 **Implementation:**
-1. Add structs: `DaemonConfig`, `SchedulerConfig`, `GatewayConfig`, `DuckBrainConfig`
-2. Add `RootConfig` wrapper: holds all sections + `FleetConfig` + `Projects`/`Namespaces`
-3. Add `Validate()` — bounds checks, required fields, path existence
-4. Add `LoadWithOverrides(tomlPath)` — reads TOML, then env vars, then CLI flags
-5. Map every existing CLI flag to a TOML key + `SCHEDULER_*` env var name
-6. Add `${ENV_VAR}` interpolation for TOML string values (simple regex replace)
-7. Add `--show-config` — prints resolved config as TOML with source annotations
-8. Add `schedulerd schema` — dumps JSON Schema for `schedulerd.toml`
-9. Add `config.example.toml` — every setting with comments
-10. Update systemd unit: `ExecStart=schedulerd --config /etc/schedulerd.toml`
-11. Keep all CLI flags working (backward compatible) — they just become overrides
+- [x] 1. Add structs: `DaemonConfig`, `SchedulerConfig`, `GatewayConfig`, `DuckBrainConfig`  ✓ `a021a67`
+- [x] 2. Add `RootConfig` wrapper: holds all sections + `FleetConfig` + `Projects`/`Namespaces`  ✓ `a021a67`
+- [x] 3. Add `Validate()` — bounds checks, required fields, path existence  ✓ `a021a67`
+- [x] 4. Add `LoadWithOverrides(tomlPath)` — reads TOML, then env vars, then CLI flags  ✓ `a021a67`
+- [x] 5. Map every existing CLI flag to a TOML key + `SCHEDULER_*` env var name  ✓ `a021a67`
+- [x] 6. Add `${ENV_VAR}` interpolation for TOML string values  ✓ `a021a67`
+- [x] 11a. ApplyRootConfig bridge (config → CLI flag pointers)  ✓ `81c184c`
+- [x] 12. Comprehensive tests (18 tests, 597 lines)  ✓ `6f8b0b7`
+- [ ] 7. Add `--show-config` — prints resolved config as TOML with source annotations
+- [ ] 8. Add `schedulerd schema` — dumps JSON Schema for `schedulerd.toml`
+- [ ] 9. Add `config.example.toml` — every setting with comments
+- [ ] 10. Update systemd unit: `ExecStart=schedulerd --config /etc/schedulerd.toml`
+- [ ] 11b. Wire LoadConfig+ApplyRootConfig into cmd/schedulerd/main.go (WIP — helpers.go exists)
 
 **Deliverable:** One `schedulerd.toml` controls everything. Env vars for containers. CLI flags for dev. Three layers, clear priority.
 **Priority: HIGH. Weight: 18. Status: IN PROGRESS.**
