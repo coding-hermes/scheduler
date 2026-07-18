@@ -1,4 +1,68 @@
-### [x] FEAT-002 — Scheduler MCP Server ✓ (pre-existing, complete)
+### [ ] FEAT-003 — HTTP API Spawn: Replace exec.Command("hermes") with Gateway API
+**Priority: HIGHEST. Weight: 20.**
+**Goal:** Replace per-tick Python process spawns with HTTP calls to the already-running
+Hermes gateway API at `127.0.0.1:8642`. Eliminates 500MB+ process startup per tick.
+
+**Why:** Every foreman tick currently spawns a full `hermes chat` process (~500MB RAM,
+33K token system prompt load). The Hermes gateway already has an HTTP API server
+running the same agent loop. Reusing it means:
+- Zero process startup overhead
+- No per-chat MCP duplication (duckbrain, gitreins loaded once by gateway)
+- No PID tracking or zombie reaping needed
+- Memory: ~5GB (8 concurrent chats) → ~1GB (gateway only)
+- No HERMES_HOME foreman config needed — gateway has normal config
+
+**Architecture:**
+```
+Current: schedulerd → exec.Command("hermes", "chat", "-q", prompt, ...)
+Proposed: schedulerd → POST http://127.0.0.1:8642/v1/responses
+```
+
+**Key API endpoint:** `POST /v1/responses`
+- Stateful — conversation key groups history per project
+- Synchronous — returns full response in one HTTP call
+- Headers: `X-Hermes-Session-Key: {project}`, `Authorization: Bearer {token}`
+- Body: `{"instructions": "...", "model": "deepseek-v4-pro", ...}`
+
+**API endpoints available on gateway (PID 348728, :8642):**
+```
+GET  /health              → {"status":"ok","version":"0.18.2"}
+GET  /v1/models           → available models
+GET  /v1/skills           → 109KB skill catalog
+GET  /v1/toolsets         → available toolsets
+POST /v1/chat/completions → stateless, stream + non-stream
+POST /v1/responses        → stateful, conversation key
+POST /v1/runs             → long-running with SSE events
+GET  /api/sessions        → session CRUD
+```
+
+**Implementation plan:**
+1. Add `--gateway-api` flag (default: `http://127.0.0.1:8642`)
+2. Create `internal/scheduler/gateway_client.go` — HTTP client
+3. Replace `exec.Command("hermes", ...)` in spawn.go with `POST /v1/responses`
+4. Add `X-Hermes-Session-Key: {project_name}` for conversation persistence
+5. HTTP timeout replaces `cmd.Process.Kill()` timeout
+6. Auth: read `HERMES_API_KEY` from env or gateway config
+7. Remove: stdout pipe scanning, PID tracking, zombie reaper, active map
+8. **Verify:** `POST /v1/responses` loads skills when specified in `instructions` field
+9. **Verify:** The API server supports the tools we need (terminal, file, web, search, memory, skills)
+10. **Fallback:** If gateway unreachable, fall back to exec.Command for now
+
+**Pre-checks (before coding):**
+- Test: `curl -X POST http://127.0.0.1:8642/v1/responses -d '{"instructions":"echo ok"}'`
+- Confirm skills load via instructions field
+- Confirm `CONVERSATION_KEY` header or `X-Hermes-Session-Key` groups conversations
+- Check if `X-Hermes-Session-Key` is the right header for project-level grouping
+
+**Savings:**
+- 500MB → 0MB per tick in process overhead
+- No MCP duplication (duckbrain, gitreins loaded once by gateway)
+- No HERMES_HOME foreman config complexity
+- No zombie reaper / PID tracking code paths
+- Simpler spawn.go (drop ~200 lines of pipe/goroutine management)
+
+**Risk:** If gateway is restarted, all in-flight ticks disconnect. Mitigation: retry with
+backoff, fall back to exec.Command if gateway dead > 2 attempts.
 **Priority: HIGH. Weight: 12.**
 - **Already implemented** in `internal/mcp/server.go` (548 lines) + `server_test.go` (698 lines).
 - 14 MCP tools available at `/mcp` endpoint, wired in `cmd/schedulerd/main.go:141-142`.
