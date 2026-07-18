@@ -71,6 +71,7 @@ func testVerify(cycles int) error {
 
 	// ── Run cycles ──
 	loop := scheduler.NewLoop(db, 60*time.Second, 4*time.Hour, 10, budget, maxConcur)
+	loop.SetNoDeliver(true) // suppress Telegram spam during verify
 	// Default loop already has simulation OFF; ensure we're using real spawns.
 
 	for i := 0; i < cycles; i++ {

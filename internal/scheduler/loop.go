@@ -34,7 +34,11 @@ type Loop struct {
 	lastEval   time.Time
 	simulate   bool
 	simSuccess float64
+	noDeliver  bool // suppress Telegram delivery (verify mode, tests)
 }
+
+// SetNoDeliver suppresses Telegram delivery of tick output.
+func (l *Loop) SetNoDeliver(v bool) { l.noDeliver = v }
 
 // NewLoop creates the evaluation loop. namespaceMode is optional for backward
 // compatibility with existing callers; omitted values default to false.
@@ -318,8 +322,10 @@ func (l *Loop) evaluate() {
 			if err := l.lifecycle.Complete(outcome); err != nil {
 				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
 			}
-			// Deliver tick output to Telegram.
-			deliverOutput(tick.Project, tick.TickID, &tick.Output)
+			// Deliver tick output to Telegram (suppressed in verify/test mode).
+			if !l.noDeliver {
+				deliverOutput(tick.Project, tick.TickID, &tick.Output)
+			}
 			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
 				"project":    outcome.Project,
 				"tick_id":    outcome.TickID,

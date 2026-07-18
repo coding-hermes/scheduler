@@ -57,7 +57,7 @@
 - **Verification:** Build, vet, tests all PASS. Guard: PASS (secrets clean). 
   After restart, goroutine count should stabilize under 50 within 10 minutes on a real fleet.
 
-### [ ] INFRA-003 — Telegram delivery for scheduler tick outcomes
+### [x] INFRA-003 — Telegram delivery for scheduler tick outcomes ✓ `64afc8a`
 **Priority: CRITICAL. Weight: 20.**
 - **Root cause:** Scheduler spawns `hermes chat -q -Q` as a subprocess → stdout only, no delivery.
   Cron system runs agent *in-process* via `AIAgent` then calls `_deliver_result()` → Telegram.
