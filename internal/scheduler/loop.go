@@ -184,6 +184,11 @@ func (l *Loop) Run() {
 			l.reapZombies()
 		case <-ticker.C:
 			l.evaluate()
+		case <-l.slotPool.SlotFreed():
+			// A slot freed up — re-evaluate to fill it with the next
+			// eligible project. Event-driven on top of periodic ticker
+			// ensures zero-wait refill when a tick completes.
+			l.evaluate()
 		}
 	}
 }

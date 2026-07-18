@@ -1,23 +1,16 @@
-### [ ] BUG-007 — Sequential spawn blocks eval — fleet starves on slow tick
-**Priority: CRITICAL. Weight: 20.**
-**Symptom:** One slow gateway response (e.g. imhotep taking 20+ minutes) blocks
-ALL subsequent spawns in the eval cycle. health endpoint responds (BUG-006 fixed),
-but no new eval cycles fire because evaluate() is blocked in spawn loop.
+### [x] BUG-007 — Sequential spawn blocks eval — fleet starves on slow tick ✓ `c8a3864`
+**Priority: CRITICAL. Weight: 20. Status: COMPLETE.**
+**Symptom:** One slow gateway response (e.g. imhotep taking 20+ minutes) blocked
+ALL subsequent spawns in the eval cycle.
 
-**Root cause:** `evaluate()` spawns projects in a sequential `for range packed` loop.
-Each `spawner.Spawn()` calls the gateway HTTP API and blocks until the response returns
-(seconds to minutes depending on model context size). With 12 projects selected,
-a single slow project starves the other 11.
+**Fix:** SlotPool — buffered channel semaphore (capacity = maxConcurrent).
+evaluate() fires projects into the pool and returns immediately. Each project
+runs in its own goroutine, acquires a slot, spawns, releases on completion
+or 2h timeout. 12 concurrent goroutines, evaluating finishes in <1s. Next eval
+cycle fires on schedule regardless of slow ticks.
 
-**Fix:** Convert the spawn loop to concurrent goroutines with a WaitGroup:
-- Each project spawns in its own goroutine
-- All spawns fire in parallel
-- evaluate() returns immediately after wg.Wait()
-- Next eval cycle fires on schedule (60s min-interval)
-
-**Files to modify:** `internal/scheduler/loop.go` — spawn loop at line 317.
-
-**Status:** NOT STARTED.
+**Files:** `internal/scheduler/loop.go` (+180/-149), `internal/scheduler/slot_pool.go` (+136 new).
+**Delivered:** `c8a3864`. Binary deployed, daemon running, 12 active ticks, health OK.
 **Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Replace 18 CLI-only flags with a three-layer configuration system.
 Priority (lowest → highest): **TOML config file < env vars < CLI flags**.

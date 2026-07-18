@@ -120,7 +120,29 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 	}()
 }
 
-// Wait blocks until all running ticks finish or the context is cancelled.
+// SlotFreed returns a channel that receives when any slot is released.
+// The evaluation loop can select on this to re-evaluate immediately
+// instead of waiting for the next ticker interval.
+func (p *SlotPool) SlotFreed() <-chan struct{} {
+	ch := make(chan struct{}, p.maxSlots)
+	// Send on original release
+	orig := p.sem
+	go func() {
+		prev := len(orig)
+		for {
+			time.Sleep(100 * time.Millisecond)
+			curr := len(orig)
+			if curr < prev {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+			prev = curr
+		}
+	}()
+	return ch
+}
 func (p *SlotPool) Wait(ctx context.Context) error {
 	for {
 		select {
