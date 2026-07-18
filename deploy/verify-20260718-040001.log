@@ -1,0 +1,48 @@
+=== SCHEDULER VERIFY 2026-07-18T09:00:01+00:00 ===
+2026/07/18 04:00:01 main.go:57: Database: /home/kara/.hermes/scheduler.db (WAL mode)
+2026/07/18 04:00:01 loop.go:219: goroutine count: 4
+2026/07/18 04:00:01 loop.go:269: EVAL: 5 project(s) selected, 100/100 budget used
+2026/07/18 04:00:01 spawn.go:218: SPAWN: alpha tick=alpha-2026-07-18-04-00-01 pid=3101249 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:01 spawn.go:218: SPAWN: epsilon tick=epsilon-2026-07-18-04-00-01 pid=3101250 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:01 spawn.go:218: SPAWN: gamma tick=gamma-2026-07-18-04-00-01 pid=3101253 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:01 spawn.go:218: SPAWN: beta tick=beta-2026-07-18-04-00-01 pid=3101256 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:01 spawn.go:218: SPAWN: zeta tick=zeta-2026-07-18-04-00-01 pid=3101258 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:03 spawn.go:295: TICK: epsilon epsilon-2026-07-18-04-00-01 → failed (1s)
+2026/07/18 04:00:04 spawn.go:295: TICK: alpha alpha-2026-07-18-04-00-01 → failed (2s)
+2026/07/18 04:00:04 spawn.go:295: TICK: beta beta-2026-07-18-04-00-01 → failed (2s)
+2026/07/18 04:00:04 loop.go:219: goroutine count: 6
+2026/07/18 04:00:04 packer.go:124: PACKER: max concurrency reached (6), stopping
+2026/07/18 04:00:04 loop.go:269: EVAL: 4 project(s) selected, 90/100 budget used
+2026/07/18 04:00:04 spawn.go:218: SPAWN: alpha tick=alpha-2026-07-18-04-00-04 pid=3101728 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:04 spawn.go:218: SPAWN: epsilon tick=epsilon-2026-07-18-04-00-04 pid=3101729 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:04 spawn.go:218: SPAWN: beta tick=beta-2026-07-18-04-00-04 pid=3101731 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:04 spawn.go:218: SPAWN: delta tick=delta-2026-07-18-04-00-04 pid=3101733 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:05 spawn.go:295: TICK: gamma gamma-2026-07-18-04-00-01 → failed (3s)
+2026/07/18 04:00:06 spawn.go:295: TICK: epsilon epsilon-2026-07-18-04-00-04 → failed (1s)
+2026/07/18 04:00:07 spawn.go:295: TICK: zeta zeta-2026-07-18-04-00-01 → failed (5s)
+2026/07/18 04:00:07 spawn.go:295: TICK: alpha alpha-2026-07-18-04-00-04 → failed (2s)
+2026/07/18 04:00:07 spawn.go:295: TICK: beta beta-2026-07-18-04-00-04 → failed (2s)
+2026/07/18 04:00:07 loop.go:219: goroutine count: 5
+2026/07/18 04:00:07 loop.go:269: EVAL: 5 project(s) selected, 100/100 budget used
+2026/07/18 04:00:07 spawn.go:218: SPAWN: alpha tick=alpha-2026-07-18-04-00-07 pid=3102039 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:07 spawn.go:218: SPAWN: epsilon tick=epsilon-2026-07-18-04-00-07 pid=3102040 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:07 spawn.go:218: SPAWN: gamma tick=gamma-2026-07-18-04-00-07 pid=3102041 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:07 spawn.go:218: SPAWN: beta tick=beta-2026-07-18-04-00-07 pid=3102044 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:07 spawn.go:218: SPAWN: zeta tick=zeta-2026-07-18-04-00-07 pid=3102046 workdir=/tmp/scheduler-verify-3457797017
+2026/07/18 04:00:09 spawn.go:295: TICK: epsilon epsilon-2026-07-18-04-00-07 → failed (1s)
+2026/07/18 04:00:09 spawn.go:295: TICK: delta delta-2026-07-18-04-00-04 → failed (4s)
+2026/07/18 04:00:10 spawn.go:295: TICK: alpha alpha-2026-07-18-04-00-07 → failed (2s)
+2026/07/18 04:00:10 spawn.go:295: TICK: beta beta-2026-07-18-04-00-07 → failed (2s)
+2026/07/18 04:00:11 spawn.go:295: TICK: gamma gamma-2026-07-18-04-00-07 → failed (3s)
+2026/07/18 04:00:13 spawn.go:295: TICK: zeta zeta-2026-07-18-04-00-07 → failed (5s)
+  ✓ No hanging ticks                         0 hanging
+  ✗ All 7 projects got ticks                 6/7
+  ✓ Budget never exceeded                    3 eval groups checked
+  ✓ No duplicate spawns per eval             0 duplicates across 3 evals
+  ✓ Session IDs captured                     0 ticks without session ID
+  ✓ Priority descending within evals         higher priority projects spawned first
+
+---
+6 checks, 1 failures
+❌ VERIFY FAILED
+2026/07/18 04:00:16 main.go:77: VERIFY FAILED: 1/6 checks failed
