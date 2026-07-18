@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -42,12 +43,16 @@ type Spawner struct {
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
-func NewSpawner(db *sql.DB, maxConcurrent int) *Spawner {
+func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawner {
+	to := 30 * time.Minute
+	if len(timeout) > 0 {
+		to = timeout[0]
+	}
 	return &Spawner{
 		db:            db,
 		maxConcurrent: maxConcurrent,
 		active:        make(map[string]*exec.Cmd),
-		timeout:       30 * time.Minute,
+		timeout:       to,
 		model:         "deepseek-v4-pro",
 		provider:      "deepseek-foreman",
 		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins",
@@ -158,8 +163,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		spawner: s,
 	}
 
-	// Parse session ID from stdout and persist it.
+	// Parse session ID from stdout and persist it. The scanner goroutine must
+	// exit when the process exits or times out so it cannot leak.
+	scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
+	st.scanCancel = scanCancel
+
 	go func() {
+		defer scanCancel()
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -172,8 +182,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if _, err := s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, id, tickID); err != nil {
 					log.Printf("ERROR persisting session_id for %s: %v", tickID, err)
 				}
-				break
+				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
+		}
+		select {
+		case <-scanCtx.Done():
+			// Expected on clean process exit or timeout; already cancelled.
+		default:
 		}
 	}()
 
@@ -192,16 +210,17 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 // SpawnedTick represents a running foreman process.
 type SpawnedTick struct {
-	TickID    string
-	Project   string
-	PID       int
-	Started   time.Time
-	SessionID string
-	cmd       *exec.Cmd
-	stdout    interface{ Close() error }
-	stderr    interface{ Close() error }
-	spawner   *Spawner
-	mu        sync.Mutex
+	TickID     string
+	Project    string
+	PID        int
+	Started    time.Time
+	SessionID  string
+	cmd        *exec.Cmd
+	stdout     interface{ Close() error }
+	stderr     interface{ Close() error }
+	spawner    *Spawner
+	scanCancel context.CancelFunc
+	mu         sync.Mutex
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -211,6 +230,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	defer st.closePipes()
+	if st.scanCancel != nil {
+		defer st.scanCancel()
+	}
 
 	timer := time.AfterFunc(st.spawner.timeout, func() {
 		if st.cmd.Process != nil {
@@ -257,6 +281,15 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
 	return outcome
+}
+
+func (st *SpawnedTick) closePipes() {
+	if st.stdout != nil {
+		_ = st.stdout.Close()
+	}
+	if st.stderr != nil {
+		_ = st.stderr.Close()
+	}
 }
 
 func splitCommand(cmd string) []string {

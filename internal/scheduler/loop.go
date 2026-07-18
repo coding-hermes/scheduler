@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -79,6 +80,15 @@ func (l *Loop) SetSimulation(successRate float64) {
 	}
 }
 
+// SetTickTimeout updates the real spawner's per-tick timeout.
+func (l *Loop) SetTickTimeout(timeout time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.spawner != nil {
+		l.spawner.timeout = timeout
+	}
+}
+
 // RunBulkSim generates N simulated ticks and exits.
 func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 	l.simulate = true
@@ -125,8 +135,8 @@ func (l *Loop) Run() {
 	if l.simulate {
 		mode = fmt.Sprintf("simulated (success=%.0f%%)", l.simSuccess*100)
 	}
-	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d)",
-		mode, l.interval, l.weightBudget, l.maxConcur)
+	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d) goroutines=%d",
+		mode, l.interval, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
 
@@ -178,6 +188,18 @@ func (l *Loop) evaluate() {
 
 	now := time.Now()
 	l.lastEval = now
+
+	// Goroutine leak monitoring
+	if goroCount := runtime.NumGoroutine(); goroCount > 100 {
+		log.Printf("WARN: goroutine count = %d (threshold: 100)", goroCount)
+		l.events.Emit(context.Background(), SeverityLow, "loop",
+			fmt.Sprintf("high goroutine count: %d", goroCount), map[string]any{
+				"count":     goroCount,
+				"threshold": 100,
+			})
+	} else {
+		log.Printf("goroutine count: %d", goroCount)
+	}
 
 	// EVAL_START event.
 	l.events.Emit(context.Background(), SeverityInfo, "loop", "evaluation started", map[string]any{
