@@ -1,4 +1,72 @@
-### [>] FEAT-004 — Dedicated Gateway Instance for Scheduler Foreman Ticks
+### [ ] FEAT-005 — Unified Daemon Config File (TOML + schema)
+**Priority: HIGH. Weight: 15.**
+**Goal:** Replace 18 CLI flags with a single `schedulerd.toml` config file.
+CLI flags override config values (standard priority: config file < env vars < flags).
+
+**Why:** Right now every daemon setting is a CLI flag:
+```
+schedulerd --db ... --listen ... --budget 100 --max-concurrent 12 \
+  --tick-timeout 2h --namespace-mode --gateway-url ... --foreman-home ...
+```
+This is fragile (typos silent), hard to document, and impossible to validate.
+A TOML config file gives us schema validation, IDE autocomplete, and a single
+source of truth checked into git.
+
+**What exists already:**
+- `fleet.example.toml` — declarative project/namespace definitions, loaded via `--config`
+- `internal/config/config.go` — `FleetConfig`, `ProjectDef`, `NamespaceDef` structs with `toml:` tags
+- `internal/config/loader.go` — TOML loader with defaults
+
+**What's missing — daemon settings never appear in TOML:**
+
+Sections to add to `schedulerd.toml`:
+
+```toml
+# ── Daemon ───────────────────────────────────────────────────────────
+[daemon]
+db_path = "~/.hermes/coding-hermes/scheduler.db"
+listen = "127.0.0.1:9090"
+
+# ── Scheduler ────────────────────────────────────────────────────────
+[scheduler]
+min_interval = "20m"
+max_interval = "24h"
+num_levels = 10
+weight_budget = 100
+max_concurrent = 12
+tick_timeout = "2h"
+namespace_mode = true
+
+# ── Gateway ───────────────────────────────────────────────────────────
+[gateway]
+url = "http://127.0.0.1:8642"
+key = "${API_SERVER_KEY}"  # env-var interpolation
+foreman_home = "~/.hermes/foreman"
+
+# ── DuckBrain ─────────────────────────────────────────────────────────
+[duckbrain]
+namespace = "coding-hermes"
+url = "http://localhost:3000"
+
+# ── Fleet ────────────────────────────────────────────────────────────
+[[projects]]
+name = "my-project"
+...
+```
+
+**Implementation:**
+1. Add `DaemonConfig`, `SchedulerConfig`, `GatewayConfig`, `DuckBrainConfig` structs
+2. Add a `SchedulerConfig` wrapper that holds all sections plus fleet
+3. Add `Validate()` method that checks bounds, required fields, path existence
+4. Load config file before CLI flag parsing; CLI flags override matching keys
+5. Support `${ENV_VAR}` interpolation in config values
+6. Add `--config` flag (already exists for fleet, extend to full config)
+7. Add `--show-config` flag to print resolved config and exit (debugging)
+8. Update systemd unit to use `--config /etc/schedulerd.toml` instead of 8 flags
+9. Add JSON Schema generation (`schedulerd schema` subcommand)
+10. Add `config.example.toml` with all settings documented
+
+**Deliverable:** `schedulerd.toml` → drop 18 CLI flags to ~3 (`--config`, `--show-config`, `--test-verify`)
 **Priority: HIGH. Weight: 18. Status: IN PROGRESS.**
 **Deliverables committed (2026-07-18):**
 - [x] `deploy/coding-hermes-scheduler-gateway.service` — systemd user unit (MemoryMax=16G, Restart=always)
