@@ -2,68 +2,57 @@ package scheduler
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"strings"
+	"os"
+	"os/exec"
 )
 
-const telegramBotToken = "8925815583:AAH5eVxUOLtKLiy50BQdkMX9Nb4wQgkD8bs"
-
-// deliverOutput sends tick output to the configured delivery target.
-// deliverFormat: "telegram:chat_id:thread_id" (from project deliver column).
-// Falls back to the scheduler thread (83996) if no target is configured.
+// deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
+// Uses `hermes send` which routes through the gateway to any configured platform
+// (Telegram, Discord, Signal, Slack, etc.) — no platform-specific code needed.
+//
+// deliver format: "platform:chat_id:thread_id" (from project deliver column).
+// Falls back to "telegram:-1003310984808:83996" if no target is configured.
 func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		log.Printf("DELIVER: %s tick=%s — no output to deliver", project, tickID)
 		return
 	}
 
-	chatID := "-1003310984808"
-	threadID := "83996" // default: scheduler foreman thread
-
-	// Parse deliver target: "telegram:<chat_id>:<thread_id>"
-	if deliver != "" {
-		parts := strings.SplitN(deliver, ":", 3)
-		if len(parts) >= 2 {
-			chatID = parts[1]
-		}
-		if len(parts) >= 3 {
-			threadID = parts[2]
-		}
+	target := deliver
+	if target == "" {
+		target = "telegram:-1003310984808:83996" // default: scheduler foreman thread
 	}
 
-	text := output.String()
-	const maxLen = 4096
-	if len(text) > maxLen {
-		text = text[:maxLen-100] + "\n\n…[truncated]"
-	}
+	subject := fmt.Sprintf("🤖 Scheduler Tick: %s [%s]", project, tickID)
 
-	msg := fmt.Sprintf("🤖 Scheduler Tick: %s [%s]\n\n%s", project, tickID, text)
-
-	body := map[string]any{
-		"chat_id":           chatID,
-		"message_thread_id": threadID,
-		"text":              msg,
-	}
-
-	payload, _ := json.Marshal(body)
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", telegramBotToken)
-
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	// Write output to a temp file for hermes send --file.
+	f, err := os.CreateTemp("", fmt.Sprintf("chtick-%s-*.txt", tickID))
 	if err != nil {
-		log.Printf("DELIVER: %s tick=%s — Telegram POST failed: %v", project, tickID, err)
+		log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer os.Remove(f.Name())
+	defer f.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode != 200 {
-		log.Printf("DELIVER: %s tick=%s — Telegram returned %d: %s", project, tickID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if _, err := f.Write(output.Bytes()); err != nil {
+		log.Printf("DELIVER: %s tick=%s — write temp file: %v", project, tickID, err)
+		return
+	}
+	f.Close()
+
+	cmd := exec.Command("hermes", "send",
+		"--to", target,
+		"--subject", subject,
+		"--file", f.Name(),
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("DELIVER: %s tick=%s — hermes send failed: %v (%s)", project, tickID, err, bytes.TrimSpace(out))
 		return
 	}
 
-	log.Printf("DELIVER: %s tick=%s → thread %s", project, tickID, threadID)
+	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, target)
 }
