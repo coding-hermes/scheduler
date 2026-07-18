@@ -309,4 +309,6 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 
 Live HTML dashboard at `http://127.0.0.1:9090/` — auto-refreshes every 60 seconds.
 
+![Dashboard](assets/dashboard.png)
+
 Shows: project fleet overview (enabled/disabled, weight, priority, last tick), recent tick history, namespace allocation with utilization bars, active tick counts, budget gauge.
