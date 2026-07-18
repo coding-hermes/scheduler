@@ -100,9 +100,10 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	})
 
 	// Greedy pack: pick projects that fit in budget.
-	currentlyRunning := p.runningCount()
-	runningSet := p.runningProjectSet()
-	// Merge with spawner's in-memory active set — spawns may not be\n	// committed to DB yet (race condition).\n	for name := range spawnerRunning {\n		runningSet[name] = true\n	}\n	// Re-pool currentlyRunning from merged set for accuracy.\n	if len(runningSet) > currentlyRunning {\n		currentlyRunning = len(runningSet)\n	}
+	// Use the in-memory running set as the SOLE source of truth.
+	// DB queries race against goroutines writing to SQLite — the
+	// memory-backed SlotPool semaphore is always correct.
+	currRunning := len(spawnerRunning)
 	used := 0
 	packed := make([]PackedProject, 0, max(1, len(list)/2))
 
@@ -113,7 +114,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 
 	for _, s := range list {
 		totalChecked++
-		if runningSet[s.name] {
+		if spawnerRunning[s.name] {
 			totalSkippedRunning++
 			continue
 		}
@@ -121,7 +122,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalSkippedBudget++
 			continue
 		}
-		if currentlyRunning >= p.maxConcurrent {
+		if currRunning >= p.maxConcurrent {
 			log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
 			break
 		}
@@ -147,12 +148,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			Deliver:  s.deliver,
 		})
 		used += s.weight
-		currentlyRunning++
+		currRunning++
 	}
 
 	if len(packed) == 0 {
 		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d, total-running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, currentlyRunning, p.maxConcurrent)
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }

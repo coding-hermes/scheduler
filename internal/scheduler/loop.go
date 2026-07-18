@@ -258,7 +258,11 @@ func (l *Loop) evaluate() {
 	}
 	if len(packed) == 0 {
 		var err error
-		packed, err = l.packer.Pick(now, l.slotPool.RunningSet())
+		runningSet := l.spawner.RunningSet()
+		if l.slotPool != nil {
+			runningSet = l.slotPool.RunningSet()
+		}
+		packed, err = l.packer.Pick(now, runningSet)
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
 			l.mu.Unlock()
