@@ -41,7 +41,7 @@
 - Host crontab entry: `0 */2 * * *` runs `./bin/schedulerd --test-verify 3` every 2h
 - Verified: `--test-verify 3` passes all 6 checks
 
-### [x] BUG-004 — Goroutine/memory leak: 659 tasks, 8GB after 18h uptime ✓ `510b093`
+### [x] BUG-004 — Goroutine/memory leak: 659 tasks, 8GB after 18h ✓ `3e89485`
 **Priority: HIGH. Weight: 12.**
 - **Fix:** Context-cancellable stdout scanner goroutine (context.WithTimeout + scanCancel), explicit
   pipe closure on Wait(), --tick-timeout CLI flag (default 30m), goroutine count logging on every
