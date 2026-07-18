@@ -94,9 +94,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		list = append(list, s)
 	}
 
-	// Sort by urgency descending.
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].urgency > list[j].urgency
+	// Sort by urgency descending, then priority descending for tie-breaking.
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].urgency != list[j].urgency {
+			return list[i].urgency > list[j].urgency
+		}
+		if list[i].priority != list[j].priority {
+			return list[i].priority > list[j].priority
+		}
+		return list[i].name < list[j].name
 	})
 
 	// Greedy pack: pick projects that fit in budget.
