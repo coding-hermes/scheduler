@@ -100,6 +100,12 @@
 - **Files:** `internal/config/toml_test.go` (+85/-60), `internal/database/projects.go` (+3/-2)
 - **AC:** `go test ./... -count=1 -short` passes, `go vet ./...` passes
 
+### [ ] INFRA — install govulncheck for dependency vulnerability scanning
+**Priority: LOW. Weight: 3.**
+- `govulncheck` not installed — `govulncheck: command not found`
+- Install via: `go install golang.org/x/vuln/cmd/govulncheck@latest`
+- Foreman can install directly (infra task, no worker needed)
+
 ### [ ] FOREMAN-TASK — Run this board
 **Priority: HIGH. Weight: ∞.**
 - Foreman reads this board before every tick. Self-heals git. Picks highest-priority undone task.
