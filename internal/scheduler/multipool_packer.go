@@ -303,6 +303,7 @@ func (m *MultiPoolPacker) Pack(
 				Command:  pu.Project.Command,
 				Model:    pu.Project.Model,
 				Provider: pu.Project.Provider,
+				Deliver:  pu.Project.Deliver,
 			})
 		}
 		result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{

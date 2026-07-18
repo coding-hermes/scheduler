@@ -68,7 +68,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, enabled, created_at, updated_at
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, deliver, enabled, created_at, updated_at
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -88,7 +88,7 @@ FROM projects`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &enabled,
+			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
@@ -107,7 +107,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, enabled, created_at, updated_at
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, deliver, enabled, created_at, updated_at
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -123,7 +123,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &enabled,
+			&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
