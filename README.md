@@ -96,15 +96,27 @@ curl http://127.0.0.1:9090/api/v1/status | jq '.project_count'
 
 # Open the dashboard
 open http://127.0.0.1:9090/
-```
+## Deployment
 
-### 7. Deploy Permanently (systemd)
+### Systemd
 
 ```bash
 make deploy-install
 sudo systemctl enable --now coding-hermes-scheduler
 sudo systemctl status coding-hermes-scheduler
 ```
+
+### Dedicated Gateway (recommended for production)
+
+For production fleets, run the scheduler on a dedicated Hermes gateway instance (separate cgroup, isolated MCPs, independent restart cycle). See [deploy/gateway-setup.md](deploy/gateway-setup.md) for full setup instructions.
+
+```
+ Main Gateway (:8642)          Scheduler Gateway (:8643)
+   ├─ main chat                   ├─ foreman tick A
+   ├─ Telegram bridge             ├─ foreman tick B
+   └─ ...                         └─ ...
+         ↑                             ↑
+    systemd cgroup              separate cgroup (MemoryMax=16G)
 
 ### What's Happening
 

@@ -160,15 +160,15 @@ schedulerd --test-verify 3                      # run 3-cycle verification
   - `~/.hermes/coding-hermes/scheduler.db` → configurable via `--db` (already existed)
   - `~/.hermes/foreman/` → configurable via `--foreman-home` (added 2026-07-18, `a5b3d9e`)
   - `127.0.0.1:8642` → configurable via `--gateway-url` (already existed)
-- [x] Clean up code:
-  - [x] Go doc comments on all exported types/functions
-  - [x] Remove debug logs
-  - [ ] Consistent error handling patterns
-- [ ] Tag `v1.0.0` release
+|- [x] Clean up code:
+|  - [x] Go doc comments on all exported types/functions
+|  - [x] Remove debug logs
+|  - [x] Consistent error handling patterns (golangci-lint clean, error wrapping with %w, no swallowed errors)
+|- [x] Tag `v1.0.0` release
 - [x] Add CI badge to README (build + test status)
 - [x] Write "Getting Started" guide (5-minute setup from scratch)
 - [x] Add example fleet config (annotated `fleet.example.toml` — 2026-07-18)
-- [ ] Document the dedicated gateway pattern (FEAT-004)
+|- [x] Document the dedicated gateway pattern (FEAT-004) — see deploy/gateway-setup.md + README.md deployment section
 
 ### [ ] INFRA-004 — Audit & Reduce exec.Command Fallback Rate
 **Priority: MEDIUM. Weight: 8.**

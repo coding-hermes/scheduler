@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"html/template"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -15,7 +14,6 @@ import (
 type Generator struct {
 	db   *sql.DB
 	tmpl *template.Template // parsed once, reused
-	mu   sync.Mutex
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
