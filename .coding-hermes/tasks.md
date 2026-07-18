@@ -390,8 +390,8 @@ sim_fixture.go, sim_fixture_test.go).
 - All localhost-only deployment → LOW exploitability. Noted in DuckBrain.
 - Go upgrade (1.26.0→1.26.5) not available via apt — defer to future distro update.
 
-### [ ] BUG-006 — evaluate() holds write lock during blocking HTTP spawn, deadlocking health endpoint
-**Priority: CRITICAL. Weight: 20. Status: NEW (2026-07-18).**
+### [x] BUG-006 — evaluate() holds write lock during blocking HTTP spawn, deadlocking health endpoint ✓ `6db45e5`
+**Priority: CRITICAL. Weight: 20. Status: COMPLETE.**
 
 **Root cause:** `loop.go:227` — `evaluate()` acquires `l.mu.Lock()` at the top and defers unlock. Inside the lock, it calls `spawner.Spawn()` → `GatewayClient.SendResponse()` → blocking HTTP POST to gateway. When gateway response is slow (stuck for 8+ min on current daemon), ALL health check requests (`LastEvalTime()` at loop.go:389) block on `RLock()`. 8 goroutines currently deadlocked.
 
