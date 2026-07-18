@@ -1,0 +1,91 @@
+# schedulerd.toml — Example Configuration
+# =============================================================================
+# Copy this file to /etc/schedulerd.toml and start the daemon with:
+#   schedulerd --config /etc/schedulerd.toml
+#
+# Resolution order (lowest → highest):
+#   1. Hardcoded defaults
+#   2. This TOML file
+#   3. SCHEDULER_* environment variables
+#   4. CLI flags (always win)
+# =============================================================================
+
+# ── Daemon ───────────────────────────────────────────────────────────────────
+[daemon]
+# Path to SQLite database file (~ and $HOME expanded at runtime)
+db_path = "~/.hermes/coding-hermes/scheduler.db"
+# HTTP listen address for dashboard, API, and MCP server
+listen = "127.0.0.1:9090"
+
+# ── Scheduler ────────────────────────────────────────────────────────────────
+[scheduler]
+# Fastest allowed tick interval (Go time.ParseDuration syntax)
+min_interval = "20m"
+# Slowest allowed tick interval
+max_interval = "24h"
+# Number of priority levels (1 = slowest, 10 = fastest). Must be >= 1.
+num_levels = 10
+# Total weight budget per evaluation cycle. Must be >= 1.
+weight_budget = 100
+# Maximum concurrent foreman ticks. Must be >= 1.
+max_concurrent = 12
+# Maximum wall-clock duration for a single tick before kill (2h = 2 hours)
+tick_timeout = "2h"
+# Enable multi-namespace scheduling (reserved/hard_cap per namespace)
+namespace_mode = true
+
+# ── Gateway ──────────────────────────────────────────────────────────────────
+[gateway]
+# Hermes gateway HTTP API URL. Empty string falls back to exec.Command.
+# Supports ${VAR} env-var interpolation (e.g. ${API_SERVER_KEY}).
+url = "http://127.0.0.1:8642"
+# API key for Hermes gateway. Supports ${VAR} interpolation.
+# Leave empty if using exec.Command spawn (no gateway).
+key = "${API_SERVER_KEY}"
+# Path to Hermes foreman home directory (~ and $HOME expanded at runtime)
+foreman_home = "~/.hermes/foreman"
+
+# ── DuckBrain ────────────────────────────────────────────────────────────────
+[duckbrain]
+# DuckBrain memory namespace for fleet context sync
+namespace = "coding-hermes"
+# DuckBrain HTTP server URL
+url = "http://localhost:3000"
+
+# ── Fleet — Declarative Project Definitions ─────────────────────────────────
+# Projects are seeded at startup (create-only upsert — existing rows survive).
+# Uncomment and edit the examples below for your fleet.
+
+# [[projects]]
+# name = "my-project"
+# repo_url = "https://github.com/example/my-project"
+# workdir = "/home/kara/my-project"
+# weight = 10
+# priority = 5
+# cooldown_s = 900
+# decay_rate = 1.0
+# model = "deepseek-v4-pro"
+# provider = "deepseek-foreman"
+# command = ""
+# namespace_id = ""       # optional FK → namespaces.id
+# deliver = "telegram:-1003310984808:12345"
+# enabled = true
+
+# ── Fleet — Declarative Namespace Definitions ────────────────────────────────
+# Namespaces are seeded at startup (create-only upsert — existing rows survive).
+
+# [[namespaces]]
+# id = "coding-hermes"
+# weight = 100
+# reserved = 70
+# hard_cap = 90
+# description = "Coding Hermes fleet namespace"
+# enabled = true
+
+# [[namespaces]]
+# id = "sandbox"
+# weight = 20
+# reserved = 0
+# hard_cap = 50
+# description = "Sandbox/test projects"
+# enabled = true

@@ -45,7 +45,22 @@ func main() {
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
+	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
+	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
 	flag.Parse()
+
+	if *schemaFlag {
+		printSchema()
+		return
+	}
+	if *showConfigFlag {
+		printConfig(*configFile, *dbPath, *listen, *minInterval, *maxInterval,
+			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
+			*tickTimeout, *gatewayURL, *gatewayKey, *foremanHome,
+			*duckbrainNS, *duckbrainURL)
+		return
+	}
+
 	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
 		*namespaceMode = true
 	}
@@ -92,15 +107,48 @@ func main() {
 		loop.SetSimulation(*simSuccess)
 	}
 
-	// Wire gateway HTTP client if configured (FEAT-003).
+	// Wire gateway HTTP client with retry (FEAT-003).
 	if *gatewayURL != "" && *gatewayKey != "" {
 		gwClient := scheduler.NewGatewayClient(*gatewayURL, *gatewayKey, *tickTimeout)
-		if err := gwClient.Ping(context.Background()); err != nil {
-			log.Printf("WARN: gateway %s not reachable (%v) — falling back to exec.Command", *gatewayURL, err)
-		} else {
-			loop.SetGatewayClient(gwClient)
-			log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
+		// Retry gateway connection with backoff — gateway may not be ready
+		// when schedulerd starts (systemd ordering). Once connected, keep
+		// retrying in the background if it ever drops.
+		var gwConnected bool
+		for attempt := 0; attempt < 10; attempt++ {
+			if err := gwClient.Ping(context.Background()); err != nil {
+				wait := time.Duration(attempt+1) * 2 * time.Second
+				log.Printf("WARN: gateway %s not reachable (attempt %d/10, retry in %v): %v", *gatewayURL, attempt+1, wait, err)
+				time.Sleep(wait)
+			} else {
+				loop.SetGatewayClient(gwClient)
+				log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
+				gwConnected = true
+				break
+			}
 		}
+		if !gwConnected {
+			log.Printf("WARN: gateway %s unreachable after 10 retries — falling back to exec.Command", *gatewayURL)
+		}
+		// Launch background reconnector — keeps trying if gateway drops later.
+		go func() {
+			for {
+				time.Sleep(60 * time.Second)
+				if !gwConnected {
+					continue // already in fallback mode
+				}
+				if err := gwClient.Ping(context.Background()); err != nil {
+					log.Printf("WARN: gateway %s dropped (%v) — retrying...", *gatewayURL, err)
+					for attempt := 0; attempt < 10; attempt++ {
+						time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+						if err := gwClient.Ping(context.Background()); err == nil {
+							log.Printf("GATEWAY: reconnected to %s", *gatewayURL)
+							loop.SetGatewayClient(gwClient)
+							break
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	// Simulation count mode: generate N ticks and exit.
