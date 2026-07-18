@@ -26,8 +26,8 @@
 **Goal:** Polish the repo for public release on `github.com/coding-hermes/scheduler`.
 
 **Checklist:**
-- [ ] Add `LICENSE` file (MIT or Apache 2.0 — confirm with Bane)
-- [ ] Add `CONTRIBUTING.md` — how to set up, test, submit PRs
+- [x] Add `LICENSE` file (MIT — already present since `caef9f8`)
+- [x] Add `CONTRIBUTING.md` — how to set up, test, submit PRs
 - [ ] Audit `README.md` for completeness:
   - Architecture diagram (ASCII art or mermaid)
   - Feature matrix (HTTP spawn, fallback, multi-namespace, etc.)
@@ -41,7 +41,7 @@
   - Go doc comments on all exported types/functions
   - Remove debug logs
   - Consistent error handling patterns
-- [ ] Add `CHANGELOG.md` summarizing v1.0 features
+- [x] Add `CHANGELOG.md` — comprehensive v1.0.0 changelog
 - [ ] Tag `v1.0.0` release
 - [ ] Add CI badge to README (build + test status)
 - [ ] Write "Getting Started" guide (5-minute setup from scratch)
