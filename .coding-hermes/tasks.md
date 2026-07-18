@@ -1,4 +1,23 @@
-### [x] FEAT-005 — Three-Layer Configuration: TOML + Env Vars + CLI Flags ✓ `a021a67`, `6f8b0b7`, `81c184c`, `e6b860f`
+### [ ] BUG-007 — Sequential spawn blocks eval — fleet starves on slow tick
+**Priority: CRITICAL. Weight: 20.**
+**Symptom:** One slow gateway response (e.g. imhotep taking 20+ minutes) blocks
+ALL subsequent spawns in the eval cycle. health endpoint responds (BUG-006 fixed),
+but no new eval cycles fire because evaluate() is blocked in spawn loop.
+
+**Root cause:** `evaluate()` spawns projects in a sequential `for range packed` loop.
+Each `spawner.Spawn()` calls the gateway HTTP API and blocks until the response returns
+(seconds to minutes depending on model context size). With 12 projects selected,
+a single slow project starves the other 11.
+
+**Fix:** Convert the spawn loop to concurrent goroutines with a WaitGroup:
+- Each project spawns in its own goroutine
+- All spawns fire in parallel
+- evaluate() returns immediately after wg.Wait()
+- Next eval cycle fires on schedule (60s min-interval)
+
+**Files to modify:** `internal/scheduler/loop.go` — spawn loop at line 317.
+
+**Status:** NOT STARTED.
 **Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Replace 18 CLI-only flags with a three-layer configuration system.
 Priority (lowest → highest): **TOML config file < env vars < CLI flags**.
