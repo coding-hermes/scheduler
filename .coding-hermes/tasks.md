@@ -1,4 +1,4 @@
-### [x] FEAT-005 — Three-Layer Configuration: TOML + Env Vars + CLI Flags ✓ `a021a67`, `(next)`
+### [x] FEAT-005 — Three-Layer Configuration: TOML + Env Vars + CLI Flags ✓ `a021a67`, `6f8b0b7`, `81c184c`, `e6b860f`
 **Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Replace 18 CLI-only flags with a three-layer configuration system.
 Priority (lowest → highest): **TOML config file < env vars < CLI flags**.
@@ -22,10 +22,8 @@ This covers every deployment style: bare metal (TOML), Docker (env vars), dev (C
 **Delivered:** structs + loader (`a021a67`), --show-config + --schema + config.example.toml + systemd unit update (this tick).
 
 ### [ ] OPEN-001 — Open Source Release Preparation
-# ── Daemon ───────────────────────────────────────────────────────────
-[daemon]
-db_path = "~/.hermes/coding-hermes/scheduler.db"
-listen = "127.0.0.1:9090"
+**Priority: HIGH. Weight: 15.**
+**Goal:** Polish the repo for public release on `github.com/coding-hermes/scheduler`.
 
 # ── Scheduler ────────────────────────────────────────────────────────
 [scheduler]
