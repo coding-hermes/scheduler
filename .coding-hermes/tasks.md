@@ -71,13 +71,13 @@
 - **Verification:** After deploy, a scheduler tick should produce a Telegram message starting
   with `🤖 Scheduler Tick:` within 5-15 minutes.
 
-### [ ] INFRA-002 — TOML config support for project definitions
+### [x] INFRA-002 — TOML config support for project definitions ✓ `97306ba`
 **Priority: LOW. Weight: 5.**
-- Want: `schedulerd --config fleet.toml` declarative fleet definition
-- [projects.alpha], [projects.beta], etc. with weight, priority, command, namespace
-- [namespaces.coding-hermes] with weight, reserved, hard_cap
-- TOML preferred over YAML — cleaner, no whitespace sensitivity
-- Later: hot-reload on SIGHUP
+- `schedulerd --config fleet.toml` declarative fleet definition
+- `internal/config/`: FleetConfig, ProjectDef, NamespaceDef types + LoadFleetConfig + ApplyFleetConfig
+- `fleet.example.toml`: annotated example with [[projects]] and [[namespaces]]
+- Idempotent create-only upsert — existing rows survive restarts
+- 6 files, +304 lines. Build+vet+test green. Guard: PASS.
 
 ### [x] FEAT-001 — Auto-slowdown for idle projects ✓ `7d0a0df`
 **Priority: HIGH. Weight: 10.**
