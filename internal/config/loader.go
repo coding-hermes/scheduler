@@ -124,6 +124,58 @@ func LoadConfig(tomlPath string) (*RootConfig, error) {
 	return cfg, nil
 }
 
+// ApplyRootConfig copies resolved values from cfg into the CLI flag pointer
+// variables that main.go owns. Only flags that have a TOML equivalent are
+// covered; pure-CLI flags (simulate, sim-count, test-verify, etc.) are left
+// untouched. The duration pointers (min/max interval, tick timeout) receive
+// parsed time.Duration values — a parse error is returned rather than
+// fatal-exiting so the caller can report it cleanly.
+//
+// ApplyRootConfig unconditionally writes every mapped pointer; the caller is
+// responsible for deciding whether the resolved value originated from TOML,
+// env vars, or a CLI default (it cannot tell, and that is by design — once
+// resolution has happened the source is moot for the running process). For
+// --show-config, which needs source annotations, use the dedicated
+// showConfigPath in cmd/schedulerd instead.
+func ApplyRootConfig(cfg *RootConfig,
+	dbPath, listen *string,
+	minInterval, maxInterval, tickTimeout *time.Duration,
+	numLevels, weightBudget, maxConcurrent *int,
+	namespaceMode *bool,
+	duckbrainNS, duckbrainURL, gatewayURL, gatewayKey, foremanHome *string,
+) error {
+	*dbPath = cfg.Daemon.DBPath
+	*listen = cfg.Daemon.Listen
+
+	minD, err := parseDurationErr(cfg.Scheduler.MinInterval, "scheduler.min_interval")
+	if err != nil {
+		return err
+	}
+	maxD, err := parseDurationErr(cfg.Scheduler.MaxInterval, "scheduler.max_interval")
+	if err != nil {
+		return err
+	}
+	tickD, err := parseDurationErr(cfg.Scheduler.TickTimeout, "scheduler.tick_timeout")
+	if err != nil {
+		return err
+	}
+	*minInterval = minD
+	*maxInterval = maxD
+	*tickTimeout = tickD
+
+	*numLevels = cfg.Scheduler.NumLevels
+	*weightBudget = cfg.Scheduler.WeightBudget
+	*maxConcurrent = cfg.Scheduler.MaxConcurrent
+	*namespaceMode = cfg.Scheduler.NamespaceMode
+
+	*duckbrainNS = cfg.DuckBrain.Namespace
+	*duckbrainURL = cfg.DuckBrain.URL
+	*gatewayURL = cfg.Gateway.URL
+	*gatewayKey = cfg.Gateway.Key
+	*foremanHome = cfg.Gateway.ForemanHome
+	return nil
+}
+
 // interpolateEnv replaces every ${VAR} placeholder in input with
 // os.Getenv("VAR"). Unknown variables expand to the empty string.
 func interpolateEnv(input string) string {
