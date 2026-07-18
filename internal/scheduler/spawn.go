@@ -70,6 +70,23 @@ func (s *Spawner) SetForemanHome(path string) {
 	s.foremanHome = path
 }
 
+// RunningSet returns the set of project names that currently have a spawned
+// process (in-memory). This is more accurate than the DB query because spawns
+// haven't been committed to the DB yet when the packer queries.
+func (s *Spawner) RunningSet() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := make(map[string]bool, len(s.active))
+	for tickID := range s.active {
+		// Extract project name from tick ID: "project-YYYY-MM-DD-HH-MM-SS"
+		idx := strings.LastIndex(tickID, "-202")
+		if idx > 0 {
+			set[tickID[:idx]] = true
+		}
+	}
+	return set
+}
+
 // SetGatewayClient configures the HTTP API client. If set, Spawn() prefers
 // HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
 func (s *Spawner) SetGatewayClient(client *GatewayClient) {
