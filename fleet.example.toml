@@ -1,0 +1,23 @@
+# Fleet configuration — declarative project and namespace definitions
+# Usage: schedulerd --config fleet.toml
+
+[[projects]]
+name = "my-project"
+repo_url = "https://github.com/user/my-project"
+workdir = "/home/kara/my-project"
+weight = 10
+priority = 5
+cooldown_s = 900
+model = "deepseek-v4-pro"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:12345"
+enabled = true
+
+[[namespaces]]
+id = "coding-hermes"
+weight = 50
+reserved = 5
+hard_cap = 80
+description = "Core coding-hermes fleet namespace"
+enabled = true

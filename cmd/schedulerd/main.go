@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/api"
+	"github.com/coding-herms/scheduler/internal/config"
 	"github.com/coding-herms/scheduler/internal/dashboard"
 	"github.com/coding-herms/scheduler/internal/database"
 	"github.com/coding-herms/scheduler/internal/mcp"
@@ -39,6 +40,7 @@ func main() {
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
+	configFile := flag.String("config", "", "Path to TOML fleet config file")
 	flag.Parse()
 	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
 		*namespaceMode = true
@@ -53,6 +55,21 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
+
+	// Declarative fleet seeding: if a fleet.toml was supplied, load and
+	// apply it before any other subsystem touches the DB. Already-existing
+	// rows are skipped (idempotent startup; create-only, never overwrite).
+	if *configFile != "" {
+		cfg, err := config.LoadFleetConfig(*configFile)
+		if err != nil {
+			log.Fatalf("FATAL: load fleet config: %v", err)
+		}
+		if err := config.ApplyFleetConfig(context.Background(), db, cfg); err != nil {
+			log.Fatalf("FATAL: apply fleet config: %v", err)
+		}
+		log.Printf("Loaded %d projects, %d namespaces from %s",
+			len(cfg.Projects), len(cfg.Namespaces), *configFile)
+	}
 
 	// ── Test-verify mode: run correctness checks and exit ──
 	if *testVerifyFlag > 0 {
