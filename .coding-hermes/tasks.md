@@ -390,6 +390,20 @@ sim_fixture.go, sim_fixture_test.go).
 - All localhost-only deployment → LOW exploitability. Noted in DuckBrain.
 - Go upgrade (1.26.0→1.26.5) not available via apt — defer to future distro update.
 
+### [ ] BUG-006 — evaluate() holds write lock during blocking HTTP spawn, deadlocking health endpoint
+**Priority: CRITICAL. Weight: 20. Status: NEW (2026-07-18).**
+
+**Root cause:** `loop.go:227` — `evaluate()` acquires `l.mu.Lock()` at the top and defers unlock. Inside the lock, it calls `spawner.Spawn()` → `GatewayClient.SendResponse()` → blocking HTTP POST to gateway. When gateway response is slow (stuck for 8+ min on current daemon), ALL health check requests (`LastEvalTime()` at loop.go:389) block on `RLock()`. 8 goroutines currently deadlocked.
+
+**Evidence:** pprof goroutine dump from PID 1610572 shows goroutine 14 in `http.(*persistConn).roundTrip` for 8 minutes under the write lock; goroutines 1750, 1569, and 6 others in `sync.RWMutex.RLock` waiting.
+
+**Fix plan:**
+1. Split `evaluate()` into state-update phase (under lock) and spawn phase (lock-free)
+2. Or: use a separate mutex for `lastEval` to decouple health from spawn
+3. Or: drop the lock before spawn calls and re-acquire after
+
+**Files:** `internal/scheduler/loop.go:226-228`
+
 ### [x] FOREMAN-TASK — Run this board
 **Priority: HIGH. Weight: ∞.**
 - Foreman reads this board before every tick. Self-heals git. Picks highest-priority undone task.

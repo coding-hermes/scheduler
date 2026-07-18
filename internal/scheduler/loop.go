@@ -223,9 +223,15 @@ func (l *Loop) Resume() {
 }
 
 // evaluate runs one evaluation cycle.
+// It splits into two phases:
+//  1. State-update phase (under lock): update lastEval, cleanup, pick projects.
+//  2. Spawn phase (lock-free): spawn each project and run alert escalation.
+//
+// The lock is released before spawns to prevent the health endpoint
+// (LastEvalTime) from deadlocking on slow gateway responses. See BUG-006.
 func (l *Loop) evaluate() {
+	// ---- Phase 1: state update (under lock) ----
 	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	now := time.Now()
 	l.lastEval = now
@@ -281,11 +287,13 @@ func (l *Loop) evaluate() {
 		packed, err = l.packer.Pick(now, l.spawner.RunningSet())
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
+			l.mu.Unlock()
 			return
 		}
 	}
 
 	if len(packed) == 0 {
+		l.mu.Unlock()
 		return // nothing to do
 	}
 
@@ -297,6 +305,13 @@ func (l *Loop) evaluate() {
 		"budget_used": sumWeights(packed),
 		"budget":      l.weightBudget,
 	})
+
+	// Snapshot fields read during spawn phase before releasing the lock.
+	simulate := l.simulate
+	noDeliver := l.noDeliver
+
+	l.mu.Unlock()
+	// ---- Phase 2: spawn projects (lock-free) ----
 
 	// 3. Spawn each selected project.
 	for _, proj := range packed {
@@ -312,7 +327,7 @@ func (l *Loop) evaluate() {
 			continue
 		}
 
-		if l.simulate {
+		if simulate {
 			// Simulated spawn — completes instantly.
 			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 				log.Printf("EVAL: sim-spawn %s: %v", proj.Name, err)
@@ -360,7 +375,7 @@ func (l *Loop) evaluate() {
 				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
 			}
 			// Deliver tick output to Telegram (suppressed in verify/test mode).
-			if !l.noDeliver {
+			if !noDeliver {
 				deliverOutput(tick.Project, tick.TickID, tick.Deliver, &tick.Output)
 			}
 			// Auto-slowdown: if the tick output signals IDLE, double the cooldown.
