@@ -231,4 +231,11 @@ internal/
 plugin/           # Hermes plugin (Python)
 specs/            # Implementation specs
 deploy/           # Systemd unit
+docs/             # Fleet status, architecture docs
 ```
+
+## Fleet & Skills
+
+See [docs/fleet.md](docs/fleet.md) for current H3 fleet status — 27 projects, thread mappings, cooldowns, skills map, provider rules.
+
+Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the scheduler per-project.

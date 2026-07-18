@@ -141,6 +141,11 @@ func (l *Loop) Run() {
 	}
 	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d) goroutines=%d",
 		mode, l.interval, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
+
+	// Startup cleanup: mark any running ticks from a previous process as timed out.
+	// These are dangling — the old process died but left ticks in 'running' state.
+	l.cleanDanglingOnStartup()
+
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
 
@@ -393,4 +398,20 @@ func sumWeights(packed []PackedProject) int {
 		total += p.Weight
 	}
 	return total
+}
+
+// cleanDanglingOnStartup marks any running ticks from a previous process as timed out.
+// A running tick with no corresponding OS process is a zombie — set status='timeout'.
+func (l *Loop) cleanDanglingOnStartup() {
+	ctx := context.Background()
+	result, err := l.db.ExecContext(ctx,
+		`UPDATE ticks SET status='timeout' WHERE status='running'`)
+	if err != nil {
+		log.Printf("DANGLING: startup cleanup failed: %v", err)
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n > 0 {
+		log.Printf("DANGLING: cleaned %d running ticks from previous process", n)
+	}
 }
