@@ -1,5 +1,7 @@
 # Coding Hermes Scheduler
 
+![Coding Hermes Scheduler](assets/hermes-scheduler-banner.png)
+
 A single Go binary that replaces dozens of static cron jobs with a dynamic, priority-weighted fleet scheduler for LLM-powered coding agents.
 
 ---
