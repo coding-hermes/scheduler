@@ -6,8 +6,9 @@ After=network.target
 Type=simple
 User=kara
 ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode
-Restart=on-failure
+Restart=always
 RestartSec=5
+MemoryMax=2G
 StandardOutput=journal
 StandardError=journal
 Environment=HOME=/home/kara
