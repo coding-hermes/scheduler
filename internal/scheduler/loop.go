@@ -284,6 +284,11 @@ func (l *Loop) evaluate() {
 	l.mu.Unlock()
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
+	// Lazy-init the slot pool if not already created (test_verify, tests).
+	if l.slotPool == nil {
+		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+	}
+
 	// Fire each project into the slot pool. The pool's semaphore limits
 	// concurrency — projects acquire a slot, spawn via gateway in their
 	// own goroutine, and release the slot on completion/timeout.
