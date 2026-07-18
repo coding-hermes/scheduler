@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS ticks (
     id            TEXT PRIMARY KEY,
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
+    pid           INTEGER DEFAULT 0,
     status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout')),
     outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout')),
     spawned_at    TEXT,

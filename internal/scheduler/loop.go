@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -146,6 +147,12 @@ func (l *Loop) Run() {
 	// These are dangling — the old process died but left ticks in 'running' state.
 	l.cleanDanglingOnStartup()
 
+	// Periodic zombie reaper: checks /proc/<pid>/ to detect dead hermes chat
+	// processes. Process alive → tick is valid regardless of age.
+	// Process dead → zombie → timeout. Runs every 60s.
+	reaper := time.NewTicker(60 * time.Second)
+	defer reaper.Stop()
+
 	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
 
@@ -164,6 +171,8 @@ func (l *Loop) Run() {
 					log.Println("LOOP: resumed")
 				}
 			}
+		case <-reaper.C:
+			l.reapZombies()
 		case <-ticker.C:
 			l.evaluate()
 		}
@@ -413,5 +422,45 @@ func (l *Loop) cleanDanglingOnStartup() {
 	n, _ := result.RowsAffected()
 	if n > 0 {
 		log.Printf("DANGLING: cleaned %d running ticks from previous process", n)
+	}
+}
+
+// reapZombies checks for running ticks whose hermes chat process has died.
+// Checks /proc/<pid>/stat — process alive → tick valid (leave alone).
+// Process dead → zombie → timeout. No blind time cutoff.
+// Runs every 60s.
+func (l *Loop) reapZombies() {
+	ctx := context.Background()
+	rows, err := l.db.QueryContext(ctx,
+		`SELECT id, pid FROM ticks WHERE status='running' AND pid > 0`)
+	if err != nil {
+		log.Printf("ZOMBIE: reaper query failed: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var reaped int
+	for rows.Next() {
+		var id string
+		var pid int
+		if err := rows.Scan(&id, &pid); err != nil {
+			continue
+		}
+		// Check if process is alive via /proc/<pid>/stat
+		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
+			l.db.ExecContext(ctx,
+				`UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id)
+			reaped++
+		}
+		// Process exists → leave it alone (it's doing real work)
+	}
+	if reaped > 0 {
+		log.Printf("ZOMBIE: reaped %d ticks (process no longer exists)", reaped)
+	}
+
+	var running int
+	l.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&running)
+	if running > l.maxConcur {
+		log.Printf("ZOMBIE: %d ticks running (max=%d) — possible process leak", running, l.maxConcur)
 	}
 }

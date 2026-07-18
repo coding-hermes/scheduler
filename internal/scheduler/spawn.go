@@ -206,11 +206,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		}
 	}()
 
-	// Update tick to running.
+	// Update tick to running with PID for zombie detection.
 	_, err = s.db.Exec(`
-		UPDATE ticks SET status = 'running', spawned_at = ?
+		UPDATE ticks SET status = 'running', spawned_at = ?, pid = ?
 		WHERE id = ?
-	`, st.Started.Format(time.RFC3339), tickID)
+	`, st.Started.Format(time.RFC3339), st.PID, tickID)
 	if err != nil {
 		log.Printf("ERROR updating tick %s to running: %v", tickID, err)
 	}
