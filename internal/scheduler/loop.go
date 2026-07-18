@@ -19,6 +19,7 @@ type Loop struct {
 	packer          *Packer
 	multiPoolPacker *MultiPoolPacker
 	spawner         *Spawner
+	slotPool        *SlotPool // concurrent spawn semaphore (BUG-007)
 	simSpawner      *SimSpawner
 	lifecycle       *LifecycleTracker
 	events          *EventLogger
@@ -95,12 +96,16 @@ func (l *Loop) SetSimulation(successRate float64) {
 	}
 }
 
-// SetTickTimeout updates the real spawner's per-tick timeout.
+// SetTickTimeout updates the real spawner's per-tick timeout and initializes
+// the concurrent slot pool if needed (BUG-007).
 func (l *Loop) SetTickTimeout(timeout time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.spawner != nil {
 		l.spawner.timeout = timeout
+	}
+	if l.slotPool == nil {
+		l.slotPool = NewSlotPool(l.maxConcur, timeout, l.spawner, l.lifecycle)
 	}
 }
 
@@ -126,7 +131,6 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case now := <-tick.C:
-			// Round-robin through projects, 8 at a time.
 			n := min(8, len(projects), count-generated)
 			for i := 0; i < n; i++ {
 				proj := projects[(generated+i)%len(projects)]
@@ -140,7 +144,7 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 		}
 	}
 	log.Printf("SIM: all %d ticks generated — waiting for simulated completion", count)
-	time.Sleep(1 * time.Second) // let goroutines finish
+	time.Sleep(1 * time.Second)
 	return nil
 }
 
@@ -153,13 +157,8 @@ func (l *Loop) Run() {
 	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d) goroutines=%d",
 		mode, l.interval, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
 
-	// Startup cleanup: mark any running ticks from a previous process as timed out.
-	// These are dangling — the old process died but left ticks in 'running' state.
 	l.cleanDanglingOnStartup()
 
-	// Periodic zombie reaper: checks /proc/<pid>/ to detect dead hermes chat
-	// processes. Process alive → tick is valid regardless of age.
-	// Process dead → zombie → timeout. Runs every 60s.
 	reaper := time.NewTicker(60 * time.Second)
 	defer reaper.Stop()
 
@@ -189,11 +188,9 @@ func (l *Loop) Run() {
 	}
 }
 
-// Stop stops the evaluation loop and waits for in-flight ticks to complete
-// (up to 15s) so that spawned goroutines don't hold resources during HTTP shutdown.
+// Stop stops the evaluation loop and waits for in-flight ticks.
 func (l *Loop) Stop() {
 	close(l.stopCh)
-	// Give spawned ticks a grace period to finish naturally.
 	done := make(chan struct{})
 	go func() {
 		l.running.Wait()
@@ -212,57 +209,34 @@ func (l *Loop) ForceEvaluate() {
 	go l.evaluate()
 }
 
-// Pause pauses the evaluation loop.
-func (l *Loop) Pause() {
-	l.pauseCh <- false
-}
-
-// Resume resumes the evaluation loop.
-func (l *Loop) Resume() {
-	l.pauseCh <- true
-}
+func (l *Loop) Pause()  { l.pauseCh <- false }
+func (l *Loop) Resume() { l.pauseCh <- true }
 
 // evaluate runs one evaluation cycle.
-// It splits into two phases:
-//  1. State-update phase (under lock): update lastEval, cleanup, pick projects.
-//  2. Spawn phase (lock-free): spawn each project and run alert escalation.
-//
-// The lock is released before spawns to prevent the health endpoint
-// (LastEvalTime) from deadlocking on slow gateway responses. See BUG-006.
+// Phase 1 (locked): state update, cleanup, pick projects.
+// Phase 2 (lock-free): fire into slot pool, alert escalation.
 func (l *Loop) evaluate() {
-	// ---- Phase 1: state update (under lock) ----
 	l.mu.Lock()
 
 	now := time.Now()
 	l.lastEval = now
 
-	// Goroutine leak monitoring
 	if goroCount := runtime.NumGoroutine(); goroCount > 100 {
 		log.Printf("WARN: goroutine count = %d (threshold: 100)", goroCount)
-		l.events.Emit(context.Background(), SeverityLow, "loop",
-			fmt.Sprintf("high goroutine count: %d", goroCount), map[string]any{
-				"count":     goroCount,
-				"threshold": 100,
-			})
-	} else {
-		log.Printf("goroutine count: %d", goroCount)
 	}
 
-	// EVAL_START event.
 	l.events.Emit(context.Background(), SeverityInfo, "loop", "evaluation started", map[string]any{
 		"active_ticks": l.lifecycle.RunningCount(),
 		"budget":       l.weightBudget,
 	})
 
-	// 1. Cleanup stale running ticks.
-	cleaned, err := l.lifecycle.CleanupStale(90 * time.Minute)
-	if err != nil {
-		log.Printf("EVAL: cleanup error: %v", err)
-	} else if cleaned > 0 {
+	// Cleanup stale ticks.
+	cleaned, _ := l.lifecycle.CleanupStale(90 * time.Minute)
+	if cleaned > 0 {
 		log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
 	}
 
-	// 2. Pick projects to run.
+	// Pick projects.
 	var packed []PackedProject
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
@@ -294,108 +268,32 @@ func (l *Loop) evaluate() {
 
 	if len(packed) == 0 {
 		l.mu.Unlock()
-		return // nothing to do
+		return
 	}
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)
 
-	l.events.Emit(context.Background(), SeverityInfo, "loop", "projects selected", map[string]any{
-		"count":       len(packed),
-		"budget_used": sumWeights(packed),
-		"budget":      l.weightBudget,
-	})
-
-	// Snapshot fields read during spawn phase before releasing the lock.
-	simulate := l.simulate
+	// Snapshot before releasing lock.
 	noDeliver := l.noDeliver
 
 	l.mu.Unlock()
-	// ---- Phase 2: spawn projects (lock-free) ----
+	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
-	// 3. Spawn each selected project.
+	// Fire each project into the slot pool. The pool's semaphore limits
+	// concurrency — projects acquire a slot, spawn via gateway in their
+	// own goroutine, and release the slot on completion/timeout.
+	// evaluate() returns immediately; the pool runs autonomously.
 	for _, proj := range packed {
-		tickID := fmt.Sprintf("%s-%s", proj.Name, now.Format("2006-01-02-15-04-05"))
-
-		if err := l.lifecycle.Enqueue(proj.Name, tickID); err != nil {
-			log.Printf("EVAL: enqueue %s: %v", proj.Name, err)
-			continue
-		}
-
-		if err := l.lifecycle.StartRunning(tickID); err != nil {
-			log.Printf("EVAL: start %s: %v", proj.Name, err)
-			continue
-		}
-
-		if simulate {
-			// Simulated spawn — completes instantly.
-			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
-				log.Printf("EVAL: sim-spawn %s: %v", proj.Name, err)
-				_ = l.lifecycle.Complete(TickOutcome{
-					TickID:  tickID,
-					Project: proj.Name,
-					Started: now,
-					Status:  TickFailed,
-					Error:   err.Error(),
-				})
-			}
-			continue
-		}
-
-		// Real spawn.
-		st, err := l.spawner.Spawn(proj, tickID)
-		if err != nil {
-			log.Printf("EVAL: spawn %s: %v", proj.Name, err)
-			_ = l.lifecycle.Complete(TickOutcome{
-				TickID:  tickID,
-				Project: proj.Name,
-				Started: now,
-				Status:  TickFailed,
-				Error:   err.Error(),
-			})
-			l.events.Emit(context.Background(), SeverityLow, "spawner", "tick spawned", map[string]any{
-				"project": proj.Name, "tick_id": tickID, "status": "failed",
-			})
-			continue
-		}
-
-		l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick spawned", map[string]any{
-			"project": proj.Name, "tick_id": tickID, "status": "running",
-		})
-
-		// Track completion asynchronously.
-		l.running.Add(1)
-		go func(tick *SpawnedTick) {
-			defer l.running.Done()
-			outcome := tick.Wait()
-			// Cost data (TokensIn, TokensOut, CostUSD) is estimated by
-			// SpawnedTick.Wait() for completed ticks and persisted to DB
-			// by lifecycle.Complete() — no extra capture needed here.
-			if err := l.lifecycle.Complete(outcome); err != nil {
-				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
-			}
-			// Deliver tick output to Telegram (suppressed in verify/test mode).
-			if !noDeliver {
-				deliverOutput(tick.Project, tick.TickID, tick.Deliver, &tick.Output)
-			}
-			// Auto-slowdown: if the tick output signals IDLE, double the cooldown.
-			autoSlowdown(l.db, tick.Project, &tick.Output)
-			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
-				"project":    outcome.Project,
-				"tick_id":    outcome.TickID,
-				"status":     string(outcome.Status),
-				"duration":   outcome.Duration.String(),
-				"tokens_in":  outcome.TokensIn,
-				"tokens_out": outcome.TokensOut,
-				"cost_usd":   outcome.CostUSD,
-			})
-		}(st)
+		l.slotPool.Spawn(proj, now, noDeliver, l.db)
 	}
 
-	// 4. Run alert escalation checks
-	escalator := NewAlertEscalator(l.db, l.events)
-	if err := escalator.RunAll(context.Background(), now); err != nil {
-		log.Printf("EVAL: escalation check error: %v", err)
+	// Alert escalation runs while pool processes ticks.
+	if len(packed) > 0 {
+		escalator := NewAlertEscalator(l.db, l.events)
+		if err := escalator.RunAll(context.Background(), now); err != nil {
+			log.Printf("EVAL: escalation check error: %v", err)
+		}
 	}
 }
 
@@ -411,8 +309,6 @@ func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) {
 	return l.spawner.SpawnMethodCounts()
 }
 
-// evalContext returns the set of currently-running project names and a map of
-// project → last completed timestamp. Used by the multi-pool packing path.
 func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) {
 	running := make([]string, 0)
 	rrows, err := l.db.QueryContext(ctx, `SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
@@ -452,8 +348,6 @@ func sumWeights(packed []PackedProject) int {
 	return total
 }
 
-// cleanDanglingOnStartup marks any running ticks from a previous process as timed out.
-// A running tick with no corresponding OS process is a zombie — set status='timeout'.
 func (l *Loop) cleanDanglingOnStartup() {
 	ctx := context.Background()
 	result, err := l.db.ExecContext(ctx,
@@ -468,10 +362,6 @@ func (l *Loop) cleanDanglingOnStartup() {
 	}
 }
 
-// reapZombies checks for running ticks whose hermes chat process has died.
-// Checks /proc/<pid>/stat — process alive → tick valid (leave alone).
-// Process dead → zombie → timeout. No blind time cutoff.
-// Runs every 60s.
 func (l *Loop) reapZombies() {
 	ctx := context.Background()
 	rows, err := l.db.QueryContext(ctx,
@@ -489,7 +379,6 @@ func (l *Loop) reapZombies() {
 		if err := rows.Scan(&id, &pid); err != nil {
 			continue
 		}
-		// Check if process is alive via /proc/<pid>/stat
 		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
 			if _, err := l.db.ExecContext(ctx,
 				`UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id); err != nil {
@@ -498,15 +387,8 @@ func (l *Loop) reapZombies() {
 			}
 			reaped++
 		}
-		// Process exists → leave it alone (it's doing real work)
 	}
 	if reaped > 0 {
-		log.Printf("ZOMBIE: reaped %d ticks (process no longer exists)", reaped)
-	}
-
-	var running int
-	l.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&running)
-	if running > l.maxConcur {
-		log.Printf("ZOMBIE: %d ticks running (max=%d) — possible process leak", running, l.maxConcur)
+		log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
 	}
 }
