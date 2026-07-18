@@ -1,5 +1,7 @@
 # Coding Hermes Scheduler
 
+[![CI](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yml)
+
 ![Coding Hermes Scheduler](assets/hermes-scheduler-banner.png)
 
 A single Go binary that replaces dozens of static cron jobs with a dynamic, priority-weighted fleet scheduler for LLM-powered coding agents.
@@ -21,43 +23,98 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 ---
 
-## Quick Start
+## Getting Started (5 minutes)
 
-### Prerequisites
+This guide takes you from zero to a running scheduler with your existing cron jobs imported.
 
-- Go 1.23+
-- Hermes gateway running with API server enabled (`API_SERVER_KEY` in `.env`)
-- SQLite3
+### 1. Prerequisites
 
-### Install
+- **Go 1.23+** — `go version`
+- **Hermes gateway** running with API server enabled — `curl http://127.0.0.1:8642/health`
+- **SQLite3** — `sqlite3 --version`
+- **Existing cron jobs** in Hermes (the scheduler imports from `~/.hermes/cron/jobs.json`)
+
+### 2. Clone and Build
 
 ```bash
-git clone https://github.com/coding-herms/scheduler.git
+git clone https://github.com/coding-hermes/scheduler.git
 cd scheduler
 make build
 ```
 
-### Migrate Existing Cron Jobs
+You now have:
+- `./bin/schedulerd` — the daemon
+- `./bin/migrate` — cron-to-scheduler migration tool
+
+### 3. Verify API Access
+
+The scheduler spawns foreman ticks through the Hermes gateway API. Verify your gateway is reachable:
 
 ```bash
-make migrate-dry    # preview what will be imported
-make migrate        # import to SQLite
+curl http://127.0.0.1:8642/health
+# → {"status":"ok","version":"0.18.2"}
+
+# Check that the API server key is set
+grep API_SERVER_KEY ~/.hermes/.env
 ```
 
-### Run
+### 4. Migrate Cron Jobs
 
 ```bash
+# Preview what will be imported
+make migrate-dry
+
+# Import to SQLite (creates ~/.hermes/coding-hermes/scheduler.db)
+make migrate
+```
+
+### 5. Run the Scheduler
+
+```bash
+# Start the daemon on port 9090
 ./bin/schedulerd
 ```
 
-Open http://localhost:9090/ for the dashboard.
+You should see:
+```
+Database: /home/.../.hermes/coding-hermes/scheduler.db (WAL mode)
+Loaded 27 projects, 0 namespaces
+GATEWAY: connected to http://127.0.0.1:8642 — using HTTP API instead of exec.Command
+HTTP: listening on 127.0.0.1:9090
+schedulerd ready
+```
 
-### Deploy (systemd)
+### 6. Verify It's Working
+
+```bash
+# Health check
+curl http://127.0.0.1:9090/api/v1/health
+# → {"status":"ok","uptime":"5m","active_ticks":3}
+
+# Fleet status
+curl http://127.0.0.1:9090/api/v1/status | jq '.project_count'
+
+# Open the dashboard
+open http://127.0.0.1:9090/
+```
+
+### 7. Deploy Permanently (systemd)
 
 ```bash
 make deploy-install
-sudo systemctl start coding-hermes-scheduler
+sudo systemctl enable --now coding-hermes-scheduler
+sudo systemctl status coding-hermes-scheduler
 ```
+
+### What's Happening
+
+Every 60 seconds the scheduler:
+1. Computes urgency for each project (based on priority + time since last run)
+2. Packs the most urgent projects into a weight budget (default 100)
+3. Spawns foreman ticks via the Hermes gateway API
+4. Records outcomes (queued → running → completed/failed)
+
+You can monitor, pause, or adjust any project through the dashboard, REST API, or MCP tools.
 
 ---
 
@@ -189,7 +246,7 @@ Default 900s between successive ticks for the same project.
 | `-min-interval` | `20m` | Fastest tick interval (priority 10) |
 | `-max-interval` | `24h` | Slowest tick interval (priority 1) |
 | `-num-levels` | `10` | Number of priority levels |
-| `-tick-timeout` | `30m` | Maximum tick duration before kill |
+| `-tick-timeout` | `2h` | Maximum tick duration before kill |
 | `-config` | (none) | Path to TOML fleet config file |
 | `-namespace-mode` | `false` | Enable multi-namespace scheduling |
 | `-test-verify` | `0` | Run N-cycle correctness verification and exit |
@@ -219,7 +276,7 @@ Commands:
 
 ## Skills
 
-This scheduler is part of the Coding Hermes ecosystem. See [`coding-herms/skills`](https://github.com/coding-herms/skills) for:
+This scheduler is part of the Coding Hermes ecosystem. See [`coding-hermes/skills`](https://github.com/coding-hermes/skills) for:
 
 - `coding-hermes-config` — First-run setup
 - `coding-hermes-foreman` — Per-project tick loop
