@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -168,6 +170,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
 	st.scanCancel = scanCancel
 
+	// Close stdout when context expires — unblocks scanner.Scan().
+	go func() {
+		<-scanCtx.Done()
+		stdout.Close()
+	}()
+
 	go func() {
 		defer scanCancel()
 		scanner := bufio.NewScanner(stdout)
@@ -186,12 +194,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
-		}
-		select {
-		case <-scanCtx.Done():
-			// Expected on clean process exit or timeout; already cancelled.
-		default:
+			// Expected on timeout (pipe closed) or process exit — not a leak.
+			if !errors.Is(err, io.EOF) {
+				log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
+			}
 		}
 	}()
 
