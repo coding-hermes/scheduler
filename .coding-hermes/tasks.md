@@ -127,7 +127,7 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 - [x] `deploy/coding-hermes-scheduler-gateway.service` — systemd user unit (MemoryMax=16G, Restart=always)
 - [x] `deploy/scheduler-profile/config.yaml` — gateway profile (duckbrain+gitreins only, no browser/chimera)
 - [x] `deploy/gateway-setup.md` — setup instructions + operations reference
-- [ ] `--gateway-url` already exists (default :8642) — no code changes needed
+- [x] `--gateway-url` already exists (default :8642) — no code changes needed
 - [ ] Profile install + gateway startup on host (requires manual DEEPSEEK_FOREMAN_API_KEY)
 - [ ] Point schedulerd at dedicated gateway (add `--gateway-url http://127.0.0.1:8643` to service unit)
 - [ ] Verification: health check, cgroup isolation test
@@ -170,8 +170,8 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 - [x] Add example fleet config (annotated `fleet.example.toml` — 2026-07-18)
 - [x] Document the dedicated gateway pattern (FEAT-004) — see deploy/gateway-setup.md + README.md deployment section
 
-### [ ] INFRA-004 — Audit & Reduce exec.Command Fallback Rate
-**Priority: MEDIUM. Weight: 8. Status: INVESTIGATED (2026-07-18).**
+### [x] INFRA-004 — Audit & Reduce exec.Command Fallback Rate ✓ counters: `1747cde`
+**Priority: MEDIUM. Weight: 8. Status: COMPLETE (2026-07-18).**
 **Goal:** Most ticks historically used exec.Command fallback instead of HTTP. Understand why and reduce.
 
 **Investigation complete (foreman tick 2026-07-18-12-19):**
@@ -182,10 +182,10 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 - **Batch failure at 11:49-11:53 CT:** 30+ ticks failed simultaneously every 60s (eval cycle) with empty session_id — gateway was down during this window, exec.Command fallback also failed. Gateway reconnected at 11:55+ and all subsequent ticks succeeded via HTTP.
 - **No code changes needed for gateway path** — it works. The historical exec rate was a transient connectivity issue now resolved.
 
-**Remaining items:**
-- [ ] Add Prometheus-style counter for HTTP vs exec.Command spawns (low priority, nice-to-have monitoring)
+**All items complete:**
+- [x] Add Prometheus-style counter for HTTP vs exec.Command spawns (`1747cde` — spawns_http/spawns_exec in /api/v1/health)
 - [x] Query: which projects use exec.Command vs HTTP? → Answer: 0 in last 2h, all gateway
-- [ ] Fix: clear `command` field from dummy projects → N/A (no projects have custom commands)
+- [x] Fix: clear `command` field from dummy projects → N/A (no projects have custom commands)
 - [x] Fix: add retry with backoff when gateway briefly unavailable → Done in `bdc75ea`
 
 ### [x] DOC-002 — Architecture Decision Record: HTTP Spawn vs Dedicated Instance
