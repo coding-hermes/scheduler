@@ -43,8 +43,8 @@ type Spawner struct {
 	model         string
 	provider      string
 	skills        string
-	foremanHome   string          // HERMES_HOME for foreman config
-	gateway       *GatewayClient  // HTTP API client (nil = use exec.Command)
+	foremanHome   string         // HERMES_HOME for foreman config
+	gateway       *GatewayClient // HTTP API client (nil = use exec.Command)
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.

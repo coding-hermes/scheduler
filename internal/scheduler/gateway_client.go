@@ -36,19 +36,19 @@ type ResponseRequest struct {
 
 // Response mirrors the Hermes /v1/responses response body.
 type Response struct {
-	ID      string         `json:"id"`
-	Status  string         `json:"status"`
-	Model   string         `json:"model"`
-	Output  []OutputItem   `json:"output"`
-	Usage   Usage          `json:"usage"`
-	Error   *ResponseError `json:"error,omitempty"`
+	ID     string         `json:"id"`
+	Status string         `json:"status"`
+	Model  string         `json:"model"`
+	Output []OutputItem   `json:"output"`
+	Usage  Usage          `json:"usage"`
+	Error  *ResponseError `json:"error,omitempty"`
 }
 
 // OutputItem is a message or tool call in the response output.
 type OutputItem struct {
-	Type    string           `json:"type"`
-	Role    string           `json:"role,omitempty"`
-	Content []ContentBlock   `json:"content,omitempty"`
+	Type    string         `json:"type"`
+	Role    string         `json:"role,omitempty"`
+	Content []ContentBlock `json:"content,omitempty"`
 }
 
 // ContentBlock is a block of content (text, tool_use, etc.)
@@ -95,7 +95,7 @@ func (g *GatewayClient) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("gateway health: HTTP %d", resp.StatusCode)
 	}
@@ -126,7 +126,7 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) 
 	if err != nil {
 		return nil, fmt.Errorf("gateway POST: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
