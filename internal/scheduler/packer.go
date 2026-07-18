@@ -164,33 +164,6 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	return packed, nil
 }
 
-// runningCount returns the number of ticks currently in running status.
-func (p *Packer) runningCount() int {
-	var n int
-	if err := p.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&n); err != nil {
-		log.Printf("ERROR counting running ticks: %v", err)
-		return 0
-	}
-	return n
-}
-
-// runningProjectSet returns the set of project names that have at least one running tick.
-func (p *Packer) runningProjectSet() map[string]bool {
-	set := map[string]bool{}
-	rows, err := p.db.Query(`SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
-	if err != nil {
-		log.Printf("ERROR querying running projects: %v", err)
-		return set
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		rows.Scan(&name)
-		set[name] = true
-	}
-	return set
-}
-
 // Budget returns the current weight budget.
 func (p *Packer) Budget() int { return p.budget }
 
