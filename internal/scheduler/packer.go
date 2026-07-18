@@ -99,10 +99,10 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		return list[i].urgency > list[j].urgency
 	})
 
-		// Greedy pack: pick projects that fit in budget.
-		currentlyRunning := p.runningCount()
-		runningSet := p.runningProjectSet()
-		// Merge with spawner's in-memory active set — spawns may not be\n	// committed to DB yet (race condition).\n	for name := range spawnerRunning {\n		runningSet[name] = true\n	}\n	// Re-pool currentlyRunning from merged set for accuracy.\n	if len(runningSet) > currentlyRunning {\n		currentlyRunning = len(runningSet)\n	}
+	// Greedy pack: pick projects that fit in budget.
+	currentlyRunning := p.runningCount()
+	runningSet := p.runningProjectSet()
+	// Merge with spawner's in-memory active set — spawns may not be\n	// committed to DB yet (race condition).\n	for name := range spawnerRunning {\n		runningSet[name] = true\n	}\n	// Re-pool currentlyRunning from merged set for accuracy.\n	if len(runningSet) > currentlyRunning {\n		currentlyRunning = len(runningSet)\n	}
 	used := 0
 	packed := make([]PackedProject, 0, max(1, len(list)/2))
 
