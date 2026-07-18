@@ -144,8 +144,8 @@ schedulerd --test-verify 3                      # run 3-cycle verification
     systemd cgroup              separate systemd cgroup (MemoryMax=16G)
 ```
 
-### [ ] OPEN-001 — Open Source Release Preparation
-**Priority: HIGH. Weight: 15.**
+### [x] OPEN-001 — Open Source Release Preparation ✓ `7a36fd3`
+**Priority: HIGH. Weight: 15. Status: COMPLETE.**
 **Goal:** Polish the repo for public release on `github.com/coding-hermes/scheduler`.
 
 **Checklist:**
@@ -188,19 +188,14 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 - [ ] Fix: clear `command` field from dummy projects → N/A (no projects have custom commands)
 - [x] Fix: add retry with backoff when gateway briefly unavailable → Done in `bdc75ea`
 
-### [ ] DOC-002 — Architecture Decision Record: HTTP Spawn vs Dedicated Instance
-**Priority: MEDIUM. Weight: 5.**
+### [x] DOC-002 — Architecture Decision Record: HTTP Spawn vs Dedicated Instance
+**Priority: MEDIUM. Weight: 5. Status: COMPLETE.**
 **Goal:** Document the tradeoffs between reusing the main gateway (FEAT-003) and
 launching a dedicated scheduler gateway (FEAT-004) so future contributors
 understand the design.
 
-**Sections:**
-1. **Shared gateway (current):** Pros (zero overhead, simple, auto-approve works) vs Cons (shared fate, no cgroup isolation, recursive self-tick)
-2. **Dedicated gateway (FEAT-004):** Pros (isolated cgroup, independent restart, can OOM safely) vs Cons (extra process, separate config maintenance, port management)
-3. **Hybrid (future):** Pool of N gateway workers, load-balanced, with auto-scaling
-4. **Decision:** Dedicated gateway for production, shared gateway for development
-
-**Deliverable:** `docs/adr/001-http-spawn-vs-dedicated-gateway.md`
+**Deliverable:** `docs/adr/001-http-spawn-vs-dedicated-gateway.md` — 4 options
+(shared, dedicated, hybrid, decision), consequences, startup order, fallback.
 **Priority: HIGHEST. Weight: 20.**
 **Goal:** Replace per-tick Python process spawns with HTTP calls to the already-running
 Hermes gateway API at `127.0.0.1:8642`. Eliminates 500MB+ process startup per tick.
