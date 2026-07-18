@@ -335,7 +335,7 @@ func TestLoadConfigNamespaceModeEnv(t *testing.T) {
 
 	// Only "true" should flip the flag on. Anything else is a no-op.
 	cases := []struct {
-		val string
+		val  string
 		want bool
 	}{
 		{"true", true},
@@ -375,10 +375,10 @@ func TestInterpolateEnv(t *testing.T) {
 		{"${FOO}", "bar"},
 		{"key = \"${API_SERVER_KEY}\"", "key = \"sk-xyz\""},
 		{"multiple ${FOO} and ${API_SERVER_KEY}", "multiple bar and sk-xyz"},
-		{"${UNKNOWN_VAR}", ""},                 // unknown → empty
+		{"${UNKNOWN_VAR}", ""}, // unknown → empty
 		{"literal $$ not a var", "literal $$ not a var"},
 		{"lowercase ${foo} not matched", "lowercase ${foo} not matched"}, // lowercase is not a var
-		{"${A1_B2}", ""}, // valid pattern, unset
+		{"${A1_B2}", ""},                                                 // valid pattern, unset
 	}
 	for _, c := range cases {
 		got := interpolateEnv(c.in)
