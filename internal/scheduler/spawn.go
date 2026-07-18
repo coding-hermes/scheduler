@@ -115,9 +115,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
-				"Format your final output as clean, well-structured markdown. "+
-				"Use markdown tables for status summaries, **bold** for emphasis, "+
-				"blank lines between sections. "+
+				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
+				"Format your final output as clean, well-structured markdown with tables and sections. "+
 				"Report result.",
 			tickID, project.Workdir,
 		)
