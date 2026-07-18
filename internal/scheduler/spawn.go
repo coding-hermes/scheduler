@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -165,6 +166,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		spawner: s,
 	}
 
+	// Tee stdout: scanner reads session_id from one side, buffer captures full output.
+	teeReader := io.TeeReader(stdout, &st.Output)
+
 	// Parse session ID from stdout and persist it. The scanner goroutine must
 	// exit when the process exits or times out so it cannot leak.
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
@@ -178,7 +182,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 	go func() {
 		defer scanCancel()
-		scanner := bufio.NewScanner(stdout)
+		scanner := bufio.NewScanner(teeReader)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "session_id:") {
@@ -221,6 +225,7 @@ type SpawnedTick struct {
 	PID        int
 	Started    time.Time
 	SessionID  string
+	Output     bytes.Buffer // full stdout for delivery after completion
 	cmd        *exec.Cmd
 	stdout     interface{ Close() error }
 	stderr     interface{ Close() error }

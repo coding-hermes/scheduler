@@ -318,6 +318,8 @@ func (l *Loop) evaluate() {
 			if err := l.lifecycle.Complete(outcome); err != nil {
 				log.Printf("EVAL: complete %s: %v", tick.TickID, err)
 			}
+			// Deliver tick output to Telegram.
+			deliverOutput(tick.Project, tick.TickID, &tick.Output)
 			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
 				"project":    outcome.Project,
 				"tick_id":    outcome.TickID,
