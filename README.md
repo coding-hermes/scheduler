@@ -264,3 +264,49 @@ docs/             # Fleet status, architecture docs
 See [docs/fleet.md](docs/fleet.md) for current H3 fleet status — 27 projects, thread mappings, cooldowns, skills map, provider rules.
 
 Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the scheduler per-project.
+
+---
+
+## REST API
+
+Full REST API at `http://127.0.0.1:9090/api/v1/`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Daemon health, uptime, active ticks |
+| `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
+| `/api/v1/projects` | GET/POST | List all or register a new project |
+| `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, or remove a project |
+| `/api/v1/ticks` | GET | Tick history with filtering |
+| `/api/v1/ticks/{id}` | GET | Single tick detail |
+| `/api/v1/events` | GET/STREAM | Event log (SSE streaming supported) |
+| `/api/v1/evaluate` | POST | Trigger immediate evaluation cycle |
+| `/api/v1/pause` | POST | Pause scheduling |
+| `/api/v1/resume` | POST | Resume scheduling |
+| `/api/v1/namespaces` | GET/POST | List or create namespaces |
+| `/api/v1/namespaces/{id}` | GET/PUT/DELETE | Read, update, or remove a namespace |
+
+## MCP Server
+
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via:
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List all projects with status, priority, weight |
+| `get_project` | Get a single project by name |
+| `enable_project` / `disable_project` | Toggle project on/off |
+| `set_priority` / `set_weight` | Adjust scheduling parameters |
+| `get_ticks` | Recent tick history for a project |
+| `pause_scheduler` / `resume_scheduler` | Pause/resume the eval loop |
+| `force_evaluate` | Trigger immediate evaluation |
+
+```json
+// Example: List all projects via MCP
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_projects","arguments":{}}}
+```
+
+## Dashboard
+
+Live HTML dashboard at `http://127.0.0.1:9090/` — auto-refreshes every 60 seconds.
+
+Shows: project fleet overview (enabled/disabled, weight, priority, last tick), recent tick history, namespace allocation with utilization bars, active tick counts, budget gauge.
