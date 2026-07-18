@@ -13,9 +13,11 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 - **Knows all your projects** — weight, priority, cooldown, model, provider
 - **Evaluates every 60 seconds** — computes urgency for each project
 - **Packs greedily** — fills a weight budget with the most urgent projects
-- **Spawns foremen** — each gets a `hermes chat -q` process
+- **Spawns foremen via HTTP** — sends prompts to the Hermes gateway API (`POST /v1/responses`) instead of per-process `hermes chat`. Zero subprocess overhead, zero MCP duplication per tick
+- **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it
 - **Tracks outcomes** — every tick is recorded (queued → running → completed/failed)
 - **Exposes control** — REST API, MCP, dashboard, DuckBrain sync
+- **Auto-approves** — `approvals.cron_mode: auto` for non-interactive foreman ticks
 
 ---
 
@@ -24,7 +26,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 ### Prerequisites
 
 - Go 1.23+
-- Hermes agent (for foreman spawning)
+- Hermes gateway running with API server enabled (`API_SERVER_KEY` in `.env`)
 - SQLite3
 
 ### Install
