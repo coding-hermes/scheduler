@@ -13,6 +13,7 @@ StandardOutput=journal
 StandardError=journal
 Environment=HOME=/home/kara
 Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=API_SERVER_KEY=WZJhtlvVMXfW6ydE2hJgVyJpi6TBYN91fZ22vldTqzE
 
 [Install]
 WantedBy=default.target

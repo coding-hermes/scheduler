@@ -39,6 +39,8 @@ func main() {
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
+	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
+	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
@@ -86,6 +88,17 @@ func main() {
 	loop.SetTickTimeout(*tickTimeout)
 	if *simulate {
 		loop.SetSimulation(*simSuccess)
+	}
+
+	// Wire gateway HTTP client if configured (FEAT-003).
+	if *gatewayURL != "" && *gatewayKey != "" {
+		gwClient := scheduler.NewGatewayClient(*gatewayURL, *gatewayKey, *tickTimeout)
+		if err := gwClient.Ping(context.Background()); err != nil {
+			log.Printf("WARN: gateway %s not reachable (%v) — falling back to exec.Command", *gatewayURL, err)
+		} else {
+			loop.SetGatewayClient(gwClient)
+			log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
+		}
 	}
 
 	// Simulation count mode: generate N ticks and exit.

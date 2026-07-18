@@ -1,4 +1,4 @@
-### [ ] FEAT-003 — HTTP API Spawn: Replace exec.Command("hermes") with Gateway API
+### [x] FEAT-003 — HTTP API Spawn: Replace exec.Command("hermes") with Gateway API ✓
 **Priority: HIGHEST. Weight: 20.**
 **Goal:** Replace per-tick Python process spawns with HTTP calls to the already-running
 Hermes gateway API at `127.0.0.1:8642`. Eliminates 500MB+ process startup per tick.

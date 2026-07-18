@@ -74,6 +74,11 @@ func (l *Loop) SetNamespaceMode(on bool) {
 	l.namespaceMode = on
 }
 
+// SetGatewayClient wires the HTTP gateway client into the spawner (FEAT-003).
+func (l *Loop) SetGatewayClient(client *GatewayClient) {
+	l.spawner.SetGatewayClient(client)
+}
+
 // SetSimulation enables simulation/dry-run mode.
 func (l *Loop) SetSimulation(successRate float64) {
 	l.mu.Lock()

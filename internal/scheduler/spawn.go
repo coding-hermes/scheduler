@@ -43,7 +43,8 @@ type Spawner struct {
 	model         string
 	provider      string
 	skills        string
-	foremanHome   string // HERMES_HOME for foreman config
+	foremanHome   string          // HERMES_HOME for foreman config
+	gateway       *GatewayClient  // HTTP API client (nil = use exec.Command)
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -67,6 +68,20 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.
 func (s *Spawner) SetForemanHome(path string) {
 	s.foremanHome = path
+}
+
+// SetGatewayClient configures the HTTP API client. If set, Spawn() prefers
+// HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
+func (s *Spawner) SetGatewayClient(client *GatewayClient) {
+	s.gateway = client
+}
+
+// GatewayAvailable returns true if the gateway client is configured and reachable.
+func (s *Spawner) GatewayAvailable() bool {
+	if s.gateway == nil {
+		return false
+	}
+	return s.gateway.Ping(context.Background()) == nil
 }
 
 // ActiveCount returns the number of currently running spawns.
@@ -112,10 +127,6 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		if project.Model != "" {
 			model = project.Model
 		}
-		provider := s.provider
-		if project.Provider != "" {
-			provider = project.Provider
-		}
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
@@ -127,6 +138,39 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"Report result.",
 			tickID, project.Workdir,
 		)
+
+		// Try HTTP gateway spawn first (zero process overhead).
+		if s.gateway != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+			resp, gwErr := s.gateway.SendResponse(ctx, prompt, model)
+			cancel()
+			if gwErr == nil && resp != nil {
+				text := resp.ExtractText()
+				now := time.Now()
+				_, _ = s.db.Exec(`UPDATE ticks SET status='completed', outcome='ok', spawned_at=?, finished_at=?, output=?, session_id='gateway' WHERE id=?`,
+					now.Format(time.RFC3339), now.Format(time.RFC3339), text, tickID)
+
+				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
+					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+				return &SpawnedTick{
+					TickID:     tickID,
+					Project:    project.Name,
+					SessionID:  "gateway",
+					Started:    now,
+					Deliver:    project.Deliver,
+					Output:     *bytes.NewBufferString(text),
+					spawner:    s,
+					completed:  true,
+					completeAt: now,
+				}, nil
+			}
+			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+		}
+
+		provider := s.provider
+		if project.Provider != "" {
+			provider = project.Provider
+		}
 
 		args := []string{
 			"chat", "-q", prompt,
@@ -245,15 +289,33 @@ type SpawnedTick struct {
 	spawner    *Spawner
 	scanCancel context.CancelFunc
 	mu         sync.Mutex
+
+	// completed is true for gateway-spawned ticks that finished in Spawn().
+	completed  bool
+	completeAt time.Time
 }
 
 // Wait blocks until the process exits and returns the outcome.
+// For gateway-completed ticks (HTTP spawn), returns immediately.
 func (st *SpawnedTick) Wait() TickOutcome {
 	defer func() {
 		st.spawner.mu.Lock()
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// Gateway-spawned ticks are already complete — return immediately.
+	if st.completed {
+		return TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickCompleted,
+			Duration:  st.completeAt.Sub(st.Started),
+		}
+	}
 
 	defer st.closePipes()
 	if st.scanCancel != nil {
