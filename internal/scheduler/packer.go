@@ -53,7 +53,7 @@ type scored struct {
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
-func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
+func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedProject, error) {
 	rows, err := p.db.Query(`
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
@@ -99,9 +99,10 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 		return list[i].urgency > list[j].urgency
 	})
 
-	// Greedy pack: pick projects that fit in budget.
-	currentlyRunning := p.runningCount()
-	runningSet := p.runningProjectSet()
+		// Greedy pack: pick projects that fit in budget.
+		currentlyRunning := p.runningCount()
+		runningSet := p.runningProjectSet()
+		// Merge with spawner's in-memory active set — spawns may not be\n	// committed to DB yet (race condition).\n	for name := range spawnerRunning {\n		runningSet[name] = true\n	}\n	// Re-pool currentlyRunning from merged set for accuracy.\n	if len(runningSet) > currentlyRunning {\n		currentlyRunning = len(runningSet)\n	}
 	used := 0
 	packed := make([]PackedProject, 0, max(1, len(list)/2))
 

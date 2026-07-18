@@ -146,7 +146,7 @@ func (sr *SimRunner) runOneTick(tickNum int) SimTickReport {
 	tr := SimTickReport{Tick: tickNum}
 
 	now := time.Now()
-	packed, err := sr.loop.packer.Pick(now)
+	packed, err := sr.loop.packer.Pick(now, nil)
 	if err != nil {
 		tr.Error = err.Error()
 		return tr

@@ -122,7 +122,7 @@ func TestSumWeights_ViaPick(t *testing.T) {
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	// budget=100 → all three fit (10+20+30=60).
 	p := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}

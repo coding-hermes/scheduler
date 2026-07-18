@@ -60,7 +60,7 @@ func TestPick_EmptyDatabase(t *testing.T) {
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	p := scheduler.NewPacker(db, calc, 100, 5)
 
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPick_RespectsBudget(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	p := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestPick_SkipsDisabled(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	p := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestPick_SortedByUrgency(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	p := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestPick_RespectsCooldown(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	p := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestPick_RespectsMaxConcurrent(t *testing.T) {
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	// maxConcurrent=2, budget=100 → packer should pick at most 2.
 	p := scheduler.NewPacker(db, calc, 100, 2)
-	got, err := p.Pick(time.Now())
+	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestPick_PopulatesFields(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	packer := scheduler.NewPacker(db, calc, 100, 10)
-	got, err := packer.Pick(time.Now())
+	got, err := packer.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}

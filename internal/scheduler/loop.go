@@ -278,7 +278,7 @@ func (l *Loop) evaluate() {
 	}
 	if len(packed) == 0 {
 		var err error
-		packed, err = l.packer.Pick(now)
+		packed, err = l.packer.Pick(now, l.spawner.RunningSet())
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
 			return

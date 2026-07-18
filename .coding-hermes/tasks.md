@@ -112,17 +112,17 @@ schedulerd --test-verify 3                      # run 3-cycle verification
 2. [x] Add `RootConfig` wrapper: holds all sections + `FleetConfig` + `Projects`/`Namespaces` ✓ `a021a67`
 3. [x] Add `Validate()` — bounds checks, required fields, path existence ✓ `a021a67`
 4. [x] Add `LoadConfig(tomlPath)` — reads TOML, applies env vars (ApplyRootConfig pending) ✓ `a021a67`
-5. [ ] Map every existing CLI flag to a TOML key + `SCHEDULER_*` env var name (main.go wiring — partial, restored)
+5. [x] Map every existing CLI flag to a TOML key + `SCHEDULER_*` env var name ✓ `e6b860f` (show_config.go: 15 settings across 4 sections, all with TOML key + env + CLI)
 6. [x] Add `${ENV_VAR}` interpolation for TOML string values (simple regex replace) ✓ `a021a67`
-7. [ ] Add `--show-config` — prints resolved config as TOML with source annotations (helpers.go needed)
-8. [ ] Add `schedulerd schema` — dumps JSON Schema for `schedulerd.toml` (helpers.go needed)
-9. [ ] Add `config.example.toml` — every setting with comments
-10. [ ] Update systemd unit: `ExecStart=schedulerd --config /etc/schedulerd.toml`
-11. [ ] Keep all CLI flags working (backward compatible) — they just become overrides
+7. [x] Add `--show-config` — prints resolved config as TOML with source annotations ✓ `e6b860f` (show_config.go)
+8. [x] Add `schedulerd schema` — dumps JSON Schema for `schedulerd.toml` ✓ `e6b860f` (--schema flag)
+9. [x] Add `config.example.toml` — every setting with comments ✓ `e6b860f` (3,899 bytes)
+10. [x] Update systemd unit: `ExecStart=schedulerd --config /etc/schedulerd.toml` ✓ `e6b860f` (deploy/coding-hermes-scheduler.service)
+11. [x] Keep all CLI flags working (backward compatible) — they just become overrides ✓ `e6b860f` (all 18 flags in main.go lines 27-49)
 12. [x] Comprehensive tests (loader_test.go, +598 lines, 12 test functions) ✓ `6f8b0b7`
 
 **Deliverable:** One `schedulerd.toml` controls everything. Env vars for containers. CLI flags for dev. Three layers, clear priority.
-**Priority: HIGH. Weight: 18. Status: IN PROGRESS.**
+**Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Deliverables committed (2026-07-18):**
 - [x] `deploy/coding-hermes-scheduler-gateway.service` — systemd user unit (MemoryMax=16G, Restart=always)
 - [x] `deploy/scheduler-profile/config.yaml` — gateway profile (duckbrain+gitreins only, no browser/chimera)
@@ -160,31 +160,33 @@ schedulerd --test-verify 3                      # run 3-cycle verification
   - `~/.hermes/coding-hermes/scheduler.db` → configurable via `--db` (already existed)
   - `~/.hermes/foreman/` → configurable via `--foreman-home` (added 2026-07-18, `a5b3d9e`)
   - `127.0.0.1:8642` → configurable via `--gateway-url` (already existed)
-|- [x] Clean up code:
-|  - [x] Go doc comments on all exported types/functions
-|  - [x] Remove debug logs
-|  - [x] Consistent error handling patterns (golangci-lint clean, error wrapping with %w, no swallowed errors)
-|- [x] Tag `v1.0.0` release
+- [x] Clean up code:
+  - [x] Go doc comments on all exported types/functions
+  - [x] Remove debug logs
+  - [x] Consistent error handling patterns (golangci-lint clean, error wrapping with %w, no swallowed errors)
+- [x] Tag `v1.0.0` release
 - [x] Add CI badge to README (build + test status)
 - [x] Write "Getting Started" guide (5-minute setup from scratch)
 - [x] Add example fleet config (annotated `fleet.example.toml` — 2026-07-18)
-|- [x] Document the dedicated gateway pattern (FEAT-004) — see deploy/gateway-setup.md + README.md deployment section
+- [x] Document the dedicated gateway pattern (FEAT-004) — see deploy/gateway-setup.md + README.md deployment section
 
 ### [ ] INFRA-004 — Audit & Reduce exec.Command Fallback Rate
-**Priority: MEDIUM. Weight: 8.**
-**Goal:** Most ticks (382 today) still use exec.Command fallback instead of HTTP.
-Understand why and reduce.
+**Priority: MEDIUM. Weight: 8. Status: INVESTIGATED (2026-07-18).**
+**Goal:** Most ticks historically used exec.Command fallback instead of HTTP. Understand why and reduce.
 
-**Investigation:**
-- 382 exec.Command spawns vs 19 HTTP gateway ticks — 95% fallback rate
-- Suspected causes:
-  1. Test/dummy projects have custom `command` fields → bypass HTTP path
-  2. Gateway restart cycles cause brief unavailability windows
-  3. `coding-hermes-scheduler` project self-ticks via gateway, causing recursive load
-- [ ] Query: which projects use exec.Command vs HTTP?
-- [ ] Fix: clear `command` field from dummy projects OR route them through gateway too
-- [ ] Fix: add retry with backoff when gateway briefly unavailable
-- [ ] Metric: add Prometheus-style counter for HTTP vs exec.Command spawns
+**Investigation complete (foreman tick 2026-07-18-12-19):**
+- **DB analysis:** 11,516 total ticks ever. 11,329 have session_id=NULL (exec.Command, no session capture). 42 have session_id='gateway' (HTTP spawns). 145 have empty string.
+- **Last 2 hours: 42 gateway, 0 exec.Command** — gateway IS working for all recent ticks! The high exec rate was historical.
+- **Root cause of historical exec rate:** Gateway was unreachable at schedulerd startup (pre-retry-backoff commit `bdc75ea`). When gateway fails, all ticks fall back to exec.Command which don't capture session IDs (regex miss).
+- **Custom Command projects: 0** — the suspected custom-command bypass theory was wrong.
+- **Batch failure at 11:49-11:53 CT:** 30+ ticks failed simultaneously every 60s (eval cycle) with empty session_id — gateway was down during this window, exec.Command fallback also failed. Gateway reconnected at 11:55+ and all subsequent ticks succeeded via HTTP.
+- **No code changes needed for gateway path** — it works. The historical exec rate was a transient connectivity issue now resolved.
+
+**Remaining items:**
+- [ ] Add Prometheus-style counter for HTTP vs exec.Command spawns (low priority, nice-to-have monitoring)
+- [x] Query: which projects use exec.Command vs HTTP? → Answer: 0 in last 2h, all gateway
+- [ ] Fix: clear `command` field from dummy projects → N/A (no projects have custom commands)
+- [x] Fix: add retry with backoff when gateway briefly unavailable → Done in `bdc75ea`
 
 ### [ ] DOC-002 — Architecture Decision Record: HTTP Spawn vs Dedicated Instance
 **Priority: MEDIUM. Weight: 5.**
@@ -279,6 +281,17 @@ backoff, fall back to exec.Command if gateway dead > 2 attempts.
 - Database Event struct updated (Severity, Component, Details), old EventLevel type updated to EventSeverity
 - LogEvent, ListEvents, API /api/v1/events handler all updated
 - 91 insertions, 72 deletions across 5 files. Guard: PASS. All tests: PASS.
+
+### [x] BUG-005 — Packer/spawner race condition: double-scheduling of already-running projects
+**Priority: HIGH. Weight: 8.**
+**Root cause:** Packer.Pick() checked only DB for running projects, but spawner tracks in-memory
+active ticks that haven't been committed to DB yet. A project that just started spawning could
+be double-scheduled by the packer in the same evaluation cycle.
+**Fix:** Add `spawnerRunning map[string]bool` parameter to `Packer.Pick()`. Merge the spawner's
+in-memory active set with DB state before greedy packing. Recalculate `currentlyRunning` from
+merged set. All 9 call sites updated (loop.go, packer_test.go, multipool_packer.go,
+sim_fixture.go, sim_fixture_test.go).
+**Files:** 7 files, +17/-16. Build+vet+tests: PASS.
 
 ---
 

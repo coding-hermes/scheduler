@@ -324,7 +324,7 @@ func (m *MultiPoolPacker) Pack(
 // or no namespaces exist.
 func (m *MultiPoolPacker) FlatFallback(db *sql.DB, calc *UrgencyCalculator, budget int, now time.Time) ([]PackedProject, error) {
 	p := NewPacker(db, calc, budget, m.maxConcurrent)
-	return p.Pick(now)
+	return p.Pick(now, nil)
 }
 
 // ---------------------------------------------------------------------------

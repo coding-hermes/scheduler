@@ -49,7 +49,7 @@ func TestSimSetupDebug(t *testing.T) {
 		t.Logf("  %s: priority=%.0f interval=%v urgency=%.4f", name, priority, interval, u)
 	}
 
-	packed, err := packer.Pick(now)
+	packed, err := packer.Pick(now, nil)
 	if err != nil {
 		t.Fatalf("pick: %v", err)
 	}
