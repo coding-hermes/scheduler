@@ -3,9 +3,9 @@ package dashboard
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"html/template"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -13,12 +13,47 @@ import (
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
-	db *sql.DB
+	db   *sql.DB
+	tmpl *template.Template      // parsed once, reused
+	mu   sync.Mutex
 }
 
-// NewGenerator creates a dashboard generator.
+// NewGenerator creates a dashboard generator. Template is parsed at construction
+// time so hot-path Generate() never pays the parse cost.
 func NewGenerator(db *sql.DB) *Generator {
-	return &Generator{db: db}
+	g := &Generator{db: db}
+	g.tmpl = template.Must(template.New("dashboard").Funcs(template.FuncMap{
+		"percent": func(used, total int) int {
+			if total == 0 { return 0 }
+			return used * 100 / total
+		},
+		"shortTime": func(s string) string {
+			if s == "" { return "—" }
+			if len(s) >= 16 { return s[11:16] }
+			return s
+		},
+		"add": func(a, b, c int) int { return a + b + c },
+		"statusClass": func(s string) string {
+			switch s {
+			case "completed": return "status-ok"
+			case "failed": return "status-fail"
+			case "timeout": return "status-timeout"
+			case "running": return "status-running"
+			default: return ""
+			}
+		},
+		"utilClass": func(reserved, hardCap, used int) string {
+			if used < reserved { return "util-green" }
+			if hardCap > 0 && used >= hardCap { return "util-red" }
+			return "util-yellow"
+		},
+		"utilColor": func(utilization float64) string {
+			if utilization > 80 { return "var(--red)" }
+			if utilization >= 50 { return "var(--yellow)" }
+			return "var(--green)"
+		},
+	}).Parse(pageTemplate))
+	return g
 }
 
 // FleetRow is one project in the fleet overview table.
@@ -51,12 +86,12 @@ type NamespaceRow struct {
 	Weight       int
 	Reserved     int
 	HardCap      int
-	Allocated    int // current budget allocation
+	Allocated    int
 	Used         int
 	Borrowed     int
 	Lent         int
 	ProjectCount int
-	Utilization  float64 // used/allocated * 100 (or 0 if allocated=0)
+	Utilization  float64
 }
 
 // NamespaceTickRow is one namespace_tick in the utilization history table.
@@ -86,69 +121,11 @@ type FleetData struct {
 	CostWeekTotal   float64
 }
 
-// Generate writes the dashboard HTML to w.
+// Generate writes the dashboard HTML to w. Template is pre-parsed — zero hot-path overhead.
 func (g *Generator) Generate(w io.Writer) error {
 	ctx := context.Background()
 	data := g.collect(ctx)
-	funcMap := template.FuncMap{
-		"percent": func(used, total int) int {
-			if total == 0 {
-				return 0
-			}
-			return used * 100 / total
-		},
-		"shortTime": func(s string) string {
-			if s == "" {
-				return "—"
-			}
-			if len(s) >= 16 {
-				return s[11:16]
-			}
-			return s
-		},
-		"add": func(a, b, c int) int { return a + b + c },
-		"statusClass": func(s string) string {
-			switch s {
-			case "completed":
-				return "status-ok"
-			case "failed":
-				return "status-fail"
-			case "timeout":
-				return "status-timeout"
-			case "running":
-				return "status-running"
-			default:
-				return ""
-			}
-		},
-		// utilClass returns a CSS class based on namespace utilization.
-		// Green: used < reserved, Yellow: reserved <= used < hard_cap, Red: used >= hard_cap.
-		// Returns "" if allocated == 0.
-		"utilClass": func(reserved, hardCap, used int) string {
-			if used < reserved {
-				return "util-green"
-			}
-			if hardCap > 0 && used >= hardCap {
-				return "util-red"
-			}
-			return "util-yellow"
-		},
-		// utilColor returns the bar background color based on utilization percentage.
-		"utilColor": func(utilization float64) string {
-			if utilization > 80 {
-				return "var(--red)"
-			}
-			if utilization >= 50 {
-				return "var(--yellow)"
-			}
-			return "var(--green)"
-		},
-	}
-	tmpl, err := template.New("dashboard").Funcs(funcMap).Parse(pageTemplate)
-	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
-	}
-	return tmpl.Execute(w, data)
+	return g.tmpl.Execute(w, data)
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {
@@ -157,13 +134,50 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		BudgetTotal: 100,
 	}
 
-	// Project stats.
-	rows, err := g.db.QueryContext(ctx, `SELECT name, weight, priority, enabled FROM projects ORDER BY name`)
+	// ── Projects: batch query with per-project stats via LEFT JOINs ──
+	// Single query replaces 7 per-project queries (N+1 → 1).
+	projectQuery := `
+		SELECT
+			p.name, p.weight, p.priority, p.enabled,
+			COALESCE(t.spawned_at, '')            AS last_tick,
+			COALESCE(t.outcome, '')                AS last_outcome,
+			COALESCE(t.session_id, '')             AS session_id,
+			COALESCE(t.running, 0) > 0             AS running_now,
+			COALESCE(t.completed, 0)               AS completed,
+			COALESCE(t.failed, 0)                  AS failed,
+			COALESCE(t.timed_out, 0)              AS timed_out,
+			COALESCE(t.cost_today, 0.0)            AS cost_today,
+			COALESCE(t.cost_week, 0.0)             AS cost_week
+		FROM projects p
+		LEFT JOIN (
+			SELECT
+				tk.project_name,
+				MAX(tk.spawned_at) AS spawned_at,
+				(SELECT tt.outcome  FROM ticks tt WHERE tt.project_name = tk.project_name AND tt.spawned_at = MAX(tk.spawned_at)) AS outcome,
+				(SELECT tt.session_id FROM ticks tt WHERE tt.project_name = tk.project_name AND tt.spawned_at = MAX(tk.spawned_at)) AS session_id,
+				SUM(CASE WHEN tk.status = 'running'   THEN 1 ELSE 0 END) AS running,
+				SUM(CASE WHEN tk.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+				SUM(CASE WHEN tk.status = 'failed'    THEN 1 ELSE 0 END) AS failed,
+				SUM(CASE WHEN tk.status = 'timeout'   THEN 1 ELSE 0 END) AS timed_out,
+				COALESCE(SUM(CASE WHEN tk.status = 'completed' AND tk.completed_at >= ? THEN tk.cost_usd ELSE 0 END), 0.0) AS cost_today,
+				COALESCE(SUM(CASE WHEN tk.status = 'completed' AND tk.completed_at >= ? THEN tk.cost_usd ELSE 0 END), 0.0) AS cost_week
+			FROM ticks tk
+			GROUP BY tk.project_name
+		) t ON t.project_name = p.name
+		ORDER BY p.name
+	`
+	dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	weekAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+
+	rows, err := g.db.QueryContext(ctx, projectQuery, dayAgo, weekAgo)
 	if err == nil {
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var r FleetRow
-			if err := rows.Scan(&r.Name, &r.Weight, &r.Priority, &r.Enabled); err != nil {
+			if err := rows.Scan(&r.Name, &r.Weight, &r.Priority, &r.Enabled,
+				&r.LastTick, &r.LastOutcome, &r.SessionID,
+				&r.RunningNow, &r.Completed, &r.Failed, &r.Timeout,
+				&r.CostToday, &r.CostWeek); err != nil {
 				continue
 			}
 			data.TotalProjects++
@@ -171,40 +185,20 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				data.EnabledProjects++
 				data.BudgetUsed += r.Weight
 			}
-			// Running check.
-			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='running'`, r.Name).Scan(&r.RunningNow)
-			// Outcome counts.
-			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='completed'`, r.Name).Scan(&r.Completed)
-			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='failed'`, r.Name).Scan(&r.Failed)
-			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE project_name=? AND status='timeout'`, r.Name).Scan(&r.Timeout)
-			// Last tick with session.
-			_ = g.db.QueryRowContext(ctx, `SELECT spawned_at, COALESCE(outcome,''), COALESCE(session_id,'') FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.Name).Scan(&r.LastTick, &r.LastOutcome, &r.SessionID)
-			// Urgency — simplified: priority * (1 + idle_hours).
-			var lastTime sql.NullString
-			_ = g.db.QueryRowContext(ctx, `SELECT MAX(spawned_at) FROM ticks WHERE project_name=?`, r.Name).Scan(&lastTime)
-			if lastTime.Valid && lastTime.String != "" {
-				if t, err := time.Parse(time.RFC3339, lastTime.String); err == nil {
-					hours := time.Since(t).Hours()
-					r.Urgency = float64(r.Priority) * (1 + hours)
+			// Urgency: priority * (1 + hours since last tick)
+			if r.LastTick != "" {
+				if t, err := time.Parse(time.RFC3339, r.LastTick); err == nil {
+					r.Urgency = float64(r.Priority) * (1 + time.Since(t).Hours())
 				}
 			}
-			// Per-project cost: today and last 7 days.
-			dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
-			weekAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-			_ = g.db.QueryRowContext(ctx,
-				`SELECT COALESCE(SUM(cost_usd),0) FROM ticks WHERE project_name=? AND status='completed' AND completed_at >= ?`,
-				r.Name, dayAgo).Scan(&r.CostToday)
-			_ = g.db.QueryRowContext(ctx,
-				`SELECT COALESCE(SUM(cost_usd),0) FROM ticks WHERE project_name=? AND status='completed' AND completed_at >= ?`,
-				r.Name, weekAgo).Scan(&r.CostWeek)
 			data.CostTodayTotal += r.CostToday
 			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
 		}
 	}
 
-	// Active ticks.
-	g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
+	// Active ticks count.
+	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
 
 	// Recent ticks.
 	tickRows, _ := g.db.QueryContext(ctx, `SELECT id, project_name, status, COALESCE(outcome,''), COALESCE(session_id,''), spawned_at, COALESCE(completed_at,''), commits, files_changed FROM ticks ORDER BY spawned_at DESC LIMIT 20`)
@@ -212,7 +206,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		defer tickRows.Close()
 		for tickRows.Next() {
 			var t TickRow
-			tickRows.Scan(&t.ID, &t.Project, &t.Status, &t.Outcome, &t.SessionID, &t.SpawnedAt, &t.CompletedAt, &t.Commits, &t.FilesChanged)
+			_ = tickRows.Scan(&t.ID, &t.Project, &t.Status, &t.Outcome, &t.SessionID, &t.SpawnedAt, &t.CompletedAt, &t.Commits, &t.FilesChanged)
 			data.RecentTicks = append(data.RecentTicks, t)
 		}
 	}
@@ -227,7 +221,6 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				Reserved: ns.Reserved,
 				HardCap:  ns.HardCap,
 			}
-			// Latest allocation from namespace_ticks.
 			ticks, terr := database.ListNamespaceTicks(ctx, g.db, ns.ID, 1)
 			if terr == nil && len(ticks) > 0 {
 				row.Allocated = ticks[0].Allocated
@@ -238,13 +231,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			if row.Allocated > 0 {
 				row.Utilization = float64(row.Used) / float64(row.Allocated) * 100
 			}
-			// Count enabled projects in this namespace.
 			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE namespace_id=? AND enabled=1`, ns.ID).Scan(&row.ProjectCount)
 			data.Namespaces = append(data.Namespaces, row)
 		}
 	}
 
-	// Recent namespace ticks (all namespaces, newest first) for the utilization chart.
+	// Recent namespace ticks for the utilization chart.
 	nsTickRows, _ := g.db.QueryContext(ctx, `SELECT tick_group, namespace_id, allocated, used, borrowed, lent, created_at FROM namespace_ticks ORDER BY created_at DESC LIMIT 100`)
 	if nsTickRows != nil {
 		defer nsTickRows.Close()
@@ -263,6 +255,7 @@ const pageTemplate = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta http-equiv="refresh" content="60">
 <title>Coding Hermes Fleet</title>
 <style>
 :root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
