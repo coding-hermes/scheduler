@@ -459,3 +459,37 @@ sim_fixture.go, sim_fixture_test.go).
 **Self-pause:** Idle tick #2 → cooldown 900s → 1800s (30m). API confirmed: `CooldownS: 1800`.
 
 **No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-18 18:53
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering in goroutine spawns)
+
+**No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-18 18:55 (#3)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering in goroutine spawns)
+
+**Daemon health:** status=ok, 10 active ticks, uptime=7m, evaluation_age=40s, spawns_http=10, spawns_exec=0
+
+**Self-pause:** Idle tick #3 → cooldown 600s → 1200s (20m). API verified: `CooldownS: 1200`.
+
+**No action needed.**
