@@ -18,6 +18,7 @@ type PackedProject struct {
 	Command  string // optional: custom spawn command (overrides default hermes chat)
 	Model    string // LLM model for this project (empty = use spawner default)
 	Provider string // LLM provider for this project (empty = use spawner default)
+	Deliver  string // delivery target (telegram:chat_id:thread_id)
 }
 
 // Packer selects which projects run given a weight budget and running set.
@@ -48,6 +49,7 @@ type scored struct {
 	command    string
 	model      string
 	provider   string
+	deliver    string
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -56,7 +58,7 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, '')
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(deliver, '')
 		FROM projects
 		WHERE enabled = 1
 		ORDER BY name
@@ -76,7 +78,7 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider); err != nil {
+			&s.model, &s.provider, &s.deliver); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -141,6 +143,7 @@ func (p *Packer) Pick(now time.Time) ([]PackedProject, error) {
 			Command:  s.command,
 			Model:    s.model,
 			Provider: s.provider,
+			Deliver:  s.deliver,
 		})
 		used += s.weight
 		currentlyRunning++

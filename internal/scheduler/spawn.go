@@ -160,6 +160,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		Project: project.Name,
 		PID:     cmd.Process.Pid,
 		Started: time.Now(),
+		Deliver: project.Deliver,
 		cmd:     cmd,
 		stdout:  stdout,
 		stderr:  stderr,
@@ -226,6 +227,7 @@ type SpawnedTick struct {
 	Started    time.Time
 	SessionID  string
 	Output     bytes.Buffer // full stdout for delivery after completion
+	Deliver    string       // delivery target (telegram:chat_id:thread_id)
 	cmd        *exec.Cmd
 	stdout     interface{ Close() error }
 	stderr     interface{ Close() error }

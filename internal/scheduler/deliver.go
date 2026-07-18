@@ -10,18 +10,30 @@ import (
 	"strings"
 )
 
+const telegramBotToken = "8925815583:AAH5eVxUOLtKLiy50BQdkMX9Nb4wQgkD8bs"
+
 // deliverOutput sends tick output to the configured delivery target.
-// The output buffer is non-truncated; deliverOutput trims to 4096 chars
-// for Telegram's message limit and appends a truncation notice if needed.
-func deliverOutput(project, tickID string, output *bytes.Buffer) {
+// deliverFormat: "telegram:chat_id:thread_id" (from project deliver column).
+// Falls back to the scheduler thread (83996) if no target is configured.
+func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		log.Printf("DELIVER: %s tick=%s — no output to deliver", project, tickID)
 		return
 	}
 
-	const telegramBotToken = "8925815583:AAH5eVxUOLtKLiy50BQdkMX9Nb4wQgkD8bs"
-	const chatID = "-1003310984808"
-	const threadID = "83996"
+	chatID := "-1003310984808"
+	threadID := "83996" // default: scheduler foreman thread
+
+	// Parse deliver target: "telegram:<chat_id>:<thread_id>"
+	if deliver != "" {
+		parts := strings.SplitN(deliver, ":", 3)
+		if len(parts) >= 2 {
+			chatID = parts[1]
+		}
+		if len(parts) >= 3 {
+			threadID = parts[2]
+		}
+	}
 
 	text := output.String()
 	const maxLen = 4096
@@ -53,5 +65,5 @@ func deliverOutput(project, tickID string, output *bytes.Buffer) {
 		return
 	}
 
-	log.Printf("DELIVER: %s tick=%s — delivered to Telegram thread %s", project, tickID, threadID)
+	log.Printf("DELIVER: %s tick=%s → thread %s", project, tickID, threadID)
 }

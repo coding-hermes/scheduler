@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS projects (
     decay_rate REAL NOT NULL DEFAULT 1.0,
     model      TEXT NOT NULL DEFAULT 'deepseek-v4-pro',
     provider   TEXT NOT NULL DEFAULT 'deepseek-foreman',
+    deliver    TEXT NOT NULL DEFAULT '',
     enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

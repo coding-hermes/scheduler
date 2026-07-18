@@ -324,7 +324,7 @@ func (l *Loop) evaluate() {
 			}
 			// Deliver tick output to Telegram (suppressed in verify/test mode).
 			if !l.noDeliver {
-				deliverOutput(tick.Project, tick.TickID, &tick.Output)
+				deliverOutput(tick.Project, tick.TickID, tick.Deliver, &tick.Output)
 			}
 			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
 				"project":    outcome.Project,
