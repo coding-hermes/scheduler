@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=kara
-ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode --max-concurrent 12 --min-interval 1m
+ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode --max-concurrent 10 --min-interval 1m --tick-timeout 900s --gateway-url=http://127.0.0.1:8642
 Restart=always
 RestartSec=5
 MemoryMax=32G

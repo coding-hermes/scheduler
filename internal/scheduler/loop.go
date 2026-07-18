@@ -184,11 +184,6 @@ func (l *Loop) Run() {
 			l.reapZombies()
 		case <-ticker.C:
 			l.evaluate()
-		case <-l.slotPool.SlotFreed():
-			// A slot freed up — re-evaluate to fill it with the next
-			// eligible project. Event-driven on top of periodic ticker
-			// ensures zero-wait refill when a tick completes.
-			l.evaluate()
 		}
 	}
 }
@@ -263,7 +258,7 @@ func (l *Loop) evaluate() {
 	}
 	if len(packed) == 0 {
 		var err error
-		packed, err = l.packer.Pick(now, l.spawner.RunningSet())
+		packed, err = l.packer.Pick(now, l.slotPool.RunningSet())
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
 			l.mu.Unlock()

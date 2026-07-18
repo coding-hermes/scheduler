@@ -13,7 +13,7 @@ import (
 // the tick completes or times out. The evaluation loop fires projects into
 // the pool and returns immediately — it never blocks waiting for spawns.
 type SlotPool struct {
-	sem       chan struct{} // buffered channel = semaphore (len = occupied)
+	sem       chan string // buffered channel = semaphore, value = project name
 	maxSlots  int
 	timeout   time.Duration
 	spawner   *Spawner
@@ -23,7 +23,7 @@ type SlotPool struct {
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
 func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool {
 	return &SlotPool{
-		sem:       make(chan struct{}, maxConcurrent),
+		sem:       make(chan string, maxConcurrent),
 		maxSlots:  maxConcurrent,
 		timeout:   timeout,
 		spawner:   spawner,
@@ -41,10 +41,24 @@ func (p *SlotPool) Running() int {
 	return len(p.sem)
 }
 
-// Acquire blocks until a slot is free, then marks it occupied.
-func (p *SlotPool) Acquire(ctx context.Context) bool {
+// RunningSet returns the set of project names currently occupying slots.
+// Used by the packer to prevent duplicate spawns.
+func (p *SlotPool) RunningSet() map[string]bool {
+	set := make(map[string]bool)
+	// Drain and re-fill the channel to snapshot names. Non-blocking.
+	for i := 0; i < len(p.sem); i++ {
+		name := <-p.sem
+		set[name] = true
+		p.sem <- name
+	}
+	return set
+}
+
+// Acquire blocks until a slot is free, then marks it occupied with the
+// given project name. Returns false if context is cancelled.
+func (p *SlotPool) Acquire(ctx context.Context, name string) bool {
 	select {
-	case p.sem <- struct{}{}:
+	case p.sem <- name:
 		return true
 	case <-ctx.Done():
 		return false
@@ -70,7 +84,7 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 		// Wait for a free slot.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		if !p.Acquire(ctx) {
+		if !p.Acquire(ctx, proj.Name) {
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			return
 		}
@@ -121,11 +135,8 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 }
 
 // SlotFreed returns a channel that receives when any slot is released.
-// The evaluation loop can select on this to re-evaluate immediately
-// instead of waiting for the next ticker interval.
 func (p *SlotPool) SlotFreed() <-chan struct{} {
 	ch := make(chan struct{}, p.maxSlots)
-	// Send on original release
 	orig := p.sem
 	go func() {
 		prev := len(orig)
@@ -143,6 +154,8 @@ func (p *SlotPool) SlotFreed() <-chan struct{} {
 	}()
 	return ch
 }
+
+// Wait blocks until all running ticks finish or the context is cancelled.
 func (p *SlotPool) Wait(ctx context.Context) error {
 	for {
 		select {
