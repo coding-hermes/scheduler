@@ -78,7 +78,7 @@
 - TOML preferred over YAML — cleaner, no whitespace sensitivity
 - Later: hot-reload on SIGHUP
 
-### [ ] FEAT-001 — Auto-slowdown for idle projects
+### [x] FEAT-001 — Auto-slowdown for idle projects ✓ `7d0a0df`
 **Priority: HIGH. Weight: 10.**
 - Mythos (blocked on credits) and others flood chat every 10-20 min with IDLE ticks.
   The foreman reports "SLOWDOWN REQUESTED — idle tick 3/7" but the scheduler ignores it.
