@@ -406,6 +406,11 @@ func (l *Loop) LastEvalTime() time.Time {
 	return l.lastEval
 }
 
+// SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
+func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) {
+	return l.spawner.SpawnMethodCounts()
+}
+
 // evalContext returns the set of currently-running project names and a map of
 // project → last completed timestamp. Used by the multi-pool packing path.
 func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) {

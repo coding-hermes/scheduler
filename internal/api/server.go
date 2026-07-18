@@ -72,6 +72,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastEvalStr = lastEval.UTC().Format(time.RFC3339)
 		evalAge = time.Since(lastEval).Seconds()
 	}
+	httpCount, execCount := s.loop.SpawnMethodCounts()
 	writeJSON(w, 200, map[string]interface{}{
 		"status":                 "ok",
 		"uptime":                 time.Since(s.started).String(),
@@ -79,6 +80,8 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"active_ticks":           activeTicks,
 		"last_evaluation":        lastEvalStr,
 		"evaluation_age_seconds": evalAge,
+		"spawns_http":            httpCount,
+		"spawns_exec":            execCount,
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,6 +46,10 @@ type Spawner struct {
 	skills        string
 	foremanHome   string         // HERMES_HOME for foreman config
 	gateway       *GatewayClient // HTTP API client (nil = use exec.Command)
+
+	// Prometheus-style spawn counters since last restart.
+	spawnCountHTTP int64
+	spawnCountExec int64
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -99,6 +104,11 @@ func (s *Spawner) GatewayAvailable() bool {
 		return false
 	}
 	return s.gateway.Ping(context.Background()) == nil
+}
+
+// SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
+func (s *Spawner) SpawnMethodCounts() (httpCount, execCount int64) {
+	return atomic.LoadInt64(&s.spawnCountHTTP), atomic.LoadInt64(&s.spawnCountExec)
 }
 
 // ActiveCount returns the number of currently running spawns.
@@ -162,6 +172,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			resp, gwErr := s.gateway.SendResponse(ctx, prompt, model)
 			cancel()
 			if gwErr == nil && resp != nil {
+				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
 				now := time.Now()
 				_, _ = s.db.Exec(`UPDATE ticks SET status='completed', outcome='ok', spawned_at=?, finished_at=?, output=?, session_id='gateway' WHERE id=?`,
@@ -183,6 +194,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
 		}
+
+		atomic.AddInt64(&s.spawnCountExec, 1)
 
 		provider := s.provider
 		if project.Provider != "" {
