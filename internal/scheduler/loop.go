@@ -359,6 +359,14 @@ func sumWeights(packed []PackedProject) int {
 
 func (l *Loop) cleanDanglingOnStartup() {
 	ctx := context.Background()
+
+	// Update last_tick_completed for projects whose running ticks
+	// are being cleaned, so the packer uses actual last-tick time
+	// rather than created_at for urgency calculation.
+	l.db.ExecContext(ctx,
+		`UPDATE projects SET last_tick_completed = datetime('now')
+		 WHERE name IN (SELECT DISTINCT project_name FROM ticks WHERE status='running')`)
+
 	result, err := l.db.ExecContext(ctx,
 		`UPDATE ticks SET status='timeout' WHERE status='running'`)
 	if err != nil {
