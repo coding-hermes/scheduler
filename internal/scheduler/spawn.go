@@ -43,6 +43,7 @@ type Spawner struct {
 	model         string
 	provider      string
 	skills        string
+	foremanHome   string // HERMES_HOME for foreman config
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -59,7 +60,13 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		model:         "deepseek-v4-pro",
 		provider:      "deepseek-foreman",
 		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins",
+		foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
 	}
+}
+
+// SetForemanHome overrides the default HERMES_HOME for foreman sessions.
+func (s *Spawner) SetForemanHome(path string) {
+	s.foremanHome = path
 }
 
 // ActiveCount returns the number of currently running spawns.
@@ -135,6 +142,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		cmd = exec.Command("hermes", args...)
 		cmd.Dir = project.Workdir
 		cmd.Env = append(os.Environ(),
+			"HERMES_HOME="+s.foremanHome,
 			"CODING_HERMES_TICK="+tickID,
 			"CODING_HERMES_SOURCE=scheduler",
 			"CODING_HERMES_PROJECT="+project.Name,
