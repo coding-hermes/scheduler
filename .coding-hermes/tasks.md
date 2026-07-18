@@ -1,12 +1,15 @@
-### [ ] FEAT-004 — Dedicated Gateway Instance for Scheduler Foreman Ticks
-**Priority: HIGH. Weight: 18.**
-**Goal:** Launch a dedicated, isolated Hermes gateway process for scheduler foreman
-ticks. Separates cgroup/memory from the main chat gateway so scheduler load can't
-OOM the main chat, and scheduler foreman ticks get their own resource limits.
+### [>] FEAT-004 — Dedicated Gateway Instance for Scheduler Foreman Ticks
+**Priority: HIGH. Weight: 18. Status: IN PROGRESS.**
+**Deliverables committed (2026-07-18):**
+- [x] `deploy/coding-hermes-scheduler-gateway.service` — systemd user unit (MemoryMax=16G, Restart=always)
+- [x] `deploy/scheduler-profile/config.yaml` — gateway profile (duckbrain+gitreins only, no browser/chimera)
+- [x] `deploy/gateway-setup.md` — setup instructions + operations reference
+- [ ] `--gateway-url` already exists (default :8642) — no code changes needed
+- [ ] Profile install + gateway startup on host (requires manual DEEPSEEK_FOREMAN_API_KEY)
+- [ ] Point schedulerd at dedicated gateway (add `--gateway-url http://127.0.0.1:8643` to service unit)
+- [ ] Verification: health check, cgroup isolation test
 
-**Why:** HTTP API spawn (FEAT-003) reuses the main gateway (PID 348728, 790MB).
-All 19+ concurrent foreman ticks run inside that one process. If the scheduler
-spawns a heavy tick and the gateway OOMs, the main chat dies too — unacceptable.
+**Decision:** Manual start with clear docs (safer for open source — no auto-launch complexity).
 
 **Architecture:**
 ```
@@ -17,32 +20,6 @@ spawns a heavy tick and the gateway OOMs, the main chat dies too — unacceptabl
          ↑                             ↑
     systemd cgroup              separate systemd cgroup (MemoryMax=16G)
 ```
-
-**Implementation:**
-1. Add `--gateway-port` flag to launch a dedicated gateway on a different port
-2. Create `coding-hermes-scheduler-gateway.service` systemd unit:
-   - `ExecStart=hermes serve --port 8643 --profile scheduler`
-   - `MemoryMax=16G` (isolated from main gateway's cgroup)
-   - `Restart=always`
-3. Create `~/.hermes/profiles/scheduler/config.yaml` — config optimized for foreman:
-   - Same providers/models as main config
-   - `approvals.cron_mode: auto`
-   - Only MCPs foreman needs: duckbrain, gitreins
-   - No browser, no google-flights, no chimera
-4. Add `--gateway-url` to point at dedicated instance (default stays :8642)
-5. Test: launch dedicated gateway, verify ticks route to it, verify cgroup separation
-6. Health check: `systemctl status coding-hermes-scheduler-gateway`
-
-**Benefits vs current HTTP spawn:**
-- Scheduler can OOM its own gateway without killing main chat
-- Separate cgroup → independent MemoryMax
-- Dedicated profile → no browser, minimal MCPs
-- Gateway restart doesn't affect main chat
-- Can scale independently (add more workers later)
-
-**Open Question:** Should the scheduler auto-start the dedicated gateway, or
-require the user to enable the systemd unit manually? Auto-start is cleaner
-but adds complexity. Manual start with clear docs is safer for open source.
 
 ### [ ] OPEN-001 — Open Source Release Preparation
 **Priority: HIGH. Weight: 15.**

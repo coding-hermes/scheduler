@@ -1,0 +1,29 @@
+[Unit]
+Description=Coding Hermes Scheduler — Dedicated Gateway
+After=network.target
+Documentation=https://github.com/coding-hermes/scheduler
+
+[Service]
+Type=simple
+User=kara
+ExecStart=/home/kara/.local/bin/hermes serve --port 8643 --profile scheduler
+Restart=always
+RestartSec=5
+MemoryMax=16G
+StandardOutput=journal
+StandardError=journal
+Environment=HOME=/home/kara
+Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HERMES_PROFILE=scheduler
+
+# ── Isolated from main gateway's cgroup ──
+# This gateway runs on :8643 with its own MemoryMax=16G.
+# The main chat gateway runs on :8642 in a separate process.
+# If the scheduler OOMs this gateway, main chat survives.
+
+# ── Health check ──
+# curl -s http://127.0.0.1:8643/health
+# journalctl --user -u coding-hermes-scheduler-gateway -f
+
+[Install]
+WantedBy=default.target

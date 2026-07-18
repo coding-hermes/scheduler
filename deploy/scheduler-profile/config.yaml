@@ -1,0 +1,94 @@
+# ──────────────────────────────────────────────────────────
+# Scheduler Gateway Profile — dedicated Hermes instance
+# for coding-hermes-scheduler foreman ticks.
+#
+# Lives at: ~/.hermes/profiles/scheduler/config.yaml
+# Launched by: deploy/coding-hermes-scheduler-gateway.service
+# Listens on: 127.0.0.1:8643
+# ──────────────────────────────────────────────────────────
+_config_version: 33
+
+# ── Agent ──
+agent:
+  api_max_retries: 3
+  gateway_timeout: 604800
+  max_turns: 200
+  reasoning_effort: high
+  tool_use_enforcement: auto
+
+# ── Approvals: auto mode for cron ──
+approvals:
+  cron_mode: auto
+  mode: manual
+  timeout: 60
+
+# ── Model: deepseek PAYG (foreman presence is non-negotiable) ──
+model:
+  base_url: https://api.deepseek.com/v1
+  default: deepseek-v4-pro
+  provider: deepseek
+
+# ── Providers ──
+providers:
+  deepseek-foreman:
+    api_key: ${DEEPSEEK_FOREMAN_API_KEY}
+    base_url: https://api.deepseek.com/v1
+    models:
+      - deepseek-v4-pro
+      - deepseek-v4-flash
+
+# ── MCP: duckbrain + gitreins ONLY (no browser, chimera, flights) ──
+mcp_servers:
+  duckbrain:
+    args:
+      - stdio
+    command: /home/kara/duckbrain/bin/hermes-mcp-wrapper.sh
+    enabled: true
+    env:
+      GIT_AUTHOR_EMAIL: totalwindupflightsystems@gmail.com
+      GIT_AUTHOR_NAME: Bane
+  gitreins:
+    command: /home/kara/gitreins-poc/bin/hermes-mcp-wrapper.sh
+    enabled: true
+    env:
+      GITREINS_LLM_MODEL: deepseek-v4-flash
+      LOG_LEVEL: WARNING
+      MCP_LOG_LEVEL: warning
+      PYTHONUNBUFFERED: '1'
+
+# ── Platform toolsets: foreman-safe (no delegation, no cronjob) ──
+platform_toolsets:
+  cli:
+    - clarify
+    - file
+    - memory
+    - search
+    - session_search
+    - skills
+    - terminal
+    - todo
+    - web
+    - vision
+
+# ── Terminal ──
+terminal:
+  auto_source_bashrc: true
+  backend: local
+  cwd: .
+
+# ── Memory ──
+memory:
+  max_chars: 10000
+  memory_enabled: true
+  user_char_limit: 1375
+  user_profile_enabled: true
+
+# ── Secrets ──
+security:
+  tirith_enabled: true
+  tirith_fail_open: true
+
+# ── Browser: disabled (foreman doesn't need it) ──
+browser:
+  engine: auto
+  cdp_url: ''
