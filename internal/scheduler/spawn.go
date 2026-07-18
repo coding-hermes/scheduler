@@ -178,7 +178,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// Close stdout when context expires — unblocks scanner.Scan().
 	go func() {
 		<-scanCtx.Done()
-		stdout.Close()
+		_ = stdout.Close()
 	}()
 
 	go func() {

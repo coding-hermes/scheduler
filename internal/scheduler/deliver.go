@@ -33,7 +33,11 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 		log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
 		return
 	}
-	defer os.Remove(f.Name())
+	defer func() {
+		if err := os.Remove(f.Name()); err != nil {
+			log.Printf("DELIVER: %s tick=%s — cleanup temp file: %v", project, tickID, err)
+		}
+	}()
 	defer f.Close()
 
 	if _, err := f.Write(output.Bytes()); err != nil {
