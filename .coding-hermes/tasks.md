@@ -78,6 +78,15 @@
 - TOML preferred over YAML — cleaner, no whitespace sensitivity
 - Later: hot-reload on SIGHUP
 
+### [ ] FEAT-001 — Auto-slowdown for idle projects
+**Priority: HIGH. Weight: 10.**
+- Mythos (blocked on credits) and others flood chat every 10-20 min with IDLE ticks.
+  The foreman reports "SLOWDOWN REQUESTED — idle tick 3/7" but the scheduler ignores it.
+- **Fix:** After each tick completes, parse the output for "IDLE" / "SLOWDOWN" signals.
+  If idle > 2 ticks, double the project's cooldown (capped at 4h). Store idle counter in DB.
+  Reset on first non-idle tick.
+- **Shortcut (done):** All 26 projects cooldown doubled (600s→1200s), mythos→14400s.
+
 ### [ ] FOREMAN-TASK — Run this board
 **Priority: HIGH. Weight: ∞.**
 - Foreman reads this board before every tick. Self-heals git. Picks highest-priority undone task.
