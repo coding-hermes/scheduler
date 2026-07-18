@@ -6,42 +6,31 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
 // deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
-// Uses `hermes send` which routes through the gateway to any configured platform
-// (Telegram, Discord, Signal, Slack, etc.) — no platform-specific code needed.
-//
-// Before delivery, the raw stdout is trimmed to the foreman's final summary —
-// tool output, diffs, and build logs are stripped so Telegram shows a clean report.
+// Formats the raw foreman output into a clean, consistent Telegram-friendly message.
 func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
-		log.Printf("DELIVER: %s tick=%s — no output to deliver", project, tickID)
+		log.Printf("DELIVER: %s tick=%s — no output", project, tickID)
 		return
 	}
 
 	target := deliver
 	if target == "" {
-		target = "telegram:-1003310984808:83996" // default: scheduler foreman thread
+		target = "telegram:-1003310984808:83996"
 	}
 
-	// Trim to summary: extract the foreman's final report, skip tool noise.
-	body := trimSummary(output.String())
+	body := formatOutput(project, tickID, output.String())
 
-	subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
-
-	// Write trimmed output to a temp file for hermes send --file.
 	f, err := os.CreateTemp("", fmt.Sprintf("chtick-%s-*.txt", tickID))
 	if err != nil {
 		log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
 		return
 	}
-	defer func() {
-		if err := os.Remove(f.Name()); err != nil {
-			log.Printf("DELIVER: %s tick=%s — remove temp file: %v", project, tickID, err)
-		}
-	}()
+	defer os.Remove(f.Name())
 	defer f.Close()
 
 	if _, err := f.WriteString(body); err != nil {
@@ -50,61 +39,142 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	}
 	f.Close()
 
+	subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
 	cmd := exec.Command("hermes", "send",
 		"--to", target,
 		"--subject", subject,
 		"--file", f.Name(),
 	)
-
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("DELIVER: %s tick=%s — hermes send failed: %v (%s)", project, tickID, err, bytes.TrimSpace(out))
 		return
 	}
-
 	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, target)
 }
 
-// trimSummary extracts the foreman's final report from the raw stdout,
-// stripping tool output (diffs, build logs, terminal output) and keeping
-// only the human-readable summary section at the end.
-func trimSummary(raw string) string {
-	// Find the last "---" separator — foreman reports delimit sections with it.
-	lastDash := strings.LastIndex(raw, "\n---\n")
-	if lastDash >= 0 {
-		summary := strings.TrimSpace(raw[lastDash:])
-		if len(summary) > 0 {
-			return truncate(summary, 4000)
-		}
-	}
+// formatOutput normalizes raw foreman output into a clean Telegram-friendly format.
+// Extracts the verdict, status table, and key metrics into a consistent structure.
+func formatOutput(project, tickID, raw string) string {
+	trimmed := trimToSummary(raw)
+	verdict := extractVerdict(trimmed)
+	metrics := extractMetrics(trimmed)
 
-	// Fallback: find the last "Foreman Tick" or "Result:" or "Verdict:" marker.
-	markers := []string{"\n---", "**Verdict:", "**Result:", "## Summary", "# Summary"}
-	for _, m := range markers {
-		idx := strings.LastIndex(raw, m)
-		if idx >= 0 {
-			summary := strings.TrimSpace(raw[idx:])
-			return truncate(summary, 4000)
-		}
+	var b strings.Builder
+	b.WriteString(verdict)
+	if len(metrics) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(formatMetrics(metrics))
 	}
+	b.WriteString(fmt.Sprintf("\n\n_%s_", tickID))
 
-	// Last resort: take the final 40% (summary is always at the end).
-	trimLen := len(raw) * 40 / 100
-	if trimLen > 0 {
-		return truncate(raw[len(raw)-trimLen:], 4000)
+	result := b.String()
+	if len(result) > 3000 {
+		result = result[:3000]
+		if idx := strings.LastIndex(result, "\n"); idx > 2500 {
+			result = result[:idx]
+		}
+		result += "\n…"
 	}
-	return truncate(raw, 4000)
+	return strings.TrimSpace(result)
 }
 
-// truncate cuts text to maxLen chars, adding "…" if truncated.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// trimToSummary extracts the final report section, skipping tool noise.
+func trimToSummary(raw string) string {
+	// Last "---" separator → summary after it
+	if idx := strings.LastIndex(raw, "\n---\n"); idx >= 0 {
+		s := strings.TrimSpace(raw[idx+5:])
+		if len(s) > 50 {
+			return s
+		}
 	}
-	// Find a clean break — try last newline within maxLen.
-	cut := strings.LastIndex(s[:maxLen], "\n")
-	if cut < maxLen/2 {
-		cut = maxLen - 1
+	// Fallback: find verdict/result markers
+	for _, m := range []string{"**Verdict:", "**Result:", "## Summary", "**Status:"} {
+		if idx := strings.LastIndex(raw, m); idx >= 0 {
+			return strings.TrimSpace(raw[idx:])
+		}
 	}
-	return s[:cut] + "\n…"
+	// Last resort: final 40%
+	t := len(raw) * 40 / 100
+	return strings.TrimSpace(raw[len(raw)-t:])
+}
+
+// extractVerdict pulls the single most important line from the output.
+func extractVerdict(text string) string {
+	// Try explicit verdict markers — capture everything after the marker
+	markerRe := regexp.MustCompile(`\*\*Verdict:\*\*\s*(.+?)(?:\n|$)`)
+	if m := markerRe.FindStringSubmatch(text); len(m) > 1 {
+		return "Verdict: " + strings.TrimSpace(strings.TrimRight(m[1], "*"))
+	}
+	resultRe := regexp.MustCompile(`\*\*Result:\*\*\s*(.+?)(?:\n|$)`)
+	if m := resultRe.FindStringSubmatch(text); len(m) > 1 {
+		return "Result: " + strings.TrimSpace(strings.TrimRight(m[1], "*"))
+	}
+	summaryRe := regexp.MustCompile(`##\s*Summary\s*\n(.+?)(?:\n|$)`)
+	if m := summaryRe.FindStringSubmatch(text); len(m) > 1 {
+		return strings.TrimSpace(m[1])
+	}
+	// Fallback: first significant line under 120 chars, not a table row
+	lines := strings.Split(text, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		l = strings.ReplaceAll(l, "**", "")
+		l = strings.TrimPrefix(l, "# ")
+		if len(l) > 10 && len(l) < 120 && !strings.HasPrefix(l, "|") {
+			return l
+		}
+	}
+	return "Tick complete"
+}
+
+// extractMetrics finds key=value pairs and table rows in the output.
+func extractMetrics(text string) map[string]string {
+	m := make(map[string]string)
+
+	// Table rows: | Key | Value |
+	tableRe := regexp.MustCompile(`\|\s*\*?(.+?)\*?\s*\|\s*(.+?)\s*\|`)
+	for _, match := range tableRe.FindAllStringSubmatch(text, -1) {
+		key := strings.TrimSpace(strings.Trim(match[1], "*-✓✅⚠️❌"))
+		val := strings.TrimSpace(match[2])
+		if key != "" && key != "Check" && key != "Gate" && key != "Step" &&
+			!strings.Contains(key, "---") {
+			m[key] = val
+		}
+	}
+
+	// Bold key-value: **Key:** value or **Key**: value
+	kvRe := regexp.MustCompile(`\*\*(.+?)\*\*[:\s]+(.+?)(?:\n|$)`)
+	for _, match := range kvRe.FindAllStringSubmatch(text, -1) {
+		key := strings.TrimSpace(match[1])
+		val := strings.TrimSpace(match[2])
+		if len(key) < 30 && len(val) < 60 {
+			m[key] = val
+		}
+	}
+
+	return m
+}
+
+// formatMetrics renders extracted metrics as a clean Telegram-friendly list.
+func formatMetrics(metrics map[string]string) string {
+	// Priority order for meaningful metrics
+	order := []string{
+		"Build", "Tests", "Guard", "Audit", "Vulns",
+		"Board", "CI", "Remote", "Deps", "Live",
+		"Cost", "Commit", "Session",
+	}
+	seen := make(map[string]bool)
+	var lines []string
+	for _, k := range order {
+		if v, ok := metrics[k]; ok {
+			lines = append(lines, fmt.Sprintf("• %s: %s", k, v))
+			seen[k] = true
+		}
+	}
+	for k, v := range metrics {
+		if !seen[k] && len(lines) < 12 {
+			lines = append(lines, fmt.Sprintf("• %s: %s", k, v))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
