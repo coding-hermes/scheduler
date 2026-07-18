@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.26'
 
 jobs:
   # ── Fast checks first ──
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.25']
+        go-version: ['1.26']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

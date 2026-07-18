@@ -1,6 +1,6 @@
 module github.com/coding-herms/scheduler
 
-go 1.25.0
+go 1.26
 
 require modernc.org/sqlite v1.38.2
 
