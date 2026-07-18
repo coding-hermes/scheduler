@@ -1,4 +1,105 @@
-### [x] FEAT-003 — HTTP API Spawn: Replace exec.Command("hermes") with Gateway API ✓
+### [ ] FEAT-004 — Dedicated Gateway Instance for Scheduler Foreman Ticks
+**Priority: HIGH. Weight: 18.**
+**Goal:** Launch a dedicated, isolated Hermes gateway process for scheduler foreman
+ticks. Separates cgroup/memory from the main chat gateway so scheduler load can't
+OOM the main chat, and scheduler foreman ticks get their own resource limits.
+
+**Why:** HTTP API spawn (FEAT-003) reuses the main gateway (PID 348728, 790MB).
+All 19+ concurrent foreman ticks run inside that one process. If the scheduler
+spawns a heavy tick and the gateway OOMs, the main chat dies too — unacceptable.
+
+**Architecture:**
+```
+ Main Gateway (:8642)          Scheduler Gateway (:8643)
+   ├─ main chat (Kara)           ├─ foreman tick A
+   ├─ Telegram bridge            ├─ foreman tick B
+   └─ ...                        └─ ...
+         ↑                             ↑
+    systemd cgroup              separate systemd cgroup (MemoryMax=16G)
+```
+
+**Implementation:**
+1. Add `--gateway-port` flag to launch a dedicated gateway on a different port
+2. Create `coding-hermes-scheduler-gateway.service` systemd unit:
+   - `ExecStart=hermes serve --port 8643 --profile scheduler`
+   - `MemoryMax=16G` (isolated from main gateway's cgroup)
+   - `Restart=always`
+3. Create `~/.hermes/profiles/scheduler/config.yaml` — config optimized for foreman:
+   - Same providers/models as main config
+   - `approvals.cron_mode: auto`
+   - Only MCPs foreman needs: duckbrain, gitreins
+   - No browser, no google-flights, no chimera
+4. Add `--gateway-url` to point at dedicated instance (default stays :8642)
+5. Test: launch dedicated gateway, verify ticks route to it, verify cgroup separation
+6. Health check: `systemctl status coding-hermes-scheduler-gateway`
+
+**Benefits vs current HTTP spawn:**
+- Scheduler can OOM its own gateway without killing main chat
+- Separate cgroup → independent MemoryMax
+- Dedicated profile → no browser, minimal MCPs
+- Gateway restart doesn't affect main chat
+- Can scale independently (add more workers later)
+
+**Open Question:** Should the scheduler auto-start the dedicated gateway, or
+require the user to enable the systemd unit manually? Auto-start is cleaner
+but adds complexity. Manual start with clear docs is safer for open source.
+
+### [ ] OPEN-001 — Open Source Release Preparation
+**Priority: HIGH. Weight: 15.**
+**Goal:** Polish the repo for public release on `github.com/coding-hermes/scheduler`.
+
+**Checklist:**
+- [ ] Add `LICENSE` file (MIT or Apache 2.0 — confirm with Bane)
+- [ ] Add `CONTRIBUTING.md` — how to set up, test, submit PRs
+- [ ] Audit `README.md` for completeness:
+  - Architecture diagram (ASCII art or mermaid)
+  - Feature matrix (HTTP spawn, fallback, multi-namespace, etc.)
+  - Configuration reference (TOML fleet config, CLI flags)
+  - API reference (health, projects, ticks, dashboard)
+- [ ] Remove hardcoded paths:
+  - `~/.hermes/coding-hermes/scheduler.db` → configurable via `--db`
+  - `~/.hermes/foreman/` → configurable via `--foreman-home`
+  - `127.0.0.1:8642` → already configurable via `--gateway-url`
+- [ ] Clean up code:
+  - Go doc comments on all exported types/functions
+  - Remove debug logs
+  - Consistent error handling patterns
+- [ ] Add `CHANGELOG.md` summarizing v1.0 features
+- [ ] Tag `v1.0.0` release
+- [ ] Add CI badge to README (build + test status)
+- [ ] Write "Getting Started" guide (5-minute setup from scratch)
+- [ ] Add example fleet config (TOML with comments)
+- [ ] Document the dedicated gateway pattern (FEAT-004)
+
+### [ ] INFRA-004 — Audit & Reduce exec.Command Fallback Rate
+**Priority: MEDIUM. Weight: 8.**
+**Goal:** Most ticks (382 today) still use exec.Command fallback instead of HTTP.
+Understand why and reduce.
+
+**Investigation:**
+- 382 exec.Command spawns vs 19 HTTP gateway ticks — 95% fallback rate
+- Suspected causes:
+  1. Test/dummy projects have custom `command` fields → bypass HTTP path
+  2. Gateway restart cycles cause brief unavailability windows
+  3. `coding-hermes-scheduler` project self-ticks via gateway, causing recursive load
+- [ ] Query: which projects use exec.Command vs HTTP?
+- [ ] Fix: clear `command` field from dummy projects OR route them through gateway too
+- [ ] Fix: add retry with backoff when gateway briefly unavailable
+- [ ] Metric: add Prometheus-style counter for HTTP vs exec.Command spawns
+
+### [ ] DOC-002 — Architecture Decision Record: HTTP Spawn vs Dedicated Instance
+**Priority: MEDIUM. Weight: 5.**
+**Goal:** Document the tradeoffs between reusing the main gateway (FEAT-003) and
+launching a dedicated scheduler gateway (FEAT-004) so future contributors
+understand the design.
+
+**Sections:**
+1. **Shared gateway (current):** Pros (zero overhead, simple, auto-approve works) vs Cons (shared fate, no cgroup isolation, recursive self-tick)
+2. **Dedicated gateway (FEAT-004):** Pros (isolated cgroup, independent restart, can OOM safely) vs Cons (extra process, separate config maintenance, port management)
+3. **Hybrid (future):** Pool of N gateway workers, load-balanced, with auto-scaling
+4. **Decision:** Dedicated gateway for production, shared gateway for development
+
+**Deliverable:** `docs/adr/001-http-spawn-vs-dedicated-gateway.md`
 **Priority: HIGHEST. Weight: 20.**
 **Goal:** Replace per-tick Python process spawns with HTTP calls to the already-running
 Hermes gateway API at `127.0.0.1:8642`. Eliminates 500MB+ process startup per tick.
