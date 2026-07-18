@@ -100,11 +100,12 @@
 - **Files:** `internal/config/toml_test.go` (+85/-60), `internal/database/projects.go` (+3/-2)
 - **AC:** `go test ./... -count=1 -short` passes, `go vet ./...` passes
 
-### [ ] INFRA — install govulncheck for dependency vulnerability scanning
+### [x] INFRA — install govulncheck for dependency vulnerability scanning ✓ `de682f6`
 **Priority: LOW. Weight: 3.**
-- `govulncheck` not installed — `govulncheck: command not found`
-- Install via: `go install golang.org/x/vuln/cmd/govulncheck@latest`
-- Foreman can install directly (infra task, no worker needed)
+- Already installed (Jul 16) at `~/go/bin/govulncheck`, just not on PATH
+- Verified working. Found 17 Go stdlib vulns + 4 imported + 5 required (not called)
+- All localhost-only deployment → LOW exploitability. Noted in DuckBrain.
+- Go upgrade (1.26.0→1.26.5) not available via apt — defer to future distro update.
 
 ### [ ] FOREMAN-TASK — Run this board
 **Priority: HIGH. Weight: ∞.**
