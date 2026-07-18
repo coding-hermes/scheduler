@@ -22,3 +22,28 @@ tasks:
   status: complete
   created_at: '2026-07-12T17:34:33.005303+00:00'
   completed_at: '2026-07-12T17:45:38.893049+00:00'
+- id: BUG-005
+  title: "Packer/spawner race condition \u2014 merge spawner running set into packer"
+  criteria:
+  - Packer.Pick accepts spawnerRunning map[string]bool parameter
+  - All call sites updated (loop, multipool, sim, tests)
+  - Spawner in-memory active set merged with DB running set before greedy pack
+  - currentlyRunning recalculated from merged set
+  - Build passes, vet passes, all tests pass
+  - No regressions in packer_test.go (7 test functions)
+  status: complete
+  created_at: '2026-07-18T17:51:39.308460+00:00'
+  completed_at: '2026-07-18T17:53:31.944972+00:00'
+- id: DOC-002
+  title: 'ADR: HTTP Spawn vs Dedicated Gateway Instance'
+  criteria:
+  - ADR covers shared gateway pros/cons
+  - ADR covers dedicated gateway (FEAT-004) pros/cons
+  - ADR covers hybrid pool (future)
+  - 'ADR states decision: dedicated for production, shared for dev'
+  - ADR documents consequences (deployment, monitoring, config drift, startup order,
+    fallback)
+  - ADR file at docs/adr/001-http-spawn-vs-dedicated-gateway.md
+  status: complete
+  created_at: '2026-07-18T17:56:36.830129+00:00'
+  completed_at: '2026-07-18T17:57:09.287042+00:00'
