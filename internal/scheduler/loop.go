@@ -326,6 +326,8 @@ func (l *Loop) evaluate() {
 			if !l.noDeliver {
 				deliverOutput(tick.Project, tick.TickID, tick.Deliver, &tick.Output)
 			}
+			// Auto-slowdown: if the tick output signals IDLE, double the cooldown.
+			autoSlowdown(l.db, tick.Project, &tick.Output)
 			l.events.Emit(context.Background(), SeverityInfo, "spawner", "tick completed", map[string]any{
 				"project":    outcome.Project,
 				"tick_id":    outcome.TickID,
