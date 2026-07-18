@@ -115,13 +115,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
-				"IMPORTANT: Your output will be delivered to Telegram as plain text. "+
-				"Do NOT use markdown code fences (```), "+
-				"inline code (`), or html. "+
-				"Convert any markdown tables to key:value line format. "+
-				"Bold text with ** is OK. "+
-				"Keep sections separated with blank lines. "+
-				"Make your final summary clean and readable as plain text. "+
+				"Format your final output as clean, well-structured markdown. "+
+				"Use markdown tables for status summaries, **bold** for emphasis, "+
+				"blank lines between sections. "+
 				"Report result.",
 			tickID, project.Workdir,
 		)
