@@ -29,11 +29,11 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		p.UpdatedAt = p.CreatedAt
 	}
 	const q = `INSERT INTO projects
-	(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, enabled, created_at, updated_at)
-	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, deliver, enabled, created_at, updated_at)
+	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		p.Name, p.RepoURL, p.Workdir, p.Weight, p.Priority, p.CooldownS,
-		p.DecayRate, p.Model, p.Provider, p.Command, p.NamespaceID, boolToInt(p.Enabled),
+		p.DecayRate, p.Model, p.Provider, p.Command, p.NamespaceID, p.Deliver, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Name, err)
@@ -44,14 +44,14 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, enabled, created_at, updated_at
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, command, namespace_id, deliver, enabled, created_at, updated_at
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &enabled, &p.CreatedAt, &p.UpdatedAt)
+		&p.DecayRate, &p.Model, &p.Provider, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}

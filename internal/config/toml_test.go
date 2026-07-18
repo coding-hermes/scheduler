@@ -10,18 +10,38 @@ import (
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
+func findProject(cfg *FleetConfig, name string) *ProjectDef {
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == name {
+			return &cfg.Projects[i]
+		}
+	}
+	return nil
+}
+
+func findNamespace(cfg *FleetConfig, id string) *NamespaceDef {
+	for i := range cfg.Namespaces {
+		if cfg.Namespaces[i].ID == id {
+			return &cfg.Namespaces[i]
+		}
+	}
+	return nil
+}
+
 func TestLoadFleetConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fleet.toml")
 
-	tomlContent := `[namespaces.coding-hermes]
+	tomlContent := `[[namespaces]]
+id = "coding-hermes"
 weight = 70
 reserved = 10
 hard_cap = 0
 enabled = true
 description = "Main coding-hermes fleet"
 
-[projects.helix]
+[[projects]]
+name = "helix"
 repo_url = "https://github.com/totalwindupflightsystems/helix"
 workdir = "/home/kara/helix"
 weight = 10
@@ -51,8 +71,8 @@ enabled = true
 	}
 
 	// Verify namespace.
-	ns, ok := cfg.Namespaces["coding-hermes"]
-	if !ok {
+	ns := findNamespace(cfg, "coding-hermes")
+	if ns == nil {
 		t.Fatal("namespace coding-hermes not found")
 	}
 	if ns.Weight != 70 {
@@ -69,8 +89,8 @@ enabled = true
 	}
 
 	// Verify project.
-	p, ok := cfg.Projects["helix"]
-	if !ok {
+	p := findProject(cfg, "helix")
+	if p == nil {
 		t.Fatal("project helix not found")
 	}
 	if p.RepoURL != "https://github.com/totalwindupflightsystems/helix" {
@@ -113,16 +133,18 @@ func TestApplyFleetConfig(t *testing.T) {
 	defer db.Close()
 
 	cfg := &FleetConfig{
-		Namespaces: map[string]NamespaceDef{
-			"coding-hermes": {
+		Namespaces: []NamespaceDef{
+			{
+				ID:          "coding-hermes",
 				Weight:      70,
 				Reserved:    10,
 				HardCap:     0,
 				Description: "Main fleet",
 			},
 		},
-		Projects: map[string]ProjectDef{
-			"helix": {
+		Projects: []ProjectDef{
+			{
+				Name:        "helix",
 				RepoURL:     "https://github.com/totalwindupflightsystems/helix",
 				Workdir:     "/home/kara/helix",
 				Weight:      10,
@@ -205,8 +227,9 @@ func TestApplyFleetConfigDefaults(t *testing.T) {
 
 	// Project with most fields omitted — defaults should apply.
 	cfg := &FleetConfig{
-		Projects: map[string]ProjectDef{
-			"minimal": {
+		Projects: []ProjectDef{
+			{
+				Name:    "minimal",
 				RepoURL: "https://github.com/example/minimal",
 				Workdir: "/home/kara/minimal",
 			},
@@ -249,8 +272,9 @@ func TestLoadFleetConfigDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fleet.toml")
 
-	// Project with explicitly disabled + namespace with defaults.
-	tomlContent := `[projects.disabled-proj]
+	// Project with explicitly disabled + defaults zeroed out.
+	tomlContent := `[[projects]]
+name = "disabled-proj"
 repo_url = "https://github.com/example/disabled"
 workdir = "/home/kara/disabled"
 weight = 0
@@ -270,8 +294,8 @@ enabled = false
 		t.Fatalf("LoadFleetConfig: %v", err)
 	}
 
-	p, ok := cfg.Projects["disabled-proj"]
-	if !ok {
+	p := findProject(cfg, "disabled-proj")
+	if p == nil {
 		t.Fatal("project disabled-proj not found")
 	}
 	if p.Enabled == nil || *p.Enabled {

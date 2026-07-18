@@ -88,6 +88,18 @@
   Reset on first non-idle tick.
 - **Shortcut (done):** All 26 projects cooldown doubled (600s→1200s), mythos→14400s.
 
+### [x] TEST-006 — Fix toml_test.go: map-based API → slice-based FleetConfig ✓ `COMMIT_HASH`
+**Priority: HIGH. Weight: 8.**
+**Root cause:** commit `97306ba` changed `FleetConfig.Namespaces`/`Projects` from maps to slices
+  but `toml_test.go` still used map access (`cfg.Namespaces["key"]`), map literals, and TOML
+  table syntax (`[namespaces.name]`) instead of array-of-tables (`[[namespaces]]`).
+- **Fix:** Rewrote all 5 test functions to use `[[projects]]`/`[[namespaces]]` TOML syntax,
+  `[]ProjectDef`/`[]NamespaceDef` slices with `findProject`/`findNamespace` helpers.
+  Also fixed `CreateProject` and `GetProject` which were missing the `deliver` column
+  (present in schema since migration but never INSERTed or SELECTed).
+- **Files:** `internal/config/toml_test.go` (+85/-60), `internal/database/projects.go` (+3/-2)
+- **AC:** `go test ./... -count=1 -short` passes, `go vet ./...` passes
+
 ### [ ] FOREMAN-TASK — Run this board
 **Priority: HIGH. Weight: ∞.**
 - Foreman reads this board before every tick. Self-heals git. Picks highest-priority undone task.
