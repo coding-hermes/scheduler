@@ -28,15 +28,15 @@
 **Checklist:**
 - [x] Add `LICENSE` file (MIT — already present since `caef9f8`)
 - [x] Add `CONTRIBUTING.md` — how to set up, test, submit PRs
-- [ ] Audit `README.md` for completeness:
-  - Architecture diagram (ASCII art or mermaid)
-  - Feature matrix (HTTP spawn, fallback, multi-namespace, etc.)
-  - Configuration reference (TOML fleet config, CLI flags)
-  - API reference (health, projects, ticks, dashboard)
-- [ ] Remove hardcoded paths:
-  - `~/.hermes/coding-hermes/scheduler.db` → configurable via `--db`
-  - `~/.hermes/foreman/` → configurable via `--foreman-home`
-  - `127.0.0.1:8642` → already configurable via `--gateway-url`
+- [x] Audit `README.md` for completeness:
+  - Architecture diagram (ASCII art — present)
+  - Feature matrix (covered by "What It Does" section)
+  - Configuration reference (flag table added 2026-07-18)
+  - API reference (endpoints table — present)
+- [x] Remove hardcoded paths:
+  - `~/.hermes/coding-hermes/scheduler.db` → configurable via `--db` (already existed)
+  - `~/.hermes/foreman/` → configurable via `--foreman-home` (added 2026-07-18, `a5b3d9e`)
+  - `127.0.0.1:8642` → configurable via `--gateway-url` (already existed)
 - [ ] Clean up code:
   - Go doc comments on all exported types/functions
   - Remove debug logs
@@ -45,7 +45,7 @@
 - [ ] Tag `v1.0.0` release
 - [ ] Add CI badge to README (build + test status)
 - [ ] Write "Getting Started" guide (5-minute setup from scratch)
-- [ ] Add example fleet config (TOML with comments)
+- [x] Add example fleet config (annotated `fleet.example.toml` — 2026-07-18)
 - [ ] Document the dedicated gateway pattern (FEAT-004)
 
 ### [ ] INFRA-004 — Audit & Reduce exec.Command Fallback Rate

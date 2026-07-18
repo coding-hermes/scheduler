@@ -79,6 +79,11 @@ func (l *Loop) SetGatewayClient(client *GatewayClient) {
 	l.spawner.SetGatewayClient(client)
 }
 
+// SetForemanHome overrides the default HERMES_HOME for foreman sessions.
+func (l *Loop) SetForemanHome(path string) {
+	l.spawner.SetForemanHome(path)
+}
+
 // SetSimulation enables simulation/dry-run mode.
 func (l *Loop) SetSimulation(successRate float64) {
 	l.mu.Lock()

@@ -41,6 +41,7 @@ func main() {
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
 	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
+	foremanHome := flag.String("foreman-home", os.ExpandEnv("$HOME/.hermes/foreman"), "HERMES_HOME path for foreman sessions")
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
@@ -86,6 +87,7 @@ func main() {
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
 	// Apply the tick timeout to the real spawner so Wait()/scanner cleanup use it.
 	loop.SetTickTimeout(*tickTimeout)
+	loop.SetForemanHome(*foremanHome)
 	if *simulate {
 		loop.SetSimulation(*simSuccess)
 	}

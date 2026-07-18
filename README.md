@@ -166,12 +166,35 @@ Default 900s between successive ticks for the same project.
 ./bin/schedulerd \
   -listen 127.0.0.1:9090 \
   -db ~/.hermes/coding-hermes/scheduler.db \
+  -foreman-home ~/.hermes/foreman \
+  -gateway-url http://127.0.0.1:8642 \
   -min-interval 20m \
   -max-interval 24h \
   -num-levels 10 \
   -budget 100 \
   -max-concurrent 8
 ```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-listen` | `127.0.0.1:9090` | HTTP listen address |
+| `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
+| `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME for foreman sessions |
+| `-gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL |
+| `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
+| `-budget` | `100` | Concurrency weight budget |
+| `-max-concurrent` | `8` | Max concurrent foreman ticks |
+| `-min-interval` | `20m` | Fastest tick interval (priority 10) |
+| `-max-interval` | `24h` | Slowest tick interval (priority 1) |
+| `-num-levels` | `10` | Number of priority levels |
+| `-tick-timeout` | `30m` | Maximum tick duration before kill |
+| `-config` | (none) | Path to TOML fleet config file |
+| `-namespace-mode` | `false` | Enable multi-namespace scheduling |
+| `-test-verify` | `0` | Run N-cycle correctness verification and exit |
+
+Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
 ---
 

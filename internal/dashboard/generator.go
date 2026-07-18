@@ -14,7 +14,7 @@ import (
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
 	db   *sql.DB
-	tmpl *template.Template      // parsed once, reused
+	tmpl *template.Template // parsed once, reused
 	mu   sync.Mutex
 }
 
@@ -24,32 +24,51 @@ func NewGenerator(db *sql.DB) *Generator {
 	g := &Generator{db: db}
 	g.tmpl = template.Must(template.New("dashboard").Funcs(template.FuncMap{
 		"percent": func(used, total int) int {
-			if total == 0 { return 0 }
+			if total == 0 {
+				return 0
+			}
 			return used * 100 / total
 		},
 		"shortTime": func(s string) string {
-			if s == "" { return "—" }
-			if len(s) >= 16 { return s[11:16] }
+			if s == "" {
+				return "—"
+			}
+			if len(s) >= 16 {
+				return s[11:16]
+			}
 			return s
 		},
 		"add": func(a, b, c int) int { return a + b + c },
 		"statusClass": func(s string) string {
 			switch s {
-			case "completed": return "status-ok"
-			case "failed": return "status-fail"
-			case "timeout": return "status-timeout"
-			case "running": return "status-running"
-			default: return ""
+			case "completed":
+				return "status-ok"
+			case "failed":
+				return "status-fail"
+			case "timeout":
+				return "status-timeout"
+			case "running":
+				return "status-running"
+			default:
+				return ""
 			}
 		},
 		"utilClass": func(reserved, hardCap, used int) string {
-			if used < reserved { return "util-green" }
-			if hardCap > 0 && used >= hardCap { return "util-red" }
+			if used < reserved {
+				return "util-green"
+			}
+			if hardCap > 0 && used >= hardCap {
+				return "util-red"
+			}
 			return "util-yellow"
 		},
 		"utilColor": func(utilization float64) string {
-			if utilization > 80 { return "var(--red)" }
-			if utilization >= 50 { return "var(--yellow)" }
+			if utilization > 80 {
+				return "var(--red)"
+			}
+			if utilization >= 50 {
+				return "var(--yellow)"
+			}
 			return "var(--green)"
 		},
 	}).Parse(pageTemplate))

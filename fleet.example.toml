@@ -1,23 +1,32 @@
 # Fleet configuration — declarative project and namespace definitions
 # Usage: schedulerd --config fleet.toml
+#
+# This file seeds the SQLite database with project and namespace definitions
+# at startup. Existing rows are preserved (idempotent; create-only, never
+# overwrites). Fields match the `projects` and `namespaces` tables in
+# scheduler.db.
+
+# ── Projects ────────────────────────────────────────────────────────────
 
 [[projects]]
-name = "my-project"
+name = "my-project"                       # unique project identifier
 repo_url = "https://github.com/user/my-project"
-workdir = "/home/kara/my-project"
-weight = 10
-priority = 5
-cooldown_s = 900
-model = "deepseek-v4-pro"
-provider = "deepseek-foreman"
-namespace_id = "coding-hermes"
-deliver = "telegram:-1003310984808:12345"
-enabled = true
+workdir = "/home/kara/my-project"         # absolute path to project repo
+weight = 10                               # concurrency budget consumed per tick (1-100)
+priority = 5                              # scheduling priority (1=slowest, 10=fastest)
+cooldown_s = 900                          # minimum seconds between ticks
+model = "deepseek-v4-pro"                 # LLM model for foreman ticks
+provider = "deepseek-foreman"             # provider (PAYG only for foremen)
+namespace_id = "coding-hermes"            # DuckBrain namespace for context
+deliver = "telegram:-1003310984808:12345" # platform:chat_id:thread_id for delivery
+enabled = true                            # false = excluded from scheduling
+
+# ── Namespaces ──────────────────────────────────────────────────────────
 
 [[namespaces]]
-id = "coding-hermes"
-weight = 50
-reserved = 5
-hard_cap = 80
+id = "coding-hermes"                      # matches namespace_id in projects above
+weight = 50                               # total weight budget ceiling for this namespace
+reserved = 5                              # guaranteed slots (always allocated)
+hard_cap = 80                             # absolute ceiling, never exceeded
 description = "Core coding-hermes fleet namespace"
-enabled = true
+enabled = true                            # false = entire namespace paused
