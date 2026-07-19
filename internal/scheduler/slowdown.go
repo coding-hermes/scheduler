@@ -55,24 +55,3 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 		}
 	}
 }
-
-// timeoutBackoff doubles a project's cooldown after a timeout to prevent
-// the spawn→timeout→spawn loop. Cap at 1 hour. When the project later
-// completes successfully, the normal cooldown flow takes over.
-func TimeoutBackoff(db *sql.DB, project string) {
-	var currentCD int
-	if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&currentCD); err != nil {
-		return
-	}
-	if currentCD == 0 {
-		currentCD = 600
-	}
-	newCD := currentCD * 2
-	if newCD > 3600 {
-		newCD = 3600
-	}
-	if newCD != currentCD {
-		db.Exec("UPDATE projects SET cooldown_s = ? WHERE name = ?", newCD, project)
-		log.Printf("TIMEOUT-BACKOFF: %s timed out → cooldown %ds → %ds (%dm)", project, currentCD, newCD, newCD/60)
-	}
-}
