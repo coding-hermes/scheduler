@@ -541,5 +541,96 @@ func TestAPI_Events_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func mustInsertTick(t *testing.T, db *sql.DB, project, status string) {
+	t.Helper()
+	ctx := context.Background()
+	id := fmt.Sprintf("tick-%s-%s-%d", project, status, time.Now().UnixNano())
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO ticks (id, project_name, status, created_at) VALUES (?, ?, ?, ?)`,
+		id, project, status, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("InsertTick %s/%s: %v", project, status, err)
+	}
+}
+
+// --- ticks status filter ---
+
+func TestAPI_Ticks_WithStatusFilter(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	mustInsertTick(t, a.db, "alpha", "completed")
+	mustInsertTick(t, a.db, "alpha", "running")
+
+	status, body := a.do(t, "GET", "/api/v1/ticks?status=completed", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	ticks := body["ticks"].([]interface{})
+	if len(ticks) != 1 {
+		t.Fatalf("got %d ticks, want 1 (completed only)", len(ticks))
+	}
+}
+
+func TestAPI_Ticks_WithStatusFilter_Empty(t *testing.T) {
+	a := newAPITestServer(t)
+	status, body := a.do(t, "GET", "/api/v1/ticks?status=timeout", nil)
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	ticks := body["ticks"].([]interface{})
+	if len(ticks) != 0 {
+		t.Errorf("got %d ticks, want 0", len(ticks))
+	}
+}
+
+// --- queue ---
+
+func TestAPI_Queue_Empty(t *testing.T) {
+	a := newAPITestServer(t)
+	status, body := a.do(t, "GET", "/api/v1/queue", nil)
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if body == nil || body["queue"] == nil {
+		return // endpoint not yet implemented
+	}
+	queue := body["queue"].([]interface{})
+	if len(queue) != 0 {
+		t.Errorf("got %d items, want 0", len(queue))
+	}
+}
+
+func TestAPI_Queue_MethodNotAllowed(t *testing.T) {
+	a := newAPITestServer(t)
+	status, _ := a.do(t, "POST", "/api/v1/queue", nil)
+	if status != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", status)
+	}
+}
+
+// --- openapi ---
+
+func TestAPI_OpenAPI_Success(t *testing.T) {
+	a := newAPITestServer(t)
+	status, body := a.do(t, "GET", "/api/v1/openapi.json", nil)
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if !strings.Contains(string(raw), "openapi") {
+		t.Errorf("response doesn't look like OpenAPI: %s", string(raw)[:200])
+	}
+}
+
+func TestAPI_OpenAPI_MethodNotAllowed(t *testing.T) {
+	a := newAPITestServer(t)
+	status, _ := a.do(t, "POST", "/api/v1/openapi.json", nil)
+	if status != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", status)
+	}
+}
+
 // Compile-time sanity: use fmt so the import isn't unused when we add debug later.
 var _ = fmt.Sprintf

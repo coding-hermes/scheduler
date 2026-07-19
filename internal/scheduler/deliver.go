@@ -55,6 +55,31 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, target)
 }
 
+// deliverAlert sends a short alert message for timeouts/errors so they
+// are visible in the chat rather than silently swallowed.
+func deliverAlert(deliver, project, tickID, reason string) {
+	target := deliver
+	if target == "" {
+		target = "telegram:-1003310984808:83996"
+	}
+	msg := fmt.Sprintf("⚠️ %s timed out — %s\nTick: %s", project, reason, tickID)
+	f, err := os.CreateTemp("", fmt.Sprintf("chtick-alert-%s-*.txt", tickID))
+	if err != nil {
+		log.Printf("ALERT: temp file: %v", err)
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(msg)
+	f.Close()
+	cmd := exec.Command("hermes", "send", "-f", f.Name(), target)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("ALERT: send failed: %v (%s)", err, bytes.TrimSpace(out))
+		return
+	}
+	log.Printf("ALERT: %s tick=%s → %s", project, tickID, target)
+}
+
 // trimToolNoise strips terminal/tool output from the foreman's raw stdout,
 // keeping only the human-written summary. Handles multiple noise sources:
 //
