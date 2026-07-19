@@ -32,7 +32,7 @@ func main() {
 	weightBudget := flag.Int("budget", 100, "Weight budget")
 	maxConcurrent := flag.Int("max-concurrent", 10, "Max concurrent foremen")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
-	tickTimeout := flag.Duration("tick-timeout", 1800*time.Second, "Maximum tick duration before timeout")
+	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	duckbrainNS := flag.String("duckbrain-ns", "coding-hermes", "DuckBrain namespace for sync")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")

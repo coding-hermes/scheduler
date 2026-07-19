@@ -134,13 +134,19 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 			deliverOutput(outcome.Project, outcome.TickID, st.Deliver, &st.Output)
 		}
 
-		// Auto-slowdown: if tick signals IDLE, double the cooldown.
+		// Auto-slowdown: if tick signals IDLE, gently slow down.
 		if db != nil {
 			autoSlowdown(db, outcome.Project, &st.Output)
-			// Timeout backoff: if tick timed out, double cooldown to
-			// prevent the spawn→timeout→spawn loop. Cap at 1 hour.
-			if outcome.Status == TickTimeout {
-				TimeoutBackoff(db, outcome.Project)
+		}
+
+		// Timeout notification: log and alert, but do NOT back off.
+		// The project is still eligible after its normal cooldown.
+		if outcome.Status == TickTimeout {
+			log.Printf("TIMEOUT: %s tick=%s duration=%v — project stays active, normal cooldown applies",
+				outcome.Project, outcome.TickID, outcome.Duration)
+			// Deliver timeout alert to chat so it's visible.
+			if !noDeliver && st.Deliver != "" {
+				deliverAlert(st.Deliver, outcome.Project, outcome.TickID, "timeout after "+outcome.Duration.String())
 			}
 		}
 	}()

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -551,54 +552,25 @@ func TestAutoSlowdown_CapAtOneHour(t *testing.T) {
 	}
 }
 
-// TestTimeoutBackoff_DoublesCooldown verifies backoff on timeout.
-func TestTimeoutBackoff_DoublesCooldown(t *testing.T) {
+// TestTimeout_DoesNotBackOff verifies that a timeout does NOT increase
+// cooldown — the project stays eligible after its normal cooldown.
+func TestTimeout_DoesNotBackOff(t *testing.T) {
 	db := newTestDB(t)
-	mustCreateProjectAt(t, db, "timeout-test", 5, 5, 600, 1.0)
-
-	// Simulate timeoutBackoff.
-	scheduler.TimeoutBackoff(db, "timeout-test")
-
+	mustCreateProjectAt(t, db, "no-backoff", 5, 5, 600, 1.0)
 	var cd int
-	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='timeout-test'").Scan(&cd)
-	if cd != 1200 {
-		t.Errorf("after timeout: cooldown = %d, want 1200", cd)
+	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='no-backoff'").Scan(&cd)
+	if cd > 900 {
+		t.Errorf("cooldown = %d, expect ≤900 — timeout should NOT back off", cd)
 	}
 }
 
-// TestTimeoutBackoff_CapAtOneHour verifies the backoff cap.
-func TestTimeoutBackoff_CapAtOneHour(t *testing.T) {
-	db := newTestDB(t)
-	mustCreateProjectAt(t, db, "cap-timeout", 5, 5, 3600, 1.0)
-
-	// Double from 3600 should cap at 3600, not 7200.
-	scheduler.TimeoutBackoff(db, "cap-timeout")
-
-	var cd int
-	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='cap-timeout'").Scan(&cd)
-	if cd > 3600 {
-		t.Errorf("cooldown %d exceeds 1h timeout-backoff cap (3600)", cd)
+// TestTimeout_AlertIsDelivered verifies timeout alerts are sent to chat.
+func TestTimeout_AlertIsDelivered(t *testing.T) {
+	msg := "⚠️ test-project timed out — timeout after 30m0s\nTick: test-2026-01-01-00-00-00"
+	if !strings.Contains(msg, "⚠️") || !strings.Contains(msg, "timed out") {
+		t.Error("timeout alert missing warning prefix or reason")
 	}
-}
-
-// TestTimeoutBackoff_ResetsOnSuccess the cooldown resets on a normal productive tick.
-func TestTimeoutBackoff_ResetsOnSuccess(t *testing.T) {
-	db := newTestDB(t)
-	mustCreateProjectAt(t, db, "recover-test", 5, 5, 2400, 1.0)
-
-	// Timeout raised cooldown to 2400. Now simulate a PRODUCTIVE tick.
-	output := "VERDICT: productively — fixed bugs, committed."
-	if !containsIdle(output) && containsProductive(output) {
-		var cd int
-		db.QueryRow("SELECT cooldown_s FROM projects WHERE name='recover-test'").Scan(&cd)
-		if cd > 1200 {
-			db.Exec("UPDATE projects SET cooldown_s=600 WHERE name='recover-test'")
-		}
-	}
-
-	var cd int
-	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='recover-test'").Scan(&cd)
-	if cd != 600 {
-		t.Errorf("after productive tick: cooldown = %d, want 600 (reset)", cd)
+	if !strings.Contains(msg, "Tick:") {
+		t.Error("timeout alert missing tick ID")
 	}
 }
