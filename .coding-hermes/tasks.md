@@ -146,47 +146,6 @@ This covers every deployment style: bare metal (TOML), Docker (env vars), dev (C
 
 **Delivered:** structs + loader (`a021a67`), --show-config + --schema + config.example.toml + systemd unit update (this tick).
 
-### [ ] OPEN-001 — Open Source Release Preparation
-**Priority: HIGH. Weight: 15.**
-**Goal:** Polish the repo for public release on `github.com/coding-hermes/scheduler`.
-
-# ── Scheduler ────────────────────────────────────────────────────────
-[scheduler]
-min_interval = "20m"
-max_interval = "24h"
-num_levels = 10
-weight_budget = 100
-max_concurrent = 12
-tick_timeout = "2h"
-namespace_mode = true
-
-# ── Gateway ───────────────────────────────────────────────────────────
-[gateway]
-url = "http://127.0.0.1:8642"
-key = "${API_SERVER_KEY}"   # env-var interpolation in TOML
-foreman_home = "~/.hermes/foreman"
-
-# ── DuckBrain ─────────────────────────────────────────────────────────
-[duckbrain]
-namespace = "coding-hermes"
-url = "http://localhost:3000"
-
-# ── Fleet ────────────────────────────────────────────────────────────
-[[projects]]
-name = "my-project"
-workdir = "/home/kara/my-project"
-weight = 10
-priority = 5
-cooldown_s = 900
-deliver = "telegram:-1003310984808:12345"
-
-[[namespaces]]
-id = "coding-hermes"
-weight = 100
-reserved = 70
-hard_cap = 90
-```
-
 **Layer 2 — Environment variables (override TOML):**
 ```
 SCHEDULER_DB_PATH=/data/scheduler.db
