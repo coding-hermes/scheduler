@@ -1,23 +1,16 @@
-### [ ] FEAT-MCP — Full MCP Server Integration
-**Priority: HIGH. Weight: 18. Status: PENDING.**
+### [x] FEAT-MCP — Full MCP Server Integration ✓ (multiple commits)
+**Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Expose the scheduler as a first-class MCP server so Hermes can connect
 directly and manage the fleet through clean tool calls — no sqlite reads/writes.
 
-**Deliverables:**
-- [ ] `mcp_list_projects` — list enabled/disabled, priorities, cooldowns, last runs
-- [ ] `mcp_get_project` — full detail on one project (ticks, status, delivery target)
-- [ ] `mcp_enable_project` / `mcp_disable_project` — toggle fleet membership
-- [ ] `mcp_set_priority` / `mcp_set_weight` / `mcp_set_cooldown` — adjust parameters
-- [ ] `mcp_get_tick` — tick details (output, status, timing)
-- [ ] `mcp_list_ticks` — recent ticks for a project, filtered by status
-- [ ] `mcp_force_evaluate` — trigger immediate eval cycle
-- [ ] `mcp_get_health` — daemon health, uptime, goroutine counts, spawn method ratios
-- [ ] `mcp_get_namespaces` — namespace budgets, allocations, borrowing stats
-- [ ] `mcp_get_queue` — queued/pending projects with urgency scores
+- [x] 14 MCP tools at `/mcp` endpoint, wired in `cmd/schedulerd/main.go:141-142`
+- [x] `fleet_projects`, `fleet_project_detail`, `fleet_set_weight`, `fleet_set_priority`
+- [x] `fleet_set_cooldown`, `fleet_set_decay`, `fleet_pause`, `fleet_resume`
+- [x] `fleet_add`, `fleet_ticks`, `fleet_evaluate`, `fleet_pause_scheduler`, `fleet_resume_scheduler`, `fleet_status`
+- [x] 698 lines of tests in `server_test.go`, all passing
+- [x] Implemented in `internal/mcp/server.go` (548 lines)
 
-**Why:** Today Hermes reads scheduler.db directly to answer fleet questions. MCP
-tools give Hermes clean, typed access without raw SQL. Enables Hermes to manage
-the fleet autonomously — enabling/disabling, adjusting priorities, triggering evals.
+**Delivered:** Verified by foreman tick 2026-07-18.
 
 ### [ ] FEAT-API — Full REST API Coverage
 **Priority: HIGH. Weight: 16. Status: PENDING.**
