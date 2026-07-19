@@ -4,11 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 5
+const latestMigration = 6
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS projects (
     decay_rate REAL NOT NULL DEFAULT 1.0,
     model      TEXT NOT NULL DEFAULT 'deepseek-v4-pro',
     provider   TEXT NOT NULL DEFAULT 'deepseek-foreman',
+    worker_model      TEXT NOT NULL DEFAULT '',
+    worker_provider   TEXT NOT NULL DEFAULT '',
     deliver    TEXT NOT NULL DEFAULT '',
     enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -146,6 +149,14 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity, created_at DESC);
 `,
 	},
+	{
+		version: 6,
+		desc:    "add worker_model and worker_provider columns to projects",
+		stmt: `
+ALTER TABLE projects ADD COLUMN worker_model TEXT DEFAULT '';
+ALTER TABLE projects ADD COLUMN worker_provider TEXT DEFAULT '';
+`,
+	},
 }
 
 // Migrate applies all pending migrations to db. Already-applied migrations
@@ -178,7 +189,14 @@ CREATE TABLE IF NOT EXISTS migrations (
 		defer func() { _ = tx.Rollback() }()
 
 		if _, err := tx.ExecContext(ctx, m.stmt); err != nil {
-			return fmt.Errorf("migration %d (%s): %w", m.version, m.desc, err)
+			// SQLite ALTER TABLE ADD COLUMN is not idempotent — if the column
+			// already exists (e.g. added in a later revision of the initial
+			// CREATE TABLE), treat "duplicate column name" as success.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				// Fall through to record the migration as applied.
+			} else {
+				return fmt.Errorf("migration %d (%s): %w", m.version, m.desc, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO migrations (version, desc) VALUES (?, ?)`,

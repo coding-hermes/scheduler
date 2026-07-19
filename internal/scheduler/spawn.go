@@ -118,6 +118,28 @@ func (s *Spawner) ActiveCount() int {
 	return len(s.active)
 }
 
+// workerDefaults returns a prompt suffix with the project's preferred worker
+// model and provider. Empty string when neither is configured. Includes
+// fallback instructions so the foreman can switch models freely.
+func workerDefaults(project PackedProject) string {
+	if project.WorkerModel == "" && project.WorkerProvider == "" {
+		return ""
+	}
+	m := project.WorkerModel
+	p := project.WorkerProvider
+	if m == "" {
+		m = "(no default)"
+	}
+	if p == "" {
+		p = "(no default)"
+	}
+	return fmt.Sprintf(
+		"Worker default: use model %s with provider %s if available. "+
+			"Feel free to use a different model if this one is unavailable or rate-limited. ",
+		m, p,
+	)
+}
+
 // canSpawn checks concurrency limits.
 func (s *Spawner) canSpawn() bool {
 	s.mu.Lock()
@@ -162,8 +184,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"Workdir: %s. "+
 				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
 				"Format your final output as clean, well-structured markdown with tables and sections. "+
+				"%s"+
 				"Report result.",
 			tickID, project.Workdir,
+			workerDefaults(project),
 		)
 
 		// Try HTTP gateway spawn first (zero process overhead).

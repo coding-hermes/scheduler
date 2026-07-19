@@ -9,16 +9,18 @@ import (
 
 // PackedProject is a project selected to run in this tick.
 type PackedProject struct {
-	Name     string
-	Priority float64
-	Weight   int
-	Urgency  float64
-	Workdir  string
-	RepoURL  string
-	Command  string // optional: custom spawn command (overrides default hermes chat)
-	Model    string // LLM model for this project (empty = use spawner default)
-	Provider string // LLM provider for this project (empty = use spawner default)
-	Deliver  string // delivery target (telegram:chat_id:thread_id)
+	Name           string
+	Priority       float64
+	Weight         int
+	Urgency        float64
+	Workdir        string
+	RepoURL        string
+	Command        string // optional: custom spawn command (overrides default hermes chat)
+	Model          string // LLM model for this project (empty = use spawner default)
+	Provider       string // LLM provider for this project (empty = use spawner default)
+	WorkerModel    string // optional: suggested worker model (foreman can override)
+	WorkerProvider string // optional: suggested worker provider (foreman can override)
+	Deliver        string // delivery target (telegram:chat_id:thread_id)
 }
 
 // Packer selects which projects run given a weight budget and running set.
@@ -36,20 +38,22 @@ func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int) *
 
 // scored is a project with its computed urgency.
 type scored struct {
-	name       string
-	priority   float64
-	weight     int
-	urgency    float64
-	decayRate  float64
-	cooldownS  int
-	lastTickAt *time.Time
-	createdAt  time.Time
-	workdir    string
-	repoURL    string
-	command    string
-	model      string
-	provider   string
-	deliver    string
+	name           string
+	priority       float64
+	weight         int
+	urgency        float64
+	decayRate      float64
+	cooldownS      int
+	lastTickAt     *time.Time
+	createdAt      time.Time
+	workdir        string
+	repoURL        string
+	command        string
+	model          string
+	provider       string
+	workerModel    string
+	workerProvider string
+	deliver        string
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -58,7 +62,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(deliver, '')
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(deliver, '')
 		FROM projects
 		WHERE enabled = 1
 		ORDER BY name
@@ -78,7 +82,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.deliver); err != nil {
+			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.deliver); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -166,16 +170,18 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			continue
 		}
 		packed = append(packed, PackedProject{
-			Name:     s.name,
-			Priority: s.priority,
-			Weight:   s.weight,
-			Urgency:  s.urgency,
-			Workdir:  s.workdir,
-			RepoURL:  s.repoURL,
-			Command:  s.command,
-			Model:    s.model,
-			Provider: s.provider,
-			Deliver:  s.deliver,
+			Name:           s.name,
+			Priority:       s.priority,
+			Weight:         s.weight,
+			Urgency:        s.urgency,
+			Workdir:        s.workdir,
+			RepoURL:        s.repoURL,
+			Command:        s.command,
+			Model:          s.model,
+			Provider:       s.provider,
+			WorkerModel:    s.workerModel,
+			WorkerProvider: s.workerProvider,
+			Deliver:        s.deliver,
 		})
 		used += s.weight
 		currRunning++

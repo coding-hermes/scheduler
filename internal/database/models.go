@@ -3,21 +3,23 @@ package database
 // Project is a single managed codebase the scheduler may spawn ticks against.
 // Field ordering matches the projects table column order for scan ergonomics.
 type Project struct {
-	Name        string  // PRIMARY KEY — also the DuckBrain project key
-	RepoURL     string  // git clone URL
-	Workdir     string  // absolute path to the working copy on this host
-	Weight      int     // 1..100 — weight budget consumed per tick (default 10)
-	Priority    int     // 1..10 — base urgency multiplier (default 5)
-	CooldownS   int     // seconds between successive ticks (default 900)
-	DecayRate   float64 // urgency decay rate (default 1.0)
-	Model       string  // LLM model id passed to the spawned agent
-	Provider    string  // LLM provider id passed to the spawned agent
-	Command     string  // optional: custom spawn command (overrides default hermes chat)
-	NamespaceID *string // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
-	Deliver     string  // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
-	Enabled     bool    // disabled projects are never scheduled
-	CreatedAt   string  // RFC3339 timestamp
-	UpdatedAt   string  // RFC3339 timestamp
+	Name           string  // PRIMARY KEY — also the DuckBrain project key
+	RepoURL        string  // git clone URL
+	Workdir        string  // absolute path to the working copy on this host
+	Weight         int     // 1..100 — weight budget consumed per tick (default 10)
+	Priority       int     // 1..10 — base urgency multiplier (default 5)
+	CooldownS      int     // seconds between successive ticks (default 900)
+	DecayRate      float64 // urgency decay rate (default 1.0)
+	Model          string  // LLM model id passed to the spawned agent
+	Provider       string  // LLM provider id passed to the spawned agent
+	WorkerModel    string  // optional: suggested worker model (foreman can override)
+	WorkerProvider string  // optional: suggested worker provider (foreman can override)
+	Command        string  // optional: custom spawn command (overrides default hermes chat)
+	NamespaceID    *string // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
+	Deliver        string  // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
+	Enabled        bool    // disabled projects are never scheduled
+	CreatedAt      string  // RFC3339 timestamp
+	UpdatedAt      string  // RFC3339 timestamp
 }
 
 // TickStatus enumerates the lifecycle states a tick may occupy.

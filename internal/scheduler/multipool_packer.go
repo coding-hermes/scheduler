@@ -312,16 +312,18 @@ func (m *MultiPoolPacker) Pack(
 		}
 		for _, pu := range st.selected {
 			result.Projects = append(result.Projects, PackedProject{
-				Name:     pu.Project.Name,
-				Priority: float64(pu.Project.Priority),
-				Weight:   pu.EffectiveWeight,
-				Urgency:  pu.Urgency,
-				Workdir:  pu.Project.Workdir,
-				RepoURL:  pu.Project.RepoURL,
-				Command:  pu.Project.Command,
-				Model:    pu.Project.Model,
-				Provider: pu.Project.Provider,
-				Deliver:  pu.Project.Deliver,
+				Name:           pu.Project.Name,
+				Priority:       float64(pu.Project.Priority),
+				Weight:         pu.EffectiveWeight,
+				Urgency:        pu.Urgency,
+				Workdir:        pu.Project.Workdir,
+				RepoURL:        pu.Project.RepoURL,
+				Command:        pu.Project.Command,
+				Model:          pu.Project.Model,
+				Provider:       pu.Project.Provider,
+				WorkerModel:    pu.Project.WorkerModel,
+				WorkerProvider: pu.Project.WorkerProvider,
+				Deliver:        pu.Project.Deliver,
 			})
 		}
 		result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{
