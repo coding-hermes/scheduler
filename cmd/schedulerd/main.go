@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -195,6 +196,34 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.Generate(w); err != nil {
 			http.Error(w, err.Error(), 500)
+		}
+	})
+
+	// htmx partial: rendered for the main dashboard's tbody every 10s.
+	mux.HandleFunc("GET /dashboard/partial", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateFleetTable(w); err != nil {
+			http.Error(w, err.Error(), 500)
+		}
+	})
+
+	// Static assets bundled via Go embed (htmx.min.js).
+	mux.HandleFunc("GET /static/htmx.min.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		_, _ = w.Write(dashGen.HTMXJS())
+	})
+
+	// Project detail page: /projects/{name}.
+	mux.HandleFunc("GET /projects/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateProjectDetail(w, name); err != nil {
+			if errors.Is(err, database.ErrProjectNotFound) {
+				http.Error(w, "project not found: "+name, http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
 

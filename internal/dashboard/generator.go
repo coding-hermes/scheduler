@@ -3,6 +3,9 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"embed"
+	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"time"
@@ -10,17 +13,30 @@ import (
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
-// Generator produces the fleet dashboard as a single-file HTML page.
-type Generator struct {
-	db   *sql.DB
-	tmpl *template.Template // parsed once, reused
+//go:embed static/htmx.min.js
+var staticFS embed.FS
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+// htmxJS is the bundled htmx library, loaded via Go embed so the dashboard
+// works offline (no CDN dependency at runtime).
+var htmxJS = mustReadStatic("static/htmx.min.js")
+
+// mustReadStatic panics if the embedded asset cannot be read at init time —
+// that always indicates a build problem (missing file), not a runtime fault.
+func mustReadStatic(path string) []byte {
+	data, err := staticFS.ReadFile(path)
+	if err != nil {
+		panic(fmt.Sprintf("dashboard: embedded asset %s missing: %v", path, err))
+	}
+	return data
 }
 
-// NewGenerator creates a dashboard generator. Template is parsed at construction
-// time so hot-path Generate() never pays the parse cost.
-func NewGenerator(db *sql.DB) *Generator {
-	g := &Generator{db: db}
-	g.tmpl = template.Must(template.New("dashboard").Funcs(template.FuncMap{
+// loadTemplates parses every embedded template, applies the shared func map,
+// and registers each {{define "..."}} block by name. Returns the parsed set.
+func loadTemplates() *template.Template {
+	funcs := template.FuncMap{
 		"percent": func(used, total int) int {
 			if total == 0 {
 				return 0
@@ -69,9 +85,63 @@ func NewGenerator(db *sql.DB) *Generator {
 			}
 			return "var(--green)"
 		},
-	}).Parse(pageTemplate))
+	}
+	t := template.New("").Funcs(funcs)
+	// Add the existing pageTemplate under the name "page" so it composes with
+	// the partials and project-detail template in the same set.
+	parsed, err := t.New("page").Parse(pageTemplate)
+	if err != nil {
+		panic(fmt.Sprintf("dashboard: parse pageTemplate: %v", err))
+	}
+	matches, err := templatesFS.ReadDir("templates")
+	if err != nil {
+		panic(fmt.Sprintf("dashboard: read embedded templates/: %v", err))
+	}
+	for _, entry := range matches {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		data, err := templatesFS.ReadFile("templates/" + name)
+		if err != nil {
+			panic(fmt.Sprintf("dashboard: read template %s: %v", name, err))
+		}
+		if _, err := parsed.New(name).Parse(string(data)); err != nil {
+			panic(fmt.Sprintf("dashboard: parse template %s: %v", name, err))
+		}
+	}
+	return parsed
+}
+
+// Generator produces the fleet dashboard as a single-file HTML page.
+type Generator struct {
+	db          *sql.DB
+	tmpl        *template.Template // parsed once, reused
+	fleetTmpl   *template.Template // partial: project table body only
+	projectTmpl *template.Template // full page: /projects/{name}
+}
+
+// NewGenerator creates a dashboard generator. Template is parsed at construction
+// time so hot-path Generate() never pays the parse cost.
+func NewGenerator(db *sql.DB) *Generator {
+	tmpl := loadTemplates()
+	g := &Generator{
+		db:          db,
+		tmpl:        tmpl,
+		fleetTmpl:   tmpl.Lookup("fleet_table"),
+		projectTmpl: tmpl.Lookup("project_detail"),
+	}
+	if g.fleetTmpl == nil {
+		panic("dashboard: fleet_table template not registered")
+	}
+	if g.projectTmpl == nil {
+		panic("dashboard: project_detail template not registered")
+	}
 	return g
 }
+
+// HTMXJS returns the bundled htmx library bytes for serving via HTTP.
+func (g *Generator) HTMXJS() []byte { return htmxJS }
 
 // FleetRow is one project in the fleet overview table.
 type FleetRow struct {
@@ -138,11 +208,53 @@ type FleetData struct {
 	CostWeekTotal   float64
 }
 
+// ProjectDetailData holds all data for the /projects/{name} page.
+type ProjectDetailData struct {
+	Project     *database.Project
+	LatestTick  *database.Tick
+	RecentTicks []database.Tick
+}
+
 // Generate writes the dashboard HTML to w. Template is pre-parsed — zero hot-path overhead.
 func (g *Generator) Generate(w io.Writer) error {
 	ctx := context.Background()
 	data := g.collect(ctx)
-	return g.tmpl.Execute(w, data)
+	return g.tmpl.ExecuteTemplate(w, "page", data)
+}
+
+// GenerateFleetTable renders the fleet table partial (tbody only) for htmx
+// to swap into the dashboard page. Routes get this from /dashboard/partial.
+func (g *Generator) GenerateFleetTable(w io.Writer) error {
+	ctx := context.Background()
+	data := g.collect(ctx)
+	return g.fleetTmpl.Execute(w, data)
+}
+
+// GenerateProjectDetail renders the project detail page. Returns an error
+// wrapping ErrProjectNotFound when no project matches the given name.
+func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
+	if name == "" {
+		return errors.New("project name is required")
+	}
+	ctx := context.Background()
+	project, err := database.GetProject(ctx, g.db, name)
+	if err != nil {
+		return fmt.Errorf("load project %q: %w", name, err)
+	}
+
+	data := ProjectDetailData{Project: project}
+
+	// Latest tick for this project (single-row fetch).
+	if latest, err := latestTickForProject(ctx, g.db, name); err == nil {
+		data.LatestTick = latest
+	}
+
+	// Last 20 ticks for the history table.
+	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
+		data.RecentTicks = ticks
+	}
+
+	return g.projectTmpl.Execute(w, data)
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {
@@ -269,13 +381,39 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	return data
 }
 
+// latestTickForProject returns the most recently spawned tick for the project,
+// or nil if the project has never been scheduled. Implementation lives here
+// (not in the database package) to avoid widening the db API for a single
+// dashboard caller; the SQL is a single indexed row lookup.
+func latestTickForProject(ctx context.Context, db *sql.DB, projectName string) (*database.Tick, error) {
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+FROM ticks WHERE project_name = ?
+ORDER BY spawned_at DESC LIMIT 1`
+	var t database.Tick
+	var status, outcome string
+	err := db.QueryRowContext(ctx, q, projectName).Scan(
+		&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
+		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
+		&t.Error, &t.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil // no ticks yet — not an error for the dashboard
+	}
+	if err != nil {
+		return nil, fmt.Errorf("latest tick for %q: %w", projectName, err)
+	}
+	t.Status = database.TickStatus(status)
+	t.Outcome = database.TickOutcome(outcome)
+	return &t, nil
+}
+
 const pageTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta http-equiv="refresh" content="60">
 <title>Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
 <style>
 :root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -299,12 +437,14 @@ tr:last-child td{border-bottom:none}
 .disabled{opacity:0.5}
 .util-green{color:var(--green)}.util-yellow{color:var(--yellow)}.util-red{color:var(--red)}
 .utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
+.htmx-indicator{color:var(--muted);font-size:0.7rem;margin-left:8px;display:none}
+.htmx-request .htmx-indicator{display:inline}
 @media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
 </style>
 </head>
 <body>
 <h1>🚀 Coding Hermes Fleet</h1>
-<div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s</div>
+<div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s · Live updates via htmx every 10s</div>
 
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
@@ -320,10 +460,13 @@ tr:last-child td{border-bottom:none}
 <h2>Projects</h2>
 <table>
 <thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Running</th></tr></thead>
-<tbody>
+<tbody id="fleet-overview"
+hx-get="/dashboard/partial"
+hx-trigger="every 10s"
+hx-swap="innerHTML">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td>{{.Name}}</td>
+<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
 <td>{{.Weight}}</td>
 <td>{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>

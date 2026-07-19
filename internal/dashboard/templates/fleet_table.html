@@ -1,0 +1,11 @@
+{{define "fleet_table"}}<tbody id="fleet-overview">
+{{range .Projects}}
+<tr class="{{if not .Enabled}}disabled{{end}}">
+<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
+<td>{{.Weight}}</td>
+<td>{{.Priority}}</td>
+<td class="meta">{{shortTime .LastTick}}</td>
+<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
+<td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
+</tr>{{end}}
+</tbody>{{end}}
