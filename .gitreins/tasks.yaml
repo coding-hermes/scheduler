@@ -178,3 +178,216 @@ tasks:
   - golangci-lint run reports zero issues
   status: pending
   created_at: '2026-07-19T14:38:58.395568+00:00'
+- id: AUDIT-001-spec-priority-type
+  title: "SPEC: Priority type mismatch \u2014 code uses int, spec says float64"
+  criteria:
+  - specs/S02-data-model.md says priority is REAL/float64
+  - models.go Project.Priority is int
+  - Either update spec to int or change code to float64
+  - All tests still pass after change
+  - MCP tools and API endpoints accept correct type
+  status: pending
+  created_at: '2026-07-19T17:28:22.124957+00:00'
+- id: AUDIT-002-missing-specs
+  title: 'SPEC: 5 spec files referenced in S01 but missing on disk (S07-S11)'
+  criteria:
+  - Write specs/S07-mcp-server.md matching current internal/mcp/server.go implementation
+  - Write specs/S08-dashboard.md matching current dashboard implementation
+  - Write specs/S09-hermes-plugin.md for plugin/plugin.yaml
+  - Write specs/S10-testing-strategy.md from existing test patterns
+  - Write specs/S11-deployment-migration.md from deploy/ files and README
+  status: pending
+  created_at: '2026-07-19T17:28:23.151832+00:00'
+- id: AUDIT-003-spec-event-mismatch
+  title: "SPEC: Event struct field mismatch \u2014 spec uses Level/Project, code uses\
+    \ Severity/Component"
+  criteria:
+  - Spec S02 shows Event.Level (info/warn/error/decision)
+  - Code uses Event.Severity (CRITICAL/HIGH/MEDIUM/LOW/INFO)
+  - Spec shows Event.Project *string, code has no Project field
+  - Align spec with code (code is the implementation reality)
+  - Update S02-data-model.md Event struct to match models.go
+  status: pending
+  created_at: '2026-07-19T17:28:24.182656+00:00'
+- id: AUDIT-004-tick-field-names
+  title: "SPEC: Tick struct field name mismatch \u2014 spec says Project, code says\
+    \ ProjectName"
+  criteria:
+  - Spec S02 Tick.Project string, code Tick.ProjectName string
+  - Spec Tick fields use *pointers for nullable, code uses zero-value types
+  - Update S02-data-model.md Tick struct to match models.go exactly
+  status: pending
+  created_at: '2026-07-19T17:28:25.217339+00:00'
+- id: AUDIT-005-test-deliver
+  title: "TEST: deliver.go \u2014 0% coverage, 3 untested functions with hardcoded\
+    \ secrets"
+  criteria:
+  - Add deliver_test.go with tests for deliverOutput, deliverAlert, trimToolNoise
+  - Mock exec.Command to avoid real hermes send calls
+  - 'Test trimToolNoise edge cases: empty, diff blocks, code blocks, worker prompts'
+  - Coverage for deliver.go reaches 70%+
+  - Remove hardcoded Telegram chat ID from deliver.go (move to config/deliver column)
+  status: pending
+  created_at: '2026-07-19T17:28:26.246021+00:00'
+- id: AUDIT-006-test-gateway
+  title: "TEST: gateway_client.go \u2014 0% coverage, 5 untested functions"
+  criteria:
+  - Add gateway_client_test.go with tests for SendResponse, Ping, ExtractText
+  - Mock HTTP server for gateway responses
+  - Test timeout, error, and success paths
+  - Coverage for gateway_client.go reaches 70%+
+  status: pending
+  created_at: '2026-07-19T17:28:40.727798+00:00'
+- id: AUDIT-007-test-slowdown
+  title: "TEST: slowdown.go \u2014 0% coverage, autoSlowdown untested"
+  criteria:
+  - Add slowdown_test.go with tests for autoSlowdown
+  - Test IDLE detection triggers 1.5x cooldown increase
+  - Test PRODUCTIVE detection resets cooldown to 600s
+  - Test cooldown cap at 3600s (1h)
+  - Coverage for slowdown.go reaches 70%+
+  status: pending
+  created_at: '2026-07-19T17:28:41.755043+00:00'
+- id: AUDIT-008-test-sync
+  title: "TEST: internal/sync \u2014 0% coverage, 8 untested functions, no test file"
+  criteria:
+  - Add sync/duckbrain_test.go with tests
+  - Mock DuckBrain HTTP server for postMemory
+  - Test syncFleetSummary, syncProjectStatuses, syncNamespaceSummary, syncNamespaceStatuses
+  - Test error handling when DuckBrain unreachable
+  - Coverage for sync package reaches 60%+
+  status: pending
+  created_at: '2026-07-19T17:28:42.879326+00:00'
+- id: AUDIT-009-test-namespaces
+  title: "TEST: database namespaces/namespace_ticks \u2014 0% coverage, 8 untested\
+    \ functions"
+  criteria:
+  - 'Add tests for namespaces.go: CreateNamespace, GetNamespace, ListNamespaces, UpdateNamespace,
+    DeleteNamespace'
+  - 'Add tests for namespace_ticks.go: InsertNamespaceTick, ListNamespaceTicks, ListNamespaceTicksByGroup'
+  - All function coverage reaches 70%+
+  status: pending
+  created_at: '2026-07-19T17:28:43.907811+00:00'
+- id: AUDIT-010-remaining-scheduler
+  title: "TEST: scheduler package \u2014 17+ functions at 0% coverage (spawn, slot_pool,\
+    \ loop setters, sim)"
+  criteria:
+  - Add tests for spawn.go Spawn and Wait (real path with mock exec)
+  - Add tests for slot_pool.go Spawn and Wait
+  - 'Add tests for loop.go setters: SetNoDeliver, SetNamespaceMode, SetGatewayClient,
+    SetForemanHome, SetSimulation, SetTickTimeout, RunBulkSim'
+  - 'Add tests for sim_fixture.go: NewSimRunner, RunMultiTick, runOneTick, Summary'
+  - Coverage for scheduler package rises from 45.1% to 60%+
+  status: pending
+  created_at: '2026-07-19T17:28:44.933752+00:00'
+- id: AUDIT-011-deps-upgrade
+  title: "DEPS: 15+ outdated packages \u2014 BurntSushi/toml 1.5\u21921.6, sqlite\
+    \ 1.38\u21921.54, x/sys 0.34\u21920.47"
+  criteria:
+  - Upgrade BurntSushi/toml from v1.5.0 to v1.6.0
+  - Upgrade modernc.org/sqlite from v1.38.2 to v1.54.0
+  - Audit breaking changes in minor/major bumps
+  - All tests pass after upgrades
+  - go vet clean
+  status: pending
+  created_at: '2026-07-19T17:29:00.989351+00:00'
+- id: AUDIT-012-remove-hardcoded-chat
+  title: "PITFALL: Hardcoded Telegram chat ID in deliver.go \u2014 security/reproducibility\
+    \ issue"
+  criteria:
+  - Remove hardcoded Telegram chat ID 'telegram:-1003310984808:83996' from deliver.go:24
+    and deliver.go:63
+  - Use project.Deliver field from DB (already in schema)
+  - Fall back to log-only if Deliver field is empty (do not hardcode a default chat)
+  - Update deliverAlert to also use project.Deliver
+  status: complete
+  created_at: '2026-07-19T17:29:02.049923+00:00'
+  completed_at: '2026-07-19T17:34:17.191455+00:00'
+- id: AUDIT-013-fix-trimtoolnoise
+  title: "PITFALL: trimToolNoise has likely bug \u2014 broken skipUntil loop (lines\
+    \ 152-160)"
+  criteria:
+  - 'trimToolNoise line 152-160 has broken logic: iterates ''lines'' but appends from
+    ''result'''
+  - "The skipUntil block reads lines but appends to result inside the for loop over\
+    \ lines \u2014 likely infinite loop or garbage output"
+  - Fix the skipUntil logic to properly skip worker prompt blocks
+  - Add test cases exercising the bug path
+  status: complete
+  created_at: '2026-07-19T17:29:03.107372+00:00'
+  completed_at: '2026-07-19T17:35:20.626259+00:00'
+- id: AUDIT-014-nplus1-dashboard
+  title: "PERF: N+1 query in dashboard collect() \u2014 namespace loop queries per\
+    \ row"
+  criteria:
+  - Dashboard collect() queries namespace ticks per-namespace in a loop (N+1)
+  - Refactor to batch query or single query with JOIN
+  - Verify dashboard still renders correctly after optimization
+  - Dashboard Generate() stays under 50ms
+  status: pending
+  created_at: '2026-07-19T17:29:04.169006+00:00'
+- id: AUDIT-015-add-benchmarks
+  title: "PERF: Zero benchmarks anywhere in the codebase \u2014 no performance regression\
+    \ guards"
+  criteria:
+  - 'Add benchmark tests: BenchmarkComputeInterval, BenchmarkComputeUrgency, BenchmarkPack,
+    BenchmarkAllocate'
+  - Add BenchmarkCollect for dashboard rendering path
+  - Results logged with benchmem
+  - No regressions in existing tests
+  status: pending
+  created_at: '2026-07-19T17:29:05.277361+00:00'
+- id: AUDIT-016-test-cmds
+  title: "TEST: cmd/schedulerd and cmd/migrate \u2014 0% coverage, no test files"
+  criteria:
+  - Add cmd/schedulerd/main_test.go with integration test
+  - Test that --show-config and --schema flags work without full startup
+  - Test --test-verify runs and exits clean
+  - Add cmd/migrate/main_test.go with basic smoke test
+  status: pending
+  created_at: '2026-07-19T17:29:21.624455+00:00'
+- id: AUDIT-017-code-quality-review
+  title: "QUALITY: Code quality review \u2014 function length, nesting, magic numbers,\
+    \ duplication"
+  criteria:
+  - Review all functions over 50 lines for split opportunities
+  - Check for functions with >4 nesting levels
+  - "Audit error handling \u2014 any bare '_' on error returns that aren't explicitly\
+    \ excluded"
+  - Check for duplicated code across packages
+  - Verify all magic numbers are named constants
+  status: pending
+  created_at: '2026-07-19T17:29:22.657664+00:00'
+- id: AUDIT-018-spec-arch-drift
+  title: "SPEC: S01 architecture spec stale \u2014 shows old spawn path, missing SlotPool,\
+    \ nonexistent Scheduler struct"
+  criteria:
+  - "Update S01 architecture diagram \u2014 spawn path changed from 'hermes chat --quiet'\
+    \ to HTTP gateway"
+  - "Update spec dependency table \u2014 sqlite driver changed to modernc.org/sqlite\
+    \ (no CGo)"
+  - "Update S01 loop behavior \u2014 event-driven SlotFreed instead of timer-driven"
+  - Document SlotPool architecture in S01
+  - "Spec shows Scheduler struct that doesn't exist \u2014 code uses Loop directly"
+  status: pending
+  created_at: '2026-07-19T17:29:23.687683+00:00'
+- id: AUDIT-019-doc-skills
+  title: "DOC: skills/README.md is placeholder \u2014 no real documentation for fleet-priority-editor\
+    \ skill"
+  criteria:
+  - Write comprehensive project-level README for skills/ directory
+  - Document fleet-priority-editor.html usage
+  - Add skill usage examples in skills/README.md
+  status: pending
+  created_at: '2026-07-19T17:29:24.728216+00:00'
+- id: AUDIT-020-sync-verify
+  title: "DUCKBRAIN: Sync code queries model/provider columns \u2014 needs COALESCE\
+    \ for schema evolution safety"
+  criteria:
+  - Sync code queries 'model' and 'provider' columns with COALESCE for NULL safety
+  - Verify sync code handles schema evolution (worker_model/worker_provider columns
+    added in migration 6)
+  - Add sync e2e integration test with real DuckBrain HTTP server mock
+  - Document DuckBrain key schema in a spec or doc
+  status: pending
+  created_at: '2026-07-19T17:29:25.770334+00:00'
