@@ -834,3 +834,27 @@ sim_fixture.go, sim_fixture_test.go).
 **Daemon health:** status=ok, 10 active ticks, uptime=2m, evaluation_age=133s, spawns_http=0, spawns_exec=5
 
 **VERDICT: productively — FEAT-API complete with tests. 3 endpoints live on daemon (queue=42 projects, openapi=16 paths).**
+
+---
+
+## PRODUCTIVE TICK — 2026-07-19 09:30 (#17)
+
+**Board status:** FEAT-API complete. FEAT-DASHBOARD (MEDIUM) and OPEN-001 gateway setup remain.
+
+**Work done:**
+- Fixed `listQueue` SQL: removed non-existent `cooldown_until` column reference
+- Added `mustInsertTick` test helper in server_test.go
+- Fixed `deliver.go:72` errcheck lint (unchecked WriteString)
+- Committed slowdown/timeout refactoring (`192503a`): 1.5x multiplier, VERDICT detection, remove TimeoutBackoff, deliverAlert on timeout
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (8/8 packages)
+- `golangci-lint run`: 0 issues
+
+**Daemon health:** status=ok, 10 active ticks, uptime=2m, evaluation_age=148s
+
+**New endpoints live:** /api/v1/queue (41 projects), /api/v1/openapi.json (16 paths), /api/v1/ticks?status=X filter
+
+**VERDICT: productively — fixed SQL bugs, added test infra, committed parallel-tick timeout/slowdown refactoring.**
