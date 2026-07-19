@@ -35,12 +35,12 @@ directly and manage the fleet through clean tool calls — no sqlite reads/write
 
 **Delivered:** Verified by foreman tick 2026-07-18.
 
-### [ ] FEAT-API — Full REST API Coverage (4 items remaining)
-**Priority: HIGH. Weight: 16. Status: IN PROGRESS.**
+### [x] FEAT-API — Full REST API Coverage ✓ `fde287d`
+**Priority: HIGH. Weight: 16. Status: COMPLETE.**
 **Goal:** Complete the REST API so external tools, dashboards, and scripts can
 fully manage the scheduler without DB access.
 
-**Already implemented (12 endpoints):**
+**All endpoints implemented (17):**
 - [x] `GET /api/v1/health` — daemon health + spawn counts
 - [x] `GET /api/v1/status` — fleet overview
 - [x] `GET /api/v1/projects` — list all projects
@@ -51,20 +51,17 @@ fully manage the scheduler without DB access.
 - [x] `POST /api/v1/namespaces` — create namespace
 - [x] `GET /api/v1/namespaces/:id` — get namespace
 - [x] `PUT /api/v1/namespaces/:id` — update namespace
-- [x] `GET /api/v1/ticks?project=X&limit=N` — tick history
+- [x] `GET /api/v1/ticks?project=X&limit=N&status=S` — tick history with optional status filter
 - [x] `GET /api/v1/ticks/:id` — full tick detail
 - [x] `POST /api/v1/evaluate` — force eval cycle
 - [x] `POST /api/v1/pause` / `POST /api/v1/resume` — global pause
 - [x] `GET /api/v1/events` — event log
+- [x] `POST /api/v1/projects/:name/spawn` — manually trigger a tick
+- [x] `GET /api/v1/queue` — ordered queue of eligible projects with urgency scores
+- [x] `GET /api/v1/openapi.json` — OpenAPI 3.0 specification
 
-**Remaining gaps:**
-- [ ] `POST /api/v1/projects/:name/spawn` — manually trigger a tick
-- [ ] `GET /api/v1/ticks` — add `status` filter to existing endpoint
-- [ ] `GET /api/v1/queue` — ordered queue of eligible projects with urgency
-- [ ] Swagger/OpenAPI spec at `/api/v1/openapi.json`
-
-**Why:** Current API has health + list only. Full CRUD + tick history makes the
-scheduler a proper service, not a black box.
+**Also in this commit:** SlotPool running count tracking, auto-slowdown cap 1h,
+timeout backoff removal, regression test cleanup, deliver.go HTTP alert formatting.
 
 ### [ ] FEAT-DASHBOARD — Full Web Dashboard
 **Priority: MEDIUM. Weight: 12. Status: PENDING.**
