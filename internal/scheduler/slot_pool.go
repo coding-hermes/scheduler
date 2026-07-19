@@ -13,9 +13,9 @@ import (
 // the tick completes or times out. The evaluation loop fires projects into
 // the pool and returns immediately — it never blocks waiting for spawns.
 type SlotPool struct {
-	sem      chan string // buffered channel = semaphore, value = project name
-	maxSlots int
-	timeout  time.Duration
+	sem       chan string // buffered channel = semaphore, value = project name
+	maxSlots  int
+	timeout   time.Duration
 	spawner   *Spawner
 	lifecycle *LifecycleTracker
 	freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
