@@ -1,3 +1,26 @@
+### [x] BUG-008 — Migration 6 breaks all 94 tests on fresh DBs ✓ `0956094`
+**Priority: CRITICAL. Weight: 20. Status: COMPLETE.**
+**Root cause:** `worker_model` and `worker_provider` columns were added to both
+migration 1's `CREATE TABLE` AND migration 6's `ALTER TABLE ADD COLUMN`. On fresh
+in-memory DBs (tests), migration 1 created the columns, then migration 6 failed
+with "duplicate column name". Production DB lacked the columns entirely.
+
+**Fix:** Made migration 6 idempotent in Migrate() — catch "duplicate column name"
+errors and treat as success. Bumped latestMigration 5→6. Production DB migration
+applied. All 94 tests now pass.
+
+**Files:** `internal/database/migrations.go` (+14/-1), production scheduler.db
+
+### [x] WIRE-001 — Worker model/provider wiring through full stack ✓ `0956094`
+**Priority: HIGH. Weight: 14. Status: COMPLETE.**
+- models.go: WorkerModel/WorkerProvider fields on Project
+- projects.go: wired through all CRUD (Create, Get, List, ListByNamespace, Update)
+- packer.go: scan from DB, populate PackedProject
+- multipool_packer.go: carry through multi-pool path
+- spawn.go: workerDefaults() hint injected into foreman prompt
+- Production DB columns added
+
+---
 ### [x] FEAT-MCP — Full MCP Server Integration ✓ (multiple commits)
 **Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Expose the scheduler as a first-class MCP server so Hermes can connect
@@ -12,19 +35,31 @@ directly and manage the fleet through clean tool calls — no sqlite reads/write
 
 **Delivered:** Verified by foreman tick 2026-07-18.
 
-### [ ] FEAT-API — Full REST API Coverage
-**Priority: HIGH. Weight: 16. Status: PENDING.**
+### [ ] FEAT-API — Full REST API Coverage (4 items remaining)
+**Priority: HIGH. Weight: 16. Status: IN PROGRESS.**
 **Goal:** Complete the REST API so external tools, dashboards, and scripts can
 fully manage the scheduler without DB access.
 
-**Gaps from current partial API:**
-- [ ] `PUT /api/v1/projects/:name` — update priority, weight, cooldown, deliver, model
+**Already implemented (12 endpoints):**
+- [x] `GET /api/v1/health` — daemon health + spawn counts
+- [x] `GET /api/v1/status` — fleet overview
+- [x] `GET /api/v1/projects` — list all projects
+- [x] `POST /api/v1/projects` — create project
+- [x] `GET /api/v1/projects/:name` — get project detail + latest tick
+- [x] `PUT /api/v1/projects/:name` — update any field (ProjectUpdates)
+- [x] `GET /api/v1/namespaces` — list namespaces
+- [x] `POST /api/v1/namespaces` — create namespace
+- [x] `GET /api/v1/namespaces/:id` — get namespace
+- [x] `PUT /api/v1/namespaces/:id` — update namespace
+- [x] `GET /api/v1/ticks?project=X&limit=N` — tick history
+- [x] `GET /api/v1/ticks/:id` — full tick detail
+- [x] `POST /api/v1/evaluate` — force eval cycle
+- [x] `POST /api/v1/pause` / `POST /api/v1/resume` — global pause
+- [x] `GET /api/v1/events` — event log
+
+**Remaining gaps:**
 - [ ] `POST /api/v1/projects/:name/spawn` — manually trigger a tick
-- [ ] `GET /api/v1/ticks?project=X&status=Y&limit=N` — tick history with filters
-- [ ] `GET /api/v1/ticks/:id` — full tick detail with output
-- [ ] `GET /api/v1/namespaces` — list namespaces with stats
-- [ ] `PUT /api/v1/namespaces/:id` — update namespace budget/weight
-- [ ] `POST /api/v1/evaluate` — force evaluation (same as mcp_force_evaluate)
+- [ ] `GET /api/v1/ticks` — add `status` filter to existing endpoint
 - [ ] `GET /api/v1/queue` — ordered queue of eligible projects with urgency
 - [ ] Swagger/OpenAPI spec at `/api/v1/openapi.json`
 

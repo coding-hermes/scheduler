@@ -125,3 +125,17 @@ tasks:
   - Migration v6 applies cleanly on fresh DB and existing DB
   status: pending
   created_at: '2026-07-19T14:08:15.358068+00:00'
+- id: FIX-TIMEOUT-ALIGNMENT
+  title: 'Timeout/cooldown alignment: timeout long, cooldown short, backoff on timeout'
+  criteria:
+  - timeoutBackoff doubles cooldown on TickTimeout outcome
+  - timeoutBackoff cap is 3600s (1h), not 14400s (4h)
+  - autoSlowdown cap is 3600s (1h), was 14400s
+  - Default tick-timeout is 1800s (30min), was 900s
+  - Systemd --tick-timeout is 1800s
+  - "Timeouts are handled BEFORE cooldown expiry \u2014 project must wait for cooldown\
+    \ before re-spawning"
+  - 'Tests: TestTimeoutBackoff_DoublesCooldown, TestTimeoutBackoff_CapAtOneHour, TestTimeoutBackoff_ResetsOnSuccess,
+    TestAutoSlowdown_CapAtOneHour'
+  status: pending
+  created_at: '2026-07-19T14:16:43.120736+00:00'
