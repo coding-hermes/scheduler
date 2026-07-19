@@ -26,11 +26,11 @@ import (
 func main() {
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
-	minInterval := flag.Duration("min-interval", 20*time.Minute, "Fastest tick interval")
+	minInterval := flag.Duration("min-interval", 30*time.Second, "Fastest tick interval")
 	maxInterval := flag.Duration("max-interval", 24*time.Hour, "Slowest tick interval")
 	numLevels := flag.Int("num-levels", 10, "Number of priority levels")
 	weightBudget := flag.Int("budget", 100, "Weight budget")
-	maxConcurrent := flag.Int("max-concurrent", 8, "Max concurrent foremen")
+	maxConcurrent := flag.Int("max-concurrent", 10, "Max concurrent foremen")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 900*time.Second, "Maximum tick duration before timeout")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")

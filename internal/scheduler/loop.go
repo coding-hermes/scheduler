@@ -33,6 +33,7 @@ type Loop struct {
 	running    sync.WaitGroup
 	stopCh     chan struct{}
 	pauseCh    chan bool
+	evalCh     chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval   time.Time
 	simulate   bool
 	simSuccess float64
@@ -59,11 +60,12 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		lifecycle:       NewLifecycleTracker(db),
 		events:          NewEventLogger(db),
 		db:              db,
-		interval:        60 * time.Second,
+		interval:        30 * time.Second,
 		weightBudget:    budget,
 		maxConcur:       maxConcur,
 		namespaceMode:   nsMode,
 		pauseCh:         make(chan bool, 1),
+		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 	}
 }
@@ -148,26 +150,63 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 	return nil
 }
 
-// Run starts the main loop. Blocks until Stop() is called.
+// Run starts the main event-driven evaluation loop. Blocks until Stop() is called.
+//
+// Architecture (event-driven, not timer-driven):
+//   - SlotPool.SlotFreed() signals when a tick completes and frees a slot.
+//   - Each signal resets a 5s coalescing debounce timer.
+//   - When the debounce expires, l.evaluate() fires to fill freed slots.
+//   - A 30s health ticker logs goroutine counts and running tick stats.
+//   - Initial evaluation fires immediately on startup.
+//   - 60s zombie reaper still runs in the background.
 func (l *Loop) Run() {
 	mode := "real"
 	if l.simulate {
 		mode = fmt.Sprintf("simulated (success=%.0f%%)", l.simSuccess*100)
 	}
-	log.Printf("LOOP: starting %s eval loop (interval=%v, budget=%d, max_concurrent=%d) goroutines=%d",
-		mode, l.interval, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
+	log.Printf("LOOP: starting %s eval loop (event-driven, budget=%d, max_concurrent=%d, debounce=5s) goroutines=%d",
+		mode, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
 
 	l.cleanDanglingOnStartup()
 
 	reaper := time.NewTicker(60 * time.Second)
 	defer reaper.Stop()
 
-	ticker := time.NewTicker(l.interval)
-	defer ticker.Stop()
+	healthTicker := time.NewTicker(30 * time.Second)
+	defer healthTicker.Stop()
+
+	// Initialize slot pool if lazy-init hasn't happened yet (test_verify, tests).
+	if l.slotPool == nil {
+		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+	}
+
+	// SlotFreed() spawns one internal polling goroutine. Capture the channel
+	// once so the select loop isn't creating new goroutines on every iteration.
+	slotFreedCh := l.slotPool.SlotFreed()
+
+	// Coalescing debounce: each slot-freed event resets a 5s timer.
+	// Only after 5s of quiet does evaluation fire — this batches rapid
+	// completions and prevents the feedback-loop flood (BUG-008).
+	var (
+		debounceTimer *time.Timer
+		debounceMu    sync.Mutex
+	)
+
+	// Fire initial evaluation so the fleet starts immediately instead of
+	// waiting for the first tick to complete.
+	select {
+	case l.evalCh <- struct{}{}:
+	default:
+	}
 
 	for {
 		select {
 		case <-l.stopCh:
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceMu.Unlock()
 			log.Println("LOOP: stopping")
 			return
 		case <-l.pauseCh:
@@ -182,7 +221,26 @@ func (l *Loop) Run() {
 			}
 		case <-reaper.C:
 			l.reapZombies()
-		case <-ticker.C:
+		case <-healthTicker.C:
+			running := 0
+			if l.slotPool != nil {
+				running = l.slotPool.Running()
+			}
+			log.Printf("LOOP: health (goroutines=%d, slots=%d/%d, last_eval=%v)",
+				runtime.NumGoroutine(), running, l.maxConcur, l.lastEval.Format("15:04:05"))
+		case <-slotFreedCh:
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceTimer = time.AfterFunc(5*time.Second, func() {
+				select {
+				case l.evalCh <- struct{}{}:
+				default:
+				}
+			})
+			debounceMu.Unlock()
+		case <-l.evalCh:
 			l.evaluate()
 		}
 	}

@@ -1,15 +1,26 @@
 [Unit]
 Description=Coding Hermes Fleet Scheduler
-After=network.target
+After=network.target hermes-gateway.service
 
 [Service]
 Type=simple
 User=kara
-ExecStartPre=/bin/sh -c 'fuser -k 9090/tcp 2>/dev/null; sleep 1; true'
-ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -listen 127.0.0.1:9090 --namespace-mode --max-concurrent 10 --min-interval 1m --tick-timeout 900s --gateway-url=http://127.0.0.1:8642
-Restart=always
-RestartSec=3
-MemoryMax=32G
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+ExecStartPre=-/usr/bin/pkill -f "hermes.*foreman"
+ExecStartPre=-/usr/bin/pkill -f "duckbrain"
+ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd \
+  -db /home/kara/.hermes/coding-hermes/scheduler.db \
+  -listen 127.0.0.1:9090 \
+  --namespace-mode \
+  --max-concurrent 10 \
+  --min-interval 30s \
+  --tick-timeout 600s \
+  --gateway-url=http://127.0.0.1:8642
+Restart=on-failure
+RestartSec=30
+MemoryMax=8G
 StandardOutput=journal
 StandardError=journal
 Environment=HOME=/home/kara

@@ -681,19 +681,19 @@ sim_fixture.go, sim_fixture_test.go).
 
 ---
 
-## IDLE TICK — 2026-07-19 04:47 (#14)
+## IDLE TICK — 2026-07-19 04:49 (#15)
 
 **Board status:** All tasks complete. No open GitHub issues or PRs.
 
 **Discovery sweep:**
 - `go build ./...`: PASS
 - `go vet ./...`: PASS
-- `go test ./... -short`: PASS (6/6 packages)
+- `go test ./... -short`: PASS (8/8 packages)
 - `golangci-lint run`: 0 issues
 - `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering)
 
-**Daemon health:** status=ok, 10 active ticks, uptime=2m, evaluation_age=1s, spawns_http=0, spawns_exec=0
+**Daemon health:** status=ok, 10 active ticks, uptime=1m35s, evaluation_age=35s, spawns_http=0, spawns_exec=0
 
-**Cooldown at max cap:** CooldownS=14400 (4h), already at maximum. 4 consecutive restarts with cooldown preserved — restart-reset pitfall consistently resolved for this project.
+**Cooldown at max cap:** CooldownS=14400 (4h), already at maximum. 5 consecutive restarts with cooldown preserved.
 
 **No action needed.**

@@ -13,21 +13,43 @@ import (
 // the tick completes or times out. The evaluation loop fires projects into
 // the pool and returns immediately — it never blocks waiting for spawns.
 type SlotPool struct {
-	sem       chan string // buffered channel = semaphore, value = project name
-	maxSlots  int
-	timeout   time.Duration
+	sem      chan string // buffered channel = semaphore, value = project name
+	maxSlots int
+	timeout  time.Duration
 	spawner   *Spawner
 	lifecycle *LifecycleTracker
+	freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
 func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool {
-	return &SlotPool{
+	p := &SlotPool{
 		sem:       make(chan string, maxConcurrent),
 		maxSlots:  maxConcurrent,
 		timeout:   timeout,
 		spawner:   spawner,
 		lifecycle: lifecycle,
+		freedCh:   make(chan struct{}, maxConcurrent),
+	}
+	// Single goroutine that watches for slot releases.
+	go p.watchReleases()
+	return p
+}
+
+// watchReleases polls the semaphore and fires freedCh when a slot is released.
+// Runs until the pool is garbage collected (process lifetime).
+func (p *SlotPool) watchReleases() {
+	prev := 0
+	for {
+		time.Sleep(100 * time.Millisecond)
+		curr := len(p.sem)
+		if curr < prev {
+			select {
+			case p.freedCh <- struct{}{}:
+			default:
+			}
+		}
+		prev = curr
 	}
 }
 
@@ -135,24 +157,10 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 }
 
 // SlotFreed returns a channel that receives when any slot is released.
+// The channel is backed by a single goroutine (created in NewSlotPool) —
+// no leaks. Use with debounce in the eval loop to avoid feedback floods.
 func (p *SlotPool) SlotFreed() <-chan struct{} {
-	ch := make(chan struct{}, p.maxSlots)
-	orig := p.sem
-	go func() {
-		prev := len(orig)
-		for {
-			time.Sleep(100 * time.Millisecond)
-			curr := len(orig)
-			if curr < prev {
-				select {
-				case ch <- struct{}{}:
-				default:
-				}
-			}
-			prev = curr
-		}
-	}()
-	return ch
+	return p.freedCh
 }
 
 // Wait blocks until all running ticks finish or the context is cancelled.
