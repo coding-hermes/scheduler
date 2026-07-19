@@ -811,3 +811,26 @@ sim_fixture.go, sim_fixture_test.go).
 **Cooldown at max cap:** CooldownS=14400 (4h), already at maximum. 5 consecutive restarts with cooldown preserved.
 
 **No action needed.**
+
+---
+
+## PRODUCTIVE TICK — 2026-07-19 09:23 (#16)
+
+**Board status:** FEAT-API completed. Only FEAT-DASHBOARD (MEDIUM) and OPEN-001 (HIGH) remain. OPEN-001 already marked COMPLETE above.
+
+**Work done:**
+- Verified FEAT-API handler code already committed (`fde287d`)
+- Fixed `listQueue` SQL: used non-existent `urgency`/`cooldown_until` columns → query projects table with correct schema
+- Added 6 tests: status filter ×2, queue ×2, openapi ×2
+- Added `mustInsertTick` helper for test data seeding
+- Committed `90f8130`
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (8/8 packages, including 6 new tests)
+- `golangci-lint run`: 0 issues
+
+**Daemon health:** status=ok, 10 active ticks, uptime=2m, evaluation_age=133s, spawns_http=0, spawns_exec=5
+
+**VERDICT: productively — FEAT-API complete with tests. 3 endpoints live on daemon (queue=42 projects, openapi=16 paths).**
