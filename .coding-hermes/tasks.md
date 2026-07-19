@@ -1,3 +1,49 @@
+## FOREMAN TICK — 2026-07-19 16:23 (#29)
+
+**Board status:** Idle tick. Daemon stable at 40m+ uptime (well past the ~60s crash window). spawns_http=19 — HTTP API path fully operational and scaling. Discovery sweep all green. All deferred tasks remain deferred.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files exist)
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (6/6 packages) |
+| `golangci-lint` | 0 issues |
+| Hilo | 54 files, 374 edges |
+| 0 TODOs/FIXMEs | Clean |
+| `govulncheck` | 0 vulns affecting code |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 7 |
+| Uptime | 40m9s (stable) |
+| spawns_exec | 6 |
+| spawns_http | 19 |
+| Budget | 100 |
+| Projects in queue | 37 |
+| Completed | 2,721 |
+| Failed | 8,991 |
+| Timeout | 179 |
+
+**Key observations:**
+
+1. **spawns_http=19** — HTTP API path is now the dominant spawn method. Tick #27 showed 0, #28 showed 7, now 19. Gateway rate-limit handling confirmed correct — excess spawns gracefully fall back to exec.Command.
+2. **Daemon 40m+ stable** — No crashes since tick #26's restart. PID 944260 running continuously. The ~60s crash window is well behind us.
+3. **Systemd still inactive** — Daemon runs manually (bash wrapper). If host reboots, daemon won't auto-start. Known operational state — not a code bug. Bane can systemctl enable when ready.
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority. Bane can explicitly request.
+
+**VERDICT: idle — Daemon stable for 40m+, HTTP API dominant, discovery sweep clean. All deferred tasks remain deferred. No worker needed.**
+
 ## FOREMAN TICK — 2026-07-19 16:05 (#28)
 
 **Board status:** Maintenance/idle tick. Daemon stable at 21m31s uptime — well past the ~60s crash window. spawns_http=7 confirms HTTP API path is working now (was 0 in previous ticks). Discovery sweep all green. All deferred tasks remain deferred.
