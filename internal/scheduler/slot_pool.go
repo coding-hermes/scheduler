@@ -31,26 +31,7 @@ func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lif
 		lifecycle: lifecycle,
 		freedCh:   make(chan struct{}, maxConcurrent),
 	}
-	// Single goroutine that watches for slot releases.
-	go p.watchReleases()
 	return p
-}
-
-// watchReleases polls the semaphore and fires freedCh when a slot is released.
-// Runs until the pool is garbage collected (process lifetime).
-func (p *SlotPool) watchReleases() {
-	prev := 0
-	for {
-		time.Sleep(100 * time.Millisecond)
-		curr := len(p.sem)
-		if curr < prev {
-			select {
-			case p.freedCh <- struct{}{}:
-			default:
-			}
-		}
-		prev = curr
-	}
 }
 
 // Available returns the number of free slots.
@@ -87,10 +68,14 @@ func (p *SlotPool) Acquire(ctx context.Context, name string) bool {
 	}
 }
 
-// Release frees one slot.
+// Release frees one slot and signals SlotFreed.
 func (p *SlotPool) Release() {
 	select {
 	case <-p.sem:
+		select {
+		case p.freedCh <- struct{}{}:
+		default:
+		}
 	default:
 	}
 }

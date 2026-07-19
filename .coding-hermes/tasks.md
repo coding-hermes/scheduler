@@ -1,3 +1,63 @@
+### [ ] FEAT-MCP — Full MCP Server Integration
+**Priority: HIGH. Weight: 18. Status: PENDING.**
+**Goal:** Expose the scheduler as a first-class MCP server so Hermes can connect
+directly and manage the fleet through clean tool calls — no sqlite reads/writes.
+
+**Deliverables:**
+- [ ] `mcp_list_projects` — list enabled/disabled, priorities, cooldowns, last runs
+- [ ] `mcp_get_project` — full detail on one project (ticks, status, delivery target)
+- [ ] `mcp_enable_project` / `mcp_disable_project` — toggle fleet membership
+- [ ] `mcp_set_priority` / `mcp_set_weight` / `mcp_set_cooldown` — adjust parameters
+- [ ] `mcp_get_tick` — tick details (output, status, timing)
+- [ ] `mcp_list_ticks` — recent ticks for a project, filtered by status
+- [ ] `mcp_force_evaluate` — trigger immediate eval cycle
+- [ ] `mcp_get_health` — daemon health, uptime, goroutine counts, spawn method ratios
+- [ ] `mcp_get_namespaces` — namespace budgets, allocations, borrowing stats
+- [ ] `mcp_get_queue` — queued/pending projects with urgency scores
+
+**Why:** Today Hermes reads scheduler.db directly to answer fleet questions. MCP
+tools give Hermes clean, typed access without raw SQL. Enables Hermes to manage
+the fleet autonomously — enabling/disabling, adjusting priorities, triggering evals.
+
+### [ ] FEAT-API — Full REST API Coverage
+**Priority: HIGH. Weight: 16. Status: PENDING.**
+**Goal:** Complete the REST API so external tools, dashboards, and scripts can
+fully manage the scheduler without DB access.
+
+**Gaps from current partial API:**
+- [ ] `PUT /api/v1/projects/:name` — update priority, weight, cooldown, deliver, model
+- [ ] `POST /api/v1/projects/:name/spawn` — manually trigger a tick
+- [ ] `GET /api/v1/ticks?project=X&status=Y&limit=N` — tick history with filters
+- [ ] `GET /api/v1/ticks/:id` — full tick detail with output
+- [ ] `GET /api/v1/namespaces` — list namespaces with stats
+- [ ] `PUT /api/v1/namespaces/:id` — update namespace budget/weight
+- [ ] `POST /api/v1/evaluate` — force evaluation (same as mcp_force_evaluate)
+- [ ] `GET /api/v1/queue` — ordered queue of eligible projects with urgency
+- [ ] Swagger/OpenAPI spec at `/api/v1/openapi.json`
+
+**Why:** Current API has health + list only. Full CRUD + tick history makes the
+scheduler a proper service, not a black box.
+
+### [ ] FEAT-DASHBOARD — Full Web Dashboard
+**Priority: MEDIUM. Weight: 12. Status: PENDING.**
+**Goal:** Live web dashboard with fleet overview, project details, tick history,
+and real-time status — no database access needed.
+
+**Pages:**
+- [ ] **Fleet overview** — table: project, priority, weight, cooldown, last tick, status (color-coded)
+- [ ] **Project detail** — tick timeline, recent output, settings editor
+- [ ] **Tick history** — searchable/filterable log of all ticks with outcomes
+- [ ] **Queue view** — ordered list of what fires next with urgency scores
+- [ ] **Namespace view** — budget allocation, borrowing, per-ns stats
+- [ ] **Health panel** — uptime, goroutines, HTTP vs exec spawn ratio, memory
+
+**Tech:** Go `html/template` + htmx for live updates (no SPA framework needed).
+Auto-refresh every 10s. Color-coded status badges (green=healthy, yellow=cooldown,
+red=timeout).
+
+**Why:** Dashboard currently exists but is basic (project list only). Full dashboard
+lets humans AND Hermes visually inspect fleet health without terminal access.
+
 ### [x] BUG-007 — Sequential spawn blocks eval — fleet starves on slow tick ✓ `c8a3864`
 **Priority: CRITICAL. Weight: 20. Status: COMPLETE.**
 **Symptom:** One slow gateway response (e.g. imhotep taking 20+ minutes) blocked
@@ -11,6 +71,34 @@ cycle fires on schedule regardless of slow ticks.
 
 **Files:** `internal/scheduler/loop.go` (+180/-149), `internal/scheduler/slot_pool.go` (+136 new).
 **Delivered:** `c8a3864`. Binary deployed, daemon running, 12 active ticks, health OK.
+
+### [x] FEAT-005 — Event-Driven Eval Loop (SlotFreed → evaluate) ✓ `af7fa8d`
+**Priority: CRITICAL. Weight: 20. Status: COMPLETE.**
+**Goal:** Replace timer-driven evaluation (60s ticker → ~1440 evals/day) with event-driven
+architecture where SlotPool.SlotFreed() triggers immediate evaluation with 5s debounce.
+
+**Architecture change:**
+```
+BEFORE: Timer drives eval every N seconds
+  ticker.C → evaluate() → Spawn goroutines → wait for next tick
+
+AFTER: Slot release triggers eval (event-driven)
+  SlotFreed signal → 5s debounce coalescing → evalCh → evaluate()
+  + 30s health ticker (logs only)
+  + initial eval fires immediately on startup
+```
+
+**Changes:**
+- `loop.go`: evalCh channel, debounce via time.AfterFunc reset on each SlotFreed signal
+- `slot_pool.go`: SlotFreed() refactored — single goroutine in NewSlotPool, pre-built freedCh
+- `main.go`: --min-interval default 20m→30s, --max-concurrent default 8→10
+- `deploy/coding-hermes-scheduler.service`: --min-interval 1m→30s
+
+**Verification:** Build+vet+tests PASS. --test-verify 3: 4/6 (2 pre-existing). Service deployed,
+10 active ticks, health OK.
+
+**Delivered:** `af7fa8d`. Binary deployed, daemon running event-driven.
+
 **Priority: HIGH. Weight: 18. Status: COMPLETE.**
 **Goal:** Replace 18 CLI-only flags with a three-layer configuration system.
 Priority (lowest → highest): **TOML config file < env vars < CLI flags**.
@@ -360,7 +448,8 @@ sim_fixture.go, sim_fixture_test.go).
 - **Fix:** Add `deliver` column to projects table (platform:chat_id:thread_id). After tick
   completes, capture final_response from stdout, wrap with `[Scheduler tick: ...]` header,
   and POST to Telegram via bot API or hermes send_message tool.
-- **Pattern:** Cron's `_deliver_result()` wraps with `"Cronjob Response: {name}\n(job_id: {id})"`.
+- **Pattern:** Cron's `_deliver_result()` wraps with `"Cronjob Response: {name}
+(job_id: {id})"`.
   Scheduler should wrap with `"🤖 Scheduler Tick: {project} [{tick_id}]"`.
 - **Delivery targets** available from paused cron jobs (extract `deliver` field, map to projects).
 - **Verification:** After deploy, a scheduler tick should produce a Telegram message starting

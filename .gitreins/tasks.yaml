@@ -47,3 +47,67 @@ tasks:
   status: complete
   created_at: '2026-07-18T17:56:36.830129+00:00'
   completed_at: '2026-07-18T17:57:09.287042+00:00'
+- id: REGRESSION-001-slotpool
+  title: 'Regression guard: SlotPool concurrency and event-driven tests'
+  criteria:
+  - 'All SlotPool tests pass: TestSlotPool_AcquireRelease, TestSlotPool_AcquireTimeout,
+    TestSlotPool_RunningSet'
+  - TestSlotPool_NoGoroutineLeak verifies single SlotFreed() goroutine
+  - TestSlotPool_SlotFreedFiresOnRelease verifies event-driven signal
+  - TestSlotPool_SlotFreedMultipleReleases verifies batched events
+  - Existing full test suite passes (go test ./... -short)
+  status: pending
+  created_at: '2026-07-19T13:29:27.762326+00:00'
+- id: REGRESSION-002-event-loop
+  title: 'Regression guard: Event-driven eval loop (not timer-driven)'
+  criteria:
+  - loop.go Run() contains SlotFreed debounce watcher (grep 'SlotFreed' loop.go)
+  - Eval fires on startup (initial evalCh send, not waiting for timer)
+  - Health ticker runs at 30s (healthTicker := time.NewTicker(30 * time.Second))
+  - No 5-minute timer gap (--min-interval controls health check, not spawn cadence)
+  - evalCh channel correctly initialized in NewLoop()
+  status: pending
+  created_at: '2026-07-19T13:29:50.047735+00:00'
+- id: REGRESSION-003-no-bindsto
+  title: 'Regression guard: Scheduler decoupled from gateway (no BindsTo)'
+  criteria:
+  - coding-hermes-scheduler.service does NOT contain 'BindsTo=' (use After only)
+  - Scheduler survives gateway restart independently
+  - systemctl status stays active when gateway restarts
+  status: pending
+  created_at: '2026-07-19T13:29:57.724148+00:00'
+- id: REGRESSION-004-concurrent
+  title: 'Regression guard: Semaphore stress + debounce + timeout'
+  criteria:
+  - "TestSlotPool_ConcurrentAcquireStress passes \u2014 100 goroutines into 10 slots,\
+    \ no overflow"
+  - "TestSlotPool_DebounceCoalescing passes \u2014 5 rapid releases fire all events"
+  - "TestSlotPool_TickTimeout passes \u2014 blocked Acquire times out correctly"
+  - TestSlotPool_AcquireRelease, AcquireTimeout, RunningSet still pass
+  status: pending
+  created_at: '2026-07-19T13:45:18.032498+00:00'
+- id: REGRESSION-005-picking
+  title: 'Regression guard: Priority sorting, budget limits, cooldown boundary, stable
+    sort'
+  criteria:
+  - "TestPick_TieBreakingSameUrgency passes \u2014 z-high (P=10) picked before a-low\
+    \ (P=1)"
+  - "TestPick_BudgetOverflow passes \u2014 weight=6+6 never exceeds budget=10"
+  - "TestPick_CooldownBoundary passes \u2014 1s cooldown + 2s old tick = eligible"
+  - "TestPacker_StableSort passes \u2014 identical inputs produce identical output\
+    \ order"
+  status: pending
+  created_at: '2026-07-19T13:45:23.699449+00:00'
+- id: REGRESSION-006-lifecycle
+  title: 'Regression guard: Zombie cleanup, auto-slowdown, namespace borrowing'
+  criteria:
+  - "TestCleanDangling_ResetsLastTick passes \u2014 NULL last_tick becomes non-NULL\
+    \ after zombie cleanup"
+  - "TestAutoSlowdown_IdleDoublesCooldown passes \u2014 IDLE output doubles cooldown\
+    \ 600\u21921200"
+  - "TestAutoSlowdown_ProductiveReducesCooldown passes \u2014 PRODUCTIVE halves cooldown\
+    \ 2400\u21921200"
+  - "TestMultiPoolPacker_Borrowing passes \u2014 ns2 gets more projects via borrowing\
+    \ from ns1"
+  status: pending
+  created_at: '2026-07-19T13:45:29.239233+00:00'
