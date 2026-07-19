@@ -375,6 +375,43 @@ func TestAPI_ResumeProject_Success(t *testing.T) {
 	}
 }
 
+func TestAPI_SpawnProject_Success(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "POST", "/api/v1/projects/alpha/spawn", nil)
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %v", status, body)
+	}
+	if body["status"] != "spawned" {
+		t.Errorf("status field = %v, want spawned", body["status"])
+	}
+	tickID, ok := body["tick_id"].(string)
+	if !ok || !strings.HasPrefix(tickID, "alpha-") {
+		t.Errorf("tick_id = %v, want alpha-YYYY-MM-DD-HH-MM-SS", body["tick_id"])
+	}
+	if _, err := time.Parse("2006-01-02-15-04-05", strings.TrimPrefix(tickID, "alpha-")); err != nil {
+		t.Errorf("tick_id = %q has invalid timestamp: %v", tickID, err)
+	}
+}
+
+func TestAPI_SpawnProject_NotFound(t *testing.T) {
+	a := newAPITestServer(t)
+	status, _ := a.do(t, "POST", "/api/v1/projects/nope/spawn", nil)
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", status)
+	}
+}
+
+func TestAPI_SpawnProject_MethodNotAllowed(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	status, _ := a.do(t, "GET", "/api/v1/projects/alpha/spawn", nil)
+	if status != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", status)
+	}
+}
+
 func TestAPI_ProjectByID_MethodNotAllowed(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")

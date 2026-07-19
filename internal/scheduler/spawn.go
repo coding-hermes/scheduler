@@ -118,10 +118,10 @@ func (s *Spawner) ActiveCount() int {
 	return len(s.active)
 }
 
-// workerDefaults returns a prompt suffix with the project's preferred worker
+// WorkerDefaults returns a prompt suffix with the project's preferred worker
 // model and provider. Empty string when neither is configured. Includes
 // fallback instructions so the foreman can switch models freely.
-func workerDefaults(project PackedProject) string {
+func WorkerDefaults(project PackedProject) string {
 	if project.WorkerModel == "" && project.WorkerProvider == "" {
 		return ""
 	}
@@ -187,7 +187,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"%s"+
 				"Report result.",
 			tickID, project.Workdir,
-			workerDefaults(project),
+			WorkerDefaults(project),
 		)
 
 		// Try HTTP gateway spawn first (zero process overhead).

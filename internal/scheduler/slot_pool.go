@@ -137,6 +137,11 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 		// Auto-slowdown: if tick signals IDLE, double the cooldown.
 		if db != nil {
 			autoSlowdown(db, outcome.Project, &st.Output)
+			// Timeout backoff: if tick timed out, double cooldown to
+			// prevent the spawn→timeout→spawn loop. Cap at 1 hour.
+			if outcome.Status == TickTimeout {
+				TimeoutBackoff(db, outcome.Project)
+			}
 		}
 	}()
 }

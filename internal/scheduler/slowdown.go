@@ -9,7 +9,7 @@ import (
 )
 
 // autoSlowdown detects IDLE signals in tick output and doubles the project's cooldown.
-// Cooldown caps at 4 hours (14400s). On first non-idle tick, cooldown resets to 600s.
+// Cooldown caps at 1 hour (3600s). On first non-idle tick, cooldown resets to 600s.
 func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		return
@@ -38,7 +38,7 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 	}
 
 	if isIdle {
-		// Double the cooldown, cap at 4 hours.
+		// Double the cooldown, cap at 1 hour.
 		var currentCD int
 		if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&currentCD); err != nil {
 			return
@@ -47,8 +47,8 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 			currentCD = 600
 		}
 		newCD := currentCD * 2
-		if newCD > 14400 {
-			newCD = 14400
+		if newCD > 3600 {
+			newCD = 3600
 		}
 		if newCD != currentCD {
 			db.Exec("UPDATE projects SET cooldown_s = ? WHERE name = ?", newCD, project)
@@ -64,5 +64,26 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 			db.Exec("UPDATE projects SET cooldown_s = 600 WHERE name = ?", project)
 			log.Printf("SLOWDOWN: %s active again → cooldown reset to 600s", project)
 		}
+	}
+}
+
+// timeoutBackoff doubles a project's cooldown after a timeout to prevent
+// the spawn→timeout→spawn loop. Cap at 1 hour. When the project later
+// completes successfully, the normal cooldown flow takes over.
+func TimeoutBackoff(db *sql.DB, project string) {
+	var currentCD int
+	if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&currentCD); err != nil {
+		return
+	}
+	if currentCD == 0 {
+		currentCD = 600
+	}
+	newCD := currentCD * 2
+	if newCD > 3600 {
+		newCD = 3600
+	}
+	if newCD != currentCD {
+		db.Exec("UPDATE projects SET cooldown_s = ? WHERE name = ?", newCD, project)
+		log.Printf("TIMEOUT-BACKOFF: %s timed out → cooldown %ds → %ds (%dm)", project, currentCD, newCD, newCD/60)
 	}
 }

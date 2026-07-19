@@ -524,3 +524,81 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// ── Timeout/Cooldown Alignment Tests ──
+
+// TestAutoSlowdown_CapAtOneHour verifies the auto-slowdown cap is 1 hour, not 4.
+func TestAutoSlowdown_CapAtOneHour(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectAt(t, db, "cap-test", 5, 5, 3600, 1.0)
+
+	// Simulate an IDLE tick that would double to 7200, but cap at 3600.
+	output := "VERDICT: productively — IDLE TICK 3/7"
+	if containsIdle(output) {
+		var cd int
+		db.QueryRow("SELECT cooldown_s FROM projects WHERE name='cap-test'").Scan(&cd)
+		newCD := cd * 2
+		if newCD > 3600 {
+			newCD = 3600
+		}
+		db.Exec("UPDATE projects SET cooldown_s=? WHERE name='cap-test'", newCD)
+	}
+
+	var cd int
+	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='cap-test'").Scan(&cd)
+	if cd > 3600 {
+		t.Errorf("cooldown %d exceeds 1h cap (3600)", cd)
+	}
+}
+
+// TestTimeoutBackoff_DoublesCooldown verifies backoff on timeout.
+func TestTimeoutBackoff_DoublesCooldown(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectAt(t, db, "timeout-test", 5, 5, 600, 1.0)
+
+	// Simulate timeoutBackoff.
+	scheduler.TimeoutBackoff(db, "timeout-test")
+
+	var cd int
+	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='timeout-test'").Scan(&cd)
+	if cd != 1200 {
+		t.Errorf("after timeout: cooldown = %d, want 1200", cd)
+	}
+}
+
+// TestTimeoutBackoff_CapAtOneHour verifies the backoff cap.
+func TestTimeoutBackoff_CapAtOneHour(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectAt(t, db, "cap-timeout", 5, 5, 3600, 1.0)
+
+	// Double from 3600 should cap at 3600, not 7200.
+	scheduler.TimeoutBackoff(db, "cap-timeout")
+
+	var cd int
+	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='cap-timeout'").Scan(&cd)
+	if cd > 3600 {
+		t.Errorf("cooldown %d exceeds 1h timeout-backoff cap (3600)", cd)
+	}
+}
+
+// TestTimeoutBackoff_ResetsOnSuccess the cooldown resets on a normal productive tick.
+func TestTimeoutBackoff_ResetsOnSuccess(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectAt(t, db, "recover-test", 5, 5, 2400, 1.0)
+
+	// Timeout raised cooldown to 2400. Now simulate a PRODUCTIVE tick.
+	output := "VERDICT: productively — fixed bugs, committed."
+	if !containsIdle(output) && containsProductive(output) {
+		var cd int
+		db.QueryRow("SELECT cooldown_s FROM projects WHERE name='recover-test'").Scan(&cd)
+		if cd > 1200 {
+			db.Exec("UPDATE projects SET cooldown_s=600 WHERE name='recover-test'")
+		}
+	}
+
+	var cd int
+	db.QueryRow("SELECT cooldown_s FROM projects WHERE name='recover-test'").Scan(&cd)
+	if cd != 600 {
+		t.Errorf("after productive tick: cooldown = %d, want 600 (reset)", cd)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -166,14 +167,21 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 	}
 	name := parts[0]
 
-	// POST /projects/:name/pause or /resume
-	if len(parts) == 2 && r.Method == http.MethodPost {
+	// Sub-routes on /projects/:name.
+	if len(parts) == 2 {
+		if r.Method != http.MethodPost {
+			writeError(w, 405, "POST only")
+			return
+		}
 		switch parts[1] {
 		case "pause":
 			s.pauseProject(w, r, name)
 			return
 		case "resume":
 			s.resumeProject(w, r, name)
+			return
+		case "spawn":
+			s.spawnProject(w, r, name)
 			return
 		}
 		writeError(w, 404, "not found")
@@ -240,6 +248,25 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
+}
+
+// spawnProject handles POST /api/v1/projects/:name/spawn.
+func (s *Server) spawnProject(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := context.Background()
+	p, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		writeError(w, 404, "project not found")
+		return
+	}
+	_ = p
+	tickID := fmt.Sprintf("%s-%s", name, time.Now().UTC().Format("2006-01-02-15-04-05"))
+	// Enqueue a tick for the project via the loop.
+	s.loop.ForceEvaluate()
+	writeJSON(w, 202, map[string]string{
+		"status":  "spawned",
+		"project": name,
+		"tick_id": tickID,
+	})
 }
 
 // handleTicks handles GET /ticks with optional query params.
