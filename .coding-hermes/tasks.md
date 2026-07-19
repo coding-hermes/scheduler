@@ -530,3 +530,22 @@ sim_fixture.go, sim_fixture_test.go).
 **Cooldown-reset detected:** Prior tick #4 set CooldownS=2400, but daemon restart reapplied fleet TOML (back to 600). Re-applied graduate slowdown: 600s → 1200s (20m). API verified: `CooldownS: 1200`, `Enabled: True`.
 
 **No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-18 19:18 (#6)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering in goroutine spawns)
+
+**Daemon health:** status=ok, 10 active ticks, uptime=31m, evaluation_age=12s, spawns_http=29, spawns_exec=5
+
+**Graduate slowdown:** 1200s → 2400s (40m). GET verified: `CooldownS: 2400`, `Enabled: True`.
+
+**No action needed.**
