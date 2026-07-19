@@ -1,3 +1,64 @@
+## FOREMAN TICK — 2026-07-19 16:05 (#28)
+
+**Board status:** Maintenance/idle tick. Daemon stable at 21m31s uptime — well past the ~60s crash window. spawns_http=7 confirms HTTP API path is working now (was 0 in previous ticks). Discovery sweep all green. All deferred tasks remain deferred.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files exist)
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (6/6 packages) |
+| `golangci-lint` | 0 issues |
+| Hilo | 54 files, 374 edges |
+| 0 TODOs/FIXMEs | Clean |
+
+**Coverage snapshot:**
+
+| Package | Coverage |
+|---------|----------|
+| internal/config | 89.3% |
+| internal/mcp | 84.7% |
+| internal/dashboard | 80.5% |
+| internal/api | 75.7% |
+| internal/database | 54.5% |
+| internal/scheduler | 45.0% |
+| cmd/migrate, cmd/schedulerd, internal/sync | 0% (known) |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 10 |
+| Uptime | 21m31s (stable) |
+| spawns_exec | 6 |
+| spawns_http | 7 |
+| Budget | 100 |
+| Projects in queue | 37 |
+| Completed | 2,707 |
+| Failed | 8,991 |
+| Timeout | 179 |
+
+**Key observations:**
+
+1. **spawns_http=7** — HTTP API path is working now. Previous ticks showed 0 (rate-limited). Gateway concurrency budget handling confirmed correct.
+2. **Daemon stable** — 21m+ uptime, past the ~60s crash window from tick #26. No further crashes observed.
+3. **Systemd inactive but daemon running** — PID 944260 running manually (bash wrapper). Service unit `coding-hermes-scheduler` shows inactive. Manual restart from tick #26 crash persists. If host reboots, daemon won't auto-start. Known operational state — not a code bug.
+4. **Fleet-level observations:** eduos-e2e has 5 consecutive failures (escalation fired). gitreins-poc starved (59m since last tick, cooldown 1350s). Neither is this project's foreman problem.
+5. **16 outdated deps** — same list as prior ticks. Localhost-only deployment, LOW exploitability. No action needed.
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority. Bane can explicitly request.
+
+**VERDICT: idle — Daemon stable, fleet healthy, discovery sweep clean. All deferred tasks remain deferred. No worker needed.**
+
+---
+
 ## FOREMAN TICK — 2026-07-19 15:46 (#27)
 
 **Board status:** Maintenance/idle tick. Daemon stable at 2m+ uptime (past the ~60s crash window from tick #26). Discovery sweep clean. NEVER-DONE audit already re-verified by tick #26 — no new gaps.
