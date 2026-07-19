@@ -63,17 +63,25 @@ fully manage the scheduler without DB access.
 **Also in this commit:** SlotPool running count tracking, auto-slowdown cap 1h,
 timeout backoff removal, regression test cleanup, deliver.go HTTP alert formatting.
 
-### [ ] FEAT-DASHBOARD — Full Web Dashboard
-**Priority: MEDIUM. Weight: 12. Status: PENDING.**
+### [ ] FEAT-DASHBOARD — Full Web Dashboard ✓ `e961f1a`
+**Priority: MEDIUM. Weight: 12. Status: PARTIAL (Phase 1 complete).**
 **Goal:** Live web dashboard with fleet overview, project details, tick history,
 and real-time status — no database access needed.
 
-**Pages:**
-- [ ] **Fleet overview** — table: project, priority, weight, cooldown, last tick, status (color-coded)
-- [ ] **Project detail** — tick timeline, recent output, settings editor
+**Phase 1 complete ✓ `e961f1a`:**
+- htmx.min.js embedded via Go embed (47KB, offline)
+- Fleet overview table auto-refreshes via htmx hx-trigger="every 10s"
+- Project detail page at GET /projects/{name}
+  - Metadata display, latest tick, last 20 ticks table
+- Pre-requisite: SQL MAX misuse + int→bool scan fix (d74e7b3)
+- All 14 dashboard tests pass, go vet clean, guard clean
+
+**Pages (remaining):**
+- [x] **Fleet overview** — htmx live-refresh table ✓
+- [x] **Project detail** — metadata + tick timeline ✓
 - [ ] **Tick history** — searchable/filterable log of all ticks with outcomes
 - [ ] **Queue view** — ordered list of what fires next with urgency scores
-- [ ] **Namespace view** — budget allocation, borrowing, per-ns stats
+- [ ] **Namespace view** — budget allocation, borrowing, per-ns stats (table exists, needs enhancement)
 - [ ] **Health panel** — uptime, goroutines, HTTP vs exec spawn ratio, memory
 
 **Tech:** Go `html/template` + htmx for live updates (no SPA framework needed).
