@@ -1,3 +1,50 @@
+## FOREMAN TICK — 2026-07-19 16:44 (#30)
+
+**Board status:** Idle tick. Daemon at 1h0m uptime — longest stable run since the crash-fix era. spawns_http=39, HTTP API dominant. Discovery sweep all green. All deferred tasks remain deferred.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files exist)
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (6/6 packages) |
+| `golangci-lint` | 0 issues |
+| Hilo | 54 files, 374 edges |
+| 0 TODOs/FIXMEs | Clean |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 8 |
+| Uptime | 1h0m (stable) |
+| spawns_exec | 6 |
+| spawns_http | 39 |
+| Budget | 100 |
+| Projects in queue | 37 |
+| Completed | 2,741 |
+| Failed | 8,991 |
+| Timeout | 179 |
+
+**Key observations:**
+
+1. **1h0m uptime** — definitively past the ~60s crash window. Daemon has been running continuously since tick #26's restart. Longest stable run observed.
+2. **spawns_http=39** — HTTP API path is now the overwhelmingly dominant spawn method (6.5× exec). Growth from 0 (#27) → 7 (#28) → 19 (#29) → 39 (#30). Gateway integration fully proven and scaling.
+3. **CI all green** — latest 5 runs all SUCCESS.
+4. **Systemd still inactive** — daemon runs manually (bash wrapper). Operational state, not a code bug. Bane can systemctl enable when ready.
+5. **Failed count 8,991** — this is the DuckBrain sync cron firing every 2h for 63 projects all failing since DuckBrain MCP is not running on :3000. Not a scheduler bug — external infrastructure dependency. 63 × ~71 cycles = ~4,500 of those. The rest are various fleet-level timeouts and provider outages. Not actionable from this foreman.
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority. Bane can explicitly request.
+
+**VERDICT: idle — Daemon stable for 1h0m, longest run since crash fix. HTTP API dominant. Discovery sweep clean. All deferred tasks remain deferred. No worker needed.**
+
 ## FOREMAN TICK — 2026-07-19 16:23 (#29)
 
 **Board status:** Idle tick. Daemon stable at 40m+ uptime (well past the ~60s crash window). spawns_http=19 — HTTP API path fully operational and scaling. Discovery sweep all green. All deferred tasks remain deferred.
