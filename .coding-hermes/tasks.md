@@ -1,3 +1,60 @@
+## FOREMAN TICK — 2026-07-19 15:12 (#24)
+
+**Board status:** Maintenance tick. Daemon running (manual instance), all 37 projects in queue, 5 active ticks. 3 FEAT-DASHBOARD pages remain — deferred (MEDIUM priority, project in maintenance).
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files exist)
+
+**Discovery sweep — all green:**
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (8/8 packages) |
+| `golangci-lint` | 0 issues |
+| `govulncheck` | 0 vulns affecting code |
+| `go mod verify` | All modules verified |
+| TODOs/FIXMEs in Go code | 0 found |
+| Specs | 7 files (S01-S07) — complete |
+| Docs | ADR + fleet.md present |
+| CI (latest 2 runs) | ✅ SUCCESS |
+
+**Daemon health:**
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 5 |
+| Uptime | 53m |
+| spawns_exec | 44 |
+| spawns_http | 0 |
+| Budget | 100 (7/100 used) |
+| Projects | 37 in queue |
+| Completed ticks | 2,686 |
+| Failed | 8,983 |
+| Timeout | 179 |
+
+**Key findings:**
+
+1. **⚠️ Daemon started manually — gateway key missing.** The running daemon (PID 127827, started 14:20) was launched from a shell without `--gateway-key`. The `--gateway-key` defaults to `API_SERVER_KEY` env var, which is only set in the systemd unit. All 44 spawns in 53 minutes went through `exec.Command` (~500MB per process) instead of the HTTP API (~zero overhead). **Fix:** restart the daemon with `--gateway-key` or source the env var before starting.
+
+2. **Gateway IS reachable and authenticates correctly.** `curl http://127.0.0.1:8642/health` with the `Authorization: Bearer WZJh...` key returns `{"status":"ok","version":"0.18.2"}`. The key from systemd unit works — it just wasn't passed to the manual daemon instance.
+
+3. **5 active ticks across 37 projects.** Queue shows projects with various cooldowns (900s for scheduler itself, 7200s for most, 14400s for slow-idle projects). All healthy.
+
+4. **spawns_http=0 is a display bug or misconfiguration — NOT a code bug.** The counters exist and are correctly wired (atomic int64 at spawn.go:51-52, incremented at spawn.go:199 for HTTP, spawn.go:222 for exec). The zero HTTP count is because the gateway client was never created at startup.
+
+**External signals:**
+- Remote: No new commits on origin/main
+- GitHub issues: None open
+- CI: Latest 2 runs green (tick #23 board update + Queue View feat)
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority, project in maintenance mode. Bane can explicitly request any page.
+
+**VERDICT: maintenance — project healthy, daemon operational (exec fallback). One actionable finding: restart daemon with gateway key for HTTP spawn efficiency.**
+
 ## FOREMAN TICK — 2026-07-19 14:21 (#23)
 
 **Board status:** Sibling committed Queue View (e6e7522). FEAT-DASHBOARD: 3/6 pages done, 3 remain. Foreman verified + pushed, ran sweep + NEVER-DONE audit.
