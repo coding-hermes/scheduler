@@ -817,3 +817,27 @@ sim_fixture.go, sim_fixture_test.go).
 **New endpoints live:** /api/v1/queue (41 projects), /api/v1/openapi.json (16 paths), /api/v1/ticks?status=X filter
 
 **VERDICT: productively — fixed SQL bugs, added test infra, committed parallel-tick timeout/slowdown refactoring.**
+
+---
+
+## IDLE TICK — 2026-07-19 09:37 (#18)
+
+**Board status:** All tasks complete except FEAT-DASHBOARD (MEDIUM, Weight 12) — 6-page web dashboard with Go html/template + htmx.
+
+**Step 0 self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Found staged cleanup: 41 lines removed from garbled OPEN-001 duplicate section
+- Committed `005add8`
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (8/8 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering in goroutine spawns)
+
+**Daemon health:** status=ok, 10 active ticks, uptime=5m12s, evaluation_age=4.8s, spawns_http=3, spawns_exec=5
+
+**FEAT-DASHBOARD deferred:** Sole remaining task is a 6-page full web dashboard. MEDIUM priority. Substantial frontend work (html/template + htmx + 6 pages + auto-refresh). Not starting without explicit direction — project in maintenance mode.
+
+**No action needed.**
