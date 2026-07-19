@@ -83,7 +83,7 @@ type FleetRow struct {
 	LastOutcome string
 	SessionID   string
 	Urgency     float64
-	RunningNow  bool
+	RunningNow  int // 0 or 1; int avoids modernc.org/sqlite int→bool scan bug
 	Completed   int
 	Failed      int
 	Timeout     int
@@ -153,12 +153,15 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 
 	// ── Projects: batch query with per-project stats via LEFT JOINs ──
 	// Single query replaces 7 per-project queries (N+1 → 1).
+	// Note: outcome and session_id are fetched via a SECOND LEFT JOIN to ticks
+	// (t2) rather than correlated subqueries — SQLite's modernc driver rejects
+	// MAX() references inside correlated subqueries ("misuse of aggregate").
 	projectQuery := `
 		SELECT
 			p.name, p.weight, p.priority, p.enabled,
 			COALESCE(t.spawned_at, '')            AS last_tick,
-			COALESCE(t.outcome, '')                AS last_outcome,
-			COALESCE(t.session_id, '')             AS session_id,
+			COALESCE(t2.outcome, '')               AS last_outcome,
+			COALESCE(t2.session_id, '')            AS session_id,
 			COALESCE(t.running, 0) > 0             AS running_now,
 			COALESCE(t.completed, 0)               AS completed,
 			COALESCE(t.failed, 0)                  AS failed,
@@ -170,8 +173,6 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			SELECT
 				tk.project_name,
 				MAX(tk.spawned_at) AS spawned_at,
-				(SELECT tt.outcome  FROM ticks tt WHERE tt.project_name = tk.project_name AND tt.spawned_at = MAX(tk.spawned_at)) AS outcome,
-				(SELECT tt.session_id FROM ticks tt WHERE tt.project_name = tk.project_name AND tt.spawned_at = MAX(tk.spawned_at)) AS session_id,
 				SUM(CASE WHEN tk.status = 'running'   THEN 1 ELSE 0 END) AS running,
 				SUM(CASE WHEN tk.status = 'completed' THEN 1 ELSE 0 END) AS completed,
 				SUM(CASE WHEN tk.status = 'failed'    THEN 1 ELSE 0 END) AS failed,
@@ -181,6 +182,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			FROM ticks tk
 			GROUP BY tk.project_name
 		) t ON t.project_name = p.name
+		LEFT JOIN ticks t2 ON t2.project_name = t.project_name AND t2.spawned_at = t.spawned_at
 		ORDER BY p.name
 	`
 	dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)

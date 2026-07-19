@@ -126,14 +126,48 @@ func snippet(haystack, needle string) string {
 }
 
 // TestGenerate_WithProjects exercises the per-project rendering path.
-//
-// SKIPPED: dashboard.collect() at line 101 scans a SQL COUNT(*) integer directly
-// into a Go bool (`&r.RunningNow`), which the modernc.org/sqlite driver does not
-// support — the query hangs indefinitely. This is a production bug that needs to
-// be fixed in internal/dashboard/generator.go (change bool to int, then compare to 0).
-// Once fixed, remove the t.Skip below and this test will exercise the rendering path.
+// This was previously SKIPPED due to the int→bool scan bug in dashboard.collect
+// (FleetRow.RunningNow changed from bool to int, fixing the modernc.org/sqlite
+// scan issue). Now actively tests project data rendering.
 func TestGenerate_WithProjects(t *testing.T) {
-	t.Skip("SKIPPED: dashboard.collect hangs due to int→bool Scan (generator.go:101) — production fix needed")
+	db := newTestDB(t)
+	mustCreateProject(t, db, "alpha", 30, 5)
+	mustCreateProject(t, db, "beta", 20, 3)
+	mustCreateProject(t, db, "gamma", 10, 1)
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.Generate(&buf); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := buf.String()
+
+	// All three project names must appear.
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("expected project %q in output", name)
+		}
+	}
+
+	// Weights must be visible.
+	for _, want := range []string{">30<", ">20<", ">10<"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected weight %s in output", want)
+		}
+	}
+
+	// Priority values.
+	for _, want := range []string{">5<", ">3<", ">1<"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected priority %s in output", want)
+		}
+	}
+
+	// Should NOT show "0/0" (empty-state) since we have projects.
+	// With 3 enabled projects, disabled 0, the card shows 3/3.
+	if strings.Contains(out, ">0/0<") {
+		t.Errorf("expected non-zero project counts, got 0/0")
+	}
 }
 
 // TestGenerate_PercentFunction_ZeroTotal verifies percent handles total=0.
