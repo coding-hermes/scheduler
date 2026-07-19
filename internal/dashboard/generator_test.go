@@ -284,3 +284,89 @@ func TestGenerate_WithNamespaces(t *testing.T) {
 		t.Errorf("expected utilization history heading")
 	}
 }
+
+// TestGenerateQueue_EmptyDatabase renders the queue page with no projects.
+func TestGenerateQueue_EmptyDatabase(t *testing.T) {
+	db := newTestDB(t)
+	g := dashboard.NewGenerator(db)
+
+	var buf strings.Builder
+	if err := g.GenerateQueue(&buf); err != nil {
+		t.Fatalf("GenerateQueue: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{"<!DOCTYPE html>", "<title>Queue", "Evaluation Queue", "0 eligible"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q", want)
+		}
+	}
+}
+
+// TestGenerateQueue_WithProjects renders the queue page sorted by urgency.
+func TestGenerateQueue_WithProjects(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProject(t, db, "alpha", 30, 5)
+	mustCreateProject(t, db, "beta", 20, 3)
+	mustCreateProject(t, db, "gamma", 10, 8) // lower weight, higher priority
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.GenerateQueue(&buf); err != nil {
+		t.Fatalf("GenerateQueue: %v", err)
+	}
+	out := buf.String()
+
+	// All three projects must appear.
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("expected project %q in queue output", name)
+		}
+	}
+
+	// Must contain nav links and structural elements.
+	if !strings.Contains(out, `href="/projects/alpha"`) {
+		t.Errorf("expected link to project detail page")
+	}
+	if !strings.Contains(out, `href="/"`) {
+		t.Errorf("expected nav link to fleet overview")
+	}
+
+	// Verify gamma (priority 8) appears before alpha (priority 5) since urgency is
+	// priority-driven when no ticks exist.
+	gammaIdx := strings.Index(out, "gamma")
+	alphaIdx := strings.Index(out, "alpha")
+	betaIdx := strings.Index(out, "beta")
+	if gammaIdx < 0 || alphaIdx < 0 || betaIdx < 0 {
+		t.Fatal("one or more projects missing from queue")
+	}
+	// gamma has higher priority (8) than alpha (5), should appear first.
+	if gammaIdx > alphaIdx {
+		t.Errorf("expected gamma (priority 8) before alpha (priority 5) in urgency-sorted queue")
+	}
+	if alphaIdx > betaIdx {
+		t.Errorf("expected alpha (priority 5) before beta (priority 3)")
+	}
+}
+
+// TestGenerateQueue_NavLinks verifies the queue page has functional navigation.
+func TestGenerateQueue_NavLinks(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProject(t, db, "test", 10, 5)
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.GenerateQueue(&buf); err != nil {
+		t.Fatalf("GenerateQueue: %v", err)
+	}
+	out := buf.String()
+
+	// Queue page nav should link back to fleet overview.
+	if !strings.Contains(out, `href="/"`) {
+		t.Errorf("queue page missing link to fleet overview")
+	}
+	// Queue should have meta with count.
+	if !strings.Contains(out, "eligible") {
+		t.Errorf("queue page missing eligibility count")
+	}
+}

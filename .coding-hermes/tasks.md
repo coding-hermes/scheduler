@@ -1,3 +1,35 @@
+## PRODUCTIVE TICK — 2026-07-19 14:19 (#22)
+
+**Board status:** FEAT-DASHBOARD Phase 2 — 2/6 pages done. 3 pages remain. 13 AUDIT tasks, 5 REGRESSION tasks.
+
+**Work done:**
+- [x] FEAT-DASHBOARD Queue View — new page at /queue showing 37 eligible projects sorted by urgency
+  - QueueEntry/QueueData structs, GenerateQueue method in generator.go
+  - queue.html template with nav, urgency bars, project detail links, auto-refresh
+  - Route registered: `GET /queue` → dashGen.GenerateQueue
+  - 3 new tests: empty queue, sorted by priority, nav links
+  - Nav links added to fleet overview and queue pages for cross-navigation
+  - SQLite lock fix: rows scan → close → per-project tick queries (avoids modernc deadlock)
+
+**Files changed:** generator.go (+84/-3), main.go (+8), templates/queue.html (new, 68 lines), generator_test.go (+86), .coding-hermes/tasks.md
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (8/8 packages, 22 tests including 3 new queue tests)
+- `golangci-lint`: 0 issues
+- Hilo: 54 files, 373 edges
+
+**Daemon health:** status=ok, 9 active ticks, uptime=~1m (post-restart), evaluation_age=0.1s, spawns_http=0, spawns_exec=9
+
+**VERDICT: productively — Queue view page shipped with tests. 3 FEAT-DASHBOARD pages remain.**
+
+---
+
+## [ ] NEVER-DONE — Run coding-hermes-never-done 11-point audit
+
+Load coding-hermes-never-done skill. Run ALL 11 checks: spec alignment, doc coverage, test gaps, package upgrades, pitfall hunt, performance audit, endpoint verification, CI/CD health, DuckBrain sync, code quality, middle-out wiring. Create a task for EVERY gap found. Do NOT mark this task done until every check passes.
+
 ## PRODUCTIVE TICK — 2026-07-19 12:27 (#21)
 
 **Board status:** FEAT-DASHBOARD (PHASE 2 pending), 15 AUDIT tasks from sweep, 5 REGRESSION tasks.
@@ -113,8 +145,8 @@ and real-time status — no database access needed.
 **Pages (remaining):**
 - [x] **Fleet overview** — htmx live-refresh table ✓
 - [x] **Project detail** — metadata + tick timeline ✓
+- [x] **Queue view** — ordered list of what fires next with urgency scores ✓ (tick #22)
 - [ ] **Tick history** — searchable/filterable log of all ticks with outcomes
-- [ ] **Queue view** — ordered list of what fires next with urgency scores
 - [ ] **Namespace view** — budget allocation, borrowing, per-ns stats (table exists, needs enhancement)
 - [ ] **Health panel** — uptime, goroutines, HTTP vs exec spawn ratio, memory
 

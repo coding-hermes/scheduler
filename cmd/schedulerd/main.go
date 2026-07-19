@@ -227,6 +227,14 @@ func main() {
 		}
 	})
 
+	// Queue page: /queue.
+	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateQueue(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
 	// API at /api/
 	mux.Handle("/api/", apiServer.Handler())
 

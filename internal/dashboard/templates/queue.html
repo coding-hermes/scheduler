@@ -1,0 +1,61 @@
+{{define "queue"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Queue · Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
+.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
+.nav{display:flex;gap:16px;margin-bottom:20px}
+.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
+.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent)}
+.disabled{opacity:0.5}
+.urgency-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:6px;vertical-align:middle;max-width:80px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
+.card .value{font-size:1.3rem;font-weight:600;margin-top:4px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/">Fleet Overview</a>
+<a href="/queue" class="active">Queue</a>
+</div>
+<h1>📋 Evaluation Queue</h1>
+<div class="meta">{{.Count}} eligible projects · sorted by urgency (descending)</div>
+
+<div class="cards">
+<div class="card"><div class="label">Eligible</div><div class="value">{{.Count}}</div></div>
+<div class="card"><div class="label">Total Weight</div><div class="value">{{.TotalWeight}}</div></div>
+</div>
+
+<table>
+<thead><tr><th>#</th><th>Project</th><th>Weight</th><th>Priority</th><th>Cooldown</th><th>Urgency</th></tr></thead>
+<tbody>
+{{range $i, $e := .Entries}}
+<tr class="{{if not .Enabled}}disabled{{end}}">
+<td class="meta">{{add1 $i}}</td>
+<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
+<td>{{.Weight}}</td>
+<td>{{.Priority}}</td>
+<td>{{.CooldownS}}s</td>
+<td><div class="urgency-bar" style="width:{{urgencyPct .Urgency}}%;background:{{urgencyColor .Urgency}}"></div>{{printf "%.1f" .Urgency}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+<p class="meta" style="margin-top:16px">Auto-refresh: <span hx-get="/queue" hx-trigger="every 30s" hx-swap="none">updating in 30s</span></p>
+</body>
+</html>{{end}}

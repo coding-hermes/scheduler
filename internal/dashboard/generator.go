@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -85,6 +86,25 @@ func loadTemplates() *template.Template {
 			}
 			return "var(--green)"
 		},
+		"add1": func(i int) int { return i + 1 },
+		"urgencyPct": func(u float64) float64 {
+			// Scale urgency 0..maxUrgency to 0..100 width.
+			// Typical max urgency in practice ~500; cap at 100 for bar width.
+			pct := u / 5.0
+			if pct > 100 {
+				return 100
+			}
+			return pct
+		},
+		"urgencyColor": func(u float64) string {
+			if u < 50 {
+				return "var(--green)"
+			}
+			if u < 200 {
+				return "var(--yellow)"
+			}
+			return "var(--red)"
+		},
 	}
 	t := template.New("").Funcs(funcs)
 	// Add the existing pageTemplate under the name "page" so it composes with
@@ -113,12 +133,30 @@ func loadTemplates() *template.Template {
 	return parsed
 }
 
+// QueueEntry is one project in the evaluation queue view.
+type QueueEntry struct {
+	Name      string
+	Weight    int
+	Priority  int
+	CooldownS int
+	Enabled   bool
+	Urgency   float64
+}
+
+// QueueData holds all data for the queue page.
+type QueueData struct {
+	Count       int
+	TotalWeight int
+	Entries     []QueueEntry
+}
+
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
 	db          *sql.DB
 	tmpl        *template.Template // parsed once, reused
 	fleetTmpl   *template.Template // partial: project table body only
 	projectTmpl *template.Template // full page: /projects/{name}
+	queueTmpl   *template.Template // full page: /queue
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
@@ -130,12 +168,16 @@ func NewGenerator(db *sql.DB) *Generator {
 		tmpl:        tmpl,
 		fleetTmpl:   tmpl.Lookup("fleet_table"),
 		projectTmpl: tmpl.Lookup("project_detail"),
+		queueTmpl:   tmpl.Lookup("queue"),
 	}
 	if g.fleetTmpl == nil {
 		panic("dashboard: fleet_table template not registered")
 	}
 	if g.projectTmpl == nil {
 		panic("dashboard: project_detail template not registered")
+	}
+	if g.queueTmpl == nil {
+		panic("dashboard: queue template not registered")
 	}
 	return g
 }
@@ -381,6 +423,70 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	return data
 }
 
+// GenerateQueue renders the evaluation queue page — all enabled projects
+// sorted by urgency (descending) with their weight, priority, and cooldown.
+func (g *Generator) GenerateQueue(w io.Writer) error {
+	ctx := context.Background()
+	data := QueueData{}
+
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT p.name, p.weight, p.priority, p.cooldown_s, p.enabled
+		FROM projects p
+		WHERE p.enabled = 1
+		ORDER BY p.name
+	`)
+	if err != nil {
+		return fmt.Errorf("query queue: %w", err)
+	}
+
+	// Collect all projects first (close rows before nested queries to avoid
+	// SQLite lock contention with modernc.org/sqlite).
+	type raw struct {
+		name      string
+		weight    int
+		priority  int
+		cooldownS int
+		enabled   bool
+	}
+	var raws []raw
+	for rows.Next() {
+		var r raw
+		if err := rows.Scan(&r.name, &r.weight, &r.priority, &r.cooldownS, &r.enabled); err != nil {
+			continue
+		}
+		raws = append(raws, r)
+	}
+	_ = rows.Close()
+
+	for _, r := range raws {
+		e := QueueEntry{
+			Name:      r.name,
+			Weight:    r.weight,
+			Priority:  r.priority,
+			CooldownS: r.cooldownS,
+			Enabled:   r.enabled,
+			Urgency:   float64(r.priority) * 10.0, // base urgency from priority alone
+		}
+		var lastTick string
+		_ = g.db.QueryRowContext(ctx, `SELECT COALESCE(spawned_at,'') FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.name).Scan(&lastTick)
+		if lastTick != "" {
+			if t, err := time.Parse(time.RFC3339, lastTick); err == nil {
+				e.Urgency = float64(r.priority) * (1 + time.Since(t).Hours())
+			}
+		}
+		data.Entries = append(data.Entries, e)
+		data.TotalWeight += r.weight
+	}
+
+	// Sort by urgency descending.
+	sort.Slice(data.Entries, func(i, j int) bool {
+		return data.Entries[i].Urgency > data.Entries[j].Urgency
+	})
+
+	data.Count = len(data.Entries)
+	return g.queueTmpl.Execute(w, data)
+}
+
 // latestTickForProject returns the most recently spawned tick for the project,
 // or nil if the project has never been scheduled. Implementation lives here
 // (not in the database package) to avoid widening the db API for a single
@@ -439,10 +545,17 @@ tr:last-child td{border-bottom:none}
 .utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
 .htmx-indicator{color:var(--muted);font-size:0.7rem;margin-left:8px;display:none}
 .htmx-request .htmx-indicator{display:inline}
+.nav{display:flex;gap:12px;margin-bottom:20px}
+.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
+.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
 @media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
 </style>
 </head>
 <body>
+<div class="nav">
+<a href="/" class="active">Fleet Overview</a>
+<a href="/queue">Queue</a>
+</div>
 <h1>🚀 Coding Hermes Fleet</h1>
 <div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s · Live updates via htmx every 10s</div>
 
