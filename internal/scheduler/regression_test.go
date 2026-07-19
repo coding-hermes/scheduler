@@ -409,3 +409,118 @@ func mustCreateProjectAtWithNS(t *testing.T, db *sql.DB, name string, weight, pr
 		t.Fatalf("CreateProject %s: %v", name, err)
 	}
 }
+
+// ── Worker Model Tests ──
+
+// TestWorkerDefaults_Empty returns empty string when neither field is set.
+func TestWorkerDefaults_Empty(t *testing.T) {
+	pp := scheduler.PackedProject{}
+	result := scheduler.WorkerDefaults(pp)
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// TestWorkerDefaults_BothSet returns preference with model and provider.
+func TestWorkerDefaults_BothSet(t *testing.T) {
+	pp := scheduler.PackedProject{
+		WorkerModel:    "gpt-5.6-sol",
+		WorkerProvider: "openai-codex",
+	}
+	result := scheduler.WorkerDefaults(pp)
+	if result == "" {
+		t.Fatal("expected non-empty preference")
+	}
+	if !containsStr(result, "gpt-5.6-sol") || !containsStr(result, "openai-codex") {
+		t.Errorf("result missing model or provider: %q", result)
+	}
+	if !containsStr(result, "if available") || !containsStr(result, "Feel free to use a different model") {
+		t.Errorf("result missing fallback language: %q", result)
+	}
+}
+
+// TestWorkerDefaults_ModelOnly works when only model is set.
+func TestWorkerDefaults_ModelOnly(t *testing.T) {
+	pp := scheduler.PackedProject{
+		WorkerModel: "gpt-5.6-sol",
+	}
+	result := scheduler.WorkerDefaults(pp)
+	if result == "" {
+		t.Fatal("expected non-empty preference")
+	}
+	if !containsStr(result, "gpt-5.6-sol") {
+		t.Errorf("missing model: %q", result)
+	}
+	if !containsStr(result, "(no default)") {
+		t.Errorf("should show '(no default)' for provider: %q", result)
+	}
+}
+
+// TestWorkerModel_CreateAndRead verifies round-trip through CreateProject/GetProject.
+func TestWorkerModel_CreateAndRead(t *testing.T) {
+	db := newTestDB(t)
+
+	p := makeProject("worker-test", 5, 5, 60, 1.0)
+	p.WorkerModel = "gpt-5.6-sol"
+	p.WorkerProvider = "openai-codex"
+
+	if err := database.CreateProject(context.Background(), db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	got, err := database.GetProject(context.Background(), db, "worker-test")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.WorkerModel != "gpt-5.6-sol" {
+		t.Errorf("WorkerModel = %q, want gpt-5.6-sol", got.WorkerModel)
+	}
+	if got.WorkerProvider != "openai-codex" {
+		t.Errorf("WorkerProvider = %q, want openai-codex", got.WorkerProvider)
+	}
+}
+
+// TestWorkerModel_UpdateAndClear verifies UpdateProject can set and clear worker fields.
+func TestWorkerModel_UpdateAndClear(t *testing.T) {
+	db := newTestDB(t)
+
+	mustCreateProjectAt(t, db, "clear-test", 5, 5, 60, 1.0)
+
+	// Set worker model.
+	wm := "gpt-5.6-sol"
+	wp := "openai-codex"
+	if err := database.UpdateProject(context.Background(), db, "clear-test", database.ProjectUpdates{
+		WorkerModel:    &wm,
+		WorkerProvider: &wp,
+	}); err != nil {
+		t.Fatalf("UpdateProject set: %v", err)
+	}
+
+	got, _ := database.GetProject(context.Background(), db, "clear-test")
+	if got.WorkerModel != wm || got.WorkerProvider != wp {
+		t.Errorf("after set: model=%q provider=%q", got.WorkerModel, got.WorkerProvider)
+	}
+
+	// Clear worker model (set to empty).
+	empty := ""
+	if err := database.UpdateProject(context.Background(), db, "clear-test", database.ProjectUpdates{
+		WorkerModel:    &empty,
+		WorkerProvider: &empty,
+	}); err != nil {
+		t.Fatalf("UpdateProject clear: %v", err)
+	}
+
+	got, _ = database.GetProject(context.Background(), db, "clear-test")
+	if got.WorkerModel != "" || got.WorkerProvider != "" {
+		t.Errorf("after clear: model=%q provider=%q, want empty", got.WorkerModel, got.WorkerProvider)
+	}
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
