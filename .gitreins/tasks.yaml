@@ -158,3 +158,23 @@ tasks:
     \ for 'enabled=0' in slot_pool/slowdown/loop confirms no auto-disable"
   status: pending
   created_at: '2026-07-19T14:30:44.979024+00:00'
+- id: FEAT-DASHBOARD
+  title: 'Increment 1: Multi-page dashboard with htmx + project detail page'
+  criteria:
+  - Generator implements http.Handler without breaking existing API server
+  - GET / returns 200 with fleet stat cards, budget bar, clickable project links,
+    and htmx 30s table polling
+  - GET /projects/{name} returns 200 with project config, last 50 ticks, worker model/provider,
+    and htmx controls for enabled, weight, and priority
+  - Project detail htmx actions update project enabled, weight, and priority in SQLite
+    and return updated controls
+  - GET /queue returns 200 with projects ordered by urgency and cooldown status
+  - GET /health returns 200 with uptime, goroutines, spawn ratio, and memory when
+    available
+  - Unknown project and route return 404; unsupported methods return 405
+  - go build ./... passes
+  - go vet ./... passes
+  - go test ./internal/dashboard/... -count=1 passes
+  - golangci-lint run reports zero issues
+  status: pending
+  created_at: '2026-07-19T14:38:58.395568+00:00'
