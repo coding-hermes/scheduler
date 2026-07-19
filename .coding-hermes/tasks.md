@@ -604,3 +604,21 @@ sim_fixture.go, sim_fixture_test.go).
 **Graduate slowdown:** 1200s → 2400s (40m). GET verified: `CooldownS: 2400`, `Enabled: True`.
 
 **No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-18 20:47 (#10)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (8/8 packages)
+- `golangci-lint run`: 0 issues
+
+**Daemon health:** status=ok, 10 active ticks, uptime=~2m, spawns_http=0, spawns_exec=0 (post-restart)
+
+**Cooldown-reset detected:** Prior tick #9 set CooldownS=2400, but daemon restart reapplied fleet TOML (back to 1200). Applied graduate slowdown: 1200s → 2400s (40m). GET verified: `CooldownS: 2400`, `Enabled: True`.
+
+**No action needed.**
