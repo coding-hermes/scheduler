@@ -154,9 +154,27 @@ func (m *MultiPoolPacker) Pack(
 			})
 		}
 
-		// Sort by urgency descending.
-		sort.Slice(scored, func(i, j int) bool {
-			return scored[i].Urgency > scored[j].Urgency
+		// Sort by urgency descending, then priority, then last-tick ASC.
+		sort.SliceStable(scored, func(i, j int) bool {
+			if scored[i].Urgency != scored[j].Urgency {
+				return scored[i].Urgency > scored[j].Urgency
+			}
+			if scored[i].Project.Priority != scored[j].Project.Priority {
+				return scored[i].Project.Priority > scored[j].Project.Priority
+			}
+			// Older last-tick = higher priority.
+			li, iOk := lastCompleted[scored[i].Project.Name]
+			lj, jOk := lastCompleted[scored[j].Project.Name]
+			if !iOk && jOk {
+				return true
+			}
+			if iOk && !jOk {
+				return false
+			}
+			if iOk && jOk {
+				return li.Before(lj)
+			}
+			return scored[i].Project.Name < scored[j].Project.Name
 		})
 
 		// Greedy pack into namespace allocation.

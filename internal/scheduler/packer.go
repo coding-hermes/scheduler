@@ -94,7 +94,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		list = append(list, s)
 	}
 
-	// Sort by urgency descending, then priority descending for tie-breaking.
+	// Sort by urgency descending, priority descending, then last tick
+	// ascending (oldest first — projects that haven't run in longest get
+	// priority over projects with the same urgency/priority).
 	sort.SliceStable(list, func(i, j int) bool {
 		if list[i].urgency != list[j].urgency {
 			return list[i].urgency > list[j].urgency
@@ -102,8 +104,30 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if list[i].priority != list[j].priority {
 			return list[i].priority > list[j].priority
 		}
+		// Older last-tick = higher priority.
+		// nil lastTickAt means never completed — those come first.
+		if list[i].lastTickAt == nil && list[j].lastTickAt != nil {
+			return true
+		}
+		if list[j].lastTickAt == nil && list[i].lastTickAt != nil {
+			return false
+		}
+		if list[i].lastTickAt != nil && list[j].lastTickAt != nil {
+			return list[i].lastTickAt.Before(*list[j].lastTickAt)
+		}
 		return list[i].name < list[j].name
 	})
+
+	// DEBUG: log top 15 sorted projects
+	for i := 0; i < min(15, len(list)); i++ {
+		s := list[i]
+		lt := "nil"
+		if s.lastTickAt != nil {
+			lt = s.lastTickAt.Format("15:04")
+		}
+		log.Printf("PACKER-SORTED[%d]: %s urgency=%.1f pri=%.0f last=%s",
+			i, s.name, s.urgency, s.priority, lt)
+	}
 
 	// Greedy pack: pick projects that fit in budget.
 	// Use the in-memory running set as the SOLE source of truth.

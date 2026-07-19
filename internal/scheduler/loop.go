@@ -364,8 +364,8 @@ func (l *Loop) cleanDanglingOnStartup() {
 	// are being cleaned, so the packer uses actual last-tick time
 	// rather than created_at for urgency calculation.
 	if _, err := l.db.ExecContext(ctx,
-		`UPDATE projects SET last_tick_completed = datetime('now')
-		 WHERE name IN (SELECT DISTINCT project_name FROM ticks WHERE status='running')`); err != nil {
+		`UPDATE projects SET last_tick_completed = strftime('%Y-%m-%dT%H:%M:%S', 'now')
+ 	 WHERE name IN (SELECT DISTINCT project_name FROM ticks WHERE status='running')`); err != nil {
 		log.Printf("DANGLING: last_tick_completed update failed: %v", err)
 	}
 
