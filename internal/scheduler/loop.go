@@ -351,7 +351,15 @@ func (l *Loop) evaluate() {
 	// concurrency — projects acquire a slot, spawn via gateway in their
 	// own goroutine, and release the slot on completion/timeout.
 	// evaluate() returns immediately; the pool runs autonomously.
+	//
+	// Dedup: skip projects already occupying a slot to prevent
+	// the timeout→re-spawn→duplicate processes problem.
+	alreadyRunning := l.slotPool.RunningSet()
 	for _, proj := range packed {
+		if alreadyRunning[proj.Name] {
+			log.Printf("DEDUP: skipping %s — already running", proj.Name)
+			continue
+		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)
 	}
 
