@@ -622,3 +622,59 @@ sim_fixture.go, sim_fixture_test.go).
 **Cooldown-reset detected:** Prior tick #9 set CooldownS=2400, but daemon restart reapplied fleet TOML (back to 1200). Applied graduate slowdown: 1200s → 2400s (40m). GET verified: `CooldownS: 2400`, `Enabled: True`.
 
 **No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-18 23:12 (#11)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+
+**Daemon health:** status=ok, 10 active ticks, uptime=1m38s (post-restart), evaluation_age=38s, spawns_http=0, spawns_exec=0
+
+**Graduate slowdown:** Pre-restart CooldownS was 9600s (160m). Applied 4h cap: 9600s → 14400s (4h). GET verified: `CooldownS: 14400`, `Enabled: True`.
+
+**No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-19 00:25 (#12)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3`: 4/6 pass (2 known pre-existing: eta starved, priority ordering)
+
+**Daemon health:** status=ok, 10 active ticks, uptime=1m34s (post-restart), evaluation_age=34s, spawns_http=0, spawns_exec=0
+
+**Cooldown preserved across restart:** Prior tick #11 set CooldownS=14400 (4h cap). Daemon restart did NOT reset cooldown — GET verified `CooldownS: 14400`, `Enabled: True`. Already at 4h maximum.
+
+**No action needed.**
+
+---
+
+## IDLE TICK — 2026-07-19 00:27 (#13)
+
+**Board status:** All tasks complete. No open GitHub issues or PRs.
+
+**Discovery sweep:**
+- `go build ./...`: PASS
+- `go vet ./...`: PASS
+- `go test ./... -short`: PASS (6/6 packages)
+- `golangci-lint run`: 0 issues
+- `--test-verify 3` (from prior tick log): 4/6 pass (2 known pre-existing: eta starved, priority ordering)
+
+**Daemon health:** status=ok, 10 active ticks, uptime=1m26s (post-restart), evaluation_age=26s, spawns_http=0, spawns_exec=0
+
+**Cooldown preserved across restart:** Prior tick #12 had CooldownS=14400 (4h cap). Daemon restart did NOT reset cooldown — GET verified `CooldownS: 14400`, `Enabled: True`. Already at 4h maximum. 3 consecutive restarts with cooldown preserved — restart-reset pitfall appears resolved for this project.
+
+**No action needed.**
