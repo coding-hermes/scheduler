@@ -1,3 +1,55 @@
+## FOREMAN TICK — 2026-07-19 15:44 (#26)
+
+**Board status:** Maintenance tick. Daemon crashed between #25 and #26 — restarted manually. Discovery sweep clean. NEVER-DONE audit re-verified (see #25 for full results). All 11 checks still pass with known pre-existing findings only.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files exist)
+
+**Discovery sweep — all green:**
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (8/8 packages) |
+| `golangci-lint` | 0 issues |
+| Hilo | 54 files, 374 edges |
+| 16 outdated deps | Localhost-only, LOW exploitability |
+| 0 TODOs/FIXMEs | Clean |
+
+**Key findings:**
+
+1. **⚠️ Daemon crash between ticks.** The daemon started at 15:41 (PID 884824, with `--gateway-key`) crashed within ~60 seconds. No core dump, no panic visible in output. Health endpoint was responding at uptime=40s but gone by uptime=60s. Root cause unknown — possible gateway client race on first eval.
+
+2. **Daemon restarted** (PID 944152, --gateway-key). Log confirms: `GATEWAY: connected to http://127.0.0.1:8642 — using HTTP API instead of exec.Command`. Health OK at 22s uptime, 7 active ticks, `spawns_exec=4, spawns_http=0`.
+
+3. **spawns_http still 0** — tick #25 discovered gateway rate-limits (max 10 concurrent), so excess spawns fall back to exec. Ticks may still be in-flight. Consistent with #25's observation.
+
+4. **DuckBrain sync consistently failing** (`dial tcp 127.0.0.1:3000: connection refused`). Pre-existing. 63 project syncs all fail.
+
+**NEVER-DONE audit (re-verified):** See tick #25 for full table. All 11 checks passed — no new gaps. Known: 0% coverage on cmd/* + internal/sync, 16 outdated deps, DuckBrain unreachable. No new tasks needed.
+
+**Daemon health:**
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 7 |
+| Uptime | 22s |
+| spawns_exec | 4 |
+| spawns_http | 0 |
+| Budget | 100 |
+| Projects | 37 in queue |
+
+**External signals:**
+- Remote: No new commits on origin/main
+- GitHub issues: None open
+- CI: Latest runs green
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority.
+
+**VERDICT: productively — Daemon crash investigated and restarted. Discovery sweep clean. No new gaps from NEVER-DONE audit. Monitor for repeat crashes; if daemon crashes again within 2 minutes, investigate gateway_client startup race.**
+
 ## FOREMAN TICK — 2026-07-19 15:33 (#25)
 
 **Board status:** Maintenance tick + NEVER-DONE audit. Gateway key issue FIXED — daemon restarted with `--gateway-key`. 37 projects in queue, 6 active ticks. All 11 never-done checks verified — no new gaps requiring task creation.
