@@ -19,9 +19,9 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 		return
 	}
 
-	target := deliver
-	if target == "" {
-		target = "telegram:-1003310984808:83996"
+	if deliver == "" {
+		log.Printf("DELIVER: %s tick=%s — no delivery target configured", project, tickID)
+		return
 	}
 
 	body := trimToolNoise(strings.TrimSpace(output.String()))
@@ -43,7 +43,7 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 
 	subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
 	cmd := exec.Command("hermes", "send",
-		"--to", target,
+		"--to", deliver,
 		"--subject", subject,
 		"--file", f.Name(),
 	)
@@ -52,15 +52,15 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 		log.Printf("DELIVER: %s tick=%s — hermes send failed: %v (%s)", project, tickID, err, bytes.TrimSpace(out))
 		return
 	}
-	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, target)
+	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)
 }
 
 // deliverAlert sends a short alert message for timeouts/errors so they
 // are visible in the chat rather than silently swallowed.
 func deliverAlert(deliver, project, tickID, reason string) {
-	target := deliver
-	if target == "" {
-		target = "telegram:-1003310984808:83996"
+	if deliver == "" {
+		log.Printf("ALERT: %s tick=%s — %s (no delivery target configured)", project, tickID, reason)
+		return
 	}
 	msg := fmt.Sprintf("⚠️ %s timed out — %s\nTick: %s", project, reason, tickID)
 	f, err := os.CreateTemp("", fmt.Sprintf("chtick-alert-%s-*.txt", tickID))
@@ -71,13 +71,13 @@ func deliverAlert(deliver, project, tickID, reason string) {
 	defer f.Close()
 	_, _ = f.WriteString(msg)
 	f.Close()
-	cmd := exec.Command("hermes", "send", "-f", f.Name(), target)
+	cmd := exec.Command("hermes", "send", "-f", f.Name(), deliver)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("ALERT: send failed: %v (%s)", err, bytes.TrimSpace(out))
 		return
 	}
-	log.Printf("ALERT: %s tick=%s → %s", project, tickID, target)
+	log.Printf("ALERT: %s tick=%s → %s", project, tickID, deliver)
 }
 
 // trimToolNoise strips terminal/tool output from the foreman's raw stdout,
@@ -101,6 +101,7 @@ func trimToolNoise(raw string) string {
 	var result []string
 	inDiff := false
 	inCodeBlock := false
+	skippingWorker := false
 
 	// Patterns that indicate non-summary lines
 	deltaRe := regexp.MustCompile(`^@@\s+-\d+`)
@@ -146,15 +147,16 @@ func trimToolNoise(raw string) string {
 			strings.HasPrefix(trimmed, "## PATTERN") ||
 			strings.HasPrefix(trimmed, "## STORE API") ||
 			strings.HasPrefix(trimmed, "## ALL") {
-			// Skip until we see a non-instruction line (blank or markdown)
-			skipUntil := true
+			skippingWorker = true
 			result = append(result, "…") // indicate skipped content
-			for skipUntil && len(lines) > 0 {
-				result = append(result, line)
-				if trimmed == "" || strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") {
-					// Keep skipping — still in worker prompt
-				} else if strings.HasPrefix(trimmed, "**") {
-					skipUntil = false // found foreman content again
+			continue
+		}
+		if skippingWorker {
+			// Stop skipping on blank lines or markdown headings (end of worker prompt)
+			if trimmed == "" || strings.HasPrefix(trimmed, "**") {
+				skippingWorker = false
+				if trimmed != "" {
+					result = append(result, line)
 				}
 			}
 			continue
