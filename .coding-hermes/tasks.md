@@ -1,3 +1,95 @@
+## FOREMAN TICK — 2026-07-20 11:30 (#56)
+
+**Board status:** PRODUCTIVE — AUDIT-001-spec-priority-type completed (`83a8d4a`). Specs now match code: Priority is `int`.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `83a8d4a`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 463 edges, 66 files (unchanged) |
+| CI (gh run list) | 3/3 SUCCESS |
+| GitReins guard | PASS (no Go files staged — spec-only change) |
+
+**AUDIT-001-spec-priority-type — COMPLETED (`83a8d4a`):**
+
+Foreman-direct spec fix. Priority type in all spec files was `float64` but all code uses `int` (1-10 integer scale, no fractional priorities). Updated 5 locations across 3 spec files:
+
+| Spec File | Change |
+|-----------|--------|
+| S01-system-architecture.md | `Priority float64` → `Priority int` (SpawnedProject struct) |
+| S02-data-model.md | `Priority float64` → `Priority int` (Project struct) |
+| S02-data-model.md | `Priority *float64` → `Priority *int` (ProjectPatch struct) |
+| S04-weight-packer.md | `Priority float64` → `Priority int` (ProjectWithUrgency struct) |
+| S04-weight-packer.md | `math.Abs(b.Priority-a.Priority) >= 0.001` → `a.Priority != b.Priority` (tie-break) |
+
+No code changes — the code was correct and consistent. S04 tie-break simplified to direct integer comparison (no epsilon needed).
+
+**Active task board:**
+
+Completed:
+- [x] DOC-AGENTS (AGENTS.md)
+- [x] TEST-SYNC (sync tests)
+- [x] PERF-BENCH (benchmarks)
+- [x] QUALITY-LONGFILES (split 2 files)
+- [x] QUALITY-GITIGNORE (deploy/*.log)
+- [x] QUALITY-LONGFILES-2 (split 3 files)
+- [x] AUDIT-005-test-deliver (`5cdfcbc`)
+- [x] AUDIT-006-test-gateway (`921723c`)
+- [x] AUDIT-007-test-slowdown (`310bba4`)
+- [x] AUDIT-009-test-namespaces (`2df6eb2`)
+- [x] AUDIT-001-spec-priority-type (`83a8d4a`)
+
+Spec alignment (3 remaining):
+- [ ] AUDIT-002-missing-specs — 5 spec files (S07-S11) referenced but missing
+- [ ] AUDIT-003-spec-event-mismatch — Event struct: spec says Level/Project, code uses Severity/Component
+- [ ] AUDIT-004-tick-field-names — Tick field name mismatch: spec says Project, code says ProjectName
+
+Test coverage (2 remaining):
+- [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
+- [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
+
+Dependencies (1):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect outdated packages (LOW)
+
+Performance (1):
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
+
+Quality/Docs (4):
+- [ ] AUDIT-017-code-quality-review — function length, nesting, magic numbers (LOW)
+- [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool (LOW)
+- [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
+- [ ] AUDIT-020-sync-verify — DuckBrain sync needs COALESCE safety (LOW)
+
+Blocked:
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **Spec alignment started.** AUDIT-001 was the first of 4 spec alignment tasks to be worked after sitting for 3+ ticks. The fix was trivial — the code was correct (int is right for a 1-10 scale), the specs were wrong (float64). Foreman-direct: no worker needed for mechanical text changes across 3 spec files.
+
+2. **11/16 AUDIT tasks now complete.** Down to 11 pending tasks (including 2 blocked). All remaining are LOW priority or blocked.
+
+3. **Next actionable: AUDIT-002-missing-specs.** 5 spec files (S07-S11) are referenced in docs but don't exist. These may need to be created or the references may need to be removed. Investigation needed to determine which.
+
+4. **AUDIT-003 and AUDIT-004 are naming mismatches** (Level/Project vs Severity/Component, Project vs ProjectName). These are likely similar foreman-direct spec fixes — no code changes expected.
+
+5. **3 remaining spec alignment tasks are all mechanical.** AUDIT-002 through AUDIT-004 can likely be resolved as foreman-direct operations in a single combined tick since they all touch spec files exclusively.
+
+**VERDICT: productive — AUDIT-001 spec fixed, 3 files updated, 5 type corrections. 1 commit pushed. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 11:07 (#55)
 
 **Board status:** PRODUCTIVE — AUDIT-009-test-namespaces completed (2df6eb2). Database coverage 55.7%→69.3%.
