@@ -1,3 +1,98 @@
+## FOREMAN TICK — 2026-07-20 09:23 (#51)
+
+**Board status:** MAINTENANCE — fourth consecutive maintenance tick. NEVER-DONE 11-point audit re-run. 10/11 checks clean. 1 finding: 3 files over 500-line threshold. QUALITY-LONGFILES-2 task created.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- GitReins state: Clean (29 tasks exist from prior audit, not blocking)
+- HEAD: `c6efeb1`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 431 edges, 60 files (unchanged) |
+| Daemon /health | status=ok, db=connected, uptime=2h10m, active_ticks=4, spawns_http=43 (+9) |
+| Gateway :8642 | UP (v0.18.2) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Dependencies | 0 DIRECT outdated. 5 INDIRECT: go-cmp, demangle, goldmark, telemetry, gc/v3. All transitive |
+
+**Endpoint sweep — all green:**
+
+| Endpoint | Status |
+|----------|--------|
+| `/` | 200 |
+| `/api/v1/health` | 200 |
+| `/api/v1/status` | 200 |
+| `/api/v1/projects` | 200 |
+| `/api/v1/namespaces` | 200 |
+| `/api/v1/ticks` | 200 |
+| `/queue` | 200 |
+| `/ticks` | 200 |
+| `/health` | 200 |
+
+**NEVER-DONE 11-point audit — 10/11 CLEAN, 1 finding:**
+
+| # | Check | Result | Action |
+|---|-------|--------|--------|
+| 1 | SPEC ALIGNMENT | 7 specs (S01-S07), all present from July 12-13. No spec drift from recent changes | CLEAN |
+| 2 | DOC COVERAGE | AGENTS.md (89L), README.md (383L). All packages covered | CLEAN |
+| 3 | TEST GAPS | cmd/migrate + cmd/schedulerd are CLI entry points (accepted). All other packages tested. 20 sync tests, 7 benchmarks | CLEAN |
+| 4 | PACKAGE UPGRADES | 0 DIRECT outdated. 5 INDIRECT (go-cmp, demangle, goldmark, telemetry, gc/v3) — all transitive | CLEAN |
+| 5 | PITFALL HUNT | 1 nil,nil (generator_data.go:281 — legitimate guard clause "no ticks yet — not an error"). 0 TODOs/FIXMEs | CLEAN |
+| 6 | PERFORMANCE | 13 benchmarks across 3 hot paths. All packages pass bench | CLEAN |
+| 7 | ENDPOINT VERIFICATION | 9/9 endpoints HTTP 200. No 501s, no stubs | CLEAN |
+| 8 | CI/CD | 5/5 SUCCESS on latest runs. No failures | CLEAN |
+| 9 | DUCKBRAIN SYNC | Status entry at /fleet/projects/coding-hermes-scheduler/status in coding-hermes namespace. Daemon sync keeps it current | CLEAN |
+| 10 | CODE QUALITY | 3 files over 500L: mcp/server.go (548L), multipool_packer.go (529L), loop.go (506L). 0 TODOs/FIXMEs | → QUALITY-LONGFILES-2 task |
+| 11 | MIDDLE-OUT WIRING | 11 routes registered in main.go. All 7 internal packages imported. Binary builds (20MB). Binary buildable | CLEAN |
+
+**Audit finding — 3 files over 500 lines:**
+
+Files that exceed the 500-line quality threshold:
+- `internal/mcp/server.go` — 548 lines (MCP JSON-RPC server)
+- `internal/scheduler/multipool_packer.go` — 529 lines (multi-pool weight packer)
+- `internal/scheduler/loop.go` — 506 lines (main scheduling loop)
+
+These are different files than the ones split in tick #47 (internal/api/server.go 835→139, internal/dashboard/generator.go 865→477). The prior QUALITY-LONGFILES task focused on the dashboard and API layers; these are the scheduler core and MCP layer.
+
+**Active task board:**
+
+- [x] DOC-AGENTS — Create AGENTS.md
+- [x] TEST-SYNC — Add sync tests
+- [x] PERF-BENCH — Go benchmarks
+- [x] QUALITY-LONGFILES — Split 2 files (generator.go, server.go)
+- [x] QUALITY-GITIGNORE — Add deploy/*.log to .gitignore
+- [ ] QUALITY-LONGFILES-2 — Split 3 files: mcp/server.go (548L), multipool_packer.go (529L), loop.go (506L) (MEDIUM) — NEW
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **10/11 checks clean.** The project is in excellent shape — 4 consecutive maintenance ticks. All specs aligned, all endpoints serving, CI green, DuckBrain synced, benchmarks exist, no stubs or TODOs.
+
+2. **One finding: 3 files over 500-line threshold.** mcp/server.go (548L), multipool_packer.go (529L), and loop.go (506L) are the new largest files. These were not part of tick #47's file split (which targeted generator.go and server.go). They represent different layers: MCP JSON-RPC server, multi-pool weight packing, and the main scheduling loop.
+
+3. **Daemon uptime 2h10m+ with 43 HTTP spawns.** The process group fix from tick #47 is holding. Zero exec fallback spawns. The fleet is actively spawning workers through the scheduler — 9 more HTTP spawns since tick #50 (~27 min ago).
+
+4. **GitReins has 29 tasks from prior audit (AUDIT-001 through AUDIT-020 + older).** These are GitReins task objects, not the coding-hermes board. Several are already done (AUDIT-012, AUDIT-013 marked ●). The coding-hermes board only tracks the 8 tasks listed above. The GitReins tasks can be cleaned up in a future tick.
+
+5. **Hilo graph unchanged at 431 edges, 60 files.** No new code since tick #47's file split. Graph is stable.
+
+6. **Same 5 indirect deps outdated** — go-cmp, demangle, goldmark, telemetry, gc/v3. All transitive. This has been consistent across ticks #48-#51.
+
+**QUALITY-LONGFILES-2 task created.** Next tick: if the board still has pending tasks, the scheduler will pick this up. If Bane prefers to defer file-splitting, the board stays in maintenance mode.
+
+**VERDICT: maintenance — 11-point audit 10/11 clean. 1 new task (QUALITY-LONGFILES-2). Project is production-ready. Cooldown at base 900s.**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 08:54 (#50)
 
 **Board status:** MAINTENANCE — third consecutive maintenance tick. Board effectively empty (only FIX-STUCK blocked + NEVER-DONE). Discovery sweep all green. No new tasks. Project stays in maintenance mode.
