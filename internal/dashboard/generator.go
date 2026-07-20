@@ -155,17 +155,17 @@ type QueueData struct {
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
-	db               *sql.DB
-	tmpl             *template.Template // parsed once, reused
-	fleetTmpl        *template.Template // partial: project table body only
-	projectTmpl      *template.Template // full page: /projects/{name}
-	queueTmpl        *template.Template // full page: /queue
-	tickHistoryTmpl  *template.Template // full page: /ticks
+	db                *sql.DB
+	tmpl              *template.Template // parsed once, reused
+	fleetTmpl         *template.Template // partial: project table body only
+	projectTmpl       *template.Template // full page: /projects/{name}
+	queueTmpl         *template.Template // full page: /queue
+	tickHistoryTmpl   *template.Template // full page: /ticks
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
-	healthTmpl       *template.Template // full page: /health
-	gatewayURL       string
-	healthClient     *http.Client
-	started          time.Time
+	healthTmpl        *template.Template // full page: /health
+	gatewayURL        string
+	healthClient      *http.Client
+	started           time.Time
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
