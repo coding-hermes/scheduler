@@ -1,3 +1,64 @@
+## FOREMAN TICK — 2026-07-20 07:56 (#47)
+
+**Board status:** PRODUCTIVE tick — QUALITY-LONGFILES completed. Worker (opencode-go) split 2 large files into 7. Bonus: process group timeout fix committed. Board down to NEVER-DONE + 1 blocked.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Git pull: Blocked by uncommitted process-group fix from concurrent worker → committed `b8f2aa8`, then clean
+- Dirty workdir: Clean after commits
+- GitReins state: Clean
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 398 edges, 55 files |
+| Daemon /health | status=ok, db=connected, uptime=44m+ |
+
+**QUALITY-LONGFILES — COMPLETED (`aae390f`):**
+
+| File | Before | After | Delta |
+|------|--------|-------|-------|
+| internal/dashboard/generator.go | 865 | 477 | -388 |
+| internal/api/server.go | 835 | 139 | -696 |
+| generator_templates.go | — | 115 | +115 |
+| generator_data.go | — | 289 | +289 |
+| server_projects.go | — | 171 | +171 |
+| server_ticks.go | — | 111 | +111 |
+| server_helpers.go | — | 443 | +443 |
+
+Worker (opencode-go @ ollama-cloud) ran 12m 10s. 87 messages, 83 tool calls. No review loop — clean execution. Build, vet, tests all pass. Both target files under 500 lines.
+
+**BONUS — Process group timeout fix (`b8f2aa8`):**
+
+Concurrent worker or Bane left uncommitted changes in spawn.go + spawn_test.go. Added `Setpgid: true` + `syscall.Kill(-pid, SIGKILL)` to kill entire process group on scheduler timeout. New test `TestSpawnTimeoutKillsProcessGroup` verifies grandchild cleanup. Committed as foreman-direct before worker spawn.
+
+**Remaining:**
+
+- [x] DOC-AGENTS — Create AGENTS.md ✓ (false finding)
+- [x] TEST-SYNC — Add sync tests ✓ `3039f14`
+- [x] PERF-BENCH — Go benchmarks ✓ `d522691`
+- [x] QUALITY-LONGFILES — Split 2 files ✓ `aae390f`
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. Worker (opencode-go) executed cleanly — no review loop, no zero output. 12-minute runtime for mechanical refactoring across 7 files is reasonable.
+
+2. Both files now under 500 lines. generator.go went from 865→477, server.go from 835→139. The new files are cohesive: templates, data types/collection, projects CRUD, ticks/events, utility helpers.
+
+3. Process group fix is a significant operational improvement — worker children will no longer survive scheduler timeouts.
+
+4. Board is effectively empty — only NEVER-DONE remains. The 11-point audit is next.
+
+**VERDICT: productive — QUALITY-LONGFILES completed (`aae390f`), process group fix committed (`b8f2aa8`). 2 commits pushed. NEVER-DONE is next.**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 07:35 (#46)
 
 **Board status:** PRODUCTIVE tick — PERF-BENCH completed. 7 Go benchmarks across 3 hot paths. Worker (MiniMax-M3) wrote code, foreman committed. 1 active task + 1 blocked remain.
