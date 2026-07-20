@@ -417,7 +417,7 @@ coding-herms-scheduler/
 │   ├── S04-weight-packer.md
 │   ├── S05-spawn-engine-lifecycle.md
 │   ├── S06-rest-api.md
-│   ├── S07-mcp-server.md
+│   ├── S07-multi-namespace-extension.md
 │   ├── S08-dashboard.md
 │   ├── S09-hermes-plugin.md
 │   ├── S10-testing-strategy.md
