@@ -292,6 +292,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 	go func() {
 		defer scanCancel()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ERROR: stdout scanner panic for tick %s: %v", tickID, r)
+			}
+		}()
 		scanner := bufio.NewScanner(teeReader)
 		for scanner.Scan() {
 			line := scanner.Text()
