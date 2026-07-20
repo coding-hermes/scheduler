@@ -15,6 +15,7 @@ type GatewayClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	timeout    time.Duration
 }
 
 // NewGatewayClient creates a client targeting the Hermes gateway API.
@@ -25,6 +26,7 @@ func NewGatewayClient(baseURL, apiKey string, timeout time.Duration) *GatewayCli
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
+		timeout: timeout,
 	}
 }
 
@@ -149,4 +151,10 @@ func (g *GatewayClient) setAuth(req *http.Request) {
 	if g.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+g.apiKey)
 	}
+}
+
+// ResetHttpClient replaces the internal http.Client with a fresh one,
+// avoiding stale connection pools after a gateway restart.
+func (g *GatewayClient) ResetHttpClient() {
+	g.httpClient = &http.Client{Timeout: g.timeout}
 }

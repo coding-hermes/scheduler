@@ -28,6 +28,8 @@ type Loop struct {
 	weightBudget    int
 	maxConcur       int
 	namespaceMode   bool
+	gatewayClient   *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
+	gatewayDead     bool           // true when last ping failed
 
 	mu         sync.RWMutex
 	running    sync.WaitGroup
@@ -345,6 +347,26 @@ func (l *Loop) evaluate() {
 	// Lazy-init the slot pool if not already created (test_verify, tests).
 	if l.slotPool == nil {
 		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+	}
+
+	// Gateway liveness check: ping before spawning. If gateway is dead,
+	// release all slots and skip this cycle. Retry next eval.
+	if l.gatewayClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := l.gatewayClient.Ping(ctx)
+		cancel()
+		if err != nil {
+			if !l.gatewayDead {
+				log.Printf("GATEWAY DEAD — pausing spawns, will retry in 30s: %v", err)
+				l.gatewayDead = true
+				l.slotPool.ReleaseAll()
+			}
+			return
+		}
+		if l.gatewayDead {
+			log.Printf("GATEWAY reconnected — resuming spawns")
+			l.gatewayDead = false
+		}
 	}
 
 	// Fire each project into the slot pool. The pool's semaphore limits

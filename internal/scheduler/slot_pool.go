@@ -80,6 +80,22 @@ func (p *SlotPool) Release() {
 	}
 }
 
+// ReleaseAll drains all currently-held slots and signals SlotFreed
+// for each one released. Safe to call when no slots are held.
+func (p *SlotPool) ReleaseAll() {
+	for {
+		select {
+		case <-p.sem:
+			select {
+			case p.freedCh <- struct{}{}:
+			default:
+			}
+		default:
+			return
+		}
+	}
+}
+
 // Spawn fires a project tick in a new goroutine. The goroutine acquires a
 // slot from the pool, spawns via the gateway, and releases the slot on
 // completion or timeout. Delivery and auto-slowdown are integrated.
