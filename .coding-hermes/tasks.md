@@ -1,3 +1,98 @@
+## FOREMAN TICK — 2026-07-20 10:26 (#54)
+
+**Board status:** PRODUCTIVE — AUDIT-005 already done (concurrent tick #52 race), AUDIT-006-test-gateway completed. Worker (gpt-5.6-sol@openai-codex) wrote 355-line gateway_client_test.go with 6 function coverage going from 0% to 87-100%. 1 commit pushed (921723c).
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `921723c`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 450 edges, 64 files (+5 from gateway tests) |
+| Gateway :8642 | UP (v0.18.2) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Dependencies | 0 DIRECT outdated |
+
+**AUDIT-006-test-gateway — COMPLETED (`921723c`):**
+
+| Function | Before | After |
+|----------|--------|-------|
+| NewGatewayClient | 0% | 100% |
+| ExtractText | 0% | 100% |
+| Ping | 0% | 100% |
+| SendResponse | 0% | 87% |
+| setAuth | 0% | 100% |
+| ResetHttpClient | 0% | 100% |
+
+Worker (gpt-5.6-sol@openai-codex) wrote 355-line test file using httptest.NewServer pattern. No source modifications. All 8 test packages pass. Scheduler package coverage improved from 56.3% to 59.6%.
+
+**Concurrent tick race — AUDIT-005 already done:**
+Tick #52 ran concurrently with #53 and completed AUDIT-005-test-deliver (`5cdfcbc`) — 24 tests for deliverOutput/deliverAlert/trimToolNoise. Board showed it as `[ ]` because #53 wrote the board after #52's completion. Now marked `[x]`.
+
+**Active task board:**
+
+Completed:
+- [x] DOC-AGENTS (AGENTS.md)
+- [x] TEST-SYNC (sync tests)
+- [x] PERF-BENCH (benchmarks)
+- [x] QUALITY-LONGFILES (split 2 files)
+- [x] QUALITY-GITIGNORE (deploy/*.log)
+- [x] QUALITY-LONGFILES-2 (split 3 files)
+- [x] AUDIT-005-test-deliver (`5cdfcbc`, concurrent #52)
+- [x] AUDIT-006-test-gateway (`921723c`)
+
+Spec alignment (4):
+- [ ] AUDIT-001-spec-priority-type — Priority type: spec says float64, code uses int
+- [ ] AUDIT-002-missing-specs — 5 spec files (S07-S11) referenced but missing
+- [ ] AUDIT-003-spec-event-mismatch — Event struct: spec says Level/Project, code uses Severity/Component
+- [ ] AUDIT-004-tick-field-names — Tick field name mismatch: spec says Project, code says ProjectName
+
+Test coverage (4 remaining):
+- [ ] AUDIT-007-test-slowdown — slowdown.go 0% coverage, autoSlowdown untested (MEDIUM) ← next actionable
+- [ ] AUDIT-009-test-namespaces — database namespace functions 0% coverage (LOW)
+- [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
+- [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
+
+Dependencies (1):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect outdated packages (LOW)
+
+Performance (1):
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
+
+Quality/Docs (4):
+- [ ] AUDIT-017-code-quality-review — function length, nesting, magic numbers (LOW)
+- [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool (LOW)
+- [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
+- [ ] AUDIT-020-sync-verify — DuckBrain sync needs COALESCE safety (LOW)
+
+Blocked:
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **AUDIT-005 was a concurrent tick race.** Tick #52 and #53 ran simultaneously — #52 completed AUDIT-005 while #53 wrote the board showing it as pending. This is a known foreman pitfall (concurrency-dual-source-race). The board is now corrected.
+
+2. **AUDIT-006 results are solid.** gateway_client.go went from 0% to 87-100% across all 6 functions. The httptest.NewServer pattern is the correct approach — distinct from deliver.go's exec.Command fake binary pattern since GatewayClient does real HTTP.
+
+3. **Scheduler package coverage now 59.6%** (up from 56.3%). The remaining gap is slowdown.go, sim_spawn.go, and other uncovered scheduler code.
+
+4. **gpt-5.6-sol@openai-codex handled Go fine this time.** Despite the memory note about silent exit on Go, the model produced working tests, ran them, and committed cleanly. The previous note may be stale or conditional on specific Go patterns.
+
+5. **Next actionable: AUDIT-007-test-slowdown.** slowdown.go has autoSlowdown at 0% — pure calculation logic that should be straightforward to test (no HTTP, no exec.Command, no database).
+
+**VERDICT: productive — AUDIT-006 completed with 87-100% coverage. Board corrected for AUDIT-005 race. 14 pending tasks remain. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 09:30 (#52)
 
 **Board status:** BOARD STALENESS DISCOVERED + PRODUCTIVE — GitReins cross-reference found 28 tasks; 12 stale completed, 1 deleted, 16 synced to board. AUDIT-005-test-deliver completed (5cdfcbc). QUALITY-LONGFILES-2 partial work stashed (completed by concurrent #53).
