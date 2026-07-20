@@ -1,3 +1,97 @@
+## FOREMAN TICK — 2026-07-20 11:07 (#55)
+
+**Board status:** PRODUCTIVE — AUDIT-009-test-namespaces completed (2df6eb2). Database coverage 55.7%→69.3%.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `2df6eb2`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 463 edges, 66 files (+13 edges, +2 files) |
+| Gateway :8642 | UP (v0.18.2) |
+| Daemon :9090 | UP (uptime 3h56m, active_ticks 4) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Dependencies | 0 DIRECT outdated, 5 INDIRECT |
+
+**AUDIT-009-test-namespaces — COMPLETED (`2df6eb2`):**
+
+| Function | Coverage |
+|----------|----------|
+| CreateNamespace | ✓ tested |
+| GetNamespace (found + not found) | ✓ tested |
+| ListNamespaces (all + enabledOnly) | ✓ tested |
+| UpdateNamespace (all fields + not found + noop) | ✓ tested |
+| DeleteNamespace | ✓ tested |
+
+Foreman-direct (Exception 7: single package, 138-line file, clear CRUD ACs). 11 tests, 245 lines. All namespace CRUD functions now covered including error paths (duplicate ID, not found, CHECK constraints).
+
+**Database package coverage: 55.7% → 69.3% (+13.6 points)**
+
+**Active task board:**
+
+Completed:
+- [x] DOC-AGENTS (AGENTS.md)
+- [x] TEST-SYNC (sync tests)
+- [x] PERF-BENCH (benchmarks)
+- [x] QUALITY-LONGFILES (split 2 files)
+- [x] QUALITY-GITIGNORE (deploy/*.log)
+- [x] QUALITY-LONGFILES-2 (split 3 files)
+- [x] AUDIT-005-test-deliver (`5cdfcbc`)
+- [x] AUDIT-006-test-gateway (`921723c`)
+- [x] AUDIT-007-test-slowdown (`310bba4`)
+- [x] AUDIT-009-test-namespaces (`2df6eb2`)
+
+Spec alignment (4):
+- [ ] AUDIT-001-spec-priority-type — Priority type: spec says float64, code uses int
+- [ ] AUDIT-002-missing-specs — 5 spec files (S07-S11) referenced but missing
+- [ ] AUDIT-003-spec-event-mismatch — Event struct: spec says Level/Project, code uses Severity/Component
+- [ ] AUDIT-004-tick-field-names — Tick field name mismatch: spec says Project, code says ProjectName
+
+Test coverage (2 remaining):
+- [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
+- [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
+
+Dependencies (1):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect outdated packages (LOW)
+
+Performance (1):
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
+
+Quality/Docs (4):
+- [ ] AUDIT-017-code-quality-review — function length, nesting, magic numbers (LOW)
+- [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool (LOW)
+- [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
+- [ ] AUDIT-020-sync-verify — DuckBrain sync needs COALESCE safety (LOW)
+
+Blocked:
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **Foreman-direct via Exception 7.** namespace CRUD functions are textbook Exception 7 material: single package, 138-line file, established test helpers (newTestDB), clear CRUD operations, no design decisions. Worker spawn would have burned 5-10 minutes for a task the foreman completed in ~3 tool calls (patch + test + commit).
+
+2. **Database coverage now 69.3%.** Up from 55.7%. The remaining uncovered code is in events.go, schema.go, migrations.go, and namespace_ticks.go — lower-value territory (schema/migrations are infrastructure, events are simple wrappers).
+
+3. **10/16 AUDIT tasks now complete.** Down to 12 pending tasks (including 2 blocked). All remaining are LOW priority or blocked.
+
+4. **Next actionable: AUDIT-001 through AUDIT-004 (spec alignment).** These 4 spec tasks have sat unworked for 3+ ticks. They're LOW impact but represent real spec-code mismatch that should be resolved.
+
+5. **AUDIT-010 (scheduler remaining 0%) and AUDIT-016 (cmd 0%) are the remaining test gaps.** AUDIT-010 is ~17 functions in the scheduler package spread across spawn.go, slot_pool.go, sim.go, lifecycle.go. This is a larger worker delegation, not an Exception 7 candidate.
+
+**VERDICT: productive — AUDIT-009 complete. 11 namespace CRUD tests, database coverage +13.6%. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 10:26/10:34 (#54 — dual-execution)
 
 **Board status:** PRODUCTIVE — 3 AUDIT tasks completed across dual execution. AUDIT-006-test-gateway (921723c), AUDIT-007-test-slowdown (310bba4). AUDIT-005 discovered already done (concurrent #52 race, 5cdfcbc). 4 commits pushed (921723c, c7d52e4, 310bba4, 4fe6f8c).
