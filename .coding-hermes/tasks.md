@@ -540,7 +540,28 @@ Completed in tick #25 (2026-07-19 15:33) — all 11 checks passed. Known gaps: 0
 **GitReins:** AUDIT-012 + AUDIT-013 marked complete. 13 AUDIT + 5 REGRESSION + FEAT-DASHBOARD + FEAT-WORKER-MODEL + FIX-TIMEOUT-ALIGNMENT + RULE-NO-TIMEOUT-BACKOFF remain.
 
 **Remaining highest-priority:**
-- FEAT-DASHBOARD (MEDIUM/12): 4 pages remaining — tick history, queue view, namespace view, health panel
+- [ ] **FEAT-DASHBOARD** (MEDIUM W12) — 3 pages remaining: Tick history, Namespace view, Health panel
+
+## [ ] FIX-STUCK — Gateway lockup recovery (HIGH W15)
+**Problem:** DeepSeek locked up today. Scheduler became unreachable because
+Gateway HTTP spawns never returnerrupted — no timeout on GatewayClient.Do().
+Daemon appeared dead. Required manual restart.
+**Fix approach:**
+- Add `http.Client.Timeout` to GatewayClient (30s)
+- Add context.WithTimeout to all GatewayClient calls
+- Add daemon self-test: /api/v1/health must return within 5s; if not, kill all running ticks + restart
+- Add stuck-tick detector: if ANY tick exceeds tick-timeout*1.5 without completing, log CRITICAL + forceRelease slot
+
+## [ ] FIX-STUCK — Systemd watchdashared (HIGH W12)
+**Problem:** Daemon runs manually — systemd was inactive. No auto-restart.
+**Fix:** Enable systemd unit — `sudo systemctl enable coding-hermes-scheduler`
+ALTERNATIVE: Add `Restart=always` with 10s delay
+
+## [ ] FIX-STUCK — Gateway health pre-check before each spawn (HIGH W10)
+**Problem:** Scheduler keeps spawning into a stuck/dead gateway, piling up
+timeout ticks that all consume slots for 2h.
+**Fix:** Before each eval, ping gateway /health. If down, pause spawning
+and log CRITICAL. Resume when gateway responds.
 - AUDIT-005 (test deliver.go): 0% coverage, needs mock-based tests
 - AUDIT-006 (test gateway_client.go): 0% coverage
 - AUDIT-007 (test slowdown.go): 0% coverage
