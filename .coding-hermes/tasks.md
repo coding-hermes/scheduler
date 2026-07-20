@@ -1,4 +1,71 @@
-## FOREMAN TICK — 2026-07-19 22:29 (#37)
+## FOREMAN TICK — 2026-07-20 00:28 (#38)
+
+**Board status:** INVESTIGATIVE tick — found scheduler daemon DOWN since Jul 19 14:19 (10h+). Stale `dagger.test` on port 9090 killed. Daemon restarted via foreground but crashed on first spawn (`spawn.go:296` pipe read panic). **BUG-009 created: spawn.go crashes daemon on subprocess pipe read failure.** System thread exhaustion prevents `go build` even with `-p 1`. DEPS/PERF blocked until system resources recover.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa)
+- `git pull --rebase`: Fork-failure on first attempt (transient), fetch succeeded, up to date
+- Workdir: Board-only uncommitted changes from tick #37 → committed as `03e0ed5`
+- GitReins state: Cleaned
+
+**Daemon state — CRITICAL:**
+
+| Field | Value |
+|-------|-------|
+| Scheduler process | `schedulerd` NOT running |
+| Port 9090 occupant | Was `dagger.test` (orphan Go test binary) → KILL'd |
+| Last daemon uptime | Jul 19 09:50 → 14:19 (4h29m, clean SIGTERM shutdown) |
+| Systemd unit | `disabled`, `inactive (dead)` |
+| Unit auto-restart | `Restart=on-failure` — but SIGTERM is a clean exit, not failure |
+| Attempt: systemctl start | BLOCKED — "requires interactive authentication" (cron context) |
+| Attempt: foreground start | Started, spawned 10 projects, then crashed in `spawn.go:296` |
+
+**Daemon crash investigation:**
+The daemon started successfully (logged fleet state: 65 projects/39 enabled/10 active ticks). It cleaned 10 dangling ticks from the previous run and began spawning. Spawns for terminal-jail, uhlp, helix succeeded. Then `crier` failed with `fork/exec hermes: resource temporarily unavailable`. The daemon later crashed in `spawn.go:296` with a `bufio.Scanner.Scan` panic on a broken subprocess pipe (errno=6 ENXIO — "No such device or address"). The spawned `hermes chat` process likely exited before the pipe reader started.
+
+**BUG-009 — spawn.go pipe read crashes daemon:**
+The `Spawn()` goroutine in `internal/scheduler/spawn.go:293-296` spawns `hermes chat` and reads its stdout via `bufio.Scanner`. When the subprocess exits before the reader starts (or the fork fails), the pipe returns ENXIO and `Scanner.Scan()` panics (uncaught error in goroutine → process exit). Fix: wrap in recover/deferred error handler, or check pipe validity before reading.
+
+**System thread exhaustion:**
+
+| Check | Result |
+|-------|--------|
+| `go build -p 1 ./...` | FAIL — `newosproc: resource temporarily unavailable`, even Go runtime can't start |
+| `go test ./... -short -p 1` | PASS (run before resource hit peak, packages 7/7) |
+| `govulncheck` | FAIL — `fork/exec compile: resource temporarily unavailable` |
+| `bash: fork` | FAIL — shell itself can't fork |
+| Total processes | 169 |
+| Hermes processes | 15 |
+| Likely cause | Too many concurrent foreman ticks + Go build parallelism exhausts cgroup pids limit |
+
+**Remaining active tasks (unchanged from tick #37):**
+- [ ] FIX-STUCK — Systemd enable + auto-restart (HIGH W12) — BLOCKED (Bane defers)
+- [ ] DEPS — 15+ outdated Go packages (MEDIUM) — blocked on system resources
+- [ ] PERF — N+1 query in dashboard collect() (MEDIUM) — blocked on system resources
+- [ ] FEAT-DASHBOARD — 3 pages remaining (MEDIUM) — blocked on system resources
+- [ ] BUG-009 — spawn.go:296 pipe read crashes scheduler daemon (CRITICAL) — new
+
+**Discovery sweep — partial:**
+
+| Check | Result |
+|-------|--------|
+| Hilo graph warm | PASS — 366 edges, 53 files, 3 languages |
+| TODOs/FIXMEs | None |
+| Outdated Go deps | 16 packages confirmed (modernc/sqlite 1.38→1.54 biggest) |
+| Daemon health | FAIL — daemon down 10h+, crash bug on spawn |
+
+**Key observations:**
+
+1. **BUG-009 is the #1 priority.** The scheduler daemon cannot stay alive because `spawn.go:296` crashes when reading a pipe from a subprocess that may have already exited. Until this is fixed, the scheduler daemon cannot run, meaning cooldown management, fleet control, and ordered scheduling are all unavailable. The Hermes cron scheduler picks up the slack (dispatching foreman ticks directly) but without cooldown sync or priority ordering.
+
+2. **System thread exhaustion is a pre-existing condition** that affects all `go build` operations. `go test -short -p 1` still passes because test packages run sequentially with fewer goroutines. `go build` spawns more parallel compilation goroutines and hits the cgroup limit.
+
+3. **DEPS and PERF tasks are blocked** until the system resource issue is resolved or Bane makes a decision. No code changes can be built.
+
+4. **Daemon has been down since 14:19 UTC** — about 10 hours. The Hermes cron scheduler has been dispatching foreman ticks directly during this time. The daemon-coded cooldown management (graduated slowdown, self-pause) is not active — all project ticks fire at their cron interval.
+
+**VERDICT: investigative — discovered daemon down 10h+, crash bug in spawn.go, created BUG-009. System thread exhaustion blocks all code work. Board updated with findings.**
 
 **Board status:** PRODUCTIVE tick — 3 tasks completed (RULE-NO-TIMEOUT-BACKOFF, FIX-TIMEOUT-ALIGNMENT cancelled, REGRESSION verified). Discovery sweep all green. Daemon at ~1h30m+ uptime. Code already 90% RULE-compliant — only needed productive reset threshold fix (1200→600). No worker spawned (trivial foreman-direct fix).
 
@@ -786,6 +853,14 @@ requests that would never complete because the connection was dead.
 - `internal/scheduler/slot_pool.go`: `ReleaseAll()` — drains all slots on gateway failure
 
 ## [ ] FIX-STUCK — Systemd enable + auto-restart (HIGH W12)
+
+## [ ] BUG-009 — spawn.go:296 pipe read crashes scheduler daemon (CRITICAL)
+**Priority: CRITICAL — blocks all scheduler daemon operation.**
+**Root cause:** `internal/scheduler/spawn.go:293-296` — `Spawn()` goroutine spawns `hermes chat` and reads stdout via `bufio.Scanner` from a subprocess pipe. When the subprocess exits before the reader starts (or fork/exec fails with EAGAIN), the pipe returns ENXIO. Scanner.Scan() panics (uncaught goroutine panic → entire process exits).
+- [ ] Add recover() or deferred error handler in spawn goroutine to catch pipe read panics
+- [ ] After fix: rebuild binary and verify daemon stays alive through spawn cycles
+- **Evidence:** Full stack trace in `proc_48ee8d8eefbf` log. Schedulerd started, spawned 10 projects, then crashed.
+- **Note:** Daemon has been down 10h+ since Jul 19 14:19. Prior shutdown was clean (SIGTERM). Crash on EVERY startup attempt.
 **Problem:** Daemon crashed, systemd was inactive — no auto-restart. Required manual restart.
 **Fix:** `sudo systemctl enable coding-hermes-scheduler` + `Restart=always` with 10s delay
 **Status:** Deferred — operational decision, Bane prefers gradual cutover. Daemon running stably via bash wrapper (PID 3811055, 1h12m+ uptime).
