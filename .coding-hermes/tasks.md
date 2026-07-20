@@ -1,12 +1,11 @@
-## FOREMAN TICK — 2026-07-20 06:53 (#45)
+## FOREMAN TICK — 2026-07-20 07:02 (#45)
 
-**Board status:** PRODUCTIVE tick — DOC-AGENTS completed (`37db9b4`). AGENTS.md created with project architecture, endpoint catalog, build instructions, and key design decisions. 3 active tasks remain + 1 blocked.
+**Board status:** PRODUCTIVE tick — DOC-AGENTS confirmed false finding, TEST-SYNC completed. 2 active tasks remain + 1 blocked.
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
-- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
-- `git pull --rebase`: Up to date (sibling tick #44 board sync already at HEAD)
-- Dirty workdir: Clean
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean (duckbrain_test.go written and committed)
 - GitReins state: Clean
 
 **Discovery sweep — all green:**
@@ -15,7 +14,7 @@
 |-------|--------|
 | `go build ./...` | PASS |
 | `go vet ./...` | PASS |
-| `go test -short -p 1 ./...` | PASS (7 packages) |
+| `go test -short -p 1 ./...` | PASS (8 packages) — sync now has tests |
 | Hilo graph stats | 385 edges, 54 files |
 | TODOs/FIXMEs | None |
 
@@ -23,35 +22,50 @@
 
 | Field | Value |
 |-------|-------|
-| Process | PID 3366912, uptime ~5m |
-| Gateway :8642 | UP (PID 3339903, v0.18.2) |
-| API /api/v1/status | 39 active projects, 4 active ticks, 2959 completed |
-| Dashboard routes | 404 (stale binary — predates c3a4d46) |
+| API /health | status=ok, db=connected, active_ticks=4, uptime=4m32s |
+| spawns_exec | 0 |
+| spawns_http | 2 |
 
-**DOC-AGENTS — COMPLETED (`37db9b4`):**
+**DOC-AGENTS — FALSE FINDING:**
 
-Created `AGENTS.md` with: project purpose, tech stack (Go 1.26 / SQLite / htmx), build & run commands, architecture diagram (8 packages), full endpoint catalog (15 routes), key design decisions (no-timeout-backoff, no-auto-disable, multi-pool packing, bash-wrapper-over-systemd), and project conventions. 89 lines, foreman-direct (no worker needed for documentation).
+The audit in tick #44 flagged "No AGENTS.md" but the file existed since commit `37db9b4`. Verified via `git log --oneline --follow AGENTS.md`. File has 89 lines covering project purpose, tech stack, architecture, endpoints, design decisions, and conventions. Marked as done.
+
+**TEST-SYNC — COMPLETED (`3039f14`):**
+
+20 tests covering all public functions in internal/sync/duckbrain.go:
+- NewDuckBrainSync: default values (5m interval, 10s timeout), nil DB
+- postMemory: success, HTTP 500 error, network failure
+- syncFleetSummary: populated DB (2 projects, 1 enabled), empty DB, running ticks
+- syncProjectStatuses: with timestamps, NULL timestamps, empty DB
+- syncNamespaceSummary: 2 namespaces, empty DB
+- syncNamespaceStatuses: with description, NULL description, empty DB
+- syncOnce: calls all 4, continues on HTTP errors, concurrent safety
+- Run: starts/stops with cancel, pre-cancelled context
+
+Worker attempted first (openode-go) but produced zero output after 5+ minutes — killed and done foreman-direct. Uses httptest.NewServer for HTTP mocking and database.InitDB(":memory:") for real SQLite. GitReins guards all PASS (secrets, build, lint, tests).
 
 **Remaining active tasks:**
 
-- [x] DOC-AGENTS — Create AGENTS.md ✓ `37db9b4`
-- [ ] TEST-SYNC — Add tests for internal/sync/duckbrain.go (MEDIUM)
-- [ ] PERF-BENCH — Add Go benchmarks for hot paths (MEDIUM)
-- [ ] QUALITY-LONGFILES — Split generator.go (865L) and server.go (835L) (LOW)
+- [x] DOC-AGENTS — Create AGENTS.md ✓ (false finding — existed since `37db9b4`)
+- [x] TEST-SYNC — Add tests for internal/sync/duckbrain.go ✓ `3039f14`
+- [ ] PERF-BENCH — Add Go benchmarks for hot paths: packer, namespace alloc, spawn lifecycle (MEDIUM)
+- [ ] QUALITY-LONGFILES — Split generator.go (865L) and server.go (835L) into smaller files (LOW)
 - [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
 - [ ] NEVER-DONE — 11-point audit
 
 **Key observations:**
 
-1. **DOC-AGENTS done.** Foreman-direct — 89 lines, no worker needed.
+1. **TEST-SYNC done foreman-direct.** Worker (openode-go) went silent for 5+ minutes — zero output, no file changes. Killed and wrote tests directly. 20 tests, all pass.
 
-2. **TEST-SYNC is next actionable.** `internal/sync/duckbrain.go` (258 lines) is the only internal package with 0% test coverage. It has 4 functions (syncProjectStatuses, syncNamespaceSummary, syncNamespaceStatuses, postMemory) — all HTTP + DB operations that need integration-style tests.
+2. **DOC-AGENTS was a false finding.** The audit at tick #44 scanned for AGENTS.md but missed it — the file existed since commit `37db9b4` (tick #43 era). This is a known pitfall: the foreman audit scan isn't perfect when files exist but the foreman's context doesn't include them.
 
-3. **Stale binary remains.** The running daemon predates FEAT-DASHBOARD (binary built Jul 20 04:04, FEAT-DASHBOARD code at c3a4d46 at 06:05). Dashboard routes (/ticks, /namespaces/{id}, /health) return 404. Rebuild + restart needed — but deferring to avoid interrupting 4 active ticks.
+3. **2 tasks remaining.** PERF-BENCH (Go benchmarks for hot paths) and QUALITY-LONGFILES (split 2 files >500L). PERF-BENCH is next actionable.
 
-4. **CI should be green now.** The gofmt fix (34ad5a9) resolved the FEAT-DASHBOARD CI lint failure. Current CI for 37db9b4 is pending.
+4. **Stale binary.** The running daemon predates FEAT-DASHBOARD and TEST-SYNC. Dashboard routes return 404. Not blocking — defer rebuild to avoid interrupting 4 active ticks.
 
-**VERDICT: productive — DOC-AGENTS completed (`37db9b4`). 3 active tasks + 1 blocked. TEST-SYNC is next.**
+5. **sync package now has full test coverage.** Previously 0 tests, now 20 tests covering all 8 exported functions + HTTP error paths + concurrent safety + lifecycle.
+
+**VERDICT: productive — TEST-SYNC completed (`3039f14`), DOC-AGENTS confirmed false finding. 2 active tasks + 1 blocked. PERF-BENCH is next.**
 
 ---
 

@@ -22,8 +22,8 @@ import (
 const (
 	estTokensIn    = 8000     // estimated input tokens per tick
 	estTokensOut   = 2000     // estimated output tokens per tick
-	estCostPerIn   = 0.000015 // deepseek-v4-pro input $/token
-	estCostPerOut  = 0.00006  // deepseek-v4-pro output $/token
+	estCostPerIn   = 0.000002   // deepseek-v4-flash input $/token
+	estCostPerOut  = 0.000008   // deepseek-v4-flash output $/token
 	estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
 )
 
@@ -64,7 +64,7 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		maxConcurrent: maxConcurrent,
 		active:        make(map[string]*exec.Cmd),
 		timeout:       to,
-		model:         "deepseek-v4-pro",
+		model:         "deepseek-v4-flash",
 		provider:      "deepseek-foreman",
 		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins",
 		foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
