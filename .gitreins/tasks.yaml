@@ -196,8 +196,9 @@ tasks:
   - Spec shows Event.Project *string, code has no Project field
   - Align spec with code (code is the implementation reality)
   - Update S02-data-model.md Event struct to match models.go
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:28:24.182656+00:00'
+  completed_at: '2026-07-20T16:48:50.756247+00:00'
 - id: AUDIT-004-tick-field-names
   title: "SPEC: Tick struct field name mismatch \u2014 spec says Project, code says\
     \ ProjectName"
@@ -205,8 +206,9 @@ tasks:
   - Spec S02 Tick.Project string, code Tick.ProjectName string
   - Spec Tick fields use *pointers for nullable, code uses zero-value types
   - Update S02-data-model.md Tick struct to match models.go exactly
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:28:25.217339+00:00'
+  completed_at: '2026-07-20T16:49:40.774154+00:00'
 - id: AUDIT-005-test-deliver
   title: "TEST: deliver.go \u2014 0% coverage, 3 untested functions with hardcoded\
     \ secrets"
