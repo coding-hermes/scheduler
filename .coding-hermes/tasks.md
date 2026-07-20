@@ -1,3 +1,68 @@
+## FOREMAN TICK — 2026-07-20 04:47 (#42)
+
+**Board status:** PRODUCTIVE tick — PERF task completed + CI lint fix. Worker (gpt-5.6-sol@openai-codex) replaced N+1 query in GenerateQueue() with single batch query. Foreman-direct fix for gofmt issue that caused 2 prior CI failures. Discovery sweep all green. FEAT-DASHBOARD is next.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Found 2 un-pulled commits from sibling tick #41 → rebased
+- Dirty workdir: Clean after commits
+- GitReins state: Clean
+
+**Daemon state — HEALTHY:**
+
+| Field | Value |
+|-------|-------|
+| Daemon uptime | ~44m |
+| API /health | status=ok, db=connected, active_ticks=4 |
+| spawns_exec | 0 |
+| spawns_http | 24 |
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (7 packages) |
+| `golangci-lint run` | 0 issues |
+| Hilo graph stats | 374 edges, 54 files |
+| TODOs/FIXMEs | None |
+
+**CI:**
+
+| Commit | Status |
+|--------|--------|
+| `f62fd02` fix: gofmt (CI lint) | SUCCESS (CI + Pipeline) |
+| `d401fd1` fix: batch dashboard queue (PERF) | Queued |
+| `9c9b2bf` deps: update 16 Go packages | Was FAILURE (gofmt) → FIXED by f62fd02 |
+| `aa60a28` cleanup: disable exec fallback | Was FAILURE (gofmt) → FIXED by f62fd02 |
+
+**PERF — COMPLETED (`d401fd1`):**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Queries per GenerateQueue() | 1 + N (40 for 39 projects) | 2 total |
+| Pattern | Per-project SELECT spawned_at | Single batch MAX(spawned_at) GROUP BY |
+| Tests | Pass | New regression tests added |
+
+**CI lint fix — FOREMAN-DIRECT (`f62fd02`):**
+
+`spawn.go:39` gofmt alignment. `gofmt -s -w` resolved. Root cause of CI failures for aa60a28 + 9c9b2bf.
+
+**Remaining active tasks:**
+
+- [x] DEPS — 16 outdated Go packages ✓ `9c9b2bf`
+- [x] PERF — N+1 query in dashboard GenerateQueue() ✓ `d401fd1`
+- [ ] FEAT-DASHBOARD — 3 pages (Tick History, Namespace View, Health Panel)
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [x] BUG-009 — spawn.go pipe read crash ✓ `e865b58`
+- [ ] NEVER-DONE — 11-point audit
+
+**VERDICT: productive — PERF completed (`d401fd1`), CI lint fixed (`f62fd02`). 2 active tasks + 1 blocked. FEAT-DASHBOARD next.**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 04:35 (#41)
 
 **Board status:** PRODUCTIVE tick — DEPS task completed. Worker spawned (gpt-5.6-sol@openai-codex) updated 16 Go packages in go.mod + go.sum. Build, vet, tests all pass. 5 minor transitive test-only deps remain (go-cmp, demangle, goldmark, telemetry, gc) — non-blocking. PERF is next actionable task.
