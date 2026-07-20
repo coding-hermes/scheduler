@@ -223,9 +223,50 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		}
 	}
 
-	// Namespaces.
+	// Namespaces — batch latest ticks + project counts to avoid N+1.
 	namespaces, err := database.ListNamespaces(ctx, g.db, false)
-	if err == nil {
+	if err == nil && len(namespaces) > 0 {
+		// Batch 1: latest namespace_tick per namespace (1 query, not N).
+		type nsTickVal struct {
+			allocated, used, borrowed, lent int
+		}
+		latestTicks := make(map[string]nsTickVal)
+		tickRows, terr := g.db.QueryContext(ctx, `
+			SELECT nt.namespace_id, nt.allocated, nt.used, nt.borrowed, nt.lent
+			FROM namespace_ticks nt
+			INNER JOIN (
+				SELECT namespace_id, MAX(created_at) AS max_created
+				FROM namespace_ticks
+				GROUP BY namespace_id
+			) latest ON nt.namespace_id = latest.namespace_id AND nt.created_at = latest.max_created
+		`)
+		if terr == nil {
+			defer tickRows.Close()
+			for tickRows.Next() {
+				var nsID string
+				var v nsTickVal
+				if tickRows.Scan(&nsID, &v.allocated, &v.used, &v.borrowed, &v.lent) == nil {
+					latestTicks[nsID] = v
+				}
+			}
+		}
+
+		// Batch 2: enabled project count per namespace (1 query, not N).
+		projectCounts := make(map[string]int)
+		countRows, cerr := g.db.QueryContext(ctx, `
+			SELECT namespace_id, COUNT(*) FROM projects WHERE enabled=1 GROUP BY namespace_id
+		`)
+		if cerr == nil {
+			defer countRows.Close()
+			for countRows.Next() {
+				var nsID string
+				var cnt int
+				if countRows.Scan(&nsID, &cnt) == nil {
+					projectCounts[nsID] = cnt
+				}
+			}
+		}
+
 		for _, ns := range namespaces {
 			row := NamespaceRow{
 				ID:       ns.ID,
@@ -233,17 +274,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				Reserved: ns.Reserved,
 				HardCap:  ns.HardCap,
 			}
-			ticks, terr := database.ListNamespaceTicks(ctx, g.db, ns.ID, 1)
-			if terr == nil && len(ticks) > 0 {
-				row.Allocated = ticks[0].Allocated
-				row.Used = ticks[0].Used
-				row.Borrowed = ticks[0].Borrowed
-				row.Lent = ticks[0].Lent
+			if v, ok := latestTicks[ns.ID]; ok {
+				row.Allocated = v.allocated
+				row.Used = v.used
+				row.Borrowed = v.borrowed
+				row.Lent = v.lent
 			}
 			if row.Allocated > 0 {
 				row.Utilization = float64(row.Used) / float64(row.Allocated) * 100
 			}
-			_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE namespace_id=? AND enabled=1`, ns.ID).Scan(&row.ProjectCount)
+			row.ProjectCount = projectCounts[ns.ID]
 			data.Namespaces = append(data.Namespaces, row)
 		}
 	}
