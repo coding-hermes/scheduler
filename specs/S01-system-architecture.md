@@ -273,7 +273,7 @@ type EvaluationResult struct {
 type SpawnedProject struct {
     Name     string  `json:"name"`
     Weight   int     `json:"weight"`
-    Priority float64 `json:"priority"`
+    Priority int `json:"priority"`
     Urgency  float64 `json:"urgency"`
     TickID   string  `json:"tick_id"`
 }

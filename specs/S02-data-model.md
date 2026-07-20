@@ -174,7 +174,7 @@ type Project struct {
     RepoURL     string    `json:"repo_url"`
     Workdir     string    `json:"workdir"`
     Weight      int       `json:"weight"`
-    Priority    float64   `json:"priority"`
+    Priority    int       `json:"priority"`
     CooldownS   int       `json:"cooldown_s"`
     DecayRate   float64   `json:"decay_rate"`
     Enabled     bool      `json:"enabled"`
@@ -186,7 +186,7 @@ type Project struct {
 // ProjectPatch is used for partial updates.
 type ProjectPatch struct {
     Weight     *int     `json:"weight,omitempty"`
-    Priority   *float64 `json:"priority,omitempty"`
+    Priority   *int `json:"priority,omitempty"`
     CooldownS  *int     `json:"cooldown_s,omitempty"`
     DecayRate  *float64 `json:"decay_rate,omitempty"`
     Enabled    *bool    `json:"enabled,omitempty"`

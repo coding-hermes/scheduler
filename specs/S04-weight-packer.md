@@ -62,7 +62,7 @@ func (w *WeightPacker) SetBudget(budget int)
 type ProjectWithUrgency struct {
     Name      string
     Weight    int
-    Priority  float64
+    Priority  int
     CooldownS int
     Urgency   float64
 }
@@ -177,8 +177,8 @@ func compareUrgency(a, b ProjectWithUrgency) int {
     diff := b.Urgency - a.Urgency
     if math.Abs(diff) < 0.001 {
         // Tie-break: higher priority first
-        if math.Abs(b.Priority-a.Priority) >= 0.001 {
-            diff = b.Priority - a.Priority
+        if a.Priority != b.Priority {
+            diff = float64(b.Priority - a.Priority)
         } else {
             // Tie-break: lighter first
             diff = float64(a.Weight - b.Weight)
