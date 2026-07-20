@@ -9,7 +9,7 @@
 
 The urgency calculator determines which projects the scheduler should run this tick. It has two functions:
 
-1. **ComputeInterval** — maps a project's priority (1-10 or decimal) to a tick interval using a geometric/exponential curve
+1. **ComputeInterval** — maps a project's priority (1-10 integer, stored in the database) to a tick interval using a geometric/exponential curve. Accepts `float64` for forward compatibility with fractional priorities, but currently only integer values 1-10 are used (cast from `int` at the call site in `packer_select.go`).
 2. **ComputeUrgency** — returns a numeric urgency score combining priority with how long the project has been waiting
 
 Urgency is computed every evaluation cycle for every enabled project. The weight-budget packer sorts by urgency to decide who runs.
@@ -49,7 +49,8 @@ func NewUrgencyCalculator(minI, maxI time.Duration, numLevels int) *UrgencyCalcu
 
 // ComputeInterval returns the geometric tick interval for a priority value.
 // priority: 1 = fastest (minInterval), numLevels = slowest (maxInterval).
-// Supports decimal priorities (e.g., 3.7) for smooth intermediate values.
+// Accepts `float64` for forward compatibility with fractional priorities;
+// currently cast from the database `int` (1-10) at the call site.
 // Formula: interval = minInterval * ratio ^ ((priority - 1) / (numLevels - 1))
 func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration
 
