@@ -9,6 +9,7 @@ require (
 	github.com/mattn/go-isatty v0.0.23 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
+	modernc.org/gc/v3 v3.1.5 // indirect
 )
 
 require (
