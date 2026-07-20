@@ -322,3 +322,101 @@ func TestPick_PopulatesFields(t *testing.T) {
 		t.Errorf("Urgency = %f, want > 0", proj.Urgency)
 	}
 }
+
+// ── ListEnabled tests ──
+
+func TestListEnabled_Empty(t *testing.T) {
+	db := newTestDB(t)
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 5)
+
+	got, err := p.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("ListEnabled: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListEnabled with empty DB returned %d projects, want 0", len(got))
+	}
+}
+
+func TestListEnabled_WithProjects(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectAt(t, db, "alpha", 10, 5, 0, 1.0)
+	mustCreateProjectAt(t, db, "beta", 20, 7, 0, 1.5)
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 5)
+
+	got, err := p.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("ListEnabled: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListEnabled returned %d projects, want 2", len(got))
+	}
+
+	// Verify fields are populated.
+	found := map[string]scheduler.PackedProject{}
+	for _, proj := range got {
+		found[proj.Name] = proj
+	}
+
+	alpha, ok := found["alpha"]
+	if !ok {
+		t.Fatal("alpha not found in ListEnabled result")
+	}
+	if alpha.Weight != 10 {
+		t.Errorf("alpha.Weight = %d, want 10", alpha.Weight)
+	}
+	if alpha.Priority != 5 {
+		t.Errorf("alpha.Priority = %f, want 5", alpha.Priority)
+	}
+	if alpha.Workdir != "/tmp/alpha" {
+		t.Errorf("alpha.Workdir = %q, want /tmp/alpha", alpha.Workdir)
+	}
+	if alpha.RepoURL != "https://example.com/alpha" {
+		t.Errorf("alpha.RepoURL = %q", alpha.RepoURL)
+	}
+
+	beta, ok := found["beta"]
+	if !ok {
+		t.Fatal("beta not found in ListEnabled result")
+	}
+	if beta.Weight != 20 {
+		t.Errorf("beta.Weight = %d, want 20", beta.Weight)
+	}
+}
+
+func TestListEnabled_SkipsDisabled(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Create a disabled project using raw SQL (mustCreateProjectAt always enables).
+	if err := database.CreateProject(ctx, db, &database.Project{
+		Name:     "disabled",
+		RepoURL:  "https://example.com/disabled",
+		Workdir:  "/tmp/disabled",
+		Weight:   10,
+		Priority: 5,
+		Model:    "test",
+		Provider: "test",
+		Enabled:  false,
+	}); err != nil {
+		t.Fatalf("CreateProject disabled: %v", err)
+	}
+	mustCreateProjectAt(t, db, "enabled", 5, 3, 0, 1.0)
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 5)
+
+	got, err := p.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("ListEnabled: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListEnabled returned %d projects, want 1 (disabled excluded)", len(got))
+	}
+	if got[0].Name != "enabled" {
+		t.Errorf("ListEnabled picked %q, want enabled", got[0].Name)
+	}
+}

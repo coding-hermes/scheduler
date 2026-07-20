@@ -186,3 +186,49 @@ func drainCh(ch <-chan struct{}, timeout time.Duration) {
 		}
 	}
 }
+
+// ── ReleaseAll tests ──
+
+func TestSlotPool_ReleaseAll(t *testing.T) {
+	db := newTestDB(t)
+	lc := scheduler.NewLifecycleTracker(db)
+	sp := scheduler.NewSpawner(db, 5)
+	pool := scheduler.NewSlotPool(5, 10*time.Second, sp, lc)
+
+	// Acquire 3 slots.
+	for _, n := range []string{"alpha", "beta", "gamma"} {
+		if !pool.Acquire(context.Background(), n) {
+			t.Fatalf("Acquire %s", n)
+		}
+	}
+	if pool.Running() != 3 {
+		t.Fatalf("Running = %d, want 3 after acquires", pool.Running())
+	}
+
+	// Release all should drain the semaphore and signal.
+	pool.ReleaseAll()
+
+	if pool.Running() != 0 {
+		t.Errorf("Running = %d after ReleaseAll, want 0", pool.Running())
+	}
+	if pool.Available() != 5 {
+		t.Errorf("Available = %d after ReleaseAll, want 5", pool.Available())
+	}
+}
+
+func TestSlotPool_ReleaseAll_Empty(t *testing.T) {
+	db := newTestDB(t)
+	lc := scheduler.NewLifecycleTracker(db)
+	sp := scheduler.NewSpawner(db, 3)
+	pool := scheduler.NewSlotPool(3, 10*time.Second, sp, lc)
+
+	// ReleaseAll on empty pool is a no-op and should not block.
+	pool.ReleaseAll()
+
+	if pool.Running() != 0 {
+		t.Errorf("Running = %d after ReleaseAll on empty pool, want 0", pool.Running())
+	}
+	if pool.Available() != 3 {
+		t.Errorf("Available = %d after ReleaseAll on empty pool, want 3", pool.Available())
+	}
+}

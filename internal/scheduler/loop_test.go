@@ -1,6 +1,7 @@
 package scheduler_test
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ func TestLoop_StopAfterReturn(t *testing.T) {
 	t.Fatal("did not reach defer (expected panic)")
 }
 
-// TestSumWeights is exercised indirectly through Pick, but we add a tiny direct test
+// TestSumWeights_ViaPick is exercised indirectly through Pick, but we add a tiny direct test
 // to lock the helper's behavior — the function is unexported so we test it via the public path.
 func TestSumWeights_ViaPick(t *testing.T) {
 	db := newTestDB(t)
@@ -137,5 +138,96 @@ func TestSumWeights_ViaPick(t *testing.T) {
 	}
 	if total != 60 {
 		t.Errorf("sum of weights = %d, want 60", total)
+	}
+}
+
+// ── Loop setter / accessor tests ──
+
+func TestLoop_SetNoDeliver(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	loop.SetNoDeliver(true)
+	// No public getter, but we verify the call doesn't panic and
+	// that subsequent setters still work.
+	loop.SetNoDeliver(false)
+}
+
+func TestLoop_SetNamespaceMode(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	loop.SetNamespaceMode(true)
+	loop.SetNamespaceMode(false)
+	// No getter — verify no deadlock on mu, no panic.
+}
+
+func TestLoop_SetGatewayClient(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	srv := httptest.NewServer(nil)
+	defer srv.Close()
+
+	gw := scheduler.NewGatewayClient(srv.URL, "", 5*time.Second)
+	loop.SetGatewayClient(gw)
+
+	// SpawnMethodCounts should delegate to spawner and return zeros.
+	httpCount, execCount := loop.SpawnMethodCounts()
+	if httpCount != 0 || execCount != 0 {
+		t.Errorf("SpawnMethodCounts = (%d, %d), want (0, 0)", httpCount, execCount)
+	}
+}
+
+func TestLoop_SetForemanHome(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.SetForemanHome("/custom/foreman/home")
+	// No getter — verify no panic.
+}
+
+func TestLoop_SetNoExecFallback(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.SetNoExecFallback(true)
+	loop.SetNoExecFallback(false)
+	// No getter — verify no panic.
+}
+
+func TestLoop_SetSimulation(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.SetSimulation(0.75)
+	// No exported getter for simulate/simSuccess — verify no panic.
+}
+
+func TestLoop_SetTickTimeout(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	loop.SetTickTimeout(30 * time.Second)
+	// SetTickTimeout lazy-inits the slot pool. Verify no panic on
+	// repeated calls (which tests the nil-slotPool branch only fires once).
+	loop.SetTickTimeout(45 * time.Second)
+	loop.SetTickTimeout(60 * time.Second)
+}
+
+func TestLoop_LastEvalTime(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	lt := loop.LastEvalTime()
+	if lt.IsZero() {
+		t.Log("initial LastEvalTime is zero — expected before first evaluation")
+	}
+}
+
+func TestLoop_SpawnMethodCounts(t *testing.T) {
+	db := newTestDB(t)
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+
+	httpCount, execCount := loop.SpawnMethodCounts()
+	if httpCount != 0 || execCount != 0 {
+		t.Errorf("SpawnMethodCounts = (%d, %d), want (0, 0)", httpCount, execCount)
 	}
 }

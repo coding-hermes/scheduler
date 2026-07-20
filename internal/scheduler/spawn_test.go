@@ -3,6 +3,8 @@ package scheduler
 import (
 	"database/sql"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -264,5 +266,126 @@ func BenchmarkSpawn_Prep(b *testing.B) {
 	}
 	if len(sinkArgs) == 0 {
 		b.Fatal("sinkArgs stayed empty")
+	}
+}
+
+// ── Spawn helpers ──
+
+func TestSplitCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     string
+		wantLen int
+		want    []string
+	}{
+		{
+			name:    "plain",
+			cmd:     "hermes chat",
+			wantLen: 2,
+			want:    []string{"hermes", "chat"},
+		},
+		{
+			name:    "single_word",
+			cmd:     "hermes",
+			wantLen: 1,
+			want:    []string{"hermes"},
+		},
+		{
+			name:    "quoted",
+			cmd:     `hermes chat "hello world"`,
+			wantLen: 3,
+			want:    []string{"hermes", "chat", "hello world"},
+		},
+		{
+			name:    "quoted_with_space",
+			cmd:     `echo "a b c" extra`,
+			wantLen: 3,
+			want:    []string{"echo", "a b c", "extra"},
+		},
+		{
+			name:    "empty",
+			cmd:     "",
+			wantLen: 0,
+			want:    nil,
+		},
+		{
+			name:    "trailing_spaces",
+			cmd:     "hermes   chat  ",
+			wantLen: 2,
+			want:    []string{"hermes", "chat"},
+		},
+		{
+			name:    "unclosed_quote",
+			cmd:     `echo "unclosed`,
+			wantLen: 2,
+			want:    []string{"echo", "unclosed"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitCommand(tt.cmd)
+			if len(got) != tt.wantLen {
+				t.Errorf("len = %d, want %d (got=%v)", len(got), tt.wantLen, got)
+				return
+			}
+			for i, w := range got {
+				if i < len(tt.want) && w != tt.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, w, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayAvailable_NilGateway(t *testing.T) {
+	db := newTestDB(t)
+	s := NewSpawner(db, 4)
+	if s.GatewayAvailable() {
+		t.Error("GatewayAvailable() = true with nil gateway, want false")
+	}
+}
+
+func TestGatewayAvailable_WithGateway(t *testing.T) {
+	db := newTestDB(t)
+	s := NewSpawner(db, 4)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	gw := NewGatewayClient(srv.URL, "", 5*time.Second)
+	s.SetGatewayClient(gw)
+
+	if !s.GatewayAvailable() {
+		t.Error("GatewayAvailable() = false against live test server, want true")
+	}
+}
+
+func TestSpawnMethodCounts_Initial(t *testing.T) {
+	db := newTestDB(t)
+	s := NewSpawner(db, 4)
+
+	httpCount, execCount := s.SpawnMethodCounts()
+	if httpCount != 0 || execCount != 0 {
+		t.Errorf("SpawnMethodCounts = (%d, %d), want (0, 0)", httpCount, execCount)
+	}
+}
+
+func TestEstimateTickCost_ReturnsConstants(t *testing.T) {
+	tin, tout, cost := estimateTickCost()
+	if tin != 8000 {
+		t.Errorf("tokensIn = %d, want 8000", tin)
+	}
+	if tout != 2000 {
+		t.Errorf("tokensOut = %d, want 2000", tout)
+	}
+	if cost <= 0 {
+		t.Errorf("costUSD = %f, want > 0", cost)
 	}
 }
