@@ -3,9 +3,14 @@ package dashboard_test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 
 	"github.com/coding-herms/scheduler/internal/dashboard"
 	"github.com/coding-herms/scheduler/internal/database"
@@ -19,6 +24,62 @@ func newTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+var queryCountingDriverID atomic.Uint64
+
+type queryCountingDriver struct {
+	base    driver.Driver
+	queries *atomic.Int64
+}
+
+func (d *queryCountingDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.base.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &queryCountingConn{Conn: conn, queries: d.queries}, nil
+}
+
+type queryCountingConn struct {
+	driver.Conn
+	queries *atomic.Int64
+}
+
+func (c *queryCountingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	c.queries.Add(1)
+	queryer, ok := c.Conn.(driver.QueryerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return queryer.QueryContext(ctx, query, args)
+}
+
+func (c *queryCountingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	execer, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return execer.ExecContext(ctx, query, args)
+}
+
+func newQueryCountingTestDB(t *testing.T) (*sql.DB, *atomic.Int64) {
+	t.Helper()
+	queries := &atomic.Int64{}
+	driverName := fmt.Sprintf("sqlite-query-count-%d", queryCountingDriverID.Add(1))
+	sql.Register(driverName, &queryCountingDriver{base: &sqlite.Driver{}, queries: queries})
+
+	db, err := sql.Open(driverName, ":memory:")
+	if err != nil {
+		t.Fatalf("open query-counting database: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := database.Migrate(context.Background(), db); err != nil {
+		_ = db.Close()
+		t.Fatalf("migrate query-counting database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db, queries
 }
 
 func mustCreateProject(t *testing.T, db *sql.DB, name string, weight, priority int) {
@@ -36,6 +97,18 @@ func mustCreateProject(t *testing.T, db *sql.DB, name string, weight, priority i
 		Enabled:   true,
 	}); err != nil {
 		t.Fatalf("CreateProject %s: %v", name, err)
+	}
+}
+
+func mustCreateTick(t *testing.T, db *sql.DB, id, projectName string, spawnedAt time.Time) {
+	t.Helper()
+	if err := database.CreateTick(context.Background(), db, &database.Tick{
+		ID:          id,
+		ProjectName: projectName,
+		Status:      database.StatusCompleted,
+		SpawnedAt:   spawnedAt.UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTick %s: %v", id, err)
 	}
 }
 
@@ -346,6 +419,56 @@ func TestGenerateQueue_WithProjects(t *testing.T) {
 	}
 	if alphaIdx > betaIdx {
 		t.Errorf("expected alpha (priority 5) before beta (priority 3)")
+	}
+}
+
+func TestGenerateQueue_UsesLatestTickForEveryProject(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProject(t, db, "alpha", 30, 5)
+	mustCreateProject(t, db, "beta", 20, 4)
+	mustCreateProject(t, db, "gamma", 10, 3)
+
+	now := time.Now().UTC()
+	mustCreateTick(t, db, "alpha-old", "alpha", now.Add(-100*time.Hour))
+	mustCreateTick(t, db, "alpha-latest", "alpha", now.Add(-time.Hour))
+	mustCreateTick(t, db, "beta-old", "beta", now.Add(-200*time.Hour))
+	mustCreateTick(t, db, "beta-latest", "beta", now.Add(-2*time.Hour))
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.GenerateQueue(&buf); err != nil {
+		t.Fatalf("GenerateQueue: %v", err)
+	}
+	out := buf.String()
+
+	// Latest-tick urgency is alpha≈10 and beta≈12, while gamma has no tick and
+	// keeps its base urgency of 30. Selecting an older tick, or failing to map a
+	// project from the batch result, changes this order.
+	gammaIdx := strings.Index(out, `href="/projects/gamma"`)
+	betaIdx := strings.Index(out, `href="/projects/beta"`)
+	alphaIdx := strings.Index(out, `href="/projects/alpha"`)
+	if gammaIdx < 0 || betaIdx < 0 || alphaIdx < 0 {
+		t.Fatalf("one or more projects missing from queue: %s", snippet(out, "Evaluation Queue"))
+	}
+	if gammaIdx >= betaIdx || betaIdx >= alphaIdx {
+		t.Errorf("expected latest-tick order gamma, beta, alpha; indexes were %d, %d, %d", gammaIdx, betaIdx, alphaIdx)
+	}
+}
+
+func TestGenerateQueue_QueryCountIsConstant(t *testing.T) {
+	db, queryCount := newQueryCountingTestDB(t)
+	for i := range 39 {
+		mustCreateProject(t, db, fmt.Sprintf("project-%02d", i), 1, 1)
+	}
+	queryCount.Store(0)
+
+	g := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := g.GenerateQueue(&buf); err != nil {
+		t.Fatalf("GenerateQueue: %v", err)
+	}
+	if got := queryCount.Load(); got != 2 {
+		t.Errorf("GenerateQueue executed %d queries for 39 projects, want 2", got)
 	}
 }
 

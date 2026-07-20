@@ -458,6 +458,30 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 	}
 	_ = rows.Close()
 
+	latestTickRows, err := g.db.QueryContext(ctx, `
+		SELECT project_name, COALESCE(MAX(spawned_at), '')
+		FROM ticks
+		WHERE project_name IN (SELECT name FROM projects WHERE enabled = 1)
+		GROUP BY project_name
+	`)
+	if err != nil {
+		return fmt.Errorf("query latest queue ticks: %w", err)
+	}
+	lastTicks := make(map[string]string, len(raws))
+	for latestTickRows.Next() {
+		var projectName, spawnedAt string
+		if err := latestTickRows.Scan(&projectName, &spawnedAt); err != nil {
+			_ = latestTickRows.Close()
+			return fmt.Errorf("scan latest queue tick: %w", err)
+		}
+		lastTicks[projectName] = spawnedAt
+	}
+	if err := latestTickRows.Err(); err != nil {
+		_ = latestTickRows.Close()
+		return fmt.Errorf("iterate latest queue ticks: %w", err)
+	}
+	_ = latestTickRows.Close()
+
 	for _, r := range raws {
 		e := QueueEntry{
 			Name:      r.name,
@@ -467,9 +491,7 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 			Enabled:   r.enabled,
 			Urgency:   float64(r.priority) * 10.0, // base urgency from priority alone
 		}
-		var lastTick string
-		_ = g.db.QueryRowContext(ctx, `SELECT COALESCE(spawned_at,'') FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 1`, r.name).Scan(&lastTick)
-		if lastTick != "" {
+		if lastTick := lastTicks[r.name]; lastTick != "" {
 			if t, err := time.Parse(time.RFC3339, lastTick); err == nil {
 				e.Urgency = float64(r.priority) * (1 + time.Since(t).Hours())
 			}
