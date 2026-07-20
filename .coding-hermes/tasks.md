@@ -1,3 +1,59 @@
+## FOREMAN TICK — 2026-07-20 15:03 (#64)
+
+**Board status:** PRODUCTIVE — AUDIT-018 closed foreman-direct. 2 remaining LOW tasks, 2 blocked.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `7acbc3e`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (9 packages) |
+| Gateway :8642 | UP (200) |
+| Daemon :9090 | UP (200) |
+| Dependencies | 0 DIRECT outdated, 5 INDIRECT |
+
+**AUDIT-018-spec-arch-drift — COMPLETED (`e214700`):**
+
+Two spec drift fixes foreman-direct via Exception 7 (spec-only, clear before/after from code):
+
+| File | Lines Changed | Fix |
+|------|--------------|-----|
+| S01-system-architecture.md | +43/-15 | Added SlotPool to Scheduler struct, architecture diagram, interfaces (§3.3), evaluation loop (§4.1), directory tree. Replaced `SpawnEngine` with `Spawner` + `SlotPool`. |
+| S06-rest-api.md | +13/-8 | Updated Event schema: `level`→`severity`, `project_name`→`component`, `timestamp`+`detail`→`details`+`created_at`. Fixed query params, example payload, response model table (§5.2), severity enum docs. |
+
+**Active task board:**
+
+Completed (20):
+- AUDIT-018-spec-arch-drift ✓ (this tick)
+
+Pending (2 LOW, 2 blocked):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect (LOW)
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query (LOW)
+- [ ] FIX-STUCK — Systemd enable (BLOCKED)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **AUDIT-018 closed foreman-direct.** S01 lacked SlotPool entirely — the spec described a simple `SpawnEngine` with `timeout` only, but the actual code uses `SlotPool` (concurrent semaphore) + `Spawner` with async spawn/freed signaling. S06 still used legacy v1 Event field names (level, project_name, timestamp, detail) when the code has used severity/component/details/created_at since v5 migration.
+
+2. **Both fixes were mechanical.** The code IS the spec — each change just transcribed the actual implementation into the spec format. Single commit, 7 patches across 2 files. No code changes, no design decisions.
+
+3. **Board down to 2 actionable LOW tasks.** AUDIT-011 (deps) and AUDIT-014 (N+1 query). Both require code changes — worker delegation appropriate. FIX-STUCK and NEVER-DONE remain blocked/recurring.
+
+4. **Next actionable: AUDIT-011 (dep upgrade) or AUDIT-014 (N+1 query).** Both are code changes — should be delegated to workers in the next tick.
+
+**VERDICT: productive — AUDIT-018 completed (`e214700`). S01 now matches SlotPool architecture, S06 Event schema matches v5 code. 20/22 tasks complete. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 14:43 (#63)
 
 **Board status:** PRODUCTIVE — AUDIT-017 + AUDIT-019 closed foreman-direct. 3 remaining LOW tasks, 2 blocked.
