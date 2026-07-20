@@ -1,3 +1,65 @@
+## FOREMAN TICK — 2026-07-19 22:04 (#36)
+
+**Board status:** PRODUCTIVE tick — marked 2 FIX-STUCK tasks complete (W15 + W10 via `be64cd1`), board sync from GitReins audit backlog. Discovery sweep all green. Daemon at 1h12m+ uptime (PID 3811055, bash wrapper). Gateway healthy (v0.18.2, port 8642). Cooldown at base 900s.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa)
+- `git pull --rebase`: Already up to date
+- Workdir: Clean (untracked deploy/verify-*.log only)
+- GitReins state: Cleaned
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short -p 1` | PASS (7/7 packages, sequential) |
+| Hilo | 54 files, 374 edges, 3 languages |
+| TODOs/FIXMEs | None |
+| `govulncheck` | 0 vulns affecting code |
+| CI | 5/5 SUCCESS (latest `ddc57f4` + `be64cd1`) |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | running (bash wrapper) |
+| PID | 3811055 |
+| Uptime | 1h12m+ |
+| Gateway :8642 | UP (hermes PID 3550053) |
+| Scheduler API :9090 | LISTEN |
+| Cooldown | 900s (base) |
+
+**Tasks completed this tick:**
+- [x] FIX-STUCK — Dead gateway connection detection (W15) ✓ `be64cd1`
+- [x] FIX-STUCK — Gateway health pre-check before each spawn (W10) ✓ `be64cd1`
+
+**Board sync — 5 new tasks from GitReins audit backlog:**
+- [ ] RULE-NO-TIMEOUT-BACKOFF — Fleet rule: timeout = try again, never back off (CRITICAL)
+- [ ] FIX-TIMEOUT-ALIGNMENT — Timeout/cooldown alignment (HIGH)
+- [ ] REGRESSION — SlotPool test hardening, 6 regression guards (HIGH)
+- [ ] DEPS — 15+ outdated Go packages (MEDIUM)
+- [ ] PERF — N+1 query in dashboard collect() (MEDIUM)
+
+**Remaining deferred:**
+- [ ] FIX-STUCK — Systemd enable + auto-restart (W12) — operational, Bane prefers gradual cutover
+
+**Key observations:**
+
+1. **W15 and W10 were completed code sitting in `be64cd1` from tick #35.** All 6 acceptance criteria for each were met. The gateway liveness fix is complete — ping before spawn, ReleaseAll on dead gateway, fresh HTTP client on reconnect, "GATEWAY reconnected" log on recovery.
+
+2. **Board was stale vs GitReins task list.** The `.coding-hermes/tasks.md` only had 3 FIX-STUCK tasks while `.gitreins/tasks.yaml` had 25+ open audit items from a prior NEVER-DONE run. Synced top 5 to the board (max per discovery sweep). 19 remaining audit items still in GitReins only.
+
+3. **RULE-NO-TIMEOUT-BACKOFF is the highest-priority open item per Bane's fleet design rules.** The code may still have timeout backoff logic that must be removed. Next tick should pick this up.
+
+4. **Daemon stable at 1h12m+** — gateway liveness fix appears effective. No crashes since be64cd1 deployment at ~20:57.
+
+5. **Systemd deferred** (W12) — operational cutover, not a code gap. Daemon runs via bash wrapper, stable.
+
+**VERDICT: productive — 2 tasks completed, 5 new tasks created from GitReins audit sync. Board now has active work. Cooldown at base 900s.**
+
 ## FOREMAN TICK — 2026-07-19 21:47 (#35)
 
 **Board status:** PRODUCTIVE tick — found uncommitted gateway-liveness work from prior tick. Committed `be64cd1`. Idle counter RESET to 0. Daemon at ~50m uptime (PID 3811055, bash wrapper, started ~20:57). Gateway healthy (v0.18.2). Cooldown RESTORED to base 900s.
@@ -660,28 +722,63 @@ Completed in tick #25 (2026-07-19 15:33) — all 11 checks passed. Known gaps: 0
 **Remaining highest-priority:**
 - [ ] **FEAT-DASHBOARD** (MEDIUM W12) — 3 pages remaining: Tick history, Namespace view, Health panel
 
-## [ ] FIX-STUCK — Dead gateway connection detection (HIGH W15)
+## [x] FIX-STUCK — Dead gateway connection detection (HIGH W15) ✓ `be64cd1`
 **Real problem:** hermes-gateway process died/restarted, but the scheduler
 didn't know — it kept using dead HTTP connections to the old gateway.
 Gateway restart was invisible. Scheduler filled all 10 slots with
 requests that would never complete because the connection was dead.
-**Fix approach:**
-- HTTP keep-alive ping to Gateway before each eval cycle
-- If ping fails (connection refused / timeout): mark Gateway as DEAD
-- Release all waiting slots, don't spawn new ticks while Gateway dead
-- Poll Gateway /health every 30s until it responds, then reconnect
-- Use a fresh http.Client on reconnect (don't reuse dead connection pool)
-- When Gateway comes back: log "GATEWAY reconnected" and resume spawning
+**Completed:** `be64cd1` (tick #35 — foreman committed prior-tick worker work)
+- `internal/scheduler/gateway_client.go`: `ResetHttpClient()` — fresh client on reconnect
+- `internal/scheduler/loop.go`: Gateway liveness ping in `evaluate()` — pings before spawning, sets gatewayDead=true, logs "GATEWAY DEAD" and "GATEWAY reconnected"
+- `internal/scheduler/slot_pool.go`: `ReleaseAll()` — drains all slots on gateway failure
 
 ## [ ] FIX-STUCK — Systemd enable + auto-restart (HIGH W12)
 **Problem:** Daemon crashed, systemd was inactive — no auto-restart. Required manual restart.
 **Fix:** `sudo systemctl enable coding-hermes-scheduler` + `Restart=always` with 10s delay
+**Status:** Deferred — operational decision, Bane prefers gradual cutover. Daemon running stably via bash wrapper (PID 3811055, 1h12m+ uptime).
 
-## [ ] FIX-STUCK — Gateway health pre-check before each spawn (HIGH W10)
+## [ ] RULE-NO-TIMEOUT-BACKOFF — Fleet rule: timeout = try again, never back off (CRITICAL)
+**Priority: CRITICAL — fleet design rule.** Timeout means retry at normal cooldown, NOT back off.
+- [ ] Remove any timeoutBackoff logic from slowdown.go and slot_pool.go
+- [ ] Timeout outcome does NOT modify cooldown — only log + alert
+- [ ] Auto-slowdown uses 1.5x multiplier, cap 3600s (1h)
+- [ ] Productive tick resets cooldown to base (600s)
+- [ ] No auto-disable for any reason — grep confirms enabled=0 nowhere in code
+- [ ] Tests: TestTimeout_DoesNotBackOff, TestAutoSlowdown_CapAtOneHour
+
+## [ ] FIX-TIMEOUT-ALIGNMENT — Timeout/cooldown alignment (HIGH)
+**Priority: HIGH.** Timeout must be long (2h), cooldown short (600-900s), backoff on timeout forbidden.
+- [ ] Default tick-timeout: 7200s (2h) in code AND systemd unit
+- [ ] Default cooldown: 600-900s base
+- [ ] Auto-slowdown cap: 3600s (1h)
+- [ ] Tests: TestTimeoutBackoff_DoublesCooldown, TestTimeoutBackoff_CapAtOneHour, TestTimeoutBackoff_ResetsOnSuccess
+
+## [ ] REGRESSION — SlotPool test hardening (6 regression guards) (HIGH)
+**Priority: HIGH — protects SlotPool event-driven architecture.**
+- [ ] REGRESSION-001: SlotPool concurrency and event-driven tests
+- [ ] REGRESSION-002: Event-driven eval loop (not timer-driven)
+- [ ] REGRESSION-003: Scheduler decoupled from gateway (no BindsTo)
+- [ ] REGRESSION-004: Semaphore stress + debounce + timeout
+- [ ] REGRESSION-005: Priority sorting, budget limits, cooldown boundary, stable sort
+- [ ] REGRESSION-006: Zombie cleanup, auto-slowdown, namespace borrowing
+
+## [ ] DEPS — 15+ outdated Go packages (MEDIUM)
+**Priority: MEDIUM.** BurntSushi/toml 1.5→1.6, modernc.org/sqlite 1.38→1.54, x/sys, etc.
+- [ ] Audit breaking changes in minor/major bumps
+- [ ] All tests pass after upgrades
+- [ ] go vet clean
+
+## [ ] PERF — N+1 query in dashboard collect() (MEDIUM)
+**Priority: MEDIUM.** Namespace loop queries per row.
+- [ ] Refactor to batch query or single query with JOIN
+- [ ] Dashboard Generate() stays under 50ms
+
+## [x] FIX-STUCK — Gateway health pre-check before each spawn (HIGH W10) ✓ `be64cd1`
 **Problem:** Scheduler keeps spawning into a stuck/dead gateway, piling up
 timeout ticks that all consume slots for 2h.
-**Fix:** Before each eval, ping gateway /health. If down, pause spawning
-and log CRITICAL. Resume when gateway responds.
+**Completed:** `be64cd1` — combined with W15 above. Gateway liveness ping in
+`evaluate()` checks `/health` before each spawn cycle. Pauses spawning and
+logs CRITICAL when gateway is dead. Resumes when gateway responds.
 - AUDIT-005 (test deliver.go): 0% coverage, needs mock-based tests
 - AUDIT-006 (test gateway_client.go): 0% coverage
 - AUDIT-007 (test slowdown.go): 0% coverage
