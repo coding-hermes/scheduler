@@ -89,6 +89,11 @@ func (l *Loop) SetForemanHome(path string) {
 	l.spawner.SetForemanHome(path)
 }
 
+// SetNoExecFallback disables exec.Command fallback on gateway failure.
+func (l *Loop) SetNoExecFallback(v bool) {
+	l.spawner.SetNoExecFallback(v)
+}
+
 // SetSimulation enables simulation/dry-run mode.
 func (l *Loop) SetSimulation(successRate float64) {
 	l.mu.Lock()

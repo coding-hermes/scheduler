@@ -46,6 +46,7 @@ type Spawner struct {
 	skills        string
 	foremanHome   string         // HERMES_HOME for foreman config
 	gateway       *GatewayClient // HTTP API client (nil = use exec.Command)
+	noExecFallback bool          // disable exec.Command fallback on gateway failure
 
 	// Prometheus-style spawn counters since last restart.
 	spawnCountHTTP int64
@@ -96,6 +97,11 @@ func (s *Spawner) RunningSet() map[string]bool {
 // HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
 func (s *Spawner) SetGatewayClient(client *GatewayClient) {
 	s.gateway = client
+}
+
+// SetNoExecFallback disables the exec.Command fallback when gateway spawns fail.
+func (s *Spawner) SetNoExecFallback(v bool) {
+	s.noExecFallback = v
 }
 
 // GatewayAvailable returns true if the gateway client is configured and reachable.
@@ -217,6 +223,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			if s.noExecFallback {
+				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
+				return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
+			}
 		}
 
 		atomic.AddInt64(&s.spawnCountExec, 1)

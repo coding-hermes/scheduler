@@ -1034,6 +1034,18 @@ Completed in tick #25 (2026-07-19 15:33) — all 11 checks passed. Known gaps: 0
 **Remaining highest-priority:**
 - [ ] **FEAT-DASHBOARD** (MEDIUM W12) — 3 pages remaining: Tick history, Namespace view, Health panel
 
+## [ ] CLEANUP — Disable exec.Command fallback by default (HIGH W12)
+**Problem:** Gateway spawn falls back to exec.Command("hermes", ...) — spawning
+heavyweight hermes chat subprocesses that consume ~1GB/system threads each.
+With 4 concurrent slots, 4 hermes chats can starve the system of threads
+(fork: Resource temporarily unavailable — entire system becomes unresponsive).
+**Fix:**
+- Default: --no-exec-fallback=true — gateway failure skips the tick, no subprocess
+- Opt-in: --no-exec-fallback=false — user explicitly enables if they have cgroup control
+- Add to systemd unit: --no-exec-fallback (default true)
+- Clean up: gate the ExecCommand path so it's impossible to accidentally enable
+- Dead simple: if gateway dead, log SKIPPED and move to next eval cycle
+
 ## [x] FIX-STUCK — Dead gateway connection detection (HIGH W15) ✓ `be64cd1`
 **Real problem:** hermes-gateway process died/restarted, but the scheduler
 didn't know — it kept using dead HTTP connections to the old gateway.
