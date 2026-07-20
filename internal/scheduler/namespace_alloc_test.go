@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -160,6 +161,91 @@ func TestNamespaceAllocator_SetBudget(t *testing.T) {
 	sum50 := got50["ns-a"] + got50["ns-b"]
 	if !approxEqual(sum50, 50, 2) {
 		t.Errorf("after SetBudget(50) sum = %d, want ~50", sum50)
+	}
+}
+
+// benchNamespaceAllocatorFixtures returns n namespace fixtures with mixed
+// weight/reserved/hardcap so both Phase 1 (reserved floor) and Phase 2
+// (proportional remainder) paths execute during the benchmark.
+//
+// Pattern: 1/3 with reserved+hardcap, 1/3 weight-only, 1/3 weight+reserved.
+func benchNamespaceAllocatorFixtures(n int) []database.Namespace {
+	out := make([]database.Namespace, n)
+	for i := 0; i < n; i++ {
+		mod := i % 3
+		ns := database.Namespace{
+			ID:      fmt.Sprintf("ns-%04d", i),
+			Weight:  ((i * 7) % 30) + 1, // 1..30
+			Enabled: true,
+		}
+		switch mod {
+		case 0:
+			ns.Reserved = ((i * 3) % 10) + 1 // 1..10
+			ns.HardCap = ((i * 11) % 50) + 20
+		case 1:
+			// weight only, no reserved, no hardcap
+		case 2:
+			ns.Reserved = ((i * 5) % 7) + 1
+			// hardcap = 0 means no cap
+		}
+		out[i] = ns
+	}
+	return out
+}
+
+// BenchmarkAllocate measures NamespaceAllocator.Allocate() across namespace
+// counts. Allocate is pure CPU work — no DB, no goroutines — so the benchmark
+// reflects algorithmic cost directly.
+func BenchmarkAllocate(b *testing.B) {
+	for _, n := range []int{3, 10, 50} {
+		fixtures := benchNamespaceAllocatorFixtures(n)
+		alloc := NewNamespaceAllocator(100)
+
+		b.Run(fmt.Sprintf("Namespaces=%d", n), func(b *testing.B) {
+			b.ResetTimer()
+			var sink int
+			for i := 0; i < b.N; i++ {
+				got := alloc.Allocate(fixtures)
+				// Touch the result so dead-code elimination can't elide the call.
+				for _, v := range got {
+					sink += v
+				}
+			}
+			// Force sink to escape.
+			if sink == 0 {
+				b.Fatalf("sink stayed 0 across %d iterations", b.N)
+			}
+		})
+	}
+}
+
+// BenchmarkAllocate_ReservedExceedsBudget exercises the reserved-scaling
+// branch (when sum of reserved floors > budget) — the warn-log path is the
+// most expensive branch in the allocator.
+func BenchmarkAllocate_ReservedExceedsBudget(b *testing.B) {
+	n := 20
+	nss := make([]database.Namespace, n)
+	for i := 0; i < n; i++ {
+		// Each namespace reserves 10, total reserved = 200, budget = 80.
+		nss[i] = database.Namespace{
+			ID:       fmt.Sprintf("ns-%04d", i),
+			Weight:   10,
+			Reserved: 10,
+			Enabled:  true,
+		}
+	}
+	alloc := NewNamespaceAllocator(80)
+
+	b.ResetTimer()
+	var sink int
+	for i := 0; i < b.N; i++ {
+		got := alloc.Allocate(nss)
+		for _, v := range got {
+			sink += v
+		}
+	}
+	if sink == 0 {
+		b.Fatalf("sink stayed 0 across %d iterations", b.N)
 	}
 }
 

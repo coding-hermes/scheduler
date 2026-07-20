@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -200,6 +201,85 @@ func TestPick_RespectsMaxConcurrent(t *testing.T) {
 	}
 	if len(got) > 2 {
 		t.Errorf("Pick returned %d, want <= 2 (maxConcurrent=2)", len(got))
+	}
+}
+
+// benchPackerDB creates an in-memory DB with n projects, all enabled, with
+// varying priority and weight so the urgency-sort and budget-fit paths both
+// run during the benchmark.
+func benchPackerDB(b *testing.B, n int) (*sql.DB, *scheduler.Packer, time.Time) {
+	b.Helper()
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		b.Fatalf("InitDB(:memory:): %v", err)
+	}
+	b.Cleanup(func() { db.Close() })
+
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("proj-%04d", i)
+		// Cycle priority 1..10 and weight 1..20 so each project differs.
+		prio := (i % 10) + 1
+		wt := (i % 20) + 1
+		if err := database.CreateProject(ctx, db, makeProject(name, wt, prio, 0, 1.0)); err != nil {
+			b.Fatalf("CreateProject %s: %v", name, err)
+		}
+	}
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	// Budget sized so roughly half of n projects fit; budget > total so all fit
+	// is also realistic — use a generous budget that exercises the sort + scan
+	// paths but still hits the early-break when maxConcurrent is low.
+	p := scheduler.NewPacker(db, calc, n*5, n)
+	return db, p, time.Now()
+}
+
+// BenchmarkPick measures Packer.Pick() across project counts. The hot path is
+// Query → Scan → urgency compute → sort → greedy fit. We don't reuse the
+// DB across iterations because Pick is read-only and the budget keeps growing.
+func BenchmarkPick(b *testing.B) {
+	for _, n := range []int{5, 50, 200} {
+		b.Run(fmt.Sprintf("Projects=%d", n), func(b *testing.B) {
+			_, packer, now := benchPackerDB(b, n)
+			running := make(map[string]bool)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, err := packer.Pick(now, running)
+				if err != nil {
+					b.Fatalf("Pick: %v", err)
+				}
+				// Use the result so the compiler can't elide the call.
+				if len(got) == 0 && n > 0 {
+					b.Fatalf("Pick returned 0 projects for n=%d", n)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkPick_WithRunning measures the packer when some projects are
+// already in the running set — exercises the spawnerRunning skip path
+// that hot loops check on every iteration.
+func BenchmarkPick_WithRunning(b *testing.B) {
+	for _, n := range []int{5, 50, 200} {
+		b.Run(fmt.Sprintf("Projects=%d", n), func(b *testing.B) {
+			_, packer, now := benchPackerDB(b, n)
+			// Mark every other project as already running.
+			running := make(map[string]bool, n/2)
+			for i := 0; i < n; i += 2 {
+				running[fmt.Sprintf("proj-%04d", i)] = true
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, err := packer.Pick(now, running)
+				if err != nil {
+					b.Fatalf("Pick: %v", err)
+				}
+				_ = got
+			}
+		})
 	}
 }
 

@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
@@ -77,5 +79,134 @@ func TestSpawner_MaxConcurrentOne(t *testing.T) {
 	// No active → canSpawn true.
 	if !s.canSpawn() {
 		t.Error("canSpawn() = false with maxConcurrent=1 and no active, want true")
+	}
+}
+
+// BenchmarkEstimateTickCost measures the cost-estimation function called from
+// SpawnedTick.Wait() on every completed tick. Today it returns package-level
+// constants; the benchmark pins the current cost so a future switch to real
+// session export shows up as a regression.
+func BenchmarkEstimateTickCost(b *testing.B) {
+	var (
+		tin, tout int
+		cost      float64
+	)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tin, tout, cost = estimateTickCost()
+	}
+	// Touch results so the compiler can't elide the call.
+	if tin == 0 && tout == 0 && cost == 0 {
+		b.Fatal("estimateTickCost returned zeros")
+	}
+}
+
+// benchSpawnFixture returns a project representative of a real spawn.
+// Worker defaults are populated so the WorkerDefaults() helper exercises its
+// non-empty branch — that branch is the most expensive string-formatting in
+// the spawn prep path.
+func benchSpawnFixture() PackedProject {
+	return PackedProject{
+		Name:        "bench-project",
+		Priority:    7,
+		Weight:      10,
+		Workdir:     "/tmp/bench-project",
+		RepoURL:     "https://example.com/bench-project",
+		Model:       "deepseek-v4-flash",
+		Provider:    "deepseek-foreman",
+		WorkerModel: "kimi-k3",
+		Deliver:     "telegram:-1001234567890:42",
+	}
+}
+
+// BenchmarkNewSpawner measures the constructor cost. NewSpawner expands $HOME
+// via os.ExpandEnv which is the only non-trivial work — pinning it lets us
+// detect if the constructor starts doing real work.
+func BenchmarkNewSpawner(b *testing.B) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		b.Fatalf("InitDB: %v", err)
+	}
+	b.Cleanup(func() { db.Close() })
+
+	b.ResetTimer()
+	var sink *Spawner
+	for i := 0; i < b.N; i++ {
+		sink = NewSpawner(db, 4)
+	}
+	if sink == nil {
+		b.Fatal("NewSpawner returned nil")
+	}
+}
+
+// BenchmarkSpawn_Prep measures the data-preparation portion of Spawn() that
+// happens BEFORE exec.Command is invoked: canSpawn check, model/provider
+// resolution, WorkerDefaults formatting, and the prompt template assembly.
+// The actual fork+exec is intentionally excluded so the benchmark reflects
+// pure scheduler-side work, not OS process startup.
+func BenchmarkSpawn_Prep(b *testing.B) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		b.Fatalf("InitDB: %v", err)
+	}
+	b.Cleanup(func() { db.Close() })
+
+	project := benchSpawnFixture()
+	tickID := fmt.Sprintf("%s-%s", project.Name, time.Now().UTC().Format("2006-01-02-15-04-05"))
+	spawner := NewSpawner(db, 4)
+
+	b.ResetTimer()
+	var (
+		sinkModel string
+		sinkArgs  []string
+	)
+	for i := 0; i < b.N; i++ {
+		// --- BEGIN spawn prep (mirrors spawn.go lines 159-258) ---
+		_ = spawner.canSpawn() // concurrency check
+
+		model := spawner.model
+		if project.Model != "" {
+			model = project.Model
+		}
+		provider := spawner.provider
+		if project.Provider != "" {
+			provider = project.Provider
+		}
+
+		_ = WorkerDefaults(project)
+
+		// Mirror the prompt template assembly (format-only — don't run it).
+		_ = fmt.Sprintf(
+			"[Scheduler tick: %s] "+
+				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
+				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
+				"Workdir: %s. "+
+				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
+				"Format your final output as clean, well-structured markdown with tables and sections. "+
+				"%s"+
+				"Report result.",
+			tickID, project.Workdir,
+			WorkerDefaults(project),
+		)
+
+		// Mirror the args list assembly.
+		sinkArgs = []string{
+			"chat", "-q", "PROMPT_PLACEHOLDER",
+			"-m", model,
+			"--provider", provider,
+			"-s", "coding-hermes-foreman",
+			"-s", "coding-hermes-cron",
+			"-s", "hilo-usage",
+			"-s", "gitreins",
+			"--ignore-rules", "-Q",
+		}
+		sinkModel = model
+		// --- END spawn prep ---
+	}
+	if sinkModel == "" {
+		b.Fatal("sinkModel stayed empty")
+	}
+	if len(sinkArgs) == 0 {
+		b.Fatal("sinkArgs stayed empty")
 	}
 }
