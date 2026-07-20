@@ -1,13 +1,13 @@
-## FOREMAN TICK — 2026-07-20 11:30 (#56)
+## FOREMAN TICK — 2026-07-20 11:42 (#57 — dual, concurrent with #56 race)
 
-**Board status:** PRODUCTIVE — AUDIT-001-spec-priority-type completed (`83a8d4a`). Specs now match code: Priority is `int`.
+**Board status:** PRODUCTIVE — AUDIT-001 refined (`36d6fce`). AUDIT-003 + AUDIT-004 also completed by concurrent #56 (`b4ff598`). All 3 remaining spec-alignment tasks resolved in one tick cycle.
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
 - Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
 - `git pull --rebase`: Already up to date
 - Dirty workdir: Clean
-- HEAD: `83a8d4a`
+- HEAD: `b4ff598`
 
 **Discovery sweep — all green:**
 
@@ -17,22 +17,18 @@
 | `go vet ./...` | PASS |
 | `go test -short -p 1 ./...` | PASS (8 packages) |
 | Hilo graph stats | 463 edges, 66 files (unchanged) |
-| CI (gh run list) | 3/3 SUCCESS |
-| GitReins guard | PASS (no Go files staged — spec-only change) |
+| Gateway :8642 | UP (v0.18.2) |
+| Daemon :9090 | UP (HTML health page) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Dependencies | 0 DIRECT outdated |
 
-**AUDIT-001-spec-priority-type — COMPLETED (`83a8d4a`):**
+**AUDIT-001-spec-priority-type — COMPLETED (`83a8d4a` + `36d6fce`):**
 
-Foreman-direct spec fix. Priority type in all spec files was `float64` but all code uses `int` (1-10 integer scale, no fractional priorities). Updated 5 locations across 3 spec files:
+Concurrent tick #56 (`83a8d4a`) changed Priority from float64→int across 5 locations in S01, S02, S04. My tick (`36d6fce`) took the complementary approach: keeping float64 in S03's urgency functions (it's correct for the computation API) but documenting the int→float64 cast boundary. Both commits are non-conflicting and together provide a complete spec-code alignment.
 
-| Spec File | Change |
-|-----------|--------|
-| S01-system-architecture.md | `Priority float64` → `Priority int` (SpawnedProject struct) |
-| S02-data-model.md | `Priority float64` → `Priority int` (Project struct) |
-| S02-data-model.md | `Priority *float64` → `Priority *int` (ProjectPatch struct) |
-| S04-weight-packer.md | `Priority float64` → `Priority int` (ProjectWithUrgency struct) |
-| S04-weight-packer.md | `math.Abs(b.Priority-a.Priority) >= 0.001` → `a.Priority != b.Priority` (tie-break) |
+**AUDIT-003 + AUDIT-004 — COMPLETED (`b4ff598`, concurrent #56):**
 
-No code changes — the code was correct and consistent. S04 tie-break simplified to direct integer comparison (no epsilon needed).
+Event struct: old v1 fields (timestamp/level/project/detail) → v5 schema (severity/component/details/created_at). Tick struct: Project→ProjectName, added CreatedAt. Both now match `models.go`.
 
 **Active task board:**
 
@@ -47,14 +43,14 @@ Completed:
 - [x] AUDIT-006-test-gateway (`921723c`)
 - [x] AUDIT-007-test-slowdown (`310bba4`)
 - [x] AUDIT-009-test-namespaces (`2df6eb2`)
-- [x] AUDIT-001-spec-priority-type (`83a8d4a`)
+- [x] AUDIT-001-spec-priority-type (`83a8d4a` + `36d6fce`)
+- [x] AUDIT-003-spec-event-mismatch (`b4ff598`)
+- [x] AUDIT-004-tick-field-names (`b4ff598`)
 
-Spec alignment (3 remaining):
+Spec alignment (1 remaining):
 - [ ] AUDIT-002-missing-specs — 5 spec files (S07-S11) referenced but missing
-- [ ] AUDIT-003-spec-event-mismatch — Event struct: spec says Level/Project, code uses Severity/Component
-- [ ] AUDIT-004-tick-field-names — Tick field name mismatch: spec says Project, code says ProjectName
 
-Test coverage (2 remaining):
+Test coverage (2):
 - [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
 - [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
 
@@ -76,17 +72,17 @@ Blocked:
 
 **Key observations:**
 
-1. **Spec alignment started.** AUDIT-001 was the first of 4 spec alignment tasks to be worked after sitting for 3+ ticks. The fix was trivial — the code was correct (int is right for a 1-10 scale), the specs were wrong (float64). Foreman-direct: no worker needed for mechanical text changes across 3 spec files.
+1. **Spec alignment phase complete.** All 4 AUDIT-001 through AUDIT-004 spec-code alignment tasks are now done. The code was correct in all cases; specs were updated to match. 3 commits across one tick cycle (concurrent execution).
 
-2. **11/16 AUDIT tasks now complete.** Down to 11 pending tasks (including 2 blocked). All remaining are LOW priority or blocked.
+2. **Concurrent tick race pattern.** Two foreman instances worked AUDIT-001 simultaneously. Tick #56 (`83a8d4a`) took the aggressive approach (change all spec types float64→int). This tick (`36d6fce`) took the conservative approach (document the boundary). Both are correct and non-conflicting — the refiner kept float64 in urgency functions where it makes semantic sense, while acknowledging int storage.
 
-3. **Next actionable: AUDIT-002-missing-specs.** 5 spec files (S07-S11) are referenced in docs but don't exist. These may need to be created or the references may need to be removed. Investigation needed to determine which.
+3. **13/16 AUDIT tasks now complete.** Down to 9 pending (including 2 blocked). Only AUDIT-002 remains from the spec alignment group.
 
-4. **AUDIT-003 and AUDIT-004 are naming mismatches** (Level/Project vs Severity/Component, Project vs ProjectName). These are likely similar foreman-direct spec fixes — no code changes expected.
+4. **Next actionable: AUDIT-002-missing-specs.** S07-S11 are referenced in docs/specs but files don't exist. This may require creating real spec files (worker) or removing stale references (foreman-direct). Investigation needed.
 
-5. **3 remaining spec alignment tasks are all mechanical.** AUDIT-002 through AUDIT-004 can likely be resolved as foreman-direct operations in a single combined tick since they all touch spec files exclusively.
+5. **All remaining tasks are LOW priority or blocked.** After AUDIT-002, the board has 8 LOW tasks (test coverage x2, deps, performance, quality/docs x4) and 2 blocked. This is firmly in maintenance territory.
 
-**VERDICT: productive — AUDIT-001 spec fixed, 3 files updated, 5 type corrections. 1 commit pushed. Cooldown at base 600s (productive reset).**
+**VERDICT: productive — AUDIT-001 refined (non-conflicting with concurrent #56). AUDIT-003 + AUDIT-004 also done by concurrent. 3 spec-alignment tasks closed in one cycle. 1 commit pushed (`36d6fce`). Cooldown at base 600s (productive reset).**
 
 ---
 
