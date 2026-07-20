@@ -222,8 +222,8 @@ paths:
     get:
       operationId: listEvents
       parameters:
-        - { name: level, in: query, schema: { type: string, enum: [info, warn, error, decision] }, example: error }
-        - { name: project, in: query, schema: { type: string }, example: alpha }
+        - { name: severity, in: query, schema: { type: string, enum: [CRITICAL, HIGH, MEDIUM, LOW, INFO] }, example: HIGH }
+        - { name: component, in: query, schema: { type: string }, example: scheduler }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, default: 100 }, example: 50 }
       responses:
         '200':
@@ -231,7 +231,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventList' }
-              example: { events: [{ id: 42, timestamp: '2026-07-12T10:04:00Z', level: info, project_name: alpha, message: tick completed, detail: '{"tick_id":"alpha-2026-07-12-10-00-00"}', created_at: '2026-07-12T10:04:00Z' }], count: 1 }
+              example: { events: [{ id: 42, severity: INFO, component: scheduler, message: tick completed, details: '{"tick_id":"alpha-2026-07-12-10-00-00"}', created_at: '2026-07-12T10:04:00Z' }], count: 1 }
         '500': { $ref: '#/components/responses/InternalError' }
         '405': { $ref: '#/components/responses/GetOnly' }
 components:
@@ -272,7 +272,7 @@ components:
       required: [id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at]
       properties: { id: { type: string, description: '<project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>' }, project_name: { type: string }, session_id: { type: string }, status: { type: string, enum: [queued, running, completed, failed, timeout] }, outcome: { type: string, enum: [committed, dry_run, failed, timeout, ''] }, spawned_at: { type: string }, completed_at: { type: string }, exit_code: { type: integer }, commits: { type: integer }, files_changed: { type: integer }, tokens_in: { type: integer, format: int64 }, tokens_out: { type: integer, format: int64 }, cost_usd: { type: number, format: double }, urgency: { type: number, format: double }, weight_used: { type: integer }, error: { type: string }, created_at: { type: string } }
     TickList: { type: object, required: [ticks, count], properties: { ticks: { type: array, items: { $ref: '#/components/schemas/Tick' } }, count: { type: integer } } }
-    Event: { type: object, required: [id, timestamp, level, project_name, message, detail, created_at], properties: { id: { type: integer, format: int64 }, timestamp: { type: string, format: date-time }, level: { type: string, enum: [info, warn, error, decision] }, project_name: { type: string }, message: { type: string }, detail: { type: string }, created_at: { type: string, format: date-time } } }
+    Event: { type: object, required: [id, severity, component, message, details, created_at], properties: { id: { type: integer, format: int64 }, severity: { type: string, enum: [CRITICAL, HIGH, MEDIUM, LOW, INFO] }, component: { type: string }, message: { type: string }, details: { type: string }, created_at: { type: string, format: date-time } } }
     EventList: { type: object, required: [events, count], properties: { events: { type: array, items: { $ref: '#/components/schemas/Event' } }, count: { type: integer } } }
     StatusMessage: { type: object, required: [status], properties: { status: { type: string } } }
 ```
@@ -293,7 +293,7 @@ JSON body operations require `Content-Type: application/json` by contract. The c
 
 ### 4.2 Pagination and filtering
 
-`GET /ticks` accepts `project` and `limit`; default limit is 50. `GET /events` accepts `level`, `project`, and `limit`; default limit is 100. A positive base-10 integer overrides the default. Missing, non-numeric, zero, and negative limits silently use the default. There is no upper cap, offset, cursor, or total database count.
+`GET /ticks` accepts `project` and `limit`; default limit is 50. `GET /events` accepts `severity`, `component`, and `limit`; default limit is 100. A positive base-10 integer overrides the default. Missing, non-numeric, zero, and negative limits silently use the default. There is no upper cap, offset, cursor, or total database count.
 
 Queries are parameterized and ordered newest first. Envelopes are exactly `{"ticks":[...],"count":N}` and `{"events":[...],"count":N}`. `count` is the returned array length, not all matching rows. Nil slices are normalized to `[]`.
 
@@ -325,10 +325,10 @@ Update is a partial object. Optional pointer fields distinguish omission from ze
 |-------|--------------|
 | Project | `name:string`, `repo_url:string`, `workdir:string`, `weight:int`, `priority:int`, `cooldown_s:int`, `decay_rate:number`, `model:string`, `provider:string`, `enabled:bool`, `created_at:string`, `updated_at:string` |
 | Tick | `id:string`, `project_name:string`, `session_id:string`, `status:string`, `outcome:string`, timestamps, integer metrics, `cost_usd:number`, `urgency:number`, `weight_used:int`, `error:string` |
-| Event | `id:int64`, `timestamp:string`, `level:string`, `project_name:string`, `message:string`, `detail:string`, `created_at:string` |
+| Event | `id:int64`, `severity:string`, `component:string`, `message:string`, `details:string`, `created_at:string` |
 | Error | exactly one required `error:string` field |
 
-Tick IDs use `<project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>`. Tick status is `queued|running|completed|failed|timeout`; terminal outcome is `committed|dry_run|failed|timeout`, while non-terminal rows may contain an empty outcome. Event level is `info|warn|error|decision`. Timestamp strings originate in SQLite and are intended to be RFC3339; incomplete tick timestamps may be empty strings rather than JSON `null`.
+Tick IDs use `<project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>`. Tick status is `queued|running|completed|failed|timeout`; terminal outcome is `committed|dry_run|failed|timeout`, while non-terminal rows may contain an empty outcome. Event severity is `CRITICAL|HIGH|MEDIUM|LOW|INFO`. Timestamp strings originate in SQLite and are intended to be RFC3339; incomplete tick timestamps may be empty strings rather than JSON `null`.
 
 `GET /projects/{name}` returns `latest_tick:null` when `getLatestTick` finds no row or encounters any query/scan error; that secondary error is intentionally ignored.
 

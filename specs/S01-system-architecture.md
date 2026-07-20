@@ -37,7 +37,8 @@ graph TB
             URG[Urgency Calculator]
             PK[Multi-Pool Packer<br/>flat or namespaced]
             BE[Borrowing Engine<br/>idle capacity redistribution]
-            SP[Spawn Engine]
+            SL[SlotPool<br/>concurrent spawn semaphore]
+            SP[Spawner]
             LC[Tick Lifecycle Tracker]
         end
 
@@ -64,7 +65,8 @@ graph TB
     NS --> URG
     URG --> PK
     BE --> PK
-    PK --> SP
+    PK --> SL
+    SL --> SP
     SP --> LC
     LC --> DB
     SYNC --> DB
@@ -105,7 +107,8 @@ type Scheduler struct {
     packer    *WeightPacker        // flat mode (default)
     multiPool *MultiPoolPacker     // namespace mode
     borrowing *BorrowingEngine
-    spawner   *SpawnEngine
+    slotPool  *SlotPool            // concurrent spawn semaphore
+    spawner   *Spawner
     lifecycle *LifecycleTracker
     syncer    *DuckBrainSyncer
     dashboard *DashboardGenerator
@@ -177,13 +180,43 @@ func (w *WeightPacker) Pack(projects []ProjectWithUrgency, running []string) []P
 func (w *WeightPacker) SetBudget(budget int)
 
 
-type SpawnEngine struct {
-    timeout time.Duration
+type Spawner struct {
+    db            *sql.DB
+    maxConcurrent int
+    timeout       time.Duration
 }
 
-func NewSpawnEngine(timeout time.Duration) *SpawnEngine
-// Spawn launches a foreman process and returns a running tick.
-func (s *SpawnEngine) Spawn(ctx context.Context, p Project, tickID string) (*RunningTick, error)
+func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawner
+// Spawn launches a foreman process and returns a spawned tick handle.
+func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, error)
+// SpawnMethodCounts returns (http, exec) counts for telemetry.
+func (s *Spawner) SpawnMethodCounts() (httpCount, execCount int64)
+
+
+type SlotPool struct {
+    sem       chan string     // buffered channel = semaphore, value = project name
+    maxSlots  int
+    timeout   time.Duration
+    spawner   *Spawner
+    lifecycle *LifecycleTracker
+    freedCh   chan struct{}   // fires when a slot is released
+}
+
+func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool
+// Available returns the number of free slots.
+func (p *SlotPool) Available() int
+// Running returns the count of currently occupied slots.
+func (p *SlotPool) Running() int
+// RunningSet returns the set of project names currently in slots.
+// Used by the packer to prevent duplicate spawns.
+func (p *SlotPool) RunningSet() map[string]bool
+// Spawn acquires a slot and launches the tick asynchronously.
+// Returns immediately after queuing — does not block on spawn completion.
+func (p *SlotPool) Spawn(project PackedProject, now time.Time, noDeliver bool, db *sql.DB)
+// SlotFreed returns a channel that fires when any slot is released.
+func (p *SlotPool) SlotFreed() <-chan struct{}
+// ReleaseAll drains all occupied slots (used during shutdown).
+func (p *SlotPool) ReleaseAll()
 
 
 type LifecycleTracker struct {
@@ -240,17 +273,15 @@ func (c Config) Validate() error {
 4. Greedy pack into weight budget:
    a. budget_remaining = budget
    b. For each project in urgency order:
+      - Skip if in SlotPool.RunningSet() (already running)
       - Skip if cooldown not elapsed
       - Skip if weight > budget_remaining
-      - Skip if running count >= max_concurrent
       - Add to run queue, subtract weight
-5. For each project in run queue:
-   a. Generate tick ID: <project>-<YYYY>-<MM>-<DD>-<HH>-<mm>-<ss>
-   b. Write tick to SQLite (status=queued)
-   c. Spawn hermes chat subprocess (status=running)
-   d. Track PID, enforce timeout
-6. Wait for all spawned ticks to complete or timeout
-7. For each completed tick:
+5. For each project in run queue, dispatch to SlotPool:
+   a. SlotPool.Spawn(project, now, noDeliver, db) — async, returns immediately
+   b. SlotPool acquires a semaphore slot, spawns via Spawner, tracks lifecycle
+6. On SlotPool.SlotFreed() signal, re-evaluate packer for pending projects
+7. For each completed tick (via LifecycleTracker):
    a. Query session outcome (hermes sessions export --dry-run)
    b. Update tick record (status=completed, outcome, commits, cost)
 8. Generate dashboard HTML
@@ -382,6 +413,8 @@ coding-herms-scheduler/
 │   │   ├── packer.go        # weight-budget packer
 │   │   ├── packer_test.go
 │   │   ├── spawn.go         # spawn engine
+│   │   ├── slot_pool.go     # concurrent slot semaphore (SlotPool)
+│   │   ├── slot_pool_test.go
 │   │   ├── lifecycle.go     # tick lifecycle tracker
 │   │   └── loop.go          # main evaluation loop
 │   ├── database/
