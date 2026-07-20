@@ -1,3 +1,65 @@
+## FOREMAN TICK — 2026-07-19 21:47 (#35)
+
+**Board status:** PRODUCTIVE tick — found uncommitted gateway-liveness work from prior tick. Committed `be64cd1`. Idle counter RESET to 0. Daemon at ~50m uptime (PID 3811055, bash wrapper, started ~20:57). Gateway healthy (v0.18.2). Cooldown RESTORED to base 900s.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa)
+- `git pull --rebase`: Blocked by dirty workdir (uncommitted code)
+- Dirty workdir detection: 3 modified Go files (46 insertions), NOT board-only changes
+
+**Dirty workdir assessment — completed work from prior tick:**
+- `internal/scheduler/gateway_client.go`: `ResetHttpClient()` — avoids stale connection pools after gateway restart
+- `internal/scheduler/loop.go`: Gateway liveness ping in `evaluate()` — when gateway is dead, release all slots and skip cycle
+- `internal/scheduler/slot_pool.go`: `ReleaseAll()` — drains all held slots on gateway failure
+- Build: PASS, Vet: PASS, Tests (sequential, -p 1): PASS (7/7 packages)
+- Work addresses daemon crash documented in ticks #25/#26 (gateway dead → crash within ~60s)
+- Verdict: completed work, committed directly. No worker spawned.
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short -p 1` | PASS (7/7 packages, sequential) |
+| Hilo | 54 files, 374 edges, 3 languages |
+| TODOs/FIXMEs | None in non-test Go code |
+| `govulncheck` | ulimit (system resource) — known, not a vuln gap |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | running (bash wrapper, not systemd) |
+| PID | 3811055 |
+| Uptime | ~50m (started ~20:57) |
+| Gateway | healthy (v0.18.2, responds to test requests) |
+| Gateway port :8642 | UP |
+
+**Cooldown — PRODUCTIVE tick (reset to base):**
+- Previous: 7200s (idle tick #7, ×8 escalated)
+- Action: Reset cooldown to base 900s (real work committed)
+- Idle counter: 0 (reset — 3 files, 46 insertions committed)
+
+**CI:**
+- 2 workflows queued for `be64cd1` (CI + CI Pipeline)
+- Previous run: SUCCESS (tick #34 board update)
+
+**Key observations:**
+
+1. **Gateway liveness fix prevents the crash pattern from ticks #25/#26.** The daemon now pings the gateway before spawning. If the gateway is unreachable, it releases all slots and skips the cycle instead of crashing. The `ResetHttpClient()` method prevents stale connection pools after a gateway restart.
+
+2. **Uncommitted work detection worked correctly.** Per Step 0 dirty workdir detection: code compiled, tests passed → identified as completed prior-tick work → committed directly without spawning a worker. Saved a full tick of duplicate work.
+
+3. **Ulimit contention persists.** Parallel test runs (`go test ./...`) fail with `newosproc: resource temporarily unavailable`. Sequential runs pass. This is a system-level constraint, not a code issue.
+
+4. **FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority.
+
+5. **Systemd inactive** — daemon runs via bash wrapper. Known operational state.
+
+**VERDICT: productive — Gateway liveness fix committed (be64cd1). Discovery sweep green. Cooldown reset to 900s from 7200s. Idle counter reset to 0. No worker needed.**
+
 ## FOREMAN TICK — 2026-07-19 22:36 (#34)
 
 **Board status:** Idle tick #7 (consecutive: #27-#34). Daemon at 2m24s uptime (recent restart — between tick #33's 3h14m record and now). spawns_exec=9, spawns_http=0 (post-restart transient). Discovery sweep all green. Cooldown escalated to 7200s (×8 base, idle tick #7+).
