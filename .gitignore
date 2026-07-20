@@ -15,6 +15,9 @@ bin/
 .DS_Store
 Thumbs.db
 
+# Deployment verification logs
+deploy/*.log
+
 # Goose migrations (if using goose)
 # goose/version/
 
