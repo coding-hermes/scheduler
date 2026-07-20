@@ -36,17 +36,17 @@ func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
-	db            *sql.DB
-	maxConcurrent int
-	active        map[string]*exec.Cmd // tickID -> running process
-	mu            sync.Mutex
-	timeout       time.Duration
-	model         string
-	provider      string
-	skills        string
-	foremanHome   string         // HERMES_HOME for foreman config
-	gateway       *GatewayClient // HTTP API client (nil = use exec.Command)
-	noExecFallback bool          // disable exec.Command fallback on gateway failure
+	db             *sql.DB
+	maxConcurrent  int
+	active         map[string]*exec.Cmd // tickID -> running process
+	mu             sync.Mutex
+	timeout        time.Duration
+	model          string
+	provider       string
+	skills         string
+	foremanHome    string         // HERMES_HOME for foreman config
+	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
+	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
 	// Prometheus-style spawn counters since last restart.
 	spawnCountHTTP int64
