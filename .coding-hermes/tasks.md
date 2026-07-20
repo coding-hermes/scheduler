@@ -1,3 +1,80 @@
+## FOREMAN TICK — 2026-07-20 15:41 (#66)
+
+**Board status:** PRODUCTIVE — AUDIT-014 completed foreman-direct. N+1 queries replaced with 2 batch queries. Board EMPTY (0 actionable tasks).
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date (after .gitreins/tasks.yaml cleanup)
+- Dirty workdir: Clean
+- HEAD: `11a3ca5`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (9 packages) |
+| Gateway :8642 | UP (200) |
+| Daemon :9090 | UP (200) |
+| Hilo graph | 488 edges, 69 files (unchanged) |
+| Dependencies | 5 transitive test-only (go-cmp, demangle, goldmark, x/exp, x/telemetry) — none are direct imports |
+
+**AUDIT-014-nplus1-dashboard — COMPLETED (`11a3ca5`):**
+
+Two N+1 queries inside the `collect()` namespace loop replaced with batch queries:
+
+| Before (per namespace) | After (single query) |
+|------------------------|---------------------|
+| `ListNamespaceTicks(ns.ID, 1)` × N | INNER JOIN on `MAX(created_at)` GROUP BY `namespace_id` |
+| `SELECT COUNT(*) FROM projects WHERE namespace_id=?` × N | `SELECT namespace_id, COUNT(*) FROM projects WHERE enabled=1 GROUP BY namespace_id` |
+
+Query count drops from `1 + 2N` to `1 + 2` for the namespace panel. File: `internal/dashboard/generator_data.go`, +49/-9 lines. No behavior change — same NamespaceRow fields populated from maps instead of per-namespace queries.
+
+**never-done 11-point audit (quick scan):**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/) |
+| 2 | Docs | PASS (README 383L, AGENTS.md, CONTRIBUTING.md) |
+| 3 | Tests | PASS (9/9 packages, cmd/migrate 32.9%, cmd/schedulerd 4.0%, scheduler 66.3%) |
+| 4 | Dependencies | PASS (0 direct outdated; 5 transitive test-only show newer versions — not actionable) |
+| 5 | Pitfalls | PASS (golangci-lint 0 issues) |
+| 6 | Performance | PASS (N+1 fixed this tick) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, dashboard renders) |
+| 8 | CI | PASS (GitHub Actions active) |
+| 9 | DuckBrain | PASS (COALESCE all safe, AUDIT-020 closed) |
+| 10 | Quality | PASS (0 lint, max file 352 lines after QUALITY-LONGFILES) |
+| 11 | Middle-out | PASS (488 edges, 69 files) |
+
+All 11 green. No new issues found.
+
+**Active task board:**
+
+Completed (22):
+- AUDIT-014-nplus1-dashboard ✓ (this tick)
+
+Pending (0 actionable, 2 blocked):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **Board is now EMPTY of actionable tasks.** 22/22 AUDIT tasks complete. Only FIX-STUCK (blocked by Bane) and NEVER-DONE (perpetual) remain.
+
+2. **AUDIT-014 was the last code-change task.** Fix was mechanical: 2 per-namespace queries → 2 batch queries. foreman-direct via Exception 7 (well-scoped, clear before/after).
+
+3. **Transitive test deps show outdated but aren't direct imports.** go-cmp, demangle, goldmark, x/exp, x/telemetry are pulled in by test tooling. No code in the scheduler imports them directly. Not actionable — they could be pruned by removing unused test dependency chains, but that's a go module tooling limitation, not a project issue.
+
+4. **Project is in pure maintenance mode.** Every AUDIT task from the initial 11-point sweep is complete. The scheduler fleet is stable with 39+ projects, 488 Hilo edges, 69 source files, clean build/vet/test/gateway/daemon.
+
+5. **next tick: NEVER-DONE re-run.** With an empty board, the next tick should run the full 11-point audit. If it finds nothing, the foreman self-pauses per never-done rules.
+
+**VERDICT: productive — AUDIT-014 completed (`11a3ca5`). 2 N+1 queries → 2 batch queries, 1+2N → 1+2 for namespace panel. Board EMPTY (22/22 complete). Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 15:26 (#65)
 
 **Board status:** PRODUCTIVE — AUDIT-011 completed foreman-direct. Worker spawn failed (opencode-go hang, 192s zero output). 1 remaining LOW task, 2 blocked.
