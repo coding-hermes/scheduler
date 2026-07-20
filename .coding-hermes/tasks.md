@@ -1,3 +1,59 @@
+## FOREMAN TICK — 2026-07-19 22:36 (#34)
+
+**Board status:** Idle tick #7 (consecutive: #27-#34). Daemon at 2m24s uptime (recent restart — between tick #33's 3h14m record and now). spawns_exec=9, spawns_http=0 (post-restart transient). Discovery sweep all green. Cooldown escalated to 7200s (×8 base, idle tick #7+).
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa)
+- `git pull --rebase`: Already up to date
+- Clean workdir (untracked deploy/verify-*.log files only)
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test ./... -short` | PASS (7/7 packages, 6 with tests) |
+| `golangci-lint` | 0 issues |
+| Hilo | 54 files, 374 edges, 3 languages |
+| `govulncheck` | 0 vulns affecting code |
+| TODOs/FIXMEs | None in non-test Go/Python code |
+
+**Daemon health:**
+
+| Field | Value |
+|-------|-------|
+| Status | ok |
+| Active ticks | 9 |
+| Uptime | 2m24s (post-restart) |
+| spawns_exec | 9 |
+| spawns_http | 0 |
+| Evaluation age | 144s (fired at startup) |
+| DB | Connected |
+| Queue | 39 projects |
+
+**Cooldown — idle tick #7:**
+- PUT CooldownS=7200 (×8 base, idle ticks 7+ per escalation table)
+- Verified via queue: cooldown_s=7200, enabled=true
+- NOT self-disabled (foreman rule — Enabled remains true)
+
+**Key observations:**
+
+1. **Daemon restarted between ticks #33 and #34.** The 3h14m record was broken. Uptime now 2m24s. Root cause unknown — possible scheduler daemon restart from the FIX-STUCK gateway commit (`c1dcf84`), or a crash. No panic data available (bash wrapper, no crash log capture).
+
+2. **spawns_http=0 (post-restart normal).** After restart, the HTTP API path resets. Prior record was spawns_http=136 at 3h14m. Expect HTTP spawns to climb again as the daemon re-establishes gateway connections.
+
+3. **CI all green** — 3 latest runs SUCCESS. Latest matches HEAD `c1dcf84`.
+
+4. **7 consecutive idle ticks.** Project in deep maintenance mode. All deferred tasks (FIX-STUCK items, FEAT-DASHBOARD remaining 3 pages) remain deferred. NEVER-DONE audit re-verified — no new gaps.
+
+5. **Systemd inactive** — daemon runs via bash wrapper (PID 3597318). Persistent known state.
+
+**FEAT-DASHBOARD:** 3 pages remain (Tick history, Namespace view, Health panel). Deferred — MEDIUM priority. Bane can explicitly request.
+
+**VERDICT: idle — Daemon restarted, recovery at 2m24s uptime. Cooldown escalated to 7200s (×8). All deferred tasks remain deferred. No worker needed.**
+
 ## FOREMAN TICK — 2026-07-19 18:54 (#33)
 
 **Board status:** Idle tick #6 (consecutive: #27-#33). Daemon at 3h14m uptime — NEW RECORD, smashing previous 2h5m. spawns_http=136 (22.7× exec, +44 since last tick). Discovery sweep all green. CooldownS unchanged at 3600 (correct for idle ticks 5-6, no escalation needed).
@@ -542,20 +598,22 @@ Completed in tick #25 (2026-07-19 15:33) — all 11 checks passed. Known gaps: 0
 **Remaining highest-priority:**
 - [ ] **FEAT-DASHBOARD** (MEDIUM W12) — 3 pages remaining: Tick history, Namespace view, Health panel
 
-## [ ] FIX-STUCK — Gateway lockup recovery (HIGH W15)
-**Problem:** DeepSeek locked up today. Scheduler became unreachable because
-Gateway HTTP spawns never returnerrupted — no timeout on GatewayClient.Do().
-Daemon appeared dead. Required manual restart.
+## [ ] FIX-STUCK — Dead gateway connection detection (HIGH W15)
+**Real problem:** hermes-gateway process died/restarted, but the scheduler
+didn't know — it kept using dead HTTP connections to the old gateway.
+Gateway restart was invisible. Scheduler filled all 10 slots with
+requests that would never complete because the connection was dead.
 **Fix approach:**
-- Add `http.Client.Timeout` to GatewayClient (30s)
-- Add context.WithTimeout to all GatewayClient calls
-- Add daemon self-test: /api/v1/health must return within 5s; if not, kill all running ticks + restart
-- Add stuck-tick detector: if ANY tick exceeds tick-timeout*1.5 without completing, log CRITICAL + forceRelease slot
+- HTTP keep-alive ping to Gateway before each eval cycle
+- If ping fails (connection refused / timeout): mark Gateway as DEAD
+- Release all waiting slots, don't spawn new ticks while Gateway dead
+- Poll Gateway /health every 30s until it responds, then reconnect
+- Use a fresh http.Client on reconnect (don't reuse dead connection pool)
+- When Gateway comes back: log "GATEWAY reconnected" and resume spawning
 
-## [ ] FIX-STUCK — Systemd watchdashared (HIGH W12)
-**Problem:** Daemon runs manually — systemd was inactive. No auto-restart.
-**Fix:** Enable systemd unit — `sudo systemctl enable coding-hermes-scheduler`
-ALTERNATIVE: Add `Restart=always` with 10s delay
+## [ ] FIX-STUCK — Systemd enable + auto-restart (HIGH W12)
+**Problem:** Daemon crashed, systemd was inactive — no auto-restart. Required manual restart.
+**Fix:** `sudo systemctl enable coding-hermes-scheduler` + `Restart=always` with 10s delay
 
 ## [ ] FIX-STUCK — Gateway health pre-check before each spawn (HIGH W10)
 **Problem:** Scheduler keeps spawning into a stuck/dead gateway, piling up
