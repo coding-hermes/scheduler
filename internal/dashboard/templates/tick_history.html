@@ -1,0 +1,74 @@
+{{define "tick_history"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Tick History · Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
+.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
+.nav{display:flex;gap:12px;margin-bottom:20px}
+.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
+.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent);animation:pulse 1.5s infinite}
+.status-timeout{color:var(--yellow)}
+.pagination{display:flex;gap:8px;justify-content:center;margin:16px 0}
+.pagination a{color:var(--accent);text-decoration:none;padding:4px 12px;border:1px solid var(--border);border-radius:4px;font-size:0.85rem}
+.pagination a:hover{background:var(--card)}
+.pagination .current{color:var(--fg);font-weight:600;padding:4px 12px}
+.pagination .disabled{color:var(--muted);padding:4px 12px;border:1px solid var(--border);border-radius:4px;font-size:0.85rem}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/">Fleet Overview</a>
+<a href="/queue">Queue</a>
+<a href="/ticks" class="active">Tick History</a>
+</div>
+<h1>📜 Tick History</h1>
+<div class="meta">Page {{.Page}} of {{.TotalPages}} · {{.TotalTicks}} total ticks · Generated {{.GeneratedAt}}</div>
+
+<div class="pagination" id="tick-history"
+     hx-get="/ticks?page={{.Page}}"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML"
+     hx-target="#tick-history">
+{{if .HasPrevious}}<a href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="disabled">← Previous</span>{{end}}
+<span class="current">Page {{.Page}} / {{.TotalPages}}</span>
+{{if .HasNext}}<a href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="disabled">Next →</span>{{end}}
+</div>
+
+<table>
+<thead><tr><th>ID</th><th>Project</th><th>Status</th><th>Outcome</th><th>Spawned</th><th>Completed</th><th>Commits</th><th>Files</th></tr></thead>
+<tbody>
+{{range .Ticks}}
+<tr>
+<td class="meta">{{.ID}}</td>
+<td><a href="/projects/{{.ProjectName}}" style="color:var(--accent);text-decoration:none">{{.ProjectName}}</a></td>
+<td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "running"}}status-running{{else if eq .Status "timeout"}}status-timeout{{end}}">{{.Status}}</td>
+<td>{{.Outcome}}</td>
+<td class="meta">{{.SpawnedAt}}</td>
+<td class="meta">{{.CompletedAt}}</td>
+<td>{{.Commits}}</td>
+<td>{{.FilesChanged}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+
+<div class="pagination">
+{{if .HasPrevious}}<a href="/ticks?page={{.PreviousPage}}">← Previous</a>{{else}}<span class="disabled">← Previous</span>{{end}}
+<span class="current">Page {{.Page}} / {{.TotalPages}}</span>
+{{if .HasNext}}<a href="/ticks?page={{.NextPage}}">Next →</a>{{else}}<span class="disabled">Next →</span>{{end}}
+</div>
+</body>
+</html>{{end}}

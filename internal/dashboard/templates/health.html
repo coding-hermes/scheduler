@@ -1,0 +1,74 @@
+{{define "health"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Health · Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
+.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
+.nav{display:flex;gap:12px;margin-bottom:20px}
+.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
+.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
+.card .value{font-size:1.3rem;font-weight:600;margin-top:4px}
+.status-ok{color:var(--green)}.status-warn{color:var(--yellow)}.status-fail{color:var(--red)}
+.refresh{color:var(--muted);font-size:0.75rem;margin-top:16px}
+@media(max-width:600px){.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/">Fleet Overview</a>
+<a href="/queue">Queue</a>
+<a href="/ticks">Tick History</a>
+<a href="/health" class="active">Health</a>
+</div>
+<h1>💚 System Health</h1>
+<div class="meta">Generated {{.GeneratedAt}} · Auto-refresh every 10s</div>
+
+<div class="cards" hx-get="/health" hx-trigger="every 10s" hx-swap="outerHTML">
+<div class="card">
+<div class="label">Daemon</div>
+<div class="value {{if eq .DaemonStatus "running"}}status-ok{{else}}status-fail{{end}}">{{.DaemonStatus}}</div>
+</div>
+<div class="card">
+<div class="label">Database</div>
+<div class="value {{if eq .DatabaseStatus "connected"}}status-ok{{else}}status-fail{{end}}">{{.DatabaseStatus}}</div>
+</div>
+<div class="card">
+<div class="label">Gateway</div>
+<div class="value {{if eq .GatewayStatus "connected"}}status-ok{{else if eq .GatewayStatus "not configured"}}status-warn{{else}}status-fail{{end}}">{{.GatewayStatus}}</div>
+{{if .GatewayURL}}<div class="meta">{{.GatewayURL}}</div>{{end}}
+</div>
+<div class="card">
+<div class="label">Uptime</div>
+<div class="value">{{.Uptime}}</div>
+</div>
+<div class="card">
+<div class="label">Active Ticks</div>
+<div class="value">{{.ActiveTicks}}</div>
+</div>
+<div class="card">
+<div class="label">Total Ticks</div>
+<div class="value">{{.TotalTicks}}</div>
+</div>
+<div class="card">
+<div class="label">Goroutines</div>
+<div class="value">{{.Goroutines}}</div>
+</div>
+<div class="card">
+<div class="label">Memory</div>
+<div class="value">{{printf "%.1f" .MemoryMB}} MB</div>
+</div>
+</div>
+
+<div class="refresh" hx-get="/health" hx-trigger="every 10s" hx-swap="none">auto-refreshing every 10s...</div>
+</body>
+</html>{{end}}

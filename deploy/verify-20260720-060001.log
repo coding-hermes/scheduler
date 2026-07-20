@@ -1,0 +1,78 @@
+=== SCHEDULER VERIFY 2026-07-20T11:00:01+00:00 ===
+2026/07/20 06:00:01 main.go:78: Database: /home/kara/.hermes/coding-hermes/scheduler.db (WAL mode)
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[0]: alpha urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[1]: epsilon urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[2]: gamma urgency=8.0 pri=8 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[3]: beta urgency=7.0 pri=7 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[4]: delta urgency=4.0 pri=4 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[5]: zeta urgency=2.0 pri=2 last=nil
+2026/07/20 06:00:01 packer.go:132: PACKER-SORTED[6]: eta urgency=1.0 pri=1 last=nil
+2026/07/20 06:00:01 loop.go:343: EVAL: 5 project(s) selected, 100/100 budget used
+2026/07/20 06:00:01 slot_pool.go:116: SLOT: acquired for epsilon (1/6 running)
+2026/07/20 06:00:01 slot_pool.go:116: SLOT: acquired for gamma (2/6 running)
+2026/07/20 06:00:01 slot_pool.go:116: SLOT: acquired for beta (3/6 running)
+2026/07/20 06:00:01 slot_pool.go:116: SLOT: acquired for zeta (4/6 running)
+2026/07/20 06:00:01 slot_pool.go:116: SLOT: acquired for alpha (5/6 running)
+2026/07/20 06:00:01 spawn.go:342: SPAWN: beta tick=beta-2026-07-20-06-00-01 pid=3121213 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:01 spawn.go:342: SPAWN: epsilon tick=epsilon-2026-07-20-06-00-01 pid=3121210 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:01 spawn.go:342: SPAWN: zeta tick=zeta-2026-07-20-06-00-01 pid=3121211 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:01 spawn.go:342: SPAWN: gamma tick=gamma-2026-07-20-06-00-01 pid=3121214 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:01 spawn.go:342: SPAWN: alpha tick=alpha-2026-07-20-06-00-01 pid=3121221 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:02 spawn.go:437: TICK: epsilon epsilon-2026-07-20-06-00-01 → failed (1s)
+2026/07/20 06:00:03 spawn.go:437: TICK: beta beta-2026-07-20-06-00-01 → failed (2s)
+2026/07/20 06:00:03 spawn.go:437: TICK: alpha alpha-2026-07-20-06-00-01 → failed (2s)
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[0]: alpha urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[1]: epsilon urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[2]: gamma urgency=8.0 pri=8 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[3]: beta urgency=7.0 pri=7 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[4]: delta urgency=4.0 pri=4 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[5]: zeta urgency=2.0 pri=2 last=nil
+2026/07/20 06:00:04 packer.go:132: PACKER-SORTED[6]: eta urgency=1.0 pri=1 last=nil
+2026/07/20 06:00:04 packer.go:160: PACKER: max concurrency reached (6), stopping
+2026/07/20 06:00:04 loop.go:343: EVAL: 4 project(s) selected, 80/100 budget used
+2026/07/20 06:00:04 slot_pool.go:116: SLOT: acquired for gamma (3/6 running)
+2026/07/20 06:00:04 slot_pool.go:116: SLOT: acquired for epsilon (4/6 running)
+2026/07/20 06:00:04 slot_pool.go:116: SLOT: acquired for beta (5/6 running)
+2026/07/20 06:00:04 slot_pool.go:116: SLOT: acquired for delta (6/6 running)
+2026/07/20 06:00:04 spawn.go:342: SPAWN: delta tick=delta-2026-07-20-06-00-04 pid=3121367 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:04 spawn.go:342: SPAWN: gamma tick=gamma-2026-07-20-06-00-04 pid=3121369 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:04 spawn.go:342: SPAWN: beta tick=beta-2026-07-20-06-00-04 pid=3121368 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:04 spawn.go:342: SPAWN: epsilon tick=epsilon-2026-07-20-06-00-04 pid=3121370 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:04 spawn.go:437: TICK: gamma gamma-2026-07-20-06-00-01 → failed (3s)
+2026/07/20 06:00:05 spawn.go:437: TICK: epsilon epsilon-2026-07-20-06-00-04 → failed (1s)
+2026/07/20 06:00:06 spawn.go:437: TICK: beta beta-2026-07-20-06-00-04 → failed (2s)
+2026/07/20 06:00:06 spawn.go:437: TICK: zeta zeta-2026-07-20-06-00-01 → failed (5s)
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[0]: alpha urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[1]: epsilon urgency=9.0 pri=9 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[2]: gamma urgency=8.0 pri=8 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[3]: beta urgency=7.0 pri=7 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[4]: delta urgency=4.0 pri=4 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[5]: zeta urgency=2.0 pri=2 last=nil
+2026/07/20 06:00:07 packer.go:132: PACKER-SORTED[6]: eta urgency=1.0 pri=1 last=nil
+2026/07/20 06:00:07 packer.go:160: PACKER: max concurrency reached (6), stopping
+2026/07/20 06:00:07 loop.go:343: EVAL: 4 project(s) selected, 70/100 budget used
+2026/07/20 06:00:07 slot_pool.go:116: SLOT: acquired for gamma (3/6 running)
+2026/07/20 06:00:07 slot_pool.go:116: SLOT: acquired for epsilon (4/6 running)
+2026/07/20 06:00:07 slot_pool.go:116: SLOT: acquired for zeta (6/6 running)
+2026/07/20 06:00:07 slot_pool.go:116: SLOT: acquired for alpha (5/6 running)
+2026/07/20 06:00:07 spawn.go:342: SPAWN: alpha tick=alpha-2026-07-20-06-00-07 pid=3121618 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:07 spawn.go:342: SPAWN: epsilon tick=epsilon-2026-07-20-06-00-07 pid=3121620 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:07 spawn.go:342: SPAWN: gamma tick=gamma-2026-07-20-06-00-07 pid=3121619 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:07 spawn.go:342: SPAWN: zeta tick=zeta-2026-07-20-06-00-07 pid=3121617 workdir=/tmp/scheduler-verify-3866598213
+2026/07/20 06:00:07 spawn.go:437: TICK: gamma gamma-2026-07-20-06-00-04 → failed (3s)
+2026/07/20 06:00:08 spawn.go:437: TICK: epsilon epsilon-2026-07-20-06-00-07 → failed (1s)
+2026/07/20 06:00:08 spawn.go:437: TICK: delta delta-2026-07-20-06-00-04 → failed (4s)
+2026/07/20 06:00:09 spawn.go:437: TICK: alpha alpha-2026-07-20-06-00-07 → failed (2s)
+2026/07/20 06:00:10 spawn.go:437: TICK: gamma gamma-2026-07-20-06-00-07 → failed (3s)
+2026/07/20 06:00:12 spawn.go:437: TICK: zeta zeta-2026-07-20-06-00-07 → failed (5s)
+  ✓ No hanging ticks                         0 hanging
+  ✗ All 7 projects got ticks                 6/7
+  ✓ Budget never exceeded                    3 eval groups checked
+  ✓ No duplicate spawns per eval             0 duplicates across 3 evals
+  ✓ Session IDs captured                     0 ticks without session ID
+  ✗ Priority descending within evals         higher priority projects spawned first
+
+---
+6 checks, 2 failures
+❌ VERIFY FAILED
+2026/07/20 06:00:15 main.go:98: VERIFY FAILED: 2/6 checks failed

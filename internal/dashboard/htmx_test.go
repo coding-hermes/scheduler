@@ -2,6 +2,9 @@ package dashboard_test
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -202,6 +205,120 @@ func TestHTMXJS_Embedded(t *testing.T) {
 	// htmx.min.js v1.x starts with the UMD wrapper "(function(e,t)".
 	if !strings.HasPrefix(string(js[:min(50, len(js))]), "(function") {
 		t.Errorf("htmx bytes don't look like UMD wrapper, got prefix: %q", string(js[:min(50, len(js))]))
+	}
+}
+
+func TestGenerateTickHistory_PaginatesGlobalTicks(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	mustCreateProject(t, db, "alpha", 10, 5)
+	mustCreateProject(t, db, "beta", 10, 5)
+
+	for i := 0; i < 51; i++ {
+		project := "alpha"
+		if i%2 == 1 {
+			project = "beta"
+		}
+		tick := &database.Tick{
+			ID:          project + "-history-" + string(rune('A'+i)),
+			ProjectName: project,
+			Status:      database.StatusCompleted,
+			Outcome:     database.OutcomeCommitted,
+			CreatedAt:   "2026-07-20T10:" + string(rune('A'+i)) + ":00Z",
+		}
+		if err := database.CreateTick(ctx, db, tick); err != nil {
+			t.Fatalf("CreateTick %d: %v", i, err)
+		}
+	}
+
+	gen := dashboard.NewGenerator(db)
+	var page1, page2 strings.Builder
+	if err := gen.GenerateTickHistory(&page1, 1); err != nil {
+		t.Fatalf("GenerateTickHistory page 1: %v", err)
+	}
+	if err := gen.GenerateTickHistory(&page2, 2); err != nil {
+		t.Fatalf("GenerateTickHistory page 2: %v", err)
+	}
+
+	for _, want := range []string{"Tick History", "Page 1", `hx-get="/ticks?page=2"`, `hx-target="#tick-history"`, "/projects/alpha", "/projects/beta"} {
+		if !strings.Contains(page1.String(), want) {
+			t.Errorf("page 1 missing %q", want)
+		}
+	}
+	if !strings.Contains(page2.String(), "Page 2") || !strings.Contains(page2.String(), `hx-get="/ticks?page=1"`) {
+		t.Errorf("page 2 missing previous-page controls: %s", snippet(page2.String(), "pagination"))
+	}
+}
+
+func TestGenerateNamespaceView_ShowsProjectsAndUtilization(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := database.CreateNamespace(ctx, db, &database.Namespace{
+		ID: "platform", Weight: 40, Reserved: 10, HardCap: 60, Enabled: true, Description: "Platform services",
+	}); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+	namespaceID := "platform"
+	for _, name := range []string{"alpha", "beta"} {
+		if err := database.CreateProject(ctx, db, &database.Project{
+			Name: name, RepoURL: "https://example.com/" + name, Workdir: "/tmp/" + name,
+			Weight: 10, Priority: 5, CooldownS: 900, DecayRate: 1, Model: "test", Provider: "test",
+			NamespaceID: &namespaceID, Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateProject %s: %v", name, err)
+		}
+	}
+	if err := database.InsertNamespaceTick(ctx, db, &database.NamespaceTick{
+		TickGroup: "group-1", NamespaceID: namespaceID, Allocated: 40, Used: 20, Borrowed: 2, Lent: 1, JobCount: 2,
+	}); err != nil {
+		t.Fatalf("InsertNamespaceTick: %v", err)
+	}
+
+	gen := dashboard.NewGenerator(db)
+	var buf strings.Builder
+	if err := gen.GenerateNamespaceView(&buf, namespaceID); err != nil {
+		t.Fatalf("GenerateNamespaceView: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Namespace: platform", "Platform services", "alpha", "beta", "50%", "+2", "-1", "Utilization History"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("namespace view missing %q", want)
+		}
+	}
+}
+
+func TestGenerateNamespaceView_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	gen := dashboard.NewGenerator(db)
+
+	var buf strings.Builder
+	err := gen.GenerateNamespaceView(&buf, "missing")
+	if !errors.Is(err, database.ErrNamespaceNotFound) {
+		t.Fatalf("GenerateNamespaceView error = %v, want ErrNamespaceNotFound", err)
+	}
+}
+
+func TestGenerateHealth_ProbesGatewayAndAutoRefreshes(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	db := newTestDB(t)
+	gen := dashboard.NewGenerator(db, gateway.URL)
+	var buf strings.Builder
+	if err := gen.GenerateHealth(&buf); err != nil {
+		t.Fatalf("GenerateHealth: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"System Health", "Daemon", "Gateway", "connected", "Uptime", "Goroutines", "Memory", `hx-get="/health"`, `hx-trigger="every 10s"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("health page missing %q", want)
+		}
 	}
 }
 

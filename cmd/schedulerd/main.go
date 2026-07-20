@@ -11,6 +11,7 @@ import (
 	_ "net/http/pprof" // registers handlers on DefaultServeMux
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -184,7 +185,7 @@ func main() {
 	// Create all components.
 	apiServer := api.NewServer(db, loop)
 	mcpServer := mcp.NewServer(db, loop)
-	dashGen := dashboard.NewGenerator(db)
+	dashGen := dashboard.NewGenerator(db, *gatewayURL)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -233,6 +234,37 @@ func main() {
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.GenerateQueue(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Tick history page: /ticks (paginated, global tick log).
+	mux.HandleFunc("GET /ticks", func(w http.ResponseWriter, r *http.Request) {
+		page := 1
+		if p := r.URL.Query().Get("page"); p != "" {
+			if n, err := strconv.Atoi(p); err == nil && n > 0 {
+				page = n
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateTickHistory(w, page); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Namespace view page: /namespaces/{id}.
+	mux.HandleFunc("GET /namespaces/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateNamespaceView(w, id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Health page: /health (daemon, db, gateway status).
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateHealth(w); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

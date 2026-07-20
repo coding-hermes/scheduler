@@ -1,0 +1,92 @@
+{{define "namespace_view"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Namespace {{.Namespace.ID}} · Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
+h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
+.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
+.nav{display:flex;gap:12px;margin-bottom:20px}
+.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
+.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
+.card .value{font-size:1.3rem;font-weight:600;margin-top:4px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+.status-ok{color:var(--green)}.status-fail{color:var(--red)}
+.utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
+@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/">Fleet Overview</a>
+<a href="/queue">Queue</a>
+<a href="/ticks">Tick History</a>
+</div>
+<h1>📦 Namespace: {{.Namespace.ID}}</h1>
+{{if .Namespace.Description}}<div class="meta">{{.Namespace.Description}}</div>{{end}}
+
+<div class="cards">
+<div class="card"><div class="label">Weight</div><div class="value">{{.Namespace.Weight}}</div></div>
+<div class="card"><div class="label">Reserved</div><div class="value">{{.Namespace.Reserved}}</div></div>
+<div class="card"><div class="label">Hard Cap</div><div class="value">{{if .Namespace.HardCap}}{{.Namespace.HardCap}}{{else}}∞{{end}}</div></div>
+<div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}</div></div>
+<div class="card"><div class="label">Total Weight</div><div class="value">{{.TotalWeight}}</div></div>
+{{if .LatestTick}}
+<div class="card"><div class="label">Allocated</div><div class="value">{{.LatestTick.Allocated}}</div></div>
+<div class="card"><div class="label">Used</div><div class="value">{{.LatestTick.Used}}</div></div>
+<div class="card"><div class="label">Utilization</div><div class="value"><div class="utilization-bar" style="width:{{printf "%.0f" .Utilization}}%"></div>{{printf "%.0f" .Utilization}}%</div></div>
+{{end}}
+</div>
+
+<h2>Projects ({{len .Projects}})</h2>
+{{if .Projects}}
+<table>
+<thead><tr><th>Name</th><th>Weight</th><th>Priority</th><th>Enabled</th><th>Cooldown</th></tr></thead>
+<tbody>
+{{range .Projects}}
+<tr>
+<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
+<td>{{.Weight}}</td>
+<td>{{.Priority}}</td>
+<td>{{if .Enabled}}<span class="status-ok">yes</span>{{else}}<span class="status-fail">no</span>{{end}}</td>
+<td>{{.CooldownS}}s</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="meta">No projects in this namespace</p>
+{{end}}
+
+<h2>Utilization History</h2>
+{{if .RecentTicks}}
+<table>
+<thead><tr><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Borrowed</th><th>Lent</th><th>Jobs</th><th>Time</th></tr></thead>
+<tbody>
+{{range .RecentTicks}}
+<tr>
+<td>{{.TickGroup}}</td>
+<td>{{.Allocated}}</td>
+<td>{{.Used}}</td>
+<td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
+<td>{{if .Lent}}-{{.Lent}}{{end}}</td>
+<td>{{.JobCount}}</td>
+<td class="meta">{{.CreatedAt}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="meta">No utilization data</p>
+{{end}}
+</body>
+</html>{{end}}

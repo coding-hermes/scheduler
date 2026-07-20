@@ -180,6 +180,52 @@ FROM ticks`
 	return out, nil
 }
 
+// ListAllTicks returns ticks across all projects, newest first, with offset
+// pagination. limit caps the result count; pass 0 for an unbounded query.
+func ListAllTicks(ctx context.Context, db *sql.DB, limit, offset int) ([]Tick, error) {
+	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+FROM ticks ORDER BY created_at DESC, id DESC`
+
+	q := baseQuery
+	args := []any{}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit > 0 {
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	} else if offset > 0 {
+		q += " LIMIT -1 OFFSET ?"
+		args = append(args, offset)
+	}
+
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list all ticks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Tick
+	for rows.Next() {
+		var t Tick
+		var status, outcome string
+		if err := rows.Scan(
+			&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
+			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
+			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
+			&t.Error, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan all tick row: %w", err)
+		}
+		t.Status = TickStatus(status)
+		t.Outcome = TickOutcome(outcome)
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all tick rows: %w", err)
+	}
+	return out, nil
+}
+
 // PruneOldTicks deletes all but the keep most recent ticks for the given
 // project (ranked by created_at descending). If keep <= 0, all ticks for
 // the project are deleted.

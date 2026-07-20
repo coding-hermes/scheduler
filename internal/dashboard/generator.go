@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net/http"
+	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -152,32 +155,52 @@ type QueueData struct {
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
-	db          *sql.DB
-	tmpl        *template.Template // parsed once, reused
-	fleetTmpl   *template.Template // partial: project table body only
-	projectTmpl *template.Template // full page: /projects/{name}
-	queueTmpl   *template.Template // full page: /queue
+	db               *sql.DB
+	tmpl             *template.Template // parsed once, reused
+	fleetTmpl        *template.Template // partial: project table body only
+	projectTmpl      *template.Template // full page: /projects/{name}
+	queueTmpl        *template.Template // full page: /queue
+	tickHistoryTmpl  *template.Template // full page: /ticks
+	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
+	healthTmpl       *template.Template // full page: /health
+	gatewayURL       string
+	healthClient     *http.Client
+	started          time.Time
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
-// time so hot-path Generate() never pays the parse cost.
-func NewGenerator(db *sql.DB) *Generator {
+// time so hot-path Generate() never pays the parse cost. gatewayURL is optional;
+// when supplied, the health panel probes its /health endpoint.
+func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
 	tmpl := loadTemplates()
+	var gateway string
+	if len(gatewayURL) > 0 {
+		gateway = strings.TrimRight(gatewayURL[0], "/")
+	}
 	g := &Generator{
-		db:          db,
-		tmpl:        tmpl,
-		fleetTmpl:   tmpl.Lookup("fleet_table"),
-		projectTmpl: tmpl.Lookup("project_detail"),
-		queueTmpl:   tmpl.Lookup("queue"),
+		db:                db,
+		tmpl:              tmpl,
+		fleetTmpl:         tmpl.Lookup("fleet_table"),
+		projectTmpl:       tmpl.Lookup("project_detail"),
+		queueTmpl:         tmpl.Lookup("queue"),
+		tickHistoryTmpl:   tmpl.Lookup("tick_history"),
+		namespaceViewTmpl: tmpl.Lookup("namespace_view"),
+		healthTmpl:        tmpl.Lookup("health"),
+		gatewayURL:        gateway,
+		healthClient:      &http.Client{Timeout: 2 * time.Second},
+		started:           time.Now(),
 	}
-	if g.fleetTmpl == nil {
-		panic("dashboard: fleet_table template not registered")
-	}
-	if g.projectTmpl == nil {
-		panic("dashboard: project_detail template not registered")
-	}
-	if g.queueTmpl == nil {
-		panic("dashboard: queue template not registered")
+	for name, parsed := range map[string]*template.Template{
+		"fleet_table":    g.fleetTmpl,
+		"project_detail": g.projectTmpl,
+		"queue":          g.queueTmpl,
+		"tick_history":   g.tickHistoryTmpl,
+		"namespace_view": g.namespaceViewTmpl,
+		"health":         g.healthTmpl,
+	} {
+		if parsed == nil {
+			panic("dashboard: " + name + " template not registered")
+		}
 	}
 	return g
 }
@@ -257,6 +280,46 @@ type ProjectDetailData struct {
 	RecentTicks []database.Tick
 }
 
+// TickHistoryData holds one page of the global tick history.
+type TickHistoryData struct {
+	GeneratedAt  string
+	Ticks        []database.Tick
+	Page         int
+	PageSize     int
+	TotalTicks   int
+	TotalPages   int
+	HasPrevious  bool
+	PreviousPage int
+	HasNext      bool
+	NextPage     int
+}
+
+// NamespaceViewData holds namespace configuration, projects, and recent
+// allocation history for /namespaces/{id}.
+type NamespaceViewData struct {
+	Namespace       *database.Namespace
+	Projects        []database.Project
+	RecentTicks     []database.NamespaceTick
+	LatestTick      *database.NamespaceTick
+	EnabledProjects int
+	TotalWeight     int
+	Utilization     float64
+}
+
+// HealthData holds daemon, database, and gateway liveness information.
+type HealthData struct {
+	GeneratedAt    string
+	DaemonStatus   string
+	DatabaseStatus string
+	GatewayStatus  string
+	GatewayURL     string
+	Uptime         string
+	ActiveTicks    int
+	TotalTicks     int
+	Goroutines     int
+	MemoryMB       float64
+}
+
 // Generate writes the dashboard HTML to w. Template is pre-parsed — zero hot-path overhead.
 func (g *Generator) Generate(w io.Writer) error {
 	ctx := context.Background()
@@ -297,6 +360,131 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	}
 
 	return g.projectTmpl.Execute(w, data)
+}
+
+const tickHistoryPageSize = 50
+
+// GenerateTickHistory renders one page of the global tick history. Pages are
+// one-based; values below one are normalized to the first page.
+func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
+	ctx := context.Background()
+	if page < 1 {
+		page = 1
+	}
+
+	var total int
+	if err := g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks`).Scan(&total); err != nil {
+		return fmt.Errorf("count ticks: %w", err)
+	}
+	totalPages := (total + tickHistoryPageSize - 1) / tickHistoryPageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	ticks, err := database.ListAllTicks(ctx, g.db, tickHistoryPageSize, (page-1)*tickHistoryPageSize)
+	if err != nil {
+		return fmt.Errorf("load tick history page %d: %w", page, err)
+	}
+	data := TickHistoryData{
+		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+		Ticks:        ticks,
+		Page:         page,
+		PageSize:     tickHistoryPageSize,
+		TotalTicks:   total,
+		TotalPages:   totalPages,
+		HasPrevious:  page > 1,
+		PreviousPage: page - 1,
+		HasNext:      page < totalPages,
+		NextPage:     page + 1,
+	}
+	return g.tickHistoryTmpl.Execute(w, data)
+}
+
+// GenerateNamespaceView renders namespace configuration, assigned projects,
+// and recent utilization history.
+func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
+	if id == "" {
+		return errors.New("namespace id is required")
+	}
+	ctx := context.Background()
+	namespace, err := database.GetNamespace(ctx, g.db, id)
+	if err != nil {
+		return fmt.Errorf("load namespace %q: %w", id, err)
+	}
+	projects, err := database.ListProjectsByNamespace(ctx, g.db, id)
+	if err != nil {
+		return fmt.Errorf("load projects for namespace %q: %w", id, err)
+	}
+	ticks, err := database.ListNamespaceTicks(ctx, g.db, id, 50)
+	if err != nil {
+		return fmt.Errorf("load utilization for namespace %q: %w", id, err)
+	}
+
+	data := NamespaceViewData{
+		Namespace:   namespace,
+		Projects:    projects,
+		RecentTicks: ticks,
+	}
+	for _, project := range projects {
+		if project.Enabled {
+			data.EnabledProjects++
+			data.TotalWeight += project.Weight
+		}
+	}
+	if len(ticks) > 0 {
+		data.LatestTick = &ticks[0]
+		if ticks[0].Allocated > 0 {
+			data.Utilization = float64(ticks[0].Used) / float64(ticks[0].Allocated) * 100
+		}
+	}
+	return g.namespaceViewTmpl.Execute(w, data)
+}
+
+// GenerateHealth renders daemon, database, and gateway liveness information.
+// The page refreshes itself with htmx, so every render performs fresh probes.
+func (g *Generator) GenerateHealth(w io.Writer) error {
+	ctx := context.Background()
+	data := HealthData{
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		DaemonStatus:   "running",
+		DatabaseStatus: "connected",
+		GatewayStatus:  "not configured",
+		GatewayURL:     g.gatewayURL,
+		Uptime:         time.Since(g.started).Round(time.Second).String(),
+		Goroutines:     runtime.NumGoroutine(),
+	}
+	if err := g.db.PingContext(ctx); err != nil {
+		data.DatabaseStatus = "error"
+	}
+	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&data.ActiveTicks)
+	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks`).Scan(&data.TotalTicks)
+
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	data.MemoryMB = float64(memory.Alloc) / (1024 * 1024)
+
+	if g.gatewayURL != "" {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.gatewayURL+"/health", nil)
+		if err != nil {
+			data.GatewayStatus = "error"
+		} else {
+			resp, err := g.healthClient.Do(req)
+			if err != nil {
+				data.GatewayStatus = "unreachable"
+			} else {
+				if resp.StatusCode == http.StatusOK {
+					data.GatewayStatus = "connected"
+				} else {
+					data.GatewayStatus = fmt.Sprintf("unhealthy (HTTP %d)", resp.StatusCode)
+				}
+				_ = resp.Body.Close()
+			}
+		}
+	}
+	return g.healthTmpl.Execute(w, data)
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {
@@ -577,6 +765,8 @@ tr:last-child td{border-bottom:none}
 <div class="nav">
 <a href="/" class="active">Fleet Overview</a>
 <a href="/queue">Queue</a>
+<a href="/ticks">Tick History</a>
+<a href="/health">Health</a>
 </div>
 <h1>🚀 Coding Hermes Fleet</h1>
 <div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s · Live updates via htmx every 10s</div>

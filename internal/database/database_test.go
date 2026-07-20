@@ -487,6 +487,44 @@ func TestListTicks_Limit(t *testing.T) {
 	}
 }
 
+func TestListAllTicks_PaginationAcrossProjects(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	for _, name := range []string{"alpha", "beta"} {
+		if err := CreateProject(ctx, db, sampleProject(name)); err != nil {
+			t.Fatalf("CreateProject %s: %v", name, err)
+		}
+	}
+
+	fixtures := []Tick{
+		{ID: "alpha-1", ProjectName: "alpha", Status: StatusCompleted, CreatedAt: "2026-07-20T10:00:00Z"},
+		{ID: "beta-1", ProjectName: "beta", Status: StatusFailed, CreatedAt: "2026-07-20T11:00:00Z"},
+		{ID: "alpha-2", ProjectName: "alpha", Status: StatusRunning, CreatedAt: "2026-07-20T12:00:00Z"},
+		{ID: "beta-2", ProjectName: "beta", Status: StatusQueued, CreatedAt: "2026-07-20T13:00:00Z"},
+	}
+	for i := range fixtures {
+		if err := CreateTick(ctx, db, &fixtures[i]); err != nil {
+			t.Fatalf("CreateTick %s: %v", fixtures[i].ID, err)
+		}
+	}
+
+	page1, err := ListAllTicks(ctx, db, 2, 0)
+	if err != nil {
+		t.Fatalf("ListAllTicks page 1: %v", err)
+	}
+	page2, err := ListAllTicks(ctx, db, 2, 2)
+	if err != nil {
+		t.Fatalf("ListAllTicks page 2: %v", err)
+	}
+
+	if len(page1) != 2 || page1[0].ID != "beta-2" || page1[1].ID != "alpha-2" {
+		t.Errorf("page 1 = %#v, want beta-2 then alpha-2", page1)
+	}
+	if len(page2) != 2 || page2[0].ID != "beta-1" || page2[1].ID != "alpha-1" {
+		t.Errorf("page 2 = %#v, want beta-1 then alpha-1", page2)
+	}
+}
+
 func TestPruneOldTicks(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
