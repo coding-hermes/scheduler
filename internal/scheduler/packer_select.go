@@ -6,6 +6,7 @@ import (
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
+
 // Pack runs the full multi-pool algorithm and returns selected projects.
 // Falls back to flat single-pool packing when no namespaces exist (the caller
 // is expected to short-circuit on NamespaceMode=false, but we also handle it

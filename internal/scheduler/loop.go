@@ -274,7 +274,6 @@ func (l *Loop) ForceEvaluate() {
 func (l *Loop) Pause()  { l.pauseCh <- false }
 func (l *Loop) Resume() { l.pauseCh <- true }
 
-
 // LastEvalTime returns when the last evaluation ran.
 func (l *Loop) LastEvalTime() time.Time {
 	l.mu.RLock()

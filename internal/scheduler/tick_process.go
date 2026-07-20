@@ -10,6 +10,7 @@ import (
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
+
 // evaluate runs one evaluation cycle.
 // Phase 1 (locked): state update, cleanup, pick projects.
 // Phase 2 (lock-free): fire into slot pool, alert escalation.

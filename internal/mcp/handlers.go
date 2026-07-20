@@ -7,6 +7,7 @@ import (
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
+
 func (s *Server) toolFleetStatus(ctx context.Context) (string, error) {
 	projects, _ := database.ListProjects(ctx, s.db, true)
 	activeTicks := 0

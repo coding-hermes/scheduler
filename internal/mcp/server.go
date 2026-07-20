@@ -298,6 +298,7 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
 }
+
 // -- helpers --
 
 func writeMCPResult(w http.ResponseWriter, id *int, result interface{}) {

@@ -61,7 +61,6 @@ func NewMultiPoolPacker(budget, maxConcurrent int) *MultiPoolPacker {
 	}
 }
 
-
 // FlatFallback delegates to the existing Packer.Pick for flat single-pool mode.
 // The caller provides a configured *sql.DB; this is used when NamespaceMode=false
 // or no namespaces exist.
