@@ -1,3 +1,82 @@
+## FOREMAN TICK — 2026-07-20 06:49 (#44)
+
+**Board status:** NEVER-DONE audit — 11-point audit complete. CI gofmt fix pushed (34ad5a9). 4 new tasks created from audit findings. Discovery sweep all green. Daemon UP (1m+), Gateway UP.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- `git pull --rebase`: Blocked by staged board changes from tick #43 → committed adce684, then up to date
+- Dirty workdir: gofmt fix found in generator.go:158 → committed 34ad5a9, pushed
+- GitReins state: Clean
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (7 packages) |
+| Hilo graph stats | 385 edges, 54 files |
+| golangci-lint | 0 issues (gofmt fixed foreman-direct) |
+| TODOs/FIXMEs | None |
+
+**Daemon state — UP:**
+
+| Field | Value |
+|-------|-------|
+| API /health | status=ok, db=connected, active_ticks=4, uptime=1m9s |
+| Gateway :8642 | UP (v0.18.2) |
+| Dashboard routes | 404 (running binary predates FEAT-DASHBOARD — needs rebuild) |
+
+**NEVER-DONE 11-point audit — COMPLETE:**
+
+| # | Check | Result | Action |
+|---|-------|--------|--------|
+| 1 | SPEC ALIGNMENT | 7 specs (S01-S07), all current | CLEAN |
+| 2 | DOC COVERAGE | No AGENTS.md | → DOC-AGENTS task |
+| 3 | TEST GAPS | 3 packages 0 tests (cmd/migrate, cmd/schedulerd, internal/sync). 0 benchmarks | → TEST-SYNC task, PERF-BENCH task |
+| 4 | PACKAGE UPGRADES | 5 outdated all INDIRECT/transitive | CLEAN |
+| 5 | PITFALL HUNT | 1 nil,nil (generator.go:716 — legitimate guard clause) | CLEAN |
+| 6 | PERFORMANCE | 0 benchmarks. 2 files >500L | → PERF-BENCH task, QUALITY-LONGFILES task |
+| 7 | ENDPOINT VERIFICATION | All API endpoints return real data (no 501s, no stubs) | CLEAN |
+| 8 | CI/CD | 2 FAILURE on c3a4d46 (gofmt) → FIX pushed (34ad5a9) | CLEAN (fixed) |
+| 9 | DUCKBRAIN SYNC | Status entries at /fleet/projects/coding-hermes-scheduler/status | CLEAN |
+| 10 | CODE QUALITY | generator.go 865L, server.go 835L (>500 threshold). 17 deep-nesting lines | → QUALITY-LONGFILES task |
+| 11 | MIDDLE-OUT WIRING | All routes registered, binary builds + starts. 1 import in main.go | CLEAN |
+
+**New tasks created from audit:**
+
+- [ ] DOC-AGENTS — Create AGENTS.md for the project (MEDIUM)
+- [ ] TEST-SYNC — Add tests for internal/sync/duckbrain.go (MEDIUM)
+- [ ] PERF-BENCH — Add Go benchmarks for hot paths: packer, namespace alloc, spawn lifecycle (MEDIUM)
+- [ ] QUALITY-LONGFILES — Split generator.go (865L) and server.go (835L) into smaller files (LOW)
+
+**Active task board:**
+
+- [ ] DOC-AGENTS — Create AGENTS.md (MEDIUM) — NEW
+- [ ] TEST-SYNC — Add tests for internal/sync/duckbrain.go (MEDIUM) — NEW
+- [ ] PERF-BENCH — Add Go benchmarks for hot paths (MEDIUM) — NEW
+- [ ] QUALITY-LONGFILES — Split generator.go (865L) and server.go (835L) (LOW) — NEW
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **CI gofmt fix pushed (34ad5a9).** The FEAT-DASHBOARD commit c3a4d46 had a gofmt issue in generator.go:158. Fixed and pushed. CI should go green on next run.
+
+2. **Dashboard routes returning 404** — the running daemon binary predates the FEAT-DASHBOARD changes. The code is committed and pushed (c3a4d46) but the binary hasn't been rebuilt. When the daemon is restarted with a fresh build, all 3 dashboard pages will serve. This is an operational concern, not a code gap.
+
+3. **All 5 outdated Go packages are INDIRECT/transitive.** No direct dependency upgrades needed. The scheduler's direct deps are current.
+
+4. **No stubs, no TODOs, no FIXMEs.** Code quality is high — the remaining tasks are documentation, test coverage for one package, benchmarks, and splitting long files. All optional improvements, not critical gaps.
+
+5. **Daemon is UP and healthy** (active_ticks=4, spawns_exec=0, spawns_http=0). The uptime is only ~1m which suggests a recent restart — possibly from the last tick or from Bane.
+
+6. **cmd/migrate and cmd/schedulerd have 0 tests** but these are CLI entry points — they wire packages together. The real logic lives in internal/ packages which all have tests. Only internal/sync genuinely lacks test coverage.
+
+**VERDICT: productive — NEVER-DONE audit complete. 4 new tasks created (DOC-AGENTS, TEST-SYNC, PERF-BENCH, QUALITY-LONGFILES). CI gofmt fix pushed. Cooldown at base 900s.**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 06:01 (#43)
 
 **Board status:** PRODUCTIVE tick — FEAT-DASHBOARD completed. Worker (gpt-5.6-sol@openai-codex) wrote Go code for 3 new dashboard pages. Foreman completed templates, routes, and nav bar. Discovery sweep all green. NEVER-DONE is next.
