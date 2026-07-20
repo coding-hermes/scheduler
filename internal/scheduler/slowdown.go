@@ -49,9 +49,9 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 		if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&currentCD); err != nil {
 			return
 		}
-		if currentCD > 1200 {
+		if currentCD > 600 {
 			db.Exec("UPDATE projects SET cooldown_s = 600 WHERE name = ?", project)
-			log.Printf("SLOWDOWN: %s productive → cooldown reset %ds → 600s", project, currentCD)
+			log.Printf("SLOWDOWN: %s productive \u2192 cooldown reset %ds \u2192 600s", project, currentCD)
 		}
 	}
 }
