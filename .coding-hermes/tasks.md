@@ -1,3 +1,90 @@
+## FOREMAN TICK — 2026-07-20 11:48 (#58)
+
+**Board status:** PRODUCTIVE — AUDIT-003 + AUDIT-004 completed (`b4ff598`, `d09f553`). All 4 spec-alignment tasks now resolved.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `d09f553`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 463 edges, 66 files (unchanged — spec-only) |
+| Gateway :8642 | UP (v0.18.2) |
+| Daemon :9090 | UP |
+| CI (gh run list) | 5/5 SUCCESS (1 in_progress for d09f553) |
+| Dependencies | 0 DIRECT outdated |
+
+**AUDIT-003-spec-event-mismatch — COMPLETED (`b4ff598`):**
+
+S02 Event struct updated from old v1 fields to v5 schema:
+- `Timestamp time.Time` → removed (not in code)
+- `Level string` → `Severity EventSeverity` with consts (CRITICAL/HIGH/MEDIUM/LOW/INFO)
+- `Project *string` → `Component string`
+- `Detail *string` → `Details string` + `CreatedAt string`
+- Added `EventSeverity` type + const block
+- Updated EventFilter fields: `Level`→`Severity`, `Project`→`Component`
+- Updated DDL (3.4): v1 `timestamp/level/project/detail` → v5 `severity/component/details/created_at`
+- Updated migration versions list (added v5)
+- Updated notable events JSON (6.3)
+
+**AUDIT-004-tick-field-names — COMPLETED (`b4ff598`):**
+
+Tick struct: `Project` → `ProjectName`, added `CreatedAt` field. Matches `models.go`.
+
+**Active task board:**
+
+Completed (13):
+- [x] DOC-AGENTS, TEST-SYNC, PERF-BENCH, QUALITY-LONGFILES, QUALITY-GITIGNORE, QUALITY-LONGFILES-2
+- [x] AUDIT-005-test-deliver, AUDIT-006-test-gateway, AUDIT-007-test-slowdown, AUDIT-009-test-namespaces
+- [x] AUDIT-001-spec-priority-type, AUDIT-003-spec-event-mismatch, AUDIT-004-tick-field-names
+
+Spec alignment (1 remaining):
+- [ ] AUDIT-002-missing-specs — S08-S11 spec files referenced but missing (S07 exists)
+
+Test coverage (2):
+- [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
+- [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
+
+Dependencies (1):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect outdated packages (LOW)
+
+Performance (1):
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
+
+Quality/Docs (4):
+- [ ] AUDIT-017-code-quality-review (LOW)
+- [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool; S06 OpenAPI still uses old event field names (LOW)
+- [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
+- [ ] AUDIT-020-sync-verify — DuckBrain sync needs COALESCE safety (LOW)
+
+Blocked:
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **Spec alignment phase COMPLETE.** All 4 AUDIT-001 through AUDIT-004 are resolved — spec now matches code for Priority type, Event struct, Tick field names, and missing fields. 3 commits across 2 ticks.
+
+2. **Foreman-direct via Exception 7.** AUDIT-003 and AUDIT-004 were spec-only edits to a single file (S02-data-model.md). Clear before/after, no design decisions, no code changes. Exception 7 applied — no worker spawn needed.
+
+3. **Triple concurrent tick race.** Ticks #55 (11:07), #56 (11:42 83a8d4a), #57 (11:42 36d6fce), and #58 (11:48 b4ff598) all executed within a 41-minute window. All productive, all non-conflicting. This is the 3rd multi-tick race in 4 hours.
+
+4. **S06 OpenAPI drift noted.** S06 still references `level`, `project_name`, `timestamp`, `detail` in its Event/query schema. This is AUDIT-018 territory (spec-arch-drift) — noted in the task description.
+
+5. **Next actionable: AUDIT-002-missing-specs.** Only remaining spec task. S08-S11 don't exist. Investigation needed: create stubs, write proper specs, or remove stale references.
+
+**VERDICT: productive — AUDIT-003 + AUDIT-004 completed. All 4 spec-alignment tasks resolved (13/16 AUDIT tasks done). 2 commits pushed (`b4ff598` + `d09f553`). Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 11:42 (#57 — dual, concurrent with #56 race)
 
 **Board status:** PRODUCTIVE — AUDIT-001 refined (`36d6fce`). AUDIT-003 + AUDIT-004 also completed by concurrent #56 (`b4ff598`). All 3 remaining spec-alignment tasks resolved in one tick cycle.
