@@ -760,3 +760,248 @@ func TestLogEvent_CheckConstraintSeverity(t *testing.T) {
 		t.Fatal("expected CHECK constraint error for invalid severity, got nil")
 	}
 }
+
+// --- Namespace tests --------------------------------------------------------
+
+func TestCreateNamespace(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	ns := &Namespace{
+		ID:          "test-ns",
+		Weight:      30,
+		Reserved:    5,
+		HardCap:     50,
+		Enabled:     true,
+		Description: "test namespace",
+	}
+	err := CreateNamespace(ctx, db, ns)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	// Verify it was created by reading it back.
+	got, err := GetNamespace(ctx, db, "test-ns")
+	if err != nil {
+		t.Fatalf("GetNamespace after create: %v", err)
+	}
+	if got.Weight != 30 || got.Reserved != 5 || got.HardCap != 50 {
+		t.Fatalf("expected weight=30 reserved=5 hard_cap=50, got weight=%d reserved=%d hard_cap=%d",
+			got.Weight, got.Reserved, got.HardCap)
+	}
+	if !got.Enabled {
+		t.Fatal("expected enabled=true")
+	}
+	if got.Description != "test namespace" {
+		t.Fatalf("description = %q, want %q", got.Description, "test namespace")
+	}
+	if got.CreatedAt == "" || got.UpdatedAt == "" {
+		t.Fatal("CreatedAt/UpdatedAt should be auto-populated")
+	}
+}
+
+func TestCreateNamespace_DuplicateID(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	ns := &Namespace{ID: "dup-ns", Weight: 10}
+	if err := CreateNamespace(ctx, db, ns); err != nil {
+		t.Fatalf("first CreateNamespace: %v", err)
+	}
+	err := CreateNamespace(ctx, db, ns)
+	if err == nil {
+		t.Fatal("expected error on duplicate ID, got nil")
+	}
+}
+
+func TestGetNamespace_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	_, err := GetNamespace(ctx, db, "no-such-ns")
+	if !errors.Is(err, ErrNamespaceNotFound) {
+		t.Fatalf("expected ErrNamespaceNotFound, got: %v", err)
+	}
+}
+
+func TestGetNamespace_Found(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	ns := &Namespace{ID: "get-test", Weight: 50, Enabled: true}
+	if err := CreateNamespace(ctx, db, ns); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	got, err := GetNamespace(ctx, db, "get-test")
+	if err != nil {
+		t.Fatalf("GetNamespace: %v", err)
+	}
+	if got.ID != "get-test" || got.Weight != 50 {
+		t.Fatalf("id=%q weight=%d, want id=%q weight=50", got.ID, got.Weight, "get-test")
+	}
+	if !got.Enabled {
+		t.Fatal("expected enabled=true")
+	}
+}
+
+func TestListNamespaces_All(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Empty to start
+	ns, err := ListNamespaces(ctx, db, false)
+	if err != nil {
+		t.Fatalf("ListNamespaces empty: %v", err)
+	}
+	if len(ns) != 0 {
+		t.Fatalf("expected 0 namespaces, got %d", len(ns))
+	}
+
+	// Create two namespaces, one disabled.
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "a", Weight: 10, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "b", Weight: 20, Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := ListNamespaces(ctx, db, false)
+	if err != nil {
+		t.Fatalf("ListNamespaces all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 total, got %d", len(all))
+	}
+	// Should be ordered by id ASC.
+	if all[0].ID != "a" || all[1].ID != "b" {
+		t.Fatalf("expected [a b] order, got [%s %s]", all[0].ID, all[1].ID)
+	}
+}
+
+func TestListNamespaces_EnabledOnly(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "a", Weight: 10, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "b", Weight: 20, Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	enabled, err := ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces enabledOnly: %v", err)
+	}
+	if len(enabled) != 1 {
+		t.Fatalf("expected 1 enabled namespace, got %d", len(enabled))
+	}
+	if enabled[0].ID != "a" {
+		t.Fatalf("expected 'a', got %q", enabled[0].ID)
+	}
+}
+
+func TestUpdateNamespace_AllFields(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "upd", Weight: 10, Reserved: 2, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := 25
+	r := 8
+	c := 60
+	e := false
+	d := "updated desc"
+	err := UpdateNamespace(ctx, db, "upd", NamespacePatch{
+		Weight:      &w,
+		Reserved:    &r,
+		HardCap:     &c,
+		Enabled:     &e,
+		Description: &d,
+	})
+	if err != nil {
+		t.Fatalf("UpdateNamespace: %v", err)
+	}
+
+	got, err := GetNamespace(ctx, db, "upd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Weight != 25 || got.Reserved != 8 || got.HardCap != 60 {
+		t.Fatalf("got weight=%d reserved=%d hard_cap=%d", got.Weight, got.Reserved, got.HardCap)
+	}
+	if got.Enabled {
+		t.Fatal("expected enabled=false after update")
+	}
+	if got.Description != "updated desc" {
+		t.Fatalf("description = %q", got.Description)
+	}
+}
+
+func TestUpdateNamespace_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	w := 5
+	err := UpdateNamespace(ctx, db, "no-such-ns", NamespacePatch{Weight: &w})
+	if !errors.Is(err, ErrNamespaceNotFound) {
+		t.Fatalf("expected ErrNamespaceNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateNamespace_Noop(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "noop", Weight: 10}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty patch should succeed (only UpdatedAt changes).
+	if err := UpdateNamespace(ctx, db, "noop", NamespacePatch{}); err != nil {
+		t.Fatalf("UpdateNamespace empty patch: %v", err)
+	}
+
+	got, err := GetNamespace(ctx, db, "noop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Weight != 10 {
+		t.Fatalf("weight changed to %d, want 10", got.Weight)
+	}
+}
+
+func TestDeleteNamespace(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "to-delete", Weight: 5, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteNamespace(ctx, db, "to-delete"); err != nil {
+		t.Fatalf("DeleteNamespace: %v", err)
+	}
+
+	// Verify it's disabled.
+	got, err := GetNamespace(ctx, db, "to-delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled {
+		t.Fatal("expected enabled=false after soft delete")
+	}
+}
+
+func TestDeleteNamespace_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	err := DeleteNamespace(ctx, db, "no-such-ns")
+	if err == nil {
+		t.Fatal("expected error on delete of missing namespace, got nil")
+	}
+}
