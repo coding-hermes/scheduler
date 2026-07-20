@@ -122,18 +122,17 @@ CREATE INDEX IF NOT EXISTS idx_namespace_ticks_ns ON namespace_ticks(namespace_i
 ### 3.4 Events Table
 
 ```sql
+-- v5: recreated with severity/component/details columns
 CREATE TABLE IF NOT EXISTS events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
-    level       TEXT NOT NULL DEFAULT 'info'
-                    CHECK(level IN ('info', 'warn', 'error', 'decision')),
-    project     TEXT,
-    message     TEXT NOT NULL,
-    detail      TEXT  -- JSON blob for structured data
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    severity   TEXT NOT NULL CHECK(severity IN ('CRITICAL','HIGH','MEDIUM','LOW','INFO')),
+    component  TEXT NOT NULL DEFAULT '',
+    message    TEXT NOT NULL,
+    details    TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_project ON events(project, timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_level ON events(level, timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity, created_at DESC);
 ```
 
 ### 3.5 Schema Migrations Table
@@ -149,6 +148,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 Migration versions:
 - **v1**: Initial schema — `projects`, `ticks`, `events`, `schema_migrations`
 - **v2**: Multi-namespace — `namespaces`, `namespace_ticks`, `projects.namespace_id`, indexes
+- **v5**: Events table rebuilt with `severity`/`component`/`details` columns (CRITICAL/HIGH/MEDIUM/LOW/INFO)
 
 ### 3.6 WAL Mode and Foreign Keys
 
@@ -195,7 +195,7 @@ type ProjectPatch struct {
 // Tick represents one foreman spawn.
 type Tick struct {
     ID           string     `json:"id"`
-    Project      string     `json:"project"`
+    ProjectName  string     `json:"project_name"`
     SessionID    *string    `json:"session_id"`
     Status       string     `json:"status"`     // queued|running|completed|failed|timeout
     Outcome      *string    `json:"outcome"`     // committed|dry_run|failed|timeout
@@ -210,6 +210,7 @@ type Tick struct {
     Urgency      *float64   `json:"urgency"`
     WeightUsed   *int       `json:"weight_used"`
     Error        *string    `json:"error"`
+    CreatedAt    string     // RFC3339
 }
 
 // TickOutcome is written after a tick completes.
@@ -225,22 +226,34 @@ type TickOutcome struct {
     Error        string
 }
 
-// Event represents an audit log entry.
+// Event represents an audit log entry. Uses severity-based classification
+// (CRITICAL/HIGH/MEDIUM/LOW/INFO) and component attribution.
 type Event struct {
-    ID        int64     `json:"id"`
-    Timestamp time.Time `json:"timestamp"`
-    Level     string    `json:"level"`    // info|warn|error|decision
-    Project   *string   `json:"project"`
-    Message   string    `json:"message"`
-    Detail    *string   `json:"detail"`   // JSON string
+    ID        int64         `json:"id"`
+    Severity  EventSeverity `json:"severity"`  // CRITICAL, HIGH, MEDIUM, LOW, INFO
+    Component string        `json:"component"` // system component that emitted the event
+    Message   string        `json:"message"`
+    Details   string        `json:"details"`   // JSON string
+    CreatedAt string        `json:"created_at"` // RFC3339
 }
+
+// EventSeverity is the severity tier for event log entries.
+type EventSeverity string
+
+const (
+    SeverityCritical EventSeverity = "CRITICAL"
+    SeverityHigh     EventSeverity = "HIGH"
+    SeverityMedium   EventSeverity = "MEDIUM"
+    SeverityLow      EventSeverity = "LOW"
+    SeverityInfo     EventSeverity = "INFO"
+)
 
 // EventFilter for querying events.
 type EventFilter struct {
-    Level   string // empty = all
-    Project string // empty = all
-    Limit   int    // default 50, max 500
-    Offset  int
+    Severity  string // empty = all
+    Component string // empty = all
+    Limit     int    // default 50, max 500
+    Offset    int
 }
 
 // Namespace represents a weight pool for related cron jobs (Migration v2).
@@ -444,18 +457,20 @@ UPDATE projects SET namespace_id = ?, updated_at = datetime('now') WHERE name = 
 ```json
 [
     {
-        "timestamp": "2026-07-12T14:03:00Z",
-        "level": "decision",
-        "project": "muster",
+        "id": 142,
+        "severity": "INFO",
+        "component": "spawn",
         "message": "Spawned foreman tick: urgency=12.4, weight=25",
-        "detail": "{\"tick_id\":\"muster-2026-07-12-14-03-01\"}"
+        "details": "{\"tick_id\":\"muster-2026-07-12-14-03-01\"}",
+        "created_at": "2026-07-12T14:03:00Z"
     },
     {
-        "timestamp": "2026-07-12T14:02:00Z",
-        "level": "warn",
-        "project": null,
+        "id": 141,
+        "severity": "HIGH",
+        "component": "sync",
         "message": "DuckBrain sync failed: connection refused (will retry in 5m)",
-        "detail": null
+        "details": "{}",
+        "created_at": "2026-07-12T14:02:00Z"
     }
 ]
 ```

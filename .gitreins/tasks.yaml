@@ -174,8 +174,9 @@ tasks:
   - Either update spec to int or change code to float64
   - All tests still pass after change
   - MCP tools and API endpoints accept correct type
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:28:22.124957+00:00'
+  completed_at: '2026-07-20T16:43:45.502439+00:00'
 - id: AUDIT-002-missing-specs
   title: 'SPEC: 5 spec files referenced in S01 but missing on disk (S07-S11)'
   criteria:
