@@ -37,9 +37,9 @@ func TestIsCodingHermesJob(t *testing.T) {
 
 func TestExtractWorkdir(t *testing.T) {
 	tests := []struct {
-		name string
+		name   string
 		prompt string
-		want  string
+		want   string
 	}{
 		{"workdir colon", "Run in workdir: /tmp/foo", "/tmp/foo"},
 		{"workdir capital", "Workdir: /tmp/bar", "/tmp/bar"},
