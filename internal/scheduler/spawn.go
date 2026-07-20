@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -22,8 +23,8 @@ import (
 const (
 	estTokensIn    = 8000     // estimated input tokens per tick
 	estTokensOut   = 2000     // estimated output tokens per tick
-	estCostPerIn   = 0.000002   // deepseek-v4-flash input $/token
-	estCostPerOut  = 0.000008   // deepseek-v4-flash output $/token
+	estCostPerIn   = 0.000002 // deepseek-v4-flash input $/token
+	estCostPerOut  = 0.000008 // deepseek-v4-flash output $/token
 	estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
 )
 
@@ -265,6 +266,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	if err != nil {
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start process: %w", err)
@@ -393,7 +395,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	timer := time.AfterFunc(st.spawner.timeout, func() {
 		if st.cmd.Process != nil {
-			_ = st.cmd.Process.Kill()
+			// Each scheduler-owned worker has its own process group. Killing the
+			// group prevents shells, Hermes workers, and test runners from
+			// surviving after the tick is marked timed out.
+			_ = syscall.Kill(-st.cmd.Process.Pid, syscall.SIGKILL)
 		}
 	})
 	defer timer.Stop()

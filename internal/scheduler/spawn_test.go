@@ -3,6 +3,11 @@ package scheduler
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -80,6 +85,57 @@ func TestSpawner_MaxConcurrentOne(t *testing.T) {
 	if !s.canSpawn() {
 		t.Error("canSpawn() = false with maxConcurrent=1 and no active, want true")
 	}
+}
+
+func TestSpawnTimeoutKillsProcessGroup(t *testing.T) {
+	db := newTestDB(t)
+	spawner := NewSpawner(db, 1)
+	spawner.timeout = 200 * time.Millisecond
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	project := PackedProject{
+		Name:    "process-group-timeout",
+		Workdir: t.TempDir(),
+		Command: fmt.Sprintf(
+			"bash -c 'sleep 30 & echo $! > %s; wait'",
+			pidFile,
+		),
+	}
+
+	tick, err := spawner.Spawn(project, "process-group-timeout-tick")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var childPID int
+	for time.Now().Before(deadline) {
+		contents, readErr := os.ReadFile(pidFile)
+		if readErr == nil {
+			childPID, err = strconv.Atoi(strings.TrimSpace(string(contents)))
+			if err == nil && childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID == 0 {
+		t.Fatal("child PID was not written")
+	}
+
+	outcome := tick.Wait()
+	if outcome.Status != TickTimeout {
+		t.Fatalf("status = %s, want %s", outcome.Status, TickTimeout)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); err == syscall.ESRCH {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild process %d survived scheduler timeout", childPID)
 }
 
 // BenchmarkEstimateTickCost measures the cost-estimation function called from
