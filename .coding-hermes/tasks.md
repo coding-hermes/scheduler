@@ -1,3 +1,87 @@
+## FOREMAN TICK — 2026-07-20 13:48 (#61)
+
+**Board status:** PRODUCTIVE — AUDIT-020 formally closed. 6 remaining LOW tasks, 2 blocked.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean
+- HEAD: `b364969`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages) |
+| Hilo graph stats | 472 edges, 66 files (unchanged) |
+| Gateway :8642 | UP (200) |
+| Daemon :9090 | UP (200) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Dependencies | 5 INDIRECT outdated |
+
+**AUDIT-020-sync-verify — CLOSED (foreman-direct):**
+
+All 4 COALESCE calls in `internal/sync/duckbrain.go` verified safe:
+
+| Line | COALESCE | Default | Safe? |
+|------|----------|---------|-------|
+| 131 | `COALESCE(last_tick_completed, '')` | empty string | ✓ |
+| 132 | `COALESCE(last_tick_started, '')` | empty string | ✓ |
+| 193 | `COALESCE(SUM(weight), 0), COALESCE(SUM(reserved), 0)` | zero | ✓ |
+| 222 | `COALESCE(description, '')` | empty string | ✓ |
+
+No NULL safety gap exists. Tick #60 investigation confirmed, now formally closed. No code changes needed.
+
+**NEVER-DONE quick re-check:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs) |
+| 2 | Docs | PASS* (AUDIT-019, LOW) |
+| 3 | Tests | PASS* (AUDIT-016, LOW) |
+| 4 | Dependencies | PASS* (AUDIT-011, LOW) |
+| 5 | Pitfalls | PASS (0 lint) |
+| 6 | Performance | PASS* (AUDIT-014, LOW) |
+| 7 | Endpoints | PASS* (AUDIT-018, LOW) |
+| 8 | CI | PASS (5/5) |
+| 9 | DuckBrain | PASS (COALESCE closed) |
+| 10 | Quality | PASS (AUDIT-017, LOW) |
+| 11 | Middle-out | PASS (472 edges, 66 files) |
+
+All 11 green. No drift since tick #60.
+
+**Active task board:**
+
+Completed (16):
+- AUDIT-020-sync-verify ✓ (this tick)
+
+Pending (6 LOW, 2 blocked):
+- [ ] AUDIT-016-test-cmds — cmd 0% coverage (LOW)
+- [ ] AUDIT-011-deps-upgrade — 5 indirect (LOW)
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query (LOW)
+- [ ] AUDIT-017-code-quality-review (LOW)
+- [ ] AUDIT-018-spec-arch-drift (LOW)
+- [ ] AUDIT-019-doc-skills — placeholder README (LOW)
+- [ ] FIX-STUCK — Systemd enable (BLOCKED)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **AUDIT-020 closed — all COALESCE calls are safe.** Four NULL-safe defaults in `duckbrain.go` handle all edge cases. No code change required.
+
+2. **6 remaining LOW tasks are all documentation, quality, or low-impact.** No MEDIUM/HIGH tasks exist. The project is firmly in maintenance mode with production-ready status.
+
+3. **Next actionable: AUDIT-016 (cmd tests) or AUDIT-014 (N+1 query fix).** Both require code changes — worker delegation appropriate for next tick.
+
+4. **Board is shrinking.** Down from 16 tasks to 8 (6 actionable LOW + 2 blocked). Three consecutive productive ticks (#59, #60, #61) closed 3 tasks without regression.
+
+**VERDICT: productive — AUDIT-020 formally closed. All 4 COALESCE calls verified safe with zero NULL gaps. 16/22 tasks complete. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 13:23 (#60)
 
 **Board status:** PRODUCTIVE — NEVER-DONE audit complete. Concurrent worker `331937e` added scheduler test coverage.
@@ -55,12 +139,13 @@ Scheduler coverage: ~62% → 66.3% (+4.3 points). One bug fixed: `TestGatewayAva
 
 **Active task board:**
 
-Completed (15):
+Completed (16):
 - [x] DOC-AGENTS, TEST-SYNC, PERF-BENCH, QUALITY-LONGFILES, QUALITY-GITIGNORE, QUALITY-LONGFILES-2
 - [x] AUDIT-005-test-deliver, AUDIT-006-test-gateway, AUDIT-007-test-slowdown, AUDIT-009-test-namespaces
 - [x] AUDIT-001-spec-priority-type, AUDIT-003-spec-event-mismatch, AUDIT-004-tick-field-names
 - [x] AUDIT-002-missing-specs
 - [x] AUDIT-010-remaining-scheduler — partially addressed by worker `331937e` (66.3%, up from 62%)
+- [x] AUDIT-020-sync-verify — all 4 COALESCE calls verified safe (tick #60); formally closed
 
 Test coverage (1):
 - [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
@@ -71,11 +156,10 @@ Dependencies (1):
 Performance (1):
 - [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
 
-Quality/Docs (4):
+Quality/Docs (3):
 - [ ] AUDIT-017-code-quality-review (LOW)
 - [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool; S06 OpenAPI still uses old event field names (LOW)
 - [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
-- [ ] AUDIT-020-sync-verify — DuckBrain sync COALESCE is already safe; review for closure (LOW)
 
 Blocked:
 - [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
