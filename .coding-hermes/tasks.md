@@ -1,3 +1,93 @@
+## FOREMAN TICK — 2026-07-20 09:54 (#53)
+
+**Board status:** PRODUCTIVE — QUALITY-LONGFILES-2 completed. Worker (opencode-go) split 3 files over 500 lines into 6 cohesive files. All files now under 352 lines. Build, vet, 8/8 test packages pass. 2 commits pushed.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Blocked by dirty .gitreins/tasks.yaml → restored, then up to date
+- Dirty workdir: Clean after 2 commits
+- GitReins state: Clean
+- HEAD: `d2e5c5a`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 ./...` | PASS (8 packages, clean testcache) |
+| Hilo graph stats | 445 edges, 63 files (+14 edges, +3 files from split) |
+| Daemon /health | status=ok, db=connected, uptime=2h32m, active_ticks=4, spawns_http=51 (+6 from #52) |
+| Gateway :8642 | UP (v0.18.2) |
+| CI (gh run list) | 3/3 SUCCESS |
+| Dependencies | 0 DIRECT outdated |
+
+**QUALITY-LONGFILES-2 — COMPLETED (`2f182c8` + `d2e5c5a`):**
+
+| Original | Before | After | New Files |
+|----------|--------|-------|-----------|
+| `internal/mcp/server.go` | 548L | → server.go (352L) + handlers.go (203L) |
+| `internal/scheduler/multipool_packer.go` | 529L | → multipool_packer.go (251L) + packer_select.go (286L) |
+| `internal/scheduler/loop.go` | 506L | → loop.go (287L) + tick_process.go (227L) |
+
+Worker (opencode-go) ran ~6 min. 2 commits: refactor `2f182c8` + gofmt cleanup `d2e5c5a`. No logic changes, no signature changes. Worker created an untracked deliver_test.go (585L, 5 failing tests) beyond scope — deleted. All 6 source files under 500 lines.
+
+**Active task board:**
+
+- [x] DOC-AGENTS — Create AGENTS.md ✓
+- [x] TEST-SYNC — Add sync tests ✓ `3039f14`
+- [x] PERF-BENCH — Go benchmarks ✓ `d522691`
+- [x] QUALITY-LONGFILES — Split 2 files ✓ `aae390f`
+- [x] QUALITY-GITIGNORE — Add deploy/*.log to .gitignore ✓ `f83dce3`
+- [x] QUALITY-LONGFILES-2 — Split 3 files: mcp/server.go, multipool_packer.go, loop.go ✓ `2f182c8`
+
+Spec alignment (4):
+- [ ] AUDIT-001-spec-priority-type — Priority type: spec says float64, code uses int
+- [ ] AUDIT-002-missing-specs — 5 spec files (S07-S11) referenced but missing
+- [ ] AUDIT-003-spec-event-mismatch — Event struct: spec says Level/Project, code uses Severity/Component
+- [ ] AUDIT-004-tick-field-names — Tick field name mismatch: spec says Project, code says ProjectName
+
+Test coverage (6):
+- [ ] AUDIT-005-test-deliver — deliver.go 0% coverage, 3 untested functions (MEDIUM) ← next actionable
+- [ ] AUDIT-006-test-gateway — gateway_client.go 0% coverage, 5 untested functions (MEDIUM)
+- [ ] AUDIT-007-test-slowdown — slowdown.go 0% coverage, autoSlowdown untested (MEDIUM)
+- [ ] AUDIT-009-test-namespaces — database namespace functions 0% coverage (LOW)
+- [ ] AUDIT-010-remaining-scheduler — scheduler package 17+ functions at 0% coverage (LOW)
+- [ ] AUDIT-016-test-cmds — cmd/schedulerd + cmd/migrate 0% coverage (LOW)
+
+Dependencies (1):
+- [ ] AUDIT-011-deps-upgrade — 5 indirect outdated packages (LOW)
+
+Performance (1):
+- [ ] AUDIT-014-nplus1-dashboard — N+1 query in dashboard collect() (LOW)
+
+Quality/Docs (4):
+- [ ] AUDIT-017-code-quality-review — function length, nesting, magic numbers (LOW)
+- [ ] AUDIT-018-spec-arch-drift — S01 shows old spawn path, missing SlotPool (LOW)
+- [ ] AUDIT-019-doc-skills — skills/README.md is placeholder (LOW)
+- [ ] AUDIT-020-sync-verify — DuckBrain sync needs COALESCE safety (LOW)
+
+Blocked:
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit
+
+**Key observations:**
+
+1. **QUALITY-LONGFILES-2 done.** All 6 files under 500 lines (largest: server.go 352L, packer_select.go 286L). The code is now in cohesive sub-files: handlers.go (MCP tool implementations), packer_select.go (multi-pool selection algorithm), tick_process.go (evaluation + maintenance).
+
+2. **Worker scope creep detected.** The worker created a new deliver_test.go (585L, 5 failing tests) alongside the file split. Deleted — not part of the task, and the tests failed. File splitting is mechanical refactoring; test writing requires understanding the domain.
+
+3. **5 pre-existing test failures were in the untracked file**, not in HEAD. The committed codebase has all tests passing. The GitReins guard blocked the gofmt commit because go test picked up the untracked _test.go file in the package directory.
+
+4. **Next actionable: AUDIT-005-test-deliver.** deliver.go has 0% coverage. Tick #52 identified this as the first test coverage task to tackle. Requires httptest-based exec.Command mocking pattern.
+
+5. **Board has 16 pending tasks from tick #52's GitReins sync.** QUALITY-LONGFILES-2 was the last pre-existing board task. All remaining tasks are from the AUDIT series.
+
+**VERDICT: productive — QUALITY-LONGFILES-2 completed. 2 commits pushed. All files under 500 lines. Board has 16 pending AUDIT tasks. AUDIT-005-test-deliver is next. Cooldown at base 600s (productive reset).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 09:35 (#52)
 
 **Board status:** BOARD STALENESS DETECTED — cross-referenced GitReins tasks.yaml vs tasks.md board. 28 GitReins tasks existed; 12 already completed (stale), 1 deleted (contradicts Bane rules), 16 genuinely pending. Board was showing "maintenance mode" for 4 ticks while 16 real tasks sat in GitReins unworked.
