@@ -1,3 +1,78 @@
+## FOREMAN TICK — 2026-07-21 16:11 (#75) — IDLE COUNTER 9/7 → PAST CAP, ESCALATE AGAIN (5th cooldown reversion)
+
+**Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). Cooldown reverted 43200s→900s after daemon restart (5th reversion). Re-fixed to 43200s. Idle counter 9/7 — 2 past escalation cap.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- Dirty workdir: `.coding-hermes/tasks.md` bookkeeping (tick #74 INFRA docs) + `schedulerd` binary artifact restored → committed as `be97fa7`
+- HEAD: `be97fa7` (tick #75 bookkeeping), prior: `594505b` (tick #74 board)
+- `git pull --rebase`: Already up to date
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| Gateway :8642 | UP (v0.18.2, /health ok) |
+| Daemon :9090 | UP (7m uptime — restarted since tick #74, 9 active ticks, 43 active projects) |
+| Dashboard :9090 | ALL routes 200 (/, /queue, /api/v1/ticks) |
+| API | 43 active projects, 4,152 completed, 13,811 failed, 179 timeout |
+| CI (gh run list) | ALL SUCCESS |
+| Hilo graph | 494 edges, 69 files (unchanged) |
+| Dependencies | 0 direct; 5 indirect transitive test-only (KNOWN, not actionable) |
+| TODOs/FIXMEs | 0 |
+| Stubs | 1 documented nil,nil guard clause (generator_data.go:321) |
+| govulncheck | No vulnerabilities found |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/, ~3,861 total lines) |
+| 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
+| 3 | Tests | PASS (9/9 packages, all pass uncached) |
+| 4 | Dependencies | PASS (0 direct; 5 indirect transitive test-only — KNOWN) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 1 documented guard clause, govulncheck clean) |
+| 6 | Performance | PASS (BenchmarkAllocate × 3 tiers, regression_test.go complete) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all routes respond) |
+| 8 | CI | PASS (ALL SUCCESS) |
+| 9 | DuckBrain | PASS (idle counter updated to 9, escalation noted) |
+| 10 | Quality | PASS (0 lint, max non-test file 479L spawn.go, clean gitignore) |
+| 11 | Middle-out | PASS (494 edges, 69 files, 28 registered HTTP routes, binary builds+runs) |
+
+**All 11 green. Zero findings. No new tasks created.**
+
+**Active task board:**
+
+Completed (22):
+- All AUDIT-001 through AUDIT-020 ✓
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **Idle counter: 9/7 — PAST ESCALATION CAP (2 over).** Counter was 8 at tick #74, now 9. The daemon rebooted, which likely consumed one tick between #74 and #75. Per Disable Authority: foreman MUST NOT self-disable. Only human or scheduler daemon (after 10+ consecutive timeouts over 24h) may disable. **URGENT: Bane must set `Enabled=false` on this project.** 9 consecutive idle ticks, zero actionable work since tick #66 (~27 hours ago).
+
+2. **Cooldown reversion #5 — daemon restart.** Daemon uptime is 7m — it restarted since tick #74 (~13 hours ago). Cooldown reverted from 43200s (12h, set at tick #74) back to fleet.toml default of 900s. Re-fixed to 43200s via API PUT, verified via GET. This is the 5th documented reversion (ticks #71-#75). The INFRA-COOLDOWN task (documented at tick #74) needs implementation: scheduler should persist cooldown changes to DB so fleet.toml doesn't override them on restart.
+
+3. **Critical fleet signal: eduos-e2e resource exhaustion.** Daemon tick history shows 30+ consecutive failed ticks for `eduos-e2e` with `fork/exec /home/kara/.local/bin/hermes: resource temporarily unavailable`. This is the exact INFRA-BACKOFF pattern documented at tick #74 — the scheduler's retry loop amplifies resource exhaustion. Validates the need for INFRA-BACKOFF (backoff on `errno 11`/`can't start new thread`) and INFRA-CGROUP (pids_current/pids_max monitoring in health endpoint).
+
+4. **No code changes since AUDIT-014** (tick #66, `11a3ca5`, 2026-07-20 15:41). That's 9 consecutive idle ticks spanning ~27 hours. Every discovery sweep and 11-point audit is green.
+
+5. **Daemon healthy:** 7m uptime, 9 active ticks, 43 active projects, DB connected. Recent outcomes: 4,152 completed, 13,811 failed, 179 timeout. The failed count is inflated by the eduos-e2e retry storm.
+
+6. **RECOMMENDATION: Disable this foreman (`Enabled=false`).** Counter is 9/7 (2 past cap). 9 consecutive idle ticks. Zero actionable tasks. The eduos-e2e resource storm is a fleet-level concern that the scheduler daemon should handle (INFRA-BACKOFF/INFRA-CGROUP), not this foreman. **Foreman MUST NOT self-disable per Disable Authority.**
+
+**VERDICT: idle — counter 9/7 (PAST CAP by 2), ESCALATE AGAIN TO BANE. 11/11 audit green, zero gaps. Cooldown re-fixed to 43200s (reversion #5). eduos-e2e resource exhaustion validates INFRA-BACKOFF need. URGENT: Bane needs to disable this foreman.**
+
+---
+
 ## FOREMAN TICK — 2026-07-21 02:42 (#74) — IDLE COUNTER 8/7 → PAST CAP, ESCALATE AGAIN
 
 **Board status:** IDLE — 11/11 audit green. GitReins sync performed (15/20 stale tasks cleaned). Idle counter 8/7 — PAST ESCALATION CAP.
