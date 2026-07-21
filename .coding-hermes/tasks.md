@@ -1,3 +1,83 @@
+## FOREMAN TICK — 2026-07-21 00:12 (#72)
+
+**Board status:** PRODUCTIVE+IDLE — Code commit (spawn.go) + 11-point audit all green. Idle counter 6/7. Cooldown re-fixed after daemon restart reversion.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Blocked by dirty workdir (`internal/scheduler/spawn.go` modified)
+- Dirty workdir: `spawn.go` — one-line change adding `never-done` skill. Build+test green → committed as `f16c059`
+- HEAD: `f16c059` (spawn.go commit)
+
+**Code change — foreman-direct (Exception 7):**
+- `f16c059` — feat: add never-done skill to foreman spawner config (+1/-1, `internal/scheduler/spawn.go`)
+- Added `never-done` to the spawner skills string. Single-line mechanical change. Build ✓, vet ✓, test 9/9 ✓, GitReins guard PASS, Hilo warm 15 edges.
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| Gateway :8642 | UP (200, /health ok) |
+| Daemon :9090 | UP (12h36m uptime, 342 HTTP spawns, 4 active ticks) |
+| Dashboard :9090 | ALL routes 200 (/, /dashboard/partial, /queue, /health, /ticks) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Hilo graph | 488 edges, 69 files (unchanged) |
+| Dependencies | 1 direct (BurntSushi/toml v1.6.0, current), 0 outdated |
+| TODOs/FIXMEs | 0 |
+| Stubs | 1 documented nil,nil guard clause (generator_data.go:321) |
+| govulncheck | No vulnerabilities found |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/, 3,861 total lines, code endpoints superset spec) |
+| 2 | Docs | PASS (README, AGENTS.md, CONTRIBUTING.md all present) |
+| 3 | Tests | PASS (9/9 packages, directory-level check: all have test files, 0 ZERO_TESTS) |
+| 4 | Dependencies | PASS (1 direct: BurntSushi/toml v1.6.0, current) |
+| 5 | Pitfalls | PASS (0 stubs, 1 documented guard clause, govulncheck clean) |
+| 6 | Performance | PASS (14 benchmarks across scheduler package, BenchmarkAllocate × 3 tiers) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all 15 API routes respond, all 6 dashboard routes 200) |
+| 8 | CI | PASS (5/5 SUCCESS) |
+| 9 | DuckBrain | FINDING — Cooldown reverted 43200s→900s (daemon restart), re-fixed via API PUT. 1st reversion. |
+| 10 | Quality | PASS (0 lint, 0 TODOs/FIXMEs, max non-test file 479L spawn.go, clean gitignore) |
+| 11 | Middle-out | PASS (488 edges, 69 files, 15 registered HTTP routes, binary builds+runs) |
+
+**All 11 green (1 finding: cooldown reversion, fixed in-tick). No new tasks created.**
+
+**Active task board:**
+
+Completed (22):
+- All AUDIT-001 through AUDIT-020 ✓
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. This tick was BOTH productive and idle. Productive: committed the `never-done` skill addition to spawner config (`f16c059`). Idle: 11-point audit found zero code gaps. Only finding was cooldown reversion.
+
+2. Idle counter: **6/7** (escalating). Previous 5 → now 6. Cooldown was set to 43200s (12h) in tick #71 but daemon restart reverted it to TOML default 900s. Re-fixed via `PUT CooldownS=43200`, verified at 43200s. This is the **1st reversion** — tracked per idle protocol.
+
+3. **At counter 7 → escalate to Bane.** Foreman MUST NOT self-disable. Per Disable Authority: only human or scheduler daemon (after 10+ consecutive timeouts over 24h) may disable. Next tick, if still empty, counter hits 7 — message Bane with disable recommendation.
+
+4. Daemon healthy: 12h36m uptime, 342 HTTP spawns, 4 active ticks, DB connected. Fleet of 66 projects (up from 43 — expanded). Cooldown at 43200s confirmed.
+
+5. The spawn.go change (`never-done` in skills list) was an uncommitted change from a prior session. Build+test confirmed green, committed directly (foreman-direct Exception 7: mechanical single-line change, no worker needed).
+
+6. Gateway :8642 dashboard routes return 404 (known — gateway serves /health only, dashboard routes live on daemon :9090). This is consistent with all prior ticks. Not a regression.
+
+7. Next tick: At 12h interval (~12:12). NEVER-DONE re-run. If still empty, idle tick #7 → escalate to Bane. Counter hits cap at 7.
+
+**VERDICT: productive+idle — spawn.go committed (`f16c059`). 11/11 audit green. Cooldown re-fixed after daemon restart reversion. Idle counter 6/7. Cooldown at 12h (43200s).**
+
+---
+
 ## FOREMAN TICK — 2026-07-20 18:04 (#71)
 
 **Board status:** IDLE — All 22/22 tasks complete. Discovery sweep green. Never-done 11/11 green. Zero gaps found. Idle counter 5/7 — ESCALATING to 12h cooldown.
