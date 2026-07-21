@@ -67,7 +67,7 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		timeout:       to,
 		model:         "deepseek-v4-flash",
 		provider:      "deepseek-foreman",
-		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins",
+		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins,never-done",
 		foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
 	}
 }
