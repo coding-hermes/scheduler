@@ -1,12 +1,12 @@
-## FOREMAN TICK — 2026-07-21 17:18 (#76) — IDLE COUNTER 10/7 → PAST CAP, ESCALATE AGAIN (6th cooldown reversion)
+## FOREMAN TICK — 2026-07-21 18:23 (#77) — IDLE COUNTER 11/7 → PAST CAP, ESCALATE AGAIN (7th cooldown reversion)
 
-**Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). Cooldown reverted 43200s→3600s after daemon restart (6th reversion). Re-fixed to 43200s via API PUT. Idle counter: 10/7 — 3 past escalation cap.
+**Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). Cooldown reverted 43200s→3600s after daemon restart (7th reversion). Re-fixed to 43200s via API PUT, verified at 43200s. Idle counter: 11/7 — 4 past escalation cap. GitReins stale tasks AUDIT-006/AUDIT-009 synced (both complete in code, stalled in GitReins since tick #74).
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
 - Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
 - Dirty workdir: Clean
-- HEAD: `5f40a88` (tick #75 board), prior: `be97fa7` (tick #75 bookkeeping)
+- HEAD: `5ddb9c1` (tick #76 board)
 - `git pull --rebase`: Already up to date
 
 **Discovery sweep — all green:**
@@ -15,15 +15,17 @@
 |-------|--------|
 | `go build ./...` | PASS |
 | `go vet ./...` | PASS |
-| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached, 2.5s benchmarks) |
 | `golangci-lint run` | 0 issues |
-| Daemon :9090 | UP (1h14m uptime, 6 active ticks, 43 active projects) |
+| Daemon :9090 | UP (2h19m uptime, 6 active ticks, 95 exec spawns) |
 | Dashboard :9090 | ALL routes 200 (/, /queue, /api/v1/ticks) |
-| API | 43 active, 4,211 completed, 13,816 failed, 179 timeout |
-| Hilo graph | 494 edges, 69 files (unchanged) |
+| API | 57 projects (43 active), Cooldown re-fixed 3600→43200s |
+| CI (coding-hermes/scheduler) | ALL SUCCESS (5/5 green) |
+| Hilo graph | 478 edges, 68 files (slight re-indexing from 494/69) |
 | govulncheck | No vulnerabilities found |
 | TODOs/FIXMEs | 0 |
 | Stubs | 1 documented nil,nil guard clause (generator_data.go:321) |
+| GitReins stale tasks | AUDIT-006/AUDIT-009 synced to complete |
 
 **Never-Done 11-point audit — all green:**
 
@@ -31,15 +33,15 @@
 |---|----------|--------|
 | 1 | Specs | PASS (11 specs in ./specs/) |
 | 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
-| 3 | Tests | PASS (9/9 packages, 27 test files, all pass uncached) |
+| 3 | Tests | PASS (27 test files, 9/9 packages, all pass uncached) |
 | 4 | Dependencies | PASS (go mod verify: all modules verified) |
-| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 1 documented guard clause) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 1 documented guard clause, govulncheck clean) |
 | 6 | Performance | PASS (13 benchmarks across 3 hot paths, all pass) |
-| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all routes respond) |
-| 8 | CI | PASS (build/vet/test/lint all green) |
-| 9 | DuckBrain | PASS (status entry updated, idle counter at 10) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all routes respond, dashboard UP) |
+| 8 | CI | PASS (ALL SUCCESS, 5/5 latest runs green) |
+| 9 | DuckBrain | PASS (GitReins stale tasks synced, status entry pending) |
 | 10 | Quality | PASS (0 lint, max non-test file 479L spawn.go) |
-| 11 | Middle-out | PASS (494 edges, 69 files, 27 HTTP routes, binary builds) |
+| 11 | Middle-out | PASS (478 edges, 68 files, 27 HTTP routes, binary builds) |
 
 **All 11 green. Zero findings. No new tasks created.**
 
@@ -47,6 +49,7 @@
 
 Completed (22):
 - All AUDIT-001 through AUDIT-020 ✓
+- GitReins stale tasks AUDIT-006/AUDIT-009 synced ✓
 
 Pending (0 actionable, 2 non-actionable):
 - [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
@@ -54,17 +57,25 @@ Pending (0 actionable, 2 non-actionable):
 
 **Key observations:**
 
-1. **Idle counter: 10/7 — 3 past escalation cap.** Previous 9 → now 10. Daemon restarted between ticks, consuming one tick cycle. Cooldown reverted from 43200s to 3600s (not fleet default of 900s — the scheduler's graduated slowdown raised it to 3600 before this tick). **URGENT: Bane must set `Enabled=false` on this project.** 10 consecutive idle ticks, zero actionable work since tick #66 (~26 hours ago).
+1. **Idle counter: 11/7 — 4 past escalation cap.** Previous 10 → now 11. Per Disable Authority: foreman MUST NOT self-disable. Only human or scheduler daemon (after 10+ consecutive timeouts over 24h) may disable. **URGENT: Bane must set `Enabled=false` on this project.** 11 consecutive idle ticks, zero actionable work since tick #66 (~27 hours ago).
 
-2. **Cooldown reversion #6 — daemon restart.** Daemon uptime is 1h14m — restarted since tick #75 (~21h gap). Cooldown reverted from 43200s (set at tick #75) to 3600s. Re-fixed to 43200s via API PUT, verified via GET. The INFRA-COOLDOWN task (documented at tick #74) remains unimplemented: scheduler should persist cooldown changes to DB so fleet.toml doesn't override them on restart.
+2. **Cooldown reversion #7 — daemon restart.** Daemon uptime is 2h19m — it restarted since tick #76. Cooldown reverted from 43200s to 3600s. Re-fixed to 43200s via API PUT, verified via GET. The INFRA-COOLDOWN task (documented at tick #74) remains unimplemented: scheduler should persist cooldown changes to DB so fleet.toml doesn't override them on restart.
 
-3. **No code changes since AUDIT-014** (tick #66, `11a3ca5`, 2026-07-20 15:41). That's 10 consecutive idle ticks spanning ~26 hours. Every discovery sweep and 11-point audit is green.
+3. **GitReins stale tasks cleaned: AUDIT-006 and AUDIT-009.** Both were marked pending in GitReins since tick #74 (3 ticks ago). Code verification confirmed both are genuinely implemented: `gateway_client_test.go` exists with TestNewGatewayClient etc., and `database_test.go` has 6 namespace-related test functions. Both now `status: complete` in `.gitreins/tasks.yaml`.
 
-4. **Daemon fleet healthy:** 1h14m uptime, 6 active ticks, 43 active projects. Recent outcomes: 4,211 completed, 13,816 failed, 179 timeout. Failed count continues to be inflated by retry storms (eduos-e2e resource exhaustion pattern).
+4. **eduos-e2e resource exhaustion continues.** Tick history shows `eduos-e2e` failing with `exit status 2` every 30s-5m for the past 90+ minutes. This is the exact pattern documented at tick #74 (INFRA-BACKOFF need). Not a concern for this foreman — fleet-level issue for the scheduler daemon.
 
-5. **RECOMMENDATION: Disable this foreman (`Enabled=false`).** Counter is 10/7 (3 past cap). 10 consecutive idle ticks. Zero actionable tasks. Foreman MUST NOT self-disable per Disable Authority.
+5. **No code changes since AUDIT-014** (tick #66, `11a3ca5`, 2026-07-20 15:41). 11 consecutive idle ticks spanning ~27 hours. Every discovery sweep and 11-point audit is green.
 
-**VERDICT: idle — counter 10/7 (PAST CAP by 3), ESCALATE AGAIN TO BANE. 11/11 audit green, zero gaps. Cooldown re-fixed to 43200s (reversion #6). URGENT: Bane needs to disable this foreman.**
+6. **Daemon fleet healthy:** 2h19m uptime, 6 active ticks, 57 projects (43 active), DB connected. Recent outcomes: 95 exec spawns, 0 HTTP spawns. Gateway integration running smoothly.
+
+7. **RECOMMENDATION: Disable this foreman (`Enabled=false`).** Counter is 11/7 (4 past cap). 11 consecutive idle ticks. Zero actionable tasks. Foreman MUST NOT self-disable per Disable Authority.
+
+**VERDICT: idle — counter 11/7 (PAST CAP by 4), ESCALATE AGAIN TO BANE. 11/11 audit green, zero gaps. Cooldown re-fixed to 43200s (reversion #7). GitReins stale tasks cleaned (AUDIT-006/009). URGENT: Bane needs to disable this foreman.**
+
+---
+
+
 
 ---
 
