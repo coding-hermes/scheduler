@@ -63,6 +63,56 @@ Pending (0 actionable, 2 non-actionable):
 - [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
 - [ ] NEVER-DONE — 11-point audit (re-run next tick)
 
+### INFRA-BACKOFF — Resource exhaustion backoff (HIGH W15)
+**Problem:** When gateway cgroup hits TasksMax (2048 pids), the scheduler's retry
+loop amplifies the failure. Logs showed 248 `can't start new thread` + 67
+`Resource temporarily unavailable` in a single degraded window. Each failed
+spawn → retry → more spawn attempts → more errors.
+
+**Fix:**
+- Detect `RuntimeError: can't start new thread` or `errno 11` in spawn output
+- On detection: enter "infra-degraded" mode — pause ALL spawning for 5 minutes
+- Set all project cooldowns to min(current, 5min) so none fire during pause
+- Alert via log + deliverAlert: "⚠️ INFRA DEGRADED — TasksMax exhausted, pausing 5m"
+- After cooldown: resume normal operation, log recovery
+- Exponential backoff: 5m → 10m → 20m if exhaustion persists
+
+### INFRA-CGROUP — Cgroup monitoring in health endpoint (HIGH W10)
+**Problem:** Systemd reports gateway "active/running" even when TasksMax is
+exhausted. No early warning before hard failure.
+
+**Fix:**
+- Add `pids_current` and `pids_max` to `/api/v1/health` response
+- Add warning thresholds: 50% (warn), 75% (alert), 90% (critical)
+- When crossing 90%: proactively reduce max-concurrent spawns to 1
+- Log at each threshold crossing
+
+### INFRA-SECRETS — Enable secret redaction (MEDIUM W5)
+**Problem:** `security.redact_secrets: false` in hermes config. API keys and
+tokens visible in journalctl, process listings, and audit logs.
+
+**Fix:**
+- Set `security.redact_secrets: true` in `~/.hermes/config.yaml`
+- Rotate any credentials that may have been logged
+
+### INFRA-COOLDOWN — Fix cooldown reversion on daemon restart (HIGH W12)
+**Problem:** Cooldowns revert to fleet.toml defaults on daemon restart. Observed
+4 times across ticks #71-74. The coding-hermes-scheduler project's cooldown
+keeps reverting from 43200s → 900s → 3600s.
+
+**Fix:**
+- Scheduler should save cooldown changes to DB on every PUT
+- On startup, DB cooldown takes priority over fleet.toml values
+- OR: fleet.toml enabled=false removes the project from ApplyFleetConfig
+
+### INFRA-TIMEOUT — Fix gateway stop-timeout discrepancy (MEDIUM W5)
+**Problem:** Gateway sees 90s systemd timeout but drain requires 210s. Future
+restarts may kill in-flight jobs instead of draining cleanly.
+
+**Fix:**
+- Investigate which unit has TimeoutStopSec=90
+- Align to >= 210s to match drain timeout
+
 **Key observations:**
 
 1. **Idle counter: 8/7 — PAST ESCALATION CAP.** Previous 7 → now 8. Escalated to Bane at tick #73. The scheduler daemon is STILL firing ticks despite the foreman requesting disable. Cooldown was at 3600s (reversion #4) → re-fixed to 43200s via API PUT, verified at 43200s. Per Disable Authority: foreman MUST NOT self-disable. Only human or scheduler daemon (after 10+ consecutive timeouts over 24h) may disable.
