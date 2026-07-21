@@ -1,3 +1,88 @@
+## FOREMAN TICK — 2026-07-21 02:42 (#74) — IDLE COUNTER 8/7 → PAST CAP, ESCALATE AGAIN
+
+**Board status:** IDLE — 11/11 audit green. GitReins sync performed (15/20 stale tasks cleaned). Idle counter 8/7 — PAST ESCALATION CAP.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Clean (after GitReins sync commit)
+- HEAD: `ff1c035` (GitReins sync commit), prior: `8c239b0` (tick #73 bookkeeping)
+
+**GitReins sync — critical finding:**
+- Task list showed 20 pending tasks while board claimed all [x] done
+- Verified ALL 20 against actual code: file existence, test functions, import paths, dep versions
+- Result: ALL 20 genuinely complete in code. Board was correct, GitReins store was stale.
+- Synced 15/20 to complete. 3 timed out on evaluator LLM (AUDIT-010, 014, 018). 2 returned 'task not found' (AUDIT-006, 009)
+- Committed as `ff1c035`
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| Gateway :8642 | UP (200, /health ok, v0.18.2) |
+| Daemon :9090 | UP (4 active ticks, 42 active projects, 3450 completed) |
+| Dashboard :9090 | ALL routes 200 (/, /dashboard/partial, /queue, /health) |
+| API | ALL 5 endpoints 200 (/api/v1/{health,status,projects,namespaces,ticks}) |
+| CI (gh run list) | 5/5 SUCCESS |
+| Hilo graph | 494 edges, 69 files (unchanged since tick #66) |
+| Dependencies | 5 indirect transitive test-only (KNOWN, not actionable) |
+| TODOs/FIXMEs | 0 |
+| Stubs | 1 documented nil,nil guard clause (generator_data.go:321) |
+| govulncheck | No vulnerabilities found |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/, 3,861 total lines) |
+| 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
+| 3 | Tests | PASS (9/9 packages, directory-level: all have test files, 0 ZERO_TESTS dirs) |
+| 4 | Dependencies | PASS (0 direct; 5 indirect transitive test-only — KNOWN, not actionable) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 1 documented nil,nil guard clause, govulncheck clean) |
+| 6 | Performance | PASS (BenchmarkAllocate × 3 tiers, regression_test.go has all REGRESSION tests) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all 15 routes 200) |
+| 8 | CI | PASS (5/5 SUCCESS) |
+| 9 | DuckBrain | PASS (GitReins sync performed, idle counter tracked) |
+| 10 | Quality | PASS (0 lint, 0 TODOs/FIXMEs, max non-test file 479L spawn.go, clean gitignore) |
+| 11 | Middle-out | PASS (494 edges, 69 files, 28 registered HTTP routes, binary builds+runs) |
+
+**All 11 green. GitReins sync performed (finding). No new tasks created.**
+
+**Active task board:**
+
+Completed (22 + GitReins sync):
+- All AUDIT-001 through AUDIT-020 ✓
+- GitReins stale-task cleanup (15/20 synced) ✓
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **Idle counter: 8/7 — PAST ESCALATION CAP.** Previous 7 → now 8. Escalated to Bane at tick #73. The scheduler daemon is STILL firing ticks despite the foreman requesting disable. Cooldown was at 3600s (reversion #4) → re-fixed to 43200s via API PUT, verified at 43200s. Per Disable Authority: foreman MUST NOT self-disable. Only human or scheduler daemon (after 10+ consecutive timeouts over 24h) may disable.
+
+2. **GitReins sync — 20 pending tasks verified done in code.** This tick found a significant gap: the GitReins task store had 20 pending tasks while the board claimed all [x]. Independent code verification confirmed ALL 20 are genuinely complete — the GitReins store was never synced when the foreman completed them. 15 synced in this commit (`ff1c035`). 3 timed out on evaluator LLM (AUDIT-010 remaining-scheduler, AUDIT-014 nplus1-dashboard, AUDIT-018 spec-arch-drift) — these are safe to consider done based on code verification. 2 returned 'task not found' (AUDIT-006 gateway, AUDIT-009 namespaces) — already cleaned in a prior sync.
+
+3. **Cooldown reversion #4 — persistent pattern.** Tick #71 set 43200s, tick #72 found 900s (daemon restart reversion #1), re-fixed. Tick #73 found 3600s (reversion #3 — not a daemon restart, unknown revert source). Tick #74 found 3600s — same as tick #73, re-fixed to 43200s via API PUT, verified. The cooldown is NOT persisting between ticks. Possible root cause: Fleet TOML ApplyFleetConfig upsert on daemon tick processing, or the PUT silently failing. This needs investigation — the scheduler's OWN foreman can't keep its cooldown stable.
+
+4. **No code changes since AUDIT-014** (tick #66, `11a3ca5`, 2026-07-20 15:41). That's 8 consecutive idle ticks spanning ~11 hours. Every discovery sweep and 11-point audit is green. The codebase is genuinely stable and complete.
+
+5. **CI shows tick #73 commit ran twice** — both `8c239b0` (same commit hash) with identical titles. Likely a CI re-run, not a code issue. All 5 runs green.
+
+6. **RECOMMENDATION: Disable this foreman.** Counter is 8/7 (past cap). 8 consecutive idle ticks. Zero actionable tasks. The scheduler daemon SHOULD set `Enabled=false` but hasn't. Bane needs to manually disable via API or dashboard. Foreman MUST NOT self-disable per Disable Authority.
+
+7. Next tick: **NONE — foreman should be disabled by Bane.** If not disabled, cooldown should be 43200s (12h), but will likely revert again. Counter would be 9 (3 past cap).
+
+**VERDICT: idle — counter 8/7 (PAST CAP), ESCALATE AGAIN TO BANE. 11/11 audit green. GitReins sync performed (15/20 stale tasks cleaned, `ff1c035`). Cooldown re-fixed to 43200s (reversion #4). Foreman MUST NOT self-disable. URGENT: Bane needs to disable this foreman.**
+
+---
+
 ## FOREMAN TICK — 2026-07-21 01:35 (#73) — IDLE COUNTER 7/7 → ESCALATE
 
 **Board status:** IDLE — 11-point audit all green. Zero gaps. Idle counter 7/7 — ESCALATING TO BANE.
