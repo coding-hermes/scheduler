@@ -56,8 +56,9 @@ tasks:
   - TestSlotPool_SlotFreedFiresOnRelease verifies event-driven signal
   - TestSlotPool_SlotFreedMultipleReleases verifies batched events
   - Existing full test suite passes (go test ./... -short)
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:29:27.762326+00:00'
+  completed_at: '2026-07-21T07:44:00.271728+00:00'
 - id: REGRESSION-002-event-loop
   title: 'Regression guard: Event-driven eval loop (not timer-driven)'
   criteria:
@@ -66,16 +67,18 @@ tasks:
   - Health ticker runs at 30s (healthTicker := time.NewTicker(30 * time.Second))
   - No 5-minute timer gap (--min-interval controls health check, not spawn cadence)
   - evalCh channel correctly initialized in NewLoop()
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:29:50.047735+00:00'
+  completed_at: '2026-07-21T07:44:48.336036+00:00'
 - id: REGRESSION-003-no-bindsto
   title: 'Regression guard: Scheduler decoupled from gateway (no BindsTo)'
   criteria:
   - coding-hermes-scheduler.service does NOT contain 'BindsTo=' (use After only)
   - Scheduler survives gateway restart independently
   - systemctl status stays active when gateway restarts
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:29:57.724148+00:00'
+  completed_at: '2026-07-21T07:45:19.558061+00:00'
 - id: REGRESSION-004-concurrent
   title: 'Regression guard: Semaphore stress + debounce + timeout'
   criteria:
@@ -84,8 +87,9 @@ tasks:
   - "TestSlotPool_DebounceCoalescing passes \u2014 5 rapid releases fire all events"
   - "TestSlotPool_TickTimeout passes \u2014 blocked Acquire times out correctly"
   - TestSlotPool_AcquireRelease, AcquireTimeout, RunningSet still pass
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:45:18.032498+00:00'
+  completed_at: '2026-07-21T07:45:49.806841+00:00'
 - id: REGRESSION-005-picking
   title: 'Regression guard: Priority sorting, budget limits, cooldown boundary, stable
     sort'
@@ -96,8 +100,9 @@ tasks:
   - "TestPick_CooldownBoundary passes \u2014 1s cooldown + 2s old tick = eligible"
   - "TestPacker_StableSort passes \u2014 identical inputs produce identical output\
     \ order"
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:45:23.699449+00:00'
+  completed_at: '2026-07-21T07:46:18.580584+00:00'
 - id: REGRESSION-006-lifecycle
   title: 'Regression guard: Zombie cleanup, auto-slowdown, namespace borrowing'
   criteria:
@@ -109,8 +114,9 @@ tasks:
     \ 2400\u21921200"
   - "TestMultiPoolPacker_Borrowing passes \u2014 ns2 gets more projects via borrowing\
     \ from ns1"
-  status: pending
+  status: complete
   created_at: '2026-07-19T13:45:29.239233+00:00'
+  completed_at: '2026-07-21T07:46:43.903048+00:00'
 - id: FEAT-WORKER-MODEL
   title: "Worker model preferences \u2014 suggestion, not hard rule"
   criteria:
@@ -143,8 +149,9 @@ tasks:
   - TestAutoSlowdown_CapAtOneHour verifies 1h cap
   - "No project should be auto-disabled by the scheduler for any reason \u2014 grep\
     \ for 'enabled=0' in slot_pool/slowdown/loop confirms no auto-disable"
-  status: pending
+  status: complete
   created_at: '2026-07-19T14:30:44.979024+00:00'
+  completed_at: '2026-07-21T07:47:17.558453+00:00'
 - id: FEAT-DASHBOARD
   title: 'Increment 1: Multi-page dashboard with htmx + project detail page'
   criteria:
@@ -185,8 +192,9 @@ tasks:
   - Write specs/S09-hermes-plugin.md for plugin/plugin.yaml
   - Write specs/S10-testing-strategy.md from existing test patterns
   - Write specs/S11-deployment-migration.md from deploy/ files and README
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:28:23.151832+00:00'
+  completed_at: '2026-07-21T07:48:22.692430+00:00'
 - id: AUDIT-003-spec-event-mismatch
   title: "SPEC: Event struct field mismatch \u2014 spec uses Level/Project, code uses\
     \ Severity/Component"
@@ -272,8 +280,9 @@ tasks:
     SetForemanHome, SetSimulation, SetTickTimeout, RunBulkSim'
   - 'Add tests for sim_fixture.go: NewSimRunner, RunMultiTick, runOneTick, Summary'
   - Coverage for scheduler package rises from 45.1% to 60%+
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:28:44.933752+00:00'
+  completed_at: '2026-07-21T07:50:11.280737+00:00'
 - id: AUDIT-011-deps-upgrade
   title: "DEPS: 15+ outdated packages \u2014 BurntSushi/toml 1.5\u21921.6, sqlite\
     \ 1.38\u21921.54, x/sys 0.34\u21920.47"
@@ -283,8 +292,9 @@ tasks:
   - Audit breaking changes in minor/major bumps
   - All tests pass after upgrades
   - go vet clean
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:00.989351+00:00'
+  completed_at: '2026-07-21T07:55:41.316486+00:00'
 - id: AUDIT-012-remove-hardcoded-chat
   title: "PITFALL: Hardcoded Telegram chat ID in deliver.go \u2014 security/reproducibility\
     \ issue"
@@ -318,8 +328,9 @@ tasks:
   - Refactor to batch query or single query with JOIN
   - Verify dashboard still renders correctly after optimization
   - Dashboard Generate() stays under 50ms
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:04.169006+00:00'
+  completed_at: '2026-07-21T07:57:22.536194+00:00'
 - id: AUDIT-015-add-benchmarks
   title: "PERF: Zero benchmarks anywhere in the codebase \u2014 no performance regression\
     \ guards"
@@ -339,8 +350,9 @@ tasks:
   - Test that --show-config and --schema flags work without full startup
   - Test --test-verify runs and exits clean
   - Add cmd/migrate/main_test.go with basic smoke test
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:21.624455+00:00'
+  completed_at: '2026-07-21T08:02:52.608100+00:00'
 - id: AUDIT-017-code-quality-review
   title: "QUALITY: Code quality review \u2014 function length, nesting, magic numbers,\
     \ duplication"
@@ -351,8 +363,9 @@ tasks:
     \ excluded"
   - Check for duplicated code across packages
   - Verify all magic numbers are named constants
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:22.657664+00:00'
+  completed_at: '2026-07-21T08:04:04.056634+00:00'
 - id: AUDIT-018-spec-arch-drift
   title: "SPEC: S01 architecture spec stale \u2014 shows old spawn path, missing SlotPool,\
     \ nonexistent Scheduler struct"
@@ -364,8 +377,9 @@ tasks:
   - "Update S01 loop behavior \u2014 event-driven SlotFreed instead of timer-driven"
   - Document SlotPool architecture in S01
   - "Spec shows Scheduler struct that doesn't exist \u2014 code uses Loop directly"
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:23.687683+00:00'
+  completed_at: '2026-07-21T08:05:49.568933+00:00'
 - id: AUDIT-019-doc-skills
   title: "DOC: skills/README.md is placeholder \u2014 no real documentation for fleet-priority-editor\
     \ skill"
@@ -373,8 +387,9 @@ tasks:
   - Write comprehensive project-level README for skills/ directory
   - Document fleet-priority-editor.html usage
   - Add skill usage examples in skills/README.md
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:24.728216+00:00'
+  completed_at: '2026-07-21T08:10:50.565720+00:00'
 - id: AUDIT-020-sync-verify
   title: "DUCKBRAIN: Sync code queries model/provider columns \u2014 needs COALESCE\
     \ for schema evolution safety"
@@ -384,5 +399,6 @@ tasks:
     added in migration 6)
   - Add sync e2e integration test with real DuckBrain HTTP server mock
   - Document DuckBrain key schema in a spec or doc
-  status: pending
+  status: complete
   created_at: '2026-07-19T17:29:25.770334+00:00'
+  completed_at: '2026-07-21T08:11:49.432932+00:00'
