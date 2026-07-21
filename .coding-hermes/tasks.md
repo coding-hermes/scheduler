@@ -1,3 +1,73 @@
+## FOREMAN TICK — 2026-07-21 17:18 (#76) — IDLE COUNTER 10/7 → PAST CAP, ESCALATE AGAIN (6th cooldown reversion)
+
+**Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). Cooldown reverted 43200s→3600s after daemon restart (6th reversion). Re-fixed to 43200s via API PUT. Idle counter: 10/7 — 3 past escalation cap.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- Dirty workdir: Clean
+- HEAD: `5f40a88` (tick #75 board), prior: `be97fa7` (tick #75 bookkeeping)
+- `git pull --rebase`: Already up to date
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| Daemon :9090 | UP (1h14m uptime, 6 active ticks, 43 active projects) |
+| Dashboard :9090 | ALL routes 200 (/, /queue, /api/v1/ticks) |
+| API | 43 active, 4,211 completed, 13,816 failed, 179 timeout |
+| Hilo graph | 494 edges, 69 files (unchanged) |
+| govulncheck | No vulnerabilities found |
+| TODOs/FIXMEs | 0 |
+| Stubs | 1 documented nil,nil guard clause (generator_data.go:321) |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/) |
+| 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
+| 3 | Tests | PASS (9/9 packages, 27 test files, all pass uncached) |
+| 4 | Dependencies | PASS (go mod verify: all modules verified) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 1 documented guard clause) |
+| 6 | Performance | PASS (13 benchmarks across 3 hot paths, all pass) |
+| 7 | Endpoints | PASS (Gateway UP, Daemon UP, all routes respond) |
+| 8 | CI | PASS (build/vet/test/lint all green) |
+| 9 | DuckBrain | PASS (status entry updated, idle counter at 10) |
+| 10 | Quality | PASS (0 lint, max non-test file 479L spawn.go) |
+| 11 | Middle-out | PASS (494 edges, 69 files, 27 HTTP routes, binary builds) |
+
+**All 11 green. Zero findings. No new tasks created.**
+
+**Active task board:**
+
+Completed (22):
+- All AUDIT-001 through AUDIT-020 ✓
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **Idle counter: 10/7 — 3 past escalation cap.** Previous 9 → now 10. Daemon restarted between ticks, consuming one tick cycle. Cooldown reverted from 43200s to 3600s (not fleet default of 900s — the scheduler's graduated slowdown raised it to 3600 before this tick). **URGENT: Bane must set `Enabled=false` on this project.** 10 consecutive idle ticks, zero actionable work since tick #66 (~26 hours ago).
+
+2. **Cooldown reversion #6 — daemon restart.** Daemon uptime is 1h14m — restarted since tick #75 (~21h gap). Cooldown reverted from 43200s (set at tick #75) to 3600s. Re-fixed to 43200s via API PUT, verified via GET. The INFRA-COOLDOWN task (documented at tick #74) remains unimplemented: scheduler should persist cooldown changes to DB so fleet.toml doesn't override them on restart.
+
+3. **No code changes since AUDIT-014** (tick #66, `11a3ca5`, 2026-07-20 15:41). That's 10 consecutive idle ticks spanning ~26 hours. Every discovery sweep and 11-point audit is green.
+
+4. **Daemon fleet healthy:** 1h14m uptime, 6 active ticks, 43 active projects. Recent outcomes: 4,211 completed, 13,816 failed, 179 timeout. Failed count continues to be inflated by retry storms (eduos-e2e resource exhaustion pattern).
+
+5. **RECOMMENDATION: Disable this foreman (`Enabled=false`).** Counter is 10/7 (3 past cap). 10 consecutive idle ticks. Zero actionable tasks. Foreman MUST NOT self-disable per Disable Authority.
+
+**VERDICT: idle — counter 10/7 (PAST CAP by 3), ESCALATE AGAIN TO BANE. 11/11 audit green, zero gaps. Cooldown re-fixed to 43200s (reversion #6). URGENT: Bane needs to disable this foreman.**
+
+---
+
 ## FOREMAN TICK — 2026-07-21 16:11 (#75) — IDLE COUNTER 9/7 → PAST CAP, ESCALATE AGAIN (5th cooldown reversion)
 
 **Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). Cooldown reverted 43200s→900s after daemon restart (5th reversion). Re-fixed to 43200s. Idle counter 9/7 — 2 past escalation cap.
