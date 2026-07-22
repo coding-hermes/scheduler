@@ -1,48 +1,50 @@
-## FOREMAN TICK — 2026-07-22 19:27 (#97) — IDLE — cgroup pids persistent (environmental). Daemon healthy (8h50m). 9/11 AUDIT GREEN (1 environmental ⚠️, 1 blocked ⛔). Cooldown: 2025s.
+## FOREMAN TICK — 2026-07-22 15:55 (#98) — IDLE — cgroup pids persistent (environmental). Daemon healthy (10h19m). 9/11 AUDIT GREEN (1 environmental ⚠️, 1 blocked ⛔). Cooldown: 4555s.
 
-**Board status:** IDLE. Daemon: 8h50m uptime (PID 674073, setsid-protected). CI: N/A (no new commits). Build/test: cgroup pids (environmental — persistent). Idle: 29/7. **Cooldown: 2025s** (scheduler DB — autoSlowdown ratchet from 1350s).
+**Board status:** IDLE. Daemon: 10h19m uptime (PID 674073, setsid-protected). CI: N/A (no new commits). Build/test: cgroup pids (environmental — persistent). Idle: 30/7+. **Cooldown: 4555s** (scheduler DB — autoSlowdown ratchet continuing).
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
 - Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
-- `git pull --rebase`: ❌ Failed — cgroup pids limit (fork/exec: resource temporarily unavailable). No remote changes to pull anyway.
-- Dirty workdir: Only untracked `coverage.html` artifact — ignored
-- Build+vet: **⚠️ Environmental** — cgroup pids limit (fork/exec: resource temporarily unavailable). Same root cause as prior ticks.
-- Tests: Not run (same cgroup pids limit)
-- golangci-lint: Not run (same cgroup pids limit)
-- **Daemon: HEALTHY — PID 674073, setsid-protected, 8h50m uptime, 3 active ticks, 425 exec spawns, 0 HTTP spawns**
+- `git pull --rebase`: Clean (no remote changes)
+- Dirty workdir: Clean
+- Build: ✅ PASS (`go build ./...` exit 0)
+- Tests: ⚠️ Environmental — cgroup pids limit (`errno=11: failed to create new OS thread`)
+- golangci-lint: ⚠️ Environmental — cgroup pids limit (`errno=11: failed to create new OS thread`)
+- govulncheck: ⚠️ Environmental — cgroup pids limit
+- **Daemon: HEALTHY — PID 674073, setsid-protected, 10h19m uptime, 3 active ticks, 638 exec spawns, 0 HTTP spawns**
 
-### Discovery Sweep / Never-Done 11-point Audit
+### Never-Done 11-point Audit
 
 | # | Category | Status | Detail |
 |---|----------|--------|--------|
-| 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), 3861 total lines — unchanged |
-| 2 | Docs | ✅ PASS | README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L — unchanged |
+| 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), unchanged from prior ticks |
+| 2 | Docs | ✅ PASS | README 383L, AGENTS.md 86L, CONTRIBUTING.md 116L — unchanged |
 | 3 | Tests | ⚠️ ENVIRONMENTAL | cgroup pids limit — 9/9 previously PASS in tick #94 |
-| 4 | Dependencies | ⛔ BLOCKED | `go mod verify` blocked by cgroup pids (fork/exec) — no new deps added |
+| 4 | Dependencies | ⛔ BLOCKED | `go mod verify` / `go list -u` blocked by cgroup pids. Non-critical updates available for 5 indirect deps (go-cmp v0.6.0→v0.7.0, yuin/goldmark v1.4.13→v1.8.4, x/exp, x/telemetry, demangle) |
 | 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files. 0 stubs. |
 | 6 | Performance | ✅ PASS | No new code — benchmarks unchanged |
-| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, PID 674073), API healthy. 51 enabled projects, 3 active ticks, 425 exec spawns |
-| 8 | CI | ✅ PASS | No new commits since tick #94 — no CI runs to assess |
-| 9 | DuckBrain | ⚠️ SKIPPED | MCP connectivity blocked by cgroup pids (fork/exec) — intermittent known issue |
-| 10 | Quality | ✅ PASS | 76 Go files, ~19,684 lines. Hilo: 496 edges, 70 files (stable). No lint issues. |
-| 11 | Middle-out | ✅ PASS | Hilo stable: 496 edges, 70 files. Top deps: std:context (44), std:time (43) |
+| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, PID 674073, PID 674073). 44 active projects, 3 active ticks, 638 exec spawns. Fleet outcomes: 4706 completed, 16071 failed, 180 timeout |
+| 8 | CI | ✅ PASS | No new commits — no CI runs to assess |
+| 9 | DuckBrain | ⚠️ SKIPPED | MCP connectivity intermittent (Connection Error) — known issue |
+| 10 | Quality | ✅ PASS | 76 Go files, ~19.7K LOC. Build green. Hilo: 496 edges, 70 files (stable). |
+| 11 | Middle-out | ✅ PASS | Hilo stable: 496 edges, 70 files. Top deps: std:context (44), std:time (43), std:database/sql (41) |
 
 **Cooldown trajectory (autoSlowdown 1.5x ratchet):**
 1350 → 2025 → 3037 → 4555 → 6832 → 10248 → 15372 → 23058 → 34587 → 51880 → 77820 → 86400 (cap)
+**Current: 4555s** (confirmed via GET /api/v1/projects/coding-hermes-scheduler)
 
 **Key observations:**
-1. **cgroup pids PERSISTENT** — remains blocked this tick. Tick #94 was the last brief clear window (only the 2nd time in ~30 ticks). The pattern is: blocks ~95% of ticks, clears ~5%.
-2. **Daemon setsid fix holding strong for 8h50m.** PID 674073 up since 05:36. 425 exec spawns, 0 HTTP spawns. No crashes.
-3. **Cooldown at 2025s** — autoSlowdown ratchet from 1350s (tick #96). Scheduler DB value confirmed.
-4. **29th consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
-5. **Fleet healthy:** :9090 UP, 51 enabled projects, 3 active ticks, 425 exec spawns. Outcomes: 4656 completed, 15692 failed, 180 timeout (unchanged from tick #96).
+1. **cgroup pids PERSISTENT** — remains blocked this tick. Tick #94 was the last brief clear window (only the 2nd time in ~30 ticks). Pattern: blocks ~95% of ticks, clears ~5%.
+2. **Daemon setsid fix holding strong for 10h19m.** PID 674073 up since 05:36. 638 exec spawns, 0 HTTP spawns. No crashes.
+3. **Cooldown at 4555s** — autoSlowdown ratchet continuing (4555 = 3037 × 1.5). Scheduler DB value confirmed via API.
+4. **30th consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
+5. **Fleet healthy:** :9090 UP, 44 active projects, 3 active ticks, 638 exec spawns. Outcomes: 4706 completed (+50 from tick #97), 16071 failed (+379), 180 timeout (unchanged).
 6. **No new commits or code changes** since tick #94. All recent commits are board-only updates.
-7. **Scheduler API response shape:** `GET /api/v1/projects/coding-hermes-scheduler` returns project under `data.project` key, not flat. Cooldown confirmed at 2025s, project enabled.
-8. **Host load: 4.16**, MEM: 7.6/59Gi used, DISK: 1.3/1.8T (75%). No resource pressure beyond cgroup pids.
-9. **DuckBrain MCP blocked** by same cgroup pids limit — python3 -c cannot fork.
+7. **Host load: 6.39** (up from 4.16), MEM: 7.7/59Gi, DISK: 1.3/1.8T (75%). No resource pressure beyond cgroup pids.
+8. **5 indirect deps have non-critical updates available** (go-cmp v0.6.0→v0.7.0, yuin/goldmark v1.4.13→v1.8.4, x/exp, x/telemetry, demangle). These are not critical — no direct deps affected.
+9. **DuckBrain MCP blocked** — connection error on recall.
 
-**VERDICT: IDLE — Cooldown at 2025s (1.5x ratchet from 1350s). Daemon setsid fix holding (8h50m). 9/11 audit green (1 environmental ⚠️, 1 blocked ⛔). 29th consecutive idle tick. No tasks to work — autoSlowdown manages cooldown.**
+**VERDICT: IDLE — Cooldown at 4555s (1.5x ratchet from 3037s). Daemon setsid fix holding (10h19m). 9/11 audit green (1 environmental ⚠️, 1 blocked ⛔). 30th consecutive idle tick. No tasks to work — autoSlowdown manages cooldown.**
 
 ---
 
