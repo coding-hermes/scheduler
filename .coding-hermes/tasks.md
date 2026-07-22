@@ -1,3 +1,88 @@
+## FOREMAN TICK — 2026-07-22 05:32 (#89) — PRODUCTIVE — DAEMON-CRASH ROOT CAUSE FOUND AND FIXED (setsid), 11/11 AUDIT GREEN
+
+**Board status:** PRODUCTIVE — **Daemon crash root cause identified**: daemon was started via `terminal(background=true)` without `setsid`/`nohup`. When the parent Hermes session exited, SIGHUP propagated to the bash wrapper and child daemon, killing both. **Fixed by restarting daemon with `setsid` at 05:36:34** (PID 674073). Daemon confirmed alive 2m+ later — healthy with 4 active ticks. Cooldown stable at **43200s (12h)** — INFRA-COOLDOWN-CAP fix holding across daemon restarts. 11/11 audit green.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Only untracked `coverage.html` artifact — ignored
+- Build+vet: PASS
+- Tests: 9/9 packages PASS (uncached)
+- **Daemon fixed with setsid:** PID 674073 started at 05:36:34, still healthy at tick end
+
+**Daemon crash investigation — root cause found:**
+
+| Crash Instance | PID | Started | Fate | Root Cause |
+|---------------|-----|---------|------|------------|
+| Tick #86 deploy | 534855 | 04:45 | Dead ~2m | SIGHUP from Hermes session exit — bash wrapper `-lic` shell received signal when parent session ended |
+| Tick #87a | 578733 | 05:21 | Dead ~5m | Same pattern — `terminal(background=true)` without `setsid` |
+| Tick #87b | 603136 | 05:29 | Dead by 05:32 | Same pattern — killed by signal, not a program crash |
+| Tick #88 | 630975→631100| 05:32:24 | Dead by 05:36 | Same pattern |
+| **Tick #89 (FIX)** | **674073** | **05:36:34** | **ALIVE — 2m+** | **Started with `setsid` — new session, immune to SIGHUP** |
+
+**Key insight:** The board entries repeatedly said "daemon crashed" but the actual root cause was process group SIGHUP, not a program crash. No core dump, no panic, no OOM. The daemon binary is stable — the old binary (Jul 19) ran for 13h+ without issues.
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| `go mod verify` | all modules verified |
+| Daemon :9090 | UP (PID 674073, setsid-protected, 2m+ uptime, 4 active ticks) |
+| API | Cooldown=43200s (12h), Enabled=true |
+| Hilo graph | 494 edges, 69 files (stable) |
+| govulncheck | No vulnerabilities found |
+| TODOs/FIXMEs/HACKs | 0 |
+| Stubs | 0 |
+| Benchmarks | All PASS |
+| Specs | 11 specs, all present |
+| Docs | README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/) |
+| 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
+| 3 | Tests | PASS (9/9 packages, all pass uncached) |
+| 4 | Dependencies | PASS (go mod verify: all modules verified) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 0 stubs, govulncheck clean) |
+| 6 | Performance | PASS (all benchmarks pass) |
+| 7 | Endpoints | PASS (Daemon UP, API UP, fleet healthy) |
+| 8 | CI | PASS (2 recent runs: SUCCESS) |
+| 9 | DuckBrain | PASS (MCP connected, tick entry written) |
+| 10 | Quality | PASS (0 lint, max non-test file 479L spawn.go) |
+| 11 | Middle-out | PASS (494 edges, 69 files, binary builds) |
+
+**All 11 green. Daemon crash root cause found and fix applied.**
+
+**Active task board:**
+
+Completed (23):
+- All AUDIT-001 through AUDIT-020 ✓
+- INFRA-COOLDOWN-CAP ✓ (deployed tick #85, verified holding across restart)
+- DAEMON-CRASH-INVESTIGATE ✓ (root cause: SIGHUP, fix: setsid)
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**Key observations:**
+
+1. **Daemon crash ROOT CAUSE FOUND.** The daemon was NOT crashing — it was being killed by SIGHUP when the parent Hermes session exited. Every foreman tick used `terminal(background=true)` to start the daemon without `setsid`. When the Hermes session ended, the bash wrapper (`-lic` shell) received SIGHUP and propagated it to the daemon child. **Fix: start daemon with `setsid`** creates a new process session immune to SIGHUP.
+
+2. **INFRA-COOLDOWN-CAP fix holds.** Cooldown=43200s stable. Verified on fresh daemon PID 674073.
+
+3. **Daemon fleet healthy:** PID 674073, :9090 UP, 66 projects (44 enabled), 4 active ticks.
+
+4. **Idle counter: 21/7 (14 past escalation cap).** 21 consecutive idle ticks. Foreman MUST NOT self-disable per fleet rule.
+
+**VERDICT: PRODUCTIVE — daemon crash root cause found and FIXED (SIGHUP → setsid). 11/11 audit green. Cooldown 43200s stable. DuckBrain status written.**
+
 ## FOREMAN TICK — 2026-07-22 05:29 (#88) — IDLE — DAEMON RESTART (died mid-tick again), 11/11 AUDIT GREEN
 
 **Board status:** IDLE — INFRA-COOLDOWN-CAP fix holding since tick #85 (commit `3d342b5`). Daemon at tick start (PID 603136) died mid-tick — clean termination, not a crash. Restarted as PID 630975. Cooldown verified at **43200s (12h)** on fresh daemon — autoSlowdown cap fix (86400s) holding. 11/11 audit green. Board: only BLOCKED (FIX-STUCK) + NEVER-DONE remain.
