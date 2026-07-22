@@ -24,8 +24,8 @@ const (
 	defaultProjectPriority  = 5
 	defaultProjectCooldown  = 900
 	defaultProjectDecayRate = 1.0
-	defaultProjectModel     = "deepseek-v4-pro"
-	defaultProjectProvider  = "deepseek-foreman"
+	defaultProjectModel    = "your-model-name"    // agent fills in
+	defaultProjectProvider = "your-provider-name" // agent fills in
 
 	defaultNamespaceWeight   = 10
 	defaultNamespaceReserved = 1

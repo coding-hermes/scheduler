@@ -1,0 +1,3526 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>scheduler: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/coding-herms/scheduler/internal/scheduler/alert_escalation.go (75.6%)</option>
+				
+				<option value="file1">github.com/coding-herms/scheduler/internal/scheduler/deliver.go (92.6%)</option>
+				
+				<option value="file2">github.com/coding-herms/scheduler/internal/scheduler/events.go (100.0%)</option>
+				
+				<option value="file3">github.com/coding-herms/scheduler/internal/scheduler/gateway_client.go (93.3%)</option>
+				
+				<option value="file4">github.com/coding-herms/scheduler/internal/scheduler/lifecycle.go (90.2%)</option>
+				
+				<option value="file5">github.com/coding-herms/scheduler/internal/scheduler/loop.go (60.8%)</option>
+				
+				<option value="file6">github.com/coding-herms/scheduler/internal/scheduler/multipool_packer.go (85.2%)</option>
+				
+				<option value="file7">github.com/coding-herms/scheduler/internal/scheduler/namespace_alloc.go (97.7%)</option>
+				
+				<option value="file8">github.com/coding-herms/scheduler/internal/scheduler/packer.go (88.0%)</option>
+				
+				<option value="file9">github.com/coding-herms/scheduler/internal/scheduler/packer_select.go (72.1%)</option>
+				
+				<option value="file10">github.com/coding-herms/scheduler/internal/scheduler/sim_fixture.go (13.7%)</option>
+				
+				<option value="file11">github.com/coding-herms/scheduler/internal/scheduler/sim_spawn.go (5.1%)</option>
+				
+				<option value="file12">github.com/coding-herms/scheduler/internal/scheduler/slot_pool.go (35.1%)</option>
+				
+				<option value="file13">github.com/coding-herms/scheduler/internal/scheduler/slowdown.go (100.0%)</option>
+				
+				<option value="file14">github.com/coding-herms/scheduler/internal/scheduler/spawn.go (65.9%)</option>
+				
+				<option value="file15">github.com/coding-herms/scheduler/internal/scheduler/tick_process.go (24.6%)</option>
+				
+				<option value="file16">github.com/coding-herms/scheduler/internal/scheduler/urgency.go (95.5%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package scheduler
+
+import (
+        "context"
+        "database/sql"
+        "fmt"
+        "log"
+        "time"
+)
+
+// AlertEscalator checks scheduler health, project starvation, and failure
+// patterns after each evaluation cycle and emits events at escalating severity.
+type AlertEscalator struct {
+        db     *sql.DB
+        events *EventLogger
+}
+
+// NewAlertEscalator creates an escalator backed by db and events.
+func NewAlertEscalator(db *sql.DB, events *EventLogger) *AlertEscalator <span class="cov8" title="1">{
+        return &amp;AlertEscalator{db: db, events: events}
+}</span>
+
+// CheckSchedulerHealth emits CRITICAL if the scheduler has not evaluated in
+// more than 10 minutes.
+func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval time.Time) error <span class="cov8" title="1">{
+        if lastEval.IsZero() </span><span class="cov8" title="1">{
+                ae.events.Emit(ctx, SeverityCritical, "escalation", "scheduler not evaluating — never ran", map[string]any{
+                        "age_seconds": -1,
+                })
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">age := time.Since(lastEval)
+        if age &gt; 10*time.Minute </span><span class="cov8" title="1">{
+                ae.events.Emit(ctx, SeverityCritical, "escalation",
+                        fmt.Sprintf("scheduler not evaluating — last eval %v ago", age.Round(time.Second)),
+                        map[string]any{
+                                "last_eval":   lastEval.Format(time.RFC3339),
+                                "age_seconds": age.Seconds(),
+                        })
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// CheckStarvation emits MEDIUM for each enabled project that has not had a
+// completed tick in more than 2× its configured maximum interval.
+func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error <span class="cov8" title="1">{
+        // Query enabled projects with their intervals.
+        prows, err := ae.db.QueryContext(ctx,
+                `SELECT name, cooldown_s FROM projects WHERE enabled = 1`)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("query projects: %w", err)
+        }</span>
+        <span class="cov8" title="1">defer prows.Close()
+
+        type projInfo struct {
+                name     string
+                cooldown int
+        }
+        var projects []projInfo
+        for prows.Next() </span><span class="cov8" title="1">{
+                var p projInfo
+                if err := prows.Scan(&amp;p.name, &amp;p.cooldown); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ESCALATION: scan project: %v", err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">projects = append(projects, p)</span>
+        }
+        <span class="cov8" title="1">if err := prows.Err(); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("iter projects: %w", err)
+        }</span>
+
+        // Get last completed tick per project.
+        <span class="cov8" title="1">crows, err := ae.db.QueryContext(ctx,
+                `SELECT project_name, MAX(completed_at) FROM ticks WHERE status = 'completed' GROUP BY project_name`)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("query completions: %w", err)
+        }</span>
+        <span class="cov8" title="1">defer crows.Close()
+
+        lastCompleted := make(map[string]time.Time)
+        for crows.Next() </span><span class="cov8" title="1">{
+                var name string
+                var ts string
+                if err := crows.Scan(&amp;name, &amp;ts); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ESCALATION: scan completion: %v", err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">t, err := time.Parse(time.RFC3339, ts)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ESCALATION: parse time %q: %v", ts, err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">lastCompleted[name] = t</span>
+        }
+        <span class="cov8" title="1">if err := crows.Err(); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("iter completions: %w", err)
+        }</span>
+
+        // Check each project for starvation.
+        <span class="cov8" title="1">now := time.Now()
+        for _, proj := range projects </span><span class="cov8" title="1">{
+                last, ok := lastCompleted[proj.name]
+                if !ok </span><span class="cov0" title="0">{
+                        // Never completed a tick — not necessarily starved if it just started.
+                        continue</span>
+                }
+                <span class="cov8" title="1">age := now.Sub(last)
+                threshold := time.Duration(proj.cooldown) * time.Second * 2
+                if age &gt; threshold </span><span class="cov8" title="1">{
+                        ae.events.Emit(ctx, SeverityMedium, "escalation",
+                                fmt.Sprintf("project starved: %s — last tick %v ago, cooldown %ds",
+                                        proj.name, age.Round(time.Second), proj.cooldown),
+                                map[string]any{
+                                        "project":     proj.name,
+                                        "last_tick":   last.Format(time.RFC3339),
+                                        "cooldown":    proj.cooldown,
+                                        "age_seconds": age.Seconds(),
+                                })
+                }</span>
+        }
+        <span class="cov8" title="1">return nil</span>
+}
+
+// CheckConsecutiveFailures emits HIGH for any project with more than 3
+// consecutive failed ticks (no completed tick interspersed).
+func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error <span class="cov8" title="1">{
+        // Get all enabled project names.
+        prows, err := ae.db.QueryContext(ctx, `SELECT name FROM projects WHERE enabled = 1`)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("query projects: %w", err)
+        }</span>
+        <span class="cov8" title="1">defer prows.Close()
+
+        var names []string
+        for prows.Next() </span><span class="cov8" title="1">{
+                var name string
+                if err := prows.Scan(&amp;name); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ESCALATION: scan project name: %v", err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">names = append(names, name)</span>
+        }
+        <span class="cov8" title="1">if err := prows.Err(); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("iter project names: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">for _, name := range names </span><span class="cov8" title="1">{
+                rows, err := ae.db.QueryContext(ctx,
+                        `SELECT id, status FROM ticks WHERE project_name = ? ORDER BY completed_at DESC LIMIT 5`,
+                        name)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ESCALATION: query ticks for %s: %v", name, err)
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">var failures []string
+                consecutive := 0
+                for rows.Next() </span><span class="cov8" title="1">{
+                        var tickID, status string
+                        if err := rows.Scan(&amp;tickID, &amp;status); err != nil </span><span class="cov0" title="0">{
+                                log.Printf("ESCALATION: scan tick: %v", err)
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">if status == "failed" || status == "timeout" </span><span class="cov8" title="1">{
+                                consecutive++
+                                failures = append(failures, tickID)
+                        }</span> else<span class="cov8" title="1"> {
+                                break</span> // completed/queued/running breaks the streak
+                        }
+                }
+                <span class="cov8" title="1">rows.Close()
+
+                if consecutive &gt; 3 </span><span class="cov8" title="1">{
+                        ae.events.Emit(ctx, SeverityHigh, "escalation",
+                                fmt.Sprintf("more than 3 consecutive failures: %s", name),
+                                map[string]any{
+                                        "project":              name,
+                                        "consecutive_failures": consecutive,
+                                        "last_failure":         failures[0],
+                                })
+                }</span>
+        }
+        <span class="cov8" title="1">return nil</span>
+}
+
+// RunAll executes all three escalation checks. Errors from individual checks
+// are logged but not propagated — one check failing does not block the others.
+func (ae *AlertEscalator) RunAll(ctx context.Context, lastEval time.Time) error <span class="cov8" title="1">{
+        if err := ae.CheckSchedulerHealth(ctx, lastEval); err != nil </span><span class="cov0" title="0">{
+                log.Printf("ESCALATION: health check error: %v", err)
+        }</span>
+        <span class="cov8" title="1">if err := ae.CheckStarvation(ctx); err != nil </span><span class="cov0" title="0">{
+                log.Printf("ESCALATION: starvation check error: %v", err)
+        }</span>
+        <span class="cov8" title="1">if err := ae.CheckConsecutiveFailures(ctx); err != nil </span><span class="cov0" title="0">{
+                log.Printf("ESCALATION: consecutive failures check error: %v", err)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package scheduler
+
+import (
+        "bytes"
+        "fmt"
+        "log"
+        "os"
+        "os/exec"
+        "regexp"
+        "strings"
+)
+
+// deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
+// Strips terminal tool output (diffs, review panels, worker prompts) and delivers
+// the foreman's actual summary. No length cap — full detail preserved.
+func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) <span class="cov8" title="1">{
+        if output == nil || output.Len() == 0 </span><span class="cov8" title="1">{
+                log.Printf("DELIVER: %s tick=%s — no output", project, tickID)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if deliver == "" </span><span class="cov8" title="1">{
+                log.Printf("DELIVER: %s tick=%s — no delivery target configured", project, tickID)
+                return
+        }</span>
+
+        <span class="cov8" title="1">body := trimToolNoise(strings.TrimSpace(output.String()))
+        body = fmt.Sprintf("%s\n\n_%s_", body, tickID)
+
+        f, err := os.CreateTemp("", fmt.Sprintf("chtick-%s-*.txt", tickID))
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
+                return
+        }</span>
+        <span class="cov8" title="1">defer f.Close()
+        defer func() </span><span class="cov8" title="1">{ _ = os.Remove(f.Name()) }</span>()
+
+        <span class="cov8" title="1">if _, err := f.WriteString(body); err != nil </span><span class="cov0" title="0">{
+                log.Printf("DELIVER: %s tick=%s — write temp file: %v", project, tickID, err)
+                return
+        }</span>
+        <span class="cov8" title="1">f.Close()
+
+        subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
+        cmd := exec.Command("hermes", "send",
+                "--to", deliver,
+                "--subject", subject,
+                "--file", f.Name(),
+        )
+        out, err := cmd.CombinedOutput()
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("DELIVER: %s tick=%s — hermes send failed: %v (%s)", project, tickID, err, bytes.TrimSpace(out))
+                return
+        }</span>
+        <span class="cov8" title="1">log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)</span>
+}
+
+// deliverAlert sends a short alert message for timeouts/errors so they
+// are visible in the chat rather than silently swallowed.
+func deliverAlert(deliver, project, tickID, reason string) <span class="cov8" title="1">{
+        if deliver == "" </span><span class="cov8" title="1">{
+                log.Printf("ALERT: %s tick=%s — %s (no delivery target configured)", project, tickID, reason)
+                return
+        }</span>
+        <span class="cov8" title="1">msg := fmt.Sprintf("⚠️ %s timed out — %s\nTick: %s", project, reason, tickID)
+        f, err := os.CreateTemp("", fmt.Sprintf("chtick-alert-%s-*.txt", tickID))
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("ALERT: temp file: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">defer f.Close()
+        _, _ = f.WriteString(msg)
+        f.Close()
+        cmd := exec.Command("hermes", "send", "-f", f.Name(), deliver)
+        out, err := cmd.CombinedOutput()
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("ALERT: send failed: %v (%s)", err, bytes.TrimSpace(out))
+                return
+        }</span>
+        <span class="cov8" title="1">log.Printf("ALERT: %s tick=%s → %s", project, tickID, deliver)</span>
+}
+
+// trimToolNoise strips terminal/tool output from the foreman's raw stdout,
+// keeping only the human-written summary. Handles multiple noise sources:
+//
+// 1. Final "---" separator — everything before it is tool noise
+// 2. "┊" prefixed lines — terminal review panels (review diff, review file)
+// 3. Git diff blocks (+/-/@@ lines)
+// 4. Worker prompt dumps (long unbroken instruction blocks)
+func trimToolNoise(raw string) string <span class="cov8" title="1">{
+        // Strategy 1: Final "---" separator is the strongest signal
+        if idx := strings.LastIndex(raw, "\n---\n"); idx &gt;= 0 </span><span class="cov8" title="1">{
+                s := strings.TrimSpace(raw[idx+5:])
+                if len(s) &gt; 50 </span><span class="cov8" title="1">{
+                        return s
+                }</span>
+        }
+
+        // Strategy 2: Strip tool output lines and compact
+        <span class="cov8" title="1">lines := strings.Split(raw, "\n")
+        var result []string
+        inDiff := false
+        inCodeBlock := false
+        skippingWorker := false
+
+        // Patterns that indicate non-summary lines
+        deltaRe := regexp.MustCompile(`^@@\s+-\d+`)
+        pipeRe := regexp.MustCompile(`^\s*┊`)
+
+        for _, line := range lines </span><span class="cov8" title="1">{
+                trimmed := strings.TrimSpace(line)
+
+                // Skip tool review panels (┊ review diff, ┊ review file, etc.)
+                if pipeRe.MatchString(line) </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+
+                // Skip git diff blocks
+                <span class="cov8" title="1">if deltaRe.MatchString(trimmed) </span><span class="cov8" title="1">{
+                        inDiff = true
+                        continue</span>
+                }
+                <span class="cov8" title="1">if inDiff </span><span class="cov8" title="1">{
+                        if strings.HasPrefix(trimmed, "+") || strings.HasPrefix(trimmed, "-") ||
+                                strings.HasPrefix(trimmed, "a/") || strings.HasPrefix(trimmed, "b/") ||
+                                strings.HasPrefix(trimmed, "index ") || strings.HasPrefix(trimmed, "---") </span><span class="cov8" title="1">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">inDiff = false</span>
+                }
+
+                // Skip code block fences (not useful in delivery)
+                <span class="cov8" title="1">if strings.HasPrefix(trimmed, "```") </span><span class="cov8" title="1">{
+                        inCodeBlock = !inCodeBlock
+                        continue</span>
+                }
+                <span class="cov8" title="1">if inCodeBlock </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+
+                // Skip worker prompt instructions (long, dense, no blank lines)
+                // These are recognizable: start with "You are a coding agent" or
+                // "## TASK:" after the foreman's actual report
+                <span class="cov8" title="1">if strings.HasPrefix(trimmed, "You are a coding agent") ||
+                        strings.HasPrefix(trimmed, "## TASK:") ||
+                        strings.HasPrefix(trimmed, "## INSERTION POINT") ||
+                        strings.HasPrefix(trimmed, "## PATTERN") ||
+                        strings.HasPrefix(trimmed, "## STORE API") ||
+                        strings.HasPrefix(trimmed, "## ALL") </span><span class="cov8" title="1">{
+                        skippingWorker = true
+                        result = append(result, "…") // indicate skipped content
+                        continue</span>
+                }
+                <span class="cov8" title="1">if skippingWorker </span><span class="cov8" title="1">{
+                        // Stop skipping on blank lines or markdown headings (end of worker prompt)
+                        if trimmed == "" || strings.HasPrefix(trimmed, "**") </span><span class="cov8" title="1">{
+                                skippingWorker = false
+                                if trimmed != "" </span><span class="cov0" title="0">{
+                                        result = append(result, line)
+                                }</span>
+                        }
+                        <span class="cov8" title="1">continue</span>
+                }
+
+                <span class="cov8" title="1">result = append(result, line)</span>
+        }
+
+        // Compact blank lines: max 2 consecutive
+        <span class="cov8" title="1">compacted := make([]string, 0, len(result))
+        blankCount := 0
+        for _, line := range result </span><span class="cov8" title="1">{
+                if strings.TrimSpace(line) == "" </span><span class="cov8" title="1">{
+                        blankCount++
+                        if blankCount &lt;= 2 </span><span class="cov8" title="1">{
+                                compacted = append(compacted, line)
+                        }</span>
+                } else<span class="cov8" title="1"> {
+                        blankCount = 0
+                        compacted = append(compacted, line)
+                }</span>
+        }
+
+        <span class="cov8" title="1">cleaned := strings.TrimSpace(strings.Join(compacted, "\n"))
+
+        // If the result is suspiciously short, return the raw (don't over-trim)
+        if len(cleaned) &lt; 50 &amp;&amp; len(raw) &gt; 200 </span><span class="cov8" title="1">{
+                return raw
+        }</span>
+
+        <span class="cov8" title="1">return cleaned</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package scheduler
+
+import (
+        "context"
+        "database/sql"
+        "encoding/json"
+        "log"
+        "time"
+)
+
+// EventSeverity follows the alert escalation matrix from OBS-006.
+type EventSeverity string
+
+const (
+        SeverityCritical EventSeverity = "CRITICAL" // scheduler down, data loss
+        SeverityHigh     EventSeverity = "HIGH"     // &gt;3 projects failing
+        SeverityMedium   EventSeverity = "MEDIUM"   // project starved
+        SeverityLow      EventSeverity = "LOW"      // single failure
+        SeverityInfo     EventSeverity = "INFO"     // normal operation
+)
+
+// EventLogger writes structured events to the events table.
+type EventLogger struct {
+        db *sql.DB
+}
+
+// NewEventLogger creates a logger backed by db.
+func NewEventLogger(db *sql.DB) *EventLogger <span class="cov8" title="1">{
+        return &amp;EventLogger{db: db}
+}</span>
+
+// Emit writes an event row to the events table. Non-blocking — errors are
+// logged but not returned, so event logging never breaks the hot path.
+func (el *EventLogger) Emit(ctx context.Context, severity EventSeverity, component, message string, details map[string]any) <span class="cov8" title="1">{
+        detailsJSON := "{}"
+        if details != nil </span><span class="cov8" title="1">{
+                b, err := json.Marshal(details)
+                if err == nil </span><span class="cov8" title="1">{
+                        detailsJSON = string(b)
+                }</span>
+        }
+
+        <span class="cov8" title="1">now := time.Now().UTC().Format(time.RFC3339)
+        _, err := el.db.ExecContext(ctx, `
+                INSERT INTO events (severity, component, message, details, created_at)
+                VALUES (?, ?, ?, ?, ?)
+        `, string(severity), component, message, detailsJSON, now)
+
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("EVENT: failed to write event [%s] %s: %v", severity, message, err)
+        }</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package scheduler
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "net/http"
+        "time"
+)
+
+// GatewayClient calls the Hermes gateway API instead of spawning processes.
+type GatewayClient struct {
+        baseURL    string
+        apiKey     string
+        httpClient *http.Client
+        timeout    time.Duration
+}
+
+// NewGatewayClient creates a client targeting the Hermes gateway API.
+func NewGatewayClient(baseURL, apiKey string, timeout time.Duration) *GatewayClient <span class="cov8" title="1">{
+        return &amp;GatewayClient{
+                baseURL: baseURL,
+                apiKey:  apiKey,
+                httpClient: &amp;http.Client{
+                        Timeout: timeout,
+                },
+                timeout: timeout,
+        }
+}</span>
+
+// ResponseRequest mirrors the Hermes /v1/responses request body.
+type ResponseRequest struct {
+        Input string `json:"input"`
+        Model string `json:"model,omitempty"`
+}
+
+// Response mirrors the Hermes /v1/responses response body.
+type Response struct {
+        ID     string         `json:"id"`
+        Status string         `json:"status"`
+        Model  string         `json:"model"`
+        Output []OutputItem   `json:"output"`
+        Usage  Usage          `json:"usage"`
+        Error  *ResponseError `json:"error,omitempty"`
+}
+
+// OutputItem is a message or tool call in the response output.
+type OutputItem struct {
+        Type    string         `json:"type"`
+        Role    string         `json:"role,omitempty"`
+        Content []ContentBlock `json:"content,omitempty"`
+}
+
+// ContentBlock is a block of content (text, tool_use, etc.)
+type ContentBlock struct {
+        Type string `json:"type"`
+        Text string `json:"text,omitempty"`
+}
+
+// Usage holds token usage info.
+type Usage struct {
+        InputTokens  int `json:"input_tokens"`
+        OutputTokens int `json:"output_tokens"`
+        TotalTokens  int `json:"total_tokens"`
+}
+
+// ResponseError is an error from the API.
+type ResponseError struct {
+        Message string `json:"message"`
+        Type    string `json:"type"`
+}
+
+// ExtractText returns the first output_text block content, or empty string.
+func (r *Response) ExtractText() string <span class="cov8" title="1">{
+        for _, item := range r.Output </span><span class="cov8" title="1">{
+                if item.Type == "message" </span><span class="cov8" title="1">{
+                        for _, block := range item.Content </span><span class="cov8" title="1">{
+                                if block.Type == "output_text" </span><span class="cov8" title="1">{
+                                        return block.Text
+                                }</span>
+                        }
+                }
+        }
+        <span class="cov8" title="1">return ""</span>
+}
+
+// Ping checks whether the gateway API is reachable and authenticated.
+func (g *GatewayClient) Ping(ctx context.Context) error <span class="cov8" title="1">{
+        req, err := http.NewRequestWithContext(ctx, "GET", g.baseURL+"/health", nil)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">g.setAuth(req)
+        resp, err := g.httpClient.Do(req)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">defer func() </span><span class="cov8" title="1">{ _ = resp.Body.Close() }</span>()
+        <span class="cov8" title="1">if resp.StatusCode != 200 </span><span class="cov8" title="1">{
+                return fmt.Errorf("gateway health: HTTP %d", resp.StatusCode)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// SendResponse sends a prompt to the gateway and returns the text result.
+// This replaces exec.Command("hermes", "chat", "-q", prompt, ...)
+func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) (*Response, error) <span class="cov8" title="1">{
+        reqBody := ResponseRequest{
+                Input: prompt,
+                Model: model,
+        }
+        bodyBytes, err := json.Marshal(reqBody)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("marshal request: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">req, err := http.NewRequestWithContext(ctx, "POST", g.baseURL+"/v1/responses",
+                bytes.NewReader(bodyBytes))
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("create request: %w", err)
+        }</span>
+        <span class="cov8" title="1">req.Header.Set("Content-Type", "application/json")
+        g.setAuth(req)
+
+        resp, err := g.httpClient.Do(req)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("gateway POST: %w", err)
+        }</span>
+        <span class="cov8" title="1">defer func() </span><span class="cov8" title="1">{ _ = resp.Body.Close() }</span>()
+
+        <span class="cov8" title="1">body, err := io.ReadAll(resp.Body)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("read response: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">var result Response
+        if err := json.Unmarshal(body, &amp;result); err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("unmarshal response: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">if result.Error != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("gateway error: %s — %s", result.Error.Type, result.Error.Message)
+        }</span>
+
+        <span class="cov8" title="1">return &amp;result, nil</span>
+}
+
+func (g *GatewayClient) setAuth(req *http.Request) <span class="cov8" title="1">{
+        if g.apiKey != "" </span><span class="cov8" title="1">{
+                req.Header.Set("Authorization", "Bearer "+g.apiKey)
+        }</span>
+}
+
+// ResetHttpClient replaces the internal http.Client with a fresh one,
+// avoiding stale connection pools after a gateway restart.
+func (g *GatewayClient) ResetHttpClient() <span class="cov8" title="1">{
+        g.httpClient = &amp;http.Client{Timeout: g.timeout}
+}</span>
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package scheduler
+
+import (
+        "database/sql"
+        "fmt"
+        "log"
+        "strings"
+        "time"
+)
+
+// TickStatus is the lifecycle state.
+type TickStatus string
+
+const (
+        TickQueued    TickStatus = "queued"
+        TickRunning   TickStatus = "running"
+        TickCompleted TickStatus = "completed"
+        TickFailed    TickStatus = "failed"
+        TickTimeout   TickStatus = "timeout"
+)
+
+// Outcome converts the tick status to the outcome column value.
+func (s TickStatus) Outcome() string <span class="cov8" title="1">{
+        switch s </span>{
+        case TickCompleted:<span class="cov8" title="1">
+                return "committed"</span>
+        case TickFailed:<span class="cov8" title="1">
+                return "failed"</span>
+        case TickTimeout:<span class="cov8" title="1">
+                return "timeout"</span>
+        default:<span class="cov0" title="0">
+                return "dry_run"</span>
+        }
+}
+
+// TickOutcome holds the result of a completed tick.
+type TickOutcome struct {
+        TickID       string
+        Project      string
+        SessionID    string
+        Started      time.Time
+        Finished     time.Time
+        Duration     time.Duration
+        Status       TickStatus
+        ExitCode     int
+        Error        string
+        TokensIn     int     // simulated or real
+        TokensOut    int     // simulated or real
+        CostUSD      float64 // simulated or real
+        Commits      int     // simulated or real
+        FilesChanged int     // simulated or real
+}
+
+// LifecycleTracker manages the tick state machine and outcome persistence.
+type LifecycleTracker struct {
+        db *sql.DB
+}
+
+// NewLifecycleTracker creates a lifecycle tracker.
+func NewLifecycleTracker(db *sql.DB) *LifecycleTracker <span class="cov8" title="1">{
+        return &amp;LifecycleTracker{db: db}
+}</span>
+
+// Enqueue creates a queued tick entry for the project.
+func (lt *LifecycleTracker) Enqueue(project, tickID string) error <span class="cov8" title="1">{
+        _, err := lt.db.Exec(`
+                INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+                VALUES (?, ?, ?, ?, ?)
+        `, tickID, project, TickQueued, time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+        if err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("enqueue tick %s: %w", tickID, err)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// StartRunning transitions a tick from queued to running.
+func (lt *LifecycleTracker) StartRunning(tickID string) error <span class="cov8" title="1">{
+        _, err := lt.db.Exec(`
+                UPDATE ticks SET status = ? WHERE id = ?
+        `, TickRunning, tickID)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("start tick %s: %w", tickID, err)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// Complete writes the final outcome of a tick to the database.
+func (lt *LifecycleTracker) Complete(outcome TickOutcome) error <span class="cov8" title="1">{
+        var exitCode interface{}
+        if outcome.ExitCode &gt;= 0 </span><span class="cov8" title="1">{
+                exitCode = outcome.ExitCode
+        }</span>
+        <span class="cov8" title="1">_, err := lt.db.Exec(`
+                UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
+                        tokens_in = ?, tokens_out = ?, cost_usd = ?
+                WHERE id = ?
+        `, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
+                stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
+                outcome.TokensIn, outcome.TokensOut, outcome.CostUSD,
+                outcome.TickID)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
+        }</span>
+
+        // If completed successfully, update project's last_tick_completed.
+        <span class="cov8" title="1">if outcome.Status == TickCompleted </span><span class="cov8" title="1">{
+                _, err = lt.db.Exec(`
+                        UPDATE projects SET last_tick_completed = ? WHERE name = ?
+                `, outcome.Finished.Format(time.RFC3339), outcome.Project)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("WARN: failed to update last_tick_completed for %s: %v", outcome.Project, err)
+                }</span>
+        }
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+// ExportSession runs `hermes sessions export` for the given session and parses stats.
+func (lt *LifecycleTracker) ExportSession(sessionID string) (SessionStats, error) <span class="cov8" title="1">{
+        // Placeholder: actual session export requires CLI parsing.
+        return SessionStats{SessionID: sessionID}, nil
+}</span>
+
+// SessionStats holds parsed session outcome data.
+type SessionStats struct {
+        SessionID    string
+        Commits      int
+        FilesChanged int
+        TokensIn     int
+        TokensOut    int
+        CostUSD      float64
+        Outcome      string // committed, dry_run, failed
+}
+
+// CleanupStale clears running ticks older than the given duration.
+func (lt *LifecycleTracker) CleanupStale(maxAge time.Duration) (int, error) <span class="cov8" title="1">{
+        cutoff := time.Now().Add(-maxAge)
+        res, err := lt.db.Exec(`
+                UPDATE ticks SET status = ?, completed_at = ?, error = ?
+                WHERE status = ? AND spawned_at &lt; ?
+        `, TickTimeout, time.Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
+        if err != nil </span><span class="cov8" title="1">{
+                return 0, err
+        }</span>
+        <span class="cov8" title="1">n, _ := res.RowsAffected()
+        if n &gt; 0 </span><span class="cov8" title="1">{
+                log.Printf("CLEANUP: %d stale running ticks timed out", n)
+        }</span>
+        <span class="cov8" title="1">return int(n), nil</span>
+}
+
+func stringOrNil(s string) interface{} <span class="cov8" title="1">{
+        s = strings.TrimSpace(s)
+        if s == "" </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">return s</span>
+}
+
+// RunningCount returns the number of currently running ticks.
+func (lt *LifecycleTracker) RunningCount() int <span class="cov8" title="1">{
+        var n int
+        lt.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&amp;n)
+        return n
+}</span>
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package scheduler
+
+import (
+        "context"
+        "database/sql"
+        "fmt"
+        "log"
+        "runtime"
+        "sync"
+        "time"
+)
+
+// Loop runs the main evaluation cycle.
+type Loop struct {
+        calculator      *UrgencyCalculator
+        packer          *Packer
+        multiPoolPacker *MultiPoolPacker
+        spawner         *Spawner
+        slotPool        *SlotPool // concurrent spawn semaphore (BUG-007)
+        simSpawner      *SimSpawner
+        lifecycle       *LifecycleTracker
+        events          *EventLogger
+        db              *sql.DB
+        interval        time.Duration
+        weightBudget    int
+        maxConcur       int
+        namespaceMode   bool
+        gatewayClient   *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
+        gatewayDead     bool           // true when last ping failed
+
+        mu         sync.RWMutex
+        running    sync.WaitGroup
+        stopCh     chan struct{}
+        pauseCh    chan bool
+        evalCh     chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
+        lastEval   time.Time
+        simulate   bool
+        simSuccess float64
+        noDeliver  bool // suppress Telegram delivery (verify mode, tests)
+}
+
+// SetNoDeliver suppresses Telegram delivery of tick output.
+func (l *Loop) SetNoDeliver(v bool) <span class="cov8" title="1">{ l.noDeliver = v }</span>
+
+// NewLoop creates the evaluation loop. namespaceMode is optional for backward
+// compatibility with existing callers; omitted values default to false.
+func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int, namespaceMode ...bool) *Loop <span class="cov8" title="1">{
+        calc := NewUrgencyCalculator(minI, maxI, numLevels)
+        nsMode := false
+        if len(namespaceMode) &gt; 0 </span><span class="cov0" title="0">{
+                nsMode = namespaceMode[0]
+        }</span>
+        <span class="cov8" title="1">return &amp;Loop{
+                calculator:      calc,
+                packer:          NewPacker(db, calc, budget, maxConcur),
+                multiPoolPacker: NewMultiPoolPacker(budget, maxConcur),
+                spawner:         NewSpawner(db, maxConcur),
+                simSpawner:      NewSimSpawner(db, 0.85),
+                lifecycle:       NewLifecycleTracker(db),
+                events:          NewEventLogger(db),
+                db:              db,
+                interval:        30 * time.Second,
+                weightBudget:    budget,
+                maxConcur:       maxConcur,
+                namespaceMode:   nsMode,
+                pauseCh:         make(chan bool, 1),
+                evalCh:          make(chan struct{}, 1),
+                stopCh:          make(chan struct{}),
+        }</span>
+}
+
+// SetNamespaceMode enables or disables multi-namespace scheduling.
+func (l *Loop) SetNamespaceMode(on bool) <span class="cov8" title="1">{
+        l.mu.Lock()
+        defer l.mu.Unlock()
+        l.namespaceMode = on
+}</span>
+
+// SetGatewayClient wires the HTTP gateway client into the spawner (FEAT-003).
+func (l *Loop) SetGatewayClient(client *GatewayClient) <span class="cov8" title="1">{
+        l.spawner.SetGatewayClient(client)
+}</span>
+
+// SetForemanHome overrides the default HERMES_HOME for foreman sessions.
+func (l *Loop) SetForemanHome(path string) <span class="cov8" title="1">{
+        l.spawner.SetForemanHome(path)
+}</span>
+
+// SetNoExecFallback disables exec.Command fallback on gateway failure.
+func (l *Loop) SetNoExecFallback(v bool) <span class="cov8" title="1">{
+        l.spawner.SetNoExecFallback(v)
+}</span>
+
+// SetSimulation enables simulation/dry-run mode.
+func (l *Loop) SetSimulation(successRate float64) <span class="cov8" title="1">{
+        l.mu.Lock()
+        defer l.mu.Unlock()
+        l.simulate = true
+        l.simSuccess = successRate
+        if l.simSpawner != nil </span><span class="cov8" title="1">{
+                l.simSpawner.success = successRate
+        }</span>
+}
+
+// SetTickTimeout updates the real spawner's per-tick timeout and initializes
+// the concurrent slot pool if needed (BUG-007).
+func (l *Loop) SetTickTimeout(timeout time.Duration) <span class="cov8" title="1">{
+        l.mu.Lock()
+        defer l.mu.Unlock()
+        if l.spawner != nil </span><span class="cov8" title="1">{
+                l.spawner.timeout = timeout
+        }</span>
+        <span class="cov8" title="1">if l.slotPool == nil </span><span class="cov8" title="1">{
+                l.slotPool = NewSlotPool(l.maxConcur, timeout, l.spawner, l.lifecycle)
+        }</span>
+}
+
+// RunBulkSim generates N simulated ticks and exits.
+func (l *Loop) RunBulkSim(ctx context.Context, count int) error <span class="cov0" title="0">{
+        l.simulate = true
+        l.simSpawner.success = l.simSuccess
+
+        projects, err := l.packer.ListEnabled(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("list projects: %w", err)
+        }</span>
+        <span class="cov0" title="0">if len(projects) == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("no enabled projects for simulation")
+        }</span>
+
+        <span class="cov0" title="0">tick := time.NewTicker(500 * time.Millisecond)
+        defer tick.Stop()
+
+        generated := 0
+        for generated &lt; count </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return ctx.Err()</span>
+                case now := &lt;-tick.C:<span class="cov0" title="0">
+                        n := min(8, len(projects), count-generated)
+                        for i := 0; i &lt; n; i++ </span><span class="cov0" title="0">{
+                                proj := projects[(generated+i)%len(projects)]
+                                tickID := fmt.Sprintf("sim-%s-%s", proj.Name, now.Format("150405"))
+                                if _, err := l.simSpawner.Spawn(proj, tickID); err != nil </span><span class="cov0" title="0">{
+                                        return fmt.Errorf("spawn: %w", err)
+                                }</span>
+                        }
+                        <span class="cov0" title="0">generated += n
+                        log.Printf("SIM: %d/%d ticks generated", generated, count)</span>
+                }
+        }
+        <span class="cov0" title="0">log.Printf("SIM: all %d ticks generated — waiting for simulated completion", count)
+        time.Sleep(1 * time.Second)
+        return nil</span>
+}
+
+// Run starts the main event-driven evaluation loop. Blocks until Stop() is called.
+//
+// Architecture (event-driven, not timer-driven):
+//   - SlotPool.SlotFreed() signals when a tick completes and frees a slot.
+//   - Each signal resets a 5s coalescing debounce timer.
+//   - When the debounce expires, l.evaluate() fires to fill freed slots.
+//   - A 30s health ticker logs goroutine counts and running tick stats.
+//   - Initial evaluation fires immediately on startup.
+//   - 60s zombie reaper still runs in the background.
+func (l *Loop) Run() <span class="cov8" title="1">{
+        mode := "real"
+        if l.simulate </span><span class="cov0" title="0">{
+                mode = fmt.Sprintf("simulated (success=%.0f%%)", l.simSuccess*100)
+        }</span>
+        <span class="cov8" title="1">log.Printf("LOOP: starting %s eval loop (event-driven, budget=%d, max_concurrent=%d, debounce=5s) goroutines=%d",
+                mode, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
+
+        l.cleanDanglingOnStartup()
+
+        reaper := time.NewTicker(60 * time.Second)
+        defer reaper.Stop()
+
+        healthTicker := time.NewTicker(30 * time.Second)
+        defer healthTicker.Stop()
+
+        // Initialize slot pool if lazy-init hasn't happened yet (test_verify, tests).
+        if l.slotPool == nil </span><span class="cov8" title="1">{
+                l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+        }</span>
+
+        // SlotFreed() spawns one internal polling goroutine. Capture the channel
+        // once so the select loop isn't creating new goroutines on every iteration.
+        <span class="cov8" title="1">slotFreedCh := l.slotPool.SlotFreed()
+
+        // Coalescing debounce: each slot-freed event resets a 5s timer.
+        // Only after 5s of quiet does evaluation fire — this batches rapid
+        // completions and prevents the feedback-loop flood (BUG-008).
+        var (
+                debounceTimer *time.Timer
+                debounceMu    sync.Mutex
+        )
+
+        // Fire initial evaluation so the fleet starts immediately instead of
+        // waiting for the first tick to complete.
+        select </span>{
+        case l.evalCh &lt;- struct{}{}:<span class="cov8" title="1"></span>
+        default:<span class="cov0" title="0"></span>
+        }
+
+        <span class="cov8" title="1">for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-l.stopCh:<span class="cov8" title="1">
+                        debounceMu.Lock()
+                        if debounceTimer != nil </span><span class="cov0" title="0">{
+                                debounceTimer.Stop()
+                        }</span>
+                        <span class="cov8" title="1">debounceMu.Unlock()
+                        log.Println("LOOP: stopping")
+                        return</span>
+                case &lt;-l.pauseCh:<span class="cov8" title="1">
+                        log.Println("LOOP: paused")
+                        select </span>{
+                        case &lt;-l.stopCh:<span class="cov0" title="0">
+                                return</span>
+                        case resume := &lt;-l.pauseCh:<span class="cov8" title="1">
+                                if resume </span><span class="cov8" title="1">{
+                                        log.Println("LOOP: resumed")
+                                }</span>
+                        }
+                case &lt;-reaper.C:<span class="cov0" title="0">
+                        l.reapZombies()</span>
+                case &lt;-healthTicker.C:<span class="cov0" title="0">
+                        running := 0
+                        if l.slotPool != nil </span><span class="cov0" title="0">{
+                                running = l.slotPool.Running()
+                        }</span>
+                        <span class="cov0" title="0">log.Printf("LOOP: health (goroutines=%d, slots=%d/%d, last_eval=%v)",
+                                runtime.NumGoroutine(), running, l.maxConcur, l.lastEval.Format("15:04:05"))</span>
+                case &lt;-slotFreedCh:<span class="cov0" title="0">
+                        debounceMu.Lock()
+                        if debounceTimer != nil </span><span class="cov0" title="0">{
+                                debounceTimer.Stop()
+                        }</span>
+                        <span class="cov0" title="0">debounceTimer = time.AfterFunc(5*time.Second, func() </span><span class="cov0" title="0">{
+                                select </span>{
+                                case l.evalCh &lt;- struct{}{}:<span class="cov0" title="0"></span>
+                                default:<span class="cov0" title="0"></span>
+                                }
+                        })
+                        <span class="cov0" title="0">debounceMu.Unlock()</span>
+                case &lt;-l.evalCh:<span class="cov8" title="1">
+                        l.evaluate()</span>
+                }
+        }
+}
+
+// Stop stops the evaluation loop and waits for in-flight ticks.
+func (l *Loop) Stop() <span class="cov8" title="1">{
+        close(l.stopCh)
+        done := make(chan struct{})
+        go func() </span><span class="cov8" title="1">{
+                l.running.Wait()
+                close(done)
+        }</span>()
+        <span class="cov8" title="1">select </span>{
+        case &lt;-done:<span class="cov8" title="1">
+                log.Println("LOOP: all in-flight ticks completed")</span>
+        case &lt;-time.After(15 * time.Second):<span class="cov0" title="0">
+                log.Println("LOOP: timed out waiting for in-flight ticks — forcing shutdown")</span>
+        }
+}
+
+// ForceEvaluate triggers an immediate evaluation.
+func (l *Loop) ForceEvaluate() <span class="cov8" title="1">{
+        go l.evaluate()
+}</span>
+
+func (l *Loop) Pause()  <span class="cov8" title="1">{ l.pauseCh &lt;- false }</span>
+func (l *Loop) Resume() <span class="cov8" title="1">{ l.pauseCh &lt;- true }</span>
+
+// LastEvalTime returns when the last evaluation ran.
+func (l *Loop) LastEvalTime() time.Time <span class="cov8" title="1">{
+        l.mu.RLock()
+        defer l.mu.RUnlock()
+        return l.lastEval
+}</span>
+
+// SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
+func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) <span class="cov8" title="1">{
+        return l.spawner.SpawnMethodCounts()
+}</span>
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package scheduler
+
+import (
+        "database/sql"
+        "math"
+        "sort"
+        "time"
+
+        "github.com/coding-herms/scheduler/internal/database"
+)
+
+// ProjectUrgency holds a project along with its computed urgency and effective
+// weight within a namespace. It is the unit of work passed between the
+// intra-namespace packer and the borrowing engine.
+type ProjectUrgency struct {
+        Project         database.Project
+        Urgency         float64
+        EffectiveWeight int
+}
+
+// NamespaceTickData holds per-namespace utilization for a single evaluation
+// cycle. It mirrors database.NamespaceTick but is a plain value type the
+// packer produces without touching the DB.
+type NamespaceTickData struct {
+        NamespaceID string
+        Allocated   int
+        Used        int // sum of effective weights of selected projects
+        Borrowed    int
+        Lent        int
+        JobCount    int
+}
+
+// PackResult holds the packing outcome.
+type PackResult struct {
+        Projects       []PackedProject     // selected projects across all namespaces
+        NamespaceTicks []NamespaceTickData // per-namespace stats for recording
+}
+
+// ---------------------------------------------------------------------------
+// MultiPoolPacker
+// ---------------------------------------------------------------------------
+
+// MultiPoolPacker implements the multi-namespace scheduling algorithm
+// (S07 §4.1 Phases 2–3). It takes a set of projects + namespaces, runs
+// per-namespace greedy packing, delegates idle-capacity redistribution to
+// BorrowingEngine, and returns the selected projects + per-namespace stats.
+//
+// When no namespaces exist (or namespace mode is disabled) it falls back to
+// the flat single-pool Packer.Pick method.
+type MultiPoolPacker struct {
+        allocator     *NamespaceAllocator
+        maxConcurrent int
+}
+
+// NewMultiPoolPacker creates a packer with the given global budget and
+// concurrency cap.
+func NewMultiPoolPacker(budget, maxConcurrent int) *MultiPoolPacker <span class="cov8" title="1">{
+        return &amp;MultiPoolPacker{
+                allocator:     NewNamespaceAllocator(budget),
+                maxConcurrent: maxConcurrent,
+        }
+}</span>
+
+// FlatFallback delegates to the existing Packer.Pick for flat single-pool mode.
+// The caller provides a configured *sql.DB; this is used when NamespaceMode=false
+// or no namespaces exist.
+func (m *MultiPoolPacker) FlatFallback(db *sql.DB, calc *UrgencyCalculator, budget int, now time.Time) ([]PackedProject, error) <span class="cov8" title="1">{
+        p := NewPacker(db, calc, budget, m.maxConcurrent)
+        return p.Pick(now, nil)
+}</span>
+
+// ---------------------------------------------------------------------------
+// BorrowingEngine
+// ---------------------------------------------------------------------------
+
+// BorrowingEngine redistributes idle namespace capacity from namespaces that
+// have unused budget and no queued jobs to namespaces that have queued jobs
+// (hit their allocation ceiling). One level only — no recursion.
+type BorrowingEngine struct{}
+
+// NewBorrowingEngine creates a borrowing engine.
+func NewBorrowingEngine() *BorrowingEngine <span class="cov8" title="1">{
+        return &amp;BorrowingEngine{}
+}</span>
+
+// Borrow redistributes idle namespace capacity.
+//
+// allocations:      namespace_id → current allocated budget (may be 0 for disabled)
+// nsDetails:        full namespace info for hard_cap lookups
+// queuedJobs:       namespace_id → list of projects still queued (didn't fit in Phase 2)
+// selectedBudget:   namespace_id → already-consumed budget from Phase 2
+//
+// Returns the updated allocations map (same map, mutated in place).
+func (b *BorrowingEngine) Borrow(
+        allocations map[string]int,
+        nsDetails []database.Namespace,
+        queuedJobs map[string][]*ProjectUrgency,
+        selectedBudget map[string]int,
+) map[string]int <span class="cov8" title="1">{
+
+        // Build a quick lookup for namespace details (hard_cap, weight).
+        nsMap := make(map[string]database.Namespace, len(nsDetails))
+        for _, ns := range nsDetails </span><span class="cov8" title="1">{
+                nsMap[ns.ID] = ns
+        }</span>
+
+        // Step 1: collect lenders (unused &gt; 0 AND no queued jobs).
+        <span class="cov8" title="1">lentPool := 0
+        lenderContrib := make(map[string]int)
+        for nsID, alloc := range allocations </span><span class="cov8" title="1">{
+                used := selectedBudget[nsID]
+                unused := alloc - used
+                if unused &gt; 0 &amp;&amp; len(queuedJobs[nsID]) == 0 </span><span class="cov8" title="1">{
+                        lenderContrib[nsID] = unused
+                        lentPool += unused
+                }</span>
+        }
+
+        <span class="cov8" title="1">if lentPool == 0 </span><span class="cov8" title="1">{
+                return allocations
+        }</span>
+
+        // Step 2: build borrower list (has queued jobs).
+        <span class="cov8" title="1">type borrower struct {
+                nsID   string
+                weight int
+        }
+        var borrowers []borrower
+        for nsID, jobs := range queuedJobs </span><span class="cov8" title="1">{
+                if len(jobs) &gt; 0 </span><span class="cov8" title="1">{
+                        w := 1
+                        if ns, ok := nsMap[nsID]; ok </span><span class="cov8" title="1">{
+                                w = ns.Weight
+                        }</span>
+                        <span class="cov8" title="1">borrowers = append(borrowers, borrower{nsID: nsID, weight: w})</span>
+                }
+        }
+
+        <span class="cov8" title="1">if len(borrowers) == 0 </span><span class="cov8" title="1">{
+                return allocations
+        }</span>
+
+        // Sort borrowers by namespace weight descending.
+        <span class="cov8" title="1">sort.Slice(borrowers, func(i, j int) bool </span><span class="cov0" title="0">{
+                return borrowers[i].weight &gt; borrowers[j].weight
+        }</span>)
+
+        // Step 3: distribute lent_pool to borrowers.
+        <span class="cov8" title="1">remainingPool := lentPool
+        for _, br := range borrowers </span><span class="cov8" title="1">{
+                if remainingPool &lt;= 0 </span><span class="cov0" title="0">{
+                        break</span>
+                }
+
+                <span class="cov8" title="1">ns, ok := nsMap[br.nsID]
+                if !ok </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">currentAlloc := allocations[br.nsID]
+
+                // max_borrow = min(hard_cap - current_allocation, remaining_pool)
+                hardCap := ns.HardCap
+                if hardCap == 0 </span><span class="cov0" title="0">{
+                        hardCap = currentAlloc // no cap → can't borrow beyond what exists
+                }</span>
+                <span class="cov8" title="1">headroom := hardCap - currentAlloc
+                if headroom &lt;= 0 </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">maxBorrow := headroom
+                if remainingPool &lt; maxBorrow </span><span class="cov8" title="1">{
+                        maxBorrow = remainingPool
+                }</span>
+
+                // Calculate need: sum of effective weights of queued jobs.
+                <span class="cov8" title="1">need := 0
+                for _, pu := range queuedJobs[br.nsID] </span><span class="cov8" title="1">{
+                        need += pu.EffectiveWeight
+                }</span>
+
+                <span class="cov8" title="1">borrowAmount := need
+                if borrowAmount &gt; maxBorrow </span><span class="cov8" title="1">{
+                        borrowAmount = maxBorrow
+                }</span>
+
+                <span class="cov8" title="1">if borrowAmount &lt;= 0 </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">allocations[br.nsID] = currentAlloc + borrowAmount
+                remainingPool -= borrowAmount</span>
+        }
+
+        // Step 4: reduce lender allocations by what they contributed.
+        // Only deduct what was actually consumed from the pool.
+        <span class="cov8" title="1">consumed := lentPool - remainingPool
+        for nsID, contrib := range lenderContrib </span><span class="cov8" title="1">{
+                if consumed &lt;= 0 </span><span class="cov0" title="0">{
+                        break</span>
+                }
+                <span class="cov8" title="1">deduct := contrib
+                if deduct &gt; consumed </span><span class="cov8" title="1">{
+                        deduct = consumed
+                }</span>
+                <span class="cov8" title="1">allocations[nsID] -= deduct
+                consumed -= deduct</span>
+        }
+
+        <span class="cov8" title="1">return allocations</span>
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// CalcEffectiveWeight computes the scaled weight of a project within its namespace.
+// Formula: floor(alloc × (projectWeight / totalWeightInNS)), floored at 1.
+// Exported for testing and external reuse.
+func CalcEffectiveWeight(projectWeight, totalWeightInNS, alloc int) int <span class="cov8" title="1">{
+        if totalWeightInNS &lt;= 0 </span><span class="cov0" title="0">{
+                return 1
+        }</span>
+        <span class="cov8" title="1">raw := math.Floor(float64(projectWeight) / float64(totalWeightInNS) * float64(alloc))
+        ew := int(raw)
+        if ew &lt; 1 </span><span class="cov8" title="1">{
+                ew = 1
+        }</span>
+        <span class="cov8" title="1">return ew</span>
+}
+
+// puInList checks whether a *ProjectUrgency pointer is already in a slice.
+func puInList(target *ProjectUrgency, list []*ProjectUrgency) bool <span class="cov8" title="1">{
+        for _, p := range list </span><span class="cov8" title="1">{
+                if p == target </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+        }
+        <span class="cov8" title="1">return false</span>
+}
+
+// sumSelectedWeights returns the sum of EffectiveWeight for already-selected
+// projects — used when recalculating total weight for re-packing.
+func sumSelectedWeights(selected []*ProjectUrgency) int <span class="cov0" title="0">{
+        total := 0
+        for _, pu := range selected </span><span class="cov0" title="0">{
+                total += pu.Project.Weight
+        }</span>
+        <span class="cov0" title="0">return total</span>
+}
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package scheduler
+
+import (
+        "log"
+        "math"
+
+        "github.com/coding-herms/scheduler/internal/database"
+)
+
+// NamespaceAllocator distributes the global budget across namespaces using a
+// two-phase algorithm (S07 §4.1 Phase 1): guaranteed reserved floors first,
+// then proportional distribution of the remainder by namespace weight, each
+// capped by hard_cap.
+type NamespaceAllocator struct {
+        budget int
+}
+
+// NewNamespaceAllocator creates an allocator with the given global budget.
+func NewNamespaceAllocator(budget int) *NamespaceAllocator <span class="cov8" title="1">{
+        return &amp;NamespaceAllocator{budget: budget}
+}</span>
+
+// SetBudget updates the global budget at runtime.
+func (a *NamespaceAllocator) SetBudget(b int) <span class="cov8" title="1">{
+        a.budget = b
+}</span>
+
+// Allocate runs the two-phase distribution: reserved floor + proportional
+// remainder. Returns a map of namespace_id → allocated budget.
+//
+// Disabled namespaces are excluded entirely. If the sum of reserved floors
+// exceeds the budget, all reserved values are proportionally scaled down. The
+// remainder is then distributed by weight. HardCap &gt; 0 caps the final
+// allocation; HardCap == 0 means no cap.
+func (a *NamespaceAllocator) Allocate(namespaces []database.Namespace) map[string]int <span class="cov8" title="1">{
+        result := make(map[string]int)
+
+        // --- Phase 0: filter to enabled namespaces ---
+        var enabled []database.Namespace
+        for _, ns := range namespaces </span><span class="cov8" title="1">{
+                if ns.Enabled </span><span class="cov8" title="1">{
+                        enabled = append(enabled, ns)
+                }</span>
+        }
+        <span class="cov8" title="1">if len(enabled) == 0 </span><span class="cov8" title="1">{
+                return result
+        }</span>
+
+        <span class="cov8" title="1">budget := a.budget
+
+        // --- Phase 1: reserved floors ---
+        // Sum reserved across all enabled namespaces.
+        rTotal := 0
+        for _, ns := range enabled </span><span class="cov8" title="1">{
+                rTotal += ns.Reserved
+        }</span>
+
+        // If R_total exceeds budget, proportionally scale each reserved value down.
+        <span class="cov8" title="1">reserved := make([]float64, len(enabled))
+        if rTotal &gt; budget </span><span class="cov8" title="1">{
+                log.Printf("WARN NamespaceAllocator: total reserved %d exceeds budget %d; scaling reserved proportionally",
+                        rTotal, budget)
+                scale := float64(budget) / float64(rTotal)
+                for i, ns := range enabled </span><span class="cov8" title="1">{
+                        reserved[i] = math.Floor(float64(ns.Reserved) * scale)
+                }</span>
+        } else<span class="cov8" title="1"> {
+                for i, ns := range enabled </span><span class="cov8" title="1">{
+                        reserved[i] = float64(ns.Reserved)
+                }</span>
+        }
+
+        // Effective reserved total after any scaling.
+        <span class="cov8" title="1">rEffective := 0.0
+        for _, r := range reserved </span><span class="cov8" title="1">{
+                rEffective += r
+        }</span>
+
+        // Remainder left for proportional distribution.
+        <span class="cov8" title="1">remainder := float64(budget) - rEffective
+        if remainder &lt; 0 </span><span class="cov0" title="0">{
+                remainder = 0
+        }</span>
+
+        // --- Phase 2: proportional distribution of remainder by weight ---
+        <span class="cov8" title="1">weights := make([]int, len(enabled))
+        sumWeights := 0
+        for i, ns := range enabled </span><span class="cov8" title="1">{
+                weights[i] = ns.Weight
+                sumWeights += ns.Weight
+        }</span>
+        <span class="cov8" title="1">if sumWeights == 0 </span><span class="cov8" title="1">{
+                log.Printf("WARN NamespaceAllocator: total weight is 0 across %d enabled namespaces; treating all as weight=1",
+                        len(enabled))
+                for i := range weights </span><span class="cov8" title="1">{
+                        weights[i] = 1
+                }</span>
+                <span class="cov8" title="1">sumWeights = len(enabled)</span>
+        }
+
+        <span class="cov8" title="1">for i, ns := range enabled </span><span class="cov8" title="1">{
+                proportional := math.Floor((float64(weights[i]) / float64(sumWeights)) * remainder)
+                allocation := int(reserved[i]) + int(proportional)
+
+                // Apply hard cap (0 means no cap).
+                if ns.HardCap &gt; 0 &amp;&amp; allocation &gt; ns.HardCap </span><span class="cov8" title="1">{
+                        allocation = ns.HardCap
+                }</span>
+
+                <span class="cov8" title="1">result[ns.ID] = allocation</span>
+        }
+
+        <span class="cov8" title="1">return result</span>
+}
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package scheduler
+
+import (
+        "database/sql"
+        "log"
+        "sort"
+        "time"
+)
+
+// PackedProject is a project selected to run in this tick.
+type PackedProject struct {
+        Name           string
+        Priority       float64
+        Weight         int
+        Urgency        float64
+        Workdir        string
+        RepoURL        string
+        Command        string // optional: custom spawn command (overrides default hermes chat)
+        Model          string // LLM model for this project (empty = use spawner default)
+        Provider       string // LLM provider for this project (empty = use spawner default)
+        WorkerModel    string // optional: suggested worker model (foreman can override)
+        WorkerProvider string // optional: suggested worker provider (foreman can override)
+        Deliver        string // delivery target (telegram:chat_id:thread_id)
+}
+
+// Packer selects which projects run given a weight budget and running set.
+type Packer struct {
+        db            *sql.DB
+        calculator    *UrgencyCalculator
+        budget        int
+        maxConcurrent int
+}
+
+// NewPacker creates a packer with the given budget and concurrency cap.
+func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int) *Packer <span class="cov8" title="1">{
+        return &amp;Packer{db: db, calculator: calc, budget: budget, maxConcurrent: maxConcurrent}
+}</span>
+
+// scored is a project with its computed urgency.
+type scored struct {
+        name           string
+        priority       float64
+        weight         int
+        urgency        float64
+        decayRate      float64
+        cooldownS      int
+        lastTickAt     *time.Time
+        createdAt      time.Time
+        workdir        string
+        repoURL        string
+        command        string
+        model          string
+        provider       string
+        workerModel    string
+        workerProvider string
+        deliver        string
+}
+
+// Pick returns the selected projects for this tick, sorted by urgency desc.
+func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedProject, error) <span class="cov8" title="1">{
+        rows, err := p.db.Query(`
+                SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
+                       last_tick_completed,
+                       created_at, workdir, repo_url, COALESCE(command, ''),
+                       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(deliver, '')
+                FROM projects
+                WHERE enabled = 1
+                ORDER BY name
+        `)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer rows.Close()
+
+        var list []scored
+
+        for rows.Next() </span><span class="cov8" title="1">{
+                var s scored
+                var lastCompleted *time.Time
+                var lastStr sql.NullString
+                var createdAtStr string
+                var enabled bool
+                if err := rows.Scan(&amp;s.name, &amp;s.weight, &amp;s.priority, &amp;s.decayRate, &amp;enabled, &amp;s.cooldownS,
+                        &amp;lastStr, &amp;createdAtStr, &amp;s.workdir, &amp;s.repoURL, &amp;s.command,
+                        &amp;s.model, &amp;s.provider, &amp;s.workerModel, &amp;s.workerProvider, &amp;s.deliver); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("ERROR scanning project row: %v", err)
+                        continue</span>
+                }
+                <span class="cov8" title="1">s.createdAt, _ = time.Parse(time.RFC3339, createdAtStr)
+                if lastStr.Valid &amp;&amp; lastStr.String != "" </span><span class="cov8" title="1">{
+                        t, err := time.Parse(time.RFC3339, lastStr.String)
+                        if err == nil </span><span class="cov8" title="1">{
+                                lastCompleted = &amp;t
+                        }</span>
+                }
+                <span class="cov8" title="1">s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
+                s.lastTickAt = lastCompleted
+                list = append(list, s)</span>
+        }
+
+        // Sort by urgency descending, priority descending, then last tick
+        // ascending (oldest first — projects that haven't run in longest get
+        // priority over projects with the same urgency/priority).
+        <span class="cov8" title="1">sort.SliceStable(list, func(i, j int) bool </span><span class="cov8" title="1">{
+                if list[i].urgency != list[j].urgency </span><span class="cov8" title="1">{
+                        return list[i].urgency &gt; list[j].urgency
+                }</span>
+                <span class="cov8" title="1">if list[i].priority != list[j].priority </span><span class="cov0" title="0">{
+                        return list[i].priority &gt; list[j].priority
+                }</span>
+                // Older last-tick = higher priority.
+                // nil lastTickAt means never completed — those come first.
+                <span class="cov8" title="1">if list[i].lastTickAt == nil &amp;&amp; list[j].lastTickAt != nil </span><span class="cov0" title="0">{
+                        return true
+                }</span>
+                <span class="cov8" title="1">if list[j].lastTickAt == nil &amp;&amp; list[i].lastTickAt != nil </span><span class="cov0" title="0">{
+                        return false
+                }</span>
+                <span class="cov8" title="1">if list[i].lastTickAt != nil &amp;&amp; list[j].lastTickAt != nil </span><span class="cov0" title="0">{
+                        return list[i].lastTickAt.Before(*list[j].lastTickAt)
+                }</span>
+                <span class="cov8" title="1">return list[i].name &lt; list[j].name</span>
+        })
+
+        // DEBUG: log top 15 sorted projects
+        <span class="cov8" title="1">for i := 0; i &lt; min(15, len(list)); i++ </span><span class="cov8" title="1">{
+                s := list[i]
+                lt := "nil"
+                if s.lastTickAt != nil </span><span class="cov8" title="1">{
+                        lt = s.lastTickAt.Format("15:04")
+                }</span>
+                <span class="cov8" title="1">log.Printf("PACKER-SORTED[%d]: %s urgency=%.1f pri=%.0f last=%s",
+                        i, s.name, s.urgency, s.priority, lt)</span>
+        }
+
+        // Greedy pack: pick projects that fit in budget.
+        // Use the in-memory running set as the SOLE source of truth.
+        // DB queries race against goroutines writing to SQLite — the
+        // memory-backed SlotPool semaphore is always correct.
+        <span class="cov8" title="1">currRunning := len(spawnerRunning)
+        used := 0
+        packed := make([]PackedProject, 0, max(1, len(list)/2))
+
+        totalChecked := 0
+        totalSkippedBudget := 0
+        totalSkippedCooldown := 0
+        totalSkippedRunning := 0
+
+        for _, s := range list </span><span class="cov8" title="1">{
+                totalChecked++
+                if spawnerRunning[s.name] </span><span class="cov0" title="0">{
+                        totalSkippedRunning++
+                        continue</span>
+                }
+                <span class="cov8" title="1">if used+s.weight &gt; p.budget </span><span class="cov8" title="1">{
+                        totalSkippedBudget++
+                        continue</span>
+                }
+                <span class="cov8" title="1">if currRunning &gt;= p.maxConcurrent </span><span class="cov8" title="1">{
+                        log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
+                        break</span>
+                }
+                <span class="cov8" title="1">cooldownDur := time.Duration(s.cooldownS) * time.Second
+                if s.cooldownS == 0 </span><span class="cov8" title="1">{
+                        // Dynamic: derive from priority via urgency calculator.
+                        cooldownDur = p.calculator.ComputeInterval(s.priority)
+                }</span>
+                <span class="cov8" title="1">if s.lastTickAt != nil &amp;&amp; now.Sub(*s.lastTickAt) &lt; cooldownDur </span><span class="cov8" title="1">{
+                        totalSkippedCooldown++
+                        continue</span>
+                }
+                <span class="cov8" title="1">packed = append(packed, PackedProject{
+                        Name:           s.name,
+                        Priority:       s.priority,
+                        Weight:         s.weight,
+                        Urgency:        s.urgency,
+                        Workdir:        s.workdir,
+                        RepoURL:        s.repoURL,
+                        Command:        s.command,
+                        Model:          s.model,
+                        Provider:       s.provider,
+                        WorkerModel:    s.workerModel,
+                        WorkerProvider: s.workerProvider,
+                        Deliver:        s.deliver,
+                })
+                used += s.weight
+                currRunning++</span>
+        }
+
+        <span class="cov8" title="1">if len(packed) == 0 </span><span class="cov8" title="1">{
+                log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d, total-running=%d/%d",
+                        totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, currRunning, p.maxConcurrent)
+        }</span>
+        <span class="cov8" title="1">return packed, nil</span>
+}
+
+// Budget returns the current weight budget.
+func (p *Packer) Budget() int <span class="cov8" title="1">{ return p.budget }</span>
+
+// ListEnabled returns all enabled projects as PackedProject for simulation.
+func (p *Packer) ListEnabled(ctx interface{}) ([]PackedProject, error) <span class="cov8" title="1">{
+        rows, err := p.db.Query(`
+                SELECT name, weight, priority, workdir, repo_url
+                FROM projects WHERE enabled = 1
+        `)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer rows.Close()
+
+        var out []PackedProject
+        for rows.Next() </span><span class="cov8" title="1">{
+                var pp PackedProject
+                if err := rows.Scan(&amp;pp.Name, &amp;pp.Weight, &amp;pp.Priority, &amp;pp.Workdir, &amp;pp.RepoURL); err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov8" title="1">out = append(out, pp)</span>
+        }
+        <span class="cov8" title="1">return out, rows.Err()</span>
+}
+</pre>
+		
+		<pre class="file" id="file9" style="display: none">package scheduler
+
+import (
+        "sort"
+        "time"
+
+        "github.com/coding-herms/scheduler/internal/database"
+)
+
+// Pack runs the full multi-pool algorithm and returns selected projects.
+// Falls back to flat single-pool packing when no namespaces exist (the caller
+// is expected to short-circuit on NamespaceMode=false, but we also handle it
+// here defensively).
+func (m *MultiPoolPacker) Pack(
+        projects []database.Project,
+        namespaces []database.Namespace,
+        urgencyCalc *UrgencyCalculator,
+        lastCompleted map[string]time.Time,
+        running []string,
+        now time.Time,
+) PackResult <span class="cov8" title="1">{
+
+        // --- Fallback: no namespaces → flat single-pool mode ---
+        if len(namespaces) == 0 </span><span class="cov8" title="1">{
+                return PackResult{Projects: []PackedProject{}, NamespaceTicks: nil}
+        }</span>
+
+        // Phase 1 — allocation (already implemented by NamespaceAllocator).
+        <span class="cov8" title="1">allocations := m.allocator.Allocate(namespaces)
+
+        runningSet := make(map[string]bool, len(running))
+        for _, name := range running </span><span class="cov8" title="1">{
+                runningSet[name] = true
+        }</span>
+
+        <span class="cov8" title="1">globalRunning := len(runningSet)
+        globalSelected := 0
+
+        type nsPackState struct {
+                ns         database.Namespace
+                alloc      int
+                selected   []*ProjectUrgency
+                queued     []*ProjectUrgency
+                usedBudget int
+        }
+        states := make(map[string]*nsPackState)
+
+        // --- Phase 2 — intra-namespace packing (per namespace) ---
+        for _, ns := range namespaces </span><span class="cov8" title="1">{
+                if !ns.Enabled </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">alloc, ok := allocations[ns.ID]
+                if !ok || alloc == 0 </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+
+                // Filter projects belonging to this namespace.
+                <span class="cov8" title="1">var nsProjects []database.Project
+                for i := range projects </span><span class="cov8" title="1">{
+                        p := &amp;projects[i]
+                        if !p.Enabled </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+                        <span class="cov8" title="1">if p.NamespaceID != nil &amp;&amp; *p.NamespaceID == ns.ID </span><span class="cov8" title="1">{
+                                nsProjects = append(nsProjects, *p)
+                        }</span>
+                }
+                <span class="cov8" title="1">if len(nsProjects) == 0 </span><span class="cov8" title="1">{
+                        states[ns.ID] = &amp;nsPackState{ns: ns, alloc: alloc}
+                        continue</span>
+                }
+
+                // Sum of all project weights in this namespace.
+                <span class="cov8" title="1">totalWeightInNS := 0
+                for _, p := range nsProjects </span><span class="cov8" title="1">{
+                        totalWeightInNS += p.Weight
+                }</span>
+                <span class="cov8" title="1">if totalWeightInNS == 0 </span><span class="cov0" title="0">{
+                        totalWeightInNS = 1 // avoid div-by-zero
+                }</span>
+
+                // Compute urgency + effective weight for each project.
+                <span class="cov8" title="1">scored := make([]ProjectUrgency, 0, len(nsProjects))
+                for _, p := range nsProjects </span><span class="cov8" title="1">{
+                        var lastTick *time.Time
+                        if lt, ok := lastCompleted[p.Name]; ok </span><span class="cov8" title="1">{
+                                lastTick = &amp;lt
+                        }</span>
+                        <span class="cov8" title="1">createdAt, _ := time.Parse(time.RFC3339, p.CreatedAt)
+                        urgency := urgencyCalc.ComputeUrgency(
+                                float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
+                        )
+
+                        effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
+                        scored = append(scored, ProjectUrgency{
+                                Project:         p,
+                                Urgency:         urgency,
+                                EffectiveWeight: effW,
+                        })</span>
+                }
+
+                // Sort by urgency descending, then priority, then last-tick ASC.
+                <span class="cov8" title="1">sort.SliceStable(scored, func(i, j int) bool </span><span class="cov8" title="1">{
+                        if scored[i].Urgency != scored[j].Urgency </span><span class="cov0" title="0">{
+                                return scored[i].Urgency &gt; scored[j].Urgency
+                        }</span>
+                        <span class="cov8" title="1">if scored[i].Project.Priority != scored[j].Project.Priority </span><span class="cov0" title="0">{
+                                return scored[i].Project.Priority &gt; scored[j].Project.Priority
+                        }</span>
+                        // Older last-tick = higher priority.
+                        <span class="cov8" title="1">li, iOk := lastCompleted[scored[i].Project.Name]
+                        lj, jOk := lastCompleted[scored[j].Project.Name]
+                        if !iOk &amp;&amp; jOk </span><span class="cov0" title="0">{
+                                return true
+                        }</span>
+                        <span class="cov8" title="1">if iOk &amp;&amp; !jOk </span><span class="cov0" title="0">{
+                                return false
+                        }</span>
+                        <span class="cov8" title="1">if iOk &amp;&amp; jOk </span><span class="cov0" title="0">{
+                                return li.Before(lj)
+                        }</span>
+                        <span class="cov8" title="1">return scored[i].Project.Name &lt; scored[j].Project.Name</span>
+                })
+
+                // Greedy pack into namespace allocation.
+                <span class="cov8" title="1">st := &amp;nsPackState{ns: ns, alloc: alloc}
+                budgetRemaining := alloc
+                for i := range scored </span><span class="cov8" title="1">{
+                        pu := &amp;scored[i]
+
+                        // Cooldown check.
+                        if lt, ok := lastCompleted[pu.Project.Name]; ok </span><span class="cov8" title="1">{
+                                cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+                                if now.Sub(lt) &lt; cooldownDur </span><span class="cov8" title="1">{
+                                        continue</span>
+                                }
+                        }
+
+                        // Concurrency cap check (global across all namespaces).
+                        <span class="cov8" title="1">if globalRunning+globalSelected &gt;= m.maxConcurrent </span><span class="cov8" title="1">{
+                                break</span>
+                        }
+
+                        // Budget check.
+                        <span class="cov8" title="1">if pu.EffectiveWeight &gt; budgetRemaining </span><span class="cov0" title="0">{
+                                st.queued = append(st.queued, pu)
+                                continue</span>
+                        }
+
+                        <span class="cov8" title="1">st.selected = append(st.selected, pu)
+                        budgetRemaining -= pu.EffectiveWeight
+                        globalSelected++</span>
+                }
+                // Any remaining items (after budget/concurrency break) go to queued.
+                <span class="cov8" title="1">for i := range scored </span><span class="cov8" title="1">{
+                        pu := &amp;scored[i]
+                        if !puInList(pu, st.selected) &amp;&amp; !puInList(pu, st.queued) </span><span class="cov8" title="1">{
+                                // Check if it was skipped by cooldown — those are NOT queued.
+                                if lt, ok := lastCompleted[pu.Project.Name]; ok </span><span class="cov8" title="1">{
+                                        cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+                                        if now.Sub(lt) &lt; cooldownDur </span><span class="cov8" title="1">{
+                                                continue</span> // cooldown-skip, not queued
+                                        }
+                                }
+                                <span class="cov8" title="1">st.queued = append(st.queued, pu)</span>
+                        }
+                }
+
+                <span class="cov8" title="1">st.usedBudget = alloc - budgetRemaining
+                states[ns.ID] = st</span>
+        }
+
+        // --- Phase 3 — borrowing ---
+        <span class="cov8" title="1">selectedBudget := make(map[string]int, len(states))
+        queuedJobs := make(map[string][]*ProjectUrgency, len(states))
+        for id, st := range states </span><span class="cov8" title="1">{
+                selectedBudget[id] = st.usedBudget
+                queuedJobs[id] = st.queued
+        }</span>
+
+        <span class="cov8" title="1">borrower := NewBorrowingEngine()
+        newAllocations := borrower.Borrow(allocations, namespaces, queuedJobs, selectedBudget)
+
+        // Re-pack borrowers that received extra budget.
+        lentMap := make(map[string]int)   // how much each ns lent
+        borrowMap := make(map[string]int) // how much each ns borrowed
+        for id, oldAlloc := range allocations </span><span class="cov8" title="1">{
+                newAlloc := newAllocations[id]
+                if newAlloc &gt; oldAlloc </span><span class="cov0" title="0">{
+                        borrowMap[id] = newAlloc - oldAlloc
+                }</span> else<span class="cov8" title="1"> if newAlloc &lt; oldAlloc </span><span class="cov0" title="0">{
+                        lentMap[id] = oldAlloc - newAlloc
+                }</span>
+        }
+
+        <span class="cov8" title="1">for id, st := range states </span><span class="cov8" title="1">{
+                extra := borrowMap[id]
+                if extra &lt;= 0 </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov0" title="0">newAlloc := newAllocations[id]
+                budgetRemaining := newAlloc - st.usedBudget
+                if budgetRemaining &lt; 0 </span><span class="cov0" title="0">{
+                        budgetRemaining = 0
+                }</span>
+
+                // Re-pack queued jobs with the new allocation.
+                <span class="cov0" title="0">var stillQueued []*ProjectUrgency
+                totalWeightInNS := 0
+                for _, pu := range st.queued </span><span class="cov0" title="0">{
+                        totalWeightInNS += pu.Project.Weight
+                }</span>
+                <span class="cov0" title="0">if totalWeightInNS == 0 &amp;&amp; len(st.queued) &gt; 0 </span><span class="cov0" title="0">{
+                        totalWeightInNS = 1
+                }</span>
+
+                <span class="cov0" title="0">for _, pu := range st.queued </span><span class="cov0" title="0">{
+                        // Recalculate effective weight with the new (larger) allocation.
+                        effW := CalcEffectiveWeight(pu.Project.Weight, totalWeightInNS+sumSelectedWeights(st.selected), newAlloc)
+                        pu.EffectiveWeight = effW
+
+                        if globalRunning+globalSelected &gt;= m.maxConcurrent </span><span class="cov0" title="0">{
+                                stillQueued = append(stillQueued, pu)
+                                continue</span>
+                        }
+                        <span class="cov0" title="0">if pu.EffectiveWeight &gt; budgetRemaining </span><span class="cov0" title="0">{
+                                stillQueued = append(stillQueued, pu)
+                                continue</span>
+                        }
+                        <span class="cov0" title="0">st.selected = append(st.selected, pu)
+                        budgetRemaining -= pu.EffectiveWeight
+                        globalSelected++</span>
+                }
+                <span class="cov0" title="0">st.queued = stillQueued
+                st.alloc = newAlloc
+                st.usedBudget = newAlloc - budgetRemaining</span>
+        }
+
+        // Update allocations that were lent (for NamespaceTicks reporting).
+        <span class="cov8" title="1">for id, st := range states </span><span class="cov8" title="1">{
+                if lent, ok := lentMap[id]; ok &amp;&amp; lent &gt; 0 </span><span class="cov0" title="0">{
+                        // Lender's effective allocation is reduced for reporting.
+                        st.alloc = newAllocations[id]
+                }</span>
+        }
+
+        // --- Build PackResult ---
+        <span class="cov8" title="1">result := PackResult{
+                Projects:       make([]PackedProject, 0),
+                NamespaceTicks: make([]NamespaceTickData, 0, len(states)),
+        }
+
+        for _, ns := range namespaces </span><span class="cov8" title="1">{
+                st, ok := states[ns.ID]
+                if !ok </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">for _, pu := range st.selected </span><span class="cov8" title="1">{
+                        result.Projects = append(result.Projects, PackedProject{
+                                Name:           pu.Project.Name,
+                                Priority:       float64(pu.Project.Priority),
+                                Weight:         pu.EffectiveWeight,
+                                Urgency:        pu.Urgency,
+                                Workdir:        pu.Project.Workdir,
+                                RepoURL:        pu.Project.RepoURL,
+                                Command:        pu.Project.Command,
+                                Model:          pu.Project.Model,
+                                Provider:       pu.Project.Provider,
+                                WorkerModel:    pu.Project.WorkerModel,
+                                WorkerProvider: pu.Project.WorkerProvider,
+                                Deliver:        pu.Project.Deliver,
+                        })
+                }</span>
+                <span class="cov8" title="1">result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{
+                        NamespaceID: ns.ID,
+                        Allocated:   newAllocations[ns.ID],
+                        Used:        st.usedBudget,
+                        Borrowed:    borrowMap[ns.ID],
+                        Lent:        lentMap[ns.ID],
+                        JobCount:    len(st.selected),
+                })</span>
+        }
+
+        <span class="cov8" title="1">return result</span>
+}
+</pre>
+		
+		<pre class="file" id="file10" style="display: none">package scheduler
+
+import (
+        "context"
+        "database/sql"
+        "fmt"
+        "log"
+        "time"
+)
+
+// SimFixture creates a clean set of test projects for simulation testing.
+// Projects are designed to exercise: concurrency cap, weight budget packing,
+// priority decay/starvation, cooldown throttling, and disabled exclusion.
+type SimFixture struct {
+        db *sql.DB
+}
+
+// NewSimFixture creates a fixture on the given database.
+func NewSimFixture(db *sql.DB) *SimFixture <span class="cov8" title="1">{
+        return &amp;SimFixture{db: db}
+}</span>
+
+// SimProject defines a test project.
+type SimProject struct {
+        Name      string
+        Weight    int
+        Priority  float64
+        CooldownS int
+        Enabled   bool
+}
+
+// TestProjects returns a carefully designed set that exercises all scheduler edges.
+// Cooldowns are set short for multi-tick simulation (1-5s).
+func (sf *SimFixture) TestProjects() []SimProject <span class="cov8" title="1">{
+        return []SimProject{
+                // Heavyweight: exhaust budget fast (35 each, 2 = 70 of 100).
+                {Name: "heavy-alpha", Weight: 35, Priority: 9, CooldownS: 3, Enabled: true},
+                {Name: "heavy-beta", Weight: 35, Priority: 8, CooldownS: 3, Enabled: true},
+                {Name: "heavy-gamma", Weight: 35, Priority: 2, CooldownS: 3, Enabled: true}, // starvation test
+
+                // Medium weight: fill remaining budget (20 each, 5 = 100).
+                {Name: "medium-alpha", Weight: 20, Priority: 7, CooldownS: 2, Enabled: true},
+                {Name: "medium-beta", Weight: 20, Priority: 6, CooldownS: 2, Enabled: true},
+                {Name: "medium-gamma", Weight: 20, Priority: 5, CooldownS: 2, Enabled: true},
+                {Name: "medium-delta", Weight: 20, Priority: 3, CooldownS: 2, Enabled: true},
+
+                // Lightweight: test concurrency cap (8).
+                {Name: "light-alpha", Weight: 5, Priority: 9, CooldownS: 1, Enabled: true},
+                {Name: "light-beta", Weight: 5, Priority: 8, CooldownS: 1, Enabled: true},
+                {Name: "light-gamma", Weight: 5, Priority: 4, CooldownS: 1, Enabled: true},
+                {Name: "light-delta", Weight: 5, Priority: 2, CooldownS: 1, Enabled: true},
+                {Name: "light-epsilon", Weight: 5, Priority: 1, CooldownS: 1, Enabled: true},
+
+                // Disabled: should never be picked.
+                {Name: "ghost-project", Weight: 10, Priority: 5, CooldownS: 60, Enabled: false},
+        }
+}</span>
+
+// Setup wipes the projects table and inserts the test fixture.
+func (sf *SimFixture) Setup(projects []SimProject) error <span class="cov8" title="1">{
+        if _, err := sf.db.Exec(`DELETE FROM projects`); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("clear projects: %w", err)
+        }</span>
+        // Also clear old ticks.
+        <span class="cov8" title="1">if _, err := sf.db.Exec(`DELETE FROM ticks`); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("clear ticks: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">now := time.Now().Format(time.RFC3339)
+        for _, p := range projects </span><span class="cov8" title="1">{
+                _, err := sf.db.Exec(`
+                        INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, enabled, created_at, updated_at)
+                        VALUES (?, 'local:/sim', '/tmp/sim', ?, ?, ?, 1.0, ?, ?, ?)
+                `, p.Name, p.Weight, p.Priority, p.CooldownS, p.Enabled, now, now)
+                if err != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("insert %s: %w", p.Name, err)
+                }</span>
+        }
+        <span class="cov8" title="1">log.Printf("SIM-SETUP: %d test projects inserted (budget=100, max_concurrent=8)", len(projects))
+        return nil</span>
+}
+
+// SimRunner runs multi-tick simulations and collects statistics.
+type SimRunner struct {
+        loop    *Loop
+        fixture *SimFixture
+}
+
+// NewSimRunner creates a runner bound to an existing loop.
+func NewSimRunner(loop *Loop, fixture *SimFixture) *SimRunner <span class="cov0" title="0">{
+        return &amp;SimRunner{
+                loop:    loop,
+                fixture: fixture,
+        }
+}</span>
+
+// RunMultiTick runs N evaluation ticks in fast-forward mode.
+// Each tick simulates a 60s advancement with cooldown decay.
+// Returns per-tick statistics.
+func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimReport, error) <span class="cov0" title="0">{
+        projects := sr.fixture.TestProjects()
+        if err := sr.fixture.Setup(projects); err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">sr.loop.SetSimulation(0.85)
+        report := &amp;SimReport{
+                TickCount: tickCount,
+                Budget:    100,
+                MaxConcur: 8,
+                Projects:  len(projects),
+                Enabled:   countEnabled(projects),
+        }
+
+        start := time.Now()
+        for tick := 1; tick &lt;= tickCount; tick++ </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return report, ctx.Err()</span>
+                default:<span class="cov0" title="0"></span>
+                }
+
+                <span class="cov0" title="0">tickReport := sr.runOneTick(tick)
+                report.Ticks = append(report.Ticks, tickReport)
+
+                // Advance simulated time so cooldowns expire between ticks.
+                time.Sleep(time.Duration(sr.fixture.TestProjects()[0].CooldownS) * time.Second)</span>
+        }
+
+        <span class="cov0" title="0">report.Elapsed = time.Since(start)
+
+        // Collect aggregate stats.
+        for _, tr := range report.Ticks </span><span class="cov0" title="0">{
+                report.TotalSpawned += tr.Spawned
+                report.TotalCompleted += tr.Completed
+                report.TotalFailed += tr.Failed
+                report.TotalTimeout += tr.Timeout
+                report.TotalBudgetUsed += tr.BudgetUsed
+        }</span>
+        <span class="cov0" title="0">report.AvgPerTick = float64(report.TotalSpawned) / float64(tickCount)
+
+        return report, nil</span>
+}
+
+func (sr *SimRunner) runOneTick(tickNum int) SimTickReport <span class="cov0" title="0">{
+        tr := SimTickReport{Tick: tickNum}
+
+        now := time.Now()
+        packed, err := sr.loop.packer.Pick(now, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                tr.Error = err.Error()
+                return tr
+        }</span>
+
+        <span class="cov0" title="0">tr.Selected = len(packed)
+        for _, p := range packed </span><span class="cov0" title="0">{
+                tr.BudgetUsed += p.Weight
+                tickID := fmt.Sprintf("sim-tick%d-%s-%s", tickNum, p.Name, now.Format("150405"))
+
+                if _, err := sr.loop.simSpawner.Spawn(p, tickID); err != nil </span><span class="cov0" title="0">{
+                        tr.Error = fmt.Sprintf("spawn %s: %v", p.Name, err)
+                        return tr
+                }</span>
+                <span class="cov0" title="0">tr.Spawned++
+
+                // Record which priority levels were picked.
+                tr.PriorityPicked = append(tr.PriorityPicked, int(p.Priority))
+                tr.NamesPicked = append(tr.NamesPicked, p.Name)</span>
+        }
+
+        // Wait for instantaneous simulated completions.
+        <span class="cov0" title="0">time.Sleep(200 * time.Millisecond)
+
+        // Count outcomes from this tick's batch.
+        rows, _ := sr.loop.db.Query(`
+                SELECT status, COUNT(*) FROM ticks 
+                WHERE id LIKE 'sim-tick' || ? || '-%' 
+                GROUP BY status
+        `, tickNum)
+        if rows != nil </span><span class="cov0" title="0">{
+                defer rows.Close()
+                for rows.Next() </span><span class="cov0" title="0">{
+                        var status string
+                        var count int
+                        rows.Scan(&amp;status, &amp;count)
+                        switch status </span>{
+                        case "completed":<span class="cov0" title="0">
+                                tr.Completed += count</span>
+                        case "failed":<span class="cov0" title="0">
+                                tr.Failed += count</span>
+                        case "timeout":<span class="cov0" title="0">
+                                tr.Timeout += count</span>
+                        }
+                }
+        }
+
+        <span class="cov0" title="0">return tr</span>
+}
+
+// SimReport holds the full simulation result.
+type SimReport struct {
+        TickCount       int
+        Budget          int
+        MaxConcur       int
+        Projects        int
+        Enabled         int
+        Elapsed         time.Duration
+        Ticks           []SimTickReport
+        TotalSpawned    int
+        TotalCompleted  int
+        TotalFailed     int
+        TotalTimeout    int
+        TotalBudgetUsed int
+        AvgPerTick      float64
+}
+
+// SimTickReport holds one tick's statistics.
+type SimTickReport struct {
+        Tick           int
+        Selected       int
+        Spawned        int
+        BudgetUsed     int
+        Completed      int
+        Failed         int
+        Timeout        int
+        PriorityPicked []int
+        NamesPicked    []string
+        Error          string
+}
+
+// Summary returns a human-readable summary of the simulation.
+func (r *SimReport) Summary() string <span class="cov0" title="0">{
+        s := fmt.Sprintf(`
+========== SIMULATION REPORT ==========
+Ticks:       %d (%.1fs real time)
+Projects:    %d total, %d enabled
+Budget:      %d  |  Max concurrent: %d
+
+Per tick:    avg %.1f projects, avg %d budget used
+Total:       %d spawned, %d completed, %d failed, %d timeout
+Success rate: %.1f%%
+
+Priority spread by tick:
+`, r.TickCount, r.Elapsed.Seconds(), r.Projects, r.Enabled, r.Budget, r.MaxConcur,
+                r.AvgPerTick, r.TotalBudgetUsed/r.TickCount,
+                r.TotalSpawned, r.TotalCompleted, r.TotalFailed, r.TotalTimeout,
+                float64(r.TotalCompleted)/float64(r.TotalSpawned)*100)
+
+        for _, t := range r.Ticks </span><span class="cov0" title="0">{
+                s += fmt.Sprintf("  tick %2d: %d projects [%v]  budget=%d/100\n",
+                        t.Tick, t.Selected, t.NamesPicked, t.BudgetUsed)
+        }</span>
+        <span class="cov0" title="0">return s</span>
+}
+
+func countEnabled(projects []SimProject) int <span class="cov0" title="0">{
+        n := 0
+        for _, p := range projects </span><span class="cov0" title="0">{
+                if p.Enabled </span><span class="cov0" title="0">{
+                        n++
+                }</span>
+        }
+        <span class="cov0" title="0">return n</span>
+}
+</pre>
+		
+		<pre class="file" id="file11" style="display: none">package scheduler
+
+import (
+        "database/sql"
+        "fmt"
+        "math/rand"
+        "sync"
+        "time"
+)
+
+// SimSpawner replaces the real Spawner for dry-run/simulation mode.
+// It simulates foreman ticks that complete instantly with randomised outcomes.
+type SimSpawner struct {
+        db      *sql.DB
+        success float64
+        mu      sync.Mutex
+}
+
+// NewSimSpawner creates a simulated spawner.
+func NewSimSpawner(db *sql.DB, successRate float64) *SimSpawner <span class="cov8" title="1">{
+        if successRate &lt;= 0 </span><span class="cov0" title="0">{
+                successRate = 0.85
+        }</span>
+        <span class="cov8" title="1">return &amp;SimSpawner{
+                db:      db,
+                success: successRate,
+        }</span>
+}
+
+// Spawn simulates launching a foreman. It creates a tick, marks it running,
+// then immediately completes it with a randomised outcome in a goroutine.
+func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, error) <span class="cov0" title="0">{
+        now := time.Now()
+
+        _, err := s.db.Exec(`
+                INSERT INTO ticks (id, project_name, status, spawned_at, urgency, weight_used, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, tickID, project.Name, TickRunning, now.Format(time.RFC3339),
+                project.Urgency, project.Weight, now.Format(time.RFC3339))
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("sim spawn %s: %w", tickID, err)
+        }</span>
+
+        <span class="cov0" title="0">sessionID := fmt.Sprintf("sim-%s-%d", tickID[:8], rand.Intn(99999))
+        _, _ = s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, sessionID, tickID)
+
+        spawned := &amp;SimSpawned{
+                TickID:    tickID,
+                Project:   project.Name,
+                SessionID: sessionID,
+                spawner:   s,
+                started:   now,
+        }
+
+        go func() </span><span class="cov0" title="0">{
+                time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+                outcome := spawned.Wait()
+                s.mu.Lock()
+                defer s.mu.Unlock()
+                finish := outcome.Finished.Format(time.RFC3339)
+                s.db.Exec(`
+                        UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?, 
+                                tokens_in = ?, tokens_out = ?, cost_usd = ?, commits = ?, files_changed = ?
+                        WHERE id = ?
+                `, string(outcome.Status), finish, outcome.ExitCode, outcome.Error,
+                        outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.Commits, outcome.FilesChanged,
+                        outcome.TickID)
+                if outcome.Status == TickCompleted </span><span class="cov0" title="0">{
+                        s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
+                }</span>
+        }()
+
+        <span class="cov0" title="0">return spawned, nil</span>
+}
+
+// SimSpawned represents a simulated running tick.
+type SimSpawned struct {
+        TickID    string
+        Project   string
+        SessionID string
+        spawner   *SimSpawner
+        started   time.Time
+}
+
+// Wait simulates the foreman running and returns a randomised outcome.
+func (s *SimSpawned) Wait() TickOutcome <span class="cov0" title="0">{
+        finished := time.Now()
+        duration := finished.Sub(s.started)
+
+        outcome := TickOutcome{
+                TickID:    s.TickID,
+                Project:   s.Project,
+                SessionID: s.SessionID,
+                Started:   s.started,
+                Finished:  finished,
+                Duration:  duration,
+        }
+
+        roll := rand.Float64()
+        if roll &lt; s.spawner.success </span><span class="cov0" title="0">{
+                outcome.Status = TickCompleted
+                outcome.ExitCode = 0
+                outcome.TokensIn = 2000 + rand.Intn(8000)
+                outcome.TokensOut = 500 + rand.Intn(3000)
+                outcome.CostUSD = float64(outcome.TokensIn)*0.00001 + float64(outcome.TokensOut)*0.00003
+                outcome.Commits = 1 + rand.Intn(3)
+                outcome.FilesChanged = 1 + rand.Intn(8)
+        }</span> else<span class="cov0" title="0"> if roll &lt; s.spawner.success+0.10 </span><span class="cov0" title="0">{
+                outcome.Status = TickTimeout
+                outcome.Error = "simulated timeout after 30m"
+        }</span> else<span class="cov0" title="0"> {
+                outcome.Status = TickFailed
+                outcome.ExitCode = 1
+                outcome.Error = "simulated build failure"
+        }</span>
+
+        <span class="cov0" title="0">return outcome</span>
+}
+</pre>
+		
+		<pre class="file" id="file12" style="display: none">package scheduler
+
+import (
+        "context"
+        "database/sql"
+        "fmt"
+        "log"
+        "time"
+)
+
+// SlotPool manages concurrent tick slots using a buffered channel as a
+// semaphore. Projects acquire a slot before spawning and release it when
+// the tick completes or times out. The evaluation loop fires projects into
+// the pool and returns immediately — it never blocks waiting for spawns.
+type SlotPool struct {
+        sem       chan string // buffered channel = semaphore, value = project name
+        maxSlots  int
+        timeout   time.Duration
+        spawner   *Spawner
+        lifecycle *LifecycleTracker
+        freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
+}
+
+// NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
+func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool <span class="cov8" title="1">{
+        p := &amp;SlotPool{
+                sem:       make(chan string, maxConcurrent),
+                maxSlots:  maxConcurrent,
+                timeout:   timeout,
+                spawner:   spawner,
+                lifecycle: lifecycle,
+                freedCh:   make(chan struct{}, maxConcurrent),
+        }
+        return p
+}</span>
+
+// Available returns the number of free slots.
+func (p *SlotPool) Available() int <span class="cov8" title="1">{
+        return p.maxSlots - len(p.sem)
+}</span>
+
+// Running returns the number of currently occupied slots.
+func (p *SlotPool) Running() int <span class="cov8" title="1">{
+        return len(p.sem)
+}</span>
+
+// RunningSet returns the set of project names currently occupying slots.
+// Used by the packer to prevent duplicate spawns.
+func (p *SlotPool) RunningSet() map[string]bool <span class="cov8" title="1">{
+        set := make(map[string]bool)
+        // Drain and re-fill the channel to snapshot names. Non-blocking.
+        for i := 0; i &lt; len(p.sem); i++ </span><span class="cov8" title="1">{
+                name := &lt;-p.sem
+                set[name] = true
+                p.sem &lt;- name
+        }</span>
+        <span class="cov8" title="1">return set</span>
+}
+
+// Acquire blocks until a slot is free, then marks it occupied with the
+// given project name. Returns false if context is cancelled.
+func (p *SlotPool) Acquire(ctx context.Context, name string) bool <span class="cov8" title="1">{
+        select </span>{
+        case p.sem &lt;- name:<span class="cov8" title="1">
+                return true</span>
+        case &lt;-ctx.Done():<span class="cov8" title="1">
+                return false</span>
+        }
+}
+
+// Release frees one slot and signals SlotFreed.
+func (p *SlotPool) Release() <span class="cov8" title="1">{
+        select </span>{
+        case &lt;-p.sem:<span class="cov8" title="1">
+                select </span>{
+                case p.freedCh &lt;- struct{}{}:<span class="cov8" title="1"></span>
+                default:<span class="cov8" title="1"></span>
+                }
+        default:<span class="cov0" title="0"></span>
+        }
+}
+
+// ReleaseAll drains all currently-held slots and signals SlotFreed
+// for each one released. Safe to call when no slots are held.
+func (p *SlotPool) ReleaseAll() <span class="cov8" title="1">{
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-p.sem:<span class="cov8" title="1">
+                        select </span>{
+                        case p.freedCh &lt;- struct{}{}:<span class="cov8" title="1"></span>
+                        default:<span class="cov0" title="0"></span>
+                        }
+                default:<span class="cov8" title="1">
+                        return</span>
+                }
+        }
+}
+
+// Spawn fires a project tick in a new goroutine. The goroutine acquires a
+// slot from the pool, spawns via the gateway, and releases the slot on
+// completion or timeout. Delivery and auto-slowdown are integrated.
+// Spawn returns immediately — it is fire-and-forget.
+func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *sql.DB) <span class="cov0" title="0">{
+        go func() </span><span class="cov0" title="0">{
+                tickID := fmt.Sprintf("%s-%s", proj.Name, now.Format("2006-01-02-15-04-05"))
+
+                // Wait for a free slot.
+                ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+                defer cancel()
+                if !p.Acquire(ctx, proj.Name) </span><span class="cov0" title="0">{
+                        log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
+                        return
+                }</span>
+                <span class="cov0" title="0">defer p.Release()
+
+                log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+
+                // Enqueue and start.
+                if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("SPAWN: enqueue %s: %v", proj.Name, err)
+                        return
+                }</span>
+                <span class="cov0" title="0">if err := p.lifecycle.StartRunning(tickID); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("SPAWN: start %s: %v", proj.Name, err)
+                        return
+                }</span>
+
+                // Spawn.
+                <span class="cov0" title="0">st, err := p.spawner.Spawn(proj, tickID)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("SPAWN: %s failed: %v", proj.Name, err)
+                        _ = p.lifecycle.Complete(TickOutcome{
+                                TickID:  tickID,
+                                Project: proj.Name,
+                                Started: now,
+                                Status:  TickFailed,
+                                Error:   err.Error(),
+                        })
+                        return
+                }</span>
+
+                // Wait for completion or timeout.
+                <span class="cov0" title="0">outcome := st.Wait()
+                if err := p.lifecycle.Complete(outcome); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("SPAWN: complete %s: %v", tickID, err)
+                }</span>
+
+                // Deliver output (suppressed in test-verify mode).
+                <span class="cov0" title="0">if !noDeliver </span><span class="cov0" title="0">{
+                        deliverOutput(outcome.Project, outcome.TickID, st.Deliver, &amp;st.Output)
+                }</span>
+
+                // Auto-slowdown: if tick signals IDLE, gently slow down.
+                <span class="cov0" title="0">if db != nil </span><span class="cov0" title="0">{
+                        autoSlowdown(db, outcome.Project, &amp;st.Output)
+                }</span>
+
+                // Timeout notification: log and alert, but do NOT back off.
+                // The project is still eligible after its normal cooldown.
+                <span class="cov0" title="0">if outcome.Status == TickTimeout </span><span class="cov0" title="0">{
+                        log.Printf("TIMEOUT: %s tick=%s duration=%v — project stays active, normal cooldown applies",
+                                outcome.Project, outcome.TickID, outcome.Duration)
+                        // Deliver timeout alert to chat so it's visible.
+                        if !noDeliver &amp;&amp; st.Deliver != "" </span><span class="cov0" title="0">{
+                                deliverAlert(st.Deliver, outcome.Project, outcome.TickID, "timeout after "+outcome.Duration.String())
+                        }</span>
+                }
+        }()
+}
+
+// SlotFreed returns a channel that receives when any slot is released.
+// The channel is backed by a single goroutine (created in NewSlotPool) —
+// no leaks. Use with debounce in the eval loop to avoid feedback floods.
+func (p *SlotPool) SlotFreed() &lt;-chan struct{} <span class="cov8" title="1">{
+        return p.freedCh
+}</span>
+
+// Wait blocks until all running ticks finish or the context is cancelled.
+func (p *SlotPool) Wait(ctx context.Context) error <span class="cov0" title="0">{
+        for </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-ctx.Done():<span class="cov0" title="0">
+                        return ctx.Err()</span>
+                default:<span class="cov0" title="0">
+                        if p.Running() == 0 </span><span class="cov0" title="0">{
+                                return nil
+                        }</span>
+                        <span class="cov0" title="0">time.Sleep(100 * time.Millisecond)</span>
+                }
+        }
+}
+</pre>
+		
+		<pre class="file" id="file13" style="display: none">package scheduler
+
+import (
+        "bytes"
+        "database/sql"
+        "log"
+        "strings"
+)
+
+// autoSlowdown detects IDLE signals in tick output and adjusts the project's cooldown.
+// Uses the structured VERDICT: line from the foreman (e.g. "VERDICT: productively — IDLE").
+// Cooldown caps at 1 hour. On any non-idle productive tick, resets to base 600s.
+func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) <span class="cov8" title="1">{
+        if output == nil || output.Len() == 0 </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">text := output.String()
+
+        // Detect idle: "VERDICT: ... — IDLE" or explicit "IDLE TICK" marker.
+        isIdle := strings.Contains(text, "IDLE TICK") ||
+                strings.Contains(text, "SLOWDOWN REQUESTED") ||
+                (strings.Contains(text, "VERDICT:") &amp;&amp; strings.Contains(text, "IDLE"))
+
+        // Detect productive non-idle: "VERDICT: ... — PRODUCTIVE" or "FIXED"/"FIXED" keywords.
+        isProductive := !isIdle &amp;&amp; (strings.Contains(text, "VERDICT:") &amp;&amp;
+                (strings.Contains(text, "PRODUCTIVE") || strings.Contains(text, "productively")))
+
+        if isIdle </span><span class="cov8" title="1">{
+                var currentCD int
+                if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&amp;currentCD); err != nil </span><span class="cov8" title="1">{
+                        return
+                }</span>
+                <span class="cov8" title="1">if currentCD == 0 </span><span class="cov8" title="1">{
+                        currentCD = 600
+                }</span>
+                // Multiply by 1.5x instead of 2x — gentler escalation.
+                <span class="cov8" title="1">newCD := currentCD + currentCD/2
+                if newCD &gt; 3600 </span><span class="cov8" title="1">{
+                        newCD = 3600
+                }</span>
+                <span class="cov8" title="1">if newCD != currentCD </span><span class="cov8" title="1">{
+                        db.Exec("UPDATE projects SET cooldown_s = ? WHERE name = ?", newCD, project)
+                        log.Printf("SLOWDOWN: %s idle → cooldown %ds → %ds (%dm)", project, currentCD, newCD, newCD/60)
+                }</span>
+        } else<span class="cov8" title="1"> if isProductive </span><span class="cov8" title="1">{
+                // Productive non-idle tick: reset cooldown to base if elevated.
+                var currentCD int
+                if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&amp;currentCD); err != nil </span><span class="cov8" title="1">{
+                        return
+                }</span>
+                <span class="cov8" title="1">if currentCD &gt; 600 </span><span class="cov8" title="1">{
+                        db.Exec("UPDATE projects SET cooldown_s = 600 WHERE name = ?", project)
+                        log.Printf("SLOWDOWN: %s productive \u2192 cooldown reset %ds \u2192 600s", project, currentCD)
+                }</span>
+        }
+}
+</pre>
+		
+		<pre class="file" id="file14" style="display: none">package scheduler
+
+import (
+        "bufio"
+        "bytes"
+        "context"
+        "database/sql"
+        "errors"
+        "fmt"
+        "io"
+        "log"
+        "os"
+        "os/exec"
+        "strings"
+        "sync"
+        "sync/atomic"
+        "syscall"
+        "time"
+)
+
+// Cost estimation constants for real ticks where session export is unavailable.
+// These are conservative estimates based on typical foreman tick usage.
+const (
+        estTokensIn    = 8000     // estimated input tokens per tick
+        estTokensOut   = 2000     // estimated output tokens per tick
+        estCostPerIn   = 0.000002 // deepseek-v4-flash input $/token
+        estCostPerOut  = 0.000008 // deepseek-v4-flash output $/token
+        estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
+)
+
+// estimateTickCost returns estimated token counts and cost for a real tick.
+// Real session export (hermes sessions export) is a future task; for now we
+// use fixed estimates so cost aggregation works from day one.
+func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) <span class="cov8" title="1">{
+        return estTokensIn, estTokensOut, estCostPerTick
+}</span>
+
+// Spawner launches coding-hermes foreman processes.
+type Spawner struct {
+        db             *sql.DB
+        maxConcurrent  int
+        active         map[string]*exec.Cmd // tickID -&gt; running process
+        mu             sync.Mutex
+        timeout        time.Duration
+        model          string
+        provider       string
+        skills         string
+        foremanHome    string         // HERMES_HOME for foreman config
+        gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
+        noExecFallback bool           // disable exec.Command fallback on gateway failure
+
+        // Prometheus-style spawn counters since last restart.
+        spawnCountHTTP int64
+        spawnCountExec int64
+}
+
+// NewSpawner creates a spawner with the given concurrency limit and defaults.
+func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawner <span class="cov8" title="1">{
+        to := 30 * time.Minute
+        if len(timeout) &gt; 0 </span><span class="cov0" title="0">{
+                to = timeout[0]
+        }</span>
+        <span class="cov8" title="1">return &amp;Spawner{
+                db:            db,
+                maxConcurrent: maxConcurrent,
+                active:        make(map[string]*exec.Cmd),
+                timeout:       to,
+                model:         "deepseek-v4-flash",
+                provider:      "deepseek-foreman",
+                skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins,never-done",
+                foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
+        }</span>
+}
+
+// SetForemanHome overrides the default HERMES_HOME for foreman sessions.
+func (s *Spawner) SetForemanHome(path string) <span class="cov8" title="1">{
+        s.foremanHome = path
+}</span>
+
+// RunningSet returns the set of project names that currently have a spawned
+// process (in-memory). This is more accurate than the DB query because spawns
+// haven't been committed to the DB yet when the packer queries.
+func (s *Spawner) RunningSet() map[string]bool <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        set := make(map[string]bool, len(s.active))
+        for tickID := range s.active </span><span class="cov0" title="0">{
+                // Extract project name from tick ID: "project-YYYY-MM-DD-HH-MM-SS"
+                idx := strings.LastIndex(tickID, "-202")
+                if idx &gt; 0 </span><span class="cov0" title="0">{
+                        set[tickID[:idx]] = true
+                }</span>
+        }
+        <span class="cov8" title="1">return set</span>
+}
+
+// SetGatewayClient configures the HTTP API client. If set, Spawn() prefers
+// HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
+func (s *Spawner) SetGatewayClient(client *GatewayClient) <span class="cov8" title="1">{
+        s.gateway = client
+}</span>
+
+// SetNoExecFallback disables the exec.Command fallback when gateway spawns fail.
+func (s *Spawner) SetNoExecFallback(v bool) <span class="cov8" title="1">{
+        s.noExecFallback = v
+}</span>
+
+// GatewayAvailable returns true if the gateway client is configured and reachable.
+func (s *Spawner) GatewayAvailable() bool <span class="cov8" title="1">{
+        if s.gateway == nil </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">return s.gateway.Ping(context.Background()) == nil</span>
+}
+
+// SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
+func (s *Spawner) SpawnMethodCounts() (httpCount, execCount int64) <span class="cov8" title="1">{
+        return atomic.LoadInt64(&amp;s.spawnCountHTTP), atomic.LoadInt64(&amp;s.spawnCountExec)
+}</span>
+
+// ActiveCount returns the number of currently running spawns.
+func (s *Spawner) ActiveCount() int <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        return len(s.active)
+}</span>
+
+// WorkerDefaults returns a prompt suffix with the project's preferred worker
+// model and provider. Empty string when neither is configured. Includes
+// fallback instructions so the foreman can switch models freely.
+func WorkerDefaults(project PackedProject) string <span class="cov8" title="1">{
+        if project.WorkerModel == "" &amp;&amp; project.WorkerProvider == "" </span><span class="cov8" title="1">{
+                return ""
+        }</span>
+        <span class="cov8" title="1">m := project.WorkerModel
+        p := project.WorkerProvider
+        if m == "" </span><span class="cov0" title="0">{
+                m = "(no default)"
+        }</span>
+        <span class="cov8" title="1">if p == "" </span><span class="cov8" title="1">{
+                p = "(no default)"
+        }</span>
+        <span class="cov8" title="1">return fmt.Sprintf(
+                "Worker default: use model %s with provider %s if available. "+
+                        "Feel free to use a different model if this one is unavailable or rate-limited. ",
+                m, p,
+        )</span>
+}
+
+// canSpawn checks concurrency limits.
+func (s *Spawner) canSpawn() bool <span class="cov8" title="1">{
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        return len(s.active) &lt; s.maxConcurrent
+}</span>
+
+// Spawn launches a foreman for the given project and tick ID.
+// Returns an error only if the process fails to start.
+// The spawned process is tracked internally and reaped by the lifecycle tracker.
+func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, error) <span class="cov8" title="1">{
+        if !s.canSpawn() </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("max concurrency %d reached", s.maxConcurrent)
+        }</span>
+
+        <span class="cov8" title="1">var cmd *exec.Cmd
+
+        if project.Command != "" </span><span class="cov8" title="1">{
+                // Custom command.
+                if strings.Contains(project.Command, "bash -c") </span><span class="cov8" title="1">{
+                        // Shell one-liner — pass the script string directly to bash -c.
+                        script := strings.TrimPrefix(project.Command, "bash -c ")
+                        script = strings.TrimSpace(script)
+                        // Strip surrounding quotes if present.
+                        script = strings.Trim(script, "'\"")
+                        cmd = exec.Command("bash", "-c", script)
+                }</span> else<span class="cov0" title="0"> {
+                        parts := splitCommand(project.Command)
+                        cmd = exec.Command(parts[0], parts[1:]...)
+                }</span>
+                <span class="cov8" title="1">cmd.Dir = project.Workdir</span>
+        } else<span class="cov0" title="0"> {
+                model := s.model
+                if project.Model != "" </span><span class="cov0" title="0">{
+                        model = project.Model
+                }</span>
+
+                <span class="cov0" title="0">prompt := fmt.Sprintf(
+                        "[Scheduler tick: %s] "+
+                                "Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
+                                "Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
+                                "Workdir: %s. "+
+                                "IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
+                                "Format your final output as clean, well-structured markdown with tables and sections. "+
+                                "%s"+
+                                "Report result.",
+                        tickID, project.Workdir,
+                        WorkerDefaults(project),
+                )
+
+                // Try HTTP gateway spawn first (zero process overhead).
+                if s.gateway != nil </span><span class="cov0" title="0">{
+                        ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+                        resp, gwErr := s.gateway.SendResponse(ctx, prompt, model)
+                        cancel()
+                        if gwErr == nil &amp;&amp; resp != nil </span><span class="cov0" title="0">{
+                                atomic.AddInt64(&amp;s.spawnCountHTTP, 1)
+                                text := resp.ExtractText()
+                                now := time.Now()
+                                _, _ = s.db.Exec(`UPDATE ticks SET status='completed', outcome='ok', spawned_at=?, finished_at=?, output=?, session_id='gateway' WHERE id=?`,
+                                        now.Format(time.RFC3339), now.Format(time.RFC3339), text, tickID)
+
+                                log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
+                                        project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+                                return &amp;SpawnedTick{
+                                        TickID:     tickID,
+                                        Project:    project.Name,
+                                        SessionID:  "gateway",
+                                        Started:    now,
+                                        Deliver:    project.Deliver,
+                                        Output:     *bytes.NewBufferString(text),
+                                        spawner:    s,
+                                        completed:  true,
+                                        completeAt: now,
+                                }, nil
+                        }</span>
+                        <span class="cov0" title="0">log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+                        if s.noExecFallback </span><span class="cov0" title="0">{
+                                log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
+                                return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
+                        }</span>
+                }
+
+                <span class="cov0" title="0">atomic.AddInt64(&amp;s.spawnCountExec, 1)
+
+                provider := s.provider
+                if project.Provider != "" </span><span class="cov0" title="0">{
+                        provider = project.Provider
+                }</span>
+
+                <span class="cov0" title="0">args := []string{
+                        "chat", "-q", prompt,
+                        "-m", model,
+                        "--provider", provider,
+                        "-s", "coding-hermes-foreman",
+                        "-s", "coding-hermes-cron",
+                        "-s", "hilo-usage",
+                        "-s", "gitreins",
+                        "--ignore-rules", "-Q",
+                }
+
+                cmd = exec.Command("hermes", args...)
+                cmd.Dir = project.Workdir
+                cmd.Env = append(os.Environ(),
+                        "HERMES_HOME="+s.foremanHome,
+                        "CODING_HERMES_TICK="+tickID,
+                        "CODING_HERMES_SOURCE=scheduler",
+                        "CODING_HERMES_PROJECT="+project.Name,
+                )</span>
+        }
+
+        <span class="cov8" title="1">stdout, err := cmd.StdoutPipe()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("stdout pipe: %w", err)
+        }</span>
+        <span class="cov8" title="1">stderr, err := cmd.StderrPipe()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("stderr pipe: %w", err)
+        }</span>
+        <span class="cov8" title="1">cmd.SysProcAttr = &amp;syscall.SysProcAttr{Setpgid: true}
+
+        if err := cmd.Start(); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("start process: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">s.mu.Lock()
+        s.active[tickID] = cmd
+        s.mu.Unlock()
+
+        st := &amp;SpawnedTick{
+                TickID:  tickID,
+                Project: project.Name,
+                PID:     cmd.Process.Pid,
+                Started: time.Now(),
+                Deliver: project.Deliver,
+                cmd:     cmd,
+                stdout:  stdout,
+                stderr:  stderr,
+                spawner: s,
+        }
+
+        // Tee stdout: scanner reads session_id from one side, buffer captures full output.
+        teeReader := io.TeeReader(stdout, &amp;st.Output)
+
+        // Parse session ID from stdout and persist it. The scanner goroutine must
+        // exit when the process exits or times out so it cannot leak.
+        scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
+        st.scanCancel = scanCancel
+
+        // Close stdout when context expires — unblocks scanner.Scan().
+        go func() </span><span class="cov8" title="1">{
+                &lt;-scanCtx.Done()
+                _ = stdout.Close()
+        }</span>()
+
+        <span class="cov8" title="1">go func() </span><span class="cov8" title="1">{
+                defer scanCancel()
+                defer func() </span><span class="cov8" title="1">{
+                        if r := recover(); r != nil </span><span class="cov0" title="0">{
+                                log.Printf("ERROR: stdout scanner panic for tick %s: %v", tickID, r)
+                        }</span>
+                }()
+                <span class="cov8" title="1">scanner := bufio.NewScanner(teeReader)
+                for scanner.Scan() </span><span class="cov0" title="0">{
+                        line := scanner.Text()
+                        if strings.HasPrefix(line, "session_id:") </span><span class="cov0" title="0">{
+                                id := strings.TrimSpace(strings.TrimPrefix(line, "session_id:"))
+                                st.mu.Lock()
+                                st.SessionID = id
+                                st.mu.Unlock()
+                                // Persist session_id to the database.
+                                if _, err := s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, id, tickID); err != nil </span><span class="cov0" title="0">{
+                                        log.Printf("ERROR persisting session_id for %s: %v", tickID, err)
+                                }</span>
+                                <span class="cov0" title="0">return</span>
+                        }
+                }
+                <span class="cov8" title="1">if err := scanner.Err(); err != nil </span><span class="cov8" title="1">{
+                        // Expected on timeout (pipe closed) or process exit — not a leak.
+                        if !errors.Is(err, io.EOF) </span><span class="cov8" title="1">{
+                                log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
+                        }</span>
+                }
+        }()
+
+        // Update tick to running with PID for zombie detection.
+        <span class="cov8" title="1">_, err = s.db.Exec(`
+                UPDATE ticks SET status = 'running', spawned_at = ?, pid = ?
+                WHERE id = ?
+        `, st.Started.Format(time.RFC3339), st.PID, tickID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("ERROR updating tick %s to running: %v", tickID, err)
+        }</span>
+
+        <span class="cov8" title="1">log.Printf("SPAWN: %s tick=%s pid=%d workdir=%s", project.Name, tickID, st.PID, project.Workdir)
+        return st, nil</span>
+}
+
+// SpawnedTick represents a running foreman process.
+type SpawnedTick struct {
+        TickID     string
+        Project    string
+        PID        int
+        Started    time.Time
+        SessionID  string
+        Output     bytes.Buffer // full stdout for delivery after completion
+        Deliver    string       // delivery target (telegram:chat_id:thread_id)
+        cmd        *exec.Cmd
+        stdout     interface{ Close() error }
+        stderr     interface{ Close() error }
+        spawner    *Spawner
+        scanCancel context.CancelFunc
+        mu         sync.Mutex
+
+        // completed is true for gateway-spawned ticks that finished in Spawn().
+        completed  bool
+        completeAt time.Time
+}
+
+// Wait blocks until the process exits and returns the outcome.
+// For gateway-completed ticks (HTTP spawn), returns immediately.
+func (st *SpawnedTick) Wait() TickOutcome <span class="cov8" title="1">{
+        defer func() </span><span class="cov8" title="1">{
+                st.spawner.mu.Lock()
+                delete(st.spawner.active, st.TickID)
+                st.spawner.mu.Unlock()
+        }</span>()
+
+        // Gateway-spawned ticks are already complete — return immediately.
+        <span class="cov8" title="1">if st.completed </span><span class="cov0" title="0">{
+                return TickOutcome{
+                        TickID:    st.TickID,
+                        Project:   st.Project,
+                        SessionID: st.SessionID,
+                        Started:   st.Started,
+                        Finished:  st.completeAt,
+                        Status:    TickCompleted,
+                        Duration:  st.completeAt.Sub(st.Started),
+                }
+        }</span>
+
+        <span class="cov8" title="1">defer st.closePipes()
+        if st.scanCancel != nil </span><span class="cov8" title="1">{
+                defer st.scanCancel()
+        }</span>
+
+        <span class="cov8" title="1">timer := time.AfterFunc(st.spawner.timeout, func() </span><span class="cov8" title="1">{
+                if st.cmd.Process != nil </span><span class="cov8" title="1">{
+                        // Each scheduler-owned worker has its own process group. Killing the
+                        // group prevents shells, Hermes workers, and test runners from
+                        // surviving after the tick is marked timed out.
+                        _ = syscall.Kill(-st.cmd.Process.Pid, syscall.SIGKILL)
+                }</span>
+        })
+        <span class="cov8" title="1">defer timer.Stop()
+
+        err := st.cmd.Wait()
+        finished := time.Now()
+
+        outcome := TickOutcome{
+                TickID:    st.TickID,
+                Project:   st.Project,
+                SessionID: st.SessionID,
+                Started:   st.Started,
+                Finished:  finished,
+        }
+
+        if err != nil </span><span class="cov8" title="1">{
+                if strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed") </span><span class="cov8" title="1">{
+                        outcome.Status = TickTimeout
+                }</span> else<span class="cov0" title="0"> {
+                        outcome.Status = TickFailed
+                        outcome.Error = err.Error()
+                }</span>
+        } else<span class="cov0" title="0"> {
+                outcome.Status = TickCompleted
+        }</span>
+
+        <span class="cov8" title="1">outcome.ExitCode = st.cmd.ProcessState.ExitCode()
+        outcome.Duration = finished.Sub(st.Started)
+
+        // Cost estimation: real session export (hermes sessions export) is a future
+        // task. For now we populate estimated token counts and cost so that cost
+        // aggregation works from day one. Only estimate on completed ticks — failed
+        // or timed-out ticks consumed fewer tokens (process exited early).
+        if outcome.Status == TickCompleted </span><span class="cov0" title="0">{
+                tin, tout, cost := estimateTickCost()
+                outcome.TokensIn = tin
+                outcome.TokensOut = tout
+                outcome.CostUSD = cost
+        }</span>
+
+        <span class="cov8" title="1">log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
+        return outcome</span>
+}
+
+func (st *SpawnedTick) closePipes() <span class="cov8" title="1">{
+        if st.stdout != nil </span><span class="cov8" title="1">{
+                _ = st.stdout.Close()
+        }</span>
+        <span class="cov8" title="1">if st.stderr != nil </span><span class="cov8" title="1">{
+                _ = st.stderr.Close()
+        }</span>
+}
+
+func splitCommand(cmd string) []string <span class="cov8" title="1">{
+        // Simple split for shell commands. Does basic quote handling.
+        var parts []string
+        var current string
+        inQuote := false
+        for _, c := range cmd </span><span class="cov8" title="1">{
+                switch c </span>{
+                case '"':<span class="cov8" title="1">
+                        inQuote = !inQuote</span>
+                case ' ':<span class="cov8" title="1">
+                        if inQuote </span><span class="cov8" title="1">{
+                                current += string(c)
+                        }</span> else<span class="cov8" title="1"> if current != "" </span><span class="cov8" title="1">{
+                                parts = append(parts, current)
+                                current = ""
+                        }</span>
+                default:<span class="cov8" title="1">
+                        current += string(c)</span>
+                }
+        }
+        <span class="cov8" title="1">if current != "" </span><span class="cov8" title="1">{
+                parts = append(parts, current)
+        }</span>
+        <span class="cov8" title="1">return parts</span>
+}
+</pre>
+		
+		<pre class="file" id="file15" style="display: none">package scheduler
+
+import (
+        "context"
+        "fmt"
+        "log"
+        "os"
+        "runtime"
+        "time"
+
+        "github.com/coding-herms/scheduler/internal/database"
+)
+
+// evaluate runs one evaluation cycle.
+// Phase 1 (locked): state update, cleanup, pick projects.
+// Phase 2 (lock-free): fire into slot pool, alert escalation.
+func (l *Loop) evaluate() <span class="cov8" title="1">{
+        l.mu.Lock()
+
+        now := time.Now()
+        l.lastEval = now
+
+        if goroCount := runtime.NumGoroutine(); goroCount &gt; 100 </span><span class="cov0" title="0">{
+                log.Printf("WARN: goroutine count = %d (threshold: 100)", goroCount)
+        }</span>
+
+        <span class="cov8" title="1">l.events.Emit(context.Background(), SeverityInfo, "loop", "evaluation started", map[string]any{
+                "active_ticks": l.lifecycle.RunningCount(),
+                "budget":       l.weightBudget,
+        })
+
+        // Cleanup stale ticks.
+        cleaned, _ := l.lifecycle.CleanupStale(90 * time.Minute)
+        if cleaned &gt; 0 </span><span class="cov0" title="0">{
+                log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
+        }</span>
+
+        // Pick projects.
+        <span class="cov8" title="1">var packed []PackedProject
+        if l.namespaceMode &amp;&amp; l.multiPoolPacker != nil </span><span class="cov0" title="0">{
+                ctx := context.Background()
+                nss, _ := database.ListNamespaces(ctx, l.db, true)
+                if len(nss) &gt; 0 </span><span class="cov0" title="0">{
+                        projs, _ := database.ListProjects(ctx, l.db, false)
+                        running, lastComp := l.evalContext(ctx)
+                        result := l.multiPoolPacker.Pack(projs, nss, l.calculator, lastComp, running, now)
+                        packed = result.Projects
+                        tickGroup := now.Format("2006-01-02-15-04-05")
+                        for _, nt := range result.NamespaceTicks </span><span class="cov0" title="0">{
+                                _ = database.InsertNamespaceTick(ctx, l.db, &amp;database.NamespaceTick{
+                                        TickGroup: tickGroup, NamespaceID: nt.NamespaceID,
+                                        Allocated: nt.Allocated, Used: nt.Used,
+                                        Borrowed: nt.Borrowed, Lent: nt.Lent, JobCount: nt.JobCount,
+                                })
+                        }</span>
+                }
+        }
+        <span class="cov8" title="1">if len(packed) == 0 </span><span class="cov8" title="1">{
+                var err error
+                runningSet := l.spawner.RunningSet()
+                if l.slotPool != nil </span><span class="cov8" title="1">{
+                        runningSet = l.slotPool.RunningSet()
+                }</span>
+                <span class="cov8" title="1">packed, err = l.packer.Pick(now, runningSet)
+                if err != nil </span><span class="cov8" title="1">{
+                        log.Printf("EVAL: packer error: %v", err)
+                        l.mu.Unlock()
+                        return
+                }</span>
+        }
+
+        <span class="cov8" title="1">if len(packed) == 0 </span><span class="cov8" title="1">{
+                l.mu.Unlock()
+                return
+        }</span>
+
+        <span class="cov0" title="0">log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
+                len(packed), sumWeights(packed), l.weightBudget)
+
+        // Snapshot before releasing lock.
+        noDeliver := l.noDeliver
+
+        l.mu.Unlock()
+        // ---- Phase 2: spawn projects (lock-free, concurrent) ----
+
+        // Lazy-init the slot pool if not already created (test_verify, tests).
+        if l.slotPool == nil </span><span class="cov0" title="0">{
+                l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+        }</span>
+
+        // Gateway liveness check: ping before spawning. If gateway is dead,
+        // release all slots and skip this cycle. Retry next eval.
+        <span class="cov0" title="0">if l.gatewayClient != nil </span><span class="cov0" title="0">{
+                ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+                err := l.gatewayClient.Ping(ctx)
+                cancel()
+                if err != nil </span><span class="cov0" title="0">{
+                        if !l.gatewayDead </span><span class="cov0" title="0">{
+                                log.Printf("GATEWAY DEAD — pausing spawns, will retry in 30s: %v", err)
+                                l.gatewayDead = true
+                                l.slotPool.ReleaseAll()
+                        }</span>
+                        <span class="cov0" title="0">return</span>
+                }
+                <span class="cov0" title="0">if l.gatewayDead </span><span class="cov0" title="0">{
+                        log.Printf("GATEWAY reconnected — resuming spawns")
+                        l.gatewayDead = false
+                }</span>
+        }
+
+        // Fire each project into the slot pool. The pool's semaphore limits
+        // concurrency — projects acquire a slot, spawn via gateway in their
+        // own goroutine, and release the slot on completion/timeout.
+        // evaluate() returns immediately; the pool runs autonomously.
+        //
+        // Dedup: skip projects already occupying a slot to prevent
+        // the timeout→re-spawn→duplicate processes problem.
+        <span class="cov0" title="0">alreadyRunning := l.slotPool.RunningSet()
+        for _, proj := range packed </span><span class="cov0" title="0">{
+                if alreadyRunning[proj.Name] </span><span class="cov0" title="0">{
+                        log.Printf("DEDUP: skipping %s — already running", proj.Name)
+                        continue</span>
+                }
+                <span class="cov0" title="0">l.slotPool.Spawn(proj, now, noDeliver, l.db)</span>
+        }
+
+        // Alert escalation runs while pool processes ticks.
+        <span class="cov0" title="0">if len(packed) &gt; 0 </span><span class="cov0" title="0">{
+                escalator := NewAlertEscalator(l.db, l.events)
+                if err := escalator.RunAll(context.Background(), now); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("EVAL: escalation check error: %v", err)
+                }</span>
+        }
+}
+func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) <span class="cov0" title="0">{
+        running := make([]string, 0)
+        rrows, err := l.db.QueryContext(ctx, `SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
+        if err == nil </span><span class="cov0" title="0">{
+                defer rrows.Close()
+                for rrows.Next() </span><span class="cov0" title="0">{
+                        var name string
+                        if err := rrows.Scan(&amp;name); err == nil </span><span class="cov0" title="0">{
+                                running = append(running, name)
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">lastCompleted := make(map[string]time.Time)
+        crows, err := l.db.QueryContext(ctx,
+                `SELECT project_name, MAX(completed_at) FROM ticks WHERE status = 'completed' GROUP BY project_name`)
+        if err == nil </span><span class="cov0" title="0">{
+                defer crows.Close()
+                for crows.Next() </span><span class="cov0" title="0">{
+                        var name string
+                        var ts string
+                        if err := crows.Scan(&amp;name, &amp;ts); err == nil </span><span class="cov0" title="0">{
+                                if t, err2 := time.Parse(time.RFC3339, ts); err2 == nil </span><span class="cov0" title="0">{
+                                        lastCompleted[name] = t
+                                }</span>
+                        }
+                }
+        }
+        <span class="cov0" title="0">return running, lastCompleted</span>
+}
+
+func sumWeights(packed []PackedProject) int <span class="cov0" title="0">{
+        total := 0
+        for _, p := range packed </span><span class="cov0" title="0">{
+                total += p.Weight
+        }</span>
+        <span class="cov0" title="0">return total</span>
+}
+
+func (l *Loop) cleanDanglingOnStartup() <span class="cov8" title="1">{
+        ctx := context.Background()
+
+        // Update last_tick_completed for projects whose running ticks
+        // are being cleaned, so the packer uses actual last-tick time
+        // rather than created_at for urgency calculation.
+        if _, err := l.db.ExecContext(ctx,
+                `UPDATE projects SET last_tick_completed = strftime('%Y-%m-%dT%H:%M:%S', 'now')
+          WHERE name IN (SELECT DISTINCT project_name FROM ticks WHERE status='running')`); err != nil </span><span class="cov0" title="0">{
+                log.Printf("DANGLING: last_tick_completed update failed: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">result, err := l.db.ExecContext(ctx,
+                `UPDATE ticks SET status='timeout' WHERE status='running'`)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("DANGLING: startup cleanup failed: %v", err)
+                return
+        }</span>
+        <span class="cov8" title="1">n, _ := result.RowsAffected()
+        if n &gt; 0 </span><span class="cov0" title="0">{
+                log.Printf("DANGLING: cleaned %d running ticks from previous process", n)
+        }</span>
+}
+
+func (l *Loop) reapZombies() <span class="cov0" title="0">{
+        ctx := context.Background()
+        rows, err := l.db.QueryContext(ctx,
+                `SELECT id, pid FROM ticks WHERE status='running' AND pid &gt; 0`)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("ZOMBIE: reaper query failed: %v", err)
+                return
+        }</span>
+        <span class="cov0" title="0">defer rows.Close()
+
+        var reaped int
+        for rows.Next() </span><span class="cov0" title="0">{
+                var id string
+                var pid int
+                if err := rows.Scan(&amp;id, &amp;pid); err != nil </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov0" title="0">if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) </span><span class="cov0" title="0">{
+                        if _, err := l.db.ExecContext(ctx,
+                                `UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id); err != nil </span><span class="cov0" title="0">{
+                                log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
+                                continue</span>
+                        }
+                        <span class="cov0" title="0">reaped++</span>
+                }
+        }
+        <span class="cov0" title="0">if reaped &gt; 0 </span><span class="cov0" title="0">{
+                log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
+        }</span>
+}
+</pre>
+		
+		<pre class="file" id="file16" style="display: none">package scheduler
+
+import (
+        "log"
+        "math"
+        "time"
+)
+
+// UrgencyCalculator computes tick intervals and urgency scores.
+type UrgencyCalculator struct {
+        minInterval time.Duration
+        maxInterval time.Duration
+        numLevels   int
+        ratio       float64
+}
+
+// NewUrgencyCalculator creates a calculator with the given range.
+func NewUrgencyCalculator(minI, maxI time.Duration, numLevels int) *UrgencyCalculator <span class="cov8" title="1">{
+        if numLevels &lt; 2 </span><span class="cov8" title="1">{
+                log.Printf("WARNING: numLevels=%d &lt; 2, setting to 2", numLevels)
+                numLevels = 2
+        }</span>
+        <span class="cov8" title="1">minSec := minI.Seconds()
+        maxSec := maxI.Seconds()
+        ratio := 1.0
+        if minSec &gt; 0 &amp;&amp; maxSec &gt; minSec </span><span class="cov8" title="1">{
+                ratio = maxSec / minSec
+        }</span> else<span class="cov8" title="1"> {
+                log.Printf("WARNING: invalid interval range (min=%.0fs, max=%.0fs), using ratio=1.0", minSec, maxSec)
+        }</span>
+        <span class="cov8" title="1">return &amp;UrgencyCalculator{
+                minInterval: minI,
+                maxInterval: maxI,
+                numLevels:   numLevels,
+                ratio:       ratio,
+        }</span>
+}
+
+// ComputeInterval maps priority to a geometric tick interval.
+// Higher priority → shorter interval (runs more frequently).
+// Formula: interval = maxInterval / ratio ^ ((priority - 1) / (numLevels - 1))
+//
+//        priority=10 → minInterval   (fastest)
+//        priority=1  → maxInterval   (slowest)
+func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration <span class="cov8" title="1">{
+        p := priority
+        if p &lt; 1 </span><span class="cov8" title="1">{
+                p = 1
+        }</span> else<span class="cov8" title="1"> if p &gt; float64(u.numLevels) </span><span class="cov8" title="1">{
+                p = float64(u.numLevels)
+        }</span>
+        <span class="cov8" title="1">position := (p - 1) / float64(u.numLevels-1)
+        divisor := math.Pow(u.ratio, position)
+        if divisor &lt;= 0 </span><span class="cov0" title="0">{
+                divisor = 1
+        }</span>
+        <span class="cov8" title="1">seconds := u.maxInterval.Seconds() / divisor
+        return time.Duration(seconds * float64(time.Second))</span>
+}
+
+// ComputeUrgency returns the urgency score for a project.
+// Formula: urgency = priority * (1 + elapsed / interval) ^ decayRate
+func (u *UrgencyCalculator) ComputeUrgency(priority, decayRate float64, now time.Time, lastCompleted *time.Time, createdAt time.Time) float64 <span class="cov8" title="1">{
+        d := decayRate
+        if d &lt; 0 </span><span class="cov8" title="1">{
+                d = 0
+        }</span>
+        <span class="cov8" title="1">var elapsed float64
+        if lastCompleted != nil </span><span class="cov8" title="1">{
+                elapsed = now.Sub(*lastCompleted).Seconds()
+        }</span> else<span class="cov8" title="1"> {
+                elapsed = now.Sub(createdAt).Seconds()
+        }</span>
+        <span class="cov8" title="1">if elapsed &lt; 0 </span><span class="cov8" title="1">{
+                elapsed = 0
+        }</span>
+        <span class="cov8" title="1">interval := u.ComputeInterval(priority)
+        intervalSeconds := interval.Seconds()
+        base := 1.0 + (elapsed / intervalSeconds)
+        if base &lt; 1.0 </span><span class="cov0" title="0">{
+                base = 1.0
+        }</span>
+        <span class="cov8" title="1">return priority * math.Pow(base, d)</span>
+}
+
+// SetRange updates the min/max interval range at runtime.
+func (u *UrgencyCalculator) SetRange(minI, maxI time.Duration) <span class="cov8" title="1">{
+        minSec := minI.Seconds()
+        maxSec := maxI.Seconds()
+        if minSec &lt;= 0 || maxSec &lt;= minSec </span><span class="cov8" title="1">{
+                log.Printf("WARNING: SetRange ignored: invalid range (min=%.0fs, max=%.0fs)", minSec, maxSec)
+                return
+        }</span>
+        <span class="cov8" title="1">u.minInterval = minI
+        u.maxInterval = maxI
+        u.ratio = maxSec / minSec</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

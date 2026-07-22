@@ -27,12 +27,12 @@ go test -short -p 1 ./...
 # Lint
 golangci-lint run
 
-# Run (requires gateway at :8642)
-./bin/schedulerd --db ~/.hermes/coding-hermes/scheduler.db \
+# Run (requires Hermes gateway)
+./bin/schedulerd --db <YOUR_DB_PATH>/scheduler.db \
   --max-concurrent 4 --min-interval 30s \
   --tick-timeout 7200s \
-  --gateway-url http://127.0.0.1:8642 \
-  --gateway-key <key> \
+  --gateway-url <YOUR_GATEWAY_URL> \
+  --gateway-key <YOUR_GATEWAY_KEY> \
   --no-exec-fallback
 ```
 
@@ -74,16 +74,13 @@ internal/
 
 ## Key Design Decisions
 
-- **No timeout backoff.** Per Bane's fleet rule: timeout means try again at normal cooldown.
+- **No timeout backoff.** Timeout means try again at normal cooldown — do not escalate.
 - **No auto-disable.** Only human command or scheduler daemon after 10+ consecutive timeouts over 24h.
 - **Foremen never use delegate_task.** Workers are spawned via `hermes chat -q` with independent model/provider selection.
-- **Multi-pool weight packing.** Namespaces get weighted allocations; within each namespace, urgency-scored projects are packed into available slots.
-- **Scheduler daemon runs via bash wrapper, not systemd** — FIX-STUCK blocked by Bane.
 
 ## Project Conventions
 
 - Go doc comments on all public functions
 - Sequential test runs (`-p 1`) due to cgroup pids limits
-- Co-author via `CODING_HERMES_CO_AUTHOR` env var in `~/.hermes/.env`
+- Co-author via `CODING_HERMES_CO_AUTHOR` env var
 - GitReins guards enforce secrets, build, lint, and tests before commit
-- Hilo graph tracks dependency edges (385 edges, 54 files as of 2026-07-20)

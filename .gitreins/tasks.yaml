@@ -404,3 +404,32 @@ tasks:
   status: complete
   created_at: '2026-07-19T17:29:25.770334+00:00'
   completed_at: '2026-07-21T08:11:49.432932+00:00'
+- id: GUARD-NO-HARDCODED-MODELS
+  title: 'Guard: no hardcoded model/provider names in source'
+  criteria:
+  - go files must use configurable defaults, not hardcoded model names (deepseek-v4-flash,
+    gpt-5.6-sol, etc.)
+  - go files must use environment variables or config structs for provider names,
+    not string literals
+  - AGENTS.md must show template placeholders (<YOUR_MODEL>, <YOUR_PROVIDER>) not
+    exact deployment values
+  - README.md must not contain exact provider/model combinations used in production
+  - "no hardcoded gateway URLs (http://127.0.0.1:8642) \u2014 use config placeholders"
+  - grepping for 'deepseek-v4' or 'gpt-5.6' or 'openai-codex' in *.go files returns
+    zero matches (except comments/constants documenting the pattern)
+  status: pending
+  created_at: '2026-07-22T20:30:15.308416+00:00'
+- id: GUARD-SKILLS-ARE-TEMPLATES
+  title: 'Guard: skills are templates, not exact deployment configs'
+  criteria:
+  - skill files (.coding-hermes/, skills/) must use {{PLACEHOLDER}} syntax for all
+    deployment-specific values
+  - no hardcoded API keys, provider names, or model names in any .md or skill file
+  - spawn.go skills string must reference generic skill names, not deployment-specific
+    ones
+  - foreman prompts must use template variables (${FOREMAN_MODEL}, ${FOREMAN_PROVIDER})
+    not hardcoded values
+  - all example configs must use <YOUR_VALUE> or ${ENV_VAR} placeholders
+  - grepping for api keys (sk-, l39Y, WZJh, etc.) in any file returns zero matches
+  status: pending
+  created_at: '2026-07-22T20:30:23.899798+00:00'

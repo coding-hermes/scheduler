@@ -23,8 +23,8 @@ import (
 const (
 	estTokensIn    = 8000     // estimated input tokens per tick
 	estTokensOut   = 2000     // estimated output tokens per tick
-	estCostPerIn   = 0.000002 // deepseek-v4-flash input $/token
-	estCostPerOut  = 0.000008 // deepseek-v4-flash output $/token
+	estCostPerIn   = 0.000002 // foreman-model input $/token (set via env)
+	estCostPerOut  = 0.000008 // foreman-model output $/token (set via env)
 	estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
 )
 
@@ -65,11 +65,19 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		maxConcurrent: maxConcurrent,
 		active:        make(map[string]*exec.Cmd),
 		timeout:       to,
-		model:         "deepseek-v4-flash",
-		provider:      "deepseek-foreman",
-		skills:        "coding-hermes-foreman,coding-hermes-cron,hilo-usage,gitreins,never-done",
+		model:         getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
+		provider:      getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
+		skills:        getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
 	}
+}
+
+// getEnvOrDefault returns the value of envVar if set, otherwise fallback.
+func getEnvOrDefault(envVar, fallback string) string {
+	if v := os.Getenv(envVar); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.
