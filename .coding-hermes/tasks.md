@@ -1,3 +1,32 @@
+## FOREMAN TICK — 2026-07-22 05:18 (#86) — PRODUCTIVE — INFRA-COOLDOWN-CAP DEPLOYED (daemon restarted with new binary, cooldown set to 43200s)
+
+**Board status:** PRODUCTIVE — Deployed the INFRA-COOLDOWN-CAP fix from tick #85. Daemon restarted with new binary (old PID 3190518 → new PID 534855). autoSlowdown cap permanently raised from 3600s to **86400s (24h)** in `slowdown.go:39`. Cooldown set to **43200s (12h)** via API PUT. Verified: `CooldownS=43200`. Daemon healthy (0:9090, DB connected, 6 active ticks). The fix will prevent autoSlowdown from overriding API-set cooldowns above 1h.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Only untracked `coverage.html` artifact — ignored
+- Build+vet: PASS (new binary built: `bin/schedulerd`, 20.8MB, md5=23fc5341)
+- Tests: 9/9 packages PASS (uncached, including 23 AutoSlowdown tests)
+
+**Deployment — INFRA-COOLDOWN-CAP fix now live:**
+| Aspect | Before (PID 3190518) | After (PID 534855) | Impact |
+|--------|---------------------|--------------------|--------|
+| slowdowm cap | **3600s** (1h) | **86400s** (24h) | Idle cooldown can escalate to 12h+ without being capped |
+| Binary date | Jul 19 | Jul 22 | Fix committed `3d342b5` → built → deployed |
+| Daemon uptime | 13h14m | 34s | Clean restart, no in-flight tick loss |
+| Cooldown | 3600s (overridden by old binary cap) | **43200s** (API PUT, now protected by new cap) | Finally permanent after 14 reversions |
+| Spawns exec | 380 | 6 (fresh session) | Normal startup |
+
+**Remaining tasks:**
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run if board stays empty)
+
+**VERDICT: productively deployed INFRA-COOLDOWN-CAP fix. 14-tick cooldown reversion problem permanently resolved. Daemon restarted with new binary (PID 534855). Cooldown = 43200s. DuckBrain status written to `coding-hermes` namespace.**
+
+---
+
 ## FOREMAN TICK — 2026-07-22 04:10 (#85) — PRODUCTIVE — INFRA-COOLDOWN-CAP FIXED (autoSlowdown cap raised to 86400s)
 
 **Board status:** PRODUCTIVE — Fixed INFRA-COOLDOWN-CAP. autoSlowdown cap raised from 3600s to **86400s (24h)** in `slowdown.go:39-40`. Tests updated: `CapAt3600`→`CapAt86400`, `Cooldown2400ToCapped`→`Cooldown57600ToCapped`, `CooldownAlready3600`→`CooldownAlready86400`. Commit `3d342b5`. All 23 AutoSlowdown tests + 9/9 packages PASS. Daemon PID 3190518 healthy. Cooldown currently 900s (requires API PUT to 43200s now that cap is fixed).
