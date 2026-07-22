@@ -1,3 +1,30 @@
+## FOREMAN TICK — 2026-07-22 04:10 (#85) — PRODUCTIVE — INFRA-COOLDOWN-CAP FIXED (autoSlowdown cap raised to 86400s)
+
+**Board status:** PRODUCTIVE — Fixed INFRA-COOLDOWN-CAP. autoSlowdown cap raised from 3600s to **86400s (24h)** in `slowdown.go:39-40`. Tests updated: `CapAt3600`→`CapAt86400`, `Cooldown2400ToCapped`→`Cooldown57600ToCapped`, `CooldownAlready3600`→`CooldownAlready86400`. Commit `3d342b5`. All 23 AutoSlowdown tests + 9/9 packages PASS. Daemon PID 3190518 healthy. Cooldown currently 900s (requires API PUT to 43200s now that cap is fixed).
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date
+- Dirty workdir: Only untracked `coverage.html` artifact — ignored
+- Build+vet: PASS
+- Tests: 9/9 packages PASS (uncached)
+- DuckBrain MCP: UP — 2 entries written
+
+**INFRA-COOLDOWN-CAP — COMPLETED:**
+| Before | After | Impact |
+|--------|-------|--------|
+| `if newCD > 3600 { newCD = 3600 }` | `if newCD > 86400 { newCD = 86400 }` | Idle cooldown can now escalate from 600s→900s→1350s→...→86400s (24h) over ~14 idle ticks instead of being hard-capped at 3600s (1h) |
+
+**Remaining tasks:**
+- After daemon restart or next idle tick, the API cooldown should be set to 43200s (12h) via `PUT /api/v1/projects/coding-hermes-scheduler {"CooldownS":43200}` — the fix ensures it won't be overwritten by autoSlowdown
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+**VERDICT: productively completed INFRA-COOLDOWN-CAP. 14-tick cooldown reversion root cause permanently fixed. Cooldown should be re-set to 43200s on next interaction (cap now respects it). DuckBrain updated. Daemon healthy (PID 3190518).**
+
+---
+
 ## FOREMAN TICK — 2026-07-22 01:58 (#84) — IDLE COUNTER 18/7 → PAST CAP BY 11, COOLDOWN REVERSION #14 — ROOT CAUSE FOUND
 
 **Board status:** IDLE — 11/11 audit green. No code changes since AUDIT-014 (tick #66, `11a3ca5`, 2026-07-20). **ROOT CAUSE DISCOVERED:** Cooldown reversions are NOT from fleet config — they're caused by `autoSlowdown()` in `internal/scheduler/slowdown.go` which caps the idle escalation cooldown at **3600s** (line 40). The daemon is NOT running with `--config` (no fleet.toml loaded). Since all ticks are IDLE, every tick's slowdown function reads 43200, multiplies by 1.5x, caps at 3600, and writes 3600. This has happened 14 times. Re-fixed to 43200s via API PUT, verified at 43200s (will revert again on next idle tick due to slowdown cap). Idle counter: 18/7 — 11 past escalation cap. Daemon PID 3190518 (same since tick #78, ~10h uptime). DuckBrain status entry written.
