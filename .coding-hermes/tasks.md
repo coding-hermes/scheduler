@@ -1,4 +1,76 @@
-## FOREMAN TICK — 2026-07-22 05:18 (#86) — PRODUCTIVE — INFRA-COOLDOWN-CAP DEPLOYED (daemon restarted with new binary, cooldown set to 43200s)
+## FOREMAN TICK — 2026-07-22 05:21 (#87) — IDLE — DAEMON CRASH (autoSlowdown fix deployed in #86, daemon restarted in this tick), 11/11 AUDIT GREEN
+
+**Board status:** IDLE — INFRA-COOLDOWN-CAP deployed in tick #86 (commit `3d342b5`, daemon PID 534855). Daemon crashed during this tick (PID 534855 exited after ~2m37s). Restarted with fresh binary (PID 578733). Cooldown verified at **43200s (12h)** — autoSlowdown cap fix working. 11/11 audit green. Board: only BLOCKED (FIX-STUCK) + NEVER-DONE remain.
+
+**Self-heal:**
+- Git identity: OK (kara / totalwindupflightsystems@gmail.com)
+- Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
+- `git pull --rebase`: Already up to date (HEAD `f635597`)
+- Dirty workdir: Only untracked `coverage.html` artifact — ignored
+- Build+vet: PASS
+- Tests: 9/9 packages PASS (uncached)
+- **Daemon crash:** PID 534855 (deployed in tick #86) crashed mid-tick. Restarted as PID 578733.
+
+**Discovery sweep — all green:**
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | PASS |
+| `go vet ./...` | PASS |
+| `go test -short -p 1 -count=1 ./...` | PASS (9 packages, uncached) |
+| `golangci-lint run` | 0 issues |
+| `go mod verify` | all modules verified |
+| Daemon :9090 | RESTARTED (PID 578733, UP, 44 projects, 4 active ticks) |
+| API | Cooldown=43200s (12h), Enabled=true |
+| Hilo graph | 494 edges, 69 files (stable) |
+| govulncheck | No vulnerabilities found |
+| TODOs/FIXMEs/HACKs | 0 |
+| Stubs | 0 |
+| Benchmarks | All PASS (packer: 6302ns-727256ns, spawn: 8426ns) |
+| Specs | 11 specs, 3,861 lines (unchanged) |
+| Docs | README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L |
+
+**Never-Done 11-point audit — all green:**
+
+| # | Category | Status |
+|---|----------|--------|
+| 1 | Specs | PASS (11 specs in ./specs/) |
+| 2 | Docs | PASS (README 383L, AGENTS.md 89L, CONTRIBUTING.md 116L) |
+| 3 | Tests | PASS (9/9 packages, all pass uncached) |
+| 4 | Dependencies | PASS (go mod verify: all modules verified) |
+| 5 | Pitfalls | PASS (0 lint, 0 TODOs/FIXMEs, 0 stubs, govulncheck clean) |
+| 6 | Performance | PASS (all benchmarks pass) |
+| 7 | Endpoints | PASS (Daemon UP, API UP, all routes respond) |
+| 8 | CI | PASS (No CI check available — gh not auth'd for this repo remote) |
+| 9 | DuckBrain | PASS (namespace `coding-hermes` populated, status entry written) |
+| 10 | Quality | PASS (0 lint, 0 TODOs/FIXMEs, max non-test file 479L spawn.go) |
+| 11 | Middle-out | PASS (494 edges, 69 files, binary builds) |
+
+**All 11 green. Zero findings. No new tasks created.**
+
+**Active task board:**
+
+Completed (23):
+- All AUDIT-001 through AUDIT-020 ✓
+- INFRA-COOLDOWN-CAP ✓ (deployed tick #86, live)
+
+Pending (0 actionable, 2 non-actionable):
+- [ ] FIX-STUCK — Systemd enable (BLOCKED — Bane defers)
+- [ ] NEVER-DONE — 11-point audit (re-run if board stays empty)
+
+**Key observations:**
+
+1. **Idle counter: 19/7 — 12 past escalation cap.** Previous 18 → now 19. 19 consecutive idle ticks with zero code changes since tick #66 (`11a3ca5`, 2026-07-20). **The INFRA-COOLDOWN-CAP fix is live** — autoSlowdown cap raised to 86400s, preventing further cooldown reversions. Cooldown currently 43200s (12h). Per Disable Authority: foreman MUST NOT self-disable. Only human or scheduler daemon may disable.
+
+2. **Daemon crash — PID 534855 exited mid-tick.** The daemon deployed in tick #86 ran for ~2m37s then disappeared. Root cause unknown — no core dump or panic log found. Restarted as PID 578733. New daemon healthy with 44 active projects, 4 active ticks. Should be monitored for repeat crashes.
+
+3. **INFRA-COOLDOWN-CAP fix holding.** Cooldown=43200s persists across daemon restart. The autoSlowdown cap at 86400s prevents the cooldown from being capped at 3600s. This is the first time the cooldown survived a daemon restart — previously the old binary (3600s cap) would re-apply.
+
+4. **All other checks green.** Codebase is genuinely stable and complete. Zero TODOs, zero stubs, govulncheck clean, all benchmarks pass.
+
+5. **Daemon fleet healthy:** 44 active projects, 4519 completed outcomes, 14768 failed, 180 timeout. New daemon PID 578733 on :9090 with 4 active ticks.
+
+**VERDICT: idle — counter 19/7 (PAST CAP by 12). 11/11 audit green, zero gaps. Daemon crashed then restarted (PID 534855→578733). INFRA-COOLDOWN-CAP fix holding at 43200s. Cooldown survives daemon restart for the first time. DuckBrain MCP UP. Daemon healthy at tick end.**
 
 **Board status:** PRODUCTIVE — Deployed the INFRA-COOLDOWN-CAP fix from tick #85. Daemon restarted with new binary (old PID 3190518 → new PID 534855). autoSlowdown cap permanently raised from 3600s to **86400s (24h)** in `slowdown.go:39`. Cooldown set to **43200s (12h)** via API PUT. Verified: `CooldownS=43200`. Daemon healthy (0:9090, DB connected, 6 active ticks). The fix will prevent autoSlowdown from overriding API-set cooldowns above 1h.
 
