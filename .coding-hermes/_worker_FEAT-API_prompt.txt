@@ -1,0 +1,70 @@
+You are a Go programmer adding REST API endpoints to an existing HTTP server in the coding-hermes scheduler project. Workdir: /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+
+The board task FEAT-API lists 9 gaps, but 5 are ALREADY IMPLEMENTED. Your job is to fill the 4 remaining gaps.
+
+=== WHAT ALREADY EXISTS (DO NOT RE-IMPLEMENT) ===
+- PUT /api/v1/projects/:name — updateProject() at server.go:211 ✓
+- GET /api/v1/ticks?project=X&limit=N — handleTicks() at server.go:246 ✓  
+- GET /api/v1/ticks/:id — handleTickByID() at server.go:271 ✓
+- GET /api/v1/namespaces — listNamespaces() at namespace_handlers.go:24 ✓
+- PUT /api/v1/namespaces/:id — updateNamespace() at namespace_handlers.go:118 ✓
+- POST /api/v1/evaluate — evaluate() at server.go:291 ✓
+
+=== WHAT YOU NEED TO ADD ===
+
+1. POST /api/v1/projects/:name/spawn (in server.go, inside handleProjectByID)
+   - The handleProjectByID method at server.go:159 routes sub-paths already (pause/resume at lines 170-181)
+   - Add a "spawn" case that: looks up the project, creates a tick ID (format: name-YYYY-MM-DD-HH-MM-SS), calls l.ForceEvaluate() to trigger evaluation, returns 202 with tick_id
+   - The Loop.ForceEvaluate() method (loop.go:266) triggers the full evaluate cycle which will pick up this project
+   - Return 404 if project not found, 202 with {"status":"spawned","tick_id":"..."} on success
+   
+2. Status filter on GET /api/v1/ticks (in server.go, modify handleTicks)
+   - Add a `status` query param to existing handleTicks at server.go:246
+   - If status is provided (e.g. "running", "completed", "failed", "timeout"), add WHERE status = ? to the listTicks query
+   - Existing query at server.go:445-472 uses listTicks helper. Modify it to accept optional status string
+   - Keep backward compat: status="" means no filter (current behavior)
+
+3. GET /api/v1/queue (in server.go, new handler)
+   - Return eligible projects ordered by urgency (what the packer would pick)
+   - Use l.packer or l.multiPoolPacker to get the queue
+   - The Packer has a Pick method that returns []PackedProject — call it with budget=999 and an empty running set to get the full ordered list
+   - Packer.Pick signature: Pick(projects, budget, runningSet) — see packer.go
+   - Return JSON: {"queue": [{name, priority, weight, cooldown_s, urgency, eligible}, ...]}
+   - If namespace mode is active, merge results from multiPoolPacker across all namespaces
+
+4. GET /api/v1/openapi.json (in server.go, new handler)
+   - Return an OpenAPI 3.0.3 JSON document describing all existing endpoints
+   - Include: info (title, version), servers, paths for every endpoint
+   - Document request/response schemas for: health, status, projects (list/create/get/update/pause/resume/spawn), namespaces (list/create/get/update), ticks (list with params, detail), queue, evaluate, pause, resume, events
+   - Keep it concise but accurate — ~200 lines of JSON
+
+5. TESTS: Add tests for all 4 new endpoints in server_test.go
+   - Follow the existing test patterns: apiTestServer fixture, newAPITestServer(), a.do() helper
+   - Test: spawn success, spawn not-found, spawn method-not-allowed
+   - Test: ticks with status filter (create tick in DB, verify filter works)
+   - Test: queue returns ordered list, queue empty
+   - Test: openapi returns valid JSON with required keys (openapi, info, paths)
+   - DO NOT run go mod tidy — do not modify go.mod/go.sum
+   - Run gofmt -w on all changed files before finishing
+
+=== CODE PATTERNS TO FOLLOW ===
+- Handler registration: server.go:33-48 (mux.HandleFunc pattern)
+- Project sub-routes: server.go:169-181 (parts[1] switch pattern)
+- Error handling: writeError(w, code, msg)
+- Success response: writeJSON(w, code, data)
+- Database access: database.GetProject(ctx, s.db, name)
+- Loop access: s.loop.ForceEvaluate(), s.loop.Pause()
+- Test setup: newAPITestServer(t), a.do(t, method, path, body)
+- Test assertions: check status code, check body map fields
+
+=== VERIFICATION ===
+After coding, run:
+1. go build ./... — must compile clean
+2. go vet ./... — no warnings
+3. go test ./internal/api/... -count=1 -v -run "Spawn|Queue|OpenAPI|Status" — all new tests pass
+4. go test ./internal/api/... -count=1 — all existing tests still pass
+5. gofmt -w internal/api/server.go internal/api/server_test.go
+
+=== COMMIT ===
+When done: git add internal/api/server.go internal/api/server_test.go && git commit -m "feat: add spawn endpoint, ticks status filter, queue, and OpenAPI spec"
+Then confirm with: git log --oneline -1

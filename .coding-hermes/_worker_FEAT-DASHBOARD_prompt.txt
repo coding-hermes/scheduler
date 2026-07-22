@@ -1,0 +1,63 @@
+#coding-hermes-worker
+
+## Task: FEAT-DASHBOARD — htmx Integration + Project Detail Page
+
+**Priority: MEDIUM. Weight: 12.**
+
+The scheduler already has a static dark-theme dashboard at `/` served by `internal/dashboard/generator.go` (Go `html/template`). It has a fleet overview table, recent ticks, and namespace tables. It auto-refreshes via `<meta http-equiv="refresh" content="60">`.
+
+### What to Build (Phase 1)
+
+**1. Add htmx for live updates**
+- Download htmx.min.js (or use CDN with local fallback via Go embed)
+- Replace meta-refresh with htmx: `hx-get="/dashboard/partial" hx-trigger="every 10s" hx-target="#fleet-overview"`
+- Create a partial template `fleet_table.html` that renders JUST the project table body (not full page)
+- The main page loads the full template, then htmx replaces the table every 10s
+- Use Go embed to bundle htmx.min.js and templates
+
+**2. Add `/projects/{name}` project detail page**
+- New route in `cmd/schedulerd/main.go` (or new file in `internal/dashboard/`)
+- Displays: project name, weight, priority, cooldown, enabled status
+- Latest tick info: outcome, session_id, spawned_at, completed_at, cost
+- Last 20 ticks for this project in a table
+- Configuration panel showing editable fields (just display for now, editing comes later)
+- Include a "back to fleet" link
+
+**3. Wire it up in main.go**
+- Add `GET /projects/{name}` route
+- Serve htmx.min.js from Go embed
+
+### Existing Architecture
+
+- **Route mount point:** `cmd/schedulerd/main.go` lines 186-206 — the dashboard handler is registered at `/` for the full page
+- **Dashboard package:** `internal/dashboard/` — `Generator` struct with `Generate(w)` method, pre-parsed template
+- **API Server:** `internal/api/server.go` — `Handler()` returns `http.ServeMux` at `/api/`
+- **Database:** `internal/database/` — `GetProject()`, `ListTicks()` with project filter, `GetLatestTick()`
+- **Database models:** `internal/database/models.go` — Project, Tick structs
+- **Go module:** `github.com/coding-herms/scheduler` with Go 1.26, only `modernc.org/sqlite` and `BurntSushi/toml` as direct deps
+
+### Key Details
+
+- Keep existing dark theme CSS from `generator.go` (lines 277-301)
+- No framework dependencies — just Go stdlib + htmz/htmx
+- Templates stay in Go `html/template` (no external template engine)
+- All new files go in `internal/dashboard/` package
+- The existing `Generator.Generate(w)` renders the full-page HTML — don't break this, add partial rendering alongside it
+- Run `go build ./...` after every change
+- Run `go test ./internal/dashboard/...` after finishing
+- Do NOT modify `go.mod` or `go.sum` unless adding a new dependency (for htmx, use Go embed or CDN, not a Go module)
+
+### Acceptance Criteria
+1. Dashboard auto-refreshes via htmx every 10s (the project table part only)
+2. `/projects/{name}` shows project detail with tick history
+3. `go build ./... ` compiles clean
+4. `go test ./internal/dashboard/... -count=1` passes all 7 tests
+5. `go vet ./...` passes
+6. The existing full-page dashboard at `/` still works
+
+### Do NOT
+- Modify API server handlers (`internal/api/`)
+- Change database schema or migrations
+- Add external Go dependencies
+- Modify generator_test.go
+- Modify generator.go's existing FleetData struct or template
