@@ -36,8 +36,8 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 		}
 		// Multiply by 1.5x instead of 2x — gentler escalation.
 		newCD := currentCD + currentCD/2
-		if newCD > 3600 {
-			newCD = 3600
+		if newCD > 86400 {
+			newCD = 86400
 		}
 		if newCD != currentCD {
 			db.Exec("UPDATE projects SET cooldown_s = ? WHERE name = ?", newCD, project)

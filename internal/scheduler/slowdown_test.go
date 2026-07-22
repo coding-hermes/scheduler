@@ -147,57 +147,58 @@ func TestAutoSlowdown_Idle_EscalationChain(t *testing.T) {
 	}
 }
 
-func TestAutoSlowdown_Idle_CapAt3600(t *testing.T) {
+func TestAutoSlowdown_Idle_CapAt86400(t *testing.T) {
 	tests := []struct {
+		name    string
 		current int
+		want    int
 	}{
-		{2400}, // 2400 * 1.5 = 3600 → exactly at cap
-		{3600}, // already at cap → stays at 3600 (no DB write since unchanged)
+		{"57600→86400 (exactly at cap)", 57600, 86400},
+		{"86400→86400 (already capped, no write)", 86400, 86400},
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("current=%d", tt.current), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			db := slowdownTestDB(t)
-			name := fmt.Sprintf("cap_%d", tt.current)
-			insertSlowdownProject(t, db, name, tt.current)
+			insertSlowdownProject(t, db, "cap_test", tt.current)
 
 			var buf bytes.Buffer
 			buf.WriteString("IDLE TICK\n")
-			autoSlowdown(db, name, &buf)
+			autoSlowdown(db, "cap_test", &buf)
 
-			if got := getSlowdownCooldown(t, db, name); got != 3600 {
-				t.Errorf("cooldown = %d, want 3600 (capped)", got)
+			if got := getSlowdownCooldown(t, db, "cap_test"); got != tt.want {
+				t.Errorf("cooldown = %d, want %d", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestAutoSlowdown_Idle_Cooldown2400ToCapped verifies 2400→3600 exactly hits the cap.
-func TestAutoSlowdown_Idle_Cooldown2400ToCapped(t *testing.T) {
+// TestAutoSlowdown_Idle_Cooldown57600ToCapped verifies 57600→86400 exactly hits the cap.
+func TestAutoSlowdown_Idle_Cooldown57600ToCapped(t *testing.T) {
 	db := slowdownTestDB(t)
-	insertSlowdownProject(t, db, "cap_2400", 2400)
+	insertSlowdownProject(t, db, "cap_57600", 57600)
 
 	var buf bytes.Buffer
 	buf.WriteString("IDLE TICK\n")
-	autoSlowdown(db, "cap_2400", &buf)
+	autoSlowdown(db, "cap_57600", &buf)
 
-	if got := getSlowdownCooldown(t, db, "cap_2400"); got != 3600 {
-		t.Errorf("cooldown = %d, want 3600 (2400 * 1.5 = 3600, equals cap)", got)
+	if got := getSlowdownCooldown(t, db, "cap_57600"); got != 86400 {
+		t.Errorf("cooldown = %d, want 86400 (57600 * 1.5 = 86400, equals cap)", got)
 	}
 }
 
-// TestAutoSlowdown_Idle_CooldownAlready3600_NoWrite verifies that when
-// the cooldown is already 3600, it stays at 3600 (cap enforced, no DB write).
-func TestAutoSlowdown_Idle_CooldownAlready3600_NoWrite(t *testing.T) {
+// TestAutoSlowdown_Idle_CooldownAlready86400_NoWrite verifies that when
+// the cooldown is already 86400, it stays at 86400 (cap enforced, no DB write).
+func TestAutoSlowdown_Idle_CooldownAlready86400_NoWrite(t *testing.T) {
 	db := slowdownTestDB(t)
-	insertSlowdownProject(t, db, "cap_3600", 3600)
+	insertSlowdownProject(t, db, "cap_86400", 86400)
 
 	var buf bytes.Buffer
 	buf.WriteString("IDLE TICK\n")
-	autoSlowdown(db, "cap_3600", &buf)
+	autoSlowdown(db, "cap_86400", &buf)
 
-	if got := getSlowdownCooldown(t, db, "cap_3600"); got != 3600 {
-		t.Errorf("cooldown = %d, want 3600 (unchanged — already at cap)", got)
+	if got := getSlowdownCooldown(t, db, "cap_86400"); got != 86400 {
+		t.Errorf("cooldown = %d, want 86400 (unchanged — already at cap)", got)
 	}
 }
 
