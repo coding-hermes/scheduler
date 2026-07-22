@@ -433,3 +433,17 @@ tasks:
   - grepping for api keys (sk-, l39Y, WZJh, etc.) in any file returns zero matches
   status: pending
   created_at: '2026-07-22T20:30:23.899798+00:00'
+- id: AUDIT-DESCENDANT-LIFECYCLE
+  title: 'Audit: descendant process lifecycle and cleanup'
+  criteria:
+  - terminal timeouts exist for all background processes and subagents
+  - background processes are killed/reaped when parent session exits
+  - no orphaned shell pipelines, build processes, or LSP servers remain after tick
+    completion
+  - 'stress-test: spawn 10 delegated agents concurrently, cancel 5, verify all 10
+    child processes cleaned up'
+  - zero MCP processes remain after every child session exits
+  - gateway alerts at 50%, 75%, 90% TasksMax
+  - TasksMax=2048 is the single source of truth for cgroup pids.max
+  status: pending
+  created_at: '2026-07-22T21:04:51.004900+00:00'

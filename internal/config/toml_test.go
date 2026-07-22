@@ -257,11 +257,11 @@ func TestApplyFleetConfigDefaults(t *testing.T) {
 	if p.DecayRate != 1.0 {
 		t.Errorf("default decay_rate: expected 1.0, got %f", p.DecayRate)
 	}
-	if p.Model != "deepseek-v4-pro" {
-		t.Errorf("default model: expected deepseek-v4-pro, got %q", p.Model)
+	if p.Model != "your-model-name" {
+		t.Errorf("default model: expected your-model-name, got %q", p.Model)
 	}
-	if p.Provider != "deepseek-foreman" {
-		t.Errorf("default provider: expected deepseek-foreman, got %q", p.Provider)
+	if p.Provider != "your-provider-name" {
+		t.Errorf("default provider: expected your-provider-name, got %q", p.Provider)
 	}
 	if !p.Enabled {
 		t.Error("default enabled should be true")

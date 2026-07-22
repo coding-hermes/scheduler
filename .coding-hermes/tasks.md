@@ -58,3 +58,30 @@ Completed (23):
 Pending (0 actionable, 2 non-actionable):
 - [ ] FIX-STACK — Systemd enable (BLOCKED — Bane defers)
 - [ ] NEVER-DONE — 11-point audit (re-run next tick)
+
+## Process Leak & TaskMax Incident (2026-07-22)
+
+### AUDIT-DESCENDANT-LIFECYCLE — Audit all descendant process cleanup (HIGH)
+**Root causes found and fixed:**
+1. **MCP Watchdog:** Thread-start failure left spawned MCP processes orphaned (reparented to PID 1). Now terminates spawned child before propagating error.
+2. **DuckDB worker pools:** Host-sized pools × 60 namespaces = 831 threads. Fixed: `threads: '1'` per DB.
+3. **terminal-jail-hardening.conf:** Reduced TasksMax from 2048 to 512, triggering the watchdog failure at lower threshold.
+
+**Remaining audit needed:**
+- Verify zero MCP processes after child session exits
+- Stress-test delegated-agent create/cancel
+- Audit terminal background-process cleanup + timeout handling
+- Gateway alerts at 50%/75%/90% TasksMax
+- Keep TasksMax=2048 as single source of truth
+
+### INFRA-BACKOFF — Resource exhaustion backoff (HIGH W15)
+Detect `can't start new thread` / `errno 11` in spawn output → pause all spawning 5m.
+
+### INFRA-CGROUP — Cgroup monitoring in health endpoint (HIGH W10)
+Add `pids_current` + `pids_max` to /api/v1/health. Warn at 50%/75%/90%.
+
+### INFRA-SECRETS — Enable secret redaction (MEDIUM W5)
+Set `security.redact_secrets: true` in hermes config.
+
+### INFRA-COOLDOWN — Fix cooldown reversion on daemon restart (HIGH W12)
+DB cooldown takes priority over fleet.toml on startup.
