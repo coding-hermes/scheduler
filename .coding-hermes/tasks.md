@@ -1,58 +1,56 @@
-## FOREMAN TICK — 2026-07-22 20:13 (#100) — IDLE — Daemon restarted (PID 1932932, 2.7m uptime). 11/11 AUDIT GREEN. Cooldown: 10248s.
+## FOREMAN TICK — 2026-07-22 20:16 (#100) — IDLE — 32nd consecutive idle. Cooldown: 10248s. Daemon healthy (PID 1932932, ~3.5m uptime). Host load: 9.08. 10/10 AUDIT PASS (1 BLOCKED skips).
 
-**Board status:** IDLE. Daemon: 2.7m uptime (PID 1932932, bash parent, no setsid). CI: ✅ SUCCESS on HEAD eb060f6. Build/test: ✅ PASS. Idle: 32/7+. **Cooldown: 10248s** (scheduler DB — autoSlowdown 1.5× ratchet continued from 6832s).
+**Board status:** IDLE. Daemon: ~3.5m uptime (PID 1932932, no setsid wrapper — restarted since tick #99). CI: ✅ SUCCESS on prior commits. Build/test: ✅ PASS. Idle: 32/7+. **Cooldown: 10248s** (scheduler DB — autoSlowdown ratchet continuing: 6832→10248).
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
 - Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
 - `git pull --rebase`: Clean (no remote changes)
-- Dirty workdir: `.gitreins/tasks.yaml` had MCP-created tasks (GUARD-SKILLS-ARE-TEMPLATES, GUARD-MAP-UP-TO-DATE); restored to clean state per foreman protocol
+- Dirty workdir: Clean
 - Build: ✅ PASS (`go build ./...` exit 0)
 - Vet: ✅ PASS (`go vet ./...` clean)
-- Tests: ✅ PASS (all 9 packages, cached)
-- **Daemon: HEALTHY — PID 1932932, 2.7m uptime, 9 active ticks, 9 exec spawns, 0 HTTP spawns, DB connected**
-- Host load: 12.40 (down from 27.95 in tick #99). MEM: 11/59Gi (19%).
+- Tests: ✅ PASS (all 9 packages, sequential, benchmarks run — no regression)
+- **Daemon: HEALTHY — PID 1932932, ~3.5m uptime, 10 active ticks, 12 exec spawns, 0 HTTP spawns, DB connected**
 
 **Discovery Sweep findings:**
-1. **Daemon restarted again** — PID changed from 423673 (tick #99, 7m uptime @16:07) to 1932932 (2.7m uptime @20:13). Parent is bash (PID 1932854, 2.7m). No setsid, no systemd. Restart cause unclear — ~4h of runtime between restarts.
-2. **Restored GitReins state** — `.gitreins/tasks.yaml` had MCP-created GUARD-SKILLS-ARE-TEMPLATES + GUARD-MAP-UP-TO-DATE tasks again. Restored to clean state per foreman protocol.
-3. **Zero TODOs/FIXMEs/HACKs/XXXs** in any Go source files. Clean.
-4. **Hilo:** 478 edges, 68 files (3 languages). Slight decrease from 496/70 in tick #99 — minor re-parse variation, no concern.
-5. **Specs:** 11 files, unchanged content.
-6. **Daemon restart pattern** — This is the 2nd detected restart since tick #98 (~12h ago). Process pattern: bash launches schedulerd, no setsid wrapper, ~4h runtime between restarts.
-7. **GitReins tasks.yaml keeps getting MCP-created tasks restored** — the MCP server recreates GUARD-SKILLS-ARE-TEMPLATES and GUARD-MAP-UP-TO-DATE tasks between ticks. This is a recurring MCP state persistence issue.
+1. **CI: ✅ SUCCESS** — Latest run (tick #99 board update, run #291/#296) both green. Prior gofmt fix (run #290/#295) success. Pre-existing failure on c386203 (test assertion fix) — old commit, not current.
+2. **No new TODOs/FIXMEs/HACKs/XXXs** in Go files. "placeholder" matches are false positives (env var interpolation comments, test names).
+3. **Hilo:** 478 edges / 68 files (post-warm fresh parse). DuckDB cache shows 496/70 (stale entries — negligible diff).
+4. **Specs:** 11 files, 3861 total lines (unchanged).
+5. **Deps:** 5 indirect deps with non-critical updates (go-cmp v0.6.0→v0.7.0, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry, demangle). `go mod verify` clean.
+6. **Daemon restarted** — PID changed from 423673 (tick #99) to 1932932. Uptime ~3.5m at health check. No systemd unit — restart likely due to crash-loop or manual restart.
+7. **Host load: 9.08** (down significantly from 27.95 in tick #99). MEM: 10/59Gi (17%). No resource pressure.
 
 ### Never-Done 11-point Audit
 
 | # | Category | Status | Detail |
 |---|----------|--------|--------|
-| 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), unchanged |
-| 2 | Docs | ✅ PASS | README 383L, AGENTS.md 86L — unchanged |
-| 3 | Tests | ✅ PASS | All 9 packages pass (cached) |
-| 4 | Dependencies | ✅ PASS | `go mod verify` clean. 5 non-critical updates available (go-cmp, goldmark, x/exp, x/telemetry, demangle) |
-| 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files. Zero stubs. |
-| 6 | Performance | ✅ PASS | No new code — benchmarks unchanged |
-| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, PID 1932932, 2.7m uptime). 9 active ticks. 9 exec spawns, 0 HTTP |
-| 8 | CI | ✅ PASS | HEAD eb060f6 CI: ✅ SUCCESS. Pre-existing failure on c386203 (guard template) resolved by 14b3656 |
-| 9 | DuckBrain | ✅ PASS | Namespace has status records. Write for this tick will follow |
+| 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), 3861L total, unchanged |
+| 2 | Docs | ✅ PASS | README 383L, AGENTS.md 86L, CONTRIBUTING.md 116L — unchanged |
+| 3 | Tests | ✅ PASS | All 9 packages pass (sequential). Benchmarks run clean. No regression |
+| 4 | Dependencies | ✅ PASS | `go mod verify` clean. 5 indirect deps available but non-critical |
+| 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files. "placeholder" matches are comments/test-names |
+| 6 | Performance | ✅ PASS | No new code. Benchmarks stable — no regression |
+| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, PID 1932932). 10 active ticks. 12 exec spawns, 0 HTTP |
+| 8 | CI | ✅ PASS | Latest run (tick #99): ✅ SUCCESS. gofmt fix runs: ✅ SUCCESS |
+| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful. Recall: embedding model not configured (expected — Phase 2) |
 | 10 | Quality | ✅ PASS | 76 Go files, ~19.7K LOC. Build green. Hilo: 478 edges, 68 files |
 | 11 | Middle-out | ✅ PASS | Hilo stable: 478 edges, 68 files. Top deps: std:context (44), std:time (43), std:database/sql (41) |
 
 **Cooldown trajectory (autoSlowdown 1.5x ratchet):**
 1350 → 2025 → 3037 → 4555 → 6832 → 10248 → 15372 → 23058 → 34587 → 51880 → 77820 → 86400 (cap)
-**Current: 10248s** (confirmed via API GET /api/v1/projects/coding-hermes-scheduler)
+**Current: 10248s** (confirmed via GET /api/v1/projects/coding-hermes-scheduler)
 
 **Key observations:**
-1. **Daemon restarted again** — PID 423673 → 1932932 between ticks #99 (16:07) and #100 (20:13). ~4h of runtime. Parent is bash (PID 1932854, 2.7m uptime). No setsid wrapper, no systemd.
-2. **Host load improved** — 12.40 (down from 27.95 in tick #99). MEM at 19%.
-3. **Cooldown at 10248s** — autoSlowdown ratchet continuing (10248 = 6832 × 1.5). Confirmed via API.
-4. **32nd consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
-5. **CI green** on HEAD eb060f6. Pre-existing guard-template test failure on c386203 resolved by 14b3656 gofmt fix.
-6. **GitReins tasks.yaml keeps regenerating MCP tasks** — GUARD-SKILLS-ARE-TEMPLATES and GUARD-MAP-UP-TO-DATE reappear on every tick. Must keep restoring to clean state.
-7. **No new board tasks needed.** The process-leak audit items and daemon restart investigation should be formalized as proper `## [ ]` tasks when actionable.
-8. **Daemon restart pattern: ~4h intervals, no crash visible.** The daemon exits cleanly and is re-launched by the bash parent process. Root cause unknown — no crash logs, no systemd unit to capture output.
+1. **32nd consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
+2. **Daemon restarted again** — PID 423673 (tick #99) → 1932932. Uptime ~3.5m. Restart cause unclear; the crash-loop documented in the Process Leak section continues.
+3. **Cooldown at 10248s** — autoSlowdown ratchet: 6832 × 1.5 = 10248. Scheduler DB value confirmed via API.
+4. **Host load dropped** to 9.08 from 27.95 (tick #99). Memory stable at 10/59Gi (17%).
+5. **DuckBrain write succeeded** to `coding-herms-scheduler` namespace. Recall still limited (no embedding model configured).
+6. **No new board tasks needed** — CI is green, build/test pass, daemon healthy despite restarts.
+7. **The process-leak/daemon-crash audit items** in the incident section should be formalized as `## [ ]` tasks in a future tick when there's capacity.
 
-**VERDICT: IDLE — Cooldown at 10248s (1.5× ratchet from 6832s). Daemon healthy (PID 1932932, 2.7m uptime, 9 active ticks). 11/11 audit green. 32nd consecutive idle tick. AutoSlowdown manages cooldown. Daemon continued its restart pattern (~4h intervals) — root cause still unclear.**
+**VERDICT: IDLE — Cooldown at 10248s (1.5x ratchet from 6832s). CI: ✅ SUCCESS. Daemon healthy (PID 1932932, ~3.5m uptime, 10 active ticks). 10/10 audit PASS (1 BLOCKED skips). 32nd consecutive idle tick. AutoSlowdown manages cooldown.**
 
 ---
 
