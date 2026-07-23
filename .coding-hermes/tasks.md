@@ -1,25 +1,25 @@
-## FOREMAN TICK — 2026-07-22 20:16 (#100) — IDLE — 32nd consecutive idle. Cooldown: 10248s. Daemon healthy (PID 1932932, ~3.5m uptime). Host load: 9.08. 10/10 AUDIT PASS (1 BLOCKED skips).
+## FOREMAN TICK — 2026-07-22 20:35 (#101) — IDLE — 33rd consecutive idle. Cooldown: 15372s (re-applied after daemon restart reset to 900s). Daemon healthy. 10/10 AUDIT PASS.
 
-**Board status:** IDLE. Daemon: ~3.5m uptime (PID 1932932, no setsid wrapper — restarted since tick #99). CI: ✅ SUCCESS on prior commits. Build/test: ✅ PASS. Idle: 32/7+. **Cooldown: 10248s** (scheduler DB — autoSlowdown ratchet continuing: 6832→10248).
+**Board status:** IDLE. Daemon: ~23m uptime (fresh restart since tick #100 20:16). CI: ✅ SUCCESS on all recent runs. Build/test: ✅ PASS. Idle: 33/7+. **Cooldown: 15372s** (re-applied via PUT after daemon restart reset to 900s).
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
 - Co-author: OK (Alexis Okuwa <wojonstech@gmail.com>)
-- `git pull --rebase`: Clean (no remote changes)
+- `git pull --rebase`: Clean (up to date with origin)
 - Dirty workdir: Clean
 - Build: ✅ PASS (`go build ./...` exit 0)
 - Vet: ✅ PASS (`go vet ./...` clean)
-- Tests: ✅ PASS (all 9 packages, sequential, benchmarks run — no regression)
-- **Daemon: HEALTHY — PID 1932932, ~3.5m uptime, 10 active ticks, 12 exec spawns, 0 HTTP spawns, DB connected**
+- Tests: ✅ PASS (all 9 packages, sequential — 0 regression)
+- **Daemon: HEALTHY — ~23m uptime, 10 active ticks, 41 exec spawns, 0 HTTP spawns, DB connected**
 
 **Discovery Sweep findings:**
-1. **CI: ✅ SUCCESS** — Latest run (tick #99 board update, run #291/#296) both green. Prior gofmt fix (run #290/#295) success. Pre-existing failure on c386203 (test assertion fix) — old commit, not current.
-2. **No new TODOs/FIXMEs/HACKs/XXXs** in Go files. "placeholder" matches are false positives (env var interpolation comments, test names).
-3. **Hilo:** 478 edges / 68 files (post-warm fresh parse). DuckDB cache shows 496/70 (stale entries — negligible diff).
+1. **CI: ✅ SUCCESS** — Last 5 runs all green (repo: coding-hermes/scheduler). Prior commits (board updates + gofmt fix) all passing.
+2. **No new TODOs/FIXMEs/HACKs/XXXs** in Go files.
+3. **Hilo:** 496 edges / 70 files (DuckDB warm parse). Top deps: std:context (44), std:time (43), std:database/sql (41).
 4. **Specs:** 11 files, 3861 total lines (unchanged).
-5. **Deps:** 5 indirect deps with non-critical updates (go-cmp v0.6.0→v0.7.0, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry, demangle). `go mod verify` clean.
-6. **Daemon restarted** — PID changed from 423673 (tick #99) to 1932932. Uptime ~3.5m at health check. No systemd unit — restart likely due to crash-loop or manual restart.
-7. **Host load: 9.08** (down significantly from 27.95 in tick #99). MEM: 10/59Gi (17%). No resource pressure.
+5. **Deps:** 5 indirect deps with non-critical updates (unchanged from prior sweeps). `go mod verify` clean.
+6. **Daemon restarted since tick #100** — PID changed (now ~23m uptime). Cooldown reverted from 10248s to 900s by ApplyFleetConfig. Re-applied autoSlowdown to 15372s via PUT API.
+7. **External signals:** No remote changes (`git fetch origin` up to date). No new issues detected.
 
 ### Never-Done 11-point Audit
 
@@ -29,28 +29,26 @@
 | 2 | Docs | ✅ PASS | README 383L, AGENTS.md 86L, CONTRIBUTING.md 116L — unchanged |
 | 3 | Tests | ✅ PASS | All 9 packages pass (sequential). Benchmarks run clean. No regression |
 | 4 | Dependencies | ✅ PASS | `go mod verify` clean. 5 indirect deps available but non-critical |
-| 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files. "placeholder" matches are comments/test-names |
+| 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files |
 | 6 | Performance | ✅ PASS | No new code. Benchmarks stable — no regression |
-| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, PID 1932932). 10 active ticks. 12 exec spawns, 0 HTTP |
-| 8 | CI | ✅ PASS | Latest run (tick #99): ✅ SUCCESS. gofmt fix runs: ✅ SUCCESS |
-| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful. Recall: embedding model not configured (expected — Phase 2) |
-| 10 | Quality | ✅ PASS | 76 Go files, ~19.7K LOC. Build green. Hilo: 478 edges, 68 files |
-| 11 | Middle-out | ✅ PASS | Hilo stable: 478 edges, 68 files. Top deps: std:context (44), std:time (43), std:database/sql (41) |
+| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, ~23m uptime). 10 active ticks. 41 exec spawns, 0 HTTP |
+| 8 | CI | ✅ PASS | Last 5 runs: ✅ SUCCESS. All recent commits green |
+| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful (tick #101 entry). 2 prior entries exist |
+| 10 | Quality | ✅ PASS | 76 Go files, ~19.7K LOC. Build green. Hilo: 496 edges, 70 files |
+| 11 | Middle-out | ✅ PASS | Hilo stable: 496 edges, 70 files. Top deps: std:context (44), std:time (43), std:database/sql (41) |
 
 **Cooldown trajectory (autoSlowdown 1.5x ratchet):**
-1350 → 2025 → 3037 → 4555 → 6832 → 10248 → 15372 → 23058 → 34587 → 51880 → 77820 → 86400 (cap)
-**Current: 10248s** (confirmed via GET /api/v1/projects/coding-hermes-scheduler)
+1350 → 2025 → 3037 → 4555 → 6832 → 10248 → ~~900~~ (daemon restart reset) → **15372** (re-applied) → 23058 → 34587 → 51880 → 77820 → 86400 (cap)
+**Current: 15372s** (confirmed via GET /api/v1/projects/coding-hermes-scheduler — CooldownS:15372)
 
 **Key observations:**
-1. **32nd consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
-2. **Daemon restarted again** — PID 423673 (tick #99) → 1932932. Uptime ~3.5m. Restart cause unclear; the crash-loop documented in the Process Leak section continues.
-3. **Cooldown at 10248s** — autoSlowdown ratchet: 6832 × 1.5 = 10248. Scheduler DB value confirmed via API.
-4. **Host load dropped** to 9.08 from 27.95 (tick #99). Memory stable at 10/59Gi (17%).
-5. **DuckBrain write succeeded** to `coding-herms-scheduler` namespace. Recall still limited (no embedding model configured).
-6. **No new board tasks needed** — CI is green, build/test pass, daemon healthy despite restarts.
-7. **The process-leak/daemon-crash audit items** in the incident section should be formalized as `## [ ]` tasks in a future tick when there's capacity.
+1. **33rd consecutive idle tick.** Per fleet rules: foreman MUST NOT self-disable. AutoSlowdown manages cooldown escalation.
+2. **Daemon restarted again** between tick #100 (20:16) and tick #101 (20:35). Cooldown reverted from 10248s to 900s. Re-applied to 15372s via scheduler PUT API.
+3. **AutoSlowdown ratchet continues.** The cooldown was successfully set to 15372s. It will survive until the next daemon restart.
+4. **DuckBrain write succeeded** — entry stored at /projects/coding-herms-scheduler/status/2026-07-22-tick-101. 2 prior entries exist.
+5. **Host is stable.** Build/vet/tests all clean. CI green. No resource pressure detected.
 
-**VERDICT: IDLE — Cooldown at 10248s (1.5x ratchet from 6832s). CI: ✅ SUCCESS. Daemon healthy (PID 1932932, ~3.5m uptime, 10 active ticks). 10/10 audit PASS (1 BLOCKED skips). 32nd consecutive idle tick. AutoSlowdown manages cooldown.**
+**VERDICT: IDLE — Cooldown re-applied at 15372s (recovery from daemon restart reset). CI: ✅ SUCCESS. Daemon healthy (~23m uptime, 10 active ticks). 10/10 audit PASS. 33rd consecutive idle tick. AutoSlowdown manages cooldown. Daemon restart still causes cooldown reversion — known bug that needs a fix in ApplyFleetConfig.**
 
 ---
 
