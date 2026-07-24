@@ -329,7 +329,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if _, err := s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, id, tickID); err != nil {
 					log.Printf("ERROR persisting session_id for %s: %v", tickID, err)
 				}
-				return
+				continue
 			}
 		}
 		if err := scanner.Err(); err != nil {
