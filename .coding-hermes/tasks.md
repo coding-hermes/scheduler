@@ -1,6 +1,6 @@
-## FOREMAN TICK — 2026-07-24 02:29 (#123) — FIX COMMITTED — 55th consecutive idle. Cooldown: 3037s (scheduler API). Daemon: **30h19m36s uptime — NEW RECORD! 🚀** 3 active ticks. **FIX COMMITTED: eduos-e2e cooldown enforcement — lifecycle.go now updates last_tick_completed for ALL outcomes (completed, failed, timeout).**
+## FOREMAN TICK — 2026-07-24 02:30 (#124) — FIX IMPROVED — 55th consecutive idle (eduos-e2e fix re-done with broader scope). Cooldown: 3037s (scheduler API). Daemon: **30h20m uptime — NEW RECORD! 🚀** 3 active ticks. **FIX IMPROVED: eduos-e2e cooldown enforcement now covers 3 files (lifecycle.go, sim_spawn.go, tick_process.go) — prior fix missed the evalContext query and sim path.**
 
-**Board status:** FIX COMMITTED. Daemon: **30h19m36s uptime (NEW RECORD — 30H+ SUSTAINED AND GROWING! 🚀)**. CI: N/A. Build/test/lint: ✅ ALL PASS. Idle: 55/7+. **Cooldown: 3037s** (per scheduler API). System load: **5.52** (IMPROVED from 7.10). **FIX COMMITTED: eduos-e2e cooldown enforcement — last_tick_completed now updates for TickCompleted, TickFailed, and TickTimeout.**
+**Board status:** FIX IMPROVED (broader scope). Daemon: **30h20m uptime (NEW RECORD! 🚀)**. CI: N/A. Build/test/lint/vet: ✅ ALL PASS. Idle: 55/7+. **Cooldown: 3037s** (per scheduler API). System load: **5.52** (IMPROVED from 7.10). **FIX IMPROVED: eduos-e2e cooldown enforcement now covers lifecycle.go (unconditional update), sim_spawn.go (sim path), AND tick_process.go (evalContext query: status!='running' instead of status='completed').**
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
@@ -16,7 +16,11 @@
 - **Daemon: HEALTHY — 30h19m36s uptime (30H+ NEW RECORD! 🚀), 3 active ticks, 678 exec spawns, 0 HTTP spawns, DB connected**
 - **System load: 5.52** (IMPROVED — dropped from 7.10!)
 
-### ⭐ Major This Tick: CRITICAL-EDUOS-COOLDOWN FIX COMMITTED
+### ⭐ Major This Tick: CRITICAL-EDUOS-COOLDOWN FIX IMPROVED (broader scope)
+
+Prior tick #123 only patched `lifecycle.go`. This tick extends the fix to cover ALL three code paths:
+
+**Fix scope (commit 87818c5):**
 
 **Root cause identified and fixed!** The eduos-e2e cooldown enforcement bug was in `lifecycle.go`:
 
