@@ -1,7 +1,15 @@
+<!--
+  ⚠️  BOARD FORMAT — coding-hermes-model-router v1.3 (2026-07-24)
+  All tasks MUST use matrix format: | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
+  Before editing this file, load the skill: skill_view(name='coding-hermes-model-router')
+  Validate: python3 ~/.hermes/scripts/validate-board-format.py .coding-hermes/tasks.md
+  NEVER remove the matrix header row or NEVER-DONE / E2E-001 fixtures.
+-->
+
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. 66th consecutive idle tick (tick #135). Daemon healthy at 1h29m uptime (6 active ticks, 79 spawns). 41/63 projects enabled. DuckBrain MCP RECOVERED via `hermes mcp test duckbrain`. 3 GitReins tasks pending. No tick storm risk: tick_timeout=600s < min cooldown=900s on all enabled projects. **INFRA-004 NOTE:** Source code analysis confirms `ApplyFleetConfig` IS create-only (loader.go:376-378) — skips existing projects. The "fleet TOML upsert" root cause from tick #133 is INCORRECT. Cooldown reversion root cause is unverified PUT claims (former foremen fabrications) + cron security scanner blocking curl, not fleet TOML overwriting.
+> **Status:** Build/test/lint/vet PASS. 67th consecutive idle tick (tick #136). Daemon healthy at 2h01m uptime (3 active ticks, 97 spawns via `hermes chat -q`, 0 via HTTP). 41/63 projects enabled. DuckBrain MCP RECOVERED via `hermes mcp test duckbrain` (connectivity OK, tool calls still experiencing intermittent ClosedResourceError — known MCP stale-pipe issue). No tick storm risk: tick_timeout=600s < min cooldown=900s on all enabled projects. CI/CD: all recent runs successful. 3 GitReins pending tasks (guard/audit, non-critical). **NEVER-DONE audit tick #136:** Spec alignment ✅ (20 AUDIT tasks), Doc coverage ✅, Test gaps ✅ (9/9 packages), Package upgrades ⚠️ (6 minor-level behind), Pitfall hunt ✅ (REGRESSION guards active), Performance audit ✅ (N+1 known), Endpoint verification ✅ (:9090 healthy), CI/CD ✅ (all green), DuckBrain sync ⚠️ (MCP stale but recoverable), Code quality ✅ (0 TODO/FIXME, 0 lint/vet), Middle-out wiring ✅ (scheduler→spawn→gateway). 6 outdated packages: go-cmp v0.6.0→v0.7.0, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry, demangle, go-isatty v0.0.23→v0.0.24 — all minor/patch, no breaking changes. INFRA-004 and COOLDOWN-REVERSION remain as documented references; code-level analysis confirms no scheduler bug.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
