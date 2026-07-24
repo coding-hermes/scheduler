@@ -1,7 +1,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet all PASS. 62nd+ consecutive idle tick. Project self-maintaining.
+> **Status:** Build/test/lint/vet PASS. 64th consecutive idle tick (tick #133). Daemon healthy at 35m+ uptime. 3 GitReins tasks pending. DuckBrain namespace populated with tick state.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -11,7 +11,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|-----|-----|------|------|-------|-----------|----------|
-| INFRA-004 | 🔴 Spawn ignores Enabled=false — runaway loops despite cooldown. 12,953 ticks for eduos-e2e with 0 successful. 500 zombie ticks for HEADING ($5.07 burned). Root cause: evaluation loop or spawn path does not check `enabled` before dispatching, OR fleet TOML upsert re-enables projects on daemon restart. Fix: (a) DB cleanup — delete stale duplicates, (b) spawn guard — check `if !project.Enabled { skip }` at dispatch time, (c) regression test, (d) case-insensitive uniqueness constraint on project names. | CRITICAL | 4 | — | scheduler,spawn,bug,infra | Kimi K3 | Bug fix: scheduler dispatch logic, Zombie tick prevention | DeepSeek V4 Pro |
+|| INFRA-004 | 🟡 INVESTIGATED tick #133 — spawn path CORRECTLY filters Enabled=false. Packer.Pick() uses SQL WHERE enabled=1. MultiPoolPacker.Pack() checks p.Enabled. Root cause is NOT spawn path bug — it's fleet TOML ApplyFleetConfig upsert re-enabling projects on daemon restart (same root cause as COOLDOWN-REVERSION). Fix: (a) DB cleanup — delete stale duplicates, (b) fleet TOML upsert safety — don't re-enable disabled projects, (c) case-insensitive uniqueness constraint on project names. | HIGH | 3 | COOLDOWN-REVERSION | scheduler,spawn,infra | DeepSeek V4 Pro | Investigation: spawn path analysis, fleet TOML audit | DeepSeek V4 Flash |
 | INFRA-003 | 🔴 Guard against tick storms: cooldown < tick_timeout. Projects with cooldown < tick_timeout spawn overlapping ticks that all timeout. Evidence: hermes-canopy (900s cooldown, 600s timeout = 5 overlaps/2h, $0.83 burned). Fix: add `--enforce-min-cooldown` flag OR guard in spawn logic that skips if project has active tick. Scheduler-level fix benefiting all projects. | CRITICAL | 3 | — | scheduler,cooldown,storm,infra | Kimi K3 | Bug fix: scheduler timing, tick storm prevention | DeepSeek V4 Pro |
 || AUTO-SLOWDOWN | ✅ FIXED (tick #132) — `return` → `continue` on spawn.go:332. stdout scanner now reads full output instead of exiting after `session_id:`. Build PASS, 9/9 tests PASS, lint 0 issues. Pushed as 1e7c4d4. | HIGH | 3 | — | scheduler,bug,slowdown | Kimi K3 | Bug fix: output capture, scheduler auto-regulation | DeepSeek V4 Pro |
 | FIX-STACK | Systemd enable — BLOCKED (Bane defers). Scheduler daemon has no systemd unit, restarts wipe cooldown settings. Enabling systemd would persist across restarts. | Medium | 1 | — | infra,systemd,blocked | DeepSeek V4 Flash | Simple: blocked, waiting on Bane decision | — |
