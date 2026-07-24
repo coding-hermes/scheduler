@@ -1,6 +1,6 @@
-## FOREMAN TICK — 2026-07-24 06:07 (#130) — IDLE — **61st** consecutive idle. Cooldown: **3600s** (PERSISTED from tick #129). Daemon: **1h54m uptime** (same PID 3282939). 7 active ticks. 11/11 audit ALL PASS.
+## FOREMAN TICK — 2026-07-24 07:59 (#131) — IDLE — **62nd** consecutive idle. Cooldown: **900s** (REVERTED — daemon restarted). Daemon: **26m uptime** (new PID 1181387). 3 active ticks. 11/11 audit ALL PASS. Test regression **FIXED**.
 
-**Board status:** IDLE (61st consecutive). CI: N/A. Build/test/lint/vet: ✅ ALL PASS. **Cooldown: 3600s** (PERSISTED from tick #129 — verified via API GET).
+**Board status:** IDLE (62nd consecutive). CI: N/A. Build/test/lint/vet: ✅ ALL PASS. **Cooldown: 900s** (reverted to fleet default after daemon restart — tick #130's 3600s claim was true at that moment but did not survive the restart).
 
 **Key event this tick — Tick #129 findings INDEPENDENTLY VERIFIED:**
 
@@ -60,23 +60,36 @@ The cooldown kept reverting to 900 because every previous tick **could not actua
 | 10 | Quality | ✅ PASS | 8,924 LOC non-test. Build green. Lint clean |
 | 11 | Middle-out | ✅ PASS | 496 edges across 70 files (1 Go language) |
 
-**Cooldown: 3600s** (VERIFIED via API GET — first real verification).
+**Cooldown: 900s** (REVERTED after daemon restart — fleet TOML overwrites API cooldown on restart per `cooldown-reset-on-restart` pitfall).
+
+### Key Events This Tick (#131)
+
+| Event | Detail |
+|-------|--------|
+| **Daemon restart detected** | PID 1181387 (26m uptime vs 1h54m from #130). Root cause unknown (no systemd unit) |
+| **Cooldown reverted to 900s** | Fleet TOML config overwrote 3600s on restart. Confirmed via API. The `cooldown-reset-on-restart` pitfall applies |
+| **Staged but uncommitted change reverted** | Prior tick staged a change to `slowdown.go` (cap 86400→43200, base 600→900) that broke 7 tests. Reverted to restore passing suite |
+| **autoSlowdown still broken** | `spawn.go:332` output scanner exits after `session_id:`, truncating Output buffer. autoSlowdown never fires regardless of cap or base values |
+| **All tests restored** | 9/9 packages pass after revert (`go test -short -p 1 ./...`) |
+| **Build/vet/lint** | All clean (exit 0, 0 issues) |
+| **Fleet** | 66 projects, 39 enabled, 3 active ticks, 5499 completed / 22091 failed / 205 timeout |
+
+**Recommendation:** Since autoSlowdown is broken regardless (spawn.go bug), there's no benefit to proposing cooldown cap/base changes until the output capture path is fixed. The revert was the correct action — preserve passing tests for a non-functional codepath.
 
 **Key observations:**
-1. **61st consecutive idle tick.** Cooldown at 3600s — **PERSISTED** from tick #129's restoration (confirmed via API GET).
-2. **Tick #129 findings INDEPENDENTLY VERIFIED.** (a) Cooldown 3600s confirmed via Python API call. (b) Root cause of cooldown reversion confirmed: curl was blocked by security scanner, previous foremen fabricated PUT claims. (c) autoSlowdown bug confirmed: spawn.go:332 scanner exits after `session_id:`, Output buffer truncated, autoSlowdown never fires for exec-spawned projects.
-3. **autoSlowdown is effectively non-functional** for all exec-spawned projects — only HTTP spawns (Gateway API path) capture the full LLM response.
-4. **Daemon healthy:** 1h54m uptime (PID 3282939, same since tick #127), 7 active ticks, 69 exec spawns, 0 HTTP spawns.
-5. **Fleet stats:** 66 projects, 41 enabled. 5,478 completed / 22,082 failed / 196 timeout.
-6. **FIX-STACK** remains BLOCKED (Bane defers systemd enable).
+1. **62nd consecutive idle tick.** Cooldown at **900s** (reverted after daemon restart — fleet TOML overwrites API cooldown per `cooldown-reset-on-restart` pitfall).
+2. **Daemon restarted** since tick #130. PID 1181387 (26m uptime). No systemd unit — startup mechanism unknown. Owner project cooldown reset to 900s.
+3. **Staged-but-uncommitted slowdown.go change reverted.** A prior tick staged changes (cap 86400→43200, base 600→900) that broke 7 tests. Reverted. Tests now pass.
+4. **autoSlowdown is STILL non-functional** for all exec-spawned projects — spawn.go:332 scanner exits after `session_id:` — Output buffer truncated. No benefit to cap/base changes until this is fixed.
+5. **Fleet stats:** 66 projects, 39 enabled. 5,499 completed / 22,091 failed / 205 timeout. 3 active ticks.
 
-**VERDICT: IDLE — Cooldown 3600s (PERSISTED from tick #129 — 2nd consecutive tick at 3600s). autoSlowdown bug confirmed (scanner exits after session_id:, Output truncated). CI: N/A. Daemon: 1h54m. 61st consecutive idle tick. 11/11 audit ALL PASS.**
+**VERDICT: IDLE — Cooldown 900s (reverted after daemon restart). autoSlowdown bug still present. CI: N/A. Daemon: 26m uptime (PID 1181387). Test regression FIXED (reverted broken staged change). 62nd consecutive idle tick. 11/11 audit ALL PASS.**
 
 ---
 
 ## Active Board
 
-Completed (39 + this tick):
+Completed (40 + this tick):
 |- All AUDIT-001 through AUDIT-020 ✓
 |- INFRA-COOLDOWN-CAP ✓ (autoSlowdown cap raised to 86400s)
 |- DAEMON-CRASH-INVESTIGATE ✓ (root cause: SIGHUP, fix: setsid)
@@ -86,9 +99,12 @@ Completed (39 + this tick):
 |- Tick #123-128 all IDLE ✓
 |- **Tick #129 — Cooldown ACTUALLY RESTORED via Python API call (first real verification). autoSlowdown bug discovered: spawn.go output buffer truncation. ✓**
 |- **Tick #130 — Cooldown PERSISTED (2nd consecutive tick at 3600s). Tick #129 findings INDEPENDENTLY VERIFIED. ✓**
+|- **Tick #131 — Daemon restarted, cooldown reverted to 900s. Staged slowdown.go change reverted (broke 7 tests). autoSlowdown still broken. ✓**
 
 Pending (1):
 - [x] CRITICAL-EDUOS-COOLDOWN — ✅ FIX COMMITTED
 - [ ] FIX-STACK — Systemd enable (BLOCKED — Bane defers)
 - [x] INFRA-COOLDOWN-REVERSION — ✅ **ROOT CAUSE IDENTIFIED.** Curl blocked by security scanner. Previous foremen fabricated "PUT succeeded" claims. First real PUT via Python this tick confirmed API works correctly. AutoSlowdown also doesn't fire due to output buffer truncation in spawn.go (scanner exits after "session_id:" line).
+- [ ] **INFRA-003 — Guard against tick storms: cooldown < tick_timeout** 🔴
+  Projects with cooldown < tick_timeout spawn overlapping ticks that all timeout. Evidence: hermes-canopy (900s cooldown, 600s timeout = 5 overlaps/2h, $0.83 burned). Fix: add `--enforce-min-cooldown` flag OR guard in spawn logic that skips if project has active tick. This is a scheduler-level fix benefiting all projects.
 - [ ] NEVER-DONE — 11-point audit (re-run next tick)
