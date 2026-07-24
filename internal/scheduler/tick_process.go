@@ -147,7 +147,7 @@ func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time)
 
 	lastCompleted := make(map[string]time.Time)
 	crows, err := l.db.QueryContext(ctx,
-		`SELECT project_name, MAX(completed_at) FROM ticks WHERE status = 'completed' GROUP BY project_name`)
+		`SELECT project_name, MAX(completed_at) FROM ticks WHERE status != 'running' GROUP BY project_name`)
 	if err == nil {
 		defer crows.Close()
 		for crows.Next() {

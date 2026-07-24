@@ -65,9 +65,8 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		`, string(outcome.Status), finish, outcome.ExitCode, outcome.Error,
 			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.Commits, outcome.FilesChanged,
 			outcome.TickID)
-		if outcome.Status == TickCompleted {
-			s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
-		}
+		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
+		s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
 	}()
 
 	return spawned, nil
