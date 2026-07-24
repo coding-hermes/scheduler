@@ -34,13 +34,13 @@
 |---|----------|--------|--------|
 | 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), unchanged (3,861 lines) |
 | 2 | Docs | ✅ PASS | README, AGENTS.md, CONTRIBUTING.md — unchanged |
-| 3 | Tests | ✅ PASS | All 9 packages pass (sequential, cached, ALL PASS). No regression |
+| 3 | Tests | ✅ PASS | All 9 packages pass (sequential, ALL PASS). No regression |
 | 4 | Dependencies | ✅ PASS | `go mod verify` clean. Same 6 non-critical updates |
 | 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files |
 | 6 | Performance | ✅ PASS | No new code. Lint: 0 issues. Benchmarks stable |
 | 7 | Endpoints | ✅ PASS | Daemon UP (:9090, **26h27m11s — NEW RECORD!**). 578 exec spawns, 0 HTTP |
 | 8 | CI | ✅ PASS | All latest runs ✅ SUCCESS |
-| 9 | DuckBrain | ⚠️ N/A | MCP connection error this tick (known transport issue — skip) |
+| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful (tick #116 entry) |
 | 10 | Quality | ✅ PASS | 67 Go-related files, ~8.9K LOC non-test. Build green. Lint clean. Hilo: 476 edges, 67 files |
 | 11 | Middle-out | ✅ PASS | Hilo stable: 476 edges, 67 files. Top deps: std:context (44), std:time (43), std:database/sql (41) |
 
