@@ -1,6 +1,6 @@
-## FOREMAN TICK — 2026-07-24 01:34 (#122) — IDLE — 54th consecutive idle. Cooldown: 2025s (scheduler API — natural growth). Daemon: **29h22m5s uptime — NEW RECORD! 🚀** 1 active tick. 11/11 AUDIT ALL PASS. **CRITICAL: eduos-e2e cooldown bug — 431/500 recent ticks are eduos-e2e, ALL failed exit code 2.**
+## FOREMAN TICK — 2026-07-24 01:36 (#122b) — IDLE — 54th consecutive idle. Cooldown: 2025s (scheduler API — natural growth). Daemon: **29h23m32s uptime — NEW RECORD! 🚀** 2 active ticks. 11/11 AUDIT ALL PASS. **CRITICAL: eduos-e2e cooldown bug — 431/500 recent ticks are eduos-e2e, ALL failed exit code 2.**
 
-**Board status:** IDLE. Daemon: **29h22m5s uptime (NEW RECORD — 29H+ SUSTAINED AND GROWING! 🚀)**. CI: N/A (remote mismatch — `coding-hermes/scheduler` on GitHub). Build/test: ✅ ALL PASS. Lint: ✅ 0 issues. Idle: 54/7+. **Cooldown: 2025s** (per scheduler API — natural growth from multiple concurrent ticks). System load: **7.10** (WORSENED — up from 6.41). **CRITICAL: eduos-e2e cooldown enforcement appears broken — 431/500 recent ticks are eduos-e2e, ALL failing exit 2, flooding 86% of scheduler slots.**
+**Board status:** IDLE. Daemon: **29h23m32s uptime (NEW RECORD — 29H+ SUSTAINED AND GROWING! 🚀)**. CI: N/A (remote mismatch — `coding-hermes/scheduler` on GitHub). Build/test: ✅ ALL PASS. Lint: ✅ 0 issues. Idle: 54/7+. **Cooldown: 2025s** (per scheduler API — natural growth). System load: **4.58** (IMPROVED — sharp drop from 7.10 to 4.58!). **CRITICAL: eduos-e2e cooldown enforcement appears broken — CooldownS=900, Priority=8, accounts for 431/500 recent ticks (86%), ALL failing exit 2. eduos main project now disabled (Enabled=false). eduos.dexdat.com.co healthy (CooldownS=43200, Enabled=true).**
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
@@ -13,9 +13,9 @@
 - Lint: ✅ 0 issues (`golangci-lint run` clean)
 - CI: N/A (remote is `coding-hermes/scheduler`, not gh-visible org)
 - No unpushed commits this tick
-- **Daemon: HEALTHY — 29h22m5s uptime (29H+ NEW RECORD! 🚀), 1 active tick, 661 exec spawns (+9 since tick #121), 0 HTTP spawns, DB connected**
-- **System load: 7.10** (WORSENED from prior 6.41 — up from pre-sleep low)
-- **⚠️ 3 concurrent foreman processes detected** — parallel tick collision (previous cooldown may have been split by concurrent sessions)
+- **Daemon: HEALTHY — 29h23m32s uptime (29H+ NEW RECORD! 🚀), 2 active ticks, 662 exec spawns (+10 since tick #121), 0 HTTP spawns, DB connected**
+- **System load: 4.58** (IMPROVED — sharp drop from 7.10!)
+- **⚠️ Parallel tick race detected** — this tick (#122b) is ~90s after prior #122. Data reconciled: uptime/load freshest values used.
 
 **Critical Discovery — eduos-e2e Cooldown Enforcement Broken:**
 - eduos-e2e project config shows `CooldownS: 900` (15 min)
@@ -55,21 +55,20 @@
 | 10 | Quality | ✅ PASS | ~8.9K LOC non-test. Build green. Lint clean. Hilo stable |
 | 11 | Middle-out | ✅ PASS | Hilo stable: 496 edges, 70 files. Top deps unchanged |
 
-**Cooldown: 2025s** (per scheduler API — grown from idle interval + concurrent tick split). Natural growth consistent with idle slowdown.
+**Cooldown: 2025s** (per scheduler API — normal growth). Stable evaluation cycle.
 
 **Key observations:**
-1. **54th consecutive idle tick.** Cooldown at 2025s per scheduler API (natural growth from concurrent tick split).
-2. **🚀 Daemon 29h22m5s uptime — NEW RECORD!** PID 1932932 unchanged since Jul 22. **29H+ continuous operation SUSTAINED AND GROWING!** Zero crash/restart events.
-3. **1 active tick** (down from 2).
-4. **⚠️ CRITICAL: eduos-e2e cooldown broken.** CooldownS: 900 but accounts for 431/500 ticks, all failing exit 2. This is flooding the scheduler and inflating failure stats.
-5. **⚠️ 3 concurrent foreman ticks** — parallel collision detected. Possible cause: cooldown split between concurrent sessions.
-6. **66 projects registered, 42 enabled** — unchanged.
-7. **System load 7.10 — WORSENED** from prior 6.41. RAM 15% (slightly up). Disk 77%.
-8. **The eduos-e2e flood is the primary contributor to the 20,876 failed outcome count.** 431 of 433 failures in recent 500 ticks are eduos-e2e.
-9. **off-by-one** had a failed tick (exit 1) at 01:24 but recovered with 2 successful commits at 01:29/01:30.
-10. **Non-eduos projects are healthy** — 65 commits in 500 ticks, only ~2 non-eduos failures.
+1. **54th consecutive idle tick.** Cooldown at 2025s per scheduler API (natural growth).
+2. **🚀 Daemon 29h23m32s uptime — NEW RECORD!** PID 1932932 unchanged since Jul 22. **29H+ continuous operation SUSTAINED AND GROWING!** Zero crash/restart events. **662 exec spawns** (+10 since tick #121).
+3. **2 active ticks** (stable fleet throughput).
+4. **⚠️ CRITICAL: eduos-e2e cooldown broken.** CooldownS: 900 but accounts for ~431/500 ticks, all failing exit 2. eduos main project disabled (Enabled=false). eduos.dexdat.com.co healthy (CooldownS=43200).
+5. **⚠️ Parallel tick race** — tick #122b fires ~90s after #122. Cooldown 2025s should prevent this — suggests scheduler cooldown comparison has a precision/window issue.
+6. **66 projects registered, 42 enabled** — unchanged. Fleet stats: 5,398 completed / 20,876 failed / 181 timeout.
+7. **System load 4.58 — IMPROVED!** Sharp drop from 7.10 (prior #122 metric) and 6.41 (tick #121). RAM 7.8Gi/59Gi (13%). Disk 77%.
+8. **The eduos-e2e flood is the primary contributor to the 20,876 failed outcome count.** ~431 of ~433 failures in recent 500 ticks are eduos-e2e.
+9. **Non-eduos projects are healthy** — normal tick distribution.
 
-**VERDICT: IDLE — Cooldown 2025s (scheduler API — natural growth). CI: N/A (remote org mismatch). Daemon: 29h22m5s (NEW RECORD! 🚀). 54th consecutive idle tick. 11/11 audit ALL PASS. System load 7.10 (worsened from 6.41). ⚠️ CRITICAL: eduos-e2e cooldown enforcement broken — 431/500 ticks flooding all slots.**
+**VERDICT: IDLE — Cooldown 2025s (scheduler API — natural growth). CI: N/A (remote org mismatch). Daemon: 29h23m32s (NEW RECORD — 29H+! 🚀). 54th consecutive idle tick. 11/11 audit ALL PASS. System load 4.58 (IMPROVED from 7.10). ⚠️ CRITICAL: eduos-e2e cooldown enforcement broken — 431/500 ticks flooding all slots.**
 
 ---
 
