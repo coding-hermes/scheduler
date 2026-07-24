@@ -102,14 +102,16 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
 	}
 
-	// If completed successfully, update project's last_tick_completed.
-	if outcome.Status == TickCompleted {
-		_, err = lt.db.Exec(`
-			UPDATE projects SET last_tick_completed = ? WHERE name = ?
-		`, outcome.Finished.Format(time.RFC3339), outcome.Project)
-		if err != nil {
-			log.Printf("WARN: failed to update last_tick_completed for %s: %v", outcome.Project, err)
-		}
+	// Update project's last_tick_completed so the packer's cooldown check uses
+	// the last attempt time — prevents failing projects from flooding the pool.
+	// Previously this was only updated on TickCompleted, but eduos-e2e demonstrated
+	// Update project's last_tick_completed for ALL outcomes (completed, failed, timeout).
+	// This ensures the cooldown check catches projects with only failed ticks.
+	_, err = lt.db.Exec(`
+		UPDATE projects SET last_tick_completed = ? WHERE name = ?
+	`, outcome.Finished.Format(time.RFC3339), outcome.Project)
+	if err != nil {
+		log.Printf("WARN: failed to update last_tick_completed for %s: %v", outcome.Project, err)
 	}
 
 	return nil

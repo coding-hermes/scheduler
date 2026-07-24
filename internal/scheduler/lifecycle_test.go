@@ -106,8 +106,9 @@ func TestLifecycle_CompleteUpdatesLastTickCompleted(t *testing.T) {
 	}
 }
 
-// TestLifecycle_CompleteFailureDoesNotUpdateTimestamp verifies failed ticks don't bump it.
-func TestLifecycle_CompleteFailureDoesNotUpdateTimestamp(t *testing.T) {
+// TestLifecycle_CompleteFailureUpdatesTimestamp verifies failed ticks DO bump
+// last_tick_completed — necessary for packer cooldown enforcement.
+func TestLifecycle_CompleteFailureUpdatesTimestamp(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProject(t, db, "alpha")
 	lt := scheduler.NewLifecycleTracker(db)
@@ -137,8 +138,8 @@ func TestLifecycle_CompleteFailureDoesNotUpdateTimestamp(t *testing.T) {
 	if err := db.QueryRow(`SELECT last_tick_completed FROM projects WHERE name = ?`, "alpha").Scan(&lastCompleted); err != nil {
 		t.Fatalf("query last_tick_completed: %v", err)
 	}
-	if lastCompleted.Valid {
-		t.Errorf("last_tick_completed = %q, want NULL (failed ticks should not update)", lastCompleted.String)
+	if !lastCompleted.Valid || lastCompleted.String == "" {
+		t.Errorf("last_tick_completed = %+v, want non-nil (failed ticks SHOULD update cooldown)", lastCompleted)
 	}
 }
 
