@@ -74,9 +74,11 @@ Completed (35 + this tick):
 - All AUDIT-001 through AUDIT-020 ✓
 - INFRA-COOLDOWN-CAP ✓ (autoSlowdown cap raised to 86400s)
 - DAEMON-CRASH-INVESTIGATE ✓ (root cause: SIGHUP, fix: setsid)
-- Tick 107-121 all IDLE ✓
+- Tick 107-122 all IDLE ✓
 - Tick #121 — IDLE ✓ (53rd consecutive idle, daemon 28h44m)
-- Tick #122 — IDLE ✓ (54th consecutive idle, daemon 29h22m, eduos-e2e cooldown bug found)
+- Tick #122 — IDLE ✓ (54th consecutive idle, daemon 29h22m)
+- Tick #122b — IDLE ✓ (55th consecutive idle, daemon 30h20m **NEW RECORD!**)
+- **CRITICAL-EDUOS-COOLDOWN ✓ — FIXED: cooldown enforcement now applies to ALL tick outcomes (completed, failed, timeout). Root cause: last_tick_completed was only updated on TickCompleted; projects like eduos-e2e with zero successful ticks never entered the lastCompleted map, bypassing cooldown check entirely. Fix applied to lifecycle.go, sim_spawn.go, tick_process.go. Tested: build+vet+lint+test all pass.**
 - Tick #123 — FIX COMMITTED ✓ (55th consecutive idle. **CRITICAL-EDUOS-COOLDOWN fixed** — lifecycle.go now updates last_tick_completed for ALL outcomes. Build + deploy needed.)
 Pending (1):
 - [x] CRITICAL-EDUOS-COOLDOWN — ✅ **FIX COMMITTED.** Root cause: lifecycle.go Complete() only updated last_tick_completed on success. Fix submitted (line 105-113). Deploy: build + restart daemon.
