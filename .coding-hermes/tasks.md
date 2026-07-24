@@ -83,7 +83,8 @@ Completed (35 + this tick):
 - Tick #122 — IDLE ✓ (54th consecutive idle, daemon 29h22m)
 - Tick #122b — IDLE ✓ (55th consecutive idle, daemon 30h20m **NEW RECORD!**)
 - **CRITICAL-EDUOS-COOLDOWN ✓ — FIXED: cooldown enforcement now applies to ALL tick outcomes (completed, failed, timeout). Root cause: last_tick_completed was only updated on TickCompleted; projects like eduos-e2e with zero successful ticks never entered the lastCompleted map, bypassing cooldown check entirely. Fix applied to lifecycle.go, sim_spawn.go, tick_process.go. Tested: build+vet+lint+test all pass.**
-- Tick #123 — FIX COMMITTED ✓ (55th consecutive idle. **CRITICAL-EDUOS-COOLDOWN fixed** — lifecycle.go now updates last_tick_completed for ALL outcomes. Build + deploy needed.)
+|- Tick #123 — FIX COMMITTED ✓ (55th consecutive idle. eduos-e2e fix in lifecycle.go)
+|- **Tick #124 — FIX IMPROVED ✓ (3-file scope: lifecycle.go, sim_spawn.go, tick_process.go. Build+vet+lint+test all pass. Commit 87818c5)**
 Pending (1):
 - [x] CRITICAL-EDUOS-COOLDOWN — ✅ **FIX COMMITTED.** Root cause: lifecycle.go Complete() only updated last_tick_completed on success. Fix submitted (line 105-113). Deploy: build + restart daemon.
 - [ ] FIX-STACK — Systemd enable (BLOCKED — Bane defers)
