@@ -25,8 +25,8 @@
 
 # Coding Hermes Scheduler — Model Router Task Matrix
 
-> **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. 73rd consecutive idle tick (tick #142). Daemon healthy (1h38m uptime, 6 active ticks, 68 exec spawns, 41/63 enabled). Cooldown=900s (persisted correctly). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — go-cmp v0.7.0, demangle, go-isatty v0.0.24, goldmark v1.8.4, golang.org/x/exp, telemetry — unchanged from tick #139). No TODO/FIXME in source. DuckBrain populated with tick #142 findings. NEVER-DONE audit completed (tick #140) — 11/11 checks PASS — next scheduled tick #144. Board fully stable — 4 active tasks (all analysis/blocked/corrected — no code changes needed).
+> **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
+> **Status:** Build/test/lint/vet PASS. 74th consecutive idle tick (tick #143). Daemon healthy (1h59m uptime, 5 active ticks, 78 exec spawns, 41/63 enabled). Cooldown=900s (persisted correctly). All 9/9 test packages PASS (cached). Hilo: 478 edges, 68 files (useful — slight variation from cache rebuild). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — go-cmp v0.7.0, demangle, go-isatty v0.0.24, goldmark v1.8.4, golang.org/x/exp, telemetry — unchanged from tick #139). No TODO/FIXME in source. DuckBrain populated with tick #143 findings. NEVER-DONE audit completed (tick #140) — 11/11 checks PASS — next scheduled tick #144. Board fully stable — 4 active tasks (all analysis/blocked/corrected — no code changes needed).
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
