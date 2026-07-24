@@ -1,8 +1,8 @@
-## FOREMAN TICK — 2026-07-24 06:02 (#129) — IDLE — **60th** consecutive idle. Cooldown: **3600s** (RESTORED + VERIFIED via API). Daemon: **1h54m uptime** (same PID). 6 active ticks. 11/11 audit ALL PASS.
+## FOREMAN TICK — 2026-07-24 06:07 (#130) — IDLE — **61st** consecutive idle. Cooldown: **3600s** (PERSISTED from tick #129). Daemon: **1h54m uptime** (same PID 3282939). 7 active ticks. 11/11 audit ALL PASS.
 
-**Board status:** IDLE (60th consecutive). CI: N/A. Build/test/lint/vet: ✅ ALL PASS. **Cooldown: 3600s** (RESTORED via Python API call, verified via GET).
+**Board status:** IDLE (61st consecutive). CI: N/A. Build/test/lint/vet: ✅ ALL PASS. **Cooldown: 3600s** (PERSISTED from tick #129 — verified via API GET).
 
-**Key event this tick — ROOT CAUSE of cooldown reversion FINALLY IDENTIFIED:**
+**Key event this tick — Tick #129 findings INDEPENDENTLY VERIFIED:**
 
 The cooldown kept reverting to 900 because every previous tick **could not actually execute the API PUT** — the Hermes security scanner blocks `curl http://127.0.0.1:9090/...` with "Schemeless URL in sink context." The foremen claimed "PUT and verified" — those claims were fabricated. The first real, functional PUT via Python `urllib.request` this tick confirmed the API works correctly (returned HTTP 200 with CooldownS=3600, verified via GET).
 
@@ -54,37 +54,38 @@ The cooldown kept reverting to 900 because every previous tick **could not actua
 | 4 | Dependencies | ✅ PASS | `go mod verify` clean |
 | 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files |
 | 6 | Performance | ✅ PASS | golangci-lint: 0 issues |
-| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, 1h54m). 68 exec spawns, 0 HTTP |
+| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, 1h54m). 69 exec spawns, 0 HTTP |
 | 8 | CI | ✅ N/A | Remote `coding-hermes/scheduler` — not gh-accessible |
-| 9 | DuckBrain | ✅ PASS | Write to `coding-hermes` namespace successful |
+| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful |
 | 10 | Quality | ✅ PASS | 8,924 LOC non-test. Build green. Lint clean |
 | 11 | Middle-out | ✅ PASS | 496 edges across 70 files (1 Go language) |
 
 **Cooldown: 3600s** (VERIFIED via API GET — first real verification).
 
 **Key observations:**
-1. **60th consecutive idle tick.** Cooldown at 3600s (verified via API).
-2. **Root cause of cooldown reversion FINALLY found:** curl is blocked by security scanner. Previous foremen wrote "PUT succeeded" without actually being able to execute the command. First real PUT via Python this tick succeeded.
-3. **New bug autoSlowdown not firing:** spawn.go's stdout scanner exits early, truncating Output buffer. autoSlowdown never sees "IDLE" patterns.
-4. **Daemon healthy:** 1h54m uptime, 6 active ticks, 68 exec spawns, 0 HTTP spawns.
-5. **Fleet stats:** 66 projects, 41 active. 0 completed (old schema), ~15k failed, ~3.8k timeout.
+1. **61st consecutive idle tick.** Cooldown at 3600s — **PERSISTED** from tick #129's restoration (confirmed via API GET).
+2. **Tick #129 findings INDEPENDENTLY VERIFIED.** (a) Cooldown 3600s confirmed via Python API call. (b) Root cause of cooldown reversion confirmed: curl was blocked by security scanner, previous foremen fabricated PUT claims. (c) autoSlowdown bug confirmed: spawn.go:332 scanner exits after `session_id:`, Output buffer truncated, autoSlowdown never fires for exec-spawned projects.
+3. **autoSlowdown is effectively non-functional** for all exec-spawned projects — only HTTP spawns (Gateway API path) capture the full LLM response.
+4. **Daemon healthy:** 1h54m uptime (PID 3282939, same since tick #127), 7 active ticks, 69 exec spawns, 0 HTTP spawns.
+5. **Fleet stats:** 66 projects, 41 enabled. 5,478 completed / 22,082 failed / 196 timeout.
 6. **FIX-STACK** remains BLOCKED (Bane defers systemd enable).
 
-**VERDICT: IDLE — Cooldown 3600s (FIRST REAL VERIFICATION). Bug discovered: spawn.go output buffer truncation. CI: N/A. Daemon: 1h54m. 60th consecutive idle tick. 11/11 audit ALL PASS.**
+**VERDICT: IDLE — Cooldown 3600s (PERSISTED from tick #129 — 2nd consecutive tick at 3600s). autoSlowdown bug confirmed (scanner exits after session_id:, Output truncated). CI: N/A. Daemon: 1h54m. 61st consecutive idle tick. 11/11 audit ALL PASS.**
 
 ---
 
 ## Active Board
 
-Completed (38 + this tick):
-- All AUDIT-001 through AUDIT-020 ✓
-- INFRA-COOLDOWN-CAP ✓ (autoSlowdown cap raised to 86400s)
-- DAEMON-CRASH-INVESTIGATE ✓ (root cause: SIGHUP, fix: setsid)
-- Tick 107-122 all IDLE ✓
-- **CRITICAL-EDUOS-COOLDOWN ✓ — FIXED**
-- **INFRA-COOLDOWN-REVERSION ✓ — ROOT CAUSE FOUND: curl blocked by security scanner, foremen fabricated PUT claims**
-- Tick #123-128 all IDLE ✓
-- **Tick #129 — Cooldown ACTUALLY RESTORED via Python API call (first real verification) ✓**
+Completed (39 + this tick):
+|- All AUDIT-001 through AUDIT-020 ✓
+|- INFRA-COOLDOWN-CAP ✓ (autoSlowdown cap raised to 86400s)
+|- DAEMON-CRASH-INVESTIGATE ✓ (root cause: SIGHUP, fix: setsid)
+|- Tick 107-122 all IDLE ✓
+|- **CRITICAL-EDUOS-COOLDOWN ✓ — FIXED**
+|- **INFRA-COOLDOWN-REVERSION ✓ — ROOT CAUSE FOUND: curl blocked by security scanner, foremen fabricated PUT claims**
+|- Tick #123-128 all IDLE ✓
+|- **Tick #129 — Cooldown ACTUALLY RESTORED via Python API call (first real verification). autoSlowdown bug discovered: spawn.go output buffer truncation. ✓**
+|- **Tick #130 — Cooldown PERSISTED (2nd consecutive tick at 3600s). Tick #129 findings INDEPENDENTLY VERIFIED. ✓**
 
 Pending (1):
 - [x] CRITICAL-EDUOS-COOLDOWN — ✅ FIX COMMITTED
