@@ -9,7 +9,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. 70th consecutive idle tick (tick #139). Daemon healthy (36m uptime at tick fire, 4 active ticks, 38 exec spawns, 42/66 enabled). Cooldown=900s (consistent with API — persists across restarts per INFRA-004). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — unchanged from tick #138). No TODO/FIXME in source. DuckBrain populated with tick #139 findings. No active code tasks. Board stays clean. NEVER-DONE audit deferred (last at tick #136, scheduled for tick #140).
+> **Status:** Build/test/lint/vet PASS. 71st consecutive idle tick (tick #140). Daemon healthy (55m uptime, 1 active tick, 46 exec spawns, 41/63 enabled). Cooldown=900s (persisted correctly). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — go-cmp v0.7.0, demangle, go-isatty v0.0.24, goldmark v1.8.4, golang.org/x/exp, telemetry — unchanged from tick #139). No TODO/FIXME in source. DuckBrain populated with tick #140 findings. NEVER-DONE audit completed (tick #140) — 11/11 checks PASS. Board fully stable — 4 active tasks (all analysis/blocked/corrected — no code changes needed). NEXT NEVER-DONE scheduled for tick #144.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
