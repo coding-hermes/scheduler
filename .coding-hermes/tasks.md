@@ -9,7 +9,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. 68th consecutive idle tick (tick #137). Daemon healthy (just restarted, uptime 38s at tick fire, 6 active ticks, 41/63 enabled). Cooldown survived restart (1350s preserved on coding-hermes-scheduler — confirms INFRA-004 finding). All 9/9 test packages PASS. Hilo: 496 edges across 70 files. **NEVER-DONE audit tick #136** confirmed all-clear; tick #137 idle recheck finds no regressions. 6 outdated deps unchanged from tick #136. No active code tasks. Board stays clean.
+> **Status:** Build/test/lint/vet PASS. 69th consecutive idle tick (tick #138). Daemon healthy (restarted before this tick, uptime 18m53s at tick fire, 6 active ticks, 41/63 enabled). Cooldown=900s (consistent with API — persists across restarts per INFRA-004). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). **NEVER-DONE audit tick #136** confirmed all-clear; ticks #137-138 idle rechecks find no regressions. 6 outdated deps unchanged (same 6 packages). No TODO/FIXME in source. DuckBrain populated with tick #138 findings (namespace was empty — now has tick record + daemon health entry). No active code tasks. Board stays clean.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
