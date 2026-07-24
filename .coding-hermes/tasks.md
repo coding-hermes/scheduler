@@ -3,13 +3,30 @@
   All tasks MUST use matrix format: | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
   Before editing this file, load the skill: skill_view(name='coding-hermes-model-router')
   Validate: python3 ~/.hermes/scripts/validate-board-format.py .coding-hermes/tasks.md
+- [ ] **GITREINS-JUDGE — Configure LLM evaluator for commit quality review**
+  | 🔴 Critical | — | — | deepseek-v4-flash @ deepseek-foreman | GITREINS_LLM_API_KEY in ~/.hermes/.env | foreman-direct |
+
+  Run: `python3 ~/.hermes/scripts/check-gitreins-judge.py .` to verify.
+  Default limits (adjust per-project based on codebase size and task complexity):
+  - Fast/small projects: `max_iterations: 50`, `max_time: 10m`, tokens: `0.2M/0.4M`
+  - Large repos (Go monorepos, 100+ files): `max_iterations: 100`, `max_time: 30m`, tokens: `1M/2M`
+  - C++/Rust (slow compiles): `max_time: 30m` minimum
+  - Scheduler/production infra: `max_time: 30m`, tokens: `1M/2M`
+  Supervisor auto-flags projects where limits are too low for codebase size.
+
+| 🔴 Critical | — | — | deepseek-v4-flash @ deepseek-foreman | GITREINS_LLM_API_KEY in ~/.hermes/.env | foreman-direct |
+
+  Run: `python3 ~/.hermes/scripts/check-gitreins-judge.py .` to verify.
+  If missing, create/edit .gitreins/config.yaml with evaluator section using deepseek-v4-flash.
+  This is CRITICAL for code quality — no automated review of worker output without it.
+
   NEVER remove the matrix header row or NEVER-DONE / E2E-001 fixtures.
 -->
 
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 66+ projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. 71st consecutive idle tick (tick #140). Daemon healthy (55m uptime, 1 active tick, 46 exec spawns, 41/63 enabled). Cooldown=900s (persisted correctly). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — go-cmp v0.7.0, demangle, go-isatty v0.0.24, goldmark v1.8.4, golang.org/x/exp, telemetry — unchanged from tick #139). No TODO/FIXME in source. DuckBrain populated with tick #140 findings. NEVER-DONE audit completed (tick #140) — 11/11 checks PASS. Board fully stable — 4 active tasks (all analysis/blocked/corrected — no code changes needed). NEXT NEVER-DONE scheduled for tick #144.
+> **Status:** Build/test/lint/vet PASS. 72nd consecutive idle tick (tick #141). Daemon healthy (1h17m uptime, 7 active ticks, 59 exec spawns, 41/63 enabled). Cooldown=900s (persisted correctly). All 9/9 test packages PASS. Hilo: 496 edges across 70 files (useful). CI: all SUCCESS (5/5 recent runs). 6 outdated deps unchanged (same 6 packages — go-cmp v0.7.0, demangle, go-isatty v0.0.24, goldmark v1.8.4, golang.org/x/exp, telemetry — unchanged from tick #139). No TODO/FIXME in source. DuckBrain populated with tick #141 findings. NEVER-DONE audit completed (tick #140) — 11/11 checks PASS — next scheduled tick #144. Board fully stable — 4 active tasks (all analysis/blocked/corrected — no code changes needed).
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
