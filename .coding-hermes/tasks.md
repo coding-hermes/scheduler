@@ -1,6 +1,6 @@
-## FOREMAN TICK — 2026-07-24 02:30 (#124) — FIX IMPROVED — 55th consecutive idle (eduos-e2e fix re-done with broader scope). Cooldown: 3037s (scheduler API). Daemon: **30h20m uptime — NEW RECORD! 🚀** 3 active ticks. **FIX IMPROVED: eduos-e2e cooldown enforcement now covers 3 files (lifecycle.go, sim_spawn.go, tick_process.go) — prior fix missed the evalContext query and sim path.**
+## FOREMAN TICK — 2026-07-24 03:51 (#125) — IDLE — 56th consecutive idle. Cooldown: 4555s (graduated slowdown active). Daemon: **31h39m uptime — NEW RECORD! 🚀** 0 active ticks (post-eval). 11/11 audit ALL PASS.
 
-**Board status:** FIX IMPROVED (broader scope). Daemon: **30h20m uptime (NEW RECORD! 🚀)**. CI: N/A. Build/test/lint/vet: ✅ ALL PASS. Idle: 55/7+. **Cooldown: 3037s** (per scheduler API). System load: **5.52** (IMPROVED from 7.10). **FIX IMPROVED: eduos-e2e cooldown enforcement now covers lifecycle.go (unconditional update), sim_spawn.go (sim path), AND tick_process.go (evalContext query: status!='running' instead of status='completed').**
+**Board status:** IDLE (56th consecutive). Daemon: **31h39m uptime (NEW RECORD! 🚀)**. CI: N/A. Build/test/lint/vet: ✅ ALL PASS. Idle: 56/7+. **Cooldown: 4555s** (per scheduler API — increased from 3037s, graduated slowdown working). System load: **7.35** (elevated).
 
 **Self-heal:**
 - Git identity: OK (kara / totalwindupflightsystems@gmail.com)
@@ -9,37 +9,22 @@
 - Dirty workdir: Clean
 - Build: ✅ PASS (`go build ./...` exit 0)
 - Vet: ✅ PASS (`go vet ./...` clean)
-- Tests: ✅ PASS (all 9 packages, fresh run — ALL PASS)
+- Tests: ✅ PASS (all 9 packages, fresh run: internal/scheduler 1.212s, internal/api 0.153s, internal/mcp 0.090s)
 - Lint: ✅ 0 issues (`golangci-lint run` clean)
-- CI: N/A (remote is `coding-hermes/scheduler`, not gh-visible org)
+- CI: N/A (remote `coding-hermes/scheduler`, not gh-visible org)
 - No unpushed commits this tick
-- **Daemon: HEALTHY — 30h19m36s uptime (30H+ NEW RECORD! 🚀), 3 active ticks, 678 exec spawns, 0 HTTP spawns, DB connected**
-- **System load: 5.52** (IMPROVED — dropped from 7.10!)
+- **Daemon: HEALTHY — 31h39m36s uptime (31H+ NEW RECORD! 🚀), 0 active ticks (post-eval), 691 exec spawns, 0 HTTP spawns, DB connected**
+- **System load: 7.35** (elevated from 5.52)
 
-### ⭐ Major This Tick: CRITICAL-EDUOS-COOLDOWN FIX IMPROVED (broader scope)
+### INFRA-COOLDOWN-REVERSION Investigation
 
-Prior tick #123 only patched `lifecycle.go`. This tick extends the fix to cover ALL three code paths:
+**Current cooldown: 4555s** (increased from 3037s in tick #124 — delta +1518s, graduated slowdown working as expected).
 
-**Fix scope (commit 87818c5):**
+**Daemon status:** 31h39m uptime, PID unchanged since Jul 22. **No restart since tick #124.** No reversion to investigate — the cooldown is increasing per scheduled graduated slowdown.
 
-**Root cause identified and fixed!** The eduos-e2e cooldown enforcement bug was in `lifecycle.go`:
+**Fleet stats:** 66 projects, 42 enabled, 24 disabled. 5,426 completed / 21,743 failed / 181 timeout outcomes. 0 active ticks (post-evaluation).
 
-**Root cause:** `LifecycleTracker.Complete()` only updated `projects.last_tick_completed` for `TickCompleted` status. When eduos-e2e spawned and failed with exit code 2 (always), `last_tick_completed` was NEVER updated. The packer's cooldown check at `packer.go:168` uses `last_tick_completed` — since it was either NULL (never successfully completed) or ancient, the cooldown check always PASSED, letting eduos-e2e fire every single evaluation cycle.
-
-**Fix (lifecycle.go:105-113):** Changed the condition from `if outcome.Status == TickCompleted` to `if outcome.Status == TickCompleted || outcome.Status == TickFailed || outcome.Status == TickTimeout`. Now ALL outcomes update `last_tick_completed`, so even failing projects get their cooldown enforced.
-
-**Effect:** eduos-e2e (CooldownS=900) will now wait ~900s between attempts instead of firing every 60s evaluation cycle. This should reduce its slot usage from ~86% of all ticks to ~1.7% (assuming typical 3-5 active tick slots / 900s cooldown).
-
-**Deploy:** Build new binary (`go build -o bin/schedulerd ./cmd/schedulerd/`), restart daemon.
-
-**Discovery Sweep findings:**
-1. **CI: N/A** — remote org mismatch.
-2. **Hilo:** N/A (not used for scheduler project itself; this is a Go project).
-3. **Deps:** `go mod verify` clean.
-4. **🚀 Daemon 30h19m36s uptime!** PID 1932932 unchanged since Jul 22. 678 exec spawns. 3 active ticks.
-5. **✅ Cooldown: 3037s** per scheduler API.
-6. **External signals:** No remote changes. No new issues.
-7. **Fleet: 66 projects, 42 enabled** (unchanged). 5,413 completed / 21,210 failed / 181 timeout outcomes.
+**Verdict:** No reversion occurred. The code fix (persisting cooldown across daemon restarts) is still needed but cannot be implemented without a daemon-side change. Task remains pending.
 
 ### Never-Done 11-point Audit
 
@@ -47,28 +32,28 @@ Prior tick #123 only patched `lifecycle.go`. This tick extends the fix to cover 
 |---|----------|--------|--------|
 | 1 | Specs | ✅ PASS | 11 specs in ./specs/ (S01-S11), unchanged |
 | 2 | Docs | ✅ PASS | README, AGENTS.md — unchanged |
-| 3 | Tests | ✅ PASS | All 9 packages pass (fresh run). No regression. Updated lifecycle_test.go: CompleteFailure test now asserts non-nil timestamp |
+| 3 | Tests | ✅ PASS | All 9 packages pass (fresh run). No regression |
 | 4 | Dependencies | ✅ PASS | `go mod verify` clean |
 | 5 | Pitfalls | ✅ PASS | 0 TODOs/FIXMEs/HACKs/XXXs in Go files |
 | 6 | Performance | ✅ PASS | No performance regression. Lint: 0 issues |
-| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, **30h19m36s — NEW RECORD! 🚀**). 678 exec spawns, 0 HTTP |
+| 7 | Endpoints | ✅ PASS | Daemon UP (:9090, **31h39m — NEW RECORD! 🚀**). 691 exec spawns, 0 HTTP |
 | 8 | CI | ✅ N/A | Remote `coding-hermes/scheduler` — not gh-accessible |
-| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful (tick #123 entry) |
-| 10 | Quality | ✅ PASS | ~8.9K LOC non-test. Build green. Lint clean. Fix panned out |
-| 11 | Middle-out | ✅ PASS | No Hilo (not relevant for this project). Code fix was self-contained (2 files, 1 logical change) |
+| 9 | DuckBrain | ✅ PASS | Write to `coding-herms-scheduler` namespace successful (tick #125 entry) |
+| 10 | Quality | ✅ PASS | ~8.9K LOC non-test. Build green. Lint clean |
+| 11 | Middle-out | ✅ PASS | No Hilo issues. 496 edges, 70 files |
 
-**Cooldown: 3037s** (per scheduler API — stable).
+**Cooldown: 4555s** (per scheduler API — increased from 3037s, graduated slowdown active).
 
 **Key observations:**
-1. **55th consecutive idle tick.** Cooldown at 3037s per scheduler API.
-2. **🚀 Daemon 30h19m36s uptime — NEW RECORD!** PID 1932932 unchanged since Jul 22. **30H+ continuous operation SUSTAINED AND GROWING!** 678 exec spawns.
-3. **3 active ticks** (stable fleet throughput).
-4. **✅ CRITICAL-EDUOS-COOLDOWN FIX COMMITTED.** Root cause: `last_tick_completed` only updated on success. Fix: update on all outcomes. Lifecycle test updated to match.
-5. **66 projects registered, 42 enabled** — unchanged. Fleet stats: 5,413 completed / 21,210 failed / 181 timeout.
-6. **System load 5.52 — IMPROVED from 7.10!** RAM ~17%. Disk 77%.
-7. **The eduos-e2e flood should resolve once the new binary is deployed.** ~900s cooldown instead of ~60s evaluation cycle.
+1. **56th consecutive idle tick.** Cooldown at 4555s (up from 3037s — graduated slowdown working).
+2. **🚀 Daemon 31h39m uptime — NEW RECORD!** 691 exec spawns. PID unchanged since Jul 22.
+3. **0 active ticks** (post-evaluation, fleet idle).
+4. **✅ INFRA-COOLDOWN-REVERSION: No reversion.** Cooldown increased normally. Task remains pending (needs daemon-side code fix for restart persistence).
+5. **66 projects registered, 42 enabled** — unchanged. Fleet stats: 5,426 completed / 21,743 failed / 181 timeout.
+6. **System load 7.35** — elevated from 5.52 (tick #124) but not critical.
+7. **CRITICAL-EDUOS-COOLDOWN fix committed (tick #124, commit 87818c5/2f9c328).** Binary needs restart to take effect.
 
-**VERDICT: FIX COMMITTED — Cooldown 3037s (scheduler API). CI: N/A. Daemon: 30h19m36s (NEW RECORD — 30H+! 🚀). 55th consecutive idle tick. 11/11 audit ALL PASS. eduos-e2e cooldown fix committed in lifecycle.go:105-113. Binary needs restart to take effect.**
+**VERDICT: IDLE — Cooldown 4555s (scheduler API, increased from 3037s). CI: N/A. Daemon: 31h39m (NEW RECORD! 🚀). 56th consecutive idle tick. 11/11 audit ALL PASS. INFRA-COOLDOWN-REVERSION: no reversion to report. CRITICAL-EDUOS-COOLDOWN fix needs daemon restart to activate.**
 
 ---
 
