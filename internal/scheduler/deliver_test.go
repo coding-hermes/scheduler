@@ -440,10 +440,10 @@ func TestTrimToolNoise_MixedNoise(t *testing.T) {
 
 func TestIsRetryableSendError(t *testing.T) {
 	cases := []struct {
-		name   string
-		err    error
-		out    string
-		want   bool
+		name string
+		err  error
+		out  string
+		want bool
 	}{
 		{"telegram timed out", errors.New("exit status 1"), "hermes send: Telegram send failed: Timed out", true},
 		{"connection reset", errors.New("exit status 1"), "connection reset by peer", true},

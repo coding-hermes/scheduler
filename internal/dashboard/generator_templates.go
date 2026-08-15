@@ -118,7 +118,7 @@ func loadTemplates() *template.Template {
 				x := float64(i) * w / float64(len(series)-1)
 				y := h - 2.0
 				if maxv > 0 {
-					y = h - 2.0 - (v / maxv) * (h - 4.0)
+					y = h - 2.0 - (v/maxv)*(h-4.0)
 				}
 				pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
 			}

@@ -33,7 +33,7 @@ func TestSumSessionCostInWindow(t *testing.T) {
 		(session_id, model, estimated_cost_usd, actual_cost_usd, first_seen, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?)`
 	for _, r := range [][]any{
-		{"in-window-est", "m", 0.10, 0, now - 100, now - 50},     // estimated only
+		{"in-window-est", "m", 0.10, 0, now - 100, now - 50},       // estimated only
 		{"in-window-actual", "m", 0.20, 0.30, now - 100, now - 50}, // actual wins
 		{"before-window", "m", 0.90, 0, now - 5000, now - 4900},    // excluded
 		{"after-window", "m", 0.90, 0, now + 5000, now + 5100},     // excluded

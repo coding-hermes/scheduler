@@ -73,6 +73,7 @@ SELECT COALESCE(SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE esti
 //   - GitReins judge usage recorded in <workdir>/.gitreins/usage.jsonl within
 //     the same window (gitreins uses its own LLM client, so it never appears
 //     in Hermes telemetry).
+//
 // Returns (cost, isReal).
 func resolveRealTickCost(foremanHome, workdir, project string, start, end time.Time) (float64, bool) {
 	total := 0.0

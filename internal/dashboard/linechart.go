@@ -60,18 +60,17 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	for i, v := range values {
 		x := padL + step*float64(i)
 		y := padT + plotH*(1.0-v/scale)
-		line.WriteString(fmt.Sprintf("%s%.1f,%.1f", comma(i), x, y))
+		fmt.Fprintf(&line, "%s%.1f,%.1f", comma(i), x, y)
 		lastX, lastY = x, y
 		// One hover circle per point with a native <title> tooltip: time + value.
 		tt := pointTitle(pts[i], v, mode)
-		points.WriteString(fmt.Sprintf(
-			`<circle cx="%.1f" cy="%.1f" r="3.5" class="pt"><title>%s</title></circle>`,
-			x, y, template.HTMLEscapeString(tt)))
+		fmt.Fprintf(&points, `<circle cx="%.1f" cy="%.1f" r="3.5" class="pt"><title>%s</title></circle>`,
+			x, y, template.HTMLEscapeString(tt))
 	}
 	// Area: close the line down to the baseline.
-	area.WriteString(fmt.Sprintf("M%.1f,%.1f", padL, padT+plotH))
+	fmt.Fprintf(&area, "M%.1f,%.1f", padL, padT+plotH)
 	area.WriteString(line.String())
-	area.WriteString(fmt.Sprintf("L%.1f,%.1fZ", lastX, padT+plotH))
+	fmt.Fprintf(&area, "L%.1f,%.1fZ", lastX, padT+plotH)
 
 	// Value label + axis labels (first/last timestamps).
 	var label string
@@ -105,8 +104,8 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	glid := "gl" + mode
 
 	var xLabels strings.Builder
-	xLabels.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" class="ax-label" text-anchor="start">%s</text>`, padL, h-4, esc(pts[0].Label)))
-	xLabels.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" class="ax-label" text-anchor="end">%s</text>`, w-padR, h-4, esc(pts[len(pts)-1].Label)))
+	fmt.Fprintf(&xLabels, `<text x="%.1f" y="%.1f" class="ax-label" text-anchor="start">%s</text>`, padL, h-4, esc(pts[0].Label))
+	fmt.Fprintf(&xLabels, `<text x="%.1f" y="%.1f" class="ax-label" text-anchor="end">%s</text>`, w-padR, h-4, esc(pts[len(pts)-1].Label))
 
 	grid := ""
 	// A light top gridline at the max for a reference.

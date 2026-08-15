@@ -66,11 +66,11 @@ func classifyTaskType(title string) TaskType {
 // typeSamples accumulates completed-tick duration AND cost for one TaskType.
 // avg/avgCost are 0 until finalize() is called.
 type typeSamples struct {
-	count    int
-	total    time.Duration
-	avg      time.Duration
+	count     int
+	total     time.Duration
+	avg       time.Duration
 	totalCost float64
-	avgCost  float64
+	avgCost   float64
 }
 
 func (s *typeSamples) add(d time.Duration, cost float64) {

@@ -240,9 +240,9 @@ func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
 	}
 
 	data := NamespaceViewData{
-		Title:      "Namespace: " + id,
-		Namespace:  namespace,
-		Projects:   projects,
+		Title:       "Namespace: " + id,
+		Namespace:   namespace,
+		Projects:    projects,
 		RecentTicks: ticks,
 	}
 	for _, project := range projects {

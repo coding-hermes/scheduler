@@ -51,22 +51,22 @@ type FleetRow struct {
 	CostToday   float64
 	CostWeek    float64
 	// Board progress (parsed from <workdir>/.coding-hermes/tasks.md).
-	Workdir          string
-	CooldownS        int
+	Workdir           string
+	CooldownS         int
 	LastTickCompleted string
-	BoardDone        int
-	BoardTotal       int
-	NextTickIn       string // human-readable "in Xm Ys", "running", "due now", or "—"
+	BoardDone         int
+	BoardTotal        int
+	NextTickIn        string // human-readable "in Xm Ys", "running", "due now", or "—"
 	// Recent cost series (last up-to-N completed ticks, oldest→newest) for the
 	// cost sparkline, plus the count of recent failed/timeout ticks (failure flag).
-	CostSeries      []float64
-	RecentFailures  int
-	RecentTicks     int
+	CostSeries     []float64
+	RecentFailures int
+	RecentTicks    int
 	// Observability: average tick duration (seconds), success rate (0-100),
 	// and estimated time-to-completion (from avg duration × steps left).
-	AvgTickSecs  int
-	SuccessRate  int // percent
-	ETA          string
+	AvgTickSecs int
+	SuccessRate int // percent
+	ETA         string
 	// CompletionAt is the projected wall-clock completion as RFC3339 (UTC);
 	// the dashboard renders it in the viewer's local timezone via JS.
 	CompletionAt string
@@ -93,7 +93,7 @@ type FleetRow struct {
 type TickRow struct {
 	ID, Project, Status, Outcome, SessionID, SpawnedAt, CompletedAt string
 	Commits, FilesChanged                                           int
-	Duration string // human-readable elapsed time between spawned and completed
+	Duration                                                        string // human-readable elapsed time between spawned and completed
 }
 
 // NamespaceRow is one namespace in the allocation overview table.
@@ -140,24 +140,24 @@ type FleetData struct {
 
 // ProjectDetailData holds all data for the /projects/{name} page.
 type ProjectDetailData struct {
-	Title       string
-	Project     *database.Project
-	LatestTick  *database.Tick
-	RecentTicks []database.Tick
-	BoardDone   int
-	BoardTotal  int
-	NextTickIn  string
-	AvgTickSecs int
-	SuccessRate int
-	ETA         string
-	BoardSteps  []BoardStep
-	TickWork    map[string]string // tick id → what it worked on (commit subjects)
-	GitReins    GitReinsSummary
-	CompletionAt string
+	Title         string
+	Project       *database.Project
+	LatestTick    *database.Tick
+	RecentTicks   []database.Tick
+	BoardDone     int
+	BoardTotal    int
+	NextTickIn    string
+	AvgTickSecs   int
+	SuccessRate   int
+	ETA           string
+	BoardSteps    []BoardStep
+	TickWork      map[string]string // tick id → what it worked on (commit subjects)
+	GitReins      GitReinsSummary
+	CompletionAt  string
 	ProjectedCost float64
-	AvgCost     float64 // mean cost per completed tick (for live-cost estimate)
-	EtaBreakdown string // per-type estimate, e.g. "code ×2 40m + test ×5 25m"
-	SpeedCost   []SpeedCostPoint // for the speed/cost-over-time charts
+	AvgCost       float64          // mean cost per completed tick (for live-cost estimate)
+	EtaBreakdown  string           // per-type estimate, e.g. "code ×2 40m + test ×5 25m"
+	SpeedCost     []SpeedCostPoint // for the speed/cost-over-time charts
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -505,13 +505,14 @@ func readBoardProgress(path string) (done, total int) {
 		case isTaskRow(line):
 			// Task row. The NEVER-DONE line ("## [ ] NEVER-DONE") is a heading,
 			// not a task row, so it never reaches here.
-			if section == "active" {
+			switch section {
+			case "active":
 				total++
 				// Markdown checklist item "- [x]" in an active section is done.
 				if strings.HasPrefix(line, "- [x] ") {
 					done++
 				}
-			} else if section == "completed" {
+			case "completed":
 				done++
 				total++
 			}
@@ -906,8 +907,12 @@ func readGitReins(workdir string, maxLatest int) GitReinsSummary {
 				Passed    bool   `json:"passed"`
 				Evaluated string `json:"evaluated_at"`
 				Stages    struct {
-					Tier1 *struct{ Passed bool `json:"passed"` } `json:"tier1"`
-					Tier2 *struct{ Passed bool `json:"passed"` } `json:"tier2"`
+					Tier1 *struct {
+						Passed bool `json:"passed"`
+					} `json:"tier1"`
+					Tier2 *struct {
+						Passed bool `json:"passed"`
+					} `json:"tier2"`
 				} `json:"stages"`
 			}
 			if err := json.Unmarshal(data, &raw); err != nil {
@@ -1006,6 +1011,7 @@ func tickWork(workdir, spawned, completed string, commitCount int) string {
 	}
 	return strings.Join(kept, " · ")
 }
+
 // readBoardSteps parses a board into an ordered roadmap of steps (completed
 // first, then pending). The first pending task is marked "active" (next up).
 // The NEVER-DONE perpetual audit is excluded. Returns nil on missing/unreadable.
@@ -1059,13 +1065,14 @@ func readBoardSteps(path string) []BoardStep {
 				if id == "" {
 					continue
 				}
-				if section == "active" {
+				switch section {
+				case "active":
 					if isDone {
 						doneRows = append(doneRows, row{id: id, title: title, commit: commit})
 					} else {
 						pendingRows = append(pendingRows, row{id: id, title: title, commit: commit})
 					}
-				} else if section == "completed" {
+				case "completed":
 					doneRows = append(doneRows, row{id: id, title: title, commit: commit})
 				}
 				continue
@@ -1095,9 +1102,10 @@ func readBoardSteps(path string) []BoardStep {
 				continue
 			}
 			r := row{id: id, title: title, commit: commit}
-			if section == "active" {
+			switch section {
+			case "active":
 				pendingRows = append(pendingRows, r)
-			} else if section == "completed" {
+			case "completed":
 				doneRows = append(doneRows, r)
 			}
 		}

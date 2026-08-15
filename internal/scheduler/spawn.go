@@ -285,26 +285,26 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo, gitreins-usage, off-by-one-usage. "+
-					"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
-					"Workdir: %s. "+
-					"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one-usage skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. "+
-					"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. "+
-					"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: "+
-					"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
-					"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. "+
-					"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. "+
-					"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. "+
-					"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. "+
-					"Worker model/provider: %s. "+
-					"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. "+
-					"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. "+
-					"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. "+
-					"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean. "+
-					"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. "+
-					"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. "+
-					"Format your final output as clean, well-structured markdown with tables and sections. "+
-					"Report result.",
+				"Load skills coding-hermes-foreman, coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo-usage, gitreins, off-by-one. "+
+				"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
+				"Workdir: %s. "+
+				"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. "+
+				"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. "+
+				"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: "+
+				"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
+				"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. "+
+				"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. "+
+				"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. "+
+				"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. "+
+				"Worker model/provider: %s. "+
+				"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. "+
+				"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. "+
+				"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. "+
+				"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean (optional — the fleet default keeps completed tasks for audit). "+
+				"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. "+
+				"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. "+
+				"Format your final output as clean, well-structured markdown with tables and sections. "+
+				"Report result.",
 			tickID, project.Workdir,
 			WorkerDefaults(project),
 		)
@@ -446,6 +446,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"chat", "-q", prompt,
 			"-m", model,
 			"--provider", provider,
+			"-s", "coding-hermes-foreman",
 			"-s", "coding-hermes-board",
 			"-s", "coding-hermes-model-router",
 			"-s", "coding-hermes-never-done",
@@ -459,9 +460,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"-s", "github-repo-management",
 			"-s", "claude-design",
 			"-s", "popular-web-designs",
-			"-s", "hilo",
-			"-s", "gitreins-usage",
-			"-s", "off-by-one-usage",
+			"-s", "hilo-usage",
+			"-s", "gitreins",
+			"-s", "off-by-one",
 			"--ignore-rules", "-Q",
 		}
 

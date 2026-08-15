@@ -108,11 +108,11 @@ func TestIsTaskRow(t *testing.T) {
 		}
 	}
 	bad := []string{
-		"|----|------|",          // table separator
-		"| ID | Task |",          // header row
-		"## [ ] NEVER-DONE",      // heading, not a row
-		"| t05 | lowercase |",    // lowercase id
-		"| 123 | digits only |",  // starts with digit
+		"|----|------|",         // table separator
+		"| ID | Task |",         // header row
+		"## [ ] NEVER-DONE",     // heading, not a row
+		"| t05 | lowercase |",   // lowercase id
+		"| 123 | digits only |", // starts with digit
 		"plain text",
 	}
 	for _, s := range bad {
