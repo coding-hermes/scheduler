@@ -1,11 +1,24 @@
-{{define "fleet_table"}}<tbody id="fleet-overview">
+{{define "fleet_table"}}
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
-<td>{{.Weight}}</td>
-<td>{{.Priority}}</td>
+<td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td class="num">{{.Weight}}</td>
+<td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
-<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
-<td>{{if .RunningNow}}<span class="running-dot"></span>running{{else if not .Enabled}}{{if .DisabledReason}}<span class="status-fail" title="disabled by {{.DisabledBy}} at {{.DisabledAt}}: {{.DisabledReason}}">disabled</span>{{else}}disabled{{end}}{{end}}</td>
+<td>{{if eq .LastOutcome "committed"}}<span class="pill ok">committed</span>{{else if eq .LastOutcome "failed"}}<span class="pill fail">failed</span>{{else if eq .LastOutcome "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td>
+{{if .BoardTotal}}
+<div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
+<span class="meta num">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
+{{else}}
+<span class="meta">—</span>
+{{end}}
+</td>
+<td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{if .ETA}}{{localtime .CompletionAt}}<span class="meta" title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success"> · {{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}<br>{{if .ProjectedCost}}<span class="meta">~{{money .ProjectedCost}} left</span>{{end}}</td>
+<td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
+<td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
+<td>{{if lt .GitReinsPass 0}}<span class="meta">—</span>{{else if eq .GitReinsPass 100}}<span class="pill ok">{{.GitReinsPass}}%</span>{{else if ge .GitReinsPass 70}}<span class="pill warn">{{.GitReinsPass}}%</span>{{else}}<span class="pill fail">{{.GitReinsPass}}%</span>{{end}}</td>
+<td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
-</tbody>{{end}}
+{{end}}

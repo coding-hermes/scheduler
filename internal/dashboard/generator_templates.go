@@ -3,6 +3,8 @@ package dashboard
 import (
 	"fmt"
 	"html/template"
+	"strings"
+	"time"
 )
 
 // mustReadStatic panics if the embedded asset cannot be read at init time —
@@ -35,6 +37,95 @@ func loadTemplates() *template.Template {
 			return s
 		},
 		"add": func(a, b, c int) int { return a + b + c },
+		"sub": func(a, b int) int { return a - b },
+		"duration": func(spawned, completed string) string {
+			return tickDuration(spawned, completed)
+		},
+		// liveDur renders the live elapsed time for a running tick (now minus
+		// spawned), as "12m 30s". Returns "—" when spawned is empty/unparseable.
+		"liveDur": func(spawned string) string {
+			if spawned == "" {
+				return "—"
+			}
+			s, err := time.Parse(time.RFC3339, spawned)
+			if err != nil {
+				return "—"
+			}
+			d := time.Since(s)
+			if d < 0 {
+				d = 0
+			}
+			if d < time.Minute {
+				return fmt.Sprintf("%ds", int(d.Seconds()))
+			}
+			return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+		},
+		// liveCost estimates the running cost of a live tick by scaling the
+		// project's average cost-per-tick by the fraction of the average tick
+		// duration already elapsed. Returns 0 when there's no signal.
+		"liveCost": func(spawned string, avgSecs int, avgCost float64) float64 {
+			if spawned == "" || avgSecs <= 0 || avgCost <= 0 {
+				return 0
+			}
+			s, err := time.Parse(time.RFC3339, spawned)
+			if err != nil {
+				return 0
+			}
+			elapsed := time.Since(s).Seconds()
+			if elapsed <= 0 {
+				return 0
+			}
+			frac := elapsed / float64(avgSecs)
+			if frac > 1 {
+				frac = 1 // cap at one full tick's average cost
+			}
+			return avgCost * frac
+		},
+		// localtime renders a UTC RFC3339 timestamp as a <time> element with a
+		// data-utc attribute; the page's JS converts it to the viewer's local
+		// timezone (the server can't know where each person connects from).
+		"localtime": func(utc string) template.HTML {
+			if utc == "" {
+				return "—"
+			}
+			return template.HTML(fmt.Sprintf(`<time class="local" data-utc="%s">…</time>`, template.HTMLEscapeString(utc)))
+		},
+		"money": func(v float64) string {
+			return fmt.Sprintf("$%.2f", v)
+		},
+		// linechart renders a hand-rolled SVG line chart from []SpeedCostPoint.
+		// mode "speed" plots tick duration (seconds), "cost" plots cost_usd.
+		"linechart": func(pts []SpeedCostPoint, mode string) template.HTML {
+			return renderLineChart(pts, mode)
+		},
+		// sparkline renders a small inline SVG line chart from a []float64 cost
+		// series (w×h viewBox). Empty/zero-series → "—". No external chart lib:
+		// this dashboard is no-CDN/no-build (stdlib Go templates).
+		"sparkline": func(series []float64) template.HTML {
+			const w, h = 64, 20
+			if len(series) == 0 {
+				return "—"
+			}
+			maxv := series[0]
+			for _, v := range series {
+				if v > maxv {
+					maxv = v
+				}
+			}
+			// Build polyline points.
+			pts := make([]string, 0, len(series))
+			for i, v := range series {
+				x := float64(i) * w / float64(len(series)-1)
+				y := h - 2.0
+				if maxv > 0 {
+					y = h - 2.0 - (v/maxv)*(h-4.0)
+				}
+				pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+			}
+			return template.HTML(fmt.Sprintf(
+				`<svg class="spark" width="%d" height="%d" viewBox="0 0 %d %d" aria-hidden="true"><polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="%s"/></svg>`,
+				w, h, w, h, strings.Join(pts, " ")))
+		},
 		"statusClass": func(s string) string {
 			switch s {
 			case "completed":

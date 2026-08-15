@@ -49,10 +49,11 @@ func computeCostUSD(model string, tokensIn, tokensOut int) float64 {
 	return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
 }
 
-// gitCommitCount returns the number of commits in workdir between [since, until].
+// gitCommitCountInWindow returns the number of commits in workdir between [since, until].
 // Returns 0 for repos without .git or on any git error — it must never block
-// the tick completion path.
-func gitCommitCount(ctx context.Context, workdir, since, until string) int {
+// the tick completion path. (Named distinctly from gitmetrics.gitCommitCount —
+// the spawn-time baseline counter — after the upstream merge.)
+func gitCommitCountInWindow(ctx context.Context, workdir, since, until string) int {
 	out, err := runGit(ctx, workdir, "rev-list", "--count",
 		"--since="+since, "--until="+until, "HEAD")
 	if err != nil {
@@ -146,7 +147,7 @@ func countGitChanges(workdir string, start, end time.Time) (int, int) {
 	defer cancel()
 	since := start.Format(time.RFC3339)
 	until := end.Format(time.RFC3339)
-	commits := gitCommitCount(ctx, workdir, since, until)
+	commits := gitCommitCountInWindow(ctx, workdir, since, until)
 	files := gitFilesChanged(ctx, workdir, since, until)
 	return commits, files
 }

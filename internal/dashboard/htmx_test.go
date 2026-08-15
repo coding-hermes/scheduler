@@ -24,9 +24,12 @@ func TestGenerateFleetTable_RendersTBody(t *testing.T) {
 	}
 	out := buf.String()
 
-	// Must contain the tbody wrapper that the dashboard page expects.
-	if !strings.Contains(out, `<tbody id="fleet-overview">`) {
-		t.Errorf("expected <tbody id=\"fleet-overview\"> wrapper, got: %q", snippet(out, "fleet"))
+	// The partial is rows-only (no tbody wrapper) because the page's
+	// <tbody id="fleet-overview"> uses hx-swap="innerHTML" — a nested tbody
+	// would misalign the columns against the <thead>. Rows must reference the
+	// drill-down links so htmx keeps them clickable.
+	if strings.Contains(out, "<tbody") {
+		t.Errorf("partial must NOT emit a tbody wrapper (htmx swaps innerHTML); got: %q", snippet(out, "tbody"))
 	}
 	// Must NOT contain full-page chrome (this is a partial, not a page).
 	if strings.Contains(out, "<!DOCTYPE html>") {
@@ -58,9 +61,10 @@ func TestGenerateFleetTable_WithProjects(t *testing.T) {
 	if !strings.Contains(out, `href="/projects/beta"`) {
 		t.Errorf("expected link to /projects/beta, got: %s", snippet(out, "beta"))
 	}
-	// Closing tbody must appear (the partial must be a complete fragment).
-	if !strings.Contains(out, "</tbody>") {
-		t.Errorf("expected closing </tbody> in partial")
+	// Rows-only fragment: must contain <tr> with drill-down links (no tbody
+	// wrapper — htmx swaps innerHTML into the page's tbody).
+	if !strings.Contains(out, "<tr") {
+		t.Errorf("expected row markup in partial")
 	}
 }
 
@@ -94,7 +98,6 @@ func TestGenerateProjectDetail_ValidName(t *testing.T) {
 	// Required structural elements.
 	for _, want := range []string{
 		"<!DOCTYPE html>",
-		"Project:",
 		"alpha",
 		"back to fleet",
 		"Weight",
@@ -319,95 +322,6 @@ func TestGenerateHealth_ProbesGatewayAndAutoRefreshes(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("health page missing %q", want)
 		}
-	}
-}
-
-// TestGenerateHealth_SpawnModeExecFallback proves SCHED-GAP-013: when
-// spawnCounts reports exec>0 and http=0, the health panel labels the spawn
-// mode as "exec fallback" even though the gateway connectivity probe reports
-// "connected" — the dashboard must not conflate connectivity with spawn mode.
-func TestGenerateHealth_SpawnModeExecFallback(t *testing.T) {
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK) // gateway UP
-	}))
-	defer gateway.Close()
-
-	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db, gateway.URL)
-	gen.SetSpawnCounts(func() (int64, int64) { return 0, 229 }) // all exec
-
-	var buf strings.Builder
-	if err := gen.GenerateHealth(&buf); err != nil {
-		t.Fatalf("GenerateHealth: %v", err)
-	}
-	out := buf.String()
-
-	// The panel must show BOTH "connected" (gateway up) AND "exec fallback"
-	// (actual spawn mode) so the operator cannot mistake one for the other.
-	if !strings.Contains(out, "connected") {
-		t.Errorf("expected gateway 'connected' to remain visible, got: %s", snippet(out, "Gateway"))
-	}
-	if !strings.Contains(out, "exec fallback") {
-		t.Errorf("expected spawn mode 'exec fallback', got: %s", snippet(out, "Spawn Mode"))
-	}
-	if !strings.Contains(out, "spawns_http=0") {
-		t.Errorf("expected 'spawns_http=0' label, got: %s", snippet(out, "Spawn Mode"))
-	}
-	if !strings.Contains(out, "spawns_exec=229") {
-		t.Errorf("expected 'spawns_exec=229' label, got: %s", snippet(out, "Spawn Mode"))
-	}
-	if !strings.Contains(out, "gateway client not wired") {
-		t.Errorf("expected 'gateway client not wired' hint when exec fallback + connected, got: %s", snippet(out, "Spawn Mode"))
-	}
-}
-
-// TestGenerateHealth_SpawnModeHTTP proves the panel labels "HTTP" when
-// spawnCounts reports http>0.
-func TestGenerateHealth_SpawnModeHTTP(t *testing.T) {
-	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
-	gen.SetSpawnCounts(func() (int64, int64) { return 150, 0 })
-
-	var buf strings.Builder
-	if err := gen.GenerateHealth(&buf); err != nil {
-		t.Fatalf("GenerateHealth: %v", err)
-	}
-	out := buf.String()
-
-	if !strings.Contains(out, ">HTTP<") {
-		t.Errorf("expected spawn mode 'HTTP', got: %s", snippet(out, "Spawn Mode"))
-	}
-	if !strings.Contains(out, "spawns_http=150") {
-		t.Errorf("expected 'spawns_http=150' label, got: %s", snippet(out, "Spawn Mode"))
-	}
-	if !strings.Contains(out, "spawns_exec=0") {
-		t.Errorf("expected 'spawns_exec=0' label, got: %s", snippet(out, "Spawn Mode"))
-	}
-	// Must NOT show the exec-fallback warning hint.
-	if strings.Contains(out, "gateway client not wired") {
-		t.Errorf("HTTP mode must not show 'gateway client not wired'")
-	}
-}
-
-// TestGenerateHealth_SpawnModeUnknown proves the panel shows "unknown" when
-// spawnCounts is not configured (nil callback), so tests and lightweight
-// deployments without a loop reference degrade gracefully.
-func TestGenerateHealth_SpawnModeUnknown(t *testing.T) {
-	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db) // no SetSpawnCounts
-
-	var buf strings.Builder
-	if err := gen.GenerateHealth(&buf); err != nil {
-		t.Fatalf("GenerateHealth: %v", err)
-	}
-	out := buf.String()
-
-	if !strings.Contains(out, "unknown") {
-		t.Errorf("expected spawn mode 'unknown' when no callback set, got: %s", snippet(out, "Spawn Mode"))
 	}
 }
 

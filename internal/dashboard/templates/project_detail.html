@@ -1,109 +1,180 @@
-{{define "project_detail"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Project: {{.Project.Name}} · Coding Hermes Fleet</title>
-<style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
-h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
-.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
-.back{color:var(--accent);text-decoration:none;font-size:0.85rem;margin-bottom:12px;display:inline-block}
-.back:hover{text-decoration:underline}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
-.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
-.card .value{font-size:1.3rem;font-weight:600;margin-top:4px}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
-th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
-tr:last-child td{border-bottom:none}
-.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent);animation:pulse 1.5s infinite}
-.running-dot{display:inline-block;width:6px;height:6px;background:var(--accent);border-radius:50%;margin-right:4px;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-.disabled{opacity:0.5}
-.config{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px}
-.config-row{display:grid;grid-template-columns:160px 1fr;gap:8px;padding:4px 0;font-size:0.85rem}
-.config-row .label{color:var(--muted);text-transform:uppercase;font-size:0.7rem;padding-top:2px}
-.config-row .value{color:var(--fg);font-family:ui-monospace,Menlo,monospace;word-break:break-all}
-@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}.config-row{grid-template-columns:1fr;gap:2px}}
-</style>
-</head>
-<body>
-<a class="back" href="/">← back to fleet</a>
-<h1>📦 {{.Project.Name}}</h1>
-<div class="meta">Project detail · {{.Project.RepoURL}}</div>
+{{define "project_detail"}}{{template "head" .}}
+{{template "sidebar" "overview"}}
+<div class="main" id="main">
+<a href="/" class="back">← back to fleet</a>
+<div class="page-head">
+<h1>{{.Project.Name}}</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> {{if .Project.Enabled}}Enabled{{else}}Disabled{{end}}</span></div>
+</div>
+<div class="meta">{{.Project.RepoURL}}</div>
 
 <div class="cards">
 <div class="card"><div class="label">Weight</div><div class="value">{{.Project.Weight}}</div></div>
 <div class="card"><div class="label">Priority</div><div class="value">{{.Project.Priority}}</div></div>
-<div class="card"><div class="label">Cooldown</div><div class="value">{{.Project.CooldownS}}s</div></div>
-<div class="card"><div class="label">Enabled</div><div class="value">{{if .Project.Enabled}}<span class="status-ok">yes</span>{{else}}<span class="status-fail">no</span>{{end}}</div></div>
-{{if not .Project.Enabled}}<div class="card"><div class="label">Disabled by</div><div class="value">{{if .Project.DisabledBy}}{{.Project.DisabledBy}}{{else}}—{{end}}</div></div>
-<div class="card"><div class="label">Disabled at</div><div class="value">{{if .Project.DisabledAt}}{{shortTime .Project.DisabledAt}}{{else}}—{{end}}</div></div>
-<div class="card"><div class="label">Disabled reason</div><div class="value">{{if .Project.DisabledReason}}{{.Project.DisabledReason}}{{else}}—{{end}}</div></div>
+<div class="card"><div class="label">Cooldown</div><div class="value" style="font-size:1.1rem">{{.Project.CooldownS}}s</div></div>
+<div class="card"><div class="label">Next Tick</div><div class="value" style="font-size:1.1rem">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</div></div>
+{{if .BoardTotal}}
+<div class="card"><div class="label">Board Progress</div><div class="value" style="font-size:1.1rem">{{.BoardDone}}/{{.BoardTotal}}</div><div class="sub">{{percent .BoardDone .BoardTotal}}% complete</div></div>
+<div class="card"><div class="label">Steps Left</div><div class="value">{{sub .BoardTotal .BoardDone}}</div></div>
+<div class="card"><div class="label">Est. Completion</div><div class="value" style="font-size:1.1rem">{{if .ETA}}{{localtime .CompletionAt}}{{else}}—{{end}}</div><div class="sub">{{if .ETA}}{{.ETA}} to go{{end}}{{if .EtaBreakdown}}<br><span class="mono" style="opacity:.8">{{.EtaBreakdown}}</span>{{end}}{{if .ProjectedCost}} · ~{{money .ProjectedCost}} projected{{end}}</div></div>
 {{end}}
 </div>
 
+{{if .BoardSteps}}
+<h2>Roadmap</h2>
+<p class="meta">{{.BoardDone}} of {{.BoardTotal}} steps done · {{.SuccessRate}}% success (last 10 ticks) · est. completion {{if .ETA}}{{.ETA}}{{else}}—{{end}}</p>
+<div class="roadmap">
+{{range .BoardSteps}}
+<div class="step {{.Status}}" data-status="{{.Status}}">
+<span class="step-id">{{.ID}}</span>
+<span class="step-title">{{.Title}}</span>
+{{if .Commit}}<span class="step-commit mono">{{.Commit}}</span>{{end}}
+</div>
+{{end}}
+</div>
+<style>
+.roadmap{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.step{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-size:0.78rem}
+.step .step-id{font-family:var(--mono);font-weight:600;color:var(--muted)}
+.step .step-title{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.step .step-commit{color:var(--faint);font-size:0.7rem}
+.step.done{border-color:rgba(55,211,153,0.4);background:rgba(55,211,153,0.06)}
+.step.done .step-id{color:var(--ok)}
+.step.active{border-color:var(--signal);background:rgba(232,163,61,0.08);box-shadow:0 0 0 1px var(--signal)}
+.step.active .step-id{color:var(--signal-hi)}
+.step.pending{opacity:0.7}
+</style>
+{{end}}
+
+{{if .GitReins.Latest}}
+<h2>GitReins Verdicts</h2>
+<p class="meta">{{.GitReins.Passed}}/{{.GitReins.Total}} judged pass ({{.GitReins.RatePct}}%) · LLM judge verdicts from .gitreins/history</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Task</th><th>Verdict</th><th>Tier 1</th><th>Tier 2</th><th>Evaluated</th></tr></thead>
+<tbody>
+{{range .GitReins.Latest}}
+<tr>
+  <td class="mono">{{.TaskID}}</td>
+  <td>{{if .Passed}}<span class="pill ok">PASS</span>{{else}}<span class="pill fail">FAIL</span>{{end}}</td>
+  <td>{{if .Tier1Passed}}<span class="status-ok">✓ guards</span>{{else}}<span class="status-fail">✗ guards</span>{{end}}</td>
+  <td>{{if .HasTier2}}{{if .Tier2Passed}}<span class="status-ok">✓ judge</span>{{else}}<span class="status-fail">✗ judge</span>{{end}}{{else}}<span class="meta">—</span>{{end}}</td>
+  <td class="meta">{{.EvaluatedAt}}</td>
+</tr>
+<tr><td colspan="5" class="gr-title">{{if .TaskTitle}}{{.TaskTitle}}{{else}}—{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<style>
+.gr-title{color:var(--muted);font-size:0.74rem;border-top:none;padding-top:0}
+</style>
+{{end}}
+
+{{if .SpeedCost}}
+<h2>Speed &amp; Output Over Time</h2>
+<p class="meta">Per completed tick · timeouts/failures with no output omitted · lower speed line = faster tick · last 20 ticks</p>
+<div class="charts">
+<div class="chart-col">
+<div class="chart-card">
+<div class="chart-title">Speed (tick duration)</div>
+{{linechart .SpeedCost "speed"}}
+</div>
+<div class="chart-card">
+<div class="chart-title">Cost per tick</div>
+{{linechart .SpeedCost "cost"}}
+</div>
+</div>
+<div class="chart-col">
+<div class="chart-card">
+<div class="chart-title">Commits per tick</div>
+{{linechart .SpeedCost "commits"}}
+</div>
+<div class="chart-card">
+<div class="chart-title">Files changed per tick</div>
+{{linechart .SpeedCost "files"}}
+</div>
+</div>
+</div>
+<style>
+.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:6px}
+.chart-col{display:flex;flex-direction:column;gap:18px;min-width:0}
+.chart-card{min-width:0}
+.chart-title{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
+@media(max-width:760px){.charts{grid-template-columns:1fr}}
+</style>
+{{end}}
+
 <h2>Latest Tick</h2>
 {{if .LatestTick}}
+<div class="table-wrap">
 <table>
 <thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Session</th><th>Spawned</th><th>Completed</th><th>Cost</th></tr></thead>
 <tbody>
 <tr>
-  <td>{{.LatestTick.ID}}</td>
-  <td class="{{if eq .LatestTick.Status "completed"}}status-ok{{else if eq .LatestTick.Status "failed"}}status-fail{{else if eq .LatestTick.Status "running"}}status-running{{end}}">{{.LatestTick.Status}}</td>
-  <td>{{.LatestTick.Outcome}}</td>
-  <td>{{if .LatestTick.SessionID}}<code>{{.LatestTick.SessionID}}</code>{{else}}—{{end}}</td>
-  <td class="meta">{{shortTime .LatestTick.SpawnedAt}}</td>
-  <td class="meta">{{shortTime .LatestTick.CompletedAt}}</td>
-  <td>${{printf "%.4f" .LatestTick.CostUSD}}</td>
+  <td class="mono">{{.LatestTick.ID}}</td>
+  <td>{{if eq .LatestTick.Status "completed"}}<span class="pill ok">completed</span>{{else if eq .LatestTick.Status "failed"}}<span class="pill fail">failed</span>{{else if eq .LatestTick.Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="pill warn">{{.LatestTick.Status}}</span>{{end}}</td>
+  <td>{{if .LatestTick.Outcome}}{{.LatestTick.Outcome}}{{else}}—{{end}}</td>
+  <td class="mono">{{if .LatestTick.SessionID}}{{.LatestTick.SessionID}}{{else}}—{{end}}</td>
+  <td class="meta">{{.LatestTick.SpawnedAt}}</td>
+  <td class="meta">{{if eq .LatestTick.Status "running"}}{{liveDur .LatestTick.SpawnedAt}} (live){{else if .LatestTick.CompletedAt}}{{.LatestTick.CompletedAt}}{{else}}—{{end}}</td>
+  <td class="num">{{if eq .LatestTick.Status "running"}}~{{printf "$%.4f" (liveCost .LatestTick.SpawnedAt $.AvgTickSecs $.AvgCost)}}{{else}}${{printf "%.4f" .LatestTick.CostUSD}}{{end}}</td>
 </tr>
 </tbody>
 </table>
+</div>
 {{else}}
 <p class="meta">No ticks recorded for this project yet.</p>
 {{end}}
 
 <h2>Recent Ticks (last 20)</h2>
 {{if .RecentTicks}}
+<div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Spawned</th><th>Completed</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
+<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Work</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
-  <td>{{.ID}}</td>
-  <td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "running"}}status-running{{end}}">{{.Status}}</td>
-  <td>{{.Outcome}}</td>
-  <td class="meta">{{shortTime .SpawnedAt}}</td>
-  <td class="meta">{{shortTime .CompletedAt}}</td>
-  <td>{{.Commits}}</td>
-  <td>{{.FilesChanged}}</td>
-  <td>${{printf "%.4f" .CostUSD}}</td>
+  <td class="mono">{{.ID}}</td>
+  <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="pill warn">{{.Status}}</span>{{end}}</td>
+  <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
+  <td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
+  <td class="meta">{{.SpawnedAt}}</td>
+  <td class="work">{{if index $.TickWork .ID}}{{index $.TickWork .ID}}{{else}}<span class="meta">—</span>{{end}}</td>
+  <td class="num">{{.Commits}}</td>
+  <td class="num">{{.FilesChanged}}</td>
+  <td class="num">{{if eq .Status "running"}}~{{printf "$%.4f" (liveCost .SpawnedAt $.AvgTickSecs $.AvgCost)}}{{else}}${{printf "%.4f" .CostUSD}}{{end}}</td>
 </tr>{{end}}
 </tbody>
 </table>
+</div>
 {{else}}
 <p class="meta">No ticks recorded for this project yet.</p>
 {{end}}
 
 <h2>Configuration</h2>
-<div class="config">
-<div class="config-row"><div class="label">Repo URL</div><div class="value">{{.Project.RepoURL}}</div></div>
-<div class="config-row"><div class="label">Workdir</div><div class="value">{{.Project.Workdir}}</div></div>
-<div class="config-row"><div class="label">Model</div><div class="value">{{.Project.Model}}</div></div>
-<div class="config-row"><div class="label">Provider</div><div class="value">{{.Project.Provider}}</div></div>
-<div class="config-row"><div class="label">Worker Model</div><div class="value">{{if .Project.WorkerModel}}{{.Project.WorkerModel}}{{else}}<span class="meta">(default)</span>{{end}}</div></div>
-<div class="config-row"><div class="label">Worker Provider</div><div class="value">{{if .Project.WorkerProvider}}{{.Project.WorkerProvider}}{{else}}<span class="meta">(default)</span>{{end}}</div></div>
-<div class="config-row"><div class="label">Cooldown</div><div class="value">{{.Project.CooldownS}} seconds</div></div>
-<div class="config-row"><div class="label">Decay Rate</div><div class="value">{{.Project.DecayRate}}</div></div>
-<div class="config-row"><div class="label">Namespace</div><div class="value">{{if .Project.NamespaceID}}{{.Project.NamespaceID}}{{else}}<span class="meta">unscheduled</span>{{end}}</div></div>
-<div class="config-row"><div class="label">Deliver</div><div class="value">{{if .Project.Deliver}}{{.Project.Deliver}}{{else}}<span class="meta">(none)</span>{{end}}</div></div>
-<div class="config-row"><div class="label">Created</div><div class="value">{{.Project.CreatedAt}}</div></div>
-<div class="config-row"><div class="label">Updated</div><div class="value">{{.Project.UpdatedAt}}</div></div>
+<div class="table-wrap">
+<table>
+<tbody>
+<tr><td class="cfg-label">Workdir</td><td class="mono">{{.Project.Workdir}}</td></tr>
+<tr><td class="cfg-label">Model</td><td>{{if .Project.Model}}{{.Project.Model}}{{else}}<span class="meta">(default)</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Provider</td><td>{{if .Project.Provider}}{{.Project.Provider}}{{else}}<span class="meta">(default)</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Worker Model</td><td>{{if .Project.WorkerModel}}{{.Project.WorkerModel}}{{else}}<span class="meta">(default)</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Worker Provider</td><td>{{if .Project.WorkerProvider}}{{.Project.WorkerProvider}}{{else}}<span class="meta">(default)</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Cooldown</td><td class="num">{{.Project.CooldownS}} seconds</td></tr>
+<tr><td class="cfg-label">Decay Rate</td><td>{{.Project.DecayRate}}</td></tr>
+<tr><td class="cfg-label">Namespace</td><td>{{if .Project.NamespaceID}}<span class="mono">{{.Project.NamespaceID}}</span>{{else}}<span class="meta">unscheduled</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Deliver</td><td class="mono">{{if .Project.Deliver}}{{.Project.Deliver}}{{else}}<span class="meta">(none)</span>{{end}}</td></tr>
+<tr><td class="cfg-label">Created</td><td class="meta">{{.Project.CreatedAt}}</td></tr>
+<tr><td class="cfg-label">Updated</td><td class="meta">{{.Project.UpdatedAt}}</td></tr>
+</tbody>
+</table>
 </div>
-<p class="meta">Editing coming in a follow-up phase. View-only for now.</p>
+<style>
+.back{color:var(--accent-hi);font-size:0.82rem;display:inline-block;margin-bottom:14px}
+.cfg-label{color:var(--muted);text-transform:uppercase;font-size:0.7rem;letter-spacing:0.05em;width:160px;background:var(--panel)}
+</style>
+</div>
+{{template "ready_js"}}
 </body>
 </html>{{end}}

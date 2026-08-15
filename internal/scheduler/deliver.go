@@ -8,7 +8,56 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// sendWithRetry runs `hermes send` with the given args, retrying transient
+// failures (timeout, connection reset, 429/5xx, "Timed out") with exponential
+// backoff. Telegram backend latency spikes are transient — a retry with backoff
+// turns a lost delivery into a delivered one. Non-retryable config/usage errors
+// (bad --to, unknown platform) fail immediately. Returns the trimmed output of
+// the last attempt and whether the send eventually succeeded.
+func sendWithRetry(args ...string) ([]byte, bool) {
+	const maxAttempts = 4
+	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+
+	var lastOut []byte
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		cmd := exec.Command("hermes", append([]string{"send"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		lastOut = out
+		if err == nil {
+			return out, true
+		}
+		msg := string(out)
+		retryable := isRetryableSendError(err, msg)
+		log.Printf("DELIVER: attempt %d/%d failed: %v (%s)%s",
+			attempt+1, maxAttempts, err, strings.TrimSpace(msg),
+			map[bool]string{true: " — retrying", false: ""}[retryable])
+		if !retryable || attempt == maxAttempts-1 {
+			return out, false
+		}
+		time.Sleep(backoff[attempt])
+	}
+	return lastOut, false
+}
+
+// isRetryableSendError reports whether a hermes-send failure is a transient
+// backend/network error worth retrying, vs a permanent config/usage error.
+func isRetryableSendError(err error, output string) bool {
+	msg := strings.ToLower(err.Error() + " " + output)
+	transient := []string{
+		"timed out", "timeout", "connection reset", "connection refused",
+		"temporary", "econnreset", "econnrefused", "i/o timeout",
+		"429", "502", "503", "504", "gateway", "backend", "network",
+	}
+	for _, t := range transient {
+		if strings.Contains(msg, t) {
+			return true
+		}
+	}
+	return false
+}
 
 // deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
 // Strips terminal tool output (diffs, review panels, worker prompts) and delivers
@@ -42,14 +91,9 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	f.Close()
 
 	subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
-	cmd := exec.Command("hermes", "send",
-		"--to", deliver,
-		"--subject", subject,
-		"--file", f.Name(),
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("DELIVER: %s tick=%s — hermes send failed: %v (%s)", project, tickID, err, bytes.TrimSpace(out))
+	out, ok := sendWithRetry("--to", deliver, "--subject", subject, "--file", f.Name())
+	if !ok {
+		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
 		return
 	}
 	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)
@@ -71,10 +115,9 @@ func deliverAlert(deliver, project, tickID, reason string) {
 	defer f.Close()
 	_, _ = f.WriteString(msg)
 	f.Close()
-	cmd := exec.Command("hermes", "send", "-f", f.Name(), deliver)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("ALERT: send failed: %v (%s)", err, bytes.TrimSpace(out))
+	out, ok := sendWithRetry("--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
+	if !ok {
+		log.Printf("ALERT: send failed after retries (%s)", bytes.TrimSpace(out))
 		return
 	}
 	log.Printf("ALERT: %s tick=%s → %s", project, tickID, deliver)

@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -41,12 +42,13 @@ type Generator struct {
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
 	started           time.Time
-	// spawnCounts, when set, returns (http, exec) spawn counts from the
-	// scheduler loop so the health panel can label the actual spawn mode
-	// (SCHED-GAP-013) rather than relying on gateway connectivity alone.
-	// Kept as a func so the dashboard package doesn't import the scheduler
-	// package (no dependency cycle; nil = feature off).
-	spawnCounts func() (httpCount, execCount int64)
+	spawnCounts       func() (httpCount, execCount int64) // optional; /health panel
+}
+
+// SetSpawnCounts wires a callback returning (http, exec) spawn counts since
+// restart, surfaced on the /health panel (upstream merge compatibility).
+func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
+	g.spawnCounts = fn
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
@@ -92,13 +94,6 @@ func (g *Generator) SetDuckBrainURL(u string) {
 	g.duckbrainURL = strings.TrimRight(u, "/")
 }
 
-// SetSpawnCounts registers a provider for spawn-method counts so the health
-// panel can display the actual spawn mode (HTTP vs exec fallback) instead of
-// inferring it from gateway connectivity (SCHED-GAP-013). Optional.
-func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
-	g.spawnCounts = fn
-}
-
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
 func (g *Generator) HTMXJS() []byte { return htmxJS }
 
@@ -129,16 +124,54 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		return fmt.Errorf("load project %q: %w", name, err)
 	}
 
-	data := ProjectDetailData{Project: project}
+	data := ProjectDetailData{Title: project.Name, Project: project}
 
-	// Latest tick for this project (single-row fetch).
+	// Board progress + next-tick timing from the project workdir/cooldown.
+	if project.Workdir != "" {
+		data.BoardDone, data.BoardTotal = readBoardProgress(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
+		data.BoardSteps = readBoardSteps(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
+	}
+	running := false
+	var lastCompleted string
+	_ = g.db.QueryRowContext(ctx, `SELECT COALESCE(last_tick_completed, '') FROM projects WHERE name = ?`, name).Scan(&lastCompleted)
 	if latest, err := latestTickForProject(ctx, g.db, name); err == nil {
 		data.LatestTick = latest
+		running = latest != nil && latest.Status == database.StatusRunning
 	}
+	data.NextTickIn = nextTickIn(running, lastCompleted, project.CooldownS)
+	// Observability: avg tick duration, success rate, ETA over recent ticks.
+	var rt, rf int
+	rt, rf = g.recentTickHealth(ctx, name, 10)
+	data.AvgTickSecs, data.AvgCost, data.SuccessRate, data.ETA, data.CompletionAt, data.ProjectedCost = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
+	// Learning ETA: predict remaining time + cost from per-task-type estimates
+	// learned from tick history + the fleet-wide prior (project-biased blend).
+	if project.Workdir != "" {
+		fleet := g.fleetLearned(ctx)
+		if learned, learnedAt, breakdown, projCost := g.learnedETA(ctx, name, project.Workdir, data.BoardSteps, fleet); learned > 0 {
+			data.ETA = formatETA(learned)
+			data.CompletionAt = learnedAt
+			data.EtaBreakdown = breakdown
+			if projCost > 0 {
+				data.ProjectedCost = projCost
+			}
+		}
+	}
+	// GitReins LLM-judge verdict summary (pass rate + latest verdicts).
+	if project.Workdir != "" {
+		data.GitReins = readGitReins(project.Workdir, 12)
+	}
+	// Speed/cost-over-time chart data (last 20 completed ticks).
+	data.SpeedCost = g.speedCostSeries(ctx, name, 20)
 
 	// Last 20 ticks for the history table.
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
 		data.RecentTicks = ticks
+	}
+
+	// "What each tick worked on": map tick id → commit subject line(s).
+	data.TickWork = map[string]string{}
+	for _, t := range data.RecentTicks {
+		data.TickWork[t.ID] = tickWork(project.Workdir, t.SpawnedAt, t.CompletedAt, t.Commits+1)
 	}
 
 	return g.projectTmpl.Execute(w, data)
@@ -171,6 +204,7 @@ func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
 		return fmt.Errorf("load tick history page %d: %w", page, err)
 	}
 	data := TickHistoryData{
+		Title:        "Tick History",
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 		Ticks:        ticks,
 		Page:         page,
@@ -206,6 +240,7 @@ func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
 	}
 
 	data := NamespaceViewData{
+		Title:       "Namespace: " + id,
 		Namespace:   namespace,
 		Projects:    projects,
 		RecentTicks: ticks,
@@ -230,6 +265,7 @@ func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
 func (g *Generator) GenerateHealth(w io.Writer) error {
 	ctx := context.Background()
 	data := HealthData{
+		Title:          "System Health",
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
 		DaemonStatus:   "running",
 		DatabaseStatus: "connected",
@@ -267,21 +303,6 @@ func (g *Generator) GenerateHealth(w io.Writer) error {
 		}
 	}
 
-	// Spawn mode telemetry (SCHED-GAP-013): surface the actual spawn mode
-	// so the panel can't be mistaken for "gateway healthy = HTTP spawning."
-	// The gateway HTTP server can be up while the daemon's gateway client is
-	// not wired (missing key), so all spawns go through exec fallback.
-	if g.spawnCounts != nil {
-		httpN, execN := g.spawnCounts()
-		data.SpawnHTTP = httpN
-		data.SpawnExec = execN
-		if execN > 0 && httpN == 0 {
-			data.SpawnMode = "exec fallback"
-		} else {
-			data.SpawnMode = "HTTP"
-		}
-	}
-
 	// DuckBrain probe (fallback visibility): show reachable/unreachable and
 	// any spooled writes pending replay. The sync layer spools failed writes,
 	// so "unreachable" here is not data loss — it's queued for replay.
@@ -313,7 +334,7 @@ func (g *Generator) GenerateHealth(w io.Writer) error {
 // sorted by urgency (descending) with their weight, priority, and cooldown.
 func (g *Generator) GenerateQueue(w io.Writer) error {
 	ctx := context.Background()
-	data := QueueData{}
+	data := QueueData{Title: "Evaluation Queue"}
 
 	rows, err := g.db.QueryContext(ctx, `
 		SELECT p.name, p.weight, p.priority, p.cooldown_s, p.enabled
@@ -395,58 +416,21 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 	return g.queueTmpl.Execute(w, data)
 }
 
-const pageTemplate = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Coding Hermes Fleet</title>
-<script src="/static/htmx.min.js"></script>
-<style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
-h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
-.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
-.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
-.card .value{font-size:1.5rem;font-weight:600;margin-top:4px}
-.budget-bar{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px}
-.budget-fill{height:8px;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));border-radius:4px;margin-top:4px;transition:width .3s}
-.budget-label{display:flex;justify-content:space-between;font-size:0.8rem;margin-top:4px;color:var(--muted)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
-th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
-tr:last-child td{border-bottom:none}
-.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent);animation:pulse 1.5s infinite}
-.running-dot{display:inline-block;width:6px;height:6px;background:var(--accent);border-radius:50%;margin-right:4px;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-.disabled{opacity:0.5}
-.util-green{color:var(--green)}.util-yellow{color:var(--yellow)}.util-red{color:var(--red)}
-.utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
-.htmx-indicator{color:var(--muted);font-size:0.7rem;margin-left:8px;display:none}
-.htmx-request .htmx-indicator{display:inline}
-.nav{display:flex;gap:12px;margin-bottom:20px}
-.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
-.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
-@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
-</style>
-</head>
-<body>
-<div class="nav">
-<a href="/" class="active">Fleet Overview</a>
-<a href="/queue">Queue</a>
-<a href="/ticks">Tick History</a>
-<a href="/health">Health</a>
+const pageTemplate = `{{template "head" .}}
+{{template "sidebar" "overview"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Fleet Overview</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> htmx live · 10s</span></div>
 </div>
-<h1>🚀 Coding Hermes Fleet</h1>
-<div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s · Live updates via htmx every 10s</div>
+<div class="meta">Generated {{.GeneratedAt}} · auto-refresh 60s</div>
 
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
 <div class="card"><div class="label">Active Ticks</div><div class="value">{{.ActiveTicks}}</div></div>
-<div class="card"><div class="label">Budget</div><div class="value">{{.BudgetUsed}}/{{.BudgetTotal}}</div></div>
+<div class="card"><div class="label">Budget Used</div><div class="value">{{.BudgetUsed}}/{{.BudgetTotal}}</div></div>
+{{if .CostTodayTotal}}<div class="card"><div class="label">Cost Today</div><div class="value">${{printf "%.2f" .CostTodayTotal}}</div></div>{{end}}
+{{if .CostWeekTotal}}<div class="card"><div class="label">Cost 7d</div><div class="value">${{printf "%.2f" .CostWeekTotal}}</div></div>{{end}}
 </div>
 
 <div class="budget-bar">
@@ -455,72 +439,93 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <h2>Projects</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Running</th></tr></thead>
+<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Est. Completion</th><th>Next Tick</th><th>Cost</th><th>GitReins</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
 hx-trigger="every 10s"
 hx-swap="innerHTML">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
-<td>{{.Weight}}</td>
-<td>{{.Priority}}</td>
+<td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td class="num">{{.Weight}}</td>
+<td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
-<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
-<td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
+<td>{{if eq .LastOutcome "committed"}}<span class="pill ok">committed</span>{{else if eq .LastOutcome "failed"}}<span class="pill fail">failed</span>{{else if eq .LastOutcome "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td>
+{{if .BoardTotal}}
+<div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
+<span class="meta num">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
+{{else}}
+<span class="meta">—</span>
+{{end}}
+</td>
+<td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{if .ETA}}{{localtime .CompletionAt}}{{if .EtaBreakdown}}<span class="meta" title="{{.EtaBreakdown}}">{{else}}<span class="meta" title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success">{{end}} · {{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}<br>{{if .ProjectedCost}}<span class="meta">~{{money .ProjectedCost}} left</span>{{end}}</td>
+<td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
+<td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
+<td>{{if lt .GitReinsPass 0}}<span class="meta">—</span>{{else}}{{if and (eq .GitReinsPass 100) (eq .CIConclusion "failure")}}<span class="pill fail" title="GitReins says 100% but CI failed — judge may be passing a red suite (cached/LLM-asserted). Trust CI.">{{.GitReinsPass}}% ⚠CI</span>{{else if eq .GitReinsPass 100}}<span class="pill ok">{{.GitReinsPass}}%</span>{{else if ge .GitReinsPass 70}}<span class="pill warn">{{.GitReinsPass}}%</span>{{else}}<span class="pill fail">{{.GitReinsPass}}%</span>{{end}}{{if eq .CIConclusion "failure"}} <span class="meta" title="CI failing">ci✗</span>{{else if eq .CIConclusion "success"}} <span class="meta" title="CI green">ci✓</span>{{end}}{{end}}</td>
+<td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
 </tbody>
 </table>
+</div>
 
 <h2>Recent Ticks</h2>
+<div class="table-wrap">
 <table>
-<thead><tr><th>Project</th><th>Status</th><th>Outcome</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
+<thead><tr><th>Project</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
 <td>{{.Project}}</td>
-<td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "running"}}status-running{{end}}">{{.Status}}</td>
-<td>{{.Outcome}}</td>
+<td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "timeout"}}<span class="pill warn">timeout</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
+<td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .Duration}}{{.Duration}}{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="meta">{{shortTime .SpawnedAt}}</td>
-<td>{{.Commits}}</td>
-<td>{{.FilesChanged}}</td>
+<td class="num">{{.Commits}}</td>
+<td class="num">{{.FilesChanged}}</td>
 </tr>{{end}}
 </tbody>
 </table>
+</div>
 
 <h2>Namespaces</h2>
 {{if .Namespaces}}
+<div class="table-wrap">
 <table>
 <thead><tr><th>Namespace</th><th>Weight</th><th>Reserved</th><th>Hard Cap</th><th>Allocated</th><th>Used</th><th>Utilization</th><th>Borrowed</th><th>Lent</th><th>Projects</th></tr></thead>
 <tbody>
 {{range .Namespaces}}
 <tr class="{{utilClass .Reserved .HardCap .Used}}">
-  <td>{{.ID}}</td>
+  <td class="mono">{{.ID}}</td>
   <td>{{.Weight}}</td>
   <td>{{.Reserved}}</td>
   <td>{{if .HardCap}}{{.HardCap}}{{else}}∞{{end}}</td>
   <td>{{.Allocated}}</td>
   <td>{{.Used}}</td>
-  <td><div class="utilization-bar" style="width:{{printf "%.0f" .Utilization}}%;background:{{utilColor .Utilization}}"></div>{{printf "%.0f" .Utilization}}%</td>
+  <td><div class="urgency-bar" style="width:{{printf "%.0f" .Utilization}}%;background:{{utilColor .Utilization}}"></div>{{printf "%.0f" .Utilization}}%</td>
   <td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
   <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
   <td>{{.ProjectCount}}</td>
 </tr>{{end}}
 </tbody>
 </table>
+</div>
 {{else}}
 <p class="meta">No namespaces configured</p>
 {{end}}
 
 <h2>Namespace Utilization History</h2>
 {{if .NamespaceTicks}}
+<div class="table-wrap">
 <table>
 <thead><tr><th>Namespace</th><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Borrowed</th><th>Lent</th><th>Time</th></tr></thead>
 <tbody>
 {{range .NamespaceTicks}}
 <tr>
-  <td>{{.NamespaceID}}</td>
+  <td class="mono">{{.NamespaceID}}</td>
   <td>{{.TickGroup}}</td>
   <td>{{.Allocated}}</td>
   <td>{{.Used}}</td>
@@ -530,8 +535,11 @@ hx-swap="innerHTML">
 </tr>{{end}}
 </tbody>
 </table>
+</div>
 {{else}}
 <p class="meta">No namespace tick data available</p>
 {{end}}
+</div>
+{{template "ready_js"}}
 </body>
 </html>`

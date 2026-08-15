@@ -126,7 +126,7 @@ func TestGenerate_EmptyDatabase(t *testing.T) {
 	out := buf.String()
 
 	// Must contain core HTML scaffolding.
-	for _, want := range []string{"<!DOCTYPE html>", "<title>Coding Hermes Fleet</title>", "Generated ", "Auto-refresh 60s"} {
+	for _, want := range []string{"<!DOCTYPE html>", "<title>Fleet Overview · Coding Hermes Fleet</title>", "Generated ", "auto-refresh 60s", "sidebar"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -369,7 +369,7 @@ func TestGenerateQueue_EmptyDatabase(t *testing.T) {
 	}
 	out := buf.String()
 
-	for _, want := range []string{"<!DOCTYPE html>", "<title>Queue", "Evaluation Queue", "0 eligible"} {
+	for _, want := range []string{"<!DOCTYPE html>", "<title>Evaluation Queue", "Evaluation Queue", "0 eligible"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}

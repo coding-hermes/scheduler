@@ -1,0 +1,169 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en" style="color-scheme:dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="theme-color" content="#0a0c11">
+<title>{{.Title}} · Coding Hermes Fleet</title>
+<script src="/static/htmx.min.js"></script>
+<style>
+/* ── Coding Hermes Fleet · ops-terminal design system ──
+   Character: a fleet scheduler is a control room, not a marketing page.
+   Mono-forward data, a single "fleet signal" accent (amber), mint for live.
+   Deliberately NOT the generic dark-SaaS indigo-on-black. */
+:root{
+--bg:#0a0c11;--panel:#0e1117;--surface:#131722;--surface2:#1a2030;
+--fg:#e6ebf4;--text:#b6bfd0;--muted:#7a8398;--faint:#566075;
+--signal:#e8a33d;--signal-hi:#f4b95f;--live:#2dd4a7;--ok:#37d399;--err:#ff6b6b;--warn:#e8a33d;
+--border:rgba(255,255,255,0.07);--border-hi:rgba(255,255,255,0.14);
+--ease-out:cubic-bezier(0.23,1,0.32,1);
+--sidebar-w:216px;
+--mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:Inter,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--fg);display:flex;min-height:100vh;-webkit-tap-highlight-color:transparent}
+a{color:var(--live);text-decoration:none}
+a:hover{color:var(--signal-hi)}
+code,.mono,.num{font-family:var(--mono)}
+
+/* Skip link for keyboard users (web-design-guidelines) */
+.skip{position:absolute;left:-9999px;top:0;background:var(--signal);color:#0a0c11;padding:8px 14px;border-radius:0 0 8px 0;font-weight:600;z-index:100}
+.skip:focus{left:0}
+
+/* Sidebar */
+.sidebar{width:var(--sidebar-w);flex-shrink:0;background:var(--panel);border-right:1px solid var(--border);padding:18px 12px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-weight:600;font-size:0.98rem;letter-spacing:-0.01em;color:var(--fg);margin-bottom:24px;padding:0 8px;user-select:none}
+.brand .logo{width:24px;height:24px;border-radius:6px;background:var(--signal);color:#0a0c11;display:grid;place-items:center;font-size:12px;font-weight:700;flex-shrink:0}
+.side-label{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--faint);padding:16px 10px 6px;font-family:var(--mono)}
+.side-nav{display:flex;flex-direction:column;gap:2px}
+.side-nav a{display:flex;align-items:center;gap:11px;position:relative;color:var(--muted);font-size:0.87rem;padding:8px 10px;border-radius:6px;transition:background 150ms var(--ease-out),color 150ms var(--ease-out);text-decoration:none}
+.side-nav a .ic{width:16px;text-align:center;font-family:var(--mono);opacity:0.75;flex-shrink:0}
+.side-nav a:hover{background:var(--surface);color:var(--fg)}
+.side-nav a:focus-visible{outline:2px solid var(--signal);outline-offset:-2px}
+.side-nav a.active{background:rgba(232,163,61,0.10);color:var(--signal-hi)}
+.side-nav a.active .ic{opacity:1}
+.side-nav a.active::before{content:"";position:absolute;left:0;width:3px;height:20px;border-radius:0 2px 2px 0;background:var(--signal)}
+
+/* Main content */
+.main{flex:1;min-width:0;padding:26px 30px}
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px}
+h1{font-size:1.35rem;font-weight:700;letter-spacing:-0.02em;line-height:1.1;text-wrap:balance}
+h2{font-size:0.8rem;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;margin:30px 0 12px;color:var(--muted);font-family:var(--mono)}
+.meta{color:var(--muted);font-size:0.8rem;margin-bottom:20px}
+.actions{display:flex;gap:8px;align-items:center}
+
+/* Live fleet signal (the signature element) */
+.signal{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:0.74rem;color:var(--muted);padding:5px 12px;border:1px solid var(--border);border-radius:999px}
+.signal .dot{width:7px;height:7px;border-radius:50%;background:var(--live);box-shadow:0 0 0 3px rgba(45,212,167,0.15);animation:signalpulse 2.2s ease-in-out infinite}
+@keyframes signalpulse{0%,100%{opacity:1}50%{opacity:0.45}}
+
+/* Cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;position:relative;overflow:hidden;opacity:0;transform:translateY(8px);transition:opacity 340ms var(--ease-out),transform 340ms var(--ease-out)}
+body.ready .card{opacity:1;transform:translateY(0)}
+.card:nth-child(2){transition-delay:40ms}.card:nth-child(3){transition-delay:80ms}.card:nth-child(4){transition-delay:120ms}.card:nth-child(5){transition-delay:160ms}.card:nth-child(6){transition-delay:200ms}
+.card .label{color:var(--muted);font-size:0.64rem;text-transform:uppercase;letter-spacing:0.09em;font-family:var(--mono)}
+.card .value{font-size:1.6rem;font-weight:700;margin-top:6px;font-family:var(--mono);letter-spacing:-0.01em}
+.card .sub{color:var(--muted);font-size:0.78rem;margin-top:4px;font-family:var(--mono)}
+
+/* Bars */
+.budget-bar{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:24px}
+.budget-fill{height:7px;background:linear-gradient(90deg,var(--ok),var(--signal));border-radius:5px;margin-top:8px;transition:width .3s var(--ease-out)}
+.budget-label{display:flex;justify-content:space-between;font-size:0.78rem;margin-top:8px;color:var(--muted);font-family:var(--mono)}
+.prog{background:var(--surface2);border-radius:4px;height:6px;width:88px;margin-bottom:3px;overflow:hidden}
+.prog-fill{height:6px;background:var(--live);border-radius:4px;transition:width .3s var(--ease-out)}
+.urgency-bar{display:inline-block;height:6px;background:var(--signal);border-radius:3px;margin-right:6px;vertical-align:middle;max-width:80px}
+
+/* Tables */
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:0.82rem}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
+th{background:var(--panel);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.62rem;letter-spacing:0.09em;position:sticky;top:0;font-family:var(--mono)}
+tr:last-child td{border-bottom:none}
+tbody tr{transition:background 140ms var(--ease-out)}
+@media(hover:hover) and (pointer:fine){tbody tr:hover{background:var(--surface2)}}
+
+/* Status pills */
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;border:1px solid var(--border-hi);color:var(--text);font-size:0.74rem;font-weight:500;font-family:var(--mono)}
+.work{white-space:normal;min-width:240px;max-width:360px;color:var(--text);font-size:0.78rem;line-height:1.4}
+/* Line charts (speed/cost over time) */
+.chart{width:100%;max-width:640px;display:block;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px}
+.ax-label{fill:var(--muted);font-size:9px;font-family:var(--mono)}
+.ax-grid{stroke:var(--border);stroke-width:1;stroke-dasharray:3 3}
+.chart-val{font-family:var(--mono);font-size:11px;font-weight:600}
+.chart .pt{fill:var(--fg);cursor:pointer;transition:r 120ms var(--ease-out)}
+.chart .pt:hover{fill:var(--signal);r:5}
+.chart .pt-end{stroke:var(--surface2);stroke-width:1.5}
+@media (prefers-reduced-motion: reduce){.chart .pt{transition:none}}
+.pill.ok{color:var(--ok);border-color:rgba(55,211,153,0.35)}
+.pill.fail{color:var(--err);border-color:rgba(255,107,107,0.35)}
+.pill.warn{color:var(--warn);border-color:rgba(232,163,61,0.4)}
+.pill.run{color:var(--live);border-color:rgba(45,212,167,0.4)}
+.status-ok{color:var(--ok)}.status-fail{color:var(--err)}.status-running{color:var(--live)}.status-timeout{color:var(--warn)}.status-warn{color:var(--warn)}
+.running-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--live);box-shadow:0 0 0 3px rgba(45,212,167,0.15);animation:signalpulse 2.2s ease-in-out infinite}
+.fail-flag{color:var(--err);font-weight:600}
+.spark{display:block;margin-top:2px}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:0.7rem;font-weight:500;font-family:var(--mono);border:1px solid var(--border-hi);color:var(--text)}
+
+/* Utilities */
+.disabled{opacity:0.45}
+.htmx-indicator{color:var(--muted);font-size:0.7rem;margin-left:8px;display:none}
+.htmx-request .htmx-indicator{display:inline}
+
+/* Responsive */
+@media(max-width:820px){
+  body{flex-direction:column}
+  .sidebar{width:100%;height:auto;position:static;border-right:none;border-bottom:1px solid var(--border);padding:12px}
+  .side-nav{flex-direction:row;flex-wrap:wrap}
+  .side-label{display:none}
+  .main{padding:16px}
+  table{font-size:0.74rem}th,td{padding:8px 10px}
+}
+@media (prefers-reduced-motion: reduce){.card{opacity:1;transform:none;transition:none}.running-dot,.signal .dot{animation:none}}
+@media (prefers-reduced-transparency: reduce){.sidebar,.table-wrap{background:var(--panel)}}
+@media (prefers-contrast: more){:root{--border:rgba(255,255,255,0.2)}.sidebar,.surface{border-color:var(--border)}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+<a class="brand" href="/"><span class="logo">❯</span> Coding&nbsp;Hermes</a>
+<div class="side-label">Fleet</div>
+<nav class="side-nav" aria-label="Fleet">
+<a href="/" {{if eq . "overview"}}class="active"{{end}}><span class="ic" aria-hidden="true">01</span> Overview</a>
+<a href="/queue" {{if eq . "queue"}}class="active"{{end}}><span class="ic" aria-hidden="true">02</span> Queue</a>
+<a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Tick History</a>
+<a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Health</a>
+</nav>
+</aside>
+{{end}}
+
+{{define "ready_js"}}<script>
+// Entrance stagger: fade/slide stat cards in once on first load (reduced-motion-safe).
+(function () {
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) { document.body.classList.add('ready'); return; }
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { document.body.classList.add('ready'); });
+  });
+})();
+// Render all <time class="local" data-utc="..."> in the viewer's local timezone.
+(function () {
+  var fmt = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  document.querySelectorAll('time.local').forEach(function (el) {
+    var utc = el.getAttribute('data-utc');
+    if (!utc) return;
+    var d = new Date(utc);
+    if (isNaN(d.getTime())) return;
+    el.textContent = fmt.format(d);
+  });
+})();
+</script>
+{{end}}

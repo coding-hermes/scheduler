@@ -1,74 +1,49 @@
-{{define "tick_history"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Tick History · Coding Hermes Fleet</title>
-<script src="/static/htmx.min.js"></script>
-<style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
-h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
-.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
-.nav{display:flex;gap:12px;margin-bottom:20px}
-.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
-.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
-th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
-tr:last-child td{border-bottom:none}
-.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent);animation:pulse 1.5s infinite}
-.status-timeout{color:var(--yellow)}
-.pagination{display:flex;gap:8px;justify-content:center;margin:16px 0}
-.pagination a{color:var(--accent);text-decoration:none;padding:4px 12px;border:1px solid var(--border);border-radius:4px;font-size:0.85rem}
-.pagination a:hover{background:var(--card)}
-.pagination .current{color:var(--fg);font-weight:600;padding:4px 12px}
-.pagination .disabled{color:var(--muted);padding:4px 12px;border:1px solid var(--border);border-radius:4px;font-size:0.85rem}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
-</style>
-</head>
-<body>
-<div class="nav">
-<a href="/">Fleet Overview</a>
-<a href="/queue">Queue</a>
-<a href="/ticks" class="active">Tick History</a>
+{{define "tick_history"}}{{template "head" .}}
+{{template "sidebar" "ticks"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Tick History</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.TotalTicks}} total</span></div>
 </div>
-<h1>📜 Tick History</h1>
-<div class="meta">Page {{.Page}} of {{.TotalPages}} · {{.TotalTicks}} total ticks · Generated {{.GeneratedAt}}</div>
+<div class="meta">Page {{.Page}} of {{.TotalPages}} · generated {{.GeneratedAt}} · auto-refresh 30s</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>Project</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
+<tbody>
+{{range .Ticks}}
+<tr>
+<td class="meta mono">{{.ID}}</td>
+<td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
+<td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else if eq .Status "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">{{.Status}}</span>{{end}}</td>
+<td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
+<td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
+<td class="meta">{{.SpawnedAt}}</td>
+<td class="num">{{.Commits}}</td>
+<td class="num">{{.FilesChanged}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
 
 <div class="pagination" id="tick-history"
      hx-get="/ticks?page={{.Page}}"
      hx-trigger="every 30s"
      hx-swap="outerHTML"
      hx-target="#tick-history">
-{{if .HasPrevious}}<a href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="disabled">← Previous</span>{{end}}
-<span class="current">Page {{.Page}} / {{.TotalPages}}</span>
-{{if .HasNext}}<a href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="disabled">Next →</span>{{end}}
+{{if .HasPrevious}}<a class="page-btn" href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.Page}} / {{.TotalPages}}</span>
+{{if .HasNext}}<a class="page-btn" href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
 </div>
-
-<table>
-<thead><tr><th>ID</th><th>Project</th><th>Status</th><th>Outcome</th><th>Spawned</th><th>Completed</th><th>Commits</th><th>Files</th></tr></thead>
-<tbody>
-{{range .Ticks}}
-<tr>
-<td class="meta">{{.ID}}</td>
-<td><a href="/projects/{{.ProjectName}}" style="color:var(--accent);text-decoration:none">{{.ProjectName}}</a></td>
-<td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "running"}}status-running{{else if eq .Status "timeout"}}status-timeout{{end}}">{{.Status}}</td>
-<td>{{.Outcome}}</td>
-<td class="meta">{{.SpawnedAt}}</td>
-<td class="meta">{{.CompletedAt}}</td>
-<td>{{.Commits}}</td>
-<td>{{.FilesChanged}}</td>
-</tr>{{end}}
-</tbody>
-</table>
-
-<div class="pagination">
-{{if .HasPrevious}}<a href="/ticks?page={{.PreviousPage}}">← Previous</a>{{else}}<span class="disabled">← Previous</span>{{end}}
-<span class="current">Page {{.Page}} / {{.TotalPages}}</span>
-{{if .HasNext}}<a href="/ticks?page={{.NextPage}}">Next →</a>{{else}}<span class="disabled">Next →</span>{{end}}
+<p class="meta"><span hx-get="/ticks?page={{.Page}}" hx-trigger="every 30s" hx-swap="none">auto-refreshing every 30s...</span></p>
 </div>
+<style>
+.pagination{display:flex;gap:8px;align-items:center;justify-content:center;margin:18px 0}
+.page-btn{padding:6px 14px;border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:0.82rem;font-weight:510;transition:background 160ms var(--ease-out)}
+.page-btn:hover{background:var(--surface2);text-decoration:none}
+.page-btn.disabled{opacity:0.4;cursor:default}
+.page-current{color:var(--muted);font-size:0.82rem;padding:6px 12px}
+</style>
+{{template "ready_js"}}
 </body>
 </html>{{end}}
