@@ -1164,3 +1164,31 @@ tasks:
   status: complete
   created_at: '2026-08-15T17:58:29.646272+00:00'
   completed_at: '2026-08-15T17:59:41.806384+00:00'
+- id: DOGFOOD-012
+  title: 'Config surfaces honest: --schema marks root TOML not-loaded (FEAT-005),
+    --show-config prints effective values incl. SCHEDULER_* env overrides, AGENTS.md
+    TOML claims aligned'
+  criteria:
+  - 'Criteria: (1) --schema description states schedulerd.toml is NOT loaded by the
+    daemon (FEAT-005 contract wording present, no three-layer loaded claim); (2) --show-config
+    prints effective auto_disable_failure_rate when SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5
+    is set (verified by test TestPrintConfig + binary run); (3) main.go env-override
+    block moved above the --schema/--show-config early exits; (4) AGENTS.md no longer
+    claims TOML [scheduler] keys are loaded; (5) go test -count=1 ./... 9/9 packages
+    pass; (6) commit 024db0e on main'
+  status: complete
+  created_at: '2026-08-15T19:49:11.183501+00:00'
+  completed_at: '2026-08-15T19:49:29.197664+00:00'
+- id: DOGFOOD-013
+  title: 'Repo mirrors honest: fleet.md regenerated from live API, repo fleet.toml
+    labeled static override subset, sim-setup count corrected to 13 (12 enabled +
+    1 disabled)'
+  criteria:
+  - 'Criteria: (1) docs/fleet.md regenerated (fresh 2026-08-15 UTC header, 72 projects/44
+    enabled from live API); (2) repo fleet.toml header states static cooldown-override
+    mirror, live file is ~/.hermes/fleet.toml written by fleet-cooldown-policy.py;
+    (3) main.go --sim-setup flag help says 13 dry-run projects (12 enabled + 1 disabled)
+    matching sim_fixture.go (13 Name entries, 12 Enabled); (4) commit dc11544 on main'
+  status: complete
+  created_at: '2026-08-15T19:49:11.394379+00:00'
+  completed_at: '2026-08-15T19:50:53.888196+00:00'
