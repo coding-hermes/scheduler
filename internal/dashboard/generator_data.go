@@ -278,8 +278,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		LEFT JOIN ticks t2 ON t2.project_name = t.project_name AND t2.spawned_at = t.spawned_at
 		ORDER BY p.name
 	`
-	dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
-	weekAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	// completed_at is stored as UTC RFC3339 (nowUTC in database/ticks.go), so
+	// the window bounds must be UTC too — comparing local-offset strings
+	// lexicographically against UTC strings mis-counts ticks near the boundary
+	// by the server's UTC offset.
+	dayAgo := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	weekAgo := time.Now().UTC().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 
 	rows, err := g.db.QueryContext(ctx, projectQuery, dayAgo, weekAgo)
 	if err == nil {

@@ -103,7 +103,9 @@ func loadTemplates() *template.Template {
 		// this dashboard is no-CDN/no-build (stdlib Go templates).
 		"sparkline": func(series []float64) template.HTML {
 			const w, h = 64, 20
-			if len(series) == 0 {
+			// A 1-element series would divide by len-1 == 0 (NaN x-coords) —
+			// render the placeholder instead.
+			if len(series) < 2 {
 				return "—"
 			}
 			maxv := series[0]

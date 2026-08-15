@@ -23,6 +23,11 @@ func TestRenderLineChart(t *testing.T) {
 	if !strings.Contains(svg, "<svg") || !strings.Contains(svg, `<path d="`) {
 		t.Fatalf("speed chart missing line path: %q", svg)
 	}
+	// SVG paths must start with a command: without the leading M the path is
+	// invalid and the line renders invisible (regression guard — PR #1 gate).
+	if !strings.Contains(svg, `<path d="M`) {
+		t.Fatalf("line path must begin with M command: %q", svg)
+	}
 	// Dither-kit look: gradient defs + bloom glow filter + per-series palette.
 	if !strings.Contains(svg, "<linearGradient") {
 		t.Errorf("chart missing dither gradient fill: %q", svg)

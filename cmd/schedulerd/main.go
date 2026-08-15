@@ -372,6 +372,8 @@ func main() {
 	})
 
 	// Tick history page: /ticks (paginated, global tick log).
+	// htmx polls return the #tick-history fragment only (HX-Request) — the
+	// full page must never be swapped into its own poller.
 	mux.HandleFunc("GET /ticks", func(w http.ResponseWriter, r *http.Request) {
 		page := 1
 		if p := r.URL.Query().Get("page"); p != "" {
@@ -380,7 +382,13 @@ func main() {
 			}
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := dashGen.GenerateTickHistory(w, page); err != nil {
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateTickHistoryPartial(w, page)
+		} else {
+			err = dashGen.GenerateTickHistory(w, page)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
@@ -399,9 +407,17 @@ func main() {
 	})
 
 	// Health page: /health (daemon, db, gateway status).
+	// htmx polls return the .cards fragment only (HX-Request) — the full page
+	// must never be swapped into its own poller.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := dashGen.GenerateHealth(w); err != nil {
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateHealthPartial(w)
+		} else {
+			err = dashGen.GenerateHealth(w)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

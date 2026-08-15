@@ -1,3 +1,12 @@
+{{define "tick_history_partial"}}<div class="pagination" id="tick-history"
+     hx-get="/ticks?page={{.Page}}"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML"
+     hx-target="#tick-history">
+{{if .HasPrevious}}<a class="page-btn" href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.Page}} / {{.TotalPages}}</span>
+{{if .HasNext}}<a class="page-btn" href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+</div>{{end}}
 {{define "tick_history"}}{{template "head" .}}
 {{template "sidebar" "ticks"}}
 <div class="main" id="main">
@@ -26,15 +35,7 @@
 </table>
 </div>
 
-<div class="pagination" id="tick-history"
-     hx-get="/ticks?page={{.Page}}"
-     hx-trigger="every 30s"
-     hx-swap="outerHTML"
-     hx-target="#tick-history">
-{{if .HasPrevious}}<a class="page-btn" href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
-<span class="page-current">Page {{.Page}} / {{.TotalPages}}</span>
-{{if .HasNext}}<a class="page-btn" href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
-</div>
+{{template "tick_history_partial" .}}
 <p class="meta"><span hx-get="/ticks?page={{.Page}}" hx-trigger="every 30s" hx-swap="none">auto-refreshing every 30s...</span></p>
 </div>
 <style>

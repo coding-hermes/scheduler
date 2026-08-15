@@ -1,13 +1,4 @@
-{{define "health"}}{{template "head" .}}
-{{template "sidebar" "health"}}
-<div class="main" id="main">
-<div class="page-head">
-<h1>System Health</h1>
-<div class="actions"><span class="signal"><span class="dot"></span> auto-refresh 10s</span></div>
-</div>
-<div class="meta">Generated {{.GeneratedAt}}</div>
-
-<div class="cards" hx-get="/health" hx-trigger="every 10s" hx-swap="outerHTML">
+{{define "health_cards"}}<div class="cards" hx-get="/health" hx-trigger="every 10s" hx-swap="outerHTML">
 <div class="card"><div class="label">Daemon</div><div class="value {{if eq .DaemonStatus "running"}}status-ok{{else}}status-fail{{end}}">{{.DaemonStatus}}</div></div>
 <div class="card"><div class="label">Database</div><div class="value {{if eq .DatabaseStatus "connected"}}status-ok{{else}}status-fail{{end}}">{{.DatabaseStatus}}</div></div>
 <div class="card"><div class="label">Gateway</div><div class="value {{if eq .GatewayStatus "connected"}}status-ok{{else if eq .GatewayStatus "not configured"}}status-warn{{else}}status-fail{{end}}">{{.GatewayStatus}}</div>{{if .GatewayURL}}<div class="sub">{{.GatewayURL}}</div>{{end}}</div>
@@ -17,7 +8,17 @@
 <div class="card"><div class="label">Total Ticks</div><div class="value">{{.TotalTicks}}</div></div>
 <div class="card"><div class="label">Goroutines</div><div class="value">{{.Goroutines}}</div></div>
 <div class="card"><div class="label">Memory</div><div class="value" style="font-size:1.1rem">{{printf "%.1f" .MemoryMB}} MB</div></div>
+</div>{{end}}
+{{define "health"}}{{template "head" .}}
+{{template "sidebar" "health"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>System Health</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> auto-refresh 10s</span></div>
 </div>
+<div class="meta">Generated {{.GeneratedAt}}</div>
+
+{{template "health_cards" .}}
 <p class="meta"><span hx-get="/health" hx-trigger="every 10s" hx-swap="none">auto-refreshing every 10s...</span></p>
 </div>
 {{template "ready_js"}}

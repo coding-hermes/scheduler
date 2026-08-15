@@ -60,7 +60,14 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	for i, v := range values {
 		x := padL + step*float64(i)
 		y := padT + plotH*(1.0-v/scale)
-		fmt.Fprintf(&line, "%s%.1f,%.1f", comma(i), x, y)
+		if i == 0 {
+			// SVG paths must start with a command; without the leading M the
+			// line is invisible (getTotalLength()=0). Implicit lineto after M
+			// is valid, so subsequent points stay bare coordinates.
+			fmt.Fprintf(&line, "M%.1f,%.1f", x, y)
+		} else {
+			fmt.Fprintf(&line, " %.1f,%.1f", x, y)
+		}
 		lastX, lastY = x, y
 		// One hover circle per point with a native <title> tooltip: time + value.
 		tt := pointTitle(pts[i], v, mode)
@@ -178,13 +185,6 @@ func modeTitle(mode string) string {
 	default:
 		return "speed"
 	}
-}
-
-func comma(i int) string {
-	if i == 0 {
-		return ""
-	}
-	return " "
 }
 
 func esc(s string) string {

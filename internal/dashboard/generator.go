@@ -182,6 +182,28 @@ const tickHistoryPageSize = 50
 // GenerateTickHistory renders one page of the global tick history. Pages are
 // one-based; values below one are normalized to the first page.
 func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
+	data, err := g.tickHistoryData(page)
+	if err != nil {
+		return err
+	}
+	return g.tickHistoryTmpl.Execute(w, data)
+}
+
+// GenerateTickHistoryPartial renders only the pagination fragment for htmx
+// polling (HX-Request). The page's #tick-history div polls /ticks with
+// hx-swap=outerHTML, so the response must be the fragment — a full page
+// swapped in compounds itself on every 30s refresh.
+func (g *Generator) GenerateTickHistoryPartial(w io.Writer, page int) error {
+	data, err := g.tickHistoryData(page)
+	if err != nil {
+		return err
+	}
+	return g.tickHistoryTmpl.ExecuteTemplate(w, "tick_history_partial", data)
+}
+
+// tickHistoryData loads the paginated tick list shared by the full page and
+// the htmx partial.
+func (g *Generator) tickHistoryData(page int) (TickHistoryData, error) {
 	ctx := context.Background()
 	if page < 1 {
 		page = 1
@@ -189,7 +211,7 @@ func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
 
 	var total int
 	if err := g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks`).Scan(&total); err != nil {
-		return fmt.Errorf("count ticks: %w", err)
+		return TickHistoryData{}, fmt.Errorf("count ticks: %w", err)
 	}
 	totalPages := (total + tickHistoryPageSize - 1) / tickHistoryPageSize
 	if totalPages == 0 {
@@ -201,9 +223,9 @@ func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
 
 	ticks, err := database.ListAllTicks(ctx, g.db, tickHistoryPageSize, (page-1)*tickHistoryPageSize)
 	if err != nil {
-		return fmt.Errorf("load tick history page %d: %w", page, err)
+		return TickHistoryData{}, fmt.Errorf("load tick history page %d: %w", page, err)
 	}
-	data := TickHistoryData{
+	return TickHistoryData{
 		Title:        "Tick History",
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 		Ticks:        ticks,
@@ -215,8 +237,7 @@ func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
 		PreviousPage: page - 1,
 		HasNext:      page < totalPages,
 		NextPage:     page + 1,
-	}
-	return g.tickHistoryTmpl.Execute(w, data)
+	}, nil
 }
 
 // GenerateNamespaceView renders namespace configuration, assigned projects,
@@ -263,6 +284,22 @@ func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
 // GenerateHealth renders daemon, database, and gateway liveness information.
 // The page refreshes itself with htmx, so every render performs fresh probes.
 func (g *Generator) GenerateHealth(w io.Writer) error {
+	data := g.healthData()
+	return g.healthTmpl.Execute(w, data)
+}
+
+// GenerateHealthPartial renders only the .cards fragment for htmx polling
+// (HX-Request). The page's .cards div polls /health with hx-swap=outerHTML,
+// so the response must be the fragment — a full page swapped in compounds
+// itself on every 10s refresh.
+func (g *Generator) GenerateHealthPartial(w io.Writer) error {
+	data := g.healthData()
+	return g.healthTmpl.ExecuteTemplate(w, "health_cards", data)
+}
+
+// healthData probes daemon, database, gateway, and DuckBrain liveness;
+// shared by the full page and the htmx cards fragment.
+func (g *Generator) healthData() HealthData {
 	ctx := context.Background()
 	data := HealthData{
 		Title:          "System Health",
@@ -327,7 +364,7 @@ func (g *Generator) GenerateHealth(w io.Writer) error {
 		}
 		_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_spool`).Scan(&data.DuckBrainSpooled)
 	}
-	return g.healthTmpl.Execute(w, data)
+	return data
 }
 
 // GenerateQueue renders the evaluation queue page — all enabled projects
