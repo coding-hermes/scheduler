@@ -1192,3 +1192,12 @@ tasks:
   status: complete
   created_at: '2026-08-15T19:49:11.394379+00:00'
   completed_at: '2026-08-15T19:50:53.888196+00:00'
+- id: DASH-PERF-001
+  title: Fleet dashboard 30s render regression
+  criteria:
+  - GET / renders in <3s with warm CI cache on 44+ projects; go build/vet/gofmt clean;
+    go test -short -p 1 ./... 9/9 pkgs PASS; golangci-lint 0; endpoint battery 16/16;
+    regression test covers the cache/concurrency path
+  status: complete
+  created_at: '2026-08-15T20:17:52.836811+00:00'
+  completed_at: '2026-08-15T20:37:31.078575+00:00'
