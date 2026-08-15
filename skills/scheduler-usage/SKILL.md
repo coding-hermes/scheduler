@@ -94,8 +94,8 @@ there's no purge.
   per-project failure breakdown.
 - `--test-verify 3` on any scratch DB is the fastest way to validate the
   whole engine end-to-end without touching the live fleet.
-- `--sim-setup --sim-ticks N` gives a 13-project fixture + simulated ticks +
-  report (README says 14 — stale).
+- `--sim-setup --sim-ticks N` gives a 13-project fixture (12 enabled + 1
+  disabled) + simulated ticks + report.
 - `--schema` prints a JSON Schema for a root `schedulerd.toml` that the
   daemon does NOT load yet (FEAT-005 wiring); `--show-config` prints the
   EFFECTIVE configuration (CLI flags + SCHEDULER_* env overrides applied)

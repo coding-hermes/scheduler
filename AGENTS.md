@@ -4,7 +4,7 @@ AI agent guidelines for the Coding Hermes fleet scheduler. This is the central n
 
 ## Project Purpose
 
-The Scheduler manages a fleet of 39+ coding-hermes foreman projects. It dispatches tick-based work cycles, enforces cooldowns, manages namespace-level resource allocation with multi-pool weight packing, and exposes both a human dashboard and a machine-readable REST API.
+The Scheduler manages a fleet of 72 coding-hermes foreman projects (44 enabled; counts change as projects are added/disabled — see docs/fleet.md for the live mirror). It dispatches tick-based work cycles, enforces cooldowns, manages namespace-level resource allocation with multi-pool weight packing, and exposes both a human dashboard and a machine-readable REST API.
 
 ## Tech Stack
 

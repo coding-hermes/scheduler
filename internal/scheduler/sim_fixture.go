@@ -38,13 +38,13 @@ func (sf *SimFixture) TestProjects() []SimProject {
 		{Name: "heavy-beta", Weight: 35, Priority: 8, CooldownS: 3, Enabled: true},
 		{Name: "heavy-gamma", Weight: 35, Priority: 2, CooldownS: 3, Enabled: true}, // starvation test
 
-		// Medium weight: fill remaining budget (20 each, 5 = 100).
+		// Medium weight: fill remaining budget (20 each, 4 = 80).
 		{Name: "medium-alpha", Weight: 20, Priority: 7, CooldownS: 2, Enabled: true},
 		{Name: "medium-beta", Weight: 20, Priority: 6, CooldownS: 2, Enabled: true},
 		{Name: "medium-gamma", Weight: 20, Priority: 5, CooldownS: 2, Enabled: true},
 		{Name: "medium-delta", Weight: 20, Priority: 3, CooldownS: 2, Enabled: true},
 
-		// Lightweight: test concurrency cap (8).
+		// Lightweight: test concurrency cap (5).
 		{Name: "light-alpha", Weight: 5, Priority: 9, CooldownS: 1, Enabled: true},
 		{Name: "light-beta", Weight: 5, Priority: 8, CooldownS: 1, Enabled: true},
 		{Name: "light-gamma", Weight: 5, Priority: 4, CooldownS: 1, Enabled: true},

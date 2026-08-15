@@ -47,7 +47,7 @@ func main() {
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
 	noExecFallback := flag.Bool("no-exec-fallback", true, "Disable exec.Command fallback when gateway fails (default true for safety)")
 	foremanHome := flag.String("foreman-home", os.ExpandEnv("$HOME/.hermes/foreman"), "HERMES_HOME path for foreman sessions")
-	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
+	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 13 dry-run projects (12 enabled + 1 disabled)")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
 	failureWindow := flag.Int("failure-window", 100, "Number of recent ticks per project for /api/v1/status per-project failure-rate breakdown")

@@ -1,6 +1,14 @@
 # Fleet configuration — cooldown overrides
 # These entries ensure cooldowns survive scheduler restarts.
 # All other projects run from their API-set values (no fleet override).
+#
+# ── STATIC cooldown-override mirror — NOT the live fleet config ─────────────
+# This repo file is a curated SUBSET of operator pins (cooldowns that must
+# survive daemon restarts). The LIVE fleet file is ~/.hermes/fleet.toml on the
+# scheduler host, written ONLY by ~/.hermes/scripts/fleet-cooldown-policy.py;
+# it covers the full fleet (~90+ entries) and changes constantly. The two
+# files have different purposes and will never be identical — do NOT copy the
+# live file into this repo (it would be stale again immediately).
 
 [[projects]]
 name = "uhlp"
