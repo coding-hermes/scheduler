@@ -112,6 +112,9 @@ internal/
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/api/v1/pause` | Pause scheduling (POST) |
 | `/api/v1/resume` | Resume scheduling (POST) |
+| `/api/v1/config` | Resolved daemon config (JSON) |
+| `/api/v1/queue` | Global queue (JSON) |
+| `/api/v1/openapi.json` | OpenAPI schema (JSON) |
 | `/mcp` | MCP JSON-RPC endpoint |
 
 ## Manual Database Operations

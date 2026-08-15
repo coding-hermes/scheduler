@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-15 19:44 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-15 22:10 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -10,8 +10,8 @@
 | Total projects (incl. disabled) | 72 |
 | Active ticks | 1 |
 | Budget | 100 |
-| Last evaluation | 2026-08-15T19:40:20Z |
-| Recent outcomes | completed=14205, failed=38844, timeout=4071 |
+| Last evaluation | 2026-08-15T22:08:39Z |
+| Recent outcomes | completed=14220, failed=38844, timeout=4073 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (72 projects, 44 enabled)
