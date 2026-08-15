@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -327,5 +330,145 @@ func TestBoardStepsMarkdownChecklist(t *testing.T) {
 	}
 	if s := byID["T00"]; s.Status != "done" {
 		t.Errorf("T00 wrong: %+v", s)
+	}
+}
+
+// TestCIConclusionCache is the DASH-PERF-001 regression: a cache hit must
+// return without re-running the gh subprocess, and a TTL-expired entry must
+// refetch. A counting runner stands in for the real `gh run list` subprocess.
+func TestCIConclusionCache(t *testing.T) {
+	calls := 0
+	g := &Generator{
+		ciCache: make(map[string]ciCacheEntry),
+		ciTTL:   60 * time.Second,
+		ciRunner: func(workdir string) string {
+			calls++
+			return "success"
+		},
+	}
+	wd := t.TempDir()
+
+	// Cold cache → exactly one fetch.
+	if got := g.ciConclusion(wd); got != "success" {
+		t.Fatalf("cold cache: got %q, want success", got)
+	}
+	if calls != 1 {
+		t.Fatalf("cold cache: expected 1 fetch, got %d", calls)
+	}
+
+	// Cache hit within TTL → no re-exec.
+	if got := g.ciConclusion(wd); got != "success" {
+		t.Fatalf("cache hit: got %q, want success", got)
+	}
+	if calls != 1 {
+		t.Errorf("cache hit: expected 0 additional fetches, got %d total", calls)
+	}
+
+	// Empty workdir → never touches the runner or the cache.
+	if got := g.ciConclusion(""); got != "" {
+		t.Errorf("empty workdir: got %q, want empty", got)
+	}
+	if calls != 1 {
+		t.Errorf("empty workdir: expected no fetch, got %d total", calls)
+	}
+
+	// TTL expiry → refetches exactly once.
+	g.ciMu.Lock()
+	g.ciCache[wd] = ciCacheEntry{conclusion: "success", fetchedAt: time.Now().Add(-61 * time.Second)}
+	g.ciMu.Unlock()
+	if got := g.ciConclusion(wd); got != "success" {
+		t.Fatalf("after TTL expiry: got %q, want success", got)
+	}
+	if calls != 2 {
+		t.Errorf("after TTL expiry: expected 1 refetch, got %d total", calls)
+	}
+}
+
+// TestWarmCIConclusions verifies the collect() warm pass fetches each
+// workdir exactly once, skips empty workdirs, and that a second warm within
+// the TTL window runs zero subprocesses (per-render gh count drops to 0
+// after warm-up).
+func TestWarmCIConclusions(t *testing.T) {
+	var mu sync.Mutex
+	calls := map[string]int{}
+	g := &Generator{
+		ciCache: make(map[string]ciCacheEntry),
+		ciTTL:   60 * time.Second,
+		ciRunner: func(workdir string) string {
+			mu.Lock()
+			calls[workdir]++
+			mu.Unlock()
+			return "failure"
+		},
+	}
+	workdirs := []string{"/repo/one", "/repo/two", "/repo/three", ""}
+
+	g.warmCIConclusions(workdirs)
+
+	mu.Lock()
+	if calls["/repo/one"] != 1 || calls["/repo/two"] != 1 || calls["/repo/three"] != 1 {
+		mu.Unlock()
+		t.Fatalf("expected exactly 1 fetch per workdir, got %v", calls)
+	}
+	_, emptyFetched := calls[""]
+	mu.Unlock()
+	if emptyFetched {
+		t.Errorf("empty workdir must not be fetched")
+	}
+
+	// Warm again within TTL → cache hits, zero subprocesses.
+	g.warmCIConclusions(workdirs)
+	mu.Lock()
+	defer mu.Unlock()
+	if calls["/repo/one"] != 1 {
+		t.Errorf("warm re-run: expected no refetch, got %v", calls)
+	}
+}
+
+// TestWarmCIConclusionsBoundedConcurrency verifies the cold-cache warm pass
+// never exceeds ciMaxConcurrent gh subprocesses in flight.
+func TestWarmCIConclusionsBoundedConcurrency(t *testing.T) {
+	var inFlight, maxInFlight int32
+	g := &Generator{
+		ciCache: make(map[string]ciCacheEntry),
+		ciTTL:   60 * time.Second,
+		ciRunner: func(workdir string) string {
+			cur := atomic.AddInt32(&inFlight, 1)
+			for {
+				prev := atomic.LoadInt32(&maxInFlight)
+				if cur <= prev || atomic.CompareAndSwapInt32(&maxInFlight, prev, cur) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			atomic.AddInt32(&inFlight, -1)
+			return "success"
+		},
+	}
+	workdirs := make([]string, 0, 24)
+	for i := 0; i < 24; i++ {
+		workdirs = append(workdirs, fmt.Sprintf("/repo/%02d", i))
+	}
+	g.warmCIConclusions(workdirs)
+	if m := atomic.LoadInt32(&maxInFlight); m > ciMaxConcurrent {
+		t.Errorf("max in-flight %d exceeds bound %d", m, ciMaxConcurrent)
+	} else if m < 2 {
+		t.Errorf("expected concurrent fetches, max in-flight was %d", m)
+	}
+}
+
+// TestNewGeneratorInitializesCICache verifies NewGenerator wires the cache,
+// the default TTL, and the real gh runner so the cache survives across
+// renders (the DASH-PERF-001 contract).
+func TestNewGeneratorInitializesCICache(t *testing.T) {
+	g := NewGenerator(nil)
+	if g.ciCache == nil {
+		t.Fatal("NewGenerator must initialize the CI conclusion cache")
+	}
+	if g.ciRunner == nil {
+		t.Fatal("NewGenerator must wire the default gh runner")
+	}
+	if got := g.ciTTLValue(); got != ciCacheDefaultTTL {
+		t.Errorf("default TTL = %v, want %v", got, ciCacheDefaultTTL)
 	}
 }

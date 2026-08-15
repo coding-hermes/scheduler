@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -326,6 +327,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// rows cursor is still open (the collect() N+1 warning).
 	// The fleet-wide learned prior is built ONCE and shared across all projects.
 	fleet := g.fleetLearned(ctx)
+	// CI conclusions (DASH-PERF-001): warm the TTL cache once, with bounded
+	// concurrency, before the per-project loop — the ciConclusion reads below
+	// then hit the cache and no render ever serializes N gh subprocesses again.
+	workdirs := make([]string, 0, len(data.Projects))
+	for i := range data.Projects {
+		if wd := data.Projects[i].Workdir; wd != "" {
+			workdirs = append(workdirs, wd)
+		}
+	}
+	g.warmCIConclusions(workdirs)
 	for i := range data.Projects {
 		r := &data.Projects[i]
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
@@ -349,7 +360,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
 				r.GitReinsPass = gr.RatePct
 			}
-			r.CIConclusion = ciConclusion(r.Workdir)
+			r.CIConclusion = g.ciConclusion(r.Workdir)
 		}
 	}
 
@@ -845,19 +856,127 @@ func formatETA(d time.Duration) string {
 	}
 }
 
+// CI conclusion caching (DASH-PERF-001). `gh run list` is a ~0.7s
+// subprocess; running it once per project on every fleet render serialized
+// to ~30s per page. Conclusions are cached per workdir for ciCacheDefaultTTL,
+// fetched with bounded concurrency on a cold cache, and hard-capped per
+// fetch so a wedged gh can never block a render.
+const (
+	// ciCacheDefaultTTL is how long a fetched CI conclusion is reused before
+	// the dashboard refetches it. 60s matches the fleet overview refresh
+	// cadence, so gh runs at most ~once per minute per project instead of
+	// once per render.
+	ciCacheDefaultTTL = 60 * time.Second
+	// ciMaxConcurrent bounds in-flight gh subprocesses during the cache
+	// warm pass: 44 projects × ~0.7s serialized was the ~30s stall; at
+	// 8-wide a cold-cache render completes in ~4s.
+	ciMaxConcurrent = 8
+	// ciFetchTimeout is the hard per-fetch deadline. A hung gh (no network,
+	// auth prompt, wedged pager) can never hold up a render longer than this.
+	ciFetchTimeout = 2 * time.Second
+)
+
+// ciCacheEntry is one cached CI conclusion and when it was fetched.
+type ciCacheEntry struct {
+	conclusion string
+	fetchedAt  time.Time
+}
+
 // ciConclusion returns the latest GitHub Actions run conclusion for the repo
-// at workdir (success / failure / "" when unknown). It is an independent
-// cross-check on the GitReins LLM-judge pass rate: the judge can report a
-// cached or LLM-asserted "green" that does not match a genuinely failing
-// suite, and a red CI is the ground truth that unmasks it. Best-effort — on
-// any error (no gh, no workflow, timeout) it returns "" so the dashboard
-// degrades gracefully.
-func ciConclusion(workdir string) string {
+// at workdir, consulting the TTL cache first. Empty string = unknown (CI pill
+// hidden); "success"/"failure" drive the ci✓/ci✗ pills and the GitReins-vs-CI
+// warning pill in fleet_table.html. A cache miss runs the gh subprocess
+// (bounded by ciFetchTimeout) and stores the result, so the fleet overview
+// pays the subprocess cost at most once per TTL window per workdir.
+func (g *Generator) ciConclusion(workdir string) string {
+	if workdir == "" {
+		return ""
+	}
+	g.ciMu.Lock()
+	if e, ok := g.ciCache[workdir]; ok && time.Since(e.fetchedAt) < g.ciTTLValue() {
+		g.ciMu.Unlock()
+		return e.conclusion
+	}
+	g.ciMu.Unlock()
+	conclusion := g.ciRunnerFunc()(workdir)
+	g.ciMu.Lock()
+	g.ciCache[workdir] = ciCacheEntry{conclusion: conclusion, fetchedAt: time.Now()}
+	g.ciMu.Unlock()
+	return conclusion
+}
+
+// warmCIConclusions prefetches CI conclusions for any workdirs not already
+// fresh in the TTL cache, with at most ciMaxConcurrent gh subprocesses in
+// flight. collect() calls this once before its per-project loop so the loop
+// reads are cache hits.
+func (g *Generator) warmCIConclusions(workdirs []string) {
+	need := make([]string, 0, len(workdirs))
+	g.ciMu.Lock()
+	for _, wd := range workdirs {
+		if wd == "" {
+			continue
+		}
+		if e, ok := g.ciCache[wd]; !ok || time.Since(e.fetchedAt) >= g.ciTTLValue() {
+			need = append(need, wd)
+		}
+	}
+	g.ciMu.Unlock()
+	if len(need) == 0 {
+		return
+	}
+	runner := g.ciRunnerFunc()
+	sem := make(chan struct{}, ciMaxConcurrent)
+	var wg sync.WaitGroup
+	for _, wd := range need {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(wd string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			conclusion := runner(wd)
+			g.ciMu.Lock()
+			g.ciCache[wd] = ciCacheEntry{conclusion: conclusion, fetchedAt: time.Now()}
+			g.ciMu.Unlock()
+		}(wd)
+	}
+	wg.Wait()
+}
+
+// ciTTLValue returns the effective cache TTL, defaulting when unset so a
+// zero-value Generator still behaves.
+func (g *Generator) ciTTLValue() time.Duration {
+	if g.ciTTL <= 0 {
+		return ciCacheDefaultTTL
+	}
+	return g.ciTTL
+}
+
+// ciRunnerFunc returns the configured CI fetcher, defaulting to the real gh
+// subprocess when unset (tests inject a counting runner).
+func (g *Generator) ciRunnerFunc() func(workdir string) string {
+	if g.ciRunner != nil {
+		return g.ciRunner
+	}
+	return runCIConclusion
+}
+
+// runCIConclusion returns the latest GitHub Actions run conclusion for the
+// repo at workdir (success / failure / "" when unknown). It is an
+// independent cross-check on the GitReins LLM-judge pass rate: the judge can
+// report a cached or LLM-asserted "green" that does not match a genuinely
+// failing suite, and a red CI is the ground truth that unmasks it.
+// Best-effort — on any error (no gh, no workflow, timeout) it returns "" so
+// the dashboard degrades gracefully.
+func runCIConclusion(workdir string) string {
 	if workdir == "" {
 		return ""
 	}
 	// gh has no -C dir flag (that's git); set the subprocess working dir.
-	cmd := exec.Command("gh", "run", "list", "--limit", "1",
+	// A hard deadline (ciFetchTimeout) caps how long a wedged gh can hold
+	// up a dashboard render.
+	ctx, cancel := context.WithTimeout(context.Background(), ciFetchTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "run", "list", "--limit", "1",
 		"--json", "conclusion,status,headBranch",
 		"--jq", `.[0].conclusion`)
 	cmd.Dir = workdir

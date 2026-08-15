@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -43,6 +44,14 @@ type Generator struct {
 	healthClient      *http.Client
 	started           time.Time
 	spawnCounts       func() (httpCount, execCount int64) // optional; /health panel
+	// CI conclusion cache (DASH-PERF-001): `gh run list` is a ~0.7s
+	// subprocess; running it once per project on EVERY fleet render cost
+	// ~30s. Conclusions are cached per workdir for ciTTL (60s default) and
+	// the cold-cache warm pass is concurrency-bounded + timeout-capped.
+	ciMu     sync.Mutex
+	ciCache  map[string]ciCacheEntry
+	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
+	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
 }
 
 // SetSpawnCounts wires a callback returning (http, exec) spawn counts since
@@ -72,6 +81,9 @@ func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
 		gatewayURL:        gateway,
 		healthClient:      &http.Client{Timeout: 2 * time.Second},
 		started:           time.Now(),
+		ciCache:           make(map[string]ciCacheEntry),
+		ciTTL:             ciCacheDefaultTTL,
+		ciRunner:          runCIConclusion,
 	}
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
