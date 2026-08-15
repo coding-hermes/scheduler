@@ -10,12 +10,15 @@ import (
 
 // printSchema emits a JSON Schema for schedulerd.toml describing every
 // TOML key, its type, default, env-var override, and CLI flag mapping.
+// The schema is the contract for the planned FEAT-005 root TOML wiring:
+// the daemon does NOT load schedulerd.toml yet (active layers: env vars <
+// CLI flags), so this documents the future layer, not a loaded one.
 func printSchema() {
 	fmt.Printf(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/coding-hermes/scheduler/schemas/schedulerd.toml.schema.json",
   "title": "schedulerd.toml",
-  "description": "Coding Hermes Scheduler daemon config — three-layer model (TOML < env vars < CLI flags)",
+  "description": "Coding Hermes Scheduler daemon config — schema for the FEAT-005 root TOML wiring (NOT yet loaded by the daemon; active layers: env vars < CLI flags)",
   "type": "object",
   "properties": {
     "daemon": {
@@ -97,25 +100,29 @@ func printSchema() {
 `, config.DefaultModel, config.DefaultProvider)
 }
 
-// printConfig renders the current (CLI-level) configuration as TOML.
-// For now, Layer 1 (TOML) and Layer 2 (env vars) are not shown — this
-// will be extended when the three-layer LoadConfig is wired in main.go.
+// printConfig renders the effective configuration (CLI flags + SCHEDULER_*
+// env overrides, already resolved in main.go before this is called) as TOML.
+// Root schedulerd.toml loading is deliberately NOT wired into daemon boot —
+// it arrives with FEAT-005; the --schema output documents that planned layer.
 func printConfig(
-	configFile, dbPath, listen string,
+	configFile, dbPath, listen, logFile string,
 	minInterval, maxInterval time.Duration,
 	numLevels, weightBudget, maxConcurrent int,
 	namespaceMode bool,
 	tickTimeout time.Duration,
-	gatewayURL, gatewayKey, foremanHome,
+	gatewayURL, gatewayKey, foremanHome string,
+	noExecFallback bool,
 	duckbrainNS, duckbrainURL string,
+	autoDisableRate float64,
+	autoDisableWindow, autoDisableMinTicks, failureWindow int,
 ) {
-	fmt.Printf(`# schedulerd resolved configuration (CLI flags only)
-# source: command-line flags
-# (TOML + env var layers coming in FEAT-005 full wiring)
+	fmt.Printf(`# schedulerd resolved configuration (effective values: CLI flags + SCHEDULER_* env overrides applied)
+# source: CLI flags + SCHEDULER_* env var overrides; root TOML loading comes in FEAT-005
 
 [daemon]
 db_path = %q
 listen = %q
+log_file = %q
 
 [scheduler]
 min_interval = %q
@@ -125,21 +132,26 @@ weight_budget = %d
 max_concurrent = %d
 tick_timeout = %q
 namespace_mode = %v
+auto_disable_failure_rate = %v
+auto_disable_window = %d
+auto_disable_min_ticks = %d
+failure_window = %d
 
 [gateway]
 url = %q
 key = %q
 foreman_home = %q
+no_exec_fallback = %v
 
 [duckbrain]
 namespace = %q
 url = %q
 `,
-		dbPath, listen,
+		dbPath, listen, logFile,
 		minInterval, maxInterval,
 		numLevels, weightBudget, maxConcurrent,
-		tickTimeout, namespaceMode,
-		gatewayURL, gatewayKey, foremanHome,
+		tickTimeout, namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
+		gatewayURL, gatewayKey, foremanHome, noExecFallback,
 		duckbrainNS, duckbrainURL,
 	)
 	if configFile != "" {

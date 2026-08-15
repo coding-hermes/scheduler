@@ -59,18 +59,11 @@ func main() {
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
 	flag.Parse()
 
-	if *schemaFlag {
-		printSchema()
-		return
-	}
-	if *showConfigFlag {
-		printConfig(*configFile, *dbPath, *listen, *minInterval, *maxInterval,
-			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
-			*tickTimeout, *gatewayURL, *gatewayKey, *foremanHome,
-			*duckbrainNS, *duckbrainURL)
-		return
-	}
-
+	// Resolve SCHEDULER_* env-var overrides BEFORE the --schema/--show-config
+	// early exits so those commands print EFFECTIVE values (DOGFOOD-012).
+	// Previously this block ran after them and --show-config never saw env
+	// overrides. Runtime daemon behavior is unchanged — the same resolution
+	// happened before the loop was created.
 	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
 		*namespaceMode = true
 	}
@@ -97,6 +90,21 @@ func main() {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			*autoDisableMinTicks = n
 		}
+	}
+
+	if *schemaFlag {
+		printSchema()
+		return
+	}
+	if *showConfigFlag {
+		printConfig(*configFile, *dbPath, *listen, *logFile,
+			*minInterval, *maxInterval,
+			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
+			*tickTimeout,
+			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
+			*duckbrainNS, *duckbrainURL,
+			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow)
+		return
 	}
 
 	// ── Test-verify mode: run correctness checks and exit ──

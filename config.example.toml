@@ -8,6 +8,12 @@
 #   2. This TOML file
 #   3. SCHEDULER_* environment variables
 #   4. CLI flags (always win)
+#
+# NOTE (DOGFOOD-012): the resolution order above is the FEAT-005 target, not
+# today's reality. The daemon currently reads only the [[projects]] /
+# [[namespaces]] fleet sections and a few [scheduler] fields from a file
+# passed via --config; the [daemon] / [gateway] / [duckbrain] root sections
+# below are NOT loaded until FEAT-005 wires LoadConfig into daemon boot.
 # =============================================================================
 
 # ── Daemon ───────────────────────────────────────────────────────────────────

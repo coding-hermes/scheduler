@@ -21,6 +21,18 @@ func TestPrintSchema(t *testing.T) {
 	if schema["title"] == nil {
 		t.Error("schema missing title")
 	}
+	// DOGFOOD-012: the description must not claim a loaded three-layer model —
+	// schedulerd.toml is NOT loaded by the daemon yet (FEAT-005 wiring only).
+	desc, ok := schema["description"].(string)
+	if !ok {
+		t.Fatal("schema missing description")
+	}
+	if strings.Contains(desc, "three-layer model (TOML < env vars < CLI flags)") {
+		t.Errorf("schema description still claims a loaded three-layer model: %q", desc)
+	}
+	if !strings.Contains(desc, "NOT yet loaded by the daemon") || !strings.Contains(desc, "FEAT-005") {
+		t.Errorf("schema description must state schedulerd.toml is NOT yet loaded (FEAT-005 contract): %q", desc)
+	}
 	props, ok := schema["properties"].(map[string]interface{})
 	if !ok {
 		t.Fatal("schema missing properties object")
@@ -65,12 +77,17 @@ func TestPrintSchema(t *testing.T) {
 func TestPrintConfig(t *testing.T) {
 	os.Setenv("SCHEDULER_DB_PATH", "testdb")
 	defer os.Unsetenv("SCHEDULER_DB_PATH")
+	// DOGFOOD-012: an env override must surface as an EFFECTIVE value in the
+	// output (main.go resolves SCHEDULER_* overrides before calling printConfig).
+	os.Setenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "0.5")
+	defer os.Unsetenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE")
 
 	out := captureStdout(func() {
 		printConfig(
 			"/tmp/fleet.toml",
 			"/tmp/test.db",
 			"127.0.0.1:9090",
+			"/tmp/scheduler.log",
 			20*60*1000000000,
 			24*60*60*1000000000,
 			10, 100, 10,
@@ -79,14 +96,18 @@ func TestPrintConfig(t *testing.T) {
 			"http://127.0.0.1:8642",
 			"secret",
 			"/tmp/foreman",
+			true,
 			"coding-hermes",
 			"http://localhost:3000",
+			0.5,
+			100, 50, 100,
 		)
 	})
 
 	checks := []string{
 		"db_path = \"/tmp/test.db\"",
 		"listen = \"127.0.0.1:9090\"",
+		"log_file = \"/tmp/scheduler.log\"",
 		"[scheduler]",
 		"min_interval = \"20m0s\"",
 		"max_interval = \"24h0m0s\"",
@@ -95,21 +116,39 @@ func TestPrintConfig(t *testing.T) {
 		"max_concurrent = 10",
 		"tick_timeout = \"2h0m0s\"",
 		"namespace_mode = false",
+		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
+		// effective value (was previously invisible to --show-config).
+		"auto_disable_failure_rate = 0.5",
+		"auto_disable_window = 100",
+		"auto_disable_min_ticks = 50",
+		"failure_window = 100",
 		"[gateway]",
 		"url = \"http://127.0.0.1:8642\"",
 		"key = \"secret\"",
 		"foreman_home = \"/tmp/foreman\"",
+		"no_exec_fallback = true",
 		"[duckbrain]",
 		"namespace = \"coding-hermes\"",
 		"url = \"http://localhost:3000\"",
 		"# fleet config file: /tmp/fleet.toml",
 		"# active env var overrides:",
 		"#   SCHEDULER_DB_PATH=testdb",
+		"#   SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5",
 	}
 	for _, substr := range checks {
 		if !strings.Contains(out, substr) {
 			t.Errorf("printConfig() output missing %q\nGot:\n%s", substr, out)
 		}
+	}
+
+	// Header honesty (DOGFOOD-012): must not claim "CLI flags only" and must
+	// state the effective-value source plus the FEAT-005 root TOML deferral.
+	if strings.Contains(out, "CLI flags only") {
+		t.Errorf("printConfig() header still claims 'CLI flags only'\nGot:\n%s", out)
+	}
+	if !strings.Contains(out, "effective values") ||
+		!strings.Contains(out, "root TOML loading comes in FEAT-005") {
+		t.Errorf("printConfig() header missing effective-values / FEAT-005 wording\nGot:\n%s", out)
 	}
 }
 

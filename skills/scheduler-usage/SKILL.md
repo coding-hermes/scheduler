@@ -97,10 +97,11 @@ there's no purge.
 - `--sim-setup --sim-ticks N` gives a 13-project fixture + simulated ticks +
   report (README says 14 — stale).
 - `--schema` prints a JSON Schema for a root `schedulerd.toml` that the
-  daemon does NOT load; `--show-config` shows CLI flags only and comments env
-  overrides without applying them to the printout. Env vars DO work at boot
-  (e.g. `SCHEDULER_AUTO_DISABLE_FAILURE_RATE`). Don't trust either command to
-  show the effective configuration (DOGFOOD-012).
+  daemon does NOT load yet (FEAT-005 wiring); `--show-config` prints the
+  EFFECTIVE configuration (CLI flags + SCHEDULER_* env overrides applied)
+  and comments which env vars are active. Env vars DO work at boot
+  (e.g. `SCHEDULER_AUTO_DISABLE_FAILURE_RATE`). Root TOML values are not
+  loaded until FEAT-005 (DOGFOOD-012).
 - Live signals: `zero_select_consecutive=0` + regular `EVAL:` lines in
   `~/.hermes/coding-hermes/scheduler.log` = loop healthy. `EVAL-STALL:`
   lines = watchdog forced re-eval after 5 idle minutes (by design, GAP-042).
