@@ -1,0 +1,57 @@
+{
+  "task_id": "NEVER-DONE-396",
+  "task_title": "NEVER-DONE full 14-point audit tick #396",
+  "task_criteria": [
+    "Board updated (tasks.jsonl row worker_summary + audit events appended, header last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count 0; audit gates all PASS"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n  \u001b[33mUpdate available: 0.11.0 \u2192 0.12.0 \u2014 https://pypi.org/project/gitreins/\u001b[0m\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Board updated (tasks.jsonl row worker_summary + audit events appended, header last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count 0; audit gates all PASS: Board updated: tasks.jsonl line 29 NEVER-DONE row has worker_summary='tick #396 FULL 14-point audit: gates 9/9...' + foreman_note updated (updated_at 2026-08-16 21:14:30); events.jsonl id 369 (audit) + id 370 (verdict) appended for task_id NEVER-DONE-396; board.jsonl header ticks_total=396 and last_commit=cf5e5e6 (prev tick #395 commit, matches established convention). Pushed: HEAD==origin/main 6647c54, git rev-list --count origin/main..HEAD = 0. Audit gates verified live: go build exit 0, go vet exit 0, gofmt clean, go test ./... all packages ok, golangci-lint '0 issues', gitreins guard 'Tier 1 Guards: PASS (secrets/go_build/go_lint/go_tests)'.\n",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Board updated (tasks.jsonl row worker_summary + audit events appended, header last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count 0; audit gates all PASS: Board updated: tasks.jsonl line 29 NEVER-DONE row has worker_summary='tick #396 FULL 14-point audit: gates 9/9...' + foreman_note updated (updated_at 2026-08-16 21:14:30); events.jsonl id 369 (audit) + id 370 (verdict) appended for task_id NEVER-DONE-396; board.jsonl header ticks_total=396 and last_c",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Board updated (tasks.jsonl row worker_summary + audit events appended, header last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count 0; audit gates all PASS",
+                "status": "PASS",
+                "detail": "Board updated: tasks.jsonl line 29 NEVER-DONE row has worker_summary='tick #396 FULL 14-point audit: gates 9/9...' + foreman_note updated (updated_at 2026-08-16 21:14:30); events.jsonl id 369 (audit) + id 370 (verdict) appended for task_id NEVER-DONE-396; board.jsonl header ticks_total=396 and last_commit=cf5e5e6 (prev tick #395 commit, matches established convention). Pushed: HEAD==origin/main 6647c54, git rev-list --count origin/main..HEAD = 0. Audit gates verified live: go build exit 0, go vet exit 0, gofmt clean, go test ./... all packages ok, golangci-lint '0 issues', gitreins guard 'Tier 1 Guards: PASS (secrets/go_build/go_lint/go_tests)'."
+              }
+            ],
+            "summary": ""
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: NEVER-DONE-396\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Board updated (tasks.jsonl row worker_summary + audit events appended, header last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count 0; audit gates all PASS: Board updated: tasks.jsonl line 29 NEVER-DONE row has worker_summary='tick #396 FULL 14-point audit: gates 9/9...' + foreman_note updated (updated_at 2026-08-16 21:14:30); events.jsonl id 369 (audit) + id 370 (verdict) appended for task_id NEVER-DONE-396; board.jsonl header ticks_total=396 and last_commit=cf5e5e6 (prev tick #395 commit, matches established convention). Pushed: HEAD==origin/main 6647c54, git rev-list --count origin/main..HEAD = 0. Audit gates verified live: go build exit 0, go vet exit 0, gofmt clean, go test ./... all packages ok, golangci-lint '0 issues', gitreins guard 'Tier 1 Guards: PASS (secrets/go_build/go_lint/go_tests)'.\n\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-08-16T21:16:36.598090"
+}
