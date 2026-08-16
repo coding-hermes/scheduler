@@ -1221,3 +1221,10 @@ tasks:
   status: complete
   created_at: '2026-08-15T22:11:32.912002+00:00'
   completed_at: '2026-08-15T22:15:47.963985+00:00'
+- id: NEVER-DONE-382
+  title: 'NEVER-DONE audit tick #382 (light+gap sweep)'
+  criteria:
+  - Board updated with audit results; any gaps found are filed as tasks; gates verified
+    (build/vet/gofmt/tests/lint); CI health reported
+  status: in_progress
+  created_at: '2026-08-16T01:35:42.875215+00:00'
