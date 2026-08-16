@@ -450,6 +450,15 @@ func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) {
 // without event spam. A zero select with NO eligible projects (normal
 // fleet-idle) resets the counter.
 func (l *Loop) noteZeroSelect(now time.Time, runningSet map[string]bool) {
+	// GAP-050: a zero select while every slot is busy is expected — the
+	// packer's global maxConcurrent cap breaks out of selection before
+	// picking anything, so eligible projects exist but NOTHING is wrong.
+	// Treat saturation like fleet-idle: reset the counter, emit nothing.
+	if len(runningSet) >= l.maxConcur {
+		l.zeroSelectCount = 0
+		l.zeroSelectEligible = 0
+		return
+	}
 	eligible := l.countEligibleProjects(now, runningSet)
 	if eligible == 0 {
 		l.zeroSelectCount = 0
@@ -493,9 +502,12 @@ func (l *Loop) resetZeroSelect() {
 // running and whose cooldown has elapsed (never completed counts as
 // eligible). These are the projects a healthy evaluation COULD have
 // picked — a zero select with eligible > 0 is the GAP-043 anomaly signal.
+// The cooldown predicate mirrors the packer's exactly (packer_select.go):
+// failure backoff first, then the blackout-window multiplier, so a project
+// the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, COALESCE(last_tick_completed, '') FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0) FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -506,7 +518,8 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		var name string
 		var cooldown int
 		var lastComp string
-		if err := rows.Scan(&name, &cooldown, &lastComp); err != nil {
+		var consecFailures int
+		if err := rows.Scan(&name, &cooldown, &lastComp, &consecFailures); err != nil {
 			continue
 		}
 		if runningSet[name] {
@@ -521,7 +534,22 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			eligible++ // unknown completion time — treat as eligible
 			continue
 		}
-		if now.Sub(comp) >= time.Duration(cooldown)*time.Second {
+		base := time.Duration(cooldown) * time.Second
+		// S-GAP-001: consecutive spawn failures back off exponentially
+		// (identical arithmetic to the packer's cooldown check).
+		if consecFailures > 0 {
+			base = FailureBackoff(base, consecFailures)
+		}
+		// Apply blackout slowdown if inside a peak-pricing window.
+		if mult, inBlackout := config.ActiveMultiplier(l.packer.blackoutWindows, now); inBlackout {
+			if mult <= 0 {
+				continue // skip-mode blackout: packer skips this project
+			}
+			if mult > 1.0 {
+				base = time.Duration(float64(base) * mult)
+			}
+		}
+		if now.Sub(comp) >= base {
 			eligible++
 		}
 	}

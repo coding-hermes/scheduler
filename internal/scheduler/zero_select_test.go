@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/config"
 )
 
 // GAP-043 zero-select monitoring tests. Evaluations log nothing when they
@@ -165,5 +167,112 @@ func TestZeroSelect_StatsExposed(t *testing.T) {
 	}
 	if !strings.Contains(details, `"eligible":1`) {
 		t.Fatalf("event details missing eligible count: %s", details)
+	}
+}
+
+// insertTestProjectWithFailures is insertTestProject plus a
+// consecutive_failures counter (S-GAP-001 spawn-failure backoff).
+func insertTestProjectWithFailures(t *testing.T, db *sql.DB, name string, cooldown int, lastCompleted string, failures int) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at, last_tick_completed, consecutive_failures)
+		 VALUES (?, 'https://example.com/' || ?, '/tmp/' || ?, 10, 5, ?, 1.0, 'm', 'p', 1, datetime('now'), datetime('now'), ?, ?)`,
+		name, name, name, cooldown, lastCompleted, failures)
+	if err != nil {
+		t.Fatalf("insert test project %s: %v", name, err)
+	}
+}
+
+// TestZeroSelect_FailureBackoffNotEligible (GAP-050): a project whose raw
+// cooldown has elapsed but whose FailureBackoff cooldown (consecutive
+// failures) has NOT elapsed is not eligible — the packer would skip it, so
+// a zero select must not alarm. 900s cooldown with 3 failures backs off to
+// 900s * 2^2 = 3600s; 30min since completion elapses the raw cooldown but
+// not the backoff.
+func TestZeroSelect_FailureBackoffNotEligible(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now()
+	insertTestProjectWithFailures(t, db, "flaky", 900, now.Add(-30*time.Minute).UTC().Format(time.RFC3339), 3)
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	if got := l.countEligibleProjects(now, map[string]bool{}); got != 0 {
+		t.Fatalf("countEligibleProjects = %d, want 0 (failure backoff not elapsed)", got)
+	}
+
+	l.noteZeroSelect(now, map[string]bool{})
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 0)
+	if l.zeroSelectCount != 0 {
+		t.Fatalf("zeroSelectCount = %d, want 0", l.zeroSelectCount)
+	}
+}
+
+// TestZeroSelect_BlackoutMultiplierNotEligible (GAP-050): inside a
+// blackout window (06:00-10:00 UTC, multiplier 2.0) a project whose raw
+// cooldown elapsed but whose doubled cooldown has NOT elapsed is not
+// eligible. 900s cooldown doubled = 1800s; 25min since completion elapses
+// the raw cooldown but not the doubled one.
+func TestZeroSelect_BlackoutMultiplierNotEligible(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC) // 08:00 UTC — inside 06:00-10:00
+	insertTestProject(t, db, "peak", 900, true, now.Add(-25*time.Minute).UTC().Format(time.RFC3339))
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+	l.SetBlackoutWindows([]config.BlackoutWindow{
+		{Start: "06:00", End: "10:00", Multiplier: 2.0},
+	})
+
+	if got := l.countEligibleProjects(now, map[string]bool{}); got != 0 {
+		t.Fatalf("countEligibleProjects = %d, want 0 (blackout-doubled cooldown not elapsed)", got)
+	}
+
+	l.noteZeroSelect(now, map[string]bool{})
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 0)
+	if l.zeroSelectCount != 0 {
+		t.Fatalf("zeroSelectCount = %d, want 0", l.zeroSelectCount)
+	}
+}
+
+// TestZeroSelect_SaturatedNoEvent (GAP-050): when every slot is busy
+// (len(runningSet) >= maxConcurrent) a zero select is expected — the
+// packer's global maxConcurrent cap breaks before any selection. Even with
+// an eligible project present, no HIGH event may fire.
+func TestZeroSelect_SaturatedNoEvent(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "km", 900, true, "") // enabled, never completed = eligible
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	running := map[string]bool{"a": true, "b": true, "c": true, "d": true} // 4/4 slots busy
+	l.noteZeroSelect(time.Now(), running)
+	l.noteZeroSelect(time.Now(), running)
+
+	assertZeroSelectEventCount(t, db, 0)
+	if l.zeroSelectCount != 0 {
+		t.Fatalf("zeroSelectCount = %d, want 0 (saturation is expected)", l.zeroSelectCount)
+	}
+}
+
+// TestZeroSelect_GenuineAnomalyStillFires (GAP-050): with no blackout
+// windows, no failures and free slots, a project whose cooldown has
+// genuinely elapsed IS eligible — the anomaly path must still alarm after
+// the threshold.
+func TestZeroSelect_GenuineAnomalyStillFires(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now()
+	insertTestProject(t, db, "km", 900, true, now.Add(-2*time.Hour).UTC().Format(time.RFC3339)) // cooldown elapsed
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	if got := l.countEligibleProjects(now, map[string]bool{}); got != 1 {
+		t.Fatalf("countEligibleProjects = %d, want 1", got)
+	}
+
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 0) // below threshold
+
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 1) // second consecutive: event fires
+
+	if l.zeroSelectCount != 2 {
+		t.Fatalf("zeroSelectCount = %d, want 2", l.zeroSelectCount)
 	}
 }
