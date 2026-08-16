@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-15 22:10 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-16 04:07 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 44 |
 | Total projects (incl. disabled) | 72 |
-| Active ticks | 1 |
+| Active ticks | 2 |
 | Budget | 100 |
-| Last evaluation | 2026-08-15T22:08:39Z |
-| Recent outcomes | completed=14220, failed=38844, timeout=4073 |
+| Last evaluation | 2026-08-16T04:03:09Z |
+| Recent outcomes | completed=14293, failed=38844, timeout=4073 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (72 projects, 44 enabled)
@@ -20,7 +20,7 @@
 
 | Project | Priority | Weight | Cooldown | Namespace |
 |---------|----------|--------|----------|-----------|
-| 9router | 10 | 15 | 43200s | coding-hermes |
+| 9router | 10 | 15 | 3600s | coding-hermes |
 | ai-plays-poke | 10 | 15 | 21600s | coding-hermes |
 | asce | 10 | 15 | 21600s | coding-hermes |
 | bunker | 10 | 15 | 3600s | coding-hermes |
@@ -57,7 +57,7 @@
 | dexdat-core | 5 | 10 | 21600s | coding-hermes |
 | eduos.dexdat.com.co | 5 | 10 | 21600s | coding-hermes |
 | escalation-doctrine | 5 | 10 | 21600s | coding-hermes |
-| h3-sdk-typescript-foreman | 5 | 10 | 43200s | coding-hermes |
+| h3-sdk-typescript-foreman | 5 | 10 | 3600s | coding-hermes |
 | heading | 5 | 10 | 21600s | coding-hermes |
 | hermes4friends-infra | 5 | 10 | 21600s | coding-hermes |
 | imhotep | 5 | 10 | 21600s | coding-hermes |
