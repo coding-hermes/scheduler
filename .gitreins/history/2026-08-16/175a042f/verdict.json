@@ -1,0 +1,82 @@
+{
+  "task_id": "GAP-050",
+  "task_title": "Fix EVAL-ZERO-SELECT false positives: countEligibleProjects must mirror packer predicate (blackout multiplier, failure backoff, maxConcurrent cap)",
+  "task_criteria": [
+    "AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard PASS 4/4"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n  \u001b[33mUpdate available: 0.11.0 \u2192 0.12.0 \u2014 https://pypi.org/project/gitreins/\u001b[0m\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard PASS 4/4: AC1: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS. AC2: loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS. AC3: loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events). AC4: go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok (cmd/migrate, cmd/schedulerd, api, config, dashboard, database, mcp, scheduler, sync); all 10 TestZeroSelect_* PASS. AC5: gitreins guard PASS 4/4 (secrets, go_build, go_lint, go_tests).\n  \u2713 AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS\n  \u2713 AC2: applies FailureBackoff for consecutive_failures>0: loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS\n  \u2713 AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event): loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events)\n  \u2713 AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS: go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok; all 10 TestZeroSelect_* PASS\n  \u2713 AC5: gitreins guard PASS 4/4: gitreins guard exit 0: PASS 4/4 (secrets clean, go_build ok, go_lint ok, go_tests ok)\nGAP-050 fully implemented: countEligibleProjects mirrors the packer predicate (blackout multiplier, failure backoff), saturated zero-selects no longer raise HIGH events, and all build/vet/gofmt/tests (9/9) plus gitreins guard (4/4) pass.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard PASS 4/4: AC1: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultipl",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard PASS 4/4",
+                "status": "PASS",
+                "detail": "AC1: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS. AC2: loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS. AC3: loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events). AC4: go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok (cmd/migrate, cmd/schedulerd, api, config, dashboard, database, mcp, scheduler, sync); all 10 TestZeroSelect_* PASS. AC5: gitreins guard PASS 4/4 (secrets, go_build, go_lint, go_tests)."
+              },
+              {
+                "criterion": "AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown",
+                "status": "PASS",
+                "detail": "loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS"
+              },
+              {
+                "criterion": "AC2: applies FailureBackoff for consecutive_failures>0",
+                "status": "PASS",
+                "detail": "loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS"
+              },
+              {
+                "criterion": "AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event)",
+                "status": "PASS",
+                "detail": "loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events)"
+              },
+              {
+                "criterion": "AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS",
+                "status": "PASS",
+                "detail": "go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok; all 10 TestZeroSelect_* PASS"
+              },
+              {
+                "criterion": "AC5: gitreins guard PASS 4/4",
+                "status": "PASS",
+                "detail": "gitreins guard exit 0: PASS 4/4 (secrets clean, go_build ok, go_lint ok, go_tests ok)"
+              }
+            ],
+            "summary": "GAP-050 fully implemented: countEligibleProjects mirrors the packer predicate (blackout multiplier, failure backoff), saturated zero-selects no longer raise HIGH events, and all build/vet/gofmt/tests (9/9) plus gitreins guard (4/4) pass."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: GAP-050\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard PASS 4/4: AC1: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS. AC2: loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS. AC3: loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events). AC4: go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok (cmd/migrate, cmd/schedulerd, api, config, dashboard, database, mcp, scheduler, sync); all 10 TestZeroSelect_* PASS. AC5: gitreins guard PASS 4/4 (secrets, go_build, go_lint, go_tests).\n  \u2713 AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to cooldown: loop.go:544 applies config.ActiveMultiplier(l.packer.blackoutWindows, now) to cooldown base, mirroring packer.go:213-219; TestZeroSelect_BlackoutMultiplierNotEligible PASS\n  \u2713 AC2: applies FailureBackoff for consecutive_failures>0: loop.go:540-542 applies FailureBackoff(base, consecFailures) for consecutive_failures>0, mirroring packer.go:210-211; TestZeroSelect_FailureBackoffNotEligible PASS\n  \u2713 AC3: zero-select with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event): loop.go:457-461 returns early (resets zeroSelectCount/eligible, emits nothing) when len(runningSet)>=l.maxConcur; TestZeroSelect_SaturatedNoEvent PASS (asserts 0 HIGH events)\n  \u2713 AC4: go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS: go build exit 0, go vet exit 0, gofmt -l empty, go test -short -p 1 ./... exit 0 with 9 packages ok; all 10 TestZeroSelect_* PASS\n  \u2713 AC5: gitreins guard PASS 4/4: gitreins guard exit 0: PASS 4/4 (secrets clean, go_build ok, go_lint ok, go_tests ok)\nGAP-050 fully implemented: countEligibleProjects mirrors the packer predicate (blackout multiplier, failure backoff), saturated zero-selects no longer raise HIGH events, and all build/vet/gofmt/tests (9/9) plus gitreins guard (4/4) pass.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-08-16T12:35:51.940180"
+}

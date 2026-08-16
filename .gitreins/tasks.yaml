@@ -1246,3 +1246,15 @@ tasks:
   status: complete
   created_at: '2026-08-16T04:03:57.351154+00:00'
   completed_at: '2026-08-16T04:11:27.851126+00:00'
+- id: GAP-050
+  title: 'Fix EVAL-ZERO-SELECT false positives: countEligibleProjects must mirror
+    packer predicate (blackout multiplier, failure backoff, maxConcurrent cap)'
+  criteria:
+  - 'AC1: countEligibleProjects applies config.ActiveMultiplier blackout windows to
+    cooldown; AC2: applies FailureBackoff for consecutive_failures>0; AC3: zero-select
+    with len(runningSet)>=maxConcurrent is NOT an anomaly (no HIGH event); AC4: go
+    build/vet/gofmt clean, go test -short -p 1 ./... 9/9 PASS; AC5: gitreins guard
+    PASS 4/4'
+  status: complete
+  created_at: '2026-08-16T12:28:45.839555+00:00'
+  completed_at: '2026-08-16T12:34:38.813348+00:00'
