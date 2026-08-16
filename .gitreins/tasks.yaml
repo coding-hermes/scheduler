@@ -1237,3 +1237,11 @@ tasks:
   status: complete
   created_at: '2026-08-16T02:53:33.800902+00:00'
   completed_at: '2026-08-16T02:55:07.720660+00:00'
+- id: NEVER-DONE-384
+  title: 'NEVER-DONE full 14-point audit tick #384'
+  criteria:
+  - Board updated (tasks.jsonl row worker_summary + audit events appended, header
+    last_commit/ticks_total correct) AND pushed to origin/main with git rev-list count
+    0; audit gates all PASS
+  status: in_progress
+  created_at: '2026-08-16T04:03:57.351154+00:00'
