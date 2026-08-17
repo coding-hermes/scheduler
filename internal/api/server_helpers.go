@@ -91,52 +91,60 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	}
 	out := map[string]ProjectFailureRate{}
 
-	// Single-pass aggregation (PERF-001): one windowed query replaces the
-	// previous per-project loop (N+1 — one ORDER BY spawned_at DESC LIMIT
-	// query per project, 44+ queries per /api/v1/status call). A CTE ranks
-	// every completed tick of every existing project by spawned_at DESC with
-	// ROW_NUMBER(); the outer query keeps only each project's most recent
-	// `window` ticks and aggregates failed/timeout vs total in one GROUP BY.
-	// This preserves the exact per-project semantics (window truncation,
-	// completed-only, failed|timeout counting) while scanning the ticks
-	// table once. The id DESC tiebreaker makes truncation deterministic when
-	// spawned_at collides.
+	// Per-project indexed loop (PERF-001). The windowed-CTE alternative was
+	// measured through the modernc.org/sqlite driver against the production
+	// DB (57k ticks, 254k events) and is a REGRESSION: ROW_NUMBER() OVER
+	// PARTITION BY forces a temp b-tree over ALL ~57k completed rows and
+	// takes 128-212ms, while this loop's per-project ORDER BY spawned_at DESC
+	// LIMIT is served by the idx_ticks_project_spawned(project_name,
+	// spawned_at) index — ~0.1ms per project, ~5ms total for 44 projects.
+	// The N+1 was never the bottleneck; window functions are what's slow in
+	// the pure-Go driver.
 	//
 	// DOGFOOD-009: only EXISTING projects are considered. A hard-deleted
 	// project (row purged from the projects table, e.g. eduos-e2e) leaves
 	// historical ticks behind; without the join those ticks resurfaced as
 	// ghost failure-rate entries (failure_rate=1.0, auto_disable_armed=true)
-	// that could never be cleared. The JOIN inside the CTE excludes ghost
-	// ticks before ranking.
-	rows, err := db.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT t.project_name, t.status,
-			       ROW_NUMBER() OVER (
-			           PARTITION BY t.project_name
-			           ORDER BY t.spawned_at DESC, t.id DESC
-			       ) AS rn
-			FROM ticks t
-			JOIN projects p ON p.name = t.project_name
-			WHERE t.completed_at IS NOT NULL
-		)
-		SELECT project_name,
-		       SUM(CASE WHEN status IN ('failed', 'timeout') THEN 1 ELSE 0 END),
-		       COUNT(*)
-		FROM ranked
-		WHERE rn <= ?
-		GROUP BY project_name`,
-		window)
+	// that could never be cleared. The DISTINCT list is built through the
+	// projects JOIN so ghost ticks never enter the loop.
+	projects, err := db.QueryContext(ctx,
+		`SELECT DISTINCT t.project_name FROM ticks t
+		 JOIN projects p ON p.name = t.project_name
+		 WHERE t.completed_at IS NOT NULL`)
 	if err != nil {
 		return out
 	}
-	defer rows.Close()
+	defer projects.Close()
 
-	for rows.Next() {
+	var names []string
+	for projects.Next() {
 		var name string
-		var failed, total int
-		if err := rows.Scan(&name, &failed, &total); err != nil {
+		if err := projects.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+
+	for _, name := range names {
+		rows, err := db.QueryContext(ctx,
+			`SELECT status FROM ticks
+			 WHERE project_name = ? AND completed_at IS NOT NULL
+			 ORDER BY spawned_at DESC LIMIT ?`,
+			name, window)
+		if err != nil {
 			continue
 		}
+		var failed, total int
+		for rows.Next() {
+			var status string
+			if err := rows.Scan(&status); err != nil {
+				continue
+			}
+			total++
+			if status == "failed" || status == "timeout" {
+				failed++
+			}
+		}
+		rows.Close()
 		if total == 0 {
 			continue
 		}

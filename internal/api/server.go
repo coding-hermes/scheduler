@@ -135,7 +135,22 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
 	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
-	lastEval := getLastEvalTime(ctx, s.db)
+	// PERF-001: serve last_evaluation from the loop's in-memory state when a
+	// loop is attached. evaluate() sets lastEval immediately BEFORE emitting
+	// the 'evaluation started' event (internal/scheduler/tick_process.go), so
+	// LastEvalTime() is the exact same timestamp the events-table query would
+	// return — zero cost instead of a full scan of the events table (no index
+	// on message; measured ~43ms on 254k rows). Serialization matches the
+	// health handler (RFC3339 UTC, zero time → empty string). getLastEvalTime
+	// remains the no-loop fallback (used by tests).
+	var lastEval string
+	if s.loop != nil {
+		if t := s.loop.LastEvalTime(); !t.IsZero() {
+			lastEval = t.UTC().Format(time.RFC3339)
+		}
+	} else {
+		lastEval = getLastEvalTime(ctx, s.db)
+	}
 	status := map[string]interface{}{
 		"budget_total":           100,
 		"active_projects":        len(projects),
