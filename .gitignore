@@ -42,3 +42,4 @@ dagger.db
 .coding-hermes/board/board.db.wal
 .coding-hermes/board/*.parquet
 .coding-hermes/board/*.duckdb
+/.gitreins/usage.jsonl
