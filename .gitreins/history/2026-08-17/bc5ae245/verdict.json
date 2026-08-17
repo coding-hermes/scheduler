@@ -1,0 +1,43 @@
+{
+  "task_id": "PERF-001",
+  "task_title": "Single-pass failure-rate aggregation in computeProjectFailureRates (N+1 fix)",
+  "task_criteria": [
+    "computeProjectFailureRates issues at most 2 queries total (no per-project loop); all existing internal/api tests pass; window truncation semantics preserved; DOGFOOD-009 ghost filtering preserved; go build and go vet clean"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n  \u001b[33mUpdate available: 0.8.1 \u2192 0.12.0 \u2014 https://pypi.org/project/gitreins/\u001b[0m\n",
+          "error": ""
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 computeProjectFailureRates issues at most 2 queries total (no per-project loop); all existing internal/api tests pass; window truncation semantics preserved; DOGFOOD-009 ghost filtering preserved; go build and go vet clean: internal/api/server_helpers.go (HEAD commit 5c40117): computeProjectFailureRates now issues exactly ONE query \u2014 a single CTE (`WITH ranked AS (SELECT ... ROW_NUMBER() OVER (PARTITION BY t.project_name ORDER BY t.spawned_at DESC, t.id DESC) ... JOIN projects p ON p.name = t.project_name WHERE t.completed_at IS NOT NULL) ... WHERE rn <= ? GROUP BY project_name`) replacing the per-project N+1 loop; no per-project query loop remains. go test ./internal/api/ -count=1 \u2192 ok (0.469s), including TestComputeProjectFailureRates_WindowTruncation (PASS: window=5 \u2192 total=5 failed=1; window=100 \u2192 total=10 failed=6, verifying truncation) and TestComputeProjectFailureRates_ExcludesHardDeletedProjects (PASS, DOGFOOD-009 ghost filtering preserved via the JOIN inside the CTE). go build ./... exit 0; go vet ./... exit 0.\nPERF-001 single-pass failure-rate aggregation is correctly implemented: one CTE query (\u22642 bound), all internal/api tests pass, window truncation and DOGFOOD-009 ghost filtering preserved, and go build/go vet are clean.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 computeProjectFailureRates issues at most 2 queries total (no per-project loop); all existing internal/api tests pass; window truncation semantics preserved; DOGFOOD-009 ghost filtering preserved; go build and go vet clean: internal/api/server_helpers.go (HEAD commit 5c40117): computeProjectFailureRates now issues exactly ONE query \u2014 a single CTE (`WITH ranked AS (SELECT ... ROW_NUMBER() OVER (PARTITION BY t.project_name ORDER BY t.spawned_at DESC, t.id DESC) ... JOIN projects p ON ",
+          "error": ""
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: PERF-001\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 computeProjectFailureRates issues at most 2 queries total (no per-project loop); all existing internal/api tests pass; window truncation semantics preserved; DOGFOOD-009 ghost filtering preserved; go build and go vet clean: internal/api/server_helpers.go (HEAD commit 5c40117): computeProjectFailureRates now issues exactly ONE query \u2014 a single CTE (`WITH ranked AS (SELECT ... ROW_NUMBER() OVER (PARTITION BY t.project_name ORDER BY t.spawned_at DESC, t.id DESC) ... JOIN projects p ON p.name = t.project_name WHERE t.completed_at IS NOT NULL) ... WHERE rn <= ? GROUP BY project_name`) replacing the per-project N+1 loop; no per-project query loop remains. go test ./internal/api/ -count=1 \u2192 ok (0.469s), including TestComputeProjectFailureRates_WindowTruncation (PASS: window=5 \u2192 total=5 failed=1; window=100 \u2192 total=10 failed=6, verifying truncation) and TestComputeProjectFailureRates_ExcludesHardDeletedProjects (PASS, DOGFOOD-009 ghost filtering preserved via the JOIN inside the CTE). go build ./... exit 0; go vet ./... exit 0.\nPERF-001 single-pass failure-rate aggregation is correctly implemented: one CTE query (\u22642 bound), all internal/api tests pass, window truncation and DOGFOOD-009 ghost filtering preserved, and go build/go vet are clean.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-08-17T15:16:49.390739"
+}
