@@ -1293,3 +1293,15 @@ tasks:
   status: complete
   created_at: '2026-08-17T11:13:38.665052+00:00'
   completed_at: '2026-08-17T11:14:24.981535+00:00'
+- id: NEVER-DONE-408
+  title: 'NEVER-DONE full 14-point audit tick #408'
+  criteria:
+  - 'Run the full 14-point NEVER-DONE audit (spec alignment, doc coverage, test gaps,
+    package upgrades, pitfall hunt, performance, endpoints, CI/CD, DuckBrain sync,
+    code quality, middle-out wiring, usability, E2E, gitreins judge). All gates pass:
+    go build/vet/gofmt clean, go test -short -p 1 ./... 9/9 pkgs PASS, golangci-lint
+    0 issues, gitreins guard PASS. File board tasks for every verified gap found.
+    Update board with audit record.'
+  status: complete
+  created_at: '2026-08-17T14:02:03.348794+00:00'
+  completed_at: '2026-08-17T14:05:59.820349+00:00'
