@@ -37,7 +37,7 @@ golangci-lint run
   --gateway-url <YOUR_GATEWAY_URL> \
   --gateway-key <YOUR_GATEWAY_KEY> \
   --foreman-home ~/.hermes/foreman \
-  --config fleet.toml \
+  --config ~/.hermes/fleet.toml \
   --no-exec-fallback
 ```
 
