@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -147,26 +148,51 @@ func (g *Generator) fleetLearned(ctx context.Context) *fleetModel {
 	if err != nil {
 		return m
 	}
-	defer rows.Close()
+	// Collect all rows first (closing the cursor releases the single shared
+	// connection) so the per-sample git log subprocesses below never hold it.
+	type rawSample struct {
+		proj, sp, co string
+		cost         float64
+	}
+	var raws []rawSample
 	for rows.Next() {
 		var proj, sp, co string
 		var cost float64
-		if rows.Scan(&proj, &sp, &co, &cost) != nil {
-			continue
+		if rows.Scan(&proj, &sp, &co, &cost) == nil {
+			raws = append(raws, rawSample{proj: proj, sp: sp, co: co, cost: cost})
 		}
-		d := parseDuration(sp, co)
-		if d <= 0 {
-			continue
-		}
-		typ := classifyTaskType(tickWork(wd[proj], sp, co, 4))
-		ds := m.byType[typ]
-		if ds == nil {
-			ds = &typeSamples{}
-			m.byType[typ] = ds
-		}
-		ds.add(d, cost)
-		m.overall.add(d, cost)
 	}
+	_ = rows.Close()
+	// Classify each sample's work via git log (a subprocess) with bounded
+	// concurrency (DASH-PERF-003) — serializing up to 200 git spawns cost
+	// ~0.5s of every render. Bucket accumulation is mutex-guarded and
+	// order-independent, so the learned model is deterministic.
+	var mu sync.Mutex
+	sem := make(chan struct{}, projMaxConcurrent)
+	var wg sync.WaitGroup
+	for _, raw := range raws {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(raw rawSample) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			d := parseDuration(raw.sp, raw.co)
+			if d <= 0 {
+				return
+			}
+			typ := classifyTaskType(tickWork(wd[raw.proj], raw.sp, raw.co, 4))
+			mu.Lock()
+			ds := m.byType[typ]
+			if ds == nil {
+				ds = &typeSamples{}
+				m.byType[typ] = ds
+			}
+			ds.add(d, raw.cost)
+			m.overall.add(d, raw.cost)
+			mu.Unlock()
+		}(raw)
+	}
+	wg.Wait()
 	for _, ds := range m.byType {
 		ds.finalize()
 	}
@@ -329,7 +355,9 @@ func shortDur(d time.Duration) string {
 // learnedETA computes the remaining-time AND remaining-cost estimate for a
 // project from its board and tick history, blending per-task-type estimates
 // with the fleet-wide prior (project-slightly-biased weighted blend) for both
-// duration and cost.
+// duration and cost. It fetches the project's own history and delegates the
+// estimation to learnedETAFromSamples (shared with the fleet overview, which
+// batches every project's history into one query).
 //
 // Returns (eta, completionAtRFC3339, breakdown, projectedCost). eta is 0 when
 // there is no signal (no board or no history) so callers fall back to the old
@@ -346,9 +374,6 @@ func (g *Generator) learnedETA(ctx context.Context, project, workdir string, ste
 		ORDER BY spawned_at DESC LIMIT 20
 	`, project)
 	var samples []tickSample
-	var projTotal time.Duration
-	var projTotalCost float64
-	var projCount int
 	if err == nil {
 		for rows.Next() {
 			var sp, co string
@@ -356,21 +381,34 @@ func (g *Generator) learnedETA(ctx context.Context, project, workdir string, ste
 			if rows.Scan(&sp, &co, &cost) == nil {
 				if d := parseDuration(sp, co); d > 0 {
 					samples = append(samples, tickSample{dur: d, cost: cost, work: tickWork(workdir, sp, co, 4)})
-					projTotal += d
-					projTotalCost += cost
-					projCount++
 				}
 			}
 		}
 		_ = rows.Close()
 	}
+	return learnedETAFromSamples(steps, samples, fleet)
+}
+
+// learnedETAFromSamples is the estimation core shared by the per-project page
+// (learnedETA) and the fleet overview (which passes pre-fetched batched
+// samples). Pure computation + git work classification; no DB access.
+func learnedETAFromSamples(steps []BoardStep, samples []tickSample, fleet *fleetModel) (time.Duration, string, string, float64) {
+	if len(steps) == 0 {
+		return 0, "", "", 0
+	}
 
 	learned := learnTypeSamples(samples)
 	var projectAvg time.Duration
 	var projectAvgCost float64
+	var projCount int
+	for _, s := range samples {
+		projectAvg += s.dur
+		projectAvgCost += s.cost
+		projCount++
+	}
 	if projCount > 0 {
-		projectAvg = projTotal / time.Duration(projCount)
-		projectAvgCost = projTotalCost / float64(projCount)
+		projectAvg /= time.Duration(projCount)
+		projectAvgCost /= float64(projCount)
 	}
 
 	// Pending steps are anything not done (active + pending).

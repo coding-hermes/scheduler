@@ -1,14 +1,19 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/database"
 )
 
 // nowRFC3339Offset returns time.Now() shifted by the given nanosecond offset,
@@ -470,5 +475,224 @@ func TestNewGeneratorInitializesCICache(t *testing.T) {
 	}
 	if got := g.ciTTLValue(); got != ciCacheDefaultTTL {
 		t.Errorf("default TTL = %v, want %v", got, ciCacheDefaultTTL)
+	}
+}
+
+// TestBatchStatsParityWithPerProjectQueries is the DASH-PERF-003 correctness
+// contract: the batched window-query path (batchCompletedSamples /
+// batchTickHealth + costSeriesFromSamples / observabilityFromSamples /
+// tickSamplesFromCompleted + learnedETAFromSamples) must produce IDENTICAL
+// results to the per-project queries it replaced (recentCostSeries,
+// recentTickHealth, observabilityStats, learnedETA) across cap boundaries
+// (>20 ticks), status mixes, and edge-case timestamps.
+func TestBatchStatsParityWithPerProjectQueries(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	workdirs := map[string]string{}
+	mustProject := func(name string) {
+		t.Helper()
+		wd := t.TempDir()
+		workdirs[name] = wd
+		if err := database.CreateProject(ctx, db, &database.Project{
+			Name: name, RepoURL: "https://example.com/" + name,
+			Workdir: wd, Weight: 10, Priority: 3, CooldownS: 900,
+			DecayRate: 1.0, Model: "test", Provider: "test", Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateProject %s: %v", name, err)
+		}
+	}
+	base := time.Now().UTC().Add(-48 * time.Hour)
+	comp := func(i int) string {
+		return base.Add(time.Duration(i)*time.Hour + 30*time.Minute).Format(time.RFC3339)
+	}
+	mustTick := func(id, proj string, status database.TickStatus, spawned time.Time, completed string, cost float64) {
+		t.Helper()
+		if err := database.CreateTick(ctx, db, &database.Tick{
+			ID: id, ProjectName: proj, Status: status,
+			SpawnedAt:   spawned.Format(time.RFC3339),
+			CompletedAt: completed,
+			CostUSD:     cost,
+		}); err != nil {
+			t.Fatalf("CreateTick %s: %v", id, err)
+		}
+	}
+
+	mustProject("alpha")
+	// 25 completed (exceeds every cap), 3 failed, 2 timeout, 1 running.
+	for i := range 25 {
+		c := comp(i)
+		if i == 21 {
+			c = "not-a-timestamp" // unparseable window: consumed by LIMIT, skipped by math
+		}
+		mustTick(fmt.Sprintf("a-c%02d", i), "alpha", database.StatusCompleted, base.Add(time.Duration(i)*time.Hour), c, float64(i)/10)
+	}
+	for i := range 3 {
+		mustTick(fmt.Sprintf("a-f%d", i), "alpha", database.StatusFailed, base.Add(time.Duration(30+i)*time.Hour), "", 0)
+	}
+	for i := range 2 {
+		mustTick(fmt.Sprintf("a-t%d", i), "alpha", database.StatusTimeout, base.Add(time.Duration(35+i)*time.Hour), "", 0)
+	}
+	mustTick("a-run", "alpha", database.StatusRunning, base.Add(40*time.Hour), "", 0)
+
+	mustProject("beta")
+	for i := range 5 {
+		mustTick(fmt.Sprintf("b-c%02d", i), "beta", database.StatusCompleted, base.Add(time.Duration(i)*time.Hour), comp(i), float64(i+1))
+	}
+
+	mustProject("gamma") // no ticks at all
+
+	g := &Generator{db: db}
+	samples := g.batchCompletedSamples(ctx)
+	health := g.batchTickHealth(ctx)
+
+	// Batch shape: capped at 20, newest-first.
+	if got := len(samples["alpha"]); got != 20 {
+		t.Errorf("batchCompletedSamples(alpha) = %d samples, want 20 (capped)", got)
+	}
+	if got := len(samples["beta"]); got != 5 {
+		t.Errorf("batchCompletedSamples(beta) = %d samples, want 5", got)
+	}
+	if got := len(samples["gamma"]); got != 0 {
+		t.Errorf("batchCompletedSamples(gamma) = %d samples, want 0", got)
+	}
+	if got := samples["alpha"][0].spawnedAt; got != base.Add(24*time.Hour).Format(time.RFC3339) {
+		t.Errorf("newest alpha sample = %q, want a-c24", got)
+	}
+	// alpha's last-10 by spawned_at: a-run(40h) + 2 timeout + 3 failed + 4 completed.
+	if got := health["alpha"]; got != (tickHealth{total: 10, failed: 5}) {
+		t.Errorf("batchTickHealth(alpha) = %+v, want total=10 failed=5", got)
+	}
+
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		// Cost sparkline parity.
+		wantCost := g.recentCostSeries(ctx, name, 12)
+		gotCost := costSeriesFromSamples(samples[name], 12)
+		if !reflect.DeepEqual(gotCost, wantCost) {
+			t.Errorf("%s: costSeriesFromSamples = %v, recentCostSeries = %v", name, gotCost, wantCost)
+		}
+		// Recent tick health parity.
+		wantTotal, wantFailed := g.recentTickHealth(ctx, name, 10)
+		got := health[name]
+		if got.total != wantTotal || got.failed != wantFailed {
+			t.Errorf("%s: batchTickHealth = %+v, recentTickHealth = (%d,%d)", name, got, wantTotal, wantFailed)
+		}
+		// Observability parity (board 3 done / 7 total → non-trivial ETA).
+		wantAvg, wantAvgCost, wantPct, wantEta, wantAt, wantProj := g.observabilityStats(ctx, name, 3, 7, wantTotal, wantFailed)
+		gotAvg, gotAvgCost, gotPct, gotEta, gotAt, gotProj := observabilityFromSamples(samples[name], 3, 7, got.total, got.failed)
+		if gotAvg != wantAvg || gotAvgCost != wantAvgCost || gotPct != wantPct || gotEta != wantEta || gotProj != wantProj {
+			t.Errorf("%s: observability mismatch: batched=(%d,%v,%d,%q,%v) per-query=(%d,%v,%d,%q,%v)",
+				name, gotAvg, gotAvgCost, gotPct, gotEta, gotProj, wantAvg, wantAvgCost, wantPct, wantEta, wantProj)
+		}
+		if gotAt != wantAt {
+			wt, err1 := time.Parse(time.RFC3339, wantAt)
+			gt, err2 := time.Parse(time.RFC3339, gotAt)
+			if err1 != nil || err2 != nil || wt.Sub(gt) > 2*time.Second || wt.Sub(gt) < -2*time.Second {
+				t.Errorf("%s: completionAt mismatch: batched=%q per-query=%q", name, gotAt, wantAt)
+			}
+		}
+		// Learned-ETA parity (fleet prior built once, shared by both paths).
+		steps := []BoardStep{
+			{ID: "T01", Title: "bootstrap", Status: "done", Commit: "abc123"},
+			{ID: "T02", Title: "implement daemon core", Status: "active"},
+			{ID: "T03", Title: "test the kill-shot", Status: "pending"},
+			{ID: "T04", Title: "docs readme", Status: "pending"},
+		}
+		fleet := g.fleetLearned(ctx)
+		wantLEta, wantLAt, wantLBreak, wantLProj := g.learnedETA(ctx, name, workdirs[name], steps, fleet)
+		gotLEta, gotLAt, gotLBreak, gotLProj := learnedETAFromSamples(steps, tickSamplesFromCompleted(workdirs[name], samples[name]), fleet)
+		if wantLEta != gotLEta || wantLProj != gotLProj {
+			t.Errorf("%s: learnedETA mismatch: batched=(%v,%v) per-query=(%v,%v)",
+				name, gotLEta, gotLProj, wantLEta, wantLProj)
+		}
+		// Breakdown parts tie on equal durations, and equal-duration parts
+		// order by map iteration (cosmetic) — compare as a multiset.
+		if !sameBreakdownParts(wantLBreak, gotLBreak) {
+			t.Errorf("%s: learnedETA breakdown mismatch: batched=%q per-query=%q", name, gotLBreak, wantLBreak)
+		}
+		if gotLAt != wantLAt {
+			wt, err1 := time.Parse(time.RFC3339, wantLAt)
+			gt, err2 := time.Parse(time.RFC3339, gotLAt)
+			if err1 != nil || err2 != nil || wt.Sub(gt) > 2*time.Second || wt.Sub(gt) < -2*time.Second {
+				t.Errorf("%s: learnedETA completionAt mismatch: batched=%q per-query=%q", name, gotLAt, wantLAt)
+			}
+		}
+	}
+}
+
+// sameBreakdownParts compares two etaBreakdown strings as multisets of
+// "type dur" parts. Equal-duration parts tie-break by map iteration order in
+// etaBreakdown (cosmetic), so the string itself may differ while the parts
+// are identical.
+func sameBreakdownParts(a, b string) bool {
+	if a == b {
+		return true
+	}
+	parts := func(s string) []string {
+		if s == "" {
+			return nil
+		}
+		return strings.Split(s, " + ")
+	}
+	pa, pb := parts(a), parts(b)
+	sort.Strings(pa)
+	sort.Strings(pb)
+	return reflect.DeepEqual(pa, pb)
+}
+
+// TestFleetLearnedDeterministic verifies the concurrently-accumulated fleet
+// prior (DASH-PERF-003) is reproducible across runs: bucket totals and the
+// overall aggregate must not depend on goroutine interleaving.
+func TestFleetLearnedDeterministic(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	base := time.Now().UTC().Add(-72 * time.Hour)
+	for p := 0; p < 3; p++ {
+		name := fmt.Sprintf("proj-%d", p)
+		if err := database.CreateProject(ctx, db, &database.Project{
+			Name: name, RepoURL: "https://example.com/" + name,
+			Workdir: t.TempDir(), Weight: 10, Priority: 3, CooldownS: 900,
+			DecayRate: 1.0, Model: "test", Provider: "test", Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateProject %s: %v", name, err)
+		}
+		for i := 0; i < 30; i++ {
+			sp := base.Add(time.Duration(p*40+i) * time.Hour)
+			if err := database.CreateTick(ctx, db, &database.Tick{
+				ID:          fmt.Sprintf("%s-c%02d", name, i),
+				ProjectName: name,
+				Status:      database.StatusCompleted,
+				SpawnedAt:   sp.Format(time.RFC3339),
+				CompletedAt: sp.Add(45 * time.Minute).Format(time.RFC3339),
+				CostUSD:     float64(i) / 7,
+			}); err != nil {
+				t.Fatalf("CreateTick: %v", err)
+			}
+		}
+	}
+
+	g := &Generator{db: db}
+	m1 := g.fleetLearned(ctx)
+	m2 := g.fleetLearned(ctx)
+	if m1.overall.count != m2.overall.count || m1.overall.total != m2.overall.total {
+		t.Errorf("fleetLearned overall nondeterministic: %+v vs %+v", m1.overall, m2.overall)
+	}
+	if len(m1.byType) != len(m2.byType) {
+		t.Errorf("fleetLearned byType count nondeterministic: %d vs %d", len(m1.byType), len(m2.byType))
+	}
+	for typ, ds := range m1.byType {
+		ds2, ok := m2.byType[typ]
+		if !ok || ds.count != ds2.count || ds.total != ds2.total {
+			t.Errorf("fleetLearned byType[%s] nondeterministic: %+v vs %+v", typ, ds, ds2)
+		}
 	}
 }

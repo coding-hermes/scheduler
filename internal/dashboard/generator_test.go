@@ -472,6 +472,36 @@ func TestGenerateQueue_QueryCountIsConstant(t *testing.T) {
 	}
 }
 
+// TestGenerateFleetTable_QueryCountIsConstant is the DASH-PERF-003 regression:
+// the fleet table must run a constant number of queries regardless of how
+// many projects exist. Before the fix every project cost ~4-5 serial queries
+// (recentCostSeries, recentTickHealth, observabilityStats, learnedETA) — 39
+// projects × ~4 = ~156 round-trips on the single sqlite connection, the
+// warm-render bottleneck. Two batched window queries now replace them all.
+func TestGenerateFleetTable_QueryCountIsConstant(t *testing.T) {
+	countFor := func(n int) int64 {
+		db, queryCount := newQueryCountingTestDB(t)
+		for i := range n {
+			mustCreateProject(t, db, fmt.Sprintf("project-%02d", i), 1, 1)
+		}
+		queryCount.Store(0)
+		g := dashboard.NewGenerator(db)
+		var buf strings.Builder
+		if err := g.GenerateFleetTable(&buf); err != nil {
+			t.Fatalf("GenerateFleetTable (%d projects): %v", n, err)
+		}
+		return queryCount.Load()
+	}
+	small := countFor(3)
+	large := countFor(39)
+	if large > 12 {
+		t.Errorf("GenerateFleetTable executed %d queries for 39 projects — per-project queries regressed (DASH-PERF-003, want <= 12)", large)
+	}
+	if large != small {
+		t.Errorf("fleet table query count depends on project count: %d queries with 3 projects vs %d with 39", small, large)
+	}
+}
+
 // TestGenerateQueue_NavLinks verifies the queue page has functional navigation.
 func TestGenerateQueue_NavLinks(t *testing.T) {
 	db := newTestDB(t)

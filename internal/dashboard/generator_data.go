@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -337,32 +338,17 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		}
 	}
 	g.warmCIConclusions(workdirs)
-	for i := range data.Projects {
-		r := &data.Projects[i]
-		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
-		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
-		r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
-		// Learning ETA: predict remaining time + cost from per-task-type
-		// estimates learned from tick history + the fleet-wide prior.
-		if r.Workdir != "" {
-			steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
-			if learned, learnedAt, breakdown, projCost := g.learnedETA(ctx, r.Name, r.Workdir, steps, fleet); learned > 0 {
-				r.ETA = formatETA(learned)
-				r.CompletionAt = learnedAt
-				r.EtaBreakdown = breakdown
-				if projCost > 0 {
-					r.ProjectedCost = projCost
-				}
-			}
-		}
-		r.GitReinsPass = -1
-		if r.Workdir != "" {
-			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
-				r.GitReinsPass = gr.RatePct
-			}
-			r.CIConclusion = g.ciConclusion(r.Workdir)
-		}
-	}
+	// DASH-PERF-003: the per-project stats below previously cost ~4-5 serial
+	// DB round-trips per project (~176 total on the single shared connection —
+	// the warm-render bottleneck). Two window-function queries now fetch every
+	// project's recent ticks in one pass each, and the enrichment loop is pure
+	// computation + file/subprocess work running with bounded concurrency
+	// (projMaxConcurrent). Parallel DB queries would serialize on the
+	// SetMaxOpenConns(1) pool anyway; batching is the only lever that cuts
+	// serial DB time.
+	samplesByProject := g.batchCompletedSamples(ctx)
+	healthByProject := g.batchTickHealth(ctx)
+	g.enrichProjects(data.Projects, samplesByProject, healthByProject, fleet)
 
 	// Active ticks count.
 	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
@@ -456,6 +442,243 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	}
 
 	return data
+}
+
+// ── Batched per-project stats (DASH-PERF-003) ──────────────────────────────
+//
+// The fleet overview previously ran ~4-5 serial DB queries per project
+// (recentCostSeries, recentTickHealth, observabilityStats, learnedETA) —
+// ~176 round-trips on the single shared connection (SetMaxOpenConns(1)), the
+// warm-render bottleneck. Two window-function queries now fetch every
+// project's recent ticks in one pass each, and the per-project enrichment
+// below is pure computation + file/subprocess work.
+
+// completedSample is one completed tick's timing/cost in the batched stats
+// path.
+type completedSample struct {
+	spawnedAt   string
+	completedAt string
+	costUSD     float64
+}
+
+// tickHealth is the (total, failed) recent-tick summary for one project.
+type tickHealth struct {
+	total  int
+	failed int
+}
+
+// batchCompletedSamples returns, per project, the last up-to-20 completed
+// ticks (newest first) in ONE query — previously three serial queries per
+// project (recentCostSeries ×12, observabilityStats ×10, learnedETA ×20).
+// One window covers all three consumers: the cost sparkline takes the first
+// 12, observability the first 10 with a non-empty completed_at, and the
+// learning predictor the first 20 with a parseable duration. Completed ticks
+// with an empty completed_at are vanishingly rare (none exist in the fleet
+// DB); they land in the cost series and are skipped by the duration-filtered
+// consumers, which matches the old per-query behavior within the top-20
+// window.
+func (g *Generator) batchCompletedSamples(ctx context.Context) map[string][]completedSample {
+	out := map[string][]completedSample{}
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT project_name, spawned_at, completed_at, cost_usd
+		FROM (
+			SELECT project_name, spawned_at, completed_at, cost_usd,
+			       ROW_NUMBER() OVER (PARTITION BY project_name ORDER BY spawned_at DESC) AS rn
+			FROM ticks
+			WHERE status = 'completed'
+		) WHERE rn <= 20
+	`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, sp, co string
+		var cost float64
+		if rows.Scan(&name, &sp, &co, &cost) == nil {
+			out[name] = append(out[name], completedSample{spawnedAt: sp, completedAt: co, costUSD: cost})
+		}
+	}
+	// ROW_NUMBER guarantees the rank within each partition, but the emitted
+	// row order is planner-dependent — sort each project's slice by
+	// spawned_at desc (RFC3339 UTC strings sort lexicographically) so the
+	// caps below are deterministic.
+	for name := range out {
+		sort.Slice(out[name], func(i, j int) bool {
+			return out[name][i].spawnedAt > out[name][j].spawnedAt
+		})
+	}
+	return out
+}
+
+// batchTickHealth returns, per project, (total, failed) over the last
+// up-to-10 ticks (any status) in ONE query — previously one query per project
+// (recentTickHealth).
+func (g *Generator) batchTickHealth(ctx context.Context) map[string]tickHealth {
+	out := map[string]tickHealth{}
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT project_name, status
+		FROM (
+			SELECT project_name, status,
+			       ROW_NUMBER() OVER (PARTITION BY project_name ORDER BY spawned_at DESC) AS rn
+			FROM ticks
+		) WHERE rn <= 10
+	`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, status string
+		if rows.Scan(&name, &status) == nil {
+			h := out[name]
+			h.total++
+			if status == "failed" || status == "timeout" {
+				h.failed++
+			}
+			out[name] = h
+		}
+	}
+	return out
+}
+
+// costSeriesFromSamples extracts the last up-to-n completed-tick costs,
+// oldest→newest, from a newest-first sample slice — the batched equivalent of
+// recentCostSeries. Returns an empty (non-nil) slice on empty, matching
+// recentCostSeries' empty result (renders as the em-dash sparkline).
+func costSeriesFromSamples(samples []completedSample, n int) []float64 {
+	if len(samples) == 0 {
+		return []float64{} // non-nil empty, matching recentCostSeries' empty result
+	}
+	if n > len(samples) {
+		n = len(samples)
+	}
+	out := make([]float64, 0, n)
+	for i := n - 1; i >= 0; i-- {
+		out = append(out, samples[i].costUSD)
+	}
+	return out
+}
+
+// observabilityFromSamples computes the observabilityStats tuple from a
+// newest-first completed-sample slice — the batched equivalent of
+// observabilityStats. The duration/cost averages count only the first 10
+// samples with a non-empty completed_at (matching the old per-project SQL
+// LIMIT 10 filter); samples with unparseable windows are skipped.
+func observabilityFromSamples(samples []completedSample, boardDone, boardTotal, recentTicks, recentFailures int) (avgSecs int, avgCost float64, successPct int, eta, completionAt string, projectedCost float64) {
+	// Average duration + cost over up-to-10 completed ticks.
+	var total time.Duration
+	var totalCost float64
+	var count int
+	seen := 0 // samples with non-empty completed_at, mirroring the old LIMIT 10
+	for _, s := range samples {
+		if seen >= 10 {
+			break
+		}
+		if s.completedAt == "" {
+			continue
+		}
+		seen++
+		if d := parseDuration(s.spawnedAt, s.completedAt); d > 0 {
+			total += d
+			totalCost += s.costUSD
+			count++
+		}
+	}
+	if count > 0 {
+		avgSecs = int(total.Seconds() / float64(count))
+		if avgSecs < 60 {
+			avgSecs = 60 // floor so ETA isn't absurdly short
+		}
+		avgCost = totalCost / float64(count)
+	}
+
+	// Success rate over the last N ticks (recentTicks = total, recentFailures = bad).
+	if recentTicks > 0 {
+		successPct = (recentTicks - recentFailures) * 100 / recentTicks
+	}
+
+	// ETA + completion timestamp + projected cost from steps remaining.
+	remaining := 0
+	if boardTotal > 0 {
+		remaining = boardTotal - boardDone
+	}
+	if remaining > 0 {
+		if avgSecs > 0 {
+			// avgSecs is in seconds; convert to a Duration properly.
+			d := time.Duration(avgSecs) * time.Second * time.Duration(remaining)
+			eta = formatETA(d)
+			completionAt = time.Now().UTC().Add(d).Format(time.RFC3339)
+		}
+		if avgCost > 0 {
+			projectedCost = avgCost * float64(remaining)
+		}
+	}
+	return avgSecs, avgCost, successPct, eta, completionAt, projectedCost
+}
+
+// tickSamplesFromCompleted converts batched completed samples into the
+// tickSample form the learning predictor consumes, classifying each tick's
+// work via git log. Only samples with a parseable duration are kept —
+// matching learnedETA's own history query semantics (completed_at != ”,
+// then duration-filtered).
+func tickSamplesFromCompleted(workdir string, samples []completedSample) []tickSample {
+	var out []tickSample
+	for _, s := range samples {
+		d := parseDuration(s.spawnedAt, s.completedAt)
+		if d <= 0 {
+			continue
+		}
+		out = append(out, tickSample{dur: d, cost: s.costUSD, work: tickWork(workdir, s.spawnedAt, s.completedAt, 4)})
+	}
+	return out
+}
+
+// enrichProjects fills the per-project dashboard fields (cost sparkline,
+// recent health, observability, learned ETA, GitReins pass rate, CI
+// conclusion) from the batched stats maps. All DB reads happened up front;
+// the rest is file reads + git log subprocesses + cache lookups, so projects
+// run with bounded concurrency (projMaxConcurrent). The fleet prior is
+// read-only here, and each project row is touched by exactly one goroutine.
+func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[string][]completedSample, healthByProject map[string]tickHealth, fleet *fleetModel) {
+	sem := make(chan struct{}, projMaxConcurrent)
+	var wg sync.WaitGroup
+	for i := range projects {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r := &projects[i]
+			samples := samplesByProject[r.Name]
+			r.CostSeries = costSeriesFromSamples(samples, 12)
+			if h, ok := healthByProject[r.Name]; ok {
+				r.RecentTicks, r.RecentFailures = h.total, h.failed
+			}
+			r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = observabilityFromSamples(samples, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+			// Learning ETA: predict remaining time + cost from per-task-type
+			// estimates learned from tick history + the fleet-wide prior.
+			if r.Workdir != "" {
+				steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
+				if learned, learnedAt, breakdown, projCost := learnedETAFromSamples(steps, tickSamplesFromCompleted(r.Workdir, samples), fleet); learned > 0 {
+					r.ETA = formatETA(learned)
+					r.CompletionAt = learnedAt
+					r.EtaBreakdown = breakdown
+					if projCost > 0 {
+						r.ProjectedCost = projCost
+					}
+				}
+			}
+			r.GitReinsPass = -1
+			if r.Workdir != "" {
+				if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
+					r.GitReinsPass = gr.RatePct
+				}
+				r.CIConclusion = g.ciConclusion(r.Workdir)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 // latestTickForProject returns the most recently spawned tick for the project,
@@ -863,10 +1086,12 @@ func formatETA(d time.Duration) string {
 // fetch so a wedged gh can never block a render.
 const (
 	// ciCacheDefaultTTL is how long a fetched CI conclusion is reused before
-	// the dashboard refetches it. 60s matches the fleet overview refresh
-	// cadence, so gh runs at most ~once per minute per project instead of
-	// once per render.
-	ciCacheDefaultTTL = 60 * time.Second
+	// the dashboard refetches it. 300s (DASH-PERF-003) cuts the cold-cache gh
+	// warm pass (~4-8s with 44 projects at ciMaxConcurrent) from once per
+	// minute to once per 5 minutes — CI conclusions are stable over minutes,
+	// and the fleet overview polls every 10s, so a 5-minute staleness window
+	// is invisible while removing a regular render spike.
+	ciCacheDefaultTTL = 300 * time.Second
 	// ciMaxConcurrent bounds in-flight gh subprocesses during the cache
 	// warm pass: 44 projects × ~0.7s serialized was the ~30s stall; at
 	// 8-wide a cold-cache render completes in ~4s.
@@ -874,6 +1099,11 @@ const (
 	// ciFetchTimeout is the hard per-fetch deadline. A hung gh (no network,
 	// auth prompt, wedged pager) can never hold up a render longer than this.
 	ciFetchTimeout = 2 * time.Second
+	// projMaxConcurrent bounds the per-project enrichment pool in collect().
+	// Enrichment does file reads, git log subprocesses, and cache lookups —
+	// no DB access (all DB reads are batched up front) — so parallel projects
+	// cannot deadlock the single sqlite connection (SetMaxOpenConns(1)).
+	projMaxConcurrent = 8
 )
 
 // ciCacheEntry is one cached CI conclusion and when it was fetched.
