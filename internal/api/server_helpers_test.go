@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -173,5 +174,58 @@ func TestComputeProjectFailureRates_ExcludesHardDeletedProjects(t *testing.T) {
 	}
 	if _, ok := rates["live"]; !ok {
 		t.Errorf("live project missing from failure rates: %+v", rates)
+	}
+}
+
+// TestComputeProjectFailureRates_WindowTruncation (PERF-001) verifies the
+// single-pass aggregation preserves per-project window semantics: a project
+// with more than `window` completed ticks only counts its most recent
+// `window` ticks by spawned_at DESC — older ticks (even failed ones) must
+// not leak into the totals.
+func TestComputeProjectFailureRates_WindowTruncation(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	mustCreateHelperTestProject(t, db, "trunc")
+
+	// 10 completed ticks, oldest first: 6 failed then 4 completed.
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		status := "completed"
+		if i < 6 {
+			status = "failed"
+		}
+		insertHelperTestTick(t, db, fmt.Sprintf("trunc-%02d", i), "trunc", status,
+			now.Add(-time.Duration(30-i)*time.Minute))
+	}
+
+	// Window 5 → only the 5 most recent ticks count (4 completed + 1 failed).
+	rates := computeProjectFailureRates(ctx, db, 5, 0, 0)
+	r, ok := rates["trunc"]
+	if !ok {
+		t.Fatalf("trunc missing from failure rates: %+v", rates)
+	}
+	if r.Total != 5 || r.Failed != 1 {
+		t.Errorf("window=5: trunc = %+v, want total=5 failed=1 (most recent 5: 4 completed + 1 failed)", r)
+	}
+	if r.FailureRate != 0.2 {
+		t.Errorf("window=5: trunc failure_rate = %v, want 0.2", r.FailureRate)
+	}
+
+	// Window 100 → no truncation: all 10 count (6 failed + 4 completed).
+	rates = computeProjectFailureRates(ctx, db, 100, 0, 0)
+	r, ok = rates["trunc"]
+	if !ok {
+		t.Fatalf("trunc missing from failure rates: %+v", rates)
+	}
+	if r.Total != 10 || r.Failed != 6 {
+		t.Errorf("window=100: trunc = %+v, want total=10 failed=6", r)
+	}
+	if r.FailureRate != 0.6 {
+		t.Errorf("window=100: trunc failure_rate = %v, want 0.6", r.FailureRate)
 	}
 }
