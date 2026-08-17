@@ -1,0 +1,47 @@
+{
+  "task_id": "PERF-001",
+  "task_title": "S10 violation: /api/v1/status p99 < 100ms (N+1 misattribution corrected \u2014 real costs were events-table scan + windowed CTE)",
+  "task_criteria": [
+    "/api/v1/status p99 < 100ms over 10 live samples at production row count (57k+ ticks, 254k events)",
+    "computeProjectFailureRates has NO window-function CTE (indexed per-project loop, ~5ms total measured through modernc)",
+    "last_evaluation served from in-memory loop state when loop attached (no events-table scan in status handler)",
+    "all internal/api tests pass including WindowTruncation and ExcludesHardDeletedProjects (DOGFOOD-009)",
+    "go build and go vet clean"
+  ],
+  "passed": true,
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n  \u001b[33mUpdate available: 0.8.1 \u2192 0.12.0 \u2014 https://pypi.org/project/gitreins/\u001b[0m\n",
+          "error": ""
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 /api/v1/status p99 < 100ms over 10 live samples at production row count (57k+ ticks, 254k events): Measured p99 = 53,921us (54ms) over 10 live samples with a loop attached (production path) at 44 projects / 57,661 ticks / 254,000 events (temp perf test in internal/api, since removed); max sample 53.9ms, all samples < 100ms. internal/api/server.go status handler.\n  \u2713 computeProjectFailureRates has NO window-function CTE (indexed per-project loop, ~5ms total measured through modernc): internal/api/server_helpers.go computeProjectFailureRates uses DISTINCT join + per-project `SELECT status FROM ticks WHERE project_name=? AND completed_at IS NOT NULL ORDER BY spawned_at DESC LIMIT ?`; grep for ROW_NUMBER|OVER(|PARTITION BY = 0 matches repo-wide. EXPLAIN QUERY PLAN confirms SEARCH ticks USING INDEX idx_ticks_project_spawned; measured 44 per-project queries = 956us total.\n  \u2713 last_evaluation served from in-memory loop state when loop attached (no events-table scan in status handler): internal/api/server.go:147-152: `if s.loop != nil { if t := s.loop.LastEvalTime(); !t.IsZero() { lastEval = t.UTC().Format(time.RFC3339) } } else { lastEval = getLastEvalTime(ctx, s.db) }` \u2014 Loop.LastEvalTime (internal/scheduler/loop.go:360) reads in-memory l.lastEval (set in evaluate() at tick_process.go:22); events-table scan only in the no-loop fallback.\n  \u2713 all internal/api tests pass including WindowTruncation and ExcludesHardDeletedProjects (DOGFOOD-009): go test ./internal/api/ -count=1 -v \u2192 ok 0.327s; TestComputeProjectFailureRates_WindowTruncation PASS and TestComputeProjectFailureRates_ExcludesHardDeletedProjects PASS (DOGFOOD-009 ghost filtering preserved via projects JOIN).\n  \u2713 go build and go vet clean: go build ./... exit 0; go vet ./... exit 0 (both run against HEAD 28f745e).\nAll five PERF-001 criteria verified: status p99 measured 54ms at production row count (57,661 ticks / 254,000 events), failure-rate aggregation uses an indexed per-project loop with no window-function CTE, last_evaluation served from in-memory loop state, all internal/api tests (incl. WindowTruncation and ExcludesHardDeletedProjects) pass, and go build/go vet are clean.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 /api/v1/status p99 < 100ms over 10 live samples at production row count (57k+ ticks, 254k events): Measured p99 = 53,921us (54ms) over 10 live samples with a loop attached (production path) at 44 projects / 57,661 ticks / 254,000 events (temp perf test in internal/api, since removed); max sample 53.9ms, all samples < 100ms. internal/api/server.go status handler.\n  \u2713 computeProjectFailureRates has NO window-function CTE (indexed per-project loop, ~5ms total measured through modernc):",
+          "error": ""
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: PERF-001\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 /api/v1/status p99 < 100ms over 10 live samples at production row count (57k+ ticks, 254k events): Measured p99 = 53,921us (54ms) over 10 live samples with a loop attached (production path) at 44 projects / 57,661 ticks / 254,000 events (temp perf test in internal/api, since removed); max sample 53.9ms, all samples < 100ms. internal/api/server.go status handler.\n  \u2713 computeProjectFailureRates has NO window-function CTE (indexed per-project loop, ~5ms total measured through modernc): internal/api/server_helpers.go computeProjectFailureRates uses DISTINCT join + per-project `SELECT status FROM ticks WHERE project_name=? AND completed_at IS NOT NULL ORDER BY spawned_at DESC LIMIT ?`; grep for ROW_NUMBER|OVER(|PARTITION BY = 0 matches repo-wide. EXPLAIN QUERY PLAN confirms SEARCH ticks USING INDEX idx_ticks_project_spawned; measured 44 per-project queries = 956us total.\n  \u2713 last_evaluation served from in-memory loop state when loop attached (no events-table scan in status handler): internal/api/server.go:147-152: `if s.loop != nil { if t := s.loop.LastEvalTime(); !t.IsZero() { lastEval = t.UTC().Format(time.RFC3339) } } else { lastEval = getLastEvalTime(ctx, s.db) }` \u2014 Loop.LastEvalTime (internal/scheduler/loop.go:360) reads in-memory l.lastEval (set in evaluate() at tick_process.go:22); events-table scan only in the no-loop fallback.\n  \u2713 all internal/api tests pass including WindowTruncation and ExcludesHardDeletedProjects (DOGFOOD-009): go test ./internal/api/ -count=1 -v \u2192 ok 0.327s; TestComputeProjectFailureRates_WindowTruncation PASS and TestComputeProjectFailureRates_ExcludesHardDeletedProjects PASS (DOGFOOD-009 ghost filtering preserved via projects JOIN).\n  \u2713 go build and go vet clean: go build ./... exit 0; go vet ./... exit 0 (both run against HEAD 28f745e).\nAll five PERF-001 criteria verified: status p99 measured 54ms at production row count (57,661 ticks / 254,000 events), failure-rate aggregation uses an indexed per-project loop with no window-function CTE, last_evaluation served from in-memory loop state, all internal/api tests (incl. WindowTruncation and ExcludesHardDeletedProjects) pass, and go build/go vet are clean.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-08-17T15:28:12.305818"
+}
