@@ -1321,3 +1321,11 @@ tasks:
   status: complete
   created_at: '2026-08-17T15:15:41.627407+00:00'
   completed_at: '2026-08-17T15:24:42.880426+00:00'
+- id: DASH-PERF-003
+  title: Dashboard /dashboard/partial render regression fix
+  criteria:
+  - 3 consecutive warm /dashboard/partial renders < 3s; endpoint battery 16/16 with
+    10s timeout; go build/vet/gofmt clean; go test -short -p 1 ./... 9/9
+  status: complete
+  created_at: '2026-08-17T18:01:58.267097+00:00'
+  completed_at: '2026-08-17T18:14:58.287255+00:00'
