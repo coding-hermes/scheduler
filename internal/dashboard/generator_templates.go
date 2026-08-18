@@ -151,14 +151,18 @@ func loadTemplates() *template.Template {
 			}
 			return "util-yellow"
 		},
+		// utilColor returns a literal hex color: html/template's CSS sanitizer
+		// (cssValueFilter) replaces unparseable values like `var(--x)` inside
+		// inline style attributes with "ZgotmplZ" (GAP-055). Values match the
+		// layout.html palette: --err, --warn/--signal, --ok.
 		"utilColor": func(utilization float64) string {
 			if utilization > 80 {
-				return "var(--red)"
+				return "#ff6b6b"
 			}
 			if utilization >= 50 {
-				return "var(--yellow)"
+				return "#e8a33d"
 			}
-			return "var(--green)"
+			return "#37d399"
 		},
 		"add1": func(i int) int { return i + 1 },
 		"urgencyPct": func(u float64) float64 {
@@ -170,14 +174,17 @@ func loadTemplates() *template.Template {
 			}
 			return pct
 		},
+		// urgencyColor returns a literal hex color for the same sanitizer
+		// reason as utilColor (GAP-055). Values match the layout.html palette:
+		// --ok, --warn/--signal, --err.
 		"urgencyColor": func(u float64) string {
 			if u < 50 {
-				return "var(--green)"
+				return "#37d399"
 			}
 			if u < 200 {
-				return "var(--yellow)"
+				return "#e8a33d"
 			}
-			return "var(--red)"
+			return "#ff6b6b"
 		},
 	}
 	t := template.New("").Funcs(funcs)
