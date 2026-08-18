@@ -162,7 +162,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │              SCHEDULER (Go binary)            │
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
-│  /api/v1/  → REST API (16 routes)             │
+│  /api/v1/  → REST API (19 routes)             │
 │  /mcp      → MCP server (14 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
@@ -185,7 +185,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 | GET | `/ticks?page=N` | Paginated tick history |
 | GET | `/namespaces/{id}` | Namespace drill-down |
 | GET | `/health` | Dashboard health panel |
-| — | `/api/v1/*` | Full REST API — 18 routes (health/status/config, projects CRUD, namespaces, ticks, events, queue, pause/resume/evaluate): see [docs/api.md](docs/api.md) |
+| — | `/api/v1/*` | Full REST API — 19 routes (health/status/config, projects CRUD + pause/resume/spawn, namespaces + sub-routes, ticks, events, queue, pause/resume/evaluate): see [docs/api.md](docs/api.md) |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
@@ -409,8 +409,12 @@ created disabled — resume them explicitly.
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Daemon health, uptime, active ticks |
 | `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
+| `/api/v1/config` | GET | Resolved daemon configuration snapshot (gateway key masked) |
 | `/api/v1/projects` | GET/POST | List all or register a new project |
 | `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, soft-delete (`?confirm=true`) or purge (`?confirm=true&purge=true`) a project |
+| `/api/v1/projects/{name}/pause` | POST | Disable one project (stops it being scheduled) |
+| `/api/v1/projects/{name}/resume` | POST | Re-enable a paused project |
+| `/api/v1/projects/{name}/spawn` | POST | Manually trigger a tick for one project |
 | `/api/v1/ticks` | GET | Tick history with filtering |
 | `/api/v1/ticks/{id}` | GET | Single tick detail |
 | `/api/v1/events` | GET/STREAM | Event log (SSE streaming supported) |
@@ -418,7 +422,10 @@ created disabled — resume them explicitly.
 | `/api/v1/pause` | POST | Pause scheduling |
 | `/api/v1/resume` | POST | Resume scheduling |
 | `/api/v1/namespaces` | GET/POST | List or create namespaces |
-| `/api/v1/namespaces/{id}` | GET/PUT/DELETE | Read, update, or remove a namespace |
+| `/api/v1/namespaces/{id}` | GET/PUT | Read or update a namespace |
+| `/api/v1/namespaces/{id}/projects` | GET | List projects assigned to a namespace |
+| `/api/v1/namespaces/{id}/move` | POST | Assign a project to a namespace |
+| `/api/v1/queue` | GET | Ordered queue of eligible projects by urgency |
 
 **DELETE `/api/v1/projects/{name}` semantics (DOGFOOD-009):** `DELETE` is a
 soft delete — it requires `?confirm=true` (else `400`) and refuses enabled

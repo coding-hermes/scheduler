@@ -449,8 +449,12 @@ var openapiSpec = []byte(`{
       "post": {
         "summary": "Manually trigger a tick for this project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
-          "202": {"description": "Tick enqueued — returns tick_id"}
+          "202": {"description": "Tick enqueued — returns tick_id"},
+          "404": {"description": "Project not found"}
         }
       }
     },
@@ -458,8 +462,12 @@ var openapiSpec = []byte(`{
       "post": {
         "summary": "Pause a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
-          "200": {"description": "Project paused"}
+          "200": {"description": "Project paused"},
+          "500": {"description": "Project not found (surfaces as 500 on this sub-route)"}
         }
       }
     },
@@ -467,8 +475,12 @@ var openapiSpec = []byte(`{
       "post": {
         "summary": "Resume a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
-          "200": {"description": "Project resumed"}
+          "200": {"description": "Project resumed"},
+          "500": {"description": "Project not found (surfaces as 500 on this sub-route)"}
         }
       }
     },
@@ -498,10 +510,40 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
-        "summary": "Update namespace",
+        "summary": "Update namespace (partial — only supplied fields are applied)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamespaceUpdates"}}}
+        },
+        "responses": {
+          "200": {"description": "Updated namespace"},
+          "400": {"description": "Invalid JSON"},
+          "404": {"description": "Namespace not found"}
+        }
+      }
+    },
+    "/api/v1/namespaces/{id}/projects": {
+      "get": {
+        "summary": "List projects assigned to a namespace",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
-          "200": {"description": "Updated namespace"}
+          "200": {"description": "{\"namespace_id\": \"<id>\", \"projects\": [<Project>, ...]}"},
+          "404": {"description": "Unknown namespace sub-route"}
+        }
+      }
+    },
+    "/api/v1/namespaces/{id}/move": {
+      "post": {
+        "summary": "Assign a project to a namespace (sets its namespace_id)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamespaceMoveRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Updated project object (flat, namespace_id set)"},
+          "400": {"description": "Missing or invalid body (project required)"},
+          "404": {"description": "Project not found"}
         }
       }
     },
@@ -530,6 +572,9 @@ var openapiSpec = []byte(`{
     "/api/v1/evaluate": {
       "post": {
         "summary": "Force an evaluation cycle",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
           "200": {"description": "Evaluation triggered"}
         }
@@ -538,6 +583,9 @@ var openapiSpec = []byte(`{
     "/api/v1/pause": {
       "post": {
         "summary": "Pause the scheduler globally",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
           "200": {"description": "Scheduler paused"}
         }
@@ -546,6 +594,9 @@ var openapiSpec = []byte(`{
     "/api/v1/resume": {
       "post": {
         "summary": "Resume the scheduler globally",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
         "responses": {
           "200": {"description": "Scheduler resumed"}
         }
@@ -577,38 +628,93 @@ var openapiSpec = []byte(`{
     "schemas": {
       "Project": {
         "type": "object",
+        "required": ["name", "repo_url", "workdir"],
         "properties": {
           "name": {"type": "string"},
           "repo_url": {"type": "string"},
           "workdir": {"type": "string"},
-          "weight": {"type": "integer"},
-          "priority": {"type": "integer"},
+          "weight": {"type": "integer", "minimum": 1, "maximum": 100},
+          "priority": {"type": "integer", "minimum": 1, "maximum": 10},
           "cooldown_s": {"type": "integer"},
-          "enabled": {"type": "boolean"},
-          "namespace_id": {"type": "string"},
+          "decay_rate": {"type": "number", "exclusiveMinimum": 0},
+          "model": {"type": "string"},
+          "provider": {"type": "string"},
           "worker_model": {"type": "string"},
-          "worker_provider": {"type": "string"}
+          "worker_provider": {"type": "string"},
+          "gateway_key": {"type": "string"},
+          "command": {"type": "string"},
+          "namespace_id": {"type": "string", "nullable": true},
+          "deliver": {"type": "string"},
+          "enabled": {"type": "boolean"},
+          "created_at": {"type": "string"},
+          "updated_at": {"type": "string"},
+          "last_tick_started": {"type": "string"},
+          "last_tick_completed": {"type": "string"},
+          "disabled_at": {"type": "string"},
+          "disabled_by": {"type": "string", "enum": ["api", "api-pause", "api-delete", "auto-disable"]},
+          "disabled_reason": {"type": "string"},
+          "consecutive_failures": {"type": "integer"}
         }
       },
       "ProjectUpdates": {
         "type": "object",
+        "description": "Partial project update — only fields present in the body are applied (pointer semantics; omit fields to leave them untouched).",
         "properties": {
-          "weight": {"type": "integer"},
-          "priority": {"type": "integer"},
+          "repo_url": {"type": "string"},
+          "workdir": {"type": "string"},
+          "weight": {"type": "integer", "minimum": 1, "maximum": 100},
+          "priority": {"type": "integer", "minimum": 1, "maximum": 10},
           "cooldown_s": {"type": "integer"},
-          "enabled": {"type": "boolean"},
+          "decay_rate": {"type": "number", "exclusiveMinimum": 0, "description": "Must be > 0 — 0 causes permanent urgency starvation"},
+          "model": {"type": "string"},
+          "provider": {"type": "string"},
           "worker_model": {"type": "string"},
-          "worker_provider": {"type": "string"}
+          "worker_provider": {"type": "string"},
+          "gateway_key": {"type": "string", "description": "Per-foreman gateway key; \"\" clears back to the daemon's shared key"},
+          "command": {"type": "string"},
+          "namespace_id": {"type": "string", "nullable": true, "description": "Set to \"\" to unassign from a namespace"},
+          "enabled": {"type": "boolean", "description": "false = disable (stamps disable provenance); true = resume (clears provenance)"},
+          "disabled_at": {"type": "string"},
+          "disabled_by": {"type": "string", "enum": ["api", "api-pause", "api-delete", "auto-disable"]},
+          "disabled_reason": {"type": "string"}
         }
       },
       "Namespace": {
         "type": "object",
+        "required": ["id", "weight"],
         "properties": {
           "id": {"type": "string"},
-          "weight": {"type": "integer"},
-          "reserved": {"type": "integer"},
-          "hard_cap": {"type": "integer"}
+          "weight": {"type": "integer", "minimum": 1, "maximum": 100},
+          "reserved": {"type": "integer", "minimum": 0},
+          "hard_cap": {"type": "integer", "minimum": 0, "description": "0 = no cap (interpret as B)"},
+          "enabled": {"type": "boolean"},
+          "description": {"type": "string"},
+          "created_at": {"type": "string"},
+          "updated_at": {"type": "string"}
         }
+      },
+      "NamespaceUpdates": {
+        "type": "object",
+        "description": "Partial namespace update — only supplied fields are applied.",
+        "properties": {
+          "weight": {"type": "integer", "minimum": 1, "maximum": 100},
+          "reserved": {"type": "integer", "minimum": 0},
+          "hard_cap": {"type": "integer", "minimum": 0},
+          "enabled": {"type": "boolean"},
+          "description": {"type": "string"}
+        }
+      },
+      "NamespaceMoveRequest": {
+        "type": "object",
+        "required": ["project"],
+        "properties": {
+          "project": {"type": "string", "description": "Name of the project to assign to this namespace"}
+        }
+      },
+      "EmptyBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "This endpoint accepts no body fields — send an empty JSON object {} or no body."
       }
     }
   }

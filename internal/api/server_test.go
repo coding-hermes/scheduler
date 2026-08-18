@@ -858,18 +858,102 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
+// documentedPaths mirrors the route table in docs/api.md (§4–§10, 19 paths).
+// The openapi.json spec must contain exactly this set — a client generator
+// needs every live route (GAP-057).
+var documentedPaths = []string{
+	"/api/v1/health",
+	"/api/v1/status",
+	"/api/v1/config",
+	"/api/v1/projects",
+	"/api/v1/projects/{name}",
+	"/api/v1/projects/{name}/pause",
+	"/api/v1/projects/{name}/resume",
+	"/api/v1/projects/{name}/spawn",
+	"/api/v1/namespaces",
+	"/api/v1/namespaces/{id}",
+	"/api/v1/namespaces/{id}/projects",
+	"/api/v1/namespaces/{id}/move",
+	"/api/v1/ticks",
+	"/api/v1/ticks/{id}",
+	"/api/v1/events",
+	"/api/v1/queue",
+	"/api/v1/evaluate",
+	"/api/v1/pause",
+	"/api/v1/resume",
+}
+
 func TestAPI_OpenAPI_Success(t *testing.T) {
 	a := newAPITestServer(t)
 	status, body := a.do(t, "GET", "/api/v1/openapi.json", nil)
 	if status != http.StatusOK {
 		t.Errorf("status = %d, want 200", status)
 	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal response: %v", err)
+	if body == nil {
+		t.Fatal("openapi.json did not parse as JSON")
 	}
-	if !strings.Contains(string(raw), "openapi") {
-		t.Errorf("response doesn't look like OpenAPI: %s", string(raw)[:200])
+
+	// (a) structure: openapi version + paths object present.
+	if body["openapi"] == nil {
+		t.Errorf("openapi.json missing top-level openapi version: %v", body)
+	}
+	paths, ok := body["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("openapi.json paths missing or not an object: %v", body["paths"])
+	}
+
+	// (b) path set == docs/api.md route table (19 paths, incl. the two
+	// namespace sub-routes that were missing before GAP-057).
+	if len(paths) != len(documentedPaths) {
+		t.Errorf("openapi.json path count = %d, want %d (docs/api.md route table)", len(paths), len(documentedPaths))
+	}
+	for _, p := range documentedPaths {
+		if _, ok := paths[p]; !ok {
+			t.Errorf("openapi.json missing documented path %s", p)
+		}
+	}
+
+	// (c) + (d) every POST/PUT operation carries a requestBody schema, and
+	// every operation (of any method) declares a 2xx success response.
+	for p, pathVal := range paths {
+		pathObj, ok := pathVal.(map[string]interface{})
+		if !ok {
+			t.Errorf("path %s: not an object", p)
+			continue
+		}
+		for method, opVal := range pathObj {
+			op, ok := opVal.(map[string]interface{})
+			if !ok {
+				t.Errorf("path %s %s: not an object", p, method)
+				continue
+			}
+			if method == "post" || method == "put" {
+				rb, ok := op["requestBody"].(map[string]interface{})
+				if !ok {
+					t.Errorf("path %s %s: missing requestBody (client generators cannot build this body)", p, method)
+					continue
+				}
+				content, _ := rb["content"].(map[string]interface{})
+				if _, ok := content["application/json"]; !ok {
+					t.Errorf("path %s %s: requestBody lacks application/json content", p, method)
+				}
+			}
+			responses, ok := op["responses"].(map[string]interface{})
+			if !ok {
+				t.Errorf("path %s %s: missing responses object", p, method)
+				continue
+			}
+			hasSuccess := false
+			for code := range responses {
+				if strings.HasPrefix(code, "2") {
+					hasSuccess = true
+					break
+				}
+			}
+			if !hasSuccess {
+				t.Errorf("path %s %s: no 2xx success response declared", p, method)
+			}
+		}
 	}
 }
 

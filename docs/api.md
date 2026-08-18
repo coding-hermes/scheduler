@@ -22,7 +22,7 @@ default (`--listen 127.0.0.1:9090`).
 | HTML dashboard | `/`, `/dashboard/partial`, `/projects/{name}`, `/queue`, `/ticks?page=N`, `/namespaces/{id}`, `/health` (not part of the JSON API) |
 | MCP (JSON-RPC) | `POST /mcp` (not part of the REST API) |
 
-Route index (all 18 `/api/v1/*` routes):
+Route index (all 19 `/api/v1/*` routes):
 
 | Method | Path | Section |
 |--------|------|---------|
