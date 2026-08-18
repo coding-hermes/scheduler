@@ -1445,3 +1445,11 @@ tasks:
   status: complete
   created_at: '2026-08-18T17:46:50.098289+00:00'
   completed_at: '2026-08-18T17:52:08.050686+00:00'
+- id: GAP-059
+  title: 'Repo identity drift: align go.mod module path to canonical repo URL'
+  criteria:
+  - go.mod module path is github.com/coding-hermes/scheduler; all internal imports
+    updated; README go install URL works; schema $id matches go.mod
+  status: complete
+  created_at: '2026-08-18T19:13:29.806943+00:00'
+  completed_at: '2026-08-18T19:19:04.942692+00:00'
