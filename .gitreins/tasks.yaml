@@ -1425,3 +1425,12 @@ tasks:
   status: complete
   created_at: '2026-08-18T15:05:11.291021+00:00'
   completed_at: '2026-08-18T15:07:09.436725+00:00'
+- id: NEVER-DONE-431
+  title: 'NEVER-DONE light audit tick #431'
+  criteria:
+  - Light audit (gates 9/9, guard 4/4, endpoints 16/16, storm 0 dups, namespace probe,
+    discovery scans clean, CI green) with no code changes; board event appended and
+    pushed
+  status: complete
+  created_at: '2026-08-18T16:25:54.454758+00:00'
+  completed_at: '2026-08-18T16:33:12.431953+00:00'
