@@ -30,6 +30,14 @@ type Server struct {
 	// three-layer config served by GET /api/v1/config (SCHED-GAP-034).
 	// Populated by main.go via SetResolvedConfig after TOML/env resolution.
 	resolvedConfig ResolvedConfig
+
+	// urgencyCalc computes engine-formula urgency scores for
+	// GET /api/v1/queue (GAP-054). Built from the resolved interval range
+	// (MinInterval/MaxInterval/NumLevels) by SetResolvedConfig; nil when
+	// unconfigured or the range is unparseable — listQueue falls back to
+	// priority-only scores in that case (tests construct the Server without
+	// SetResolvedConfig).
+	urgencyCalc *scheduler.UrgencyCalculator
 }
 
 // NewServer creates an API server.

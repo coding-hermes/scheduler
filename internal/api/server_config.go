@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"time"
+
+	"github.com/coding-herms/scheduler/internal/scheduler"
 )
 
 // GatewayConfigSnapshot is the gateway section of the resolved config
@@ -47,9 +50,46 @@ type ResolvedConfig struct {
 // SetResolvedConfig stores the resolved-config snapshot served by
 // GET /api/v1/config (SCHED-GAP-034). The gateway key is masked before
 // storage so the plaintext key can never leak through the endpoint.
+// It also (re)builds the urgency calculator for GET /api/v1/queue (GAP-054)
+// from the resolved interval range; an absent or unparseable range leaves
+// the calculator nil (listQueue falls back to priority-only scores).
 func (s *Server) SetResolvedConfig(cfg ResolvedConfig) {
 	cfg.Gateway.Key = maskGatewayKey(cfg.Gateway.Key)
 	s.resolvedConfig = cfg
+	s.urgencyCalc = newUrgencyCalculatorFromConfig(cfg)
+}
+
+// newUrgencyCalculatorFromConfig builds the scheduler's urgency calculator
+// from a resolved interval range, or nil when the range is missing or
+// unparseable (MinInterval/MaxInterval must parse as Go durations and
+// NumLevels must be > 0). It mirrors the daemon's NewUrgencyCalculator call
+// in internal/scheduler/loop.go so the API's urgency scores match the
+// engine's ordering exactly.
+func newUrgencyCalculatorFromConfig(cfg ResolvedConfig) *scheduler.UrgencyCalculator {
+	if cfg.NumLevels <= 0 {
+		return nil
+	}
+	minI, err := time.ParseDuration(cfg.MinInterval)
+	if err != nil {
+		return nil
+	}
+	maxI, err := time.ParseDuration(cfg.MaxInterval)
+	if err != nil {
+		return nil
+	}
+	return scheduler.NewUrgencyCalculator(minI, maxI, cfg.NumLevels)
+}
+
+// urgencyCalculator returns the server's urgency calculator, lazily
+// rebuilding it from the resolved-config snapshot on first use when
+// SetResolvedConfig did not produce one (e.g. an unparseable range at set
+// time that is later corrected). Returns nil when no usable config exists.
+func (s *Server) urgencyCalculator() *scheduler.UrgencyCalculator {
+	if s.urgencyCalc != nil {
+		return s.urgencyCalc
+	}
+	s.urgencyCalc = newUrgencyCalculatorFromConfig(s.resolvedConfig)
+	return s.urgencyCalc
 }
 
 // maskGatewayKey masks a gateway API key for introspection: first 4 chars

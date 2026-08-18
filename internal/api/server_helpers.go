@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
@@ -304,21 +306,57 @@ type queueItem struct {
 	Enabled   bool    `json:"enabled"`
 }
 
-func listQueue(ctx context.Context, db *sql.DB) ([]queueItem, error) {
-	rows, err := db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1) FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
+// listQueue returns the ordered queue of eligible projects with real
+// engine-formula urgency scores (GAP-054). Urgency is computed with the
+// scheduler engine's own UrgencyCalculator (same formula as the daemon's
+// selection path: priority * (1 + elapsed/interval)^decay_rate, elapsed
+// since last_tick_completed or created_at), so the API ordering matches the
+// scheduler's ComputeUrgency ordering. When no calculator is configured
+// (Server built without SetResolvedConfig, or an unparseable interval
+// range), scores fall back to priority-only so the endpoint never panics.
+// Rows are sorted by urgency descending after computation.
+func (s *Server) listQueue(ctx context.Context) ([]queueItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,'') FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	calc := s.urgencyCalculator()
+	now := time.Now()
 	var items []queueItem
 	for rows.Next() {
 		var it queueItem
-		if err := rows.Scan(&it.Project, &it.Weight, &it.Priority, &it.CooldownS, &it.Enabled); err != nil {
+		var decayRate float64
+		var createdAtStr, lastStr string
+		if err := rows.Scan(&it.Project, &it.Weight, &it.Priority, &it.CooldownS, &it.Enabled, &decayRate, &createdAtStr, &lastStr); err != nil {
 			return nil, err
+		}
+		if calc != nil {
+			// Mirror the engine's input handling exactly (see
+			// internal/scheduler/packer.go Pick): created_at parses as
+			// RFC3339; an empty/unparseable last_tick_completed leaves
+			// lastCompleted nil so urgency falls back to created_at.
+			createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
+			var lastCompleted *time.Time
+			if lastStr != "" {
+				if t, err := time.Parse(time.RFC3339, lastStr); err == nil {
+					lastCompleted = &t
+				}
+			}
+			it.Urgency = calc.ComputeUrgency(float64(it.Priority), decayRate, now, lastCompleted, createdAt)
+		} else {
+			// No calculator configured: priority-only base (tests).
+			it.Urgency = float64(it.Priority)
 		}
 		items = append(items, it)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Urgency > items[j].Urgency
+	})
+	return items, nil
 }
 
 // openapiSpec is the OpenAPI 3.0 specification for the scheduler API.

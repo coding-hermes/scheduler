@@ -88,7 +88,7 @@ func (s *Server) queue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := context.Background()
-	items, err := listQueue(ctx, s.db)
+	items, err := s.listQueue(ctx)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
