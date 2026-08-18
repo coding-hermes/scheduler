@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // newTestDB is duplicated from spawn_test.go — centralize later.

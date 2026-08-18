@@ -18,13 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/api"
-	"github.com/coding-herms/scheduler/internal/config"
-	"github.com/coding-herms/scheduler/internal/dashboard"
-	"github.com/coding-herms/scheduler/internal/database"
-	"github.com/coding-herms/scheduler/internal/mcp"
-	"github.com/coding-herms/scheduler/internal/scheduler"
-	"github.com/coding-herms/scheduler/internal/sync"
+	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/dashboard"
+	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/mcp"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/sync"
 )
 
 func main() {

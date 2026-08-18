@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // handleProjects handles GET (list) and POST (create).

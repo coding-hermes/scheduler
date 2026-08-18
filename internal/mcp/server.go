@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // Server is the MCP-over-HTTP server for Hermes integration.

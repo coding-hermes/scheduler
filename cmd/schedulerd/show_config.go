@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // printSchema emits a JSON Schema for schedulerd.toml describing every

@@ -10,9 +10,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/api"
-	"github.com/coding-herms/scheduler/internal/database"
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // testVerify runs a self-contained end-to-end scheduling correctness test.

@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/config"
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // Pack runs the full multi-pool algorithm and returns selected projects.

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // handleTicks handles GET /ticks with optional query params.

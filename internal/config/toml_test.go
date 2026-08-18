@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 func findProject(cfg *FleetConfig, name string) *ProjectDef {

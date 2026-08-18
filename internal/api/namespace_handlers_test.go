@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 func createTestNamespace(t *testing.T, db *sql.DB, id string) {

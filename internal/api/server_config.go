@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // GatewayConfigSnapshot is the gateway section of the resolved config

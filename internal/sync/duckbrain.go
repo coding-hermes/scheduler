@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica

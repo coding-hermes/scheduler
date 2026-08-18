@@ -1,4 +1,4 @@
-module github.com/coding-herms/scheduler
+module github.com/coding-hermes/scheduler
 
 go 1.26
 

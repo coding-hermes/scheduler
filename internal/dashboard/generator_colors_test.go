@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/dashboard"
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/dashboard"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // TestGenerateQueue_NoZgotmplZ is the GAP-055 regression test. html/template's

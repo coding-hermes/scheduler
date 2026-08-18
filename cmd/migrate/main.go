@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/coding-herms/scheduler/internal/config"
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // CronJob mirrors the actual Hermes cron job config format.

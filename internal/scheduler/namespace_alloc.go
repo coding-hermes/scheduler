@@ -4,7 +4,7 @@ import (
 	"log"
 	"math"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // NamespaceAllocator distributes the global budget across namespaces using a

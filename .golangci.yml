@@ -42,7 +42,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/coding-herms/scheduler
+        - github.com/coding-hermes/scheduler
 
 issues:
   max-issues-per-linter: 0

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // GAP-043 zero-select monitoring tests. Evaluations log nothing when they

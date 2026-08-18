@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // Server is the HTTP API server for the fleet scheduler.

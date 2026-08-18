@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // PackedProject is a project selected to run in this tick.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // newTestDuckBrainSync builds a syncer against an in-memory DB.

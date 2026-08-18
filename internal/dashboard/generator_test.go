@@ -12,8 +12,8 @@ import (
 
 	"modernc.org/sqlite"
 
-	"github.com/coding-herms/scheduler/internal/dashboard"
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/dashboard"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 func newTestDB(t *testing.T) *sql.DB {

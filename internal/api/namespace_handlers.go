@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // handleNamespaces handles GET (list) and POST (create) on /namespaces.

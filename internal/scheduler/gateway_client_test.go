@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 func TestGatewayClient_SendResponse_DisablesApprovals(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // Regression tests for INFRA-012 (2026-08-01): daemon restart must NOT

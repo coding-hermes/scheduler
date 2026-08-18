@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coding-herms/scheduler/internal/dashboard"
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/dashboard"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // TestGenerateFleetTable_RendersTBody verifies that the htmx partial produces

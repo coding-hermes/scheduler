@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
-	mcpserver "github.com/coding-herms/scheduler/internal/mcp"
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/database"
+	mcpserver "github.com/coding-hermes/scheduler/internal/mcp"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // mcpTestServer wraps an httptest server with helpers for JSON-RPC calls.

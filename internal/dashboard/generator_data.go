@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // QueueEntry is one project in the evaluation queue view.

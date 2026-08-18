@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/api"
 )
 
 // TestAPI_Status_AutoDisableConfig (GAP-047) verifies /api/v1/status carries

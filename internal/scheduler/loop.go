@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // Loop runs the main evaluation cycle.

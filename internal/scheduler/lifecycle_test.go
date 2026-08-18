@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 func mustCreateProject(t *testing.T, db *sql.DB, name string) {

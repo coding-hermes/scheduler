@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // insertHelperTestTick inserts a completed tick row directly into the DB.

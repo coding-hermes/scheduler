@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // TestConformance_CreateProject_SnakeCaseDefaults verifies the documented

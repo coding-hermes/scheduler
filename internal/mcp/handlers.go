@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 func (s *Server) toolFleetStatus(ctx context.Context) (string, error) {

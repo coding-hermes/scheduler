@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coding-herms/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // TestNewLoop_Defaults verifies the constructor wires up the calculator, packer, and lifecycle.
