@@ -1358,3 +1358,14 @@ tasks:
   status: complete
   created_at: '2026-08-18T05:27:13.565371+00:00'
   completed_at: '2026-08-18T05:33:00.853519+00:00'
+- id: GAP-055
+  title: Fix dashboard urgency/utilization bar colors (ZgotmplZ)
+  criteria:
+  - 'urgencyColor/utilColor in internal/dashboard/generator_templates.go must return
+    parseable CSS (hex colors) instead of var(--x); rendered /queue HTML must contain
+    a parseable background value (hex like #XXXXXX) and ZERO occurrences of ZgotmplZ;
+    regression test added asserting no ZgotmplZ in rendered queue page; go build ./...
+    && go test -count=1 -short -p 1 ./... pass; golangci-lint clean on changed files'
+  status: complete
+  created_at: '2026-08-18T06:27:53.967255+00:00'
+  completed_at: '2026-08-18T06:33:04.226423+00:00'
