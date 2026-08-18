@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-17 08:00 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-18 06:33 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 44 |
 | Total projects (incl. disabled) | 72 |
-| Active ticks | 3 |
+| Active ticks | 1 |
 | Budget | 100 |
-| Last evaluation | 2026-08-17T08:00:07Z |
-| Recent outcomes | completed=14652, failed=38845, timeout=4076 |
+| Last evaluation | 2026-08-18T06:22:32Z |
+| Recent outcomes | completed=14986, failed=38845, timeout=4084 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (72 projects, 44 enabled)
@@ -35,7 +35,7 @@
 | h3-sdk-python-foreman | 10 | 15 | 3600s | coding-hermes |
 | h3-shim-foreman | 10 | 15 | 21600s | coding-hermes |
 | helix | 10 | 10 | 21600s | coding-hermes |
-| hermes-canopy | 10 | 10 | 21600s | coding-hermes |
+| hermes-canopy | 10 | 10 | 3600s | coding-hermes |
 | hivemind-work | 10 | 15 | 21600s | coding-hermes |
 | Kobayashi-Maru | 10 | 15 | 21600s | coding-hermes |
 | muster | 10 | 15 | 21600s | coding-hermes |
