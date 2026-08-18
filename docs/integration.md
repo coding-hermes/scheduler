@@ -1,13 +1,18 @@
 # Coding Hermes Scheduler — Operator Integration Guide
 
-Live-verified 2026-08-08 against `schedulerd` on `127.0.0.1:9090` (uptime 7h, CI green,
-`./bin/schedulerd --test-verify 3` → `SCHEDULER VERIFIED`). Every example below was
-exercised against the running daemon; response bodies are trimmed for readability.
+Live-verified 2026-08-18 against `schedulerd` on `127.0.0.1:9090` (spawns_http=49 /
+spawns_exec=0, CI green, `./bin/schedulerd --test-verify 3` → `SCHEDULER VERIFIED`).
+Every example below was exercised against the running daemon; response bodies are
+trimmed for readability.
 
 ## 1. Overview
 
 The Coding Hermes Scheduler is a Go daemon that packs fleet projects into a weight
-budget (default 100, max concurrency 8) and spawns foreman ticks via `hermes chat -q`.
+budget (default 100, max concurrency 10) and spawns foreman ticks through the Hermes
+gateway HTTP API (`--gateway-url`, default `http://127.0.0.1:8642`) — gateway-first
+spawns are the primary mechanism. The legacy `exec.Command("hermes", "chat", ...)`
+fallback is disabled by default (`--no-exec-fallback=true`), so a gateway outage
+drops ticks rather than silently degrading to local CLI spawns.
 It listens on `127.0.0.1:9090` (loopback only) and persists state in
 `~/.hermes/coding-hermes/scheduler.db`.
 
@@ -34,17 +39,21 @@ On create, omitted `weight`/`priority`/`cooldown_s`/`decay_rate` default to
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/health
-# {"active_ticks":4,"db":"connected","evaluation_age_seconds":24,"last_evaluation":"...Z",
-#  "spawns_exec":131,"spawns_http":0,"status":"ok","uptime":"7h2m58s"}
+# {"active_ticks":4,"db":"connected","evaluation_age_seconds":116,"last_evaluation":"...Z",
+#  "spawns_exec":0,"spawns_http":49,"status":"ok","uptime":"2h40m20s"}
 ```
 
-- `spawns_exec` / `spawns_http` — tick spawn mechanism. `spawns_http=0` + rising
-  `spawns_exec` means the daemon is in exec-spawn mode (no gateway client). Fleet norm
-  is gateway mode (`spawns_http` rising, `spawns_exec=0`); see `docs/dogfood/diagnostics.md`.
+- `spawns_exec` / `spawns_http` — tick spawn mechanism. Gateway HTTP spawns are the
+  PRIMARY mechanism and the fleet norm: `spawns_http` rising with `spawns_exec=0`
+  (the live fleet matches this shape). `spawns_exec > 0` occurs only when the gateway
+  is unavailable AND the operator explicitly enabled the fallback
+  (`--no-exec-fallback=false`); with the default `true`, a gateway outage drops ticks
+  instead of exec-spawning (GAP-048). See `docs/dogfood/diagnostics.md`.
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/status
-# {"projects":27,"active_projects":26,"weight_used":130,"namespaces":[...], ...}
+# {"active_projects":44,"active_ticks":4,"budget_total":100,"failure_window":100,
+#  "last_evaluation":"...Z","projects_failure_rates":{...}, ...}
 ```
 
 ## 4. Projects
