@@ -1453,3 +1453,11 @@ tasks:
   status: complete
   created_at: '2026-08-18T19:13:29.806943+00:00'
   completed_at: '2026-08-18T19:19:04.942692+00:00'
+- id: GAP-058
+  title: docs/integration.md stale spawn mechanics claims
+  criteria:
+  - integration.md states gateway HTTP spawns as primary, max concurrency 10, no 'hermes
+    chat -q' spawn claim
+  status: complete
+  created_at: '2026-08-18T20:37:53.929572+00:00'
+  completed_at: '2026-08-18T20:41:14.450540+00:00'
