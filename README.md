@@ -185,15 +185,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 | GET | `/ticks?page=N` | Paginated tick history |
 | GET | `/namespaces/{id}` | Namespace drill-down |
 | GET | `/health` | Dashboard health panel |
-| GET | `/api/v1/health` | Machine health check (JSON) |
-| GET | `/api/v1/status` | Fleet status summary (JSON) |
-| GET/POST | `/api/v1/projects` | List/manage projects |
-| GET/POST | `/api/v1/namespaces` | List/create namespaces |
-| GET | `/api/v1/ticks` | List ticks |
-| GET | `/api/v1/events` | List event log (SSE streaming supported) |
-| POST | `/api/v1/evaluate` | Trigger re-evaluation |
-| POST | `/api/v1/pause` | Pause scheduling |
-| POST | `/api/v1/resume` | Resume scheduling |
+| — | `/api/v1/*` | Full REST API — 18 routes (health/status/config, projects CRUD, namespaces, ticks, events, queue, pause/resume/evaluate): see [docs/api.md](docs/api.md) |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
