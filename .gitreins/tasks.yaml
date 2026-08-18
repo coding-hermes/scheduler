@@ -1396,3 +1396,13 @@ tasks:
   status: complete
   created_at: '2026-08-18T11:27:37.140908+00:00'
   completed_at: '2026-08-18T11:30:25.528203+00:00'
+- id: NEVER-DONE-428
+  title: 'NEVER-DONE light audit tick #428'
+  criteria:
+  - "Light audit passes: make build, go vet, gofmt clean, go test -short 9/9 packages,\
+    \ golangci-lint 0 issues, endpoint battery 16/16 + MCP 14/14, parity max-id lockstep,\
+    \ pins held, CI green, storm-watch 0 dups \u2014 evidence in board audit event\
+    \ tick 428"
+  status: complete
+  created_at: '2026-08-18T12:42:38.178149+00:00'
+  completed_at: '2026-08-18T12:43:14.868111+00:00'
