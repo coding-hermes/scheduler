@@ -1347,3 +1347,14 @@ tasks:
   status: complete
   created_at: '2026-08-18T03:07:15.211424+00:00'
   completed_at: '2026-08-18T03:09:22.379364+00:00'
+- id: GAP-054
+  title: Fix GET /api/v1/queue urgency zeros (listQueue never computes urgency)
+  criteria:
+  - GET /api/v1/queue returns distinct non-zero urgency values computed with the engine's
+    formula (priority * (1 + elapsed/interval)^decayRate with interval from ComputeInterval,
+    elapsed from last_tick_completed or created_at) and ordered by urgency DESC; unit
+    test asserts urgency != 0 for an overdue high-priority project; go build, go vet,
+    go test -count=1 -short -p 1 ./... all pass
+  status: complete
+  created_at: '2026-08-18T05:27:13.565371+00:00'
+  completed_at: '2026-08-18T05:33:00.853519+00:00'
