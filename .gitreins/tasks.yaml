@@ -1434,3 +1434,14 @@ tasks:
   status: complete
   created_at: '2026-08-18T16:25:54.454758+00:00'
   completed_at: '2026-08-18T16:33:12.431953+00:00'
+- id: GAP-057
+  title: openapi.json machine spec broken (17 paths vs 19 live routes, no requestBody
+    on POST/PUT, 2 namespace paths missing)
+  criteria:
+  - openapi.json served at /api/v1/openapi.json must contain all 19 documented paths
+    (docs/api.md route table), every POST/PUT path carries a requestBody schema, the
+    2 missing namespace paths /api/v1/namespaces/{id}/projects and /api/v1/namespaces/{id}/move
+    are present, and path counts agree across README/docs/api.md/openapi.json
+  status: complete
+  created_at: '2026-08-18T17:46:50.098289+00:00'
+  completed_at: '2026-08-18T17:52:08.050686+00:00'
