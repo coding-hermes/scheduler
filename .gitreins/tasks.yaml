@@ -1461,3 +1461,15 @@ tasks:
   status: complete
   created_at: '2026-08-18T20:37:53.929572+00:00'
   completed_at: '2026-08-18T20:41:14.450540+00:00'
+- id: NEVER-DONE-435
+  title: 'NEVER-DONE full 12-point audit tick #435'
+  criteria:
+  - 'Full 12-point audit: gates 9/9 (build, vet, gofmt, tests, lint), gitreins guard
+    tier1 4/4, govulncheck clean, endpoint battery 16/16 + MCP tools + config 200,
+    parity lockstep recorded, pins held (API equals fleet.toml), storm 0 duplicate
+    ticks, CI green, discovery clean (TODO/FIXME 0, test gaps 0, docs 9/9, deps minor-only,
+    benchmarks 7, stubs 0), DuckBrain sync stats object, off-by-one live stats; board
+    event appended, fixture rows updated, pushed with 0 unpushed'
+  status: complete
+  created_at: '2026-08-18T21:53:22.989370+00:00'
+  completed_at: '2026-08-18T21:58:00.750827+00:00'
