@@ -1483,3 +1483,15 @@ tasks:
   status: complete
   created_at: '2026-08-19T02:53:00.717026+00:00'
   completed_at: '2026-08-19T02:54:08.480988+00:00'
+- id: NEVER-DONE-441
+  title: "Light audit tick #441 (no fixture window \u2014 NEVER-DONE FULL ran #439,\
+    \ next full #443+; E2E-001 FULL ran #440, next full #445+)"
+  criteria:
+  - 'Light audit passes: gates build/vet/gofmt/tests 9/9 + lint 0, gitreins guard
+    tier1 4/4, govulncheck clean, endpoint battery 16/16, namespace probe 404/404/200,
+    parity lockstep, pins held API==fleet.toml, storm 0 dups, CI green, discovery
+    clean (TODO/FIXME 0, test gaps 0, docs 9/9, deps non-actionable), board event
+    appended + NEVER-DONE fixture row updated, pushed with 0 unpushed; IDLE verdict'
+  status: complete
+  created_at: '2026-08-19T05:08:07.968597+00:00'
+  completed_at: '2026-08-19T05:09:11.704859+00:00'
