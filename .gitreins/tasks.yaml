@@ -1495,3 +1495,11 @@ tasks:
   status: complete
   created_at: '2026-08-19T05:08:07.968597+00:00'
   completed_at: '2026-08-19T05:09:11.704859+00:00'
+- id: NEVER-DONE-442
+  title: 'light audit tick #442 (gates + battery + storm-watch + parity)'
+  criteria:
+  - tick completes with board event id=437 appended, header ticks_total=442/ticks_idle=8,
+    commit pushed to origin/main, CI green
+  status: complete
+  created_at: '2026-08-19T07:18:15.119210+00:00'
+  completed_at: '2026-08-19T07:20:21.547051+00:00'
