@@ -1581,3 +1581,13 @@ tasks:
   status: complete
   created_at: '2026-08-19T19:27:45.721579+00:00'
   completed_at: '2026-08-19T19:29:03.785335+00:00'
+- id: NEVER-DONE-452
+  title: '11-point self-improvement audit tick #452'
+  criteria:
+  - Audit all 11 points (spec alignment, doc coverage, test gaps, package upgrades,
+    pitfall hunt, performance, endpoints, CI, DuckBrain, code quality, wiring); report
+    findings on the board; IDLE verdict expected if no gaps found. No code changes
+    required for IDLE.
+  status: complete
+  created_at: '2026-08-19T20:33:15.495598+00:00'
+  completed_at: '2026-08-19T20:34:49.439616+00:00'
