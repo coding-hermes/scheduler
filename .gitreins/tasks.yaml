@@ -1556,3 +1556,12 @@ tasks:
   status: complete
   created_at: '2026-08-19T15:28:35.109831+00:00'
   completed_at: '2026-08-19T15:32:31.470559+00:00'
+- id: NEVER-DONE-449
+  title: 'NEVER-DONE light audit tick #449'
+  criteria:
+  - 'Light audit passes with IDLE verdict: gates 9/9 (build/vet/gofmt/tests/lint),
+    endpoint battery 16/16, parity lockstep held, pins held, CI green, no worker dispatch
+    needed'
+  status: complete
+  created_at: '2026-08-19T17:04:19.365017+00:00'
+  completed_at: '2026-08-19T17:08:16.023038+00:00'
