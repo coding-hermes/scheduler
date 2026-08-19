@@ -1508,5 +1508,6 @@ tasks:
   criteria:
   - Audit gates all PASS (build/vet/gofmt/tests/lint/vuln); endpoint battery 16/16;
     parity lockstep; pins held; board updated + pushed; CI green
-  status: in_progress
+  status: complete
   created_at: '2026-08-19T09:25:37.594708+00:00'
+  completed_at: '2026-08-19T09:29:16.126560+00:00'
