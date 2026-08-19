@@ -1519,3 +1519,10 @@ tasks:
   status: complete
   created_at: '2026-08-19T10:42:07.691142+00:00'
   completed_at: '2026-08-19T10:45:09.344045+00:00'
+- id: NEVER-DONE-445
+  title: 'Tick 445 light audit: gates, E2E-001 FULL battery, parity, pins, CI'
+  criteria:
+  - Audit evidence committed (gates green, battery PASS, parity lockstep, pins held)
+    and tick event appended with verdict IDLE; commit exists in git log
+  status: in_progress
+  created_at: '2026-08-19T11:50:04.692233+00:00'
