@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-18 06:33 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-19 09:26 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -10,8 +10,8 @@
 | Total projects (incl. disabled) | 72 |
 | Active ticks | 1 |
 | Budget | 100 |
-| Last evaluation | 2026-08-18T06:22:32Z |
-| Recent outcomes | completed=14986, failed=38845, timeout=4084 |
+| Last evaluation | 2026-08-19T09:25:30Z |
+| Recent outcomes | completed=15383, failed=38846, timeout=4089 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (72 projects, 44 enabled)
@@ -28,7 +28,7 @@
 | coding-hermes-scheduler | 10 | 15 | 3600s | coding-hermes |
 | consensus | 10 | 15 | 3600s | coding-hermes |
 | crier | 10 | 15 | 21600s | coding-hermes |
-| deepseek-dashboard | 10 | 15 | 21600s | coding-hermes |
+| deepseek-dashboard | 10 | 15 | 3600s | coding-hermes |
 | dexdat-memory | 10 | 10 | 3600s | coding-hermes |
 | duckbrain | 10 | 10 | 3600s | coding-hermes |
 | h3 | 10 | 15 | 21600s | coding-hermes |
@@ -40,7 +40,7 @@
 | Kobayashi-Maru | 10 | 15 | 21600s | coding-hermes |
 | muster | 10 | 15 | 21600s | coding-hermes |
 | musterflow | 10 | 15 | 21600s | coding-hermes |
-| rabbit-hole | 10 | 15 | 21600s | coding-hermes |
+| rabbit-hole | 10 | 15 | 3600s | coding-hermes |
 | ring-runner | 10 | 15 | 21600s | coding-hermes |
 | speclang | 10 | 15 | 21600s | coding-hermes |
 | terminal-jail | 10 | 15 | 21600s | coding-hermes |
@@ -49,7 +49,7 @@
 | wojons-mythos | 10 | 15 | 21600s | coding-hermes |
 | uhlp | 9 | 15 | 21600s | coding-hermes |
 | gitreins-poc | 8 | 15 | 21600s | coding-hermes |
-| h3-sdk-go-foreman | 8 | 10 | 21600s | coding-hermes |
+| h3-sdk-go-foreman | 8 | 10 | 3600s | coding-hermes |
 | helios | 8 | 10 | 3600s | coding-hermes |
 | hermes-dagger | 8 | 10 | 3600s | coding-hermes |
 | inference-estimator | 8 | 10 | 3600s | coding-hermes |
