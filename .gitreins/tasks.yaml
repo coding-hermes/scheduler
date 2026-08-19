@@ -1591,3 +1591,12 @@ tasks:
   status: complete
   created_at: '2026-08-19T20:33:15.495598+00:00'
   completed_at: '2026-08-19T20:34:49.439616+00:00'
+- id: NEVER-DONE-453
+  title: 'NEVER-DONE FULL 12-point audit tick #453'
+  criteria:
+  - Audit gates all PASS (build/vet/gofmt/tests 9-9/lint/govulncheck), endpoint battery
+    16/16 + MCP 14/14, parity lockstep, CI green, pins API==fleet.toml; IDLE verdict
+    expected; board updated + pushed
+  status: complete
+  created_at: '2026-08-19T21:45:27.225624+00:00'
+  completed_at: '2026-08-19T21:46:37.437690+00:00'
