@@ -1535,3 +1535,15 @@ tasks:
   status: complete
   created_at: '2026-08-19T13:02:04.938248+00:00'
   completed_at: '2026-08-19T13:03:15.882313+00:00'
+- id: NEVER-DONE-447
+  title: 'NEVER-DONE 11-point audit tick #447 (light)'
+  criteria:
+  - "Run the NEVER-DONE perpetual audit for tick #447 (light cadence \u2014 FULL 12-point\
+    \ ran #446): verify gates (make build, go vet, gofmt, go test -count=1 -short\
+    \ -p 1 ./... 9/9, golangci-lint 0 issues, govulncheck clean), endpoint battery\
+    \ 16/16 + MCP 14/14, parity lockstep (jsonl/db max-id equal), pins (h3 21600,\
+    \ warpfs 43200, fast-tier 3600), CI green, and record evidence in board audit\
+    \ event id 442 with verdict IDLE; board commit 021929c must exist and be pushed."
+  status: complete
+  created_at: '2026-08-19T14:20:50.936029+00:00'
+  completed_at: '2026-08-19T14:20:53.557913+00:00'
