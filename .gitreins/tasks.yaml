@@ -1615,5 +1615,6 @@ tasks:
   - 'Run E2E-001 full battery: gates 9/9, endpoint battery 16/16, govulncheck clean,
     parity lockstep, pins API==fleet.toml, CI green, storm-watch 0 dups. Append IDLE
     audit event tick 455, update fixture rows, commit board, push.'
-  status: in_progress
+  status: complete
   created_at: '2026-08-20T05:20:53.890665+00:00'
+  completed_at: '2026-08-20T05:24:03.822368+00:00'
