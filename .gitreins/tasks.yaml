@@ -1636,3 +1636,11 @@ tasks:
   status: complete
   created_at: '2026-08-20T17:40:19.564047+00:00'
   completed_at: '2026-08-20T17:45:38.710555+00:00'
+- id: NEVER-DONE-458
+  title: 'NEVER-DONE light audit tick #458'
+  criteria:
+  - 'Light audit passes: gates green (build/vet/gofmt/tests/lint/govulncheck), endpoint
+    battery 17/17, parity lockstep, pins 21600, CI green, board event appended'
+  status: complete
+  created_at: '2026-08-21T05:20:17.393348+00:00'
+  completed_at: '2026-08-21T05:21:00.773643+00:00'
