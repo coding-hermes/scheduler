@@ -370,6 +370,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				tickID, time.Now().Format(time.RFC3339), tickID); err != nil {
 				log.Printf("WARN: placeholder session_id/heartbeat for %s: %v", tickID, err)
 			}
+			// SCHED-GAP-060: stamp last_tick_started AT SPAWN so a running
+			// tick already reports its own spawn time (mirrors the exec
+			// branch below). The post-completion UPDATE used to write the
+			// COMPLETION time here. reqStart is captured before
+			// SendResponse (SCHED-GAP-029) — do NOT use time.Now().
+			_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
+				reqStart.Format(time.RFC3339), project.Name)
 			stopHeartbeat := s.startHeartbeat(tickID)
 
 			// Per-foreman gateway key: project.GatewayKey when set, else the
@@ -391,9 +398,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// (finished_at, output) and outcome='ok' violated the ticks CHECK, so
 				// it silently no-oped on every run.
 				// S-GAP-001: a successful spawn also resets the consecutive-failure
-				// backoff counter.
-				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ?, consecutive_failures = 0 WHERE name = ?`,
-					now.Format(time.RFC3339), project.Name)
+				// backoff counter. SCHED-GAP-060: last_tick_started is NO longer
+				// written here — it was stamped at spawn time above (writing the
+				// completion moment here corrupted the API field).
+				_, _ = s.db.Exec(`UPDATE projects SET consecutive_failures = 0 WHERE name = ?`,
+					project.Name)
 
 				// S-GAP-003: persist the REAL gateway session id (resp.ID);
 				// fall back to the placeholder tick id when the gateway
