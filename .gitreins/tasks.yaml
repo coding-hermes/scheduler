@@ -1685,3 +1685,14 @@ tasks:
   status: complete
   created_at: '2026-08-21T12:03:44.147808+00:00'
   completed_at: '2026-08-21T12:14:45.017880+00:00'
+- id: NEVER-DONE-461
+  title: 'NEVER-DONE light audit tick #461'
+  criteria:
+  - "Board updated (JSONL canonical) with tick #461 light-audit closeout: audit gates\
+    \ all PASS (build/vet/gofmt/tests 9/9, golangci-lint 0, govulncheck clean), battery\
+    \ 14/14, parity max-id lockstep, pins API==fleet.toml 0 mismatches, DuckBrain\
+    \ reachable, perf warm <1s. Push blocked by INFRA-GH-001 (dead PAT \u2014 operator\
+    \ rotation pending, 9 commits unpushed)."
+  status: complete
+  created_at: '2026-08-21T12:36:35.639605+00:00'
+  completed_at: '2026-08-21T12:37:30.134550+00:00'
