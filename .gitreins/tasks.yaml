@@ -1696,3 +1696,12 @@ tasks:
   status: complete
   created_at: '2026-08-21T12:36:35.639605+00:00'
   completed_at: '2026-08-21T12:37:30.134550+00:00'
+- id: NEVER-DONE-462
+  title: 'NEVER-DONE light audit tick #462'
+  criteria:
+  - 'Light audit passes: make build OK, go vet clean, gofmt clean, go test -short
+    -p 1 all pass, golangci-lint 0 issues, live daemon healthy, board parity lockstep,
+    pins API==fleet.toml'
+  status: complete
+  created_at: '2026-08-21T18:43:17.258115+00:00'
+  completed_at: '2026-08-21T18:45:47.732197+00:00'
