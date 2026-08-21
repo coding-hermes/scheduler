@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-20 17:44 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-21 12:08 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 44 |
 | Total projects (incl. disabled) | 72 |
-| Active ticks | 4 |
+| Active ticks | 3 |
 | Budget | 100 |
-| Last evaluation | 2026-08-20T17:39:10Z |
-| Recent outcomes | completed=15783, failed=38846, timeout=4090 |
+| Last evaluation | 2026-08-21T12:05:07Z |
+| Recent outcomes | completed=15882, failed=38846, timeout=4093 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (72 projects, 44 enabled)
@@ -39,7 +39,7 @@
 | hivemind-work | 10 | 15 | 21600s | coding-hermes |
 | Kobayashi-Maru | 10 | 15 | 21600s | coding-hermes |
 | muster | 10 | 15 | 21600s | coding-hermes |
-| musterflow | 10 | 15 | 21600s | coding-hermes |
+| musterflow | 10 | 15 | 3600s | coding-hermes |
 | rabbit-hole | 10 | 15 | 21600s | coding-hermes |
 | ring-runner | 10 | 15 | 21600s | coding-hermes |
 | speclang | 10 | 15 | 21600s | coding-hermes |
