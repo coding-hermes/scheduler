@@ -44,8 +44,16 @@ type Loop struct {
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval time.Time
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
-	// HIGH event (zero = never). Guards the stall-event throttle.
+	// HIGH/MEDIUM stall event (zero = never). Guards the stall-event
+	// throttle shared by both severities (SCHED-GAP-061).
 	lastStallEvent time.Time
+	// lastStallForce is when the watchdog last pushed a forced
+	// re-evaluation (zero = never). The loop has recovered within one
+	// cycle when lastEval is refreshed after this timestamp — the forced
+	// eval was consumed and evaluate() ran. Distinguishes the
+	// self-recovering idle cadence (MEDIUM, SCHED-GAP-061) from a genuine
+	// wedge whose forced evals never run (HIGH).
+	lastStallForce time.Time
 	// GAP-043 zero-select monitoring: consecutive evals that selected 0
 	// projects while eligible (enabled, not running, cooldown elapsed)
 	// projects existed. Evaluations log nothing on a zero select, so an
@@ -373,9 +381,13 @@ func (l *Loop) LastEvalTime() time.Time {
 // 13:08-14:14 local, recovered only by manual POST /api/v1/evaluate).
 const evalStallThreshold = 10 * 30 * time.Second // 10 x min-interval
 
-// evalStallReEmitGap re-emits the HIGH stall event while a stall persists
+// evalStallReEmitGap re-emits the stall event while a stall persists
 // (forced re-evaluations not restoring the loop), so a wedged loop stays
-// visible without event spam.
+// visible without event spam. SCHED-GAP-061: the gap throttles BOTH
+// severities — a persistent wedge re-alarms HIGH once per window, and a
+// self-recovering idle fleet logs at most one MEDIUM per window — and
+// doubles as the episode window: a detection counts as a one-cycle
+// recovery only when the previous forced eval was pushed within the gap.
 const evalStallReEmitGap = 30 * time.Minute
 
 // zeroSelectThreshold is the number of consecutive zero-select evaluations
@@ -397,9 +409,28 @@ const zeroSelectReEmitGap = 30 * time.Minute
 // evalStallThreshold with zero in-flight ticks, the loop has no pending
 // trigger: force one and emit a HIGH event at stall onset, re-emitted
 // every evalStallReEmitGap while the stall persists.
+//
+// SCHED-GAP-061: on a healthy idle fleet the condition legitimately
+// recurs every evalStallThreshold — the forced re-evaluation is consumed
+// by the loop (evaluate() refreshes lastEval) and finds nothing to pick
+// (all projects in cooldown), then lastEval ages again. Every such
+// self-recovering detection was previously re-emitted HIGH every
+// evalStallReEmitGap, desensitizing operators to real wedges (37 HIGH
+// events observed 08-19T20:08Z..08-21T10:03Z). Severity now follows the
+// outcome of the previous forced re-evaluation:
+//   - first onset (no previous force, or the previous episode's force is
+//     older than the re-emit window) or non-recovery (lastEval still
+//     frozen at the pre-force value: the loop never consumed the forced
+//     eval) → HIGH;
+//   - one-cycle recovery (lastEval refreshed after a force pushed within
+//     the re-emit window: the loop subsequently evaluated normally) →
+//     MEDIUM — the events table has no WARN level (CHECK constraint
+//     CRITICAL/HIGH/MEDIUM/LOW/INFO), and MEDIUM is the established
+//     "notable but not alarming" tier (throttled starvation notices).
 func (l *Loop) checkEvalStall(running int) {
 	l.mu.RLock()
 	lastEval := l.lastEval
+	lastForce := l.lastStallForce
 	l.mu.RUnlock()
 	if lastEval.IsZero() {
 		return // never evaluated — the initial eval fires at startup
@@ -410,11 +441,20 @@ func (l *Loop) checkEvalStall(running int) {
 	}
 
 	now := time.Now()
+	// One-cycle recovery: the previous forced re-evaluation was pushed
+	// within the current episode window AND consumed by the loop —
+	// evaluate() ran and refreshed lastEval after the force. A stale
+	// force from a long-closed episode (fleet busy for hours, then idle)
+	// reads as a fresh onset, not a recovery, even though lastEval is
+	// inevitably newer.
+	recovered := !lastForce.IsZero() && now.Sub(lastForce) < evalStallReEmitGap && lastEval.After(lastForce)
+
 	l.mu.Lock()
 	emit := l.lastStallEvent.IsZero() || now.Sub(l.lastStallEvent) >= evalStallReEmitGap
 	if emit {
 		l.lastStallEvent = now
 	}
+	l.lastStallForce = now
 	l.mu.Unlock()
 
 	// Force re-evaluation on every stall crossing (cheap: an idle fleet
@@ -427,13 +467,24 @@ func (l *Loop) checkEvalStall(running int) {
 	if !emit {
 		return
 	}
-	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v)",
-		age.Round(time.Second), running, evalStallThreshold)
-	l.events.Emit(context.Background(), SeverityHigh, "loop", "eval loop stalled — forced re-evaluation", map[string]any{
+
+	severity := SeverityHigh
+	message := "eval loop stalled — forced re-evaluation"
+	if recovered {
+		// Demoted (SCHED-GAP-061): the forced re-eval recovered the
+		// loop within one cycle — the watchdog working as designed on
+		// an idle fleet, not an operator alarm.
+		severity = SeverityMedium
+		message = "eval loop stalled — forced re-evaluation (recovered)"
+	}
+	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v, recovered=%t)",
+		age.Round(time.Second), running, evalStallThreshold, recovered)
+	l.events.Emit(context.Background(), severity, "loop", message, map[string]any{
 		"age_seconds":  age.Seconds(),
 		"last_eval":    lastEval.Format(time.RFC3339),
 		"active_ticks": running,
 		"threshold_s":  evalStallThreshold.Seconds(),
+		"recovered":    recovered,
 	})
 }
 
