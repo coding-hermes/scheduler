@@ -1644,3 +1644,43 @@ tasks:
   status: complete
   created_at: '2026-08-21T05:20:17.393348+00:00'
   completed_at: '2026-08-21T05:28:36.355268+00:00'
+- id: SCHED-GAP-060
+  title: "P1 \u2014 projects.last_tick_started stamped with completion time in gateway\
+    \ spawn path"
+  criteria:
+  - "PASS: a project with a running tick reports last_tick_started \u2248 tick spawned_at\
+    \ (stamped at spawn, not at session completion) and last_tick_completed = prior\
+    \ completion; gateway spawn path writes reqStart at spawn time; regression tests\
+    \ TestSpawn_GatewayLastTickStarted + TestSpawn_GatewayRunningLastTickStarted pass;\
+    \ build/vet/gofmt/tests/lint all green."
+  status: complete
+  created_at: '2026-08-21T11:41:09.247312+00:00'
+  completed_at: '2026-08-21T11:41:12.937399+00:00'
+- id: SCHED-GAP-061
+  title: Recurring HIGH eval-stall alarm noise
+  criteria:
+  - 'Fix: demote successful one-cycle watchdog recoveries to WARN; keep HIGH for consecutive
+    failures/non-recoveries. PASS: 0 HIGH eval-stall events in a 24h normal window,
+    OR every watchdog-forced re-eval that recovers within one cycle logs <=WARN. Files:
+    internal/scheduler/eval_stall.go, loop.go, eval_stall_test.go.'
+  status: complete
+  created_at: '2026-08-21T12:03:39.305368+00:00'
+  completed_at: '2026-08-21T12:11:00.575917+00:00'
+- id: SCHED-GAP-062
+  title: Stale tasks.md Blocked pointer
+  criteria:
+  - 'Drop the hand-maintained Blocked line in outer .coding-hermes/tasks.md (or auto-generate
+    from board status); board is source of truth. PASS: pointer Blocked/Pending content
+    matches board statuses at read time (Blocked line removed or empty).'
+  status: complete
+  created_at: '2026-08-21T12:03:43.805760+00:00'
+  completed_at: '2026-08-21T12:13:08.544787+00:00'
+- id: NEVER-DONE-460
+  title: 'NEVER-DONE FULL 12-point audit tick #460'
+  criteria:
+  - 'Board updated + audit gates all PASS: specs S01-S11 present, 9/9 packages tested,
+    go vet/build/gofmt/tests green, golangci-lint 0, govulncheck clean, deps minor-only,
+    battery 16/16 + MCP 14/14 + config 200, warm perf under 3s, CI green or documented
+    blocker, DuckBrain sync ok, daemon healthy.'
+  status: in_progress
+  created_at: '2026-08-21T12:03:44.147808+00:00'
