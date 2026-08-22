@@ -595,12 +595,20 @@ curl -s "http://127.0.0.1:9090/api/v1/events?severity=HIGH&limit=20" | jq '.even
 
 ### GET /api/v1/queue
 
-**Purpose:** The ordered queue of eligible (enabled) projects with engine-
-formula urgency scores (GAP-054), sorted by urgency descending. Urgency =
-`priority * (1 + elapsed/interval)^decay_rate` (elapsed since
-`last_tick_completed`, falling back to `created_at`), matching the daemon's
-selection ordering. When no urgency calculator is configured the score falls
-back to priority-only.
+**Purpose:** The full set of enabled projects with engine-formula urgency
+scores (GAP-054), sorted by urgency descending — NOT only currently
+dispatchable projects. Every enabled project appears in the queue, including
+projects still in cooldown. Urgency = `priority * (1 + elapsed/interval)^decay_rate`
+(elapsed since `last_tick_completed`, falling back to `created_at`), matching
+the daemon's selection ordering. When no urgency calculator is configured the
+score falls back to priority-only.
+
+**Eligibility semantics (live-verified 2026-08-21):** queue membership is NOT
+eligibility. `cooldown_s` carries the seconds remaining until the project
+becomes dispatchable (`0` = dispatchable now); an integrator must filter on
+`cooldown_s == 0` to obtain the dispatchable subset. Filtering without that
+check silently yields projects the daemon will not pick until their cooldown
+expires.
 
 **Query params:** none. **Request body:** none.
 
@@ -617,7 +625,8 @@ back to priority-only.
 | `count` | int | Number of queue items |
 | `queue[].project` | string | Project name |
 | `queue[].urgency` | float | Engine urgency score (descending sort key) |
-| `queue[].weight` / `priority` / `cooldown_s` | int | Project scheduling parameters |
+| `queue[].weight` / `priority` | int | Project scheduling parameters |
+| `queue[].cooldown_s` | int | Seconds remaining until the project is dispatchable; `0` = eligible now. Present on every queue item regardless of value — do not use queue membership as an eligibility signal |
 | `queue[].enabled` | bool | Always true (only enabled projects are queued) |
 
 **Errors:** 405 on non-GET.

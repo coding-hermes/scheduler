@@ -425,7 +425,7 @@ created disabled — resume them explicitly.
 | `/api/v1/namespaces/{id}` | GET/PUT | Read or update a namespace |
 | `/api/v1/namespaces/{id}/projects` | GET | List projects assigned to a namespace |
 | `/api/v1/namespaces/{id}/move` | POST | Assign a project to a namespace |
-| `/api/v1/queue` | GET | Ordered queue of eligible projects by urgency |
+| `/api/v1/queue` | GET | All enabled projects by urgency (filter `cooldown_s == 0` for the dispatchable subset) |
 
 **DELETE `/api/v1/projects/{name}` semantics (DOGFOOD-009):** `DELETE` is a
 soft delete — it requires `?confirm=true` (else `400`) and refuses enabled
