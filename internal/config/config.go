@@ -87,10 +87,10 @@ type SchedulerConfig struct {
 // weekdays only (DeepSeek official card 2026-08-23: off-peak all day weekends,
 // Beijing time — weekends are Sat/Sun Beijing = UTC+8).
 type BlackoutWindow struct {
-	Start         string  `toml:"start"`         // "HH:MM" in UTC (e.g. "01:00")
-	End           string  `toml:"end"`           // "HH:MM" in UTC (e.g. "04:00")
-	Multiplier    float64 `toml:"multiplier"`    // e.g. 2.0 = double cooldown, 0 = skip entirely
-	WeekdaysOnly  bool    `toml:"weekdays_only"` // apply only Mon-Fri (Beijing time); weekends all off-peak
+	Start        string  `toml:"start"`         // "HH:MM" in UTC (e.g. "01:00")
+	End          string  `toml:"end"`           // "HH:MM" in UTC (e.g. "04:00")
+	Multiplier   float64 `toml:"multiplier"`    // e.g. 2.0 = double cooldown, 0 = skip entirely
+	WeekdaysOnly bool    `toml:"weekdays_only"` // apply only Mon-Fri (Beijing time); weekends all off-peak
 }
 
 // ActiveMultiplier returns the slowdown multiplier for the given time.
