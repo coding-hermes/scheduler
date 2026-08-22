@@ -1705,3 +1705,12 @@ tasks:
   status: complete
   created_at: '2026-08-21T18:43:17.258115+00:00'
   completed_at: '2026-08-21T18:45:47.732197+00:00'
+- id: SCHED-GAP-063
+  title: "docs/api.md \xA79 queue semantics drift"
+  criteria:
+  - "docs \xA79 matches live behavior (queue lists ALL enabled projects with cooldown_s\
+    \ remaining; dispatchable = cooldown_s==0); queue schema documents cooldown_s\
+    \ semantics"
+  status: complete
+  created_at: '2026-08-22T01:04:08.576538+00:00'
+  completed_at: '2026-08-22T01:04:53.078854+00:00'
