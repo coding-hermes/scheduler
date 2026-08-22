@@ -1732,3 +1732,14 @@ tasks:
   status: complete
   created_at: '2026-08-22T16:35:23.136649+00:00'
   completed_at: '2026-08-22T16:39:05.864288+00:00'
+- id: DEP-001
+  title: Upgrade modernc.org/sqlite v1.54.0 -> v1.57.0, drop retracted modernc.org/libc
+    v1.74.3
+  criteria:
+  - 'go list -m -u modernc.org/libc shows no retracted version in tree; go.mod/go.sum
+    updated via go get modernc.org/sqlite@v1.57.0 + go mod tidy; full gates green:
+    go build ./..., go vet ./..., gofmt clean, go test -short -p 1 ./... 9/9, golangci-lint
+    0 issues, govulncheck 0; verify log shows SCHEDULER VERIFIED (--test-verify 3)'
+  status: complete
+  created_at: '2026-08-22T22:44:32.662250+00:00'
+  completed_at: '2026-08-22T22:52:48.572779+00:00'
