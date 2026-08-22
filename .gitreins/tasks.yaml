@@ -1723,3 +1723,12 @@ tasks:
   status: complete
   created_at: '2026-08-22T10:24:51.714485+00:00'
   completed_at: '2026-08-22T10:26:59.123848+00:00'
+- id: NEVER-DONE-465
+  title: 'NEVER-DONE full audit tick #465'
+  criteria:
+  - 'Full 14-point self-improvement audit: gates (build/vet/gofmt/tests 9/9/lint 0),
+    gitreins guard 4/4, endpoint battery, storm/dup check, board parity, docs coverage,
+    deps, CI health (INFRA-GH-001 re-verify), and any gaps filed as board rows'
+  status: complete
+  created_at: '2026-08-22T16:35:23.136649+00:00'
+  completed_at: '2026-08-22T16:39:05.864288+00:00'
