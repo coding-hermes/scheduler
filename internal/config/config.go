@@ -83,11 +83,14 @@ type SchedulerConfig struct {
 // applies a cooldown multiplier to reduce API costs. All times are UTC.
 // If Multiplier <= 0, the project is not spawned during this window.
 //
-// Example: DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC at 2x price.
+// Example: DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC at 2x price,
+// weekdays only (DeepSeek official card 2026-08-23: off-peak all day weekends,
+// Beijing time — weekends are Sat/Sun Beijing = UTC+8).
 type BlackoutWindow struct {
-	Start      string  `toml:"start"`      // "HH:MM" in UTC (e.g. "01:00")
-	End        string  `toml:"end"`        // "HH:MM" in UTC (e.g. "04:00")
-	Multiplier float64 `toml:"multiplier"` // e.g. 2.0 = double cooldown, 0 = skip entirely
+	Start         string  `toml:"start"`         // "HH:MM" in UTC (e.g. "01:00")
+	End           string  `toml:"end"`           // "HH:MM" in UTC (e.g. "04:00")
+	Multiplier    float64 `toml:"multiplier"`    // e.g. 2.0 = double cooldown, 0 = skip entirely
+	WeekdaysOnly  bool    `toml:"weekdays_only"` // apply only Mon-Fri (Beijing time); weekends all off-peak
 }
 
 // ActiveMultiplier returns the slowdown multiplier for the given time.
@@ -95,6 +98,14 @@ type BlackoutWindow struct {
 // Returns 0 if Multiplier <= 0 (skip/project blackout).
 func ActiveMultiplier(windows []BlackoutWindow, now time.Time) (float64, bool) {
 	for _, w := range windows {
+		// Weekday check in BEIJING time (UTC+8) — DeepSeek's weekend rule is
+		// defined in Beijing time; Sat/Sun Beijing = off-peak all day.
+		if w.WeekdaysOnly {
+			bj := now.UTC().Add(8 * time.Hour)
+			if bj.Weekday() == time.Saturday || bj.Weekday() == time.Sunday {
+				continue
+			}
+		}
 		startH, startM := parseHM(w.Start)
 		endH, endM := parseHM(w.End)
 		start := time.Date(now.Year(), now.Month(), now.Day(), startH, startM, 0, 0, time.UTC)
