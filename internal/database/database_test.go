@@ -1139,3 +1139,81 @@ func TestDeleteNamespace_NotFound(t *testing.T) {
 		t.Fatal("expected error on delete of missing namespace, got nil")
 	}
 }
+
+// TestMigrate_FallbackChainColumns pins migration v14 (SCHED-GAP-064): the
+// projects table must gain fallback_model/fallback_provider/no_global_fallback
+// so fleet.toml fallback chains persist across restarts.
+func TestMigrate_FallbackChainColumns(t *testing.T) {
+	db := newTestDB(t)
+
+	for _, col := range []string{"fallback_model", "fallback_provider", "no_global_fallback"} {
+		var n int
+		if err := db.QueryRow(
+			`SELECT count(*) FROM pragma_table_info('projects') WHERE name = ?`, col,
+		).Scan(&n); err != nil {
+			t.Fatalf("pragma_table_info(projects) for %s: %v", col, err)
+		}
+		if n != 1 {
+			t.Errorf("projects.%s missing after Migrate (count=%d) — migration v14 not applied", col, n)
+		}
+	}
+}
+
+// TestProject_FallbackChainRoundTrip pins CreateProject/GetProject/UpdateProject
+// round-tripping the SCHED-GAP-064 fields end-to-end.
+func TestProject_FallbackChainRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	p := sampleProject("fallback-chain")
+	p.FallbackModel = "fallback-m"
+	p.FallbackProvider = "fallback-p"
+	p.NoGlobalFallback = true
+	if err := CreateProject(ctx, db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	got, err := GetProject(ctx, db, "fallback-chain")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.FallbackModel != "fallback-m" || got.FallbackProvider != "fallback-p" || !got.NoGlobalFallback {
+		t.Errorf("GetProject fallback fields = (%q, %q, %v), want (fallback-m, fallback-p, true)",
+			got.FallbackModel, got.FallbackProvider, got.NoGlobalFallback)
+	}
+
+	// Partial update: clear the flag, keep the tiers.
+	f := false
+	if err := UpdateProject(ctx, db, "fallback-chain", ProjectUpdates{NoGlobalFallback: &f}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	got, err = GetProject(ctx, db, "fallback-chain")
+	if err != nil {
+		t.Fatalf("GetProject after update: %v", err)
+	}
+	if got.NoGlobalFallback {
+		t.Error("NoGlobalFallback = true after clearing update, want false")
+	}
+	if got.FallbackProvider != "fallback-p" {
+		t.Errorf("FallbackProvider = %q after unrelated update, want fallback-p (partial update must not clear it)", got.FallbackProvider)
+	}
+
+	// ListProjects must also surface the fields.
+	all, err := ListProjects(ctx, db, false)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	found := false
+	for _, pr := range all {
+		if pr.Name == "fallback-chain" {
+			found = true
+			if pr.FallbackModel != "fallback-m" || pr.FallbackProvider != "fallback-p" {
+				t.Errorf("ListProjects fallback fields = (%q, %q), want (fallback-m, fallback-p)",
+					pr.FallbackModel, pr.FallbackProvider)
+			}
+		}
+	}
+	if !found {
+		t.Error("ListProjects did not return fallback-chain")
+	}
+}

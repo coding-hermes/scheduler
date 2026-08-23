@@ -197,19 +197,22 @@ func (m *MultiPoolPacker) packFlat(
 			}
 		}
 		packed = append(packed, PackedProject{
-			Name:           s.proj.Name,
-			Priority:       float64(s.proj.Priority),
-			Weight:         s.proj.Weight,
-			Urgency:        s.urgency,
-			Workdir:        s.proj.Workdir,
-			RepoURL:        s.proj.RepoURL,
-			Command:        s.proj.Command,
-			Model:          s.proj.Model,
-			Provider:       s.proj.Provider,
-			WorkerModel:    s.proj.WorkerModel,
-			WorkerProvider: s.proj.WorkerProvider,
-			GatewayKey:     s.proj.GatewayKey,
-			Deliver:        s.proj.Deliver,
+			Name:             s.proj.Name,
+			Priority:         float64(s.proj.Priority),
+			Weight:           s.proj.Weight,
+			Urgency:          s.urgency,
+			Workdir:          s.proj.Workdir,
+			RepoURL:          s.proj.RepoURL,
+			Command:          s.proj.Command,
+			Model:            s.proj.Model,
+			Provider:         s.proj.Provider,
+			FallbackModel:    s.proj.FallbackModel,
+			FallbackProvider: s.proj.FallbackProvider,
+			NoGlobalFallback: s.proj.NoGlobalFallback,
+			WorkerModel:      s.proj.WorkerModel,
+			WorkerProvider:   s.proj.WorkerProvider,
+			GatewayKey:       s.proj.GatewayKey,
+			Deliver:          s.proj.Deliver,
 		})
 		used += s.proj.Weight
 		budgetRemaining -= s.proj.Weight

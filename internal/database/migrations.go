@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 13
+const latestMigration = 14
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS projects (
     provider   TEXT NOT NULL DEFAULT 'your-provider-name',
     worker_model      TEXT NOT NULL DEFAULT '',
     worker_provider   TEXT NOT NULL DEFAULT '',
+    fallback_model    TEXT NOT NULL DEFAULT '',
+    fallback_provider TEXT NOT NULL DEFAULT '',
+    no_global_fallback INTEGER NOT NULL DEFAULT 0,
     deliver    TEXT NOT NULL DEFAULT '',
     enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -219,6 +222,15 @@ UPDATE projects SET
     disabled_reason = 'pre-GAP-044 disable',
     disabled_at = COALESCE(disabled_at, COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')))
 WHERE enabled = 0 AND COALESCE(disabled_by, '') = '';
+`,
+	},
+	{
+		version: 14,
+		desc:    "add model/provider fallback chain columns to projects (SCHED-GAP-064)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN fallback_model TEXT DEFAULT '';
+ALTER TABLE projects ADD COLUMN fallback_provider TEXT DEFAULT '';
+ALTER TABLE projects ADD COLUMN no_global_fallback INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }

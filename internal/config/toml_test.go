@@ -387,3 +387,73 @@ func TestLoadFleetConfigMissingFile(t *testing.T) {
 
 // Ensure sql import used.
 var _ = sql.ErrNoRows
+
+// TestApplyFleetConfig_FallbackChainPins (SCHED-GAP-064): fleet.toml pins
+// the fallback tiers + no_global_fallback flag on EXISTING projects (durable
+// pin, same contract as model/provider), while empty fallback keys leave an
+// API-assigned fallback untouched (GatewayKey-style conditional pin).
+func TestApplyFleetConfig_FallbackChainPins(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create the project first, then pin via fleet config.
+	if err := database.CreateProject(ctx, db, &database.Project{
+		Name: "fallback-pinned", RepoURL: "https://github.com/example/fallback-pinned",
+		Workdir: "/home/kara/fallback-pinned", Weight: 10, Priority: 5, CooldownS: 900,
+		Model: "old-model", Provider: "old-provider", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	cfg := &FleetConfig{
+		Projects: []ProjectDef{
+			{
+				Name: "fallback-pinned", RepoURL: "https://github.com/example/fallback-pinned",
+				Workdir: "/home/kara/fallback-pinned",
+				Model:   "deepseek-v4-flash", Provider: "deepseek-foreman",
+				FallbackModel: "deepseek-v4-pro", FallbackProvider: "deepseek-foreman",
+				NoGlobalFallback: true,
+			},
+		},
+	}
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (pin): %v", err)
+	}
+
+	p, err := database.GetProject(ctx, db, "fallback-pinned")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.FallbackModel != "deepseek-v4-pro" || p.FallbackProvider != "deepseek-foreman" {
+		t.Errorf("pinned fallback tiers = (%q, %q), want (deepseek-v4-pro, deepseek-foreman)",
+			p.FallbackModel, p.FallbackProvider)
+	}
+	if !p.NoGlobalFallback {
+		t.Error("pinned no_global_fallback = false, want true")
+	}
+
+	// An API-assigned fallback must survive a re-pin with a keyless entry.
+	fm := "api-assigned-fallback"
+	if err := database.UpdateProject(ctx, db, "fallback-pinned", database.ProjectUpdates{FallbackModel: &fm}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	cfg.Projects[0].FallbackModel = "" // keyless entry
+	cfg.Projects[0].NoGlobalFallback = false
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (re-pin): %v", err)
+	}
+	p, err = database.GetProject(ctx, db, "fallback-pinned")
+	if err != nil {
+		t.Fatalf("GetProject after re-pin: %v", err)
+	}
+	if p.FallbackModel != "api-assigned-fallback" {
+		t.Errorf("FallbackModel after keyless re-pin = %q, want api-assigned-fallback (conditional pin must not clear it)", p.FallbackModel)
+	}
+	if p.NoGlobalFallback {
+		t.Error("NoGlobalFallback = true after re-pin with flag false, want false")
+	}
+}

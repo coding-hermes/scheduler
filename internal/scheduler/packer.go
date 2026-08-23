@@ -11,19 +11,22 @@ import (
 
 // PackedProject is a project selected to run in this tick.
 type PackedProject struct {
-	Name           string
-	Priority       float64
-	Weight         int
-	Urgency        float64
-	Workdir        string
-	RepoURL        string
-	Command        string // optional: custom spawn command (overrides default hermes chat)
-	Model          string // LLM model for this project (empty = use spawner default)
-	Provider       string // LLM provider for this project (empty = use spawner default)
-	WorkerModel    string // optional: suggested worker model (foreman can override)
-	WorkerProvider string // optional: suggested worker provider (foreman can override)
-	GatewayKey     string // per-foreman Hermes gateway key (empty = shared --gateway-key)
-	Deliver        string // delivery target (telegram:chat_id:thread_id)
+	Name             string
+	Priority         float64
+	Weight           int
+	Urgency          float64
+	Workdir          string
+	RepoURL          string
+	Command          string // optional: custom spawn command (overrides default hermes chat)
+	Model            string // LLM model for this project (empty = use spawner default)
+	Provider         string // LLM provider for this project (empty = use spawner default)
+	FallbackModel    string // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
+	FallbackProvider string // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
+	NoGlobalFallback bool   // true → skip the spawner-level (env) fallback tier (SCHED-GAP-064)
+	WorkerModel      string // optional: suggested worker model (foreman can override)
+	WorkerProvider   string // optional: suggested worker provider (foreman can override)
+	GatewayKey       string // per-foreman Hermes gateway key (empty = shared --gateway-key)
+	Deliver          string // delivery target (telegram:chat_id:thread_id)
 }
 
 // Packer selects which projects run given a weight budget and running set.
@@ -71,6 +74,9 @@ type scored struct {
 	command             string
 	model               string
 	provider            string
+	fallbackModel       string
+	fallbackProvider    string
+	noGlobalFallback    bool
 	workerModel         string
 	workerProvider      string
 	gatewayKey          string
@@ -83,7 +89,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
 		       consecutive_failures
 		FROM projects
 		WHERE enabled = 1
@@ -104,7 +110,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -224,19 +230,22 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			continue
 		}
 		packed = append(packed, PackedProject{
-			Name:           s.name,
-			Priority:       s.priority,
-			Weight:         s.weight,
-			Urgency:        s.urgency,
-			Workdir:        s.workdir,
-			RepoURL:        s.repoURL,
-			Command:        s.command,
-			Model:          s.model,
-			Provider:       s.provider,
-			WorkerModel:    s.workerModel,
-			WorkerProvider: s.workerProvider,
-			GatewayKey:     s.gatewayKey,
-			Deliver:        s.deliver,
+			Name:             s.name,
+			Priority:         s.priority,
+			Weight:           s.weight,
+			Urgency:          s.urgency,
+			Workdir:          s.workdir,
+			RepoURL:          s.repoURL,
+			Command:          s.command,
+			Model:            s.model,
+			Provider:         s.provider,
+			FallbackModel:    s.fallbackModel,
+			FallbackProvider: s.fallbackProvider,
+			NoGlobalFallback: s.noGlobalFallback,
+			WorkerModel:      s.workerModel,
+			WorkerProvider:   s.workerProvider,
+			GatewayKey:       s.gatewayKey,
+			Deliver:          s.deliver,
 		})
 		used += s.weight
 		currRunning++

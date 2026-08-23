@@ -14,6 +14,9 @@ type Project struct {
 	DecayRate         float64 `json:"decay_rate"`          // urgency decay rate (default 1.0)
 	Model             string  `json:"model"`               // LLM model id passed to the spawned agent
 	Provider          string  `json:"provider"`            // LLM provider id passed to the spawned agent
+	FallbackModel     string  `json:"fallback_model"`      // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
+	FallbackProvider  string  `json:"fallback_provider"`   // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
+	NoGlobalFallback  bool    `json:"no_global_fallback"`  // true → skip the spawner-level (env) fallback tier entirely (SCHED-GAP-064)
 	WorkerModel       string  `json:"worker_model"`        // optional: suggested worker model (foreman can override)
 	WorkerProvider    string  `json:"worker_provider"`     // optional: suggested worker provider (foreman can override)
 	GatewayKey        string  `json:"gateway_key"`         // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
@@ -91,6 +94,16 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	}
 	setString("Model", &p.Model)
 	setString("Provider", &p.Provider)
+	setString("FallbackModel", &p.FallbackModel)
+	setString("FallbackProvider", &p.FallbackProvider)
+	if !p.NoGlobalFallback {
+		if raw, ok := legacy["NoGlobalFallback"]; ok {
+			var b bool
+			if err := json.Unmarshal(raw, &b); err == nil {
+				p.NoGlobalFallback = b
+			}
+		}
+	}
 	setString("WorkerModel", &p.WorkerModel)
 	setString("WorkerProvider", &p.WorkerProvider)
 	setString("GatewayKey", &p.GatewayKey)

@@ -413,6 +413,19 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.GatewayKey != "" {
 				updates.GatewayKey = &pd.GatewayKey
 			}
+			// SCHED-GAP-064: fallback tiers pin the same way as GatewayKey —
+			// only when fleet.toml explicitly sets them, so an API-assigned
+			// fallback survives a restart with a keyless entry. The
+			// no_global_fallback FLAG pins unconditionally (like Enabled):
+			// the fleet.toml entry is authoritative for the flag, defaulting
+			// to false when the key is absent.
+			if pd.FallbackModel != "" {
+				updates.FallbackModel = &pd.FallbackModel
+			}
+			if pd.FallbackProvider != "" {
+				updates.FallbackProvider = &pd.FallbackProvider
+			}
+			updates.NoGlobalFallback = &pd.NoGlobalFallback
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
 			}
@@ -464,19 +477,22 @@ func projectFromDef(pd ProjectDef) *database.Project {
 	}
 
 	p := &database.Project{
-		Name:       pd.Name,
-		RepoURL:    pd.RepoURL,
-		Workdir:    pd.Workdir,
-		Weight:     weight,
-		Priority:   priority,
-		CooldownS:  cooldown,
-		DecayRate:  decay,
-		Model:      model,
-		Provider:   provider,
-		GatewayKey: pd.GatewayKey,
-		Command:    pd.Command,
-		Deliver:    pd.Deliver,
-		Enabled:    enabled,
+		Name:             pd.Name,
+		RepoURL:          pd.RepoURL,
+		Workdir:          pd.Workdir,
+		Weight:           weight,
+		Priority:         priority,
+		CooldownS:        cooldown,
+		DecayRate:        decay,
+		Model:            model,
+		Provider:         provider,
+		FallbackModel:    pd.FallbackModel,
+		FallbackProvider: pd.FallbackProvider,
+		NoGlobalFallback: pd.NoGlobalFallback,
+		GatewayKey:       pd.GatewayKey,
+		Command:          pd.Command,
+		Deliver:          pd.Deliver,
+		Enabled:          enabled,
 	}
 	if pd.NamespaceID != "" {
 		nsID := pd.NamespaceID

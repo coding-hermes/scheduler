@@ -298,7 +298,7 @@ func TestMigration13_BackfillsLegacyDisableProvenance(t *testing.T) {
 		t.Fatalf("create enabled-a: %v", err)
 	}
 
-	// Upgrade: Migrate applies v13 only.
+	// Upgrade: Migrate applies v13 (backfill) and any later migrations.
 	if err := Migrate(ctx, db); err != nil {
 		t.Fatalf("Migrate (v13): %v", err)
 	}
@@ -306,8 +306,8 @@ func TestMigration13_BackfillsLegacyDisableProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationVersion: %v", err)
 	}
-	if v != 13 {
-		t.Fatalf("migration version = %d, want 13", v)
+	if v != latestMigration {
+		t.Fatalf("migration version = %d, want %d", v, latestMigration)
 	}
 
 	legacy, err := GetProject(ctx, db, "legacy-a")

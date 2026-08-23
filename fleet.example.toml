@@ -15,8 +15,11 @@ workdir = "/absolute/path/to/my-project"   # absolute path to project repo
 weight = 10                               # concurrency budget consumed per tick (1-100)
 priority = 5                              # scheduling priority (1=slowest, 10=fastest)
 cooldown_s = 7200                          # tier: 900 hot (operator) / 7200 default 2h / 43200 idle 12h (only NEVER-DONE pending)
-model = "deepseek-v4-flash"                 # LLM model for foreman ticks
-provider = "deepseek-foreman"             # provider (PAYG only for foremen)
+model = "deepseek-v4-flash"                 # LLM model for foreman ticks (chain tier 1 — project primary)
+provider = "deepseek-foreman"             # provider (PAYG only for foremen) (chain tier 1 — project primary)
+fallback_model = "deepseek-v4-pro"        # optional: fallback model tier (chain tier 2) — used when the primary model/provider is empty or rejected by the gateway
+fallback_provider = "deepseek-foreman"    # optional: fallback provider tier (chain tier 2)
+no_global_fallback = false                # true = STOP the chain here: never fall back to the spawner-level env defaults (SCHEDULER_FOREMAN_MODEL/_PROVIDER/_FALLBACK_*)
 namespace_id = "coding-hermes"            # DuckBrain namespace for context
 deliver = "telegram:-1003310984808:12345" # platform:chat_id:thread_id for delivery
 enabled = true                            # false = excluded from scheduling

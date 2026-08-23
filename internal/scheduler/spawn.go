@@ -37,17 +37,22 @@ func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
-	db             *sql.DB
-	maxConcurrent  int
-	active         map[string]*exec.Cmd // tickID -> running process
-	mu             sync.Mutex
-	timeout        time.Duration
-	model          string
-	provider       string
-	skills         string
-	foremanHome    string         // HERMES_HOME for foreman config
-	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
-	noExecFallback bool           // disable exec.Command fallback on gateway failure
+	db            *sql.DB
+	maxConcurrent int
+	active        map[string]*exec.Cmd // tickID -> running process
+	mu            sync.Mutex
+	timeout       time.Duration
+	model         string
+	provider      string
+	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
+	// chain. Applied AFTER the project's primary and fallback tiers; skipped
+	// entirely when a project sets NoGlobalFallback.
+	fallbackModel    string
+	fallbackProvider string
+	skills           string
+	foremanHome      string         // HERMES_HOME for foreman config
+	gateway          *GatewayClient // HTTP API client (nil = use exec.Command)
+	noExecFallback   bool           // disable exec.Command fallback on gateway failure
 
 	// events is an optional EventLogger. When set, terminal gateway-key
 	// rejections (GAP-035) emit a HIGH event so a key regression is
@@ -78,6 +83,8 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		timeout:           to,
 		model:             getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
 		provider:          getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
+		fallbackModel:     getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", ""),
+		fallbackProvider:  getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", ""),
 		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
 		heartbeatInterval: 5 * time.Minute,
@@ -246,6 +253,99 @@ func WorkerDefaults(project PackedProject) string {
 	)
 }
 
+// chainEntry is one step of the model/provider fallback chain (SCHED-GAP-064).
+// An entry is PRESENT when at least one of model/provider is non-empty; a
+// present entry contributes its non-empty fields, and any field still empty
+// falls through to the next present entry. Model and provider therefore
+// resolve INDEPENDENTLY through the chain.
+type chainEntry struct {
+	model    string
+	provider string
+}
+
+// present reports whether the entry contributes anything to the chain.
+func (e chainEntry) present() bool {
+	return e.model != "" || e.provider != ""
+}
+
+// resolveChain returns the effective model/provider by walking the given
+// chain left-to-right: the first present entry seeds the result, and every
+// subsequent present entry back-fills whichever field is still empty. The
+// final result is the first non-empty value per field, in chain order.
+func resolveChain(entries []chainEntry) (model, provider string) {
+	for _, e := range entries {
+		if !e.present() {
+			continue
+		}
+		if model == "" {
+			model = e.model
+		}
+		if provider == "" {
+			provider = e.provider
+		}
+	}
+	return model, provider
+}
+
+// resolveModelProvider resolves the spawn model/provider through the full
+// fallback chain for a packed project:
+//
+//  1. project primary   (project.Model / project.Provider)
+//  2. project fallback  (project.FallbackModel / project.FallbackProvider)
+//  3. global primary    (spawner defaults: s.model / s.provider — env
+//     SCHEDULER_FOREMAN_MODEL / SCHEDULER_FOREMAN_PROVIDER)
+//  4. global fallback   (spawner env SCHEDULER_FOREMAN_FALLBACK_MODEL /
+//     SCHEDULER_FOREMAN_FALLBACK_PROVIDER)
+//
+// Steps 3-4 are SKIPPED entirely when the project sets NoGlobalFallback —
+// the chain then ends after the project fallback tier, and fields that are
+// still empty resolve to empty (the gateway/exec receives an empty
+// model/provider rather than a global default). A project with empty project
+// tiers and no flag keeps today's behavior: it resolves to the spawner's
+// global defaults (step 3), with the env fallback (step 4) only reachable
+// when the global primary itself is empty.
+func (s *Spawner) resolveModelProvider(project PackedProject) (model, provider string) {
+	return resolveChain(s.spawnChain(project))
+}
+
+// nextChainResolution returns the model/provider for the chain step AFTER the
+// first present entry (the entry that seeded the primary resolution) — the
+// values a gateway 401/403 retry should use. ok is false when no further
+// present entry exists (chain exhausted → no retry) or when the remainder
+// resolves to all-empty (nothing to retry with).
+func nextChainResolution(chain []chainEntry) (model, provider string, ok bool) {
+	for i, e := range chain {
+		if e.present() {
+			m, p := resolveChain(chain[i+1:])
+			return m, p, m != "" || p != ""
+		}
+	}
+	return "", "", false
+}
+
+// spawnChain builds the project's fallback chain (project primary + project
+// fallback + global tiers unless NoGlobalFallback): the ordered list of
+// model/provider entries the spawn resolution walks, and the gateway 401/403
+// retry advances one step through. resolveChain(chain) equals
+// resolveModelProvider's result for the same project.
+func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
+	chain := []chainEntry{
+		{model: project.Model, provider: project.Provider},
+		{model: project.FallbackModel, provider: project.FallbackProvider},
+	}
+	// The no_global_fallback flag is the ONLY gate for steps 3-4: a project
+	// with empty project tiers and no flag keeps the legacy contract
+	// ("empty = use spawner default") and still resolves to the global
+	// primary (step 3), with the env fallback (step 4) reachable behind it.
+	if !project.NoGlobalFallback {
+		chain = append(chain,
+			chainEntry{model: s.model, provider: s.provider},
+			chainEntry{model: s.fallbackModel, provider: s.fallbackProvider},
+		)
+	}
+	return chain
+}
+
 // canSpawn checks concurrency limits.
 func (s *Spawner) canSpawn() bool {
 	s.mu.Lock()
@@ -278,20 +378,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		}
 		cmd.Dir = project.Workdir
 	} else {
-		model := s.model
-		if project.Model != "" {
-			model = project.Model
-		}
-
-		// Resolve provider the SAME way the exec branch does below. The
-		// gateway HTTP spawn previously dropped it entirely (SendResponse
-		// only carried prompt/model/key), so every fleet tick fell through
-		// to the gateway default provider — the MAIN DeepSeek key — instead
-		// of the foreman key pinned in fleet.toml. (2026-08-23 cost audit)
-		provider := s.provider
-		if project.Provider != "" {
-			provider = project.Provider
-		}
+		// SCHED-GAP-064: resolve the spawn model/provider through the
+		// fallback CHAIN: project primary → project fallback → global
+		// primary (spawner env defaults) → global fallback (env). Model
+		// and provider resolve INDEPENDENTLY: an entry counts when at
+		// least one of the two is non-empty, and each field falls
+		// through to the next entry's non-empty value. The gateway and
+		// exec branches below consume the SAME resolved values, so the
+		// f3919a7 provider fix (foreman key, not the MAIN key) keeps
+		// working through every chain step.
+		model, provider := s.resolveModelProvider(project)
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
@@ -393,12 +489,34 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 			// Per-foreman gateway key: project.GatewayKey when set, else the
 			// daemon's shared --gateway-key (Bane 2026-07-31).
+			// SCHED-GAP-064: when the gateway rejects the PRIMARY chain
+			// combination with an auth-class error (HTTP 401/403 — the
+			// provider/model combination is rejected, NOT the pre-validated
+			// gateway key), retry ONCE with the NEXT entry in the fallback
+			// chain. Other errors (network, 5xx, timeout) keep the
+			// single-attempt behavior, and a chain with no next entry (the
+			// common single-tier project) keeps the legacy GAP-035
+			// fail-fast: one dispatch, terminal ErrGatewayKeyRejected, no
+			// retry flood. On a successful retry the tick's model/provider
+			// (cost lookup) reflect the entry that actually ran.
+			chain := s.spawnChain(project)
+			retryModel, retryProvider, hasRetry := nextChainResolution(chain)
 			resp, gwErr := func() (*Response, error) {
 				// The heartbeat goroutine must never outlive the request —
 				// stop it on every return path (success AND failure).
 				defer close(stopHeartbeat)
 				defer cancel()
-				return s.gateway.SendResponse(ctx, prompt, model, provider, project.GatewayKey)
+				r, err := s.gateway.SendResponse(ctx, prompt, model, provider, project.GatewayKey)
+				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry {
+					return r, err
+				}
+				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
+					project.Name, tickID, model, provider, retryModel, retryProvider)
+				r2, err2 := s.gateway.SendResponse(ctx, prompt, retryModel, retryProvider, project.GatewayKey)
+				if err2 == nil {
+					model, provider = retryModel, retryProvider
+				}
+				return r2, err2
 			}()
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
