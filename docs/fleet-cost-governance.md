@@ -1,0 +1,107 @@
+# Fleet Cost Governance — Design Spec
+
+> Source: Bane directive 2026-08-23. Board rows: SCHED-GAP-064..068.
+> Context: fleet 16,259 ticks / 9.48B input tokens / 73.5M output tokens / ~$2,017 est
+> (Jul 12–Aug 23). Input:output ratio ≈ **129:1** — context re-reads dominate, not generation.
+
+## 1. Cooldown policy (DONE 2026-08-23)
+
+All five 1h projects moved to the 6h default (live API + fleet.toml pins + policy-script ok):
+
+| Project | Before | After |
+|---|---|---|
+| 9router | 3600 | 21600 |
+| escalation-doctrine | 3600 | 21600 |
+| hermes-canopy | 3600 | 21600 |
+| hermes-dagger | 3600 | 21600 |
+| musterflow | 3600 | 21600 |
+
+Policy: **most projects 4–6h** (21600 default). 3600 reserved for explicitly
+Bane-designated fast projects. 43200 for completed/idle. `fleet-cooldown-policy.py`
+enforces floors/promotions; operator pins live in fleet.toml.
+
+## 2. Model/provider fallback chains (SCHED-GAP-064)
+
+### Resolution order (per spawn)
+
+```
+1. project.primary (model+provider)          # e.g. custom key, deepseek-foreman
+2. project.fallback (model+provider)         # if primary unavailable/fails
+3. GLOBAL primary (model+provider)           # fleet-wide default
+4. GLOBAL fallback (model+provider)          # last resort
+```
+
+- A per-project `no_global_fallback = true` flag stops the chain at step 2
+  (project opted out of global lanes entirely — e.g. isolated custom-key projects).
+- Failure detection: provider auth failure, 402/403 exhaustion, repeated errors —
+  NOT a single transient 5xx (avoid flapping). Same classification as the existing
+  gateway-key-rejected terminal path.
+- Both spawn paths must resolve identically: gateway HTTP spawn (passes `provider`
+  in the body — fix f3919a7) AND exec fallback (`--provider`).
+- fleet.toml schema: `primary_model/primary_provider/fallback_model/fallback_provider`
+  per project + `[global] primary/fallback` section. Empty fields = skip that step.
+
+### Why
+Different projects have different economics: some ride flat-rate subs
+(opencode-go, ollama-cloud, kimi-for-coding), some PAYG lanes, some custom keys.
+A broken custom provider currently strands the project (or silently falls to the
+gateway default = main key — the f3919a7 bug class). Explicit chains fix both.
+
+## 3. Idle-tick / NEVER-DONE model routing (SCHED-GAP-065)
+
+- Add `idle_model`/`idle_provider` per project (or a global idle lane).
+- The scheduler knows the board has no actionable tasks *after* the foreman
+  reads it — so routing must be pre-spawn: use the project's last-tick outcome
+  + board state heuristic, or make the tick prompt ask for a cheap re-spawn.
+  Simplest correct v1: scheduler checks the project's pending-task count from
+  the board JSONL before spawn (it already reads boards for gap detection) and
+  spawns idle ticks on the idle lane.
+- Idle ticks are the most frequent tick type; they currently load the full
+  15-skill stack at full context cost. A cheap lane (or fewer skills in the
+  idle prompt) is the highest-frequency saving.
+
+## 4. Per-project budgets (SCHED-GAP-066)
+
+### Rules
+- **Never kill a running tick.** Budgets gate *spawns only*.
+- Tiers per project (all optional, any combination):
+  - `daily_budget_usd`
+  - `weekly_budget_usd`
+  - `final_budget_usd` — lifetime cap; when exhausted the project stops
+    scheduling for good (e.g. inference-estimator: one-time project, fixed
+    budget, then done).
+- Budget source of truth: scheduler.db `ticks.cost_usd` sums (already recorded
+  per tick). Reset windows: UTC day / UTC week.
+- Exhausted state: project shows `blocked_reason = "budget_daily/weekly/final"`,
+  zero new spawns, existing tick completes normally. Auto-disable semantics like
+  the failure-rate auto-disable (SCHED-GAP-018) — but budget-driven.
+- Expose `budget_spent` / `budget_remaining` in `/api/v1/projects` + dashboard.
+
+## 5. Skill bloat + fresh-context management (SCHED-GAP-067)
+
+- Fleet-wide SKILL.md size scan (cron or one-shot): >100K = emergency, >50K = trim.
+  Move pitfalls corpora to `references/`; keep the body lean (proven: 100K→48.6K
+  saved ~240M tokens/day).
+- Fresh-context (cache-miss) discipline for tick authors:
+  1. **Byte-stable context within a tick** — don't swap skills/system prompt
+     mid-tick; every mutation invalidates the cache prefix and re-pays at miss
+     prices (2–31× hit price).
+  2. **Batch LLM calls** — cache TTL ~5 min; a call after a long terminal gap
+     re-pays the whole context as a miss. Do reads/checks first, then LLM calls
+     back-to-back.
+  3. Keep tick prompts as short as correctness allows (the 15-skill load list
+     is re-paid per call).
+
+## 6. Weekly cost digest (SCHED-GAP-068)
+
+- Script: `scheduler.db` → per-project ticks/tokens_in/tokens_out/cost_usd +
+  in:out ratio + budget status; merge DeepSeek usage export when available.
+- Deliver: Telegram table + DuckBrain finding, weekly. Numbers must match
+  scheduler.db exactly (verification step in the cron prompt).
+
+## 7. Supporting changes
+
+- `fleet.toml` regen script must preserve all new fields (it currently rewrites
+  only name/repo/weight/priority/cooldown/model/provider/ns/deliver/enabled —
+  extend `write_fleet_pins`).
+- Scheduler docs (docs/fleet.md, docs/api.md) updated for the new schema.
