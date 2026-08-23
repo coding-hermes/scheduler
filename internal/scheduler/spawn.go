@@ -283,6 +283,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			model = project.Model
 		}
 
+		// Resolve provider the SAME way the exec branch does below. The
+		// gateway HTTP spawn previously dropped it entirely (SendResponse
+		// only carried prompt/model/key), so every fleet tick fell through
+		// to the gateway default provider — the MAIN DeepSeek key — instead
+		// of the foreman key pinned in fleet.toml. (2026-08-23 cost audit)
+		provider := s.provider
+		if project.Provider != "" {
+			provider = project.Provider
+		}
+
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
 				"Load skills coding-hermes-foreman, coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo-usage, gitreins, off-by-one. "+
@@ -386,7 +396,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// stop it on every return path (success AND failure).
 				defer close(stopHeartbeat)
 				defer cancel()
-				return s.gateway.SendResponse(ctx, prompt, model, project.GatewayKey)
+				return s.gateway.SendResponse(ctx, prompt, model, provider, project.GatewayKey)
 			}()
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
@@ -444,11 +454,6 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				s.noteSpawnFailure(project.Name)
 				return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
 			}
-		}
-
-		provider := s.provider
-		if project.Provider != "" {
-			provider = project.Provider
 		}
 
 		args := []string{

@@ -47,7 +47,7 @@ func TestGatewayClient_SendResponse_DisablesApprovals(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	resp, err := client.SendResponse(t.Context(), "test prompt", "test-model", "")
+	resp, err := client.SendResponse(t.Context(), "test prompt", "test-model", "", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestGatewayClient_SendResponse_IncludesModel(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "test prompt", "deepseek-v4-pro", "")
+	_, err := client.SendResponse(t.Context(), "test prompt", "deepseek-v4-pro", "", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
@@ -111,6 +111,41 @@ func TestGatewayClient_SendResponse_IncludesModel(t *testing.T) {
 	}
 	if body["input"] != "test prompt" {
 		t.Errorf("input = %v, want 'test prompt'", body["input"])
+	}
+}
+
+// Regression test for the 2026-08-23 cost-audit bug: the gateway spawn
+// dropped the provider entirely, so fleet ticks silently defaulted to the
+// main key instead of the foreman key pinned in fleet.toml.
+func TestGatewayClient_SendResponse_IncludesProvider(t *testing.T) {
+	var capturedBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 4096)
+		n, _ := r.Body.Read(buf)
+		capturedBody = buf[:n]
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_test",
+			"status": "completed",
+			"output": []map[string]any{},
+			"usage":  map[string]int{},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	if _, err := client.SendResponse(t.Context(), "prompt", "deepseek-v4-flash", "deepseek-foreman", ""); err != nil {
+		t.Fatalf("SendResponse: %v", err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["provider"] != "deepseek-foreman" {
+		t.Errorf("provider = %v, want deepseek-foreman", body["provider"])
 	}
 }
 
@@ -131,7 +166,7 @@ func TestGatewayClient_SendResponse_AuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "sk-test-key-123", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "hello", "test-model", "")
+	_, err := client.SendResponse(t.Context(), "hello", "test-model", "", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
@@ -161,7 +196,7 @@ func TestGatewayClient_SendResponse_PerForemanKey(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "sk-shared-key", 30*time.Second)
-	if _, err := client.SendResponse(t.Context(), "hello", "test-model", "sk-foreman-abc"); err != nil {
+	if _, err := client.SendResponse(t.Context(), "hello", "test-model", "", "sk-foreman-abc"); err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
 	if capturedAuth != "Bearer sk-foreman-abc" {
@@ -169,7 +204,7 @@ func TestGatewayClient_SendResponse_PerForemanKey(t *testing.T) {
 	}
 
 	// Empty key falls back to the shared daemon key.
-	if _, err := client.SendResponse(t.Context(), "hello", "test-model", ""); err != nil {
+	if _, err := client.SendResponse(t.Context(), "hello", "test-model", "", ""); err != nil {
 		t.Fatalf("SendResponse (empty key): %v", err)
 	}
 	if capturedAuth != "Bearer sk-shared-key" {
@@ -193,7 +228,7 @@ func TestGatewayClient_SendResponse_ErrorResponse(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "hello", "nonexistent-model", "")
+	_, err := client.SendResponse(t.Context(), "hello", "nonexistent-model", "", "")
 	if err == nil {
 		t.Fatal("expected error for gateway error response, got nil")
 	}

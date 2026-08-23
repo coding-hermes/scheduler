@@ -361,7 +361,7 @@ func TestGatewayClient_SendResponse_401WithNonErrorBodyStillFails(t *testing.T) 
 	defer srv.Close()
 
 	client := NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second)
-	resp, err := client.SendResponse(t.Context(), "prompt", "model", "fk-revoked")
+	resp, err := client.SendResponse(t.Context(), "prompt", "model", "", "fk-revoked")
 
 	if err == nil {
 		t.Fatal("SendResponse(401 non-error JSON body) = nil error — a key rejection was silently swallowed as success")
@@ -386,7 +386,7 @@ func TestGatewayClient_SendResponse_Non2xxFails(t *testing.T) {
 	defer srv.Close()
 
 	client := NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second)
-	resp, err := client.SendResponse(t.Context(), "prompt", "model", "")
+	resp, err := client.SendResponse(t.Context(), "prompt", "model", "", "")
 
 	if err == nil {
 		t.Fatal("SendResponse(500) = nil error — a non-2xx status must never succeed")

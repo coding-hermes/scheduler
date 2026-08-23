@@ -45,6 +45,7 @@ func NewGatewayClient(baseURL, apiKey string, timeout time.Duration) *GatewayCli
 type ResponseRequest struct {
 	Input           string `json:"input"`
 	Model           string `json:"model,omitempty"`
+	Provider        string `json:"provider,omitempty"`         // empty = gateway default (was silently defaulting fleet spawns to the main key)
 	RequireApproval *bool  `json:"require_approval,omitempty"` // nil = use gateway default, false = disable approvals
 }
 
@@ -166,11 +167,12 @@ func (g *GatewayClient) health(ctx context.Context, key string) error {
 // to use the daemon-level shared key (--gateway-key). Foreman spawns pass
 // project.GatewayKey when set, so each foreman authenticates with its own
 // key (Bane 2026-07-31).
-func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, key string) (*Response, error) {
+func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, provider, key string) (*Response, error) {
 	noApproval := false
 	reqBody := ResponseRequest{
 		Input:           prompt,
 		Model:           model,
+		Provider:        provider,
 		RequireApproval: &noApproval, // scheduler agents never need approval
 	}
 	bodyBytes, err := json.Marshal(reqBody)
