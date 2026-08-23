@@ -295,7 +295,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-foreman, coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo-usage, gitreins, off-by-one. "+
+				"Load skills coding-hermes-map and coding-hermes-foreman at start. "+
+				"Use the map to pull additional skills LAZILY as each phase needs them "+
+				"(board read, worker dispatch, gitreins, debugging, etc.) — never preload the whole toolbox. "+
 				"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
 				"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. "+
