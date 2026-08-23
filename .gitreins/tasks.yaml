@@ -1759,3 +1759,15 @@ tasks:
   status: complete
   created_at: '2026-08-23T10:41:39.758473+00:00'
   completed_at: '2026-08-23T10:42:35.374569+00:00'
+- id: SCHED-GAP-064
+  title: fleet.toml model/provider fallback chains
+  criteria:
+  - Per-project fallback_model/fallback_provider + no_global_fallback in fleet.toml;
+    global primary+fallback; resolution order project primary -> project fallback
+    -> (unless no_global_fallback) -> global primary -> global fallback; gateway and
+    exec spawns use resolved provider; project with broken/empty custom provider falls
+    through chain and still spawns; no_global_fallback stops global tier; tests +
+    docs
+  status: complete
+  created_at: '2026-08-23T16:58:49.387740+00:00'
+  completed_at: '2026-08-23T17:40:36.345135+00:00'
