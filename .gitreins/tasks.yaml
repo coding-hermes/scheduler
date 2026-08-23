@@ -1743,3 +1743,19 @@ tasks:
   status: complete
   created_at: '2026-08-22T22:44:32.662250+00:00'
   completed_at: '2026-08-22T22:52:48.572779+00:00'
+- id: NEVER-DONE-467
+  title: 'NEVER-DONE light audit tick #467'
+  criteria:
+  - Light audit gates green (build/vet/gofmt/tests 9/9, lint 0, gitreins guard 4/4,
+    endpoint battery 16/16, storm 0 dups), no code changes, IDLE verdict event appended
+  status: complete
+  created_at: '2026-08-23T00:56:27.132537+00:00'
+  completed_at: '2026-08-23T00:58:52.710368+00:00'
+- id: NEVER-DONE-468
+  title: 'NEVER-DONE light audit tick #468'
+  criteria:
+  - Light audit gates green (build/vet/gofmt/tests 9/9, lint 0, gitreins guard 4/4,
+    endpoint battery 16/16, storm 0 dups), no code changes, IDLE verdict event appended
+  status: complete
+  created_at: '2026-08-23T10:41:39.758473+00:00'
+  completed_at: '2026-08-23T10:42:35.374569+00:00'
