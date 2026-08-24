@@ -1822,3 +1822,15 @@ tasks:
   status: complete
   created_at: '2026-08-24T09:59:05.325843+00:00'
   completed_at: '2026-08-24T11:50:41.102776+00:00'
+- id: SCHED-GAP-069
+  title: Per-tick fleet quality review agent
+  criteria:
+  - 'Review runs for every completed scheduler tick: per-tick + per-model rollup keys
+    land in DuckBrain ns ''fleet-quality''; a query path answers ''how is the system
+    working / is model X right for use case Y'' from accumulated reviews. Verifiable:
+    script at ~/.hermes/scripts/fleet-quality-review.py py_compiles; two consecutive
+    live dry-runs succeed; DuckBrain ns fleet-quality has per-tick and per-model keys;
+    query mode returns accumulated reviews.'
+  status: complete
+  created_at: '2026-08-24T11:59:19.621988+00:00'
+  completed_at: '2026-08-24T13:11:00.337327+00:00'
