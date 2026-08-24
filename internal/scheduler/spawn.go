@@ -49,10 +49,23 @@ type Spawner struct {
 	// entirely when a project sets NoGlobalFallback.
 	fallbackModel    string
 	fallbackProvider string
-	skills           string
-	foremanHome      string         // HERMES_HOME for foreman config
-	gateway          *GatewayClient // HTTP API client (nil = use exec.Command)
-	noExecFallback   bool           // disable exec.Command fallback on gateway failure
+	// SCHED-GAP-065: idle-lane tiers for ticks on boards with ZERO pending
+	// tasks. The project's idle tier (fleet.toml idle_model/idle_provider)
+	// is prepended to the regular chain; the env tier below is the global
+	// idle lane behind it — gated by NoGlobalFallback like the other
+	// spawner-level (env) tiers. Empty = no idle lane (idle ticks resolve
+	// exactly like work ticks).
+	idleModel    string
+	idleProvider string
+	// pendingCounter reads board pending counts for idle-tick routing
+	// (SCHED-GAP-065). Defaults to the package-level shared instance; nil
+	// (tests, tooling) biases every spawn to the work chain — the
+	// conservative default that never cheap-routes real work.
+	pendingCounter *PendingTaskCounter
+	skills         string
+	foremanHome    string         // HERMES_HOME for foreman config
+	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
+	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
 	// events is an optional EventLogger. When set, terminal gateway-key
 	// rejections (GAP-035) emit a HIGH event so a key regression is
@@ -85,6 +98,9 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		provider:          getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
 		fallbackModel:     getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", ""),
 		fallbackProvider:  getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", ""),
+		idleModel:         getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
+		idleProvider:      getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		pendingCounter:    defaultPendingCounter,
 		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
 		heartbeatInterval: 5 * time.Minute,
@@ -168,6 +184,12 @@ func (s *Spawner) SetNoExecFallback(v bool) {
 // gateway-key rejections (GAP-035). Nil (the default) disables emission.
 func (s *Spawner) SetEventLogger(el *EventLogger) {
 	s.events = el
+}
+
+// SetPendingCounter overrides the pending-task counter used for idle-tick
+// routing (SCHED-GAP-065). Pass nil to force the work chain for every spawn.
+func (s *Spawner) SetPendingCounter(c *PendingTaskCounter) {
+	s.pendingCounter = c
 }
 
 // gatewayKeyProbeTimeout bounds the pre-dispatch per-project key validation
@@ -346,6 +368,45 @@ func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
 	return chain
 }
 
+// tickIsIdle reports whether this spawn is an IDLE tick: the project's board
+// has zero pending tasks (SCHED-GAP-065). A nil counter (tests, tooling)
+// biases to work — the conservative default that never cheap-routes real
+// work. CountPending returns 0 for a missing board, so a project with no
+// board file at all is idle too.
+func (s *Spawner) tickIsIdle(project PackedProject) bool {
+	if s.pendingCounter == nil {
+		return false
+	}
+	return s.pendingCounter.CountPending(project.Workdir) == 0
+}
+
+// spawnChainForKind builds the chain for the tick kind (SCHED-GAP-065). For
+// idle ticks the idle tiers are PREPENDED to the regular chain:
+//
+//  1. project idle   (project.IdleModel / project.IdleProvider)
+//  2. global idle    (spawner env SCHEDULER_FOREMAN_IDLE_MODEL / _PROVIDER)
+//     3+. the regular chain (project primary → project fallback → global
+//     primary → global fallback, honoring NoGlobalFallback)
+//
+// The global idle tier is a spawner-level (env) lane, so it is gated by
+// NoGlobalFallback exactly like the global primary/fallback tiers. Empty
+// idle fields are not present() and fall through naturally, so a project
+// with no idle config resolves EXACTLY as a work tick — no behavior
+// regression for fleets without idle lanes. The gateway 401/403 retry walks
+// this same chain so a rejected idle tick never retries onto the work lane
+// out of order.
+func (s *Spawner) spawnChainForKind(project PackedProject, idle bool) []chainEntry {
+	regular := s.spawnChain(project)
+	if !idle {
+		return regular
+	}
+	idleTiers := []chainEntry{{model: project.IdleModel, provider: project.IdleProvider}}
+	if !project.NoGlobalFallback {
+		idleTiers = append(idleTiers, chainEntry{model: s.idleModel, provider: s.idleProvider})
+	}
+	return append(idleTiers, regular...)
+}
+
 // canSpawn checks concurrency limits.
 func (s *Spawner) canSpawn() bool {
 	s.mu.Lock()
@@ -387,7 +448,21 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// exec branches below consume the SAME resolved values, so the
 		// f3919a7 provider fix (foreman key, not the MAIN key) keeps
 		// working through every chain step.
-		model, provider := s.resolveModelProvider(project)
+		//
+		// SCHED-GAP-065: pick the chain KIND first from the board's
+		// pending-task count — zero pending = idle tick, resolved via
+		// the idle chain (project idle tier + global idle lane prepended
+		// to the regular chain). The gateway 401/403 retry below walks
+		// THIS chain, so a rejected idle tick retries within the idle
+		// chain instead of jumping straight to the work lane.
+		idle := s.tickIsIdle(project)
+		chain := s.spawnChainForKind(project, idle)
+		model, provider := resolveChain(chain)
+		chainKind := "work"
+		if idle {
+			chainKind = "idle"
+		}
+		log.Printf("SPAWN: %s tick=%s chain=%s model=%q provider=%q", project.Name, tickID, chainKind, model, provider)
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
@@ -499,7 +574,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// fail-fast: one dispatch, terminal ErrGatewayKeyRejected, no
 			// retry flood. On a successful retry the tick's model/provider
 			// (cost lookup) reflect the entry that actually ran.
-			chain := s.spawnChain(project)
+			// SCHED-GAP-065: `chain` is the kind-appropriate chain computed
+			// at resolution above — idle chain for idle ticks, regular
+			// chain otherwise — so the retry advances within the SAME chain
+			// the tick was spawned with.
 			retryModel, retryProvider, hasRetry := nextChainResolution(chain)
 			resp, gwErr := func() (*Response, error) {
 				// The heartbeat goroutine must never outlive the request —

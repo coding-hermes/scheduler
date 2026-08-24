@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 15
+const latestMigration = 16
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS projects (
     fallback_model    TEXT NOT NULL DEFAULT '',
     fallback_provider TEXT NOT NULL DEFAULT '',
     no_global_fallback INTEGER NOT NULL DEFAULT 0,
+    idle_model        TEXT NOT NULL DEFAULT '',
+    idle_provider     TEXT NOT NULL DEFAULT '',
     daily_budget_usd  REAL NOT NULL DEFAULT 0.0,
     weekly_budget_usd REAL NOT NULL DEFAULT 0.0,
     final_budget_usd  REAL NOT NULL DEFAULT 0.0,
@@ -243,6 +245,14 @@ ALTER TABLE projects ADD COLUMN no_global_fallback INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN daily_budget_usd REAL NOT NULL DEFAULT 0.0;
 ALTER TABLE projects ADD COLUMN weekly_budget_usd REAL NOT NULL DEFAULT 0.0;
 ALTER TABLE projects ADD COLUMN final_budget_usd REAL NOT NULL DEFAULT 0.0;
+`,
+	},
+	{
+		version: 16,
+		desc:    "add idle-tick model routing columns to projects (SCHED-GAP-065)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN idle_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN idle_provider TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

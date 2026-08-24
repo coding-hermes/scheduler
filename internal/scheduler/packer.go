@@ -23,6 +23,8 @@ type PackedProject struct {
 	FallbackModel    string // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
 	FallbackProvider string // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
 	NoGlobalFallback bool   // true → skip the spawner-level (env) fallback tier (SCHED-GAP-064)
+	IdleModel        string // optional: idle-tick model tier, prepended to the spawn chain on zero-pending boards (SCHED-GAP-065)
+	IdleProvider     string // optional: idle-tick provider tier (SCHED-GAP-065)
 	WorkerModel      string // optional: suggested worker model (foreman can override)
 	WorkerProvider   string // optional: suggested worker provider (foreman can override)
 	GatewayKey       string // per-foreman Hermes gateway key (empty = shared --gateway-key)
@@ -87,6 +89,8 @@ type scored struct {
 	fallbackModel       string
 	fallbackProvider    string
 	noGlobalFallback    bool
+	idleModel           string
+	idleProvider        string
 	dailyBudgetUSD      float64
 	weeklyBudgetUSD     float64
 	finalBudgetUSD      float64
@@ -102,7 +106,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(daily_budget_usd, 0.0), COALESCE(weekly_budget_usd, 0.0), COALESCE(final_budget_usd, 0.0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(idle_model, ''), COALESCE(idle_provider, ''), COALESCE(daily_budget_usd, 0.0), COALESCE(weekly_budget_usd, 0.0), COALESCE(final_budget_usd, 0.0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
 		       consecutive_failures
 		FROM projects
 		WHERE enabled = 1
@@ -124,7 +128,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -265,6 +269,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			FallbackModel:    s.fallbackModel,
 			FallbackProvider: s.fallbackProvider,
 			NoGlobalFallback: s.noGlobalFallback,
+			IdleModel:        s.idleModel,
+			IdleProvider:     s.idleProvider,
 			WorkerModel:      s.workerModel,
 			WorkerProvider:   s.workerProvider,
 			GatewayKey:       s.gatewayKey,

@@ -239,6 +239,8 @@ func (m *MultiPoolPacker) packFlat(
 			FallbackModel:    s.proj.FallbackModel,
 			FallbackProvider: s.proj.FallbackProvider,
 			NoGlobalFallback: s.proj.NoGlobalFallback,
+			IdleModel:        s.proj.IdleModel,
+			IdleProvider:     s.proj.IdleProvider,
 			WorkerModel:      s.proj.WorkerModel,
 			WorkerProvider:   s.proj.WorkerProvider,
 			GatewayKey:       s.proj.GatewayKey,

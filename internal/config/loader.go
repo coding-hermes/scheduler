@@ -426,6 +426,15 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				updates.FallbackProvider = &pd.FallbackProvider
 			}
 			updates.NoGlobalFallback = &pd.NoGlobalFallback
+			// SCHED-GAP-065: idle tiers pin the same way as the fallback
+			// tiers — only when fleet.toml explicitly sets them, so an
+			// API-assigned idle lane survives a restart with a keyless entry.
+			if pd.IdleModel != "" {
+				updates.IdleModel = &pd.IdleModel
+			}
+			if pd.IdleProvider != "" {
+				updates.IdleProvider = &pd.IdleProvider
+			}
 			// SCHED-GAP-066: budget caps pin when the key is PRESENT in
 			// fleet.toml (pointer non-nil) — including an explicit 0, which
 			// clears an API-assigned cap back to unlimited. A keyless entry
@@ -503,6 +512,8 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		FallbackModel:    pd.FallbackModel,
 		FallbackProvider: pd.FallbackProvider,
 		NoGlobalFallback: pd.NoGlobalFallback,
+		IdleModel:        pd.IdleModel,
+		IdleProvider:     pd.IdleProvider,
 		GatewayKey:       pd.GatewayKey,
 		Command:          pd.Command,
 		Deliver:          pd.Deliver,

@@ -189,6 +189,8 @@ type ProjectDef struct {
 	FallbackModel    string   `toml:"fallback_model"`     // SCHED-GAP-064: fallback model tier for the spawn chain; empty = no project fallback
 	FallbackProvider string   `toml:"fallback_provider"`  // SCHED-GAP-064: fallback provider tier for the spawn chain
 	NoGlobalFallback bool     `toml:"no_global_fallback"` // true → skip the spawner-level (env) fallback tier entirely
+	IdleModel        string   `toml:"idle_model"`         // SCHED-GAP-065: idle-tick model tier — used when the project board has ZERO pending tasks; empty = no project idle tier (falls through to the regular chain)
+	IdleProvider     string   `toml:"idle_provider"`      // SCHED-GAP-065: idle-tick provider tier
 	DailyBudgetUSD   *float64 `toml:"daily_budget_usd"`   // SCHED-GAP-066: per-UTC-day spend cap; nil or <= 0 = unlimited
 	WeeklyBudgetUSD  *float64 `toml:"weekly_budget_usd"`  // SCHED-GAP-066: per-UTC-week spend cap (Monday 00:00 UTC reset); nil or <= 0 = unlimited
 	FinalBudgetUSD   *float64 `toml:"final_budget_usd"`   // SCHED-GAP-066: one-time lifetime spend cap, never resets; nil or <= 0 = unlimited

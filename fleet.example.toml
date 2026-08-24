@@ -20,6 +20,8 @@ provider = "deepseek-foreman"             # provider (PAYG only for foremen) (ch
 fallback_model = "deepseek-v4-pro"        # optional: fallback model tier (chain tier 2) — used when the primary model/provider is empty or rejected by the gateway
 fallback_provider = "deepseek-foreman"    # optional: fallback provider tier (chain tier 2)
 no_global_fallback = false                # true = STOP the chain here: never fall back to the spawner-level env defaults (SCHEDULER_FOREMAN_MODEL/_PROVIDER/_FALLBACK_*)
+idle_model = "deepseek-v4-flash"          # optional (SCHED-GAP-065): idle-tick chain tier — used when the project board has ZERO pending tasks; falls through to the regular chain when empty
+idle_provider = "opencode-go"             # optional: idle-tick provider tier (empty = no project idle lane). Spawner-level env default: SCHEDULER_FOREMAN_IDLE_MODEL/_PROVIDER (the global idle lane, gated by no_global_fallback like the other global tiers)
 daily_budget_usd = 5.0                    # optional (SCHED-GAP-066): per-UTC-day spend cap from ticks.cost_usd; omit or 0 = unlimited. Blocks NEW spawns only — a running tick always finishes
 weekly_budget_usd = 20.0                  # optional: per-UTC-week cap (resets Monday 00:00 UTC); omit or 0 = unlimited
 final_budget_usd = 0                      # optional: one-time lifetime cap, NEVER resets — exhausted = project stops scheduling for good (e.g. one-time projects)

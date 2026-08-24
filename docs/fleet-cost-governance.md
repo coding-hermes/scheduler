@@ -47,18 +47,32 @@ Different projects have different economics: some ride flat-rate subs
 A broken custom provider currently strands the project (or silently falls to the
 gateway default = main key — the f3919a7 bug class). Explicit chains fix both.
 
-## 3. Idle-tick / NEVER-DONE model routing (SCHED-GAP-065)
+## 3. Idle-tick / NEVER-DONE model routing (SCHED-GAP-065 — DONE 2026-08-24)
 
-- Add `idle_model`/`idle_provider` per project (or a global idle lane).
-- The scheduler knows the board has no actionable tasks *after* the foreman
-  reads it — so routing must be pre-spawn: use the project's last-tick outcome
-  + board state heuristic, or make the tick prompt ask for a cheap re-spawn.
-  Simplest correct v1: scheduler checks the project's pending-task count from
-  the board JSONL before spawn (it already reads boards for gap detection) and
-  spawns idle ticks on the idle lane.
-- Idle ticks are the most frequent tick type; they currently load the full
-  15-skill stack at full context cost. A cheap lane (or fewer skills in the
-  idle prompt) is the highest-frequency saving.
+- Per-project `idle_model`/`idle_provider` in fleet.toml (conditional pin,
+  same contract as the SCHED-GAP-064 fallback tiers) + spawner env defaults
+  `SCHEDULER_FOREMAN_IDLE_MODEL`/`_PROVIDER` as the global idle lane.
+- Chain kind is decided PRE-SPAWN: the spawner counts the project's board
+  pending rows via the existing PendingTaskCounter (SCHED-GAP-019 —
+  tasks.jsonl `status=="pending"`, tasks.md `"## [ ] "` fallback; 0 when no
+  board file). Zero pending = idle tick, else work tick. Counter semantics
+  unchanged — fixture rows count as pending, so fixture-carrying projects
+  keep the work chain.
+- Idle chain = idle tiers PREPENDED to the regular SCHED-GAP-064 chain:
+  `project idle → global idle (env) → project primary → project fallback →
+  global primary → global fallback`. The env idle lane is gated by
+  `no_global_fallback` like the other spawner-level tiers. Empty idle fields
+  are skipped, so a project with no idle config resolves exactly as before
+  (no regression).
+- The gateway 401/403 retry (one-step chain advance, SCHED-GAP-064) walks
+  the SAME chain the tick was spawned with — a rejected idle tick retries
+  within the idle chain, never jumps straight to the work lane.
+- Every dispatch logs `SPAWN: <project> tick=<id> chain=idle|work
+  model="…" provider="…"` — the audit trail for which lane each tick paid.
+- DB: migration v16 (`idle_model`/`idle_provider` TEXT NOT NULL DEFAULT '');
+  API JSON fields + `PUT /api/v1/projects/{name}` accept the snake_case keys.
+- Worker model text (WorkerDefaults) is the WORKER lane, not the foreman
+  tick lane — deliberately untouched.
 
 ## 4. Per-project budgets (SCHED-GAP-066 — DONE 2026-08-24)
 

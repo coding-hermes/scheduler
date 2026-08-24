@@ -457,3 +457,69 @@ func TestApplyFleetConfig_FallbackChainPins(t *testing.T) {
 		t.Error("NoGlobalFallback = true after re-pin with flag false, want false")
 	}
 }
+
+// TestApplyFleetConfig_IdleChainPins (SCHED-GAP-065): fleet.toml pins the
+// idle tiers on EXISTING projects (GatewayKey-style conditional pin), while
+// keyless entries leave an API-assigned idle lane untouched. Also verifies
+// the TOML parse of the new keys end-to-end.
+func TestApplyFleetConfig_IdleChainPins(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create the project first, then pin via fleet config.
+	if err := database.CreateProject(ctx, db, &database.Project{
+		Name: "idle-pinned", RepoURL: "https://github.com/example/idle-pinned",
+		Workdir: "/home/kara/idle-pinned", Weight: 10, Priority: 5, CooldownS: 900,
+		Model: "old-model", Provider: "old-provider", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	cfg := &FleetConfig{
+		Projects: []ProjectDef{
+			{
+				Name: "idle-pinned", RepoURL: "https://github.com/example/idle-pinned",
+				Workdir: "/home/kara/idle-pinned",
+				Model:   "deepseek-v4-flash", Provider: "deepseek-foreman",
+				IdleModel: "deepseek-v4-flash", IdleProvider: "opencode-go",
+			},
+		},
+	}
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (pin): %v", err)
+	}
+
+	p, err := database.GetProject(ctx, db, "idle-pinned")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.IdleModel != "deepseek-v4-flash" || p.IdleProvider != "opencode-go" {
+		t.Errorf("pinned idle tiers = (%q, %q), want (deepseek-v4-flash, opencode-go)",
+			p.IdleModel, p.IdleProvider)
+	}
+
+	// An API-assigned idle lane must survive a re-pin with a keyless entry.
+	im := "api-assigned-idle"
+	if err := database.UpdateProject(ctx, db, "idle-pinned", database.ProjectUpdates{IdleModel: &im}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	cfg.Projects[0].IdleModel = "" // keyless entry
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (re-pin): %v", err)
+	}
+	p, err = database.GetProject(ctx, db, "idle-pinned")
+	if err != nil {
+		t.Fatalf("GetProject after re-pin: %v", err)
+	}
+	if p.IdleModel != "api-assigned-idle" {
+		t.Errorf("IdleModel after keyless re-pin = %q, want api-assigned-idle (conditional pin must not clear it)", p.IdleModel)
+	}
+	// The provider key is still set in the entry, so it re-pins.
+	if p.IdleProvider != "opencode-go" {
+		t.Errorf("IdleProvider after re-pin = %q, want opencode-go (set key re-pins)", p.IdleProvider)
+	}
+}

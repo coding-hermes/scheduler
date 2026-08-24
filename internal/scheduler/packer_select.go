@@ -349,6 +349,8 @@ func (m *MultiPoolPacker) Pack(
 				FallbackModel:    pu.Project.FallbackModel,
 				FallbackProvider: pu.Project.FallbackProvider,
 				NoGlobalFallback: pu.Project.NoGlobalFallback,
+				IdleModel:        pu.Project.IdleModel,
+				IdleProvider:     pu.Project.IdleProvider,
 				WorkerModel:      pu.Project.WorkerModel,
 				WorkerProvider:   pu.Project.WorkerProvider,
 				GatewayKey:       pu.Project.GatewayKey,

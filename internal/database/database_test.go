@@ -1159,6 +1159,90 @@ func TestMigrate_FallbackChainColumns(t *testing.T) {
 	}
 }
 
+// TestMigrate_IdleChainColumns pins migration v16 (SCHED-GAP-065): the
+// projects table must gain idle_model/idle_provider so fleet.toml idle-tick
+// routing lanes persist across restarts.
+func TestMigrate_IdleChainColumns(t *testing.T) {
+	db := newTestDB(t)
+
+	v, err := MigrationVersion(context.Background(), db)
+	if err != nil {
+		t.Fatalf("MigrationVersion: %v", err)
+	}
+	if v < 16 {
+		t.Errorf("MigrationVersion = %d, want >= 16 (idle-tick routing migration)", v)
+	}
+	for _, col := range []string{"idle_model", "idle_provider"} {
+		var n int
+		if err := db.QueryRow(
+			`SELECT count(*) FROM pragma_table_info('projects') WHERE name = ?`, col,
+		).Scan(&n); err != nil {
+			t.Fatalf("pragma_table_info(projects) for %s: %v", col, err)
+		}
+		if n != 1 {
+			t.Errorf("projects.%s missing after Migrate (count=%d) — migration v16 not applied", col, n)
+		}
+	}
+}
+
+// TestProject_IdleChainRoundTrip pins CreateProject/GetProject/UpdateProject
+// round-tripping the SCHED-GAP-065 idle fields end-to-end, including the
+// API partial-update path.
+func TestProject_IdleChainRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	p := sampleProject("idle-chain")
+	p.IdleModel = "idle-m"
+	p.IdleProvider = "idle-p"
+	if err := CreateProject(ctx, db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	got, err := GetProject(ctx, db, "idle-chain")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.IdleModel != "idle-m" || got.IdleProvider != "idle-p" {
+		t.Errorf("GetProject idle fields = (%q, %q), want (idle-m, idle-p)", got.IdleModel, got.IdleProvider)
+	}
+
+	// Partial update: change the model, leave the provider; an unrelated
+	// field update must not clear the idle lane.
+	im := "idle-m2"
+	if err := UpdateProject(ctx, db, "idle-chain", ProjectUpdates{IdleModel: &im}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	got, err = GetProject(ctx, db, "idle-chain")
+	if err != nil {
+		t.Fatalf("GetProject after update: %v", err)
+	}
+	if got.IdleModel != "idle-m2" {
+		t.Errorf("IdleModel = %q after update, want idle-m2", got.IdleModel)
+	}
+	if got.IdleProvider != "idle-p" {
+		t.Errorf("IdleProvider = %q after unrelated update, want idle-p (partial update must not clear it)", got.IdleProvider)
+	}
+
+	// ListProjects must also surface the fields.
+	all, err := ListProjects(ctx, db, false)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	found := false
+	for _, pr := range all {
+		if pr.Name == "idle-chain" {
+			found = true
+			if pr.IdleModel != "idle-m2" || pr.IdleProvider != "idle-p" {
+				t.Errorf("ListProjects idle fields = (%q, %q), want (idle-m2, idle-p)", pr.IdleModel, pr.IdleProvider)
+			}
+		}
+	}
+	if !found {
+		t.Error("ListProjects did not return idle-chain")
+	}
+}
+
 // TestProject_FallbackChainRoundTrip pins CreateProject/GetProject/UpdateProject
 // round-tripping the SCHED-GAP-064 fields end-to-end.
 func TestProject_FallbackChainRoundTrip(t *testing.T) {

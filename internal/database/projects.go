@@ -69,11 +69,12 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		}
 	}
 	const q = `INSERT INTO projects
-(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		p.Name, p.RepoURL, p.Workdir, p.Weight, p.Priority, p.CooldownS,
 		p.DecayRate, p.Model, p.Provider, p.FallbackModel, p.FallbackProvider, boolToInt(p.NoGlobalFallback),
+		p.IdleModel, p.IdleProvider,
 		p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD,
 		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.Command, p.NamespaceID, p.Deliver, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt)
@@ -86,14 +87,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason)
 	if err == sql.ErrNoRows {
@@ -112,7 +113,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -132,7 +133,7 @@ FROM projects`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
@@ -153,7 +154,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -169,7 +170,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
@@ -205,6 +206,8 @@ type ProjectUpdates struct {
 	FallbackModel    *string  `json:"fallback_model"` // SCHED-GAP-064: project fallback tier for the spawn chain
 	FallbackProvider *string  `json:"fallback_provider"`
 	NoGlobalFallback *bool    `json:"no_global_fallback"` // true → skip the spawner-level (env) fallback tier
+	IdleModel        *string  `json:"idle_model"`         // SCHED-GAP-065: project idle tier, prepended to the spawn chain on zero-pending boards
+	IdleProvider     *string  `json:"idle_provider"`      // SCHED-GAP-065: idle provider tier; "" clears back to no project idle lane
 	DailyBudgetUSD   *float64 `json:"daily_budget_usd"`   // SCHED-GAP-066: per-UTC-day spend cap; <= 0 = unlimited
 	WeeklyBudgetUSD  *float64 `json:"weekly_budget_usd"`  // per-UTC-week spend cap (Monday 00:00 UTC reset); <= 0 = unlimited
 	FinalBudgetUSD   *float64 `json:"final_budget_usd"`   // one-time lifetime spend cap, never resets; <= 0 = unlimited
@@ -291,6 +294,14 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 	if u.FallbackProvider == nil {
 		var v string
 		fill("FallbackProvider", &v, func() { u.FallbackProvider = &v })
+	}
+	if u.IdleModel == nil {
+		var v string
+		fill("IdleModel", &v, func() { u.IdleModel = &v })
+	}
+	if u.IdleProvider == nil {
+		var v string
+		fill("IdleProvider", &v, func() { u.IdleProvider = &v })
 	}
 	if u.NoGlobalFallback == nil {
 		var v bool
@@ -422,6 +433,14 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.NoGlobalFallback != nil {
 		setClauses = append(setClauses, "no_global_fallback = ?")
 		args = append(args, boolToInt(*updates.NoGlobalFallback))
+	}
+	if updates.IdleModel != nil {
+		setClauses = append(setClauses, "idle_model = ?")
+		args = append(args, *updates.IdleModel)
+	}
+	if updates.IdleProvider != nil {
+		setClauses = append(setClauses, "idle_provider = ?")
+		args = append(args, *updates.IdleProvider)
 	}
 	if updates.DailyBudgetUSD != nil {
 		setClauses = append(setClauses, "daily_budget_usd = ?")
