@@ -20,6 +20,9 @@ provider = "deepseek-foreman"             # provider (PAYG only for foremen) (ch
 fallback_model = "deepseek-v4-pro"        # optional: fallback model tier (chain tier 2) — used when the primary model/provider is empty or rejected by the gateway
 fallback_provider = "deepseek-foreman"    # optional: fallback provider tier (chain tier 2)
 no_global_fallback = false                # true = STOP the chain here: never fall back to the spawner-level env defaults (SCHEDULER_FOREMAN_MODEL/_PROVIDER/_FALLBACK_*)
+daily_budget_usd = 5.0                    # optional (SCHED-GAP-066): per-UTC-day spend cap from ticks.cost_usd; omit or 0 = unlimited. Blocks NEW spawns only — a running tick always finishes
+weekly_budget_usd = 20.0                  # optional: per-UTC-week cap (resets Monday 00:00 UTC); omit or 0 = unlimited
+final_budget_usd = 0                      # optional: one-time lifetime cap, NEVER resets — exhausted = project stops scheduling for good (e.g. one-time projects)
 namespace_id = "coding-hermes"            # DuckBrain namespace for context
 deliver = "telegram:-1003310984808:12345" # platform:chat_id:thread_id for delivery
 enabled = true                            # false = excluded from scheduling

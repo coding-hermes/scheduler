@@ -405,12 +405,22 @@ automation keeps working. On create, omitted `weight`/`priority`/
 `cooldown_s`/`decay_rate` default to `10`/`5`/`900`/`1.0`; new projects are
 created disabled — resume them explicitly.
 
+**Per-project budgets (SCHED-GAP-066):** `fleet.toml` entries may set
+`daily_budget_usd` (UTC-day cap), `weekly_budget_usd` (UTC-week cap, resets
+Monday 00:00 UTC), and `final_budget_usd` (one-time lifetime cap, never
+resets). All three are opt-in — omitted or `0` means unlimited. Spend is
+summed from `ticks.cost_usd`. When any configured cap is reached the project
+is excluded from selection (zero new spawns, `blocked_reason="budget"` in
+`GET /api/v1/projects`) — running ticks are NEVER killed mid-run. Keys pin on
+restart when present in fleet.toml (explicit `0` clears); keyless entries
+leave API-assigned caps untouched.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Daemon health, uptime, active ticks |
 | `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
 | `/api/v1/config` | GET | Resolved daemon configuration snapshot (gateway key masked) |
-| `/api/v1/projects` | GET/POST | List all or register a new project |
+| `/api/v1/projects` | GET/POST | List all or register a new project (GET response carries SCHED-GAP-066 budget telemetry: `spent_daily_usd`/`spent_weekly_usd`/`spent_total_usd`, `remaining_*`, `budget_blocked`, `blocked_reason`) |
 | `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, soft-delete (`?confirm=true`) or purge (`?confirm=true&purge=true`) a project |
 | `/api/v1/projects/{name}/pause` | POST | Disable one project (stops it being scheduled) |
 | `/api/v1/projects/{name}/resume` | POST | Re-enable a paused project |

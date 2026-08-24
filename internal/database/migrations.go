@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 14
+const latestMigration = 15
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS projects (
     fallback_model    TEXT NOT NULL DEFAULT '',
     fallback_provider TEXT NOT NULL DEFAULT '',
     no_global_fallback INTEGER NOT NULL DEFAULT 0,
+    daily_budget_usd  REAL NOT NULL DEFAULT 0.0,
+    weekly_budget_usd REAL NOT NULL DEFAULT 0.0,
+    final_budget_usd  REAL NOT NULL DEFAULT 0.0,
     deliver    TEXT NOT NULL DEFAULT '',
     enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -231,6 +234,15 @@ WHERE enabled = 0 AND COALESCE(disabled_by, '') = '';
 ALTER TABLE projects ADD COLUMN fallback_model TEXT DEFAULT '';
 ALTER TABLE projects ADD COLUMN fallback_provider TEXT DEFAULT '';
 ALTER TABLE projects ADD COLUMN no_global_fallback INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 15,
+		desc:    "add per-project budget cap columns to projects (SCHED-GAP-066)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN daily_budget_usd REAL NOT NULL DEFAULT 0.0;
+ALTER TABLE projects ADD COLUMN weekly_budget_usd REAL NOT NULL DEFAULT 0.0;
+ALTER TABLE projects ADD COLUMN final_budget_usd REAL NOT NULL DEFAULT 0.0;
 `,
 	},
 }

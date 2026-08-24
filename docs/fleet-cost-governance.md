@@ -60,22 +60,28 @@ gateway default = main key — the f3919a7 bug class). Explicit chains fix both.
   15-skill stack at full context cost. A cheap lane (or fewer skills in the
   idle prompt) is the highest-frequency saving.
 
-## 4. Per-project budgets (SCHED-GAP-066)
+## 4. Per-project budgets (SCHED-GAP-066 — DONE 2026-08-24)
 
 ### Rules
-- **Never kill a running tick.** Budgets gate *spawns only*.
-- Tiers per project (all optional, any combination):
-  - `daily_budget_usd`
-  - `weekly_budget_usd`
+- **Never kill a running tick.** Budgets gate *spawns only* (selection-time
+  filter in all three packer paths; running tick rows are untouched).
+- Tiers per project (all optional, any combination; `0`/unset = unlimited):
+  - `daily_budget_usd` — resets at the UTC day boundary
+  - `weekly_budget_usd` — resets Monday 00:00 UTC
   - `final_budget_usd` — lifetime cap; when exhausted the project stops
     scheduling for good (e.g. inference-estimator: one-time project, fixed
     budget, then done).
 - Budget source of truth: scheduler.db `ticks.cost_usd` sums (already recorded
-  per tick). Reset windows: UTC day / UTC week.
-- Exhausted state: project shows `blocked_reason = "budget_daily/weekly/final"`,
-  zero new spawns, existing tick completes normally. Auto-disable semantics like
-  the failure-rate auto-disable (SCHED-GAP-018) — but budget-driven.
-- Expose `budget_spent` / `budget_remaining` in `/api/v1/projects` + dashboard.
+  per tick).
+- Exhausted state: `/api/v1/projects` shows `blocked_reason = "budget"` +
+  `budget_window = "daily"|"weekly"|"final"`, `budget_blocked = true`,
+  `spent_daily/weekly/total_usd`, `remaining_*` (null when uncapped);
+  zero new spawns, existing tick completes normally. The scheduler log line is
+  `BUDGET: <project> blocked (<window> spent $X/$Y)`.
+- Schema: migration v15 adds the three REAL columns (default 0.0); fleet.toml
+  keys pin on restart when present (explicit `0` clears; keyless entries leave
+  API-assigned caps untouched); `PUT /api/v1/projects/{name}` accepts the
+  snake_case keys.
 
 ## 5. Skill bloat + fresh-context management (SCHED-GAP-067)
 

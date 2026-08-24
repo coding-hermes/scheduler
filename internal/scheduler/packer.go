@@ -37,6 +37,10 @@ type Packer struct {
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
 	pendingCounter  *PendingTaskCounter
+	// budgetGate, when non-nil, excludes budget-exhausted projects from
+	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
+	// nil = no budget enforcement (tests, spend-query failure fail-open).
+	budgetGate BudgetGate
 }
 
 // NewPacker creates a packer with the given budget and concurrency cap. The
@@ -58,6 +62,12 @@ func (p *Packer) SetPendingCounter(c *PendingTaskCounter) {
 	p.pendingCounter = c
 }
 
+// SetBudgetGate installs the per-cycle budget gate (SCHED-GAP-066). Pass nil
+// to disable budget enforcement.
+func (p *Packer) SetBudgetGate(g BudgetGate) {
+	p.budgetGate = g
+}
+
 // scored is a project with its computed urgency.
 type scored struct {
 	name                string
@@ -77,6 +87,9 @@ type scored struct {
 	fallbackModel       string
 	fallbackProvider    string
 	noGlobalFallback    bool
+	dailyBudgetUSD      float64
+	weeklyBudgetUSD     float64
+	finalBudgetUSD      float64
 	workerModel         string
 	workerProvider      string
 	gatewayKey          string
@@ -89,7 +102,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(daily_budget_usd, 0.0), COALESCE(weekly_budget_usd, 0.0), COALESCE(final_budget_usd, 0.0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
 		       consecutive_failures
 		FROM projects
 		WHERE enabled = 1
@@ -101,6 +114,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	defer rows.Close()
 
 	var list []scored
+	skippedBudgetCap := 0
 
 	for rows.Next() {
 		var s scored
@@ -110,10 +124,19 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
+		}
+		// SCHED-GAP-066: budget-exhausted projects are never picked. The
+		// gate filters NEW spawns only — a running tick is never touched.
+		if p.budgetGate != nil {
+			if detail, blocked := p.budgetGate(s.name, s.dailyBudgetUSD, s.weeklyBudgetUSD, s.finalBudgetUSD); blocked {
+				log.Printf("BUDGET: %s blocked (%s) — excluded from selection; running ticks untouched", s.name, detail)
+				skippedBudgetCap++
+				continue
+			}
 		}
 		s.createdAt, _ = time.Parse(time.RFC3339, createdAtStr)
 		if lastStr.Valid && lastStr.String != "" {
@@ -252,8 +275,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	}
 
 	if len(packed) == 0 {
-		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d, total-running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, currRunning, p.maxConcurrent)
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d, total-running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // handleProjects handles GET (list) and POST (create).
@@ -24,6 +25,37 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// projectListItem is the /api/v1/projects list element: the full project row
+// plus the SCHED-GAP-066 budget telemetry. Remaining* are nil (JSON null)
+// when the corresponding cap is unlimited (<= 0); budget_blocked is true when
+// any configured cap is reached, in which case blocked_reason is "budget" and
+// budget_window names the exhausted window ("daily" / "weekly" / "final").
+type projectListItem struct {
+	database.Project
+	SpentDailyUSD      float64  `json:"spent_daily_usd"`
+	SpentWeeklyUSD     float64  `json:"spent_weekly_usd"`
+	SpentTotalUSD      float64  `json:"spent_total_usd"`
+	RemainingDailyUSD  *float64 `json:"remaining_daily_usd"`
+	RemainingWeeklyUSD *float64 `json:"remaining_weekly_usd"`
+	RemainingFinalUSD  *float64 `json:"remaining_final_usd"`
+	BudgetBlocked      bool     `json:"budget_blocked"`
+	BlockedReason      string   `json:"blocked_reason"`
+	BudgetWindow       string   `json:"budget_window,omitempty"`
+}
+
+// budgetRemaining returns cap-spent clamped at 0, or nil when cap <= 0
+// (unlimited budget → JSON null remaining).
+func budgetRemaining(capUSD, spentUSD float64) *float64 {
+	if capUSD <= 0 {
+		return nil
+	}
+	r := capUSD - spentUSD
+	if r < 0 {
+		r = 0
+	}
+	return &r
+}
+
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	projects, err := database.ListProjects(ctx, s.db, false)
@@ -34,7 +66,36 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	if projects == nil {
 		projects = []database.Project{}
 	}
-	writeJSON(w, 200, map[string]interface{}{"projects": projects})
+	// SCHED-GAP-066: enrich each project with its budget spend/remaining and
+	// blocked state. Fail-open: if the spend query breaks, serve the plain
+	// project rows rather than erroring the whole endpoint.
+	spends, spendErr := scheduler.LoadBudgetSpends(ctx, s.db, time.Now())
+	if spendErr != nil {
+		writeJSON(w, 200, map[string]interface{}{"projects": projects})
+		return
+	}
+	items := make([]projectListItem, 0, len(projects))
+	for i := range projects {
+		p := &projects[i]
+		spend := spends[p.Name]
+		window := scheduler.BudgetBlockReason(p, spend)
+		item := projectListItem{
+			Project:            *p,
+			SpentDailyUSD:      spend.Daily,
+			SpentWeeklyUSD:     spend.Weekly,
+			SpentTotalUSD:      spend.Total,
+			RemainingDailyUSD:  budgetRemaining(p.DailyBudgetUSD, spend.Daily),
+			RemainingWeeklyUSD: budgetRemaining(p.WeeklyBudgetUSD, spend.Weekly),
+			RemainingFinalUSD:  budgetRemaining(p.FinalBudgetUSD, spend.Total),
+			BudgetBlocked:      window != "",
+			BudgetWindow:       window,
+		}
+		if window != "" {
+			item.BlockedReason = "budget"
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, 200, map[string]interface{}{"projects": items})
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {

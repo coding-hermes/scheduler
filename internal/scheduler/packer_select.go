@@ -75,6 +75,12 @@ func (m *MultiPoolPacker) Pack(
 				continue
 			}
 			if p.NamespaceID != nil && *p.NamespaceID == ns.ID {
+				// SCHED-GAP-066: budget-exhausted projects are never
+				// packed. Checked AFTER the membership test so a blocked
+				// project logs once per eval, not once per namespace.
+				if m.budgetBlocked(p) != "" {
+					continue
+				}
 				nsProjects = append(nsProjects, *p)
 			}
 		}
@@ -371,6 +377,10 @@ func (m *MultiPoolPacker) Pack(
 	for i := range projects {
 		p := &projects[i]
 		if !p.Enabled {
+			continue
+		}
+		// SCHED-GAP-066: budget-exhausted projects are never packed.
+		if m.budgetBlocked(p) != "" {
 			continue
 		}
 		if selectedNames[p.Name] {

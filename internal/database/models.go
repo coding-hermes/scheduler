@@ -17,6 +17,9 @@ type Project struct {
 	FallbackModel     string  `json:"fallback_model"`      // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
 	FallbackProvider  string  `json:"fallback_provider"`   // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
 	NoGlobalFallback  bool    `json:"no_global_fallback"`  // true → skip the spawner-level (env) fallback tier entirely (SCHED-GAP-064)
+	DailyBudgetUSD    float64 `json:"daily_budget_usd"`    // per-UTC-day spend cap; <= 0 = unlimited (SCHED-GAP-066)
+	WeeklyBudgetUSD   float64 `json:"weekly_budget_usd"`   // per-UTC-week spend cap (Monday 00:00 UTC reset); <= 0 = unlimited (SCHED-GAP-066)
+	FinalBudgetUSD    float64 `json:"final_budget_usd"`    // one-time lifetime spend cap, never resets; <= 0 = unlimited (SCHED-GAP-066)
 	WorkerModel       string  `json:"worker_model"`        // optional: suggested worker model (foreman can override)
 	WorkerProvider    string  `json:"worker_provider"`     // optional: suggested worker provider (foreman can override)
 	GatewayKey        string  `json:"gateway_key"`         // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key

@@ -54,6 +54,10 @@ type MultiPoolPacker struct {
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
 	pendingCounter  *PendingTaskCounter
+	// budgetGate, when non-nil, excludes budget-exhausted projects from
+	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
+	// nil = no budget enforcement (tests, spend-query failure fail-open).
+	budgetGate BudgetGate
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
@@ -71,6 +75,28 @@ func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.Blac
 // SetPendingCounter overrides the pending-task counter (for tests).
 func (m *MultiPoolPacker) SetPendingCounter(c *PendingTaskCounter) {
 	m.pendingCounter = c
+}
+
+// SetBudgetGate installs the per-cycle budget gate (SCHED-GAP-066). Pass nil
+// to disable budget enforcement.
+func (m *MultiPoolPacker) SetBudgetGate(g BudgetGate) {
+	m.budgetGate = g
+}
+
+// budgetBlocked reports the block detail for a budget-exhausted project, or
+// "" when the project may be scheduled. Beside the !p.Enabled checks in every
+// selection path, an exhausted project is skipped and logged — never killed
+// mid-run (running ticks are untouched by the packers).
+func (m *MultiPoolPacker) budgetBlocked(p *database.Project) string {
+	if m.budgetGate == nil {
+		return ""
+	}
+	detail, blocked := m.budgetGate(p.Name, p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD)
+	if blocked {
+		log.Printf("BUDGET: %s blocked (%s) — excluded from selection; running ticks untouched", p.Name, detail)
+		return detail
+	}
+	return ""
 }
 
 // FlatFallback delegates to the existing Packer.Pick for flat single-pool mode.
@@ -111,6 +137,10 @@ func (m *MultiPoolPacker) packFlat(
 	for i := range projects {
 		p := &projects[i]
 		if !p.Enabled {
+			continue
+		}
+		// SCHED-GAP-066: budget-exhausted projects are never packed.
+		if m.budgetBlocked(p) != "" {
 			continue
 		}
 		if runningSet != nil && runningSet[p.Name] {

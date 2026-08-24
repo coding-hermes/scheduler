@@ -426,6 +426,20 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				updates.FallbackProvider = &pd.FallbackProvider
 			}
 			updates.NoGlobalFallback = &pd.NoGlobalFallback
+			// SCHED-GAP-066: budget caps pin when the key is PRESENT in
+			// fleet.toml (pointer non-nil) — including an explicit 0, which
+			// clears an API-assigned cap back to unlimited. A keyless entry
+			// leaves an API-assigned budget untouched (GatewayKey-style
+			// conditional pin).
+			if pd.DailyBudgetUSD != nil {
+				updates.DailyBudgetUSD = pd.DailyBudgetUSD
+			}
+			if pd.WeeklyBudgetUSD != nil {
+				updates.WeeklyBudgetUSD = pd.WeeklyBudgetUSD
+			}
+			if pd.FinalBudgetUSD != nil {
+				updates.FinalBudgetUSD = pd.FinalBudgetUSD
+			}
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
 			}
@@ -493,6 +507,17 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		Command:          pd.Command,
 		Deliver:          pd.Deliver,
 		Enabled:          enabled,
+	}
+	// SCHED-GAP-066: budget caps are opt-in — absent or <= 0 means unlimited,
+	// which is also the schema default (0.0), so only positive values map.
+	if pd.DailyBudgetUSD != nil && *pd.DailyBudgetUSD > 0 {
+		p.DailyBudgetUSD = *pd.DailyBudgetUSD
+	}
+	if pd.WeeklyBudgetUSD != nil && *pd.WeeklyBudgetUSD > 0 {
+		p.WeeklyBudgetUSD = *pd.WeeklyBudgetUSD
+	}
+	if pd.FinalBudgetUSD != nil && *pd.FinalBudgetUSD > 0 {
+		p.FinalBudgetUSD = *pd.FinalBudgetUSD
 	}
 	if pd.NamespaceID != "" {
 		nsID := pd.NamespaceID

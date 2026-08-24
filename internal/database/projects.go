@@ -69,11 +69,12 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		}
 	}
 	const q = `INSERT INTO projects
-(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		p.Name, p.RepoURL, p.Workdir, p.Weight, p.Priority, p.CooldownS,
 		p.DecayRate, p.Model, p.Provider, p.FallbackModel, p.FallbackProvider, boolToInt(p.NoGlobalFallback),
+		p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD,
 		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.Command, p.NamespaceID, p.Deliver, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt)
 	if err != nil {
@@ -85,7 +86,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
@@ -93,6 +94,7 @@ FROM projects WHERE name = ?`
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
@@ -110,7 +112,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -131,6 +133,7 @@ FROM projects`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
@@ -150,7 +153,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -167,6 +170,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback,
+			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
@@ -201,6 +205,9 @@ type ProjectUpdates struct {
 	FallbackModel    *string  `json:"fallback_model"` // SCHED-GAP-064: project fallback tier for the spawn chain
 	FallbackProvider *string  `json:"fallback_provider"`
 	NoGlobalFallback *bool    `json:"no_global_fallback"` // true → skip the spawner-level (env) fallback tier
+	DailyBudgetUSD   *float64 `json:"daily_budget_usd"`   // SCHED-GAP-066: per-UTC-day spend cap; <= 0 = unlimited
+	WeeklyBudgetUSD  *float64 `json:"weekly_budget_usd"`  // per-UTC-week spend cap (Monday 00:00 UTC reset); <= 0 = unlimited
+	FinalBudgetUSD   *float64 `json:"final_budget_usd"`   // one-time lifetime spend cap, never resets; <= 0 = unlimited
 	WorkerModel      *string  `json:"worker_model"`
 	WorkerProvider   *string  `json:"worker_provider"`
 	GatewayKey       *string  `json:"gateway_key"` // per-foreman Hermes gateway key; "" clears back to shared key
@@ -415,6 +422,18 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.NoGlobalFallback != nil {
 		setClauses = append(setClauses, "no_global_fallback = ?")
 		args = append(args, boolToInt(*updates.NoGlobalFallback))
+	}
+	if updates.DailyBudgetUSD != nil {
+		setClauses = append(setClauses, "daily_budget_usd = ?")
+		args = append(args, *updates.DailyBudgetUSD)
+	}
+	if updates.WeeklyBudgetUSD != nil {
+		setClauses = append(setClauses, "weekly_budget_usd = ?")
+		args = append(args, *updates.WeeklyBudgetUSD)
+	}
+	if updates.FinalBudgetUSD != nil {
+		setClauses = append(setClauses, "final_budget_usd = ?")
+		args = append(args, *updates.FinalBudgetUSD)
 	}
 	if updates.WorkerModel != nil {
 		setClauses = append(setClauses, "worker_model = ?")

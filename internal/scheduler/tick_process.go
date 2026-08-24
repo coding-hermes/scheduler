@@ -38,6 +38,19 @@ func (l *Loop) evaluate() {
 
 	// Pick projects.
 	var packed []PackedProject
+	// SCHED-GAP-066: install the per-cycle budget gate on BOTH selection
+	// paths (multi-pool + flat fallback). Spends are precomputed in one
+	// query anchored at this eval's `now`; a nil gate (query failure) is
+	// fail-open so a broken spend query never halts scheduling. The gate
+	// filters NEW spawns only — running ticks are never touched.
+	if gate := NewBudgetGate(context.Background(), l.db, now); gate != nil {
+		if l.multiPoolPacker != nil {
+			l.multiPoolPacker.SetBudgetGate(gate)
+		}
+		if l.packer != nil {
+			l.packer.SetBudgetGate(gate)
+		}
+	}
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
