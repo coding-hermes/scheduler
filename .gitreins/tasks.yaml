@@ -1788,3 +1788,17 @@ tasks:
   status: complete
   created_at: '2026-08-24T07:32:48.961319+00:00'
   completed_at: '2026-08-24T07:34:29.477683+00:00'
+- id: SCHED-GAP-065
+  title: Idle-tick model routing (idle_model/idle_provider)
+  criteria:
+  - fleet.toml schema gains per-project idle_model/idle_provider + spawner env defaults
+    SCHEDULER_FOREMAN_IDLE_MODEL/_PROVIDER; spawn resolution picks the IDLE chain
+    (idle_model -> idle_provider -> regular chain fallthrough) when the project board
+    has ZERO pending tasks (PendingTaskCounter), else the regular fallback chain (SCHED-GAP-064);
+    empty idle fields fall through to the regular chain; spawn log line records resolved
+    model/provider + chain kind (idle|work); DB migration + API JSON fields + loader
+    pins; unit tests for idle resolution/fallthrough/spawn-selection; fleet.example.toml
+    + docs updated
+  status: complete
+  created_at: '2026-08-24T08:14:57.106822+00:00'
+  completed_at: '2026-08-24T08:43:12.474230+00:00'
