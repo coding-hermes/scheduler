@@ -1802,3 +1802,12 @@ tasks:
   status: complete
   created_at: '2026-08-24T08:14:57.106822+00:00'
   completed_at: '2026-08-24T08:43:12.474230+00:00'
+- id: SCHED-GAP-068
+  title: Weekly fleet cost digest script
+  criteria:
+  - Script at ~/.hermes/scripts/fleet-cost-digest.py reads scheduler.db ticks (tokens_in/tokens_out/cost_usd
+    per project) + DeepSeek usage export; emits per-project table with in:out ratios
+    and budget status; delivers to Telegram and DuckBrain weekly; numbers match scheduler.db.
+  status: complete
+  created_at: '2026-08-24T09:11:30.268517+00:00'
+  completed_at: '2026-08-24T09:34:37.282017+00:00'
