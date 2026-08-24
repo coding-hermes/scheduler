@@ -1811,3 +1811,14 @@ tasks:
   status: complete
   created_at: '2026-08-24T09:11:30.268517+00:00'
   completed_at: '2026-08-24T09:34:37.282017+00:00'
+- id: SCHED-GAP-067
+  title: FLEET SKILL-BLOAT AUDIT + FRESH-CONTEXT MANAGEMENT
+  criteria:
+  - scan all fleet SKILL.md files for size (target <50K; >100K = emergency); fat-skill
+    report committed; >100K fleet skills + coding-hermes foreman-ops/core skills reduced
+    to <=50K with detail moved to references/ (nothing deleted, edited skills still
+    load); fresh-context/cache-miss control guidance (byte-stable context within ticks,
+    batch LLM calls, avoid >5min gaps) committed to docs/; no code changes
+  status: complete
+  created_at: '2026-08-24T09:59:05.325843+00:00'
+  completed_at: '2026-08-24T11:50:41.102776+00:00'
