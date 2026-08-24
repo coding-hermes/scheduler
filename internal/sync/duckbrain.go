@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -631,6 +632,12 @@ func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any,
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Optional DuckBrain API-key auth (DB-GAP-039): when the daemon runs
+	// with --auth=apikey it requires the X-API-Key header. Unset/empty env
+	// keeps the pre-auth behavior exactly — no header is sent.
+	if tok := os.Getenv("DUCKBRAIN_API_KEY"); tok != "" {
+		req.Header.Set("X-API-Key", tok)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
