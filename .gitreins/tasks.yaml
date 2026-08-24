@@ -1771,3 +1771,20 @@ tasks:
   status: complete
   created_at: '2026-08-23T16:58:49.387740+00:00'
   completed_at: '2026-08-23T17:40:36.345135+00:00'
+- id: SCHED-GAP-066
+  title: Per-project budgets (daily/weekly/final) in fleet.toml + scheduler enforcement
+  criteria:
+  - fleet.toml schema gains per-project budget caps (daily_budget_usd/weekly_budget_usd/final_budget_usd);
+    scheduler blocks FOLLOW-UP spawns once budget exhausted (never kills running ticks);
+    daily/weekly reset windows; /api/v1/projects exposes spent/remaining; exhausted
+    project shows blocked_reason=budget and zero new spawns while running tick finishes
+  status: complete
+  created_at: '2026-08-24T06:52:57.069023+00:00'
+  completed_at: '2026-08-24T07:29:24.471629+00:00'
+- id: NEVER-DONE-470
+  title: 'NEVER-DONE full audit tick #470'
+  criteria:
+  - full 12-point audit battery all PASS; board updated + pushed
+  status: complete
+  created_at: '2026-08-24T07:32:48.961319+00:00'
+  completed_at: '2026-08-24T07:34:29.477683+00:00'
