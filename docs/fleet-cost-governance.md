@@ -97,7 +97,11 @@ gateway default = main key — the f3919a7 bug class). Explicit chains fix both.
   API-assigned caps untouched); `PUT /api/v1/projects/{name}` accepts the
   snake_case keys.
 
-## 5. Skill bloat + fresh-context management (SCHED-GAP-067)
+## 5. Skill bloat + fresh-context management (SCHED-GAP-067 — DONE 2026-08-24)
+
+Full policy: `docs/skill-size-policy.md`. Audit + split results:
+`docs/skill-bloat-report-2026-08-24.md` (19 fleet skills split from ~100K to
+≤50K; fleet >50K count 97→78; zero fleet skills >100K remain).
 
 - Fleet-wide SKILL.md size scan (cron or one-shot): >100K = emergency, >50K = trim.
   Move pitfalls corpora to `references/`; keep the body lean (proven: 100K→48.6K
