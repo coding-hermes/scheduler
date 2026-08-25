@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-24 07:32 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-25 20:52 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 42 |
 | Total projects (incl. disabled) | 74 |
-| Active ticks | 4 |
+| Active ticks | 3 |
 | Budget | 100 |
-| Last evaluation | 2026-08-24T07:27:48Z |
-| Recent outcomes | completed=16358, failed=38904, timeout=4102 |
+| Last evaluation | 2026-08-25T20:48:21Z |
+| Recent outcomes | completed=16824, failed=38960, timeout=4117 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (74 projects, 42 enabled)
@@ -25,16 +25,16 @@
 | asce | 10 | 15 | 21600s | coding-hermes |
 | bunker | 10 | 15 | 21600s | coding-hermes |
 | chimera-v2 | 10 | 15 | 21600s | coding-hermes |
-| coding-hermes-scheduler | 10 | 15 | 60s | coding-hermes |
+| coding-hermes-scheduler | 10 | 15 | 3600s | coding-hermes |
 | consensus | 10 | 15 | 21600s | coding-hermes |
-| crier | 10 | 15 | 60s | coding-hermes |
-| deepseek-dashboard | 10 | 15 | 60s | coding-hermes |
+| deepseek-dashboard | 10 | 15 | 21600s | coding-hermes |
 | dexdat-memory | 10 | 10 | 21600s | coding-hermes |
 | duckbrain | 10 | 10 | 21600s | coding-hermes |
 | h3 | 10 | 15 | 21600s | coding-hermes |
 | h3-sdk-python-foreman | 10 | 15 | 21600s | coding-hermes |
 | h3-shim-foreman | 10 | 15 | 21600s | coding-hermes |
 | helix | 10 | 10 | 21600s | coding-hermes |
+| hermes-canopy | 10 | 10 | 7200s | coding-hermes |
 | hermes-dagger | 10 | 10 | 7200s | coding-hermes |
 | hivemind-work | 10 | 15 | 21600s | coding-hermes |
 | Kobayashi-Maru | 10 | 15 | 21600s | coding-hermes |
@@ -45,15 +45,15 @@
 | speclang | 10 | 15 | 21600s | coding-hermes |
 | terminal-jail | 10 | 15 | 21600s | coding-hermes |
 | totalstack | 10 | 15 | 21600s | coding-hermes |
-| warpfs | 10 | 15 | 60s | coding-hermes |
-| wojons-mythos | 10 | 15 | 60s | coding-hermes |
-| uhlp | 9 | 15 | 21600s | coding-hermes |
+| warpfs | 10 | 15 | 21600s | coding-hermes |
+| wojons-mythos | 10 | 15 | 21600s | coding-hermes |
+| uhlp | 9 | 15 | 3600s | coding-hermes |
 | gitreins-poc | 8 | 15 | 21600s | coding-hermes |
 | h3-sdk-go-foreman | 8 | 10 | 21600s | coding-hermes |
-| helios | 8 | 10 | 21600s | coding-hermes |
+| helios | 8 | 10 | 3600s | coding-hermes |
 | inference-estimator | 8 | 10 | 21600s | coding-hermes |
-| mafia-ai-benchmark | 8 | 10 | 21600s | coding-hermes |
-| dexdat-core | 5 | 10 | 60s | coding-hermes |
+| mafia-ai-benchmark | 8 | 10 | 3600s | coding-hermes |
+| dexdat-core | 5 | 10 | 3600s | coding-hermes |
 | escalation-doctrine | 5 | 10 | 21600s | coding-hermes |
 | h3-sdk-typescript-foreman | 5 | 10 | 21600s | coding-hermes |
 | heading | 5 | 10 | 21600s | coding-hermes |
@@ -61,7 +61,7 @@
 | imhotep | 5 | 10 | 21600s | coding-hermes |
 | my-project | 5 | 10 | 21600s | coding-hermes |
 | off-by-one | 5 | 10 | 21600s | coding-hermes |
-| rethinkdb | 5 | 10 | 60s | coding-hermes |
+| rethinkdb | 5 | 10 | 21600s | coding-hermes |
 
 ### Disabled (32)
 
@@ -75,6 +75,7 @@
 | ch-eta | 2 | 5 | 43200s | test-dummy |
 | ch-gamma | 7 | 10 | 43200s | test-dummy |
 | ch-zeta | 4 | 5 | 43200s | test-dummy |
+| crier | 10 | 15 | 60s | coding-hermes |
 | dc-prune | 7 | 8 | 43200s | test-dummy |
 | dc-rotate | 3 | 3 | 43200s | test-dummy |
 | dc-vacuum | 5 | 5 | 43200s | test-dummy |
@@ -85,7 +86,6 @@
 | global-fast | 10 | 15 | 43200s | test-dummy |
 | global-slow | 1 | 10 | 43200s | test-dummy |
 | HEADING | 10 | 25 | 43200s | coding-hermes |
-| hermes-canopy | 10 | 10 | 7200s | coding-hermes |
 | hivemind-pulse | 10 | 15 | 43200s | coding-hermes |
 | mon-alert | 4 | 5 | 43200s | test-dummy |
 | mon-check | 6 | 5 | 43200s | test-dummy |
