@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // ── SCHED-GAP-066: /api/v1/projects budget payload ───────────────────────
@@ -59,11 +60,17 @@ func TestSchedGap066_ProjectsPayloadBudget(t *testing.T) {
 		t.Fatalf("UpdateProject: %v", err)
 	}
 
-	// $6.25 of ticks today → over the daily cap.
-	now := time.Now().UTC()
-	insertAPICostTick(t, a, "t-api-1", "budget-exhausted", now.Add(-2*time.Hour), 4.00)
-	insertAPICostTick(t, a, "t-api-2", "budget-exhausted", now.Add(-time.Hour), 2.25)
-	insertAPICostTick(t, a, "t-api-3", "budget-unlimited", now.Add(-time.Hour), 9.50)
+	// $6.25 of ticks today → over the daily cap. Anchor tick times to the
+	// UTC day start, NOT time.Now(): the daily window resets at UTC
+	// midnight (UTCDayStart), so now.Add(-2h) falls on the previous day
+	// between 00:00-02:00 UTC and the -2h tick drops out of the window
+	// (spent 2.25 instead of 6.25 — time-of-day flaky; CI runs outside
+	// that window so it stayed green). dayStart+1h/+2h are always inside
+	// the current UTC day at any run time.
+	dayStart := scheduler.UTCDayStart(time.Now())
+	insertAPICostTick(t, a, "t-api-1", "budget-exhausted", dayStart.Add(time.Hour), 4.00)
+	insertAPICostTick(t, a, "t-api-2", "budget-exhausted", dayStart.Add(2*time.Hour), 2.25)
+	insertAPICostTick(t, a, "t-api-3", "budget-unlimited", dayStart.Add(2*time.Hour), 9.50)
 
 	code, parsed := a.do(t, "GET", "/api/v1/projects", nil)
 	if code != 200 {
