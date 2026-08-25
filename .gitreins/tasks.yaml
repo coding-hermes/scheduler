@@ -1910,3 +1910,22 @@ tasks:
   status: complete
   created_at: '2026-08-25T20:50:11.530677+00:00'
   completed_at: '2026-08-25T20:52:34.685261+00:00'
+- id: NEVER-DONE-483
+  title: 'NEVER-DONE light audit tick #483'
+  criteria:
+  - 'Light audit passes: gates green (build/vet/gofmt/tests 9-9/lint 0/guard 4-4),
+    endpoint battery 16/16, storm-watch 0 dups, ns probe 404/404/200, parity documented,
+    pins match, CI green, no new findings requiring board tasks; board updated + pushed'
+  status: complete
+  created_at: '2026-08-25T21:59:49.005400+00:00'
+  completed_at: '2026-08-25T22:08:01.396096+00:00'
+- id: INT-CI-003
+  title: 'INT-CI-003: env-key probe breaks TestRun_StartsAndStops callCount'
+  criteria:
+  - 'TestRun_StartsAndStops passes with DUCKBRAIN_API_KEY set in the environment:
+    handler counts only POST requests; go test -count=1 -short -run TestRun_StartsAndStops
+    ./internal/sync/ passes with the env key set AND unset; full suite go test -count=1
+    -short -p 1 ./... 9/9 PASS; build/vet/gofmt/lint clean'
+  status: complete
+  created_at: '2026-08-25T22:02:56.062043+00:00'
+  completed_at: '2026-08-25T22:03:48.824604+00:00'
