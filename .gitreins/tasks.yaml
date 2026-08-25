@@ -1851,3 +1851,22 @@ tasks:
   status: complete
   created_at: '2026-08-24T18:51:48.131318+00:00'
   completed_at: '2026-08-24T18:53:58.571998+00:00'
+- id: INT-CI-002
+  title: Fix UTC-midnight-flaky TestSchedGap066_ProjectsPayloadBudget
+  criteria:
+  - go test -short -p 1 -count=1 ./... passes 9/9 (internal/api included) at any run
+    time; tick times anchored to UTCDayStart(now) + fixed offsets, no time.Now()-relative
+    offsets; gofmt clean
+  status: complete
+  created_at: '2026-08-25T01:08:53.679642+00:00'
+  completed_at: '2026-08-25T01:10:00.653936+00:00'
+- id: SCHED-GAP-070
+  title: Wire fleet cost digest + quality review into cron
+  criteria:
+  - "crontab -l shows BOTH fleet-cost-digest-weekly.sh and fleet-quality-review-cron.sh\
+    \ entries (existing 3 entries untouched); each wrapper runs cleanly (exit 0) and\
+    \ produces fresh output \u2014 cost digest log and quality review log/state \u2014\
+    \ whose numbers match live scheduler DB cost data; board SCHED-GAP-070 row updated"
+  status: complete
+  created_at: '2026-08-25T10:44:35.711821+00:00'
+  completed_at: '2026-08-25T10:49:24.901674+00:00'
