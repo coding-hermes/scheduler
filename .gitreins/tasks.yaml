@@ -1877,3 +1877,20 @@ tasks:
   status: complete
   created_at: '2026-08-25T17:26:16.050751+00:00'
   completed_at: '2026-08-25T17:30:25.410436+00:00'
+- id: SCHED-GAP-072
+  title: DuckBrain sync key startup validation
+  criteria:
+  - "Criterion: DuckBrainSync validates DUCKBRAIN_API_KEY before the first sync write\
+    \ via a side-effect-free authenticated probe (GET baseURL/api/namespaces?namespace=<ns>\
+    \ with X-API-Key header); a 401/403 probe response fails fast \u2014 distinct\
+    \ 'DUCKBRAIN KEY REJECTED' log line + HIGH event (component duckbrain-sync) +\
+    \ sync writes skipped (no spool flood). 401/403 on any write classified via sentinel\
+    \ error ErrDuckBrainKeyRejected distinct from generic unreachable; key-rejected\
+    \ failures do NOT spool (terminal) and mark health unreachable with last_error;\
+    \ a successful write after rejection resets health and emits the standard recovery\
+    \ event. Gates: make build; go vet ./internal/sync/...; gofmt clean; go test -count=1\
+    \ -short -p 1 ./... 9/9 packages; golangci-lint 0 issues. Unit tests cover 401/403/200/429\
+    \ paths with httptest."
+  status: complete
+  created_at: '2026-08-25T17:44:22.681043+00:00'
+  completed_at: '2026-08-25T18:16:36.012364+00:00'
