@@ -1894,3 +1894,12 @@ tasks:
   status: complete
   created_at: '2026-08-25T17:44:22.681043+00:00'
   completed_at: '2026-08-25T18:16:36.012364+00:00'
+- id: E2E-001-481
+  title: 'E2E-001 FULL battery tick #481'
+  criteria:
+  - 'Full E2E battery passes: all gates green (build/vet/gofmt/tests 9-9/lint 0/govulncheck
+    0), endpoint battery 16/16, storm-watch 0 dups, ns probe 404/404/200, parity documented,
+    pins match, CI green, no new findings requiring board tasks'
+  status: complete
+  created_at: '2026-08-25T19:43:40.952813+00:00'
+  completed_at: '2026-08-25T19:45:48.020338+00:00'
