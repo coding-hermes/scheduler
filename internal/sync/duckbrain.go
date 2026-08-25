@@ -7,16 +7,29 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
+
+// ErrDuckBrainKeyRejected is the terminal classification for DuckBrain
+// 401/403 responses (SCHED-GAP-072). During the tick #479 incident
+// (2026-08-25) a restored auth.json was missing the scheduler daemon's
+// DUCKBRAIN_API_KEY entry, so every sync write 401'd for 1.5h and spooled
+// ~7.9K events into sync_spool with no distinct signal. Anything that wraps
+// this sentinel is an AUTH rejection, not a transient outage: key-rejected
+// writes are NOT spooled (replaying them with the same rejected key is
+// pointless) and a HIGH event names the key as the cause so it is visible
+// immediately.
+var ErrDuckBrainKeyRejected = errors.New("duckbrain key rejected")
 
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica
 // via its HTTP REST API. Writes that fail are spooled to SQLite and
@@ -30,13 +43,14 @@ type DuckBrainSync struct {
 	httpClient *http.Client
 	interval   time.Duration
 
-	mu             sync.Mutex
-	reachable      bool   // last cycle reached DuckBrain
-	consecutiveErr int    // consecutive failed post cycles
-	lastErr        string // last error text
-	lastOKAt       string // RFC3339 of last successful post
-	spooled        int    // pending spooled writes (cached from count)
-	alertedDown    bool   // HIGH event already emitted for current outage
+	mu              sync.Mutex
+	reachable       bool   // last cycle reached DuckBrain
+	consecutiveErr  int    // consecutive failed post cycles
+	lastErr         string // last error text
+	lastOKAt        string // RFC3339 of last successful post
+	spooled         int    // pending spooled writes (cached from count)
+	alertedDown     bool   // HIGH event already emitted for current outage
+	keyRejectedFlag bool   // API key rejected (SCHED-GAP-072) — sync cycles skipped until a probe succeeds
 
 	// pendingSpool buffers failed writes during a sync cycle. They are
 	// flushed to sync_spool AFTER all syncs complete, because sync
@@ -118,6 +132,14 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 	log.Printf("SYNC: DuckBrain sync started (namespace=%s, baseURL=%s, every %s)",
 		d.namespace, d.baseURL, d.interval)
 
+	// Startup key validation (SCHED-GAP-072): when DUCKBRAIN_API_KEY is set,
+	// probe DuckBrain BEFORE the first write cycle so a rejected key fails
+	// fast with a distinct HIGH event instead of silently spooling every
+	// failed write (tick #479: 7.9K events over 1.5h before anyone noticed).
+	if err := d.validateKey(ctx); err != nil {
+		log.Printf("DUCKBRAIN KEY REJECTED: %v — failing fast, sync writes disabled", err)
+	}
+
 	// Sync immediately on start.
 	d.syncOnce(ctx)
 
@@ -137,6 +159,21 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 // + SDLC events + tick lifecycle.
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
+
+	// Key-rejection gate (SCHED-GAP-072): while the API key is rejected,
+	// skip the whole cycle. Writes would 401 and spooling them is what
+	// flooded sync_spool during tick #479 — replay with the same rejected
+	// key is pointless. The flag clears via validateKey below once the
+	// server accepts the key again.
+	if d.keyRejected() {
+		_ = d.validateKey(ctx) // periodic re-validation; flips state on success
+		if d.keyRejected() {
+			// Persist any queued HIGH event NOW so the alert lands
+			// immediately instead of waiting for a recovered cycle.
+			d.flushPending(ctx)
+			return
+		}
+	}
 
 	// Phase 0: replay anything spooled from previous failures. This is the
 	// fallback path — spooled writes are re-attempted before fresh syncs so
@@ -211,6 +248,100 @@ func (d *DuckBrainSync) flushPending(ctx context.Context) {
 			Message:   ev.message,
 			Details:   ev.details,
 		})
+	}
+}
+
+// duckbrainProbeTimeout caps the side-effect-free key probe so startup is
+// never blocked long by a slow/unreachable DuckBrain.
+const duckbrainProbeTimeout = 5 * time.Second
+
+// keyRejected reports whether sync cycles are currently gated off because
+// the DuckBrain API key was rejected.
+func (d *DuckBrainSync) keyRejected() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.keyRejectedFlag
+}
+
+// validateKey probes DuckBrain with a cheap, side-effect-free GET
+// (/api/namespaces for this namespace) that exercises the same X-API-Key
+// auth gate as writes (SCHED-GAP-072). Behavior:
+//   - DUCKBRAIN_API_KEY empty/unset: pre-auth compatibility — NO probe, nil.
+//   - 401/403: flags sync cycles off, bumps health failure state, queues a
+//     distinct HIGH event naming the key as rejected, and returns a wrapped
+//     ErrDuckBrainKeyRejected.
+//   - Other statuses/network errors: reported but NON-terminal — the caller
+//     proceeds (writes then surface the real outage through recordFailure).
+//
+// A successful probe while flagged clears the flag (and, if an outage was
+// recorded, fires the standard recovery INFO event) so writes resume.
+func (d *DuckBrainSync) validateKey(ctx context.Context) error {
+	tok := os.Getenv("DUCKBRAIN_API_KEY")
+	if tok == "" {
+		return nil // pre-auth mode: no header, no probe (DB-GAP-039 contract)
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, duckbrainProbeTimeout)
+	defer cancel()
+
+	url := fmt.Sprintf("%s/api/namespaces?namespace=%s", d.baseURL, d.namespace)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("create key probe: %w", err)
+	}
+	req.Header.Set("X-API-Key", tok)
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("duckbrain key probe: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		err := fmt.Errorf("%w (HTTP %d): %s", ErrDuckBrainKeyRejected, resp.StatusCode, string(respBody))
+		d.recordKeyRejected(err.Error())
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("duckbrain key probe returned %d", resp.StatusCode)
+	}
+
+	d.mu.Lock()
+	wasFlagged := d.keyRejectedFlag
+	d.keyRejectedFlag = false
+	d.mu.Unlock()
+	if wasFlagged {
+		log.Printf("SYNC: DuckBrain accepted the API key again — resuming sync writes")
+		d.recordSuccess() // resets reachable/consecutiveErr, INFO recovery if outage
+	}
+	return nil
+}
+
+// recordKeyRejected updates health after an auth-rejected write/probe and
+// gates sync cycles off until a later validateKey succeeds. Like
+// recordFailure it bumps consecutive_failures/last_error and queues ONE HIGH
+// per outage — but the HIGH message names the REJECTED KEY (not
+// "unreachable") and nothing is spooled (SCHED-GAP-072).
+func (d *DuckBrainSync) recordKeyRejected(errText string) {
+	d.mu.Lock()
+	d.reachable = false
+	d.consecutiveErr++
+	d.lastErr = errText
+	d.keyRejectedFlag = true
+	first := !d.alertedDown
+	d.alertedDown = true
+	if first {
+		d.pendingEvents = append(d.pendingEvents, pendingSyncEvent{
+			severity: database.SeverityHigh,
+			message:  "DuckBrain API key REJECTED (HTTP 401/403) — failing fast, sync writes disabled, nothing spooled",
+			details:  `{"error": "` + errText + `", "base_url": "` + d.baseURL + `"}`,
+		})
+	}
+	d.mu.Unlock()
+
+	if first {
+		log.Printf("SYNC: DuckBrain API key rejected (HIGH event queued)")
 	}
 }
 
@@ -590,6 +721,14 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 
 	postErr := d.postMemoryBody(ctx, body, key)
 	if postErr != nil {
+		// Key-rejected writes are TERMINAL (SCHED-GAP-072): replaying them
+		// with the same rejected key is pointless — spooling every one of
+		// them is exactly what flooded sync_spool with ~7.9K events during
+		// tick #479. Record the distinct HIGH and move on without spooling.
+		if errors.Is(postErr, ErrDuckBrainKeyRejected) {
+			d.recordKeyRejected(postErr.Error())
+			return postErr
+		}
 		// FALLBACK: never drop a write silently. Buffer it for spooling —
 		// it is persisted to sync_spool by flushPending at the end of the
 		// cycle and replayed once DuckBrain is reachable again. This is
@@ -650,6 +789,13 @@ func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any,
 		// Retryable — stop the burst; remaining writes spool for next cycle.
 		return fmt.Errorf("duckbrain rate limited (429)")
 	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// AUTH rejection (SCHED-GAP-072): terminal, classified via sentinel
+		// so callers can skip spooling and raise a distinct HIGH event
+		// instead of the generic "unreachable" path (tick #479 flood).
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("%w (HTTP %d): %s", ErrDuckBrainKeyRejected, resp.StatusCode, string(respBody))
+	}
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("duckbrain api returned %d: %s", resp.StatusCode, string(respBody))
@@ -685,8 +831,14 @@ func (d *DuckBrainSync) recordSuccess() {
 
 // recordFailure updates health after a failed write and queues a HIGH
 // alert event on the first failure of a new outage (flushed end-of-cycle,
-// not on every retry).
+// not on every retry). A key-rejected error text gets a distinct HIGH
+// message naming the REJECTED KEY rather than "unreachable"
+// (SCHED-GAP-072).
 func (d *DuckBrainSync) recordFailure(errText string) {
+	highMessage := "DuckBrain unreachable — writes spooled for replay"
+	if strings.Contains(errText, ErrDuckBrainKeyRejected.Error()) {
+		highMessage = "DuckBrain API key REJECTED (HTTP 401/403) — failing fast, sync writes disabled, nothing spooled"
+	}
 	d.mu.Lock()
 	d.reachable = false
 	d.consecutiveErr++
@@ -697,7 +849,7 @@ func (d *DuckBrainSync) recordFailure(errText string) {
 		// First failure of a new outage — queued (flushed end-of-cycle).
 		d.pendingEvents = append(d.pendingEvents, pendingSyncEvent{
 			severity: database.SeverityHigh,
-			message:  "DuckBrain unreachable — writes spooled for replay",
+			message:  highMessage,
 			details:  `{"error": "` + errText + `", "base_url": "` + d.baseURL + `"}`,
 		})
 	}
