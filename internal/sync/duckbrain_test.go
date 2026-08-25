@@ -818,7 +818,12 @@ func TestRun_StartsAndStops(t *testing.T) {
 
 	var callCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		// Count writes only: the SCHED-GAP-072 key-validation probe is a GET
+		// (/api/namespaces) and fires whenever DUCKBRAIN_API_KEY is set in the
+		// environment — counting it would make this test environment-dependent.
+		if r.Method == http.MethodPost {
+			callCount++
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
