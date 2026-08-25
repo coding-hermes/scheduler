@@ -1870,3 +1870,10 @@ tasks:
   status: complete
   created_at: '2026-08-25T10:44:35.711821+00:00'
   completed_at: '2026-08-25T10:49:24.901674+00:00'
+- id: NEVER-DONE-479
+  title: NEVER-DONE full 12-point audit tick 479
+  criteria:
+  - 12-point audit gates all PASS; board updated and pushed
+  status: complete
+  created_at: '2026-08-25T17:26:16.050751+00:00'
+  completed_at: '2026-08-25T17:30:25.410436+00:00'
