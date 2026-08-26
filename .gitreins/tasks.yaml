@@ -1970,3 +1970,13 @@ tasks:
   status: complete
   created_at: '2026-08-26T17:41:06.415070+00:00'
   completed_at: '2026-08-26T17:44:22.219049+00:00'
+- id: DOGFOOD-017
+  title: bin/migrate silent-skip diagnostics + docs
+  criteria:
+  - migrate logs a per-job SKIP reason when a job fails eligibility (not-a-coding-hermes-job
+    branch currently silent); README Getting Started step 4 and the tool's help text
+    document the two eligibility filters (name/skills must mention coding-hermes/foreman;
+    prompt must contain a workdir path). Build, vet, gofmt, and the test suite pass.
+  status: complete
+  created_at: '2026-08-26T18:09:48.583124+00:00'
+  completed_at: '2026-08-26T18:14:10.093699+00:00'
