@@ -39,9 +39,9 @@ func main() {
 	dbFile := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	dryRun := flag.Bool("dry-run", false, "Print what would be imported without writing")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [flags]\n\n", os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(), "Imports Hermes cron jobs from jobs.json into the scheduler database.\n\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "Eligibility: only coding-hermes jobs are imported — the job name\n(case-insensitive) or any skill must mention \"coding-hermes\" or \"foreman\", and\nthe job prompt must contain a workdir path (e.g. \"Workdir: /home/...\").\nIneligible jobs are skipped with a per-job SKIP reason.\n\nFlags:\n")
+		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [flags]\n\n", os.Args[0])
+		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Imports Hermes cron jobs from jobs.json into the scheduler database.\n\n")
+		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Eligibility: only coding-hermes jobs are imported — the job name\n(case-insensitive) or any skill must mention \"coding-hermes\" or \"foreman\", and\nthe job prompt must contain a workdir path (e.g. \"Workdir: /home/...\").\nIneligible jobs are skipped with a per-job SKIP reason.\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
