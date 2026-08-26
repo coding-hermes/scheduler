@@ -2,7 +2,7 @@
 name: scheduler-usage
 description: >-
   How to USE the Coding Hermes Scheduler for real: REST API dialect (snake_case,
-  envelopes), MCP tools (fleet_* only — fleet_add BROKEN, see golden rule 8),
+  envelopes), MCP tools (fleet_* only — fleet_add accepts repo or repo_url),
   dashboard, project lifecycle (create/PUT/DELETE soft+purge), board format,
   sim/verify harnesses, and the known traps (spawn tick_id unresolvable,
   fleet_ticks PascalCase, migrate silent skips, --simulate doesn't simulate).
@@ -100,8 +100,9 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
 
 `{"jsonrpc":"2.0","id":N,"method":"tools/call","params":{"name":"fleet_status","arguments":{}}}`.
 Read-only tools (`fleet_status`, `fleet_projects`, `fleet_project_detail`,
-`fleet_ticks`) are safe anytime. **Do NOT use `fleet_add`** (broken —
-DOGFOOD-014; create via REST instead). `fleet_ticks` output is PascalCase
+`fleet_ticks`) are safe anytime. **`fleet_add` works** (DOGFOOD-014 fixed):
+pass `repo` or its REST-style alias `repo_url` for the git URL (DOGFOOD-019);
+REST `POST /api/v1/projects` also works. `fleet_ticks` output is PascalCase
 (DOGFOOD-016).
 
 ## Diagnostics and verification
@@ -132,7 +133,7 @@ DOGFOOD-014; create via REST instead). `fleet_ticks` output is PascalCase
   (`/home/kara/coding-hermes-scheduler/.coding-hermes/tasks.md`) is
   intentionally not a board.
 - `/fleet …` chat slash commands: the plugin symlink is FIXED (re-pointed
-  08-15, DOGFOOD-008) but `add` is dead via the fleet_add bug (DOGFOOD-014);
+  08-15, DOGFOOD-008) and `add` works (DOGFOOD-014 fixed, DOGFOOD-019 alias);
   the read-only commands (`status`, `projects`, `ticks`, …) work.
 - `docs/fleet.md` is regenerated from the live API (docs/regenerate_fleet.py;
   last run 2026-08-25, 74 projects/42 enabled) — but trust the API over any
