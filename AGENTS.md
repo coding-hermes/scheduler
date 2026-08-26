@@ -108,7 +108,7 @@ internal/
 | `/api/v1/projects` | List/manage projects |
 | `/api/v1/namespaces` | List namespaces |
 | `/api/v1/ticks` | List ticks |
-| `/api/v1/events` | List event log (GET; SSE streaming supported) |
+| `/api/v1/events` | List event log (GET) |
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/api/v1/pause` | Pause scheduling (POST) |
 | `/api/v1/resume` | Resume scheduling (POST) |

@@ -691,6 +691,74 @@ func TestMCP_FleetTicks(t *testing.T) {
 	}
 }
 
+func TestMCP_FleetTicks_SnakeCaseWire(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	// Insert a tick row directly (created_at is NOT NULL).
+	if _, err := m.db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES ('dogfood-016-tick', 'alpha', 'running', '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')`); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_ticks",
+			"arguments": map[string]interface{}{},
+		},
+	})
+	if resp.Error != nil {
+		t.Fatalf("error: %+v", resp.Error)
+	}
+	text := extractText(t, resp.Result)
+
+	// S06 conformance: row keys must be snake_case (REST dialect).
+	for _, want := range []string{`"id":`, `"project_name":`, `"status":`, `"spawned_at":`, `"files_changed":`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("fleet_ticks missing %s; got: %s", want, text)
+		}
+	}
+	// PascalCase keys must be gone.
+	for _, bad := range []string{`"ID":`, `"ProjectName"`, `"SpawnedAt"`, `"FilesChanged"`} {
+		if strings.Contains(text, bad) {
+			t.Errorf("fleet_ticks still emits PascalCase key %s; got: %s", bad, text)
+		}
+	}
+	// The tick row itself must be present.
+	if !strings.Contains(text, "dogfood-016-tick") {
+		t.Errorf("expected inserted tick in result, got: %s", text)
+	}
+
+	// fleet_project_detail's recent_ticks must be snake_case too.
+	_, resp = m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_project_detail",
+			"arguments": map[string]interface{}{"name": "alpha"},
+		},
+	})
+	if resp.Error != nil {
+		t.Fatalf("error: %+v", resp.Error)
+	}
+	text = extractText(t, resp.Result)
+	if !strings.Contains(text, `"recent_ticks"`) {
+		t.Fatalf("expected recent_ticks in result, got: %s", text)
+	}
+	if !strings.Contains(text, `"id":`) {
+		t.Errorf("recent_ticks missing snake_case \"id\":; got: %s", text)
+	}
+	for _, bad := range []string{`"ID":`, `"SpawnedAt"`, `"CompletedAt"`} {
+		if strings.Contains(text, bad) {
+			t.Errorf("fleet_project_detail recent_ticks still emits PascalCase key %s; got: %s", bad, text)
+		}
+	}
+}
+
 func TestMCP_FleetEvaluate(t *testing.T) {
 	m := newMCPTestServer(t)
 	_, resp := m.call(t, map[string]interface{}{

@@ -42,8 +42,13 @@ func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]int
 	rows, _ := s.db.QueryContext(ctx, `SELECT id, status, outcome, spawned_at, completed_at, commits, files_changed 
 		FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 5`, name)
 	type tickSummary struct {
-		ID, Status, Outcome, SpawnedAt, CompletedAt string
-		Commits, FilesChanged                       int
+		ID           string `json:"id"`
+		Status       string `json:"status"`
+		Outcome      string `json:"outcome"`
+		SpawnedAt    string `json:"spawned_at"`
+		CompletedAt  string `json:"completed_at"`
+		Commits      int    `json:"commits"`
+		FilesChanged int    `json:"files_changed"`
 	}
 	var ticks []tickSummary
 	if rows != nil {
@@ -223,8 +228,15 @@ func (s *Server) toolFleetTicks(ctx context.Context, args map[string]interface{}
 	}
 	defer rows.Close()
 	type tickRow struct {
-		ID, ProjectName, Status, Outcome, SpawnedAt, CompletedAt string
-		ExitCode, Commits, FilesChanged                          int
+		ID           string `json:"id"`
+		ProjectName  string `json:"project_name"`
+		Status       string `json:"status"`
+		Outcome      string `json:"outcome"`
+		SpawnedAt    string `json:"spawned_at"`
+		CompletedAt  string `json:"completed_at"`
+		ExitCode     int    `json:"exit_code"`
+		Commits      int    `json:"commits"`
+		FilesChanged int    `json:"files_changed"`
 	}
 	var ticks []tickRow
 	for rows.Next() {
