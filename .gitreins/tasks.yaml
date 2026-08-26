@@ -1959,3 +1959,14 @@ tasks:
   status: complete
   created_at: '2026-08-26T17:24:36.904710+00:00'
   completed_at: '2026-08-26T17:27:54.736981+00:00'
+- id: DOGFOOD-016
+  title: MCP fleet_ticks snake_case wire conformance
+  criteria:
+  - fleet_ticks MCP tool output uses snake_case JSON keys (id, project_name, status,
+    outcome, spawned_at, completed_at, exit_code, commits, files_changed); a regression
+    test in internal/mcp asserts snake_case keys for fleet_ticks AND fleet_project_detail
+    recent_ticks; AGENTS.md /api/v1/events row no longer claims SSE; go build, go
+    vet, go test -count=1 -short -p 1 ./... all pass
+  status: complete
+  created_at: '2026-08-26T17:41:06.415070+00:00'
+  completed_at: '2026-08-26T17:44:22.219049+00:00'
