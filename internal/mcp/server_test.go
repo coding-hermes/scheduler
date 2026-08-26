@@ -571,6 +571,38 @@ func TestMCP_FleetAdd(t *testing.T) {
 	if got.Weight != 10 {
 		t.Errorf("weight = %d, want default 10", got.Weight)
 	}
+
+	// repo_url must work as an ALIAS for repo (DOGFOOD-019): an agent that
+	// learned the REST dialect (POST /api/v1/projects takes repo_url) calls
+	// fleet_add with repo_url and NO repo key — it must succeed and store
+	// the supplied URL.
+	_, resp = m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "fleet_add",
+			"arguments": map[string]interface{}{
+				"name":     "aliasproj",
+				"repo_url": "https://example.com/aliasproj",
+				"workdir":  "/tmp/aliasproj",
+			},
+		},
+	})
+	if resp.Error != nil {
+		t.Fatalf("fleet_add with repo_url alias failed: %+v", resp.Error)
+	}
+	text = extractText(t, resp.Result)
+	if !strings.Contains(text, `"status":"added"`) {
+		t.Errorf("expected added status for repo_url alias, got: %s", text)
+	}
+	got, err = database.GetProject(context.Background(), m.db, "aliasproj")
+	if err != nil {
+		t.Fatalf("GetProject(aliasproj): %v", err)
+	}
+	if got.RepoURL != "https://example.com/aliasproj" {
+		t.Errorf("RepoURL = %q, want the repo_url-supplied value", got.RepoURL)
+	}
 }
 
 // TestMCP_FleetAdd_WeightValidation verifies out-of-range weight values are
@@ -665,6 +697,11 @@ func TestMCP_FleetAdd_MissingFields(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatal("expected error for missing repo/workdir")
 		return
+	}
+	// The message must name both param spellings so an agent that only knows
+	// the REST dialect (repo_url) can recover (DOGFOOD-019).
+	if !strings.Contains(resp.Error.Message, "repo") || !strings.Contains(resp.Error.Message, "repo_url") {
+		t.Errorf("error = %q, want mention of both repo and repo_url", resp.Error.Message)
 	}
 }
 

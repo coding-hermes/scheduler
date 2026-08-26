@@ -63,12 +63,10 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
    then mirror into board.db with delete-then-insert (the tasks table has NO
    primary key — `INSERT OR REPLACE` fails with a Binder error). Validate with
    `python3 -c "import json;[json.loads(l) for l in open('tasks.jsonl')]"`.
-8. **MCP `fleet_add` is BROKEN (DOGFOOD-014, P0, open):** every call errors
-   `-32000 "CHECK constraint failed: priority >= 1 AND priority <= 10"` —
-   toolFleetAdd never defaults Priority (REST defaults 5). The `/fleet add`
-   slash command routes through it, so it's dead too. **Use REST
-   `POST /api/v1/projects` to create projects** until fixed. Also note the
-   param naming: MCP takes `repo`, REST takes `repo_url` (DOGFOOD-019).
+8. **MCP `fleet_add` works (DOGFOOD-014 fixed, tick #484):** accepts `repo`
+   (canonical) or `repo_url` (alias, REST-style name, DOGFOOD-019) for the
+   git URL. REST `POST /api/v1/projects` also works. Use either surface to
+   create projects.
 9. **Do NOT poll `GET /ticks/{id}` with the tick_id returned by
    `POST /projects/{name}/spawn`** (DOGFOOD-015, P1, open): the spawn
    response formats the id in UTC, the stored row in local time → 404

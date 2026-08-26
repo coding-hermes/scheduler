@@ -153,14 +153,15 @@ var tools = []ToolDefinition{
 	},
 	{
 		Name:        "fleet_add",
-		Description: "Add a new project to the fleet.",
+		Description: "Add a new project to the fleet. Accepts repo or repo_url (alias) for the git URL.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":    map[string]interface{}{"type": "string", "description": "Project name"},
-				"repo":    map[string]interface{}{"type": "string", "description": "Git repo URL"},
-				"workdir": map[string]interface{}{"type": "string", "description": "Local working directory"},
-				"weight":  map[string]interface{}{"type": "integer", "description": "Initial weight (default 10)"},
+				"name":     map[string]interface{}{"type": "string", "description": "Project name"},
+				"repo":     map[string]interface{}{"type": "string", "description": "Git repo URL"},
+				"repo_url": map[string]interface{}{"type": "string", "description": "Alias for repo (REST-style name)"},
+				"workdir":  map[string]interface{}{"type": "string", "description": "Local working directory"},
+				"weight":   map[string]interface{}{"type": "integer", "description": "Initial weight (default 10)"},
 			},
 			"required": []string{"name", "repo", "workdir"},
 		},

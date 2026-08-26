@@ -158,11 +158,17 @@ func (s *Server) toolFleetResume(ctx context.Context, args map[string]interface{
 
 func (s *Server) toolFleetAdd(ctx context.Context, args map[string]interface{}) (string, error) {
 	name := getStringArg(args, "name")
+	// repo_url is accepted as an alias for repo (REST-style name) so agents
+	// that learned the REST dialect (POST /api/v1/projects uses repo_url)
+	// don't fail the call. repo remains the canonical/primary name.
 	repo := getStringArg(args, "repo")
+	if repo == "" {
+		repo = getStringArg(args, "repo_url")
+	}
 	workdir := getStringArg(args, "workdir")
 	weight := getIntArg(args, "weight")
 	if name == "" || repo == "" || workdir == "" {
-		return "", fmt.Errorf("name, repo, and workdir are required")
+		return "", fmt.Errorf("name, repo (or repo_url), and workdir are required")
 	}
 	// Mirror the REST create defaults (internal/api/server_projects.go): a
 	// minimal {name, repo, workdir} body must satisfy the CHECK constraints.
