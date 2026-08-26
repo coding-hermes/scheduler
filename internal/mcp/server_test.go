@@ -530,13 +530,14 @@ func TestMCP_FleetPause_MissingName(t *testing.T) {
 	}
 }
 
+// TestMCP_FleetAdd verifies the ONLY add-project path through MCP works:
+// tools/call fleet_add with a minimal {name, repo, workdir} body (no priority
+// arg) must succeed and create a row with the S06 defaults (weight 10,
+// priority 5). Before DOGFOOD-014 the tool built database.Project without
+// Priority, so the explicit 0 defeated the schema DEFAULT and every call
+// failed with "CHECK constraint failed: priority >= 1 AND priority <= 10".
 func TestMCP_FleetAdd(t *testing.T) {
 	m := newMCPTestServer(t)
-	// Note: the MCP fleet_add tool doesn't initialize priority/cooldown, leaving them
-	// at 0 which violates the CHECK constraint (priority >= 1). This is a known
-	// bug in the add tool. Here we verify it accepts the call and creates a row by
-	// first seeding the project manually then updating it via the tool with valid priority.
-	mustCreateMCPProject(t, m.db, "alpha")
 
 	_, resp := m.call(t, map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -548,19 +549,105 @@ func TestMCP_FleetAdd(t *testing.T) {
 				"name":    "newproj",
 				"repo":    "https://example.com/newproj",
 				"workdir": "/tmp/newproj",
-				"weight":  15,
 			},
 		},
 	})
-	// Either it succeeded (tool fixed upstream) or it returned a CHECK constraint error.
-	// Both are acceptable outcomes — what we're testing is the round-trip JSON-RPC envelope.
-	if resp.Error == nil {
-		// If it succeeded, verify the project exists.
-		if _, err := database.GetProject(context.Background(), m.db, "newproj"); err != nil {
-			t.Errorf("GetProject: %v", err)
+	if resp.Error != nil {
+		t.Fatalf("fleet_add failed: %+v", resp.Error)
+	}
+	text := extractText(t, resp.Result)
+	if !strings.Contains(text, `"status":"added"`) {
+		t.Errorf("expected added status, got: %s", text)
+	}
+
+	// The row must exist with the default priority (and weight).
+	got, err := database.GetProject(context.Background(), m.db, "newproj")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Priority != 5 {
+		t.Errorf("priority = %d, want default 5", got.Priority)
+	}
+	if got.Weight != 10 {
+		t.Errorf("weight = %d, want default 10", got.Weight)
+	}
+}
+
+// TestMCP_FleetAdd_WeightValidation verifies out-of-range weight values are
+// rejected with a friendly validation error before reaching the database —
+// never a raw sqlite CHECK constraint string.
+func TestMCP_FleetAdd_WeightValidation(t *testing.T) {
+	m := newMCPTestServer(t)
+
+	for _, tc := range []struct {
+		weight int
+	}{
+		{weight: 0},
+		{weight: 150},
+	} {
+		_, resp := m.call(t, map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params": map[string]interface{}{
+				"name": "fleet_add",
+				"arguments": map[string]interface{}{
+					"name":    "badweight",
+					"repo":    "https://example.com/badweight",
+					"workdir": "/tmp/badweight",
+					"weight":  tc.weight,
+				},
+			},
+		})
+		if resp.Error == nil {
+			t.Fatalf("expected error for weight=%d, got nil", tc.weight)
 		}
-	} else {
-		t.Logf("fleet_add returned error (acceptable — known CHECK constraint bug): %v", resp.Error)
+		if !strings.Contains(resp.Error.Message, "weight must be 1-100") {
+			t.Errorf("weight=%d: error = %q, want friendly range error", tc.weight, resp.Error.Message)
+		}
+		if strings.Contains(resp.Error.Message, "CHECK constraint") {
+			t.Errorf("weight=%d: raw CHECK constraint surfaced: %q", tc.weight, resp.Error.Message)
+		}
+	}
+
+	// No row may have been created by the rejected calls.
+	if _, err := database.GetProject(context.Background(), m.db, "badweight"); err == nil {
+		t.Fatal("project was created despite weight validation rejection")
+	}
+}
+
+// TestMCP_FleetAdd_DuplicateName verifies a duplicate name surfaces as a
+// friendly "already exists" error, not a raw sqlite UNIQUE constraint string.
+func TestMCP_FleetAdd_DuplicateName(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "fleet_add",
+			"arguments": map[string]interface{}{
+				"name":    "alpha",
+				"repo":    "https://example.com/alpha2",
+				"workdir": "/tmp/alpha2",
+			},
+		},
+	})
+	if resp.Error == nil {
+		t.Fatal("expected error for duplicate name")
+		return
+	}
+	// CreateProject's case-insensitive duplicate check fires before the
+	// INSERT, so the message is the readable "already registered by enabled
+	// project" form (same text the REST handler returns verbatim) rather
+	// than a raw UNIQUE constraint string. Either way it must be friendly.
+	if !strings.Contains(resp.Error.Message, "already") {
+		t.Errorf("error = %q, want friendly duplicate message", resp.Error.Message)
+	}
+	if strings.Contains(resp.Error.Message, "UNIQUE constraint") {
+		t.Errorf("raw UNIQUE constraint surfaced: %q", resp.Error.Message)
 	}
 }
 

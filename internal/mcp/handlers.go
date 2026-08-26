@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -158,19 +159,47 @@ func (s *Server) toolFleetAdd(ctx context.Context, args map[string]interface{}) 
 	if name == "" || repo == "" || workdir == "" {
 		return "", fmt.Errorf("name, repo, and workdir are required")
 	}
-	if weight == 0 {
+	// Mirror the REST create defaults (internal/api/server_projects.go): a
+	// minimal {name, repo, workdir} body must satisfy the CHECK constraints.
+	// weight=0 is ambiguous — either the arg was omitted or explicitly set
+	// to 0 — so only default when the key is absent; an explicit 0 is
+	// rejected below as out of range.
+	if _, ok := args["weight"]; !ok {
 		weight = 10
 	}
+	if weight < 1 || weight > 100 {
+		return "", fmt.Errorf("weight must be 1-100, got %d", weight)
+	}
 	p := &database.Project{
-		Name:    name,
-		RepoURL: repo,
-		Workdir: workdir,
-		Weight:  weight,
+		Name:      name,
+		RepoURL:   repo,
+		Workdir:   workdir,
+		Weight:    weight,
+		Priority:  5,
+		CooldownS: 900,
+		DecayRate: 1.0,
 	}
 	if err := database.CreateProject(ctx, s.db, p); err != nil {
-		return "", err
+		return "", friendlyCreateError(name, err)
 	}
 	return jsonString(map[string]string{"status": "added", "project": name}), nil
+}
+
+// friendlyCreateError maps database.CreateProject failures to human-readable
+// messages so a raw sqlite error never surfaces through the MCP tool. Mirrors
+// the REST handler's 409/400 mapping (internal/api/server_projects.go).
+func friendlyCreateError(name string, err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "UNIQUE constraint"):
+		return fmt.Errorf("project %q already exists", name)
+	case strings.Contains(msg, "already registered by enabled project"):
+		return fmt.Errorf("cannot add project %q: %s", name, msg)
+	case strings.Contains(msg, "CHECK constraint failed"):
+		return fmt.Errorf("invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0")
+	default:
+		return fmt.Errorf("failed to create project %q: %s", name, msg)
+	}
 }
 
 func (s *Server) toolFleetTicks(ctx context.Context, args map[string]interface{}) (string, error) {
