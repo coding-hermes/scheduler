@@ -122,8 +122,7 @@ func TestSlotPool_SpawnFailureAdvancesAttemptClock(t *testing.T) {
 	pool := NewSlotPool(1, 10*time.Second, spawner, lc)
 
 	now := time.Now()
-	tickID := fmt.Sprintf("%s-%s", "sgap001-clock", now.Format("2006-01-02-15-04-05"))
-	pool.Spawn(PackedProject{Name: "sgap001-clock", Workdir: t.TempDir()}, now, true, db)
+	tickID := pool.Spawn(PackedProject{Name: "sgap001-clock", Workdir: t.TempDir()}, now, true, db)
 
 	// The pool spawns in a goroutine — poll for the terminal status. The
 	// tick row does not exist until the goroutine enqueues it, so use a

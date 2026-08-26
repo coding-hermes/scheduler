@@ -37,6 +37,12 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 
 	// budget=0 ensures Pick returns empty so ForceEvaluate is a no-op (no real spawning).
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
+	// DOGFOOD-015: the spawn endpoint now enqueues synchronously and fires a
+	// real spawn session. Disable the exec fallback so the session cannot
+	// launch an actual `hermes` process from the test host — the tick row is
+	// enqueued before the session runs, so the endpoint contract (resolvable
+	// tick_id) holds without a live spawn.
+	loop.SetNoExecFallback(true)
 	srv := api.NewServer(db, loop)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -569,6 +575,66 @@ func TestAPI_SpawnProject_NotFound(t *testing.T) {
 	status, _ := a.do(t, "POST", "/api/v1/projects/nope/spawn", nil)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", status)
+	}
+}
+
+// TestAPI_SpawnProject_TickIDResolves is the DOGFOOD-015 regression: the
+// tick_id returned by POST /projects/{name}/spawn must be a REAL stored row
+// (canonical UTC via database.NextTickID), so the documented
+// spawn → GET /ticks/{id} workflow resolves. Before the fix the handler
+// predicted an id with time.Now().UTC().Format while SlotPool.Spawn stamped
+// the stored row with LOCAL time — on a -05:00 host the returned id 404'd
+// forever. Deterministic: the row is enqueued synchronously by the handler,
+// so no sleeps or time mocking are needed.
+func TestAPI_SpawnProject_TickIDResolves(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "POST", "/api/v1/projects/alpha/spawn", nil)
+	if status != http.StatusAccepted {
+		t.Fatalf("spawn status = %d, want 202: %v", status, body)
+	}
+	tickID, ok := body["tick_id"].(string)
+	if !ok || tickID == "" {
+		t.Fatalf("tick_id = %v, want non-empty string", body["tick_id"])
+	}
+
+	// The returned id must resolve via GET /ticks/{id} — the documented
+	// spawn→poll-by-id workflow (docs/api.md §5).
+	status, tickBody := a.do(t, "GET", "/api/v1/ticks/"+tickID, nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET /ticks/%s status = %d, want 200 (tick not found): %v", tickID, status, tickBody)
+	}
+	if tickBody["id"] != tickID {
+		t.Errorf("tick id = %v, want %q", tickBody["id"], tickID)
+	}
+	if tickBody["project_name"] != "alpha" {
+		t.Errorf("project_name = %v, want alpha", tickBody["project_name"])
+	}
+	// The id must be canonical UTC (database.NextTickID format) — the
+	// local-time stamping bug produced ids that never matched.
+	if _, err := time.Parse("2006-01-02-15-04-05", strings.TrimPrefix(tickID, "alpha-")); err != nil {
+		t.Errorf("tick_id = %q has invalid timestamp: %v", tickID, err)
+	}
+}
+
+// TestAPI_SpawnProject_AlreadyRunning pins the SCHED-GAP-030 duplicate-spawn
+// protection on the manual spawn endpoint: a project with a queued/running
+// tick row is refused with 409 instead of double-spawning. The queued row is
+// seeded directly (deterministic — the async spawn session from a live POST
+// could complete before the second request lands).
+func TestAPI_SpawnProject_AlreadyRunning(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	// Seed a queued tick row — the same state a live spawn leaves behind.
+	if err := scheduler.NewLifecycleTracker(a.db).Enqueue("alpha", "alpha-seeded-queued"); err != nil {
+		t.Fatalf("seed enqueue: %v", err)
+	}
+
+	status, body := a.do(t, "POST", "/api/v1/projects/alpha/spawn", nil)
+	if status != http.StatusConflict {
+		t.Fatalf("spawn status = %d, want 409: %v", status, body)
 	}
 }
 

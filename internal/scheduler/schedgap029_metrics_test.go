@@ -410,8 +410,7 @@ func TestSCHEDGAP029_SlotPoolGatewayMetricsPersist(t *testing.T) {
 	pool := NewSlotPool(2, 30*time.Second, spawner, lc)
 
 	now := time.Now()
-	tickID := fmt.Sprintf("%s-%s", projName, now.Format("2006-01-02-15-04-05"))
-	pool.Spawn(PackedProject{Name: projName, Workdir: t.TempDir()}, now, true, nil)
+	tickID := pool.Spawn(PackedProject{Name: projName, Workdir: t.TempDir()}, now, true, nil)
 
 	// Wait for the tick to complete.
 	deadline := time.Now().Add(10 * time.Second)

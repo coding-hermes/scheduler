@@ -3,10 +3,11 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // SlotPool manages concurrent tick slots using a buffered channel as a
@@ -139,10 +140,34 @@ func (p *SlotPool) ReleaseAll() {
 // slot from the pool, spawns via the gateway, and releases the slot on
 // completion or timeout. Delivery and auto-slowdown are integrated.
 // Spawn returns immediately — it is fire-and-forget.
-func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *sql.DB) {
-	go func() {
-		tickID := fmt.Sprintf("%s-%s", proj.Name, now.Format("2006-01-02-15-04-05"))
+//
+// DOGFOOD-015: the tick id is generated HERE via database.NextTickID (the
+// canonical UTC generator) instead of formatting the caller's local-time
+// `now` — the old `now.Format("2006-01-02-15-04-05")` stamped rows with
+// LOCAL time while the API spawn handler predicted UTC ids, so a returned
+// tick_id could never resolve via GET /ticks/{id} on a non-UTC host.
+// The generated id is returned so callers can correlate the row.
+func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *sql.DB) string {
+	tickID := database.NextTickID(proj.Name)
+	p.spawn(proj, tickID, now, noDeliver, db, false)
+	return tickID
+}
 
+// SpawnEnqueued fires a project tick whose row was ALREADY enqueued (by the
+// caller, e.g. Loop.SpawnNow for the API spawn endpoint) into the slot pool.
+// The goroutine acquires a slot, transitions the row to running, spawns via
+// the gateway, and releases the slot on completion or timeout. The tick id
+// must match the enqueued row — the caller generated it with
+// database.NextTickID. Returns immediately — fire-and-forget.
+func (p *SlotPool) SpawnEnqueued(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB) {
+	p.spawn(proj, tickID, now, noDeliver, db, true)
+}
+
+// spawn is the shared goroutine body for Spawn and SpawnEnqueued. When
+// enqueued is true the row already exists (status queued) and the goroutine
+// only transitions it to running; otherwise it enqueues first.
+func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB, enqueued bool) {
+	go func() {
 		// Wait for a free slot.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -155,9 +180,11 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
 
 		// Enqueue and start.
-		if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil {
-			log.Printf("SPAWN: enqueue %s: %v", proj.Name, err)
-			return
+		if !enqueued {
+			if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil {
+				log.Printf("SPAWN: enqueue %s: %v", proj.Name, err)
+				return
+			}
 		}
 		if err := p.lifecycle.StartRunning(tickID); err != nil {
 			log.Printf("SPAWN: start %s: %v", proj.Name, err)

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // Loop runs the main evaluation cycle.
@@ -359,6 +361,88 @@ func (l *Loop) Stop() {
 // ForceEvaluate triggers an immediate evaluation.
 func (l *Loop) ForceEvaluate() {
 	go l.evaluate()
+}
+
+// ErrProjectRunning is returned by SpawnNow when the project already has a
+// tick in flight (slot pool running set or DB running rows) — the
+// SCHED-GAP-030 duplicate-spawn protection. The caller should surface it as
+// a 409 rather than enqueue a second tick for the same project.
+var ErrProjectRunning = errors.New("project already has a tick in flight")
+
+// SpawnNow synchronously enqueues a tick for the project and fires the spawn
+// session into the slot pool, returning the REAL stored tick id (DOGFOOD-015).
+//
+// The id is generated with database.NextTickID — the canonical UTC generator
+// shared with SlotPool.Spawn — so the returned id always resolves via
+// GET /ticks/{id}. The row is enqueued BEFORE the async spawn session runs,
+// so the id is resolvable immediately (status queued) even when the pool is
+// full and the goroutine has to wait for a slot.
+//
+// Duplicate-spawn protection (SCHED-GAP-030): a project that already holds a
+// slot, or has a running/queued tick row, is refused with ErrProjectRunning —
+// the same dedup the evaluation loop applies, so the manual spawn endpoint
+// can never double-spawn a project that is mid-tick.
+func (l *Loop) SpawnNow(project database.Project) (string, error) {
+	l.mu.RLock()
+	simulate := l.simulate
+	noDeliver := l.noDeliver
+	l.mu.RUnlock()
+
+	// Dedup: refuse when the project already occupies a slot or has a
+	// running/queued tick row (SCHED-GAP-030 — the eval loop merges both
+	// sources; mirror it here so the manual endpoint cannot double-spawn).
+	if l.slotPool != nil && l.slotPool.RunningSet()[project.Name] {
+		return "", ErrProjectRunning
+	}
+	var inFlight int
+	if err := l.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_name = ? AND status IN ('queued','running')`, project.Name).Scan(&inFlight); err == nil && inFlight > 0 {
+		return "", ErrProjectRunning
+	}
+
+	tickID := database.NextTickID(project.Name)
+
+	proj := PackedProject{
+		Name:             project.Name,
+		Priority:         float64(project.Priority),
+		Weight:           project.Weight,
+		Workdir:          project.Workdir,
+		RepoURL:          project.RepoURL,
+		Command:          project.Command,
+		Model:            project.Model,
+		Provider:         project.Provider,
+		FallbackModel:    project.FallbackModel,
+		FallbackProvider: project.FallbackProvider,
+		NoGlobalFallback: project.NoGlobalFallback,
+		IdleModel:        project.IdleModel,
+		IdleProvider:     project.IdleProvider,
+		WorkerModel:      project.WorkerModel,
+		WorkerProvider:   project.WorkerProvider,
+		GatewayKey:       project.GatewayKey,
+		Deliver:          project.Deliver,
+	}
+
+	// Simulation mode: the sim spawner inserts the row itself (status
+	// running) and completes it in 50-250ms — the returned id still
+	// resolves, so the spawn→poll workflow holds in --simulate too.
+	if simulate {
+		if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
+			return "", fmt.Errorf("sim spawn %s: %w", project.Name, err)
+		}
+		return tickID, nil
+	}
+
+	// Enqueue synchronously so the returned id is a real, stored row.
+	if err := l.lifecycle.Enqueue(project.Name, tickID); err != nil {
+		return "", fmt.Errorf("enqueue tick for %s: %w", project.Name, err)
+	}
+
+	// Fire the spawn session (async — the row is already queued, so the
+	// returned id resolves regardless of slot availability).
+	if l.slotPool == nil {
+		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+	}
+	l.slotPool.SpawnEnqueued(proj, tickID, time.Now(), noDeliver, l.db)
+	return tickID, nil
 }
 
 func (l *Loop) Pause()  { l.pauseCh <- false }

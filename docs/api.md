@@ -392,9 +392,15 @@ sub-route does not map to 404 (see also resume).
 
 ### POST /api/v1/projects/{name}/spawn
 
-**Purpose:** Manually trigger a tick for one project — forces an evaluation
-cycle. The returned `tick_id` is the predicted `<name>-<YYYY>-<MM>-<DD>-<HH>-<MM>-<SS>`
-id; actual spawn still respects scheduler state (cooldown, budget, namespace).
+**Purpose:** Manually trigger a tick for one project. The tick is enqueued
+synchronously and the returned `tick_id` is the REAL stored row id
+(DOGFOOD-015) — `GET /api/v1/ticks/{tick_id}` resolves it immediately
+(status `queued` until the spawn session picks it up). The id is the
+canonical UTC `<name>-<YYYY>-<MM>-<DD>-<HH>-<MM>-<SS>` (same generator the
+scheduler's own spawn path uses), so it never drifts from the stored row on
+non-UTC hosts. Actual spawn still respects scheduler state (cooldown,
+budget, namespace); a project that already has a queued/running tick is
+refused with 409 (duplicate-spawn protection, SCHED-GAP-030).
 
 **Response 202:**
 
@@ -403,11 +409,13 @@ id; actual spawn still respects scheduler state (cooldown, budget, namespace).
  "tick_id":"my-project-2026-08-18-06-55-00"}
 ```
 
-**Errors:** 404 `{"error":"project not found"}`; 405 on non-POST.
+**Errors:** 404 `{"error":"project not found"}`; 409 `{"error":"project already has a tick in flight"}`; 405 on non-POST.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/spawn
 # 202 {"status":"spawned","project":"my-project","tick_id":"my-project-..."}
+curl -s http://127.0.0.1:9090/api/v1/ticks/my-project-2026-08-18-06-55-00
+# 200 — the returned tick_id always resolves
 ```
 
 ## 6. Namespaces

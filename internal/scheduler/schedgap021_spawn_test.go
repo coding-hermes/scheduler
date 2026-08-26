@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -96,8 +95,7 @@ func TestSlotPool_OutOfOrderCompletionKeepsRunningMarker(t *testing.T) {
 
 	// The fast tick acquires the second slot and completes almost immediately
 	// — out of acquisition order, exactly like the live incident.
-	fastTickID := fmt.Sprintf("%s-%s", fastName, now.Format("2006-01-02-15-04-05"))
-	pool.Spawn(PackedProject{Name: fastName, Workdir: t.TempDir()}, now, true, nil)
+	fastTickID := pool.Spawn(PackedProject{Name: fastName, Workdir: t.TempDir()}, now, true, nil)
 
 	// Wait for the fast tick to COMPLETE. Its RunningSet entry is transient
 	// (acquire→spawn→complete→release can all land inside one poll
