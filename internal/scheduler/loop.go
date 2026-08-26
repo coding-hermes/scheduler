@@ -53,9 +53,17 @@ type Loop struct {
 	// re-evaluation (zero = never). The loop has recovered within one
 	// cycle when lastEval is refreshed after this timestamp — the forced
 	// eval was consumed and evaluate() ran. Distinguishes the
-	// self-recovering idle cadence (MEDIUM, SCHED-GAP-061) from a genuine
-	// wedge whose forced evals never run (HIGH).
+	// self-recovering idle cadence from a genuine wedge whose forced
+	// evals never run.
 	lastStallForce time.Time
+	// stallMisses is the count of CONSECUTIVE non-recovered stall
+	// crossings (DOGFOOD-018): the previous forced re-evaluation was
+	// consumed by the loop, but lastEval was still frozen at the
+	// pre-force value when the next detection ran — evaluate() ran but
+	// did not refresh lastEval, or is so wedged the force never landed.
+	// At evalStallEscalateAfter consecutive misses the detection escalates
+	// to HIGH. Any recovered crossing resets the counter to zero.
+	stallMisses int
 	// GAP-043 zero-select monitoring: consecutive evals that selected 0
 	// projects while eligible (enabled, not running, cooldown elapsed)
 	// projects existed. Evaluations log nothing on a zero select, so an
@@ -474,6 +482,15 @@ const evalStallThreshold = 10 * 30 * time.Second // 10 x min-interval
 // recovery only when the previous forced eval was pushed within the gap.
 const evalStallReEmitGap = 30 * time.Minute
 
+// evalStallEscalateAfter is the number of CONSECUTIVE non-recovered stall
+// crossings (previous forced re-evaluation consumed but lastEval still
+// frozen at the pre-force value) before the watchdog re-escalates to HIGH
+// (DOGFOOD-018). The threshold is 2 so a single transient non-recovery —
+// e.g. a slow evaluate() that refreshes lastEval shortly after the health
+// ticker sampled it — does not alarm, while a genuinely wedged loop
+// surfaces within two forced cycles. Any recovery resets the counter.
+const evalStallEscalateAfter = 2
+
 // zeroSelectThreshold is the number of consecutive zero-select evaluations
 // (with eligible projects present) before EVAL-ZERO-SELECT fires (GAP-043).
 // Two is chosen so a single transient empty pick (e.g. every project in
@@ -500,17 +517,27 @@ const zeroSelectReEmitGap = 30 * time.Minute
 // (all projects in cooldown), then lastEval ages again. Every such
 // self-recovering detection was previously re-emitted HIGH every
 // evalStallReEmitGap, desensitizing operators to real wedges (37 HIGH
-// events observed 08-19T20:08Z..08-21T10:03Z). Severity now follows the
+// events observed 08-19T20:08Z..08-21T10:03Z). Severity follows the
 // outcome of the previous forced re-evaluation:
 //   - first onset (no previous force, or the previous episode's force is
-//     older than the re-emit window) or non-recovery (lastEval still
-//     frozen at the pre-force value: the loop never consumed the forced
-//     eval) → HIGH;
+//     older than the re-emit window) or a GENUINE wedge (consecutive
+//     non-recoveries: the previous forced eval was consumed but lastEval
+//     was still frozen at the pre-force value) → HIGH;
 //   - one-cycle recovery (lastEval refreshed after a force pushed within
 //     the re-emit window: the loop subsequently evaluated normally) →
-//     MEDIUM — the events table has no WARN level (CHECK constraint
-//     CRITICAL/HIGH/MEDIUM/LOW/INFO), and MEDIUM is the established
-//     "notable but not alarming" tier (throttled starvation notices).
+//     INFO — the events table has no WARN level (CHECK constraint
+//     CRITICAL/HIGH/MEDIUM/LOW/INFO), and the INFO tier matches the
+//     "evaluation started" cadence while keeping the recovery visible in
+//     the event stream.
+//
+// DOGFOOD-018: the SCHED-GAP-061 demotion (recovered → MEDIUM) still
+// flooded the event log with a MEDIUM every evalStallReEmitGap on a
+// healthy idle fleet (27 events 08-25T00:00Z..08-26, spacing 30-60 min),
+// burying real escalations. Recoveries now emit at INFO, and a genuine
+// wedge — where the forced re-evaluation does NOT restore lastEval —
+// escalates HIGH only after evalStallEscalateAfter consecutive
+// non-recovered crossings (see stallMisses), so a single transient miss
+// cannot alarm while a persistently wedged loop still surfaces.
 func (l *Loop) checkEvalStall(running int) {
 	l.mu.RLock()
 	lastEval := l.lastEval
@@ -525,15 +552,35 @@ func (l *Loop) checkEvalStall(running int) {
 	}
 
 	now := time.Now()
+	// onset: no recent forced eval — the stall episode is starting
+	// fresh, or the previous episode closed more than
+	// evalStallReEmitGap ago (fleet busy for hours, then idle again).
+	onset := lastForce.IsZero() || now.Sub(lastForce) >= evalStallReEmitGap
 	// One-cycle recovery: the previous forced re-evaluation was pushed
 	// within the current episode window AND consumed by the loop —
 	// evaluate() ran and refreshed lastEval after the force. A stale
-	// force from a long-closed episode (fleet busy for hours, then idle)
-	// reads as a fresh onset, not a recovery, even though lastEval is
-	// inevitably newer.
-	recovered := !lastForce.IsZero() && now.Sub(lastForce) < evalStallReEmitGap && lastEval.After(lastForce)
+	// force from a long-closed episode reads as a fresh onset, not a
+	// recovery, even though lastEval is inevitably newer.
+	recovered := !onset && lastEval.After(lastForce)
 
 	l.mu.Lock()
+	// DOGFOOD-018: consecutive-miss tracking. A recovered crossing
+	// resets the counter to 0; a fresh onset starts a new episode at 1;
+	// any other non-recovered crossing increments. Escalation to HIGH
+	// requires evalStallEscalateAfter consecutive non-recovered
+	// crossings within one episode — a single transient miss after a
+	// healthy stretch must not alarm.
+	switch {
+	case recovered:
+		l.stallMisses = 0
+	case onset:
+		l.stallMisses = 1
+	default:
+		l.stallMisses++
+	}
+	escalated := l.stallMisses >= evalStallEscalateAfter
+	misses := l.stallMisses
+
 	emit := l.lastStallEvent.IsZero() || now.Sub(l.lastStallEvent) >= evalStallReEmitGap
 	if emit {
 		l.lastStallEvent = now
@@ -554,21 +601,39 @@ func (l *Loop) checkEvalStall(running int) {
 
 	severity := SeverityHigh
 	message := "eval loop stalled — forced re-evaluation"
-	if recovered {
-		// Demoted (SCHED-GAP-061): the forced re-eval recovered the
-		// loop within one cycle — the watchdog working as designed on
-		// an idle fleet, not an operator alarm.
-		severity = SeverityMedium
+	switch {
+	case onset:
+		// Fresh episode: no recent forced eval. HIGH immediately so a
+		// genuinely wedged loop still alarms at first detection.
+	case escalated:
+		// Genuine wedge (DOGFOOD-018): consecutive forced evals were
+		// consumed but lastEval stayed frozen — evaluate() is not
+		// refreshing. HIGH.
+		message = "eval loop stalled — forced re-evaluation (unrecovered)"
+	case recovered:
+		// One-cycle recovery (DOGFOOD-018): the forced re-eval restored
+		// the loop within one cycle — the watchdog working as designed on
+		// an idle fleet. INFO keeps the event visible in the stream
+		// without competing with operator alarms.
+		severity = SeverityInfo
 		message = "eval loop stalled — forced re-evaluation (recovered)"
+	default:
+		// Single non-recovered crossing below the escalation threshold:
+		// the previous forced eval was consumed but lastEval stayed
+		// frozen (transient slow evaluate(), or the start of a wedge).
+		// INFO at first miss; the next consecutive miss escalates HIGH.
+		severity = SeverityInfo
+		message = "eval loop stalled — forced re-evaluation (unrecovered)"
 	}
-	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v, recovered=%t)",
-		age.Round(time.Second), running, evalStallThreshold, recovered)
+	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v, recovered=%t, misses=%d)",
+		age.Round(time.Second), running, evalStallThreshold, recovered, misses)
 	l.events.Emit(context.Background(), severity, "loop", message, map[string]any{
 		"age_seconds":  age.Seconds(),
 		"last_eval":    lastEval.Format(time.RFC3339),
 		"active_ticks": running,
 		"threshold_s":  evalStallThreshold.Seconds(),
 		"recovered":    recovered,
+		"misses":       misses,
 	})
 }
 

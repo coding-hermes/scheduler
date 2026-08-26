@@ -118,17 +118,19 @@ func TestEvalStall_RecoveryWithinGapThrottlesNextOnset(t *testing.T) {
 	assertStallEventCount(t, db, 1)
 }
 
-// SCHED-GAP-061 regression tests. The watchdog previously re-emitted the
-// HIGH "eval loop stalled" event every evalStallReEmitGap while the fleet
-// idled (37 HIGH events 08-19T20:08Z..08-21T10:03Z, every one
-// self-recovered by the next forced eval). The stall condition recurs on a
-// healthy idle fleet by construction: the forced re-evaluation is consumed
-// by the loop (evaluate() refreshes lastEval) and picks nothing, then
-// lastEval ages past evalStallThreshold again. Now a detection whose
-// previous forced eval recovered within one cycle is demoted to MEDIUM;
-// first onset and non-recovery stay HIGH.
+// SCHED-GAP-061 / DOGFOOD-018 regression tests. The watchdog previously
+// re-emitted the HIGH "eval loop stalled" event every evalStallReEmitGap
+// while the fleet idled (37 HIGH events 08-19T20:08Z..08-21T10:03Z, every
+// one self-recovered by the next forced eval). The stall condition recurs
+// on a healthy idle fleet by construction: the forced re-evaluation is
+// consumed by the loop (evaluate() refreshes lastEval) and picks nothing,
+// then lastEval ages past evalStallThreshold again. SCHED-GAP-061 demoted
+// one-cycle recoveries to MEDIUM — which still flooded the log (27 MEDIUM
+// events 08-25T00:00Z..08-26, one every ~30-60 min). DOGFOOD-018 demotes
+// recoveries to INFO and escalates HIGH only on evalStallEscalateAfter
+// CONSECUTIVE non-recovered crossings (stallMisses).
 
-func TestEvalStall_OneCycleRecoveryDemotedToMedium(t *testing.T) {
+func TestEvalStall_OneCycleRecoveryDemotedToInfo(t *testing.T) {
 	db := newTestDB(t)
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 
@@ -138,6 +140,7 @@ func TestEvalStall_OneCycleRecoveryDemotedToMedium(t *testing.T) {
 	l.checkEvalStall(0)
 	assertForcedEval(t, l)
 	assertStallEventCountSeverity(t, db, "HIGH", 1)
+	assertStallEventCountSeverity(t, db, "INFO", 0)
 	assertStallEventCountSeverity(t, db, "MEDIUM", 0)
 
 	// The forced re-evaluation runs: evaluate() refreshes lastEval.
@@ -147,15 +150,22 @@ func TestEvalStall_OneCycleRecoveryDemotedToMedium(t *testing.T) {
 	// re-triggers evaluation between forced evals). The previous force
 	// was pushed within the episode window and consumed by the loop
 	// (lastEval is newer than the force), so this detection is a
-	// one-cycle recovery: MEDIUM, not HIGH. Open the re-emit window so
-	// the demoted event actually lands.
+	// one-cycle recovery: INFO, not HIGH/MEDIUM (DOGFOOD-018). Open the
+	// re-emit window so the INFO event actually lands.
 	l.lastStallForce = time.Now().Add(-10 * time.Minute)
 	l.lastStallEvent = time.Now().Add(-(evalStallReEmitGap + time.Minute))
 	l.lastEval = time.Now().Add(-6 * time.Minute)
 	l.checkEvalStall(0)
 	assertForcedEval(t, l)
 	assertStallEventCountSeverity(t, db, "HIGH", 1)
-	assertStallEventCountSeverity(t, db, "MEDIUM", 1)
+	assertStallEventCountSeverity(t, db, "INFO", 1)
+	assertStallEventCountSeverity(t, db, "MEDIUM", 0)
+
+	// A recovery resets the consecutive-miss counter (misses stay at 0
+	// for an always-recovering idle fleet).
+	if l.stallMisses != 0 {
+		t.Fatalf("stallMisses = %d after recovery, want 0", l.stallMisses)
+	}
 }
 
 func TestEvalStall_NonRecoveryStaysHigh(t *testing.T) {
@@ -193,7 +203,92 @@ func TestEvalStall_FreshOnsetAfterLongHealthyPeriodStaysHigh(t *testing.T) {
 	l.checkEvalStall(0)
 	assertForcedEval(t, l)
 	assertStallEventCountSeverity(t, db, "HIGH", 1)
+	assertStallEventCountSeverity(t, db, "INFO", 0)
 	assertStallEventCountSeverity(t, db, "MEDIUM", 0)
+}
+
+// DOGFOOD-018: a genuine wedge — consecutive stall crossings where the
+// previous forced re-evaluation did NOT restore lastEval — must escalate
+// HIGH after evalStallEscalateAfter misses, and a single non-recovered
+// crossing must NOT alarm on its own.
+
+func TestEvalStall_ConsecutiveMissesEscalateToHigh(t *testing.T) {
+	db := newTestDB(t)
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	// First onset: HIGH immediately (requirement: fresh stall with no
+	// recent force alarms right away). Miss counter starts at 1.
+	l.lastEval = time.Now().Add(-10 * time.Minute)
+	l.checkEvalStall(0)
+	assertForcedEval(t, l)
+	assertStallEventCountSeverity(t, db, "HIGH", 1)
+	if l.stallMisses != 1 {
+		t.Fatalf("stallMisses = %d after first onset, want 1", l.stallMisses)
+	}
+
+	// The forced evals are never consumed: lastEval stays frozen at the
+	// pre-force value. Second crossing after the re-emit gap — the
+	// previous force is recent (not an onset) and lastEval did not
+	// refresh, so this is a consecutive miss: 2 >= evalStallEscalateAfter
+	// → HIGH, with the distinct (unrecovered) message.
+	l.lastStallEvent = time.Now().Add(-(evalStallReEmitGap + time.Minute))
+	l.lastEval = time.Now().Add(-10 * time.Minute)
+	l.checkEvalStall(0)
+	assertForcedEval(t, l)
+	assertStallEventCountSeverity(t, db, "HIGH", 2)
+	assertStallEventCountSeverity(t, db, "INFO", 0)
+	if l.stallMisses != 2 {
+		t.Fatalf("stallMisses = %d after second miss, want 2", l.stallMisses)
+	}
+
+	// The escalated event carries the (unrecovered) message.
+	var msg string
+	if err := db.QueryRow(
+		`SELECT message FROM events WHERE severity = 'HIGH' AND component = 'loop'
+		 AND message LIKE 'eval loop stalled%' ORDER BY id DESC LIMIT 1`,
+	).Scan(&msg); err != nil {
+		t.Fatalf("read latest HIGH stall event: %v", err)
+	}
+	if msg != "eval loop stalled — forced re-evaluation (unrecovered)" {
+		t.Fatalf("latest HIGH stall message = %q, want the (unrecovered) variant", msg)
+	}
+}
+
+func TestEvalStall_RecoveryResetsMissCounter(t *testing.T) {
+	db := newTestDB(t)
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	// First onset: misses=1, HIGH.
+	l.lastEval = time.Now().Add(-10 * time.Minute)
+	l.checkEvalStall(0)
+	assertForcedEval(t, l)
+	assertStallEventCountSeverity(t, db, "HIGH", 1)
+
+	// One-cycle recovery: lastEval refreshes after the force; the next
+	// crossing is a recovery — INFO, and the counter resets to 0.
+	l.lastStallForce = time.Now().Add(-10 * time.Minute)
+	l.lastStallEvent = time.Now().Add(-(evalStallReEmitGap + time.Minute))
+	l.lastEval = time.Now().Add(-6 * time.Minute)
+	l.checkEvalStall(0)
+	assertForcedEval(t, l)
+	assertStallEventCountSeverity(t, db, "INFO", 1)
+	assertStallEventCountSeverity(t, db, "HIGH", 1)
+	if l.stallMisses != 0 {
+		t.Fatalf("stallMisses = %d after recovery, want 0", l.stallMisses)
+	}
+
+	// A fresh non-recovered crossing right after a recovery must NOT
+	// escalate: the counter restarted at 0, so this single miss is INFO
+	// (the next consecutive miss would be the first HIGH re-alarm).
+	l.lastStallEvent = time.Now().Add(-(evalStallReEmitGap + time.Minute))
+	l.lastEval = time.Now().Add(-10 * time.Minute)
+	l.checkEvalStall(0)
+	assertForcedEval(t, l)
+	assertStallEventCountSeverity(t, db, "INFO", 2)
+	assertStallEventCountSeverity(t, db, "HIGH", 1)
+	if l.stallMisses != 1 {
+		t.Fatalf("stallMisses = %d after post-recovery miss, want 1", l.stallMisses)
+	}
 }
 
 func assertForcedEval(t *testing.T, l *Loop) {
