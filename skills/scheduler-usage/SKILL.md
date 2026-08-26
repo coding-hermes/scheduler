@@ -1,14 +1,15 @@
 ---
 name: scheduler-usage
 description: >-
-  How to USE the Coding Hermes Scheduler for real: REST API dialect (now
-  snake_case), MCP tools (fleet_* only), dashboard, project lifecycle
-  (create/PUT/DELETE-soft), board format, sim/verify harnesses, and the
-  known traps (simulate doesn't simulate, plugin symlink, doc mirrors).
+  How to USE the Coding Hermes Scheduler for real: REST API dialect (snake_case,
+  envelopes), MCP tools (fleet_* only — fleet_add BROKEN, see golden rule 8),
+  dashboard, project lifecycle (create/PUT/DELETE soft+purge), board format,
+  sim/verify harnesses, and the known traps (spawn tick_id unresolvable,
+  fleet_ticks PascalCase, migrate silent skips, --simulate doesn't simulate).
   Load this before operating the scheduler or writing any integration
-  against http://127.0.0.1:9090. Rewritten from the 2026-08-15 dogfood run
-  (docs/dogfood/2026-08-15-integration.md); supersedes the 08-04 version.
-version: 1.1.0
+  against http://127.0.0.1:9090. Updated from the 2026-08-25 dogfood run
+  (docs/dogfood/2026-08-25-integration.md); supersedes the 08-15 version.
+version: 1.2.0
 category: software-development
 ---
 
@@ -21,31 +22,34 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
 `coding-hermes-scheduler.service`, `-config /home/kara/.hermes/fleet.toml`,
 `--auto-disable-failure-rate 0.9`).
 
-## Golden rules (verified 2026-08-15)
+## Golden rules (verified 2026-08-25)
 
-1. **The wire format is snake_case everywhere now** (S06 conformance landed
-   08-04+): `cooldown_s`, `decay_rate`, `disabled_at`… Lists come in
-   envelopes: `GET /api/v1/projects` → `{"projects":[…]}`; detail →
+1. **The wire format is snake_case everywhere on REST** (S06 conformance):
+   `cooldown_s`, `decay_rate`, `disabled_at`… Lists come in envelopes:
+   `GET /api/v1/projects` → `{"projects":[…]}`; detail →
    `{"project":{…},"latest_tick":…}`. PascalCase keys are still ACCEPTED on
    decode (legacy), so old scripts keep working — but read with snake_case.
+   Exception: **MCP `fleet_ticks` returns PascalCase** (`ID`, `ProjectName`,
+   `Status`…) — DOGFOOD-016 open; don't trust the dialect there.
 2. **Create a project with the minimal spec body** (works since DOGFOOD-001):
    `{"name":"X","repo_url":"…","workdir":"/abs/path"}` → 201, created
    DISABLED with defaults weight 10 / priority 5 / cooldown_s 900 /
-   decay_rate 1.0. Dup name → 409. Enable with `PUT {"enabled":true}`.
-3. **DELETE is a SOFT delete.** `DELETE /api/v1/projects/{name}?confirm=true`
-   → 200 but the row persists (enabled=0, `disabled_by="api-delete"`). 409
-   while enabled. There is NO API way to purge rows. Keep scratch lifecycle
-   tests to a minimum — they accumulate forever.
+   decay_rate 1.0. Dup name → 409. Same workdir as an enabled project → 409.
+   Enable with `PUT {"enabled":true}`.
+3. **DELETE is a SOFT delete with an optional purge.** `DELETE
+   /api/v1/projects/{name}?confirm=true` → 200 but the row persists
+   (enabled=0, `disabled_by="api-delete"`); 409 while enabled. Add
+   `&purge=true` to hard-delete the row (DOGFOOD-009 fixed 08-25) — purge is
+   what keeps scratch lifecycle tests from accumulating forever.
 4. **PUT to change cooldown/decay/enabled**:
    `curl -X PUT http://127.0.0.1:9090/api/v1/projects/<NAME> -d '{"cooldown_s":900,"decay_rate":1.0}'`.
    This is how the stand-in cron wakes paused foremen (CooldownS/PascalCase
    also accepted).
-5. **Do NOT trust `--simulate` or `--sim-count`** (DOGFOOD-007 open):
-   `--simulate` still uses the real spawner (ticks fail with "no gateway
-   client and exec fallback disabled" without gateway credentials — or spawn
-   real foremen with them); `--sim-count` crashes with a UNIQUE ticks.id
-   constraint error. Use `--sim-setup --sim-ticks N` on a scratch DB or
-   `--test-verify 3` instead.
+5. **Do NOT trust `--simulate`** (still real-spawner; ticks fail with "no
+   gateway client and exec fallback disabled" without gateway credentials —
+   or spawn real foremen with them). `--sim-count N` is FIXED (DOGFOOD-007
+   closed 08-25: generates N simulated ticks, exit 0). `--sim-setup
+   --sim-ticks N` gives a 13-project fixture (12 enabled + 1 disabled).
 6. **MCP tool names are the 14 `fleet_*` tools** (`fleet_status`,
    `fleet_projects`, `fleet_project_detail`, `fleet_set_weight`,
    `fleet_set_priority`, `fleet_set_cooldown`, `fleet_set_decay`,
@@ -56,9 +60,25 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
 7. **The board is JSONL in `.coding-hermes/board/`** (tasks.jsonl git-tracked
    + DuckDB board.db mirror kept in parity). Append one JSON object per line
    (id, title, status, priority, complexity, capability_tags, created_at…),
-   then mirror into board.db with an existence-checked INSERT (the tasks
-   table has NO primary key — `INSERT OR IGNORE` fails). Validate with
+   then mirror into board.db with delete-then-insert (the tasks table has NO
+   primary key — `INSERT OR REPLACE` fails with a Binder error). Validate with
    `python3 -c "import json;[json.loads(l) for l in open('tasks.jsonl')]"`.
+8. **MCP `fleet_add` is BROKEN (DOGFOOD-014, P0, open):** every call errors
+   `-32000 "CHECK constraint failed: priority >= 1 AND priority <= 10"` —
+   toolFleetAdd never defaults Priority (REST defaults 5). The `/fleet add`
+   slash command routes through it, so it's dead too. **Use REST
+   `POST /api/v1/projects` to create projects** until fixed. Also note the
+   param naming: MCP takes `repo`, REST takes `repo_url` (DOGFOOD-019).
+9. **Do NOT poll `GET /ticks/{id}` with the tick_id returned by
+   `POST /projects/{name}/spawn`** (DOGFOOD-015, P1, open): the spawn
+   response formats the id in UTC, the stored row in local time → 404
+   ("tick not found") on a -05:00 host. Instead list
+   `GET /ticks?project=<name>` and use the id from the list.
+10. **`bin/migrate` only imports "coding-hermes"-flavored jobs** (name/skills
+    must mention coding-hermes or foreman AND the prompt must contain a
+    workdir path); everything else is skipped SILENTLY — "0 imported, 2
+    skipped" with no per-job reason (DOGFOOD-017). Name jobs
+    `<proj> coding-hermes-foreman` and include `Workdir: /abs/path`.
 
 ## Endpoint cheat sheet (verified 2026-08-15)
 
@@ -70,7 +90,7 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
 | `GET /api/v1/projects/{name}` | `{"project":…,"latest_tick":…}`; 404 `{"error":"project not found"}` |
 | `POST /api/v1/projects` | create (minimal snake_case body; defaults; created disabled; dup-name 409) |
 | `PUT /api/v1/projects/{name}` | partial update (snake_case or PascalCase) |
-| `DELETE /api/v1/projects/{name}?confirm=true` | soft delete (409 if enabled) |
+| `DELETE /api/v1/projects/{name}?confirm=true` | soft delete (409 if enabled); add `&purge=true` to hard-delete |
 | `GET /api/v1/ticks?project=X&limit=N` | newest-first, `{count,ticks}`; rows carry tokens/cost_usd/commits/exit_code |
 | `GET /api/v1/events?severity=HIGH&limit=N` | event feed; `loop` HIGH events = eval-stall watchdog firing (GAP-042 — by design) |
 | `GET /api/v1/namespaces` | namespace weights |
@@ -82,8 +102,9 @@ MCP JSON-RPC on `/mcp`, htmx dashboard at `/`. Live DB:
 
 `{"jsonrpc":"2.0","id":N,"method":"tools/call","params":{"name":"fleet_status","arguments":{}}}`.
 Read-only tools (`fleet_status`, `fleet_projects`, `fleet_project_detail`,
-`fleet_ticks`) are safe anytime. `fleet_add` creates projects — remember
-there's no purge.
+`fleet_ticks`) are safe anytime. **Do NOT use `fleet_add`** (broken —
+DOGFOOD-014; create via REST instead). `fleet_ticks` output is PascalCase
+(DOGFOOD-016).
 
 ## Diagnostics and verification
 
@@ -112,13 +133,17 @@ there's no purge.
   `.coding-hermes/board/tasks.jsonl`. The outer dir pointer file
   (`/home/kara/coding-hermes-scheduler/.coding-hermes/tasks.md`) is
   intentionally not a board.
-- `/fleet …` chat slash commands may be dead — the plugin symlink
-  `~/.hermes/plugins/coding-hermes` points at a typo'd path
-  (`/home/kara/coding-herms-scheduler/plugin`, missing `-hermes-`;
-  DOGFOOD-008). Check `readlink -f ~/.hermes/plugins/coding-hermes` before
-  relying on them.
-- Repo `fleet.toml` and `docs/fleet.md` are stale mirrors of the live fleet
-  (DOGFOOD-013) — trust the API, not the repo files.
+- `/fleet …` chat slash commands: the plugin symlink is FIXED (re-pointed
+  08-15, DOGFOOD-008) but `add` is dead via the fleet_add bug (DOGFOOD-014);
+  the read-only commands (`status`, `projects`, `ticks`, …) work.
+- `docs/fleet.md` is regenerated from the live API (docs/regenerate_fleet.py;
+  last run 2026-08-25, 74 projects/42 enabled) — but trust the API over any
+  mirror. Repo `fleet.toml` is a partial mirror (DOGFOOD-013).
+- `AGENTS.md` claims `/api/v1/events` supports SSE — it returns plain JSON
+  for stream=1/stream=true/Accept: text/event-stream (DOGFOOD-016).
+- Eval-stall events ("eval loop stalled — forced re-evaluation (recovered)",
+  MEDIUM) fire ~hourly while the fleet idles — GAP-042 watchdog by design,
+  but noisy (DOGFOOD-018); don't read them as outages.
 - No auth on anything — loopback only, treat as operator-only.
 - The daemon binary at `bin/schedulerd` is what's running; systemd user unit
   `coding-hermes-scheduler.service` builds it via ExecStartPre. Rebuild +

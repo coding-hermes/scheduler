@@ -70,3 +70,43 @@ appended to tasks.jsonl + mirrored into board.db.
 
 **Foreman:** Cooldown was 21600s (≥14400) → woken to 900s via API PUT after
 task commit (Enabled stayed true).
+
+## 2026-08-25 — 🟡 PROMISING-BUT-ROUGH (REST surface strong; MCP/spawn contracts broken)
+
+**Promise:** "A single Go binary that replaces dozens of static cron jobs" —
+priority-weighted fleet scheduler, HTTP-gateway spawns, REST + MCP + dashboard,
+outcome tracking.
+
+**Verdict evidence:** Live fleet healthy (74 projects/42 enabled, verify logs
+green, DuckBrain sync OK). ALL prior findings re-verified FIXED live: create-
+project 201/409, snake_case everywhere on REST, DELETE soft+purge (DOGFOOD-009),
+--sim-count no longer crashes (DOGFOOD-007), OpenAPI 19 paths w/ requestBodies
+(GAP-057), queue urgency computed (GAP-054), no ZgotmplZ bars (GAP-055), /fleet
+symlink fixed (DOGFOOD-008), fleet.md mirror current. Full write-path lifecycle
+on scratch daemon :9093 passed (create/dup-409/workdir-409/PUT dual-dialect/
+400-validation/404/405/DELETE guards/namespaces CRUD+move/MCP 13 of 14 tools/
+--test-verify 6/6/migrate import). NEW breaks: MCP fleet_add fails on EVERY call
+(priority=0, no default → raw sqlite CHECK error; /fleet add routes through it);
+spawn returns UTC tick_id that GET /ticks/{id} 404s (stored IDs are local-time);
+MCP fleet_ticks still PascalCase; migrate silently skips non-coding-hermes jobs
+(no reason logged, filters undocumented); eval-stall watchdog still fires ~hourly
+(27 MEDIUM events/24h, GAP-061 closed by severity demotion only).
+
+**Time-to-first-success:** ~1s (live health probe; no stalls this run).
+
+**Top 3 findings (task IDs):**
+1. **DOGFOOD-014 (P0)** — MCP fleet_add always fails (CHECK constraint
+   priority>=1; toolFleetAdd never defaults Priority; /fleet add dead).
+2. **DOGFOOD-015 (P1)** — spawn returns unresolvable tick_id (UTC vs local
+   timezone ID mismatch between server_projects.go and slot_pool.go).
+3. **DOGFOOD-016 (P2)** — MCP fleet_ticks PascalCase + AGENTS.md SSE over-claim.
+   (Also DOGFOOD-017 migrate silent skips, DOGFOOD-018 hourly eval-stall alarm
+   noise, DOGFOOD-019 MCP repo vs REST repo_url naming.)
+
+**Artifacts left:** docs/dogfood/2026-08-25-integration.md (new),
+docs/dogfood/diagnostics.md (appended), skills/scheduler-usage/SKILL.md
+(v1.2.0), board tasks DOGFOOD-014..019 appended to tasks.jsonl + mirrored into
+board.db.
+
+**Foreman:** Cooldown was 21600s (≥14400) → woken to 900s via API PUT after
+task commit (Enabled stayed true).
