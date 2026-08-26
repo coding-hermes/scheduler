@@ -1940,3 +1940,14 @@ tasks:
   status: complete
   created_at: '2026-08-26T16:36:34.795038+00:00'
   completed_at: '2026-08-26T16:40:23.270519+00:00'
+- id: DOGFOOD-015
+  title: "Spawn tick_id timezone mismatch \u2014 canonical UTC id"
+  criteria:
+  - 'POST /api/v1/projects/{name}/spawn returns tick_id that GET /api/v1/ticks/{id}
+    resolves (200). Both internal/api/server_projects.go spawn handler and internal/scheduler/slot_pool.go
+    SlotPool.Spawn use database.NextTickID (UTC). Regression test: POST spawn then
+    GET /ticks/{returned_id} = 200. go build ./..., go vet ./..., go test -count=1
+    -short -p 1 ./... pass.'
+  status: complete
+  created_at: '2026-08-26T16:52:56.527816+00:00'
+  completed_at: '2026-08-26T17:12:44.148222+00:00'
