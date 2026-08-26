@@ -58,6 +58,7 @@ func main() {
 
 	for _, j := range jobs {
 		if !isCodingHermesJob(j) {
+			log.Printf("SKIP %s: not a coding-hermes job (name/skills must mention coding-hermes/foreman)", j.Name)
 			skipped++
 			continue
 		}

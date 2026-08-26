@@ -60,6 +60,13 @@ grep API_SERVER_KEY ~/.hermes/.env
 
 ### 4. Migrate Cron Jobs
 
+**Eligibility.** The migration tool only imports jobs that pass BOTH filters:
+
+1. **Coding-hermes job** — the job name (case-insensitive) or any of its skills must contain `coding-hermes` or `foreman`.
+2. **Workdir in prompt** — the job prompt must contain a workdir path, e.g. `Workdir: /home/...` or `workdir /home/...`.
+
+Ineligible jobs are skipped with a per-job `SKIP <name>: ...` reason in the output, so you can see exactly why each job was not imported.
+
 ```bash
 # Preview what will be imported
 make migrate-dry
