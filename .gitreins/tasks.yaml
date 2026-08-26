@@ -1980,3 +1980,23 @@ tasks:
   status: complete
   created_at: '2026-08-26T18:09:48.583124+00:00'
   completed_at: '2026-08-26T18:14:10.093699+00:00'
+- id: DOGFOOD-018
+  title: 'Eval-stall watchdog event flood: one-cycle recoveries must not emit MEDIUM
+    events every re-emit gap'
+  criteria:
+  - golangci-lint run --timeout=5m passes with zero issues
+  - go test -count=1 -short -p 1 ./internal/scheduler/ passes (eval_stall tests included)
+  - one-cycle recovered stall episodes log at INFO level (no MEDIUM/HIGH event emission)
+    OR are suppressed with escalation only on consecutive non-recovered failures
+  - existing tests updated/added to cover the new severity behavior
+  status: complete
+  created_at: '2026-08-26T18:25:12.591960+00:00'
+  completed_at: '2026-08-26T18:49:48.311470+00:00'
+- id: INT-CI-004
+  title: 'CI lint RED: errcheck in cmd/migrate/main.go flag.Usage (3 unchecked fmt.Fprintf)'
+  criteria:
+  - golangci-lint run --timeout=5m (full repo, CI scope) passes with zero issues
+  - go build ./cmd/migrate/ compiles
+  status: complete
+  created_at: '2026-08-26T18:26:27.667038+00:00'
+  completed_at: '2026-08-26T18:51:11.416590+00:00'
