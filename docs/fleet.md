@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-25 20:52 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-26 17:26 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 42 |
 | Total projects (incl. disabled) | 74 |
-| Active ticks | 3 |
+| Active ticks | 2 |
 | Budget | 100 |
-| Last evaluation | 2026-08-25T20:48:21Z |
-| Recent outcomes | completed=16824, failed=38960, timeout=4117 |
+| Last evaluation | 2026-08-26T17:22:28Z |
+| Recent outcomes | completed=17353, failed=38960, timeout=4117 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (74 projects, 42 enabled)
@@ -25,7 +25,7 @@
 | asce | 10 | 15 | 21600s | coding-hermes |
 | bunker | 10 | 15 | 21600s | coding-hermes |
 | chimera-v2 | 10 | 15 | 21600s | coding-hermes |
-| coding-hermes-scheduler | 10 | 15 | 3600s | coding-hermes |
+| coding-hermes-scheduler | 10 | 15 | 60s | coding-hermes |
 | consensus | 10 | 15 | 21600s | coding-hermes |
 | deepseek-dashboard | 10 | 15 | 21600s | coding-hermes |
 | dexdat-memory | 10 | 10 | 21600s | coding-hermes |
@@ -45,7 +45,7 @@
 | speclang | 10 | 15 | 21600s | coding-hermes |
 | terminal-jail | 10 | 15 | 21600s | coding-hermes |
 | totalstack | 10 | 15 | 21600s | coding-hermes |
-| warpfs | 10 | 15 | 21600s | coding-hermes |
+| warpfs | 10 | 15 | 60s | coding-hermes |
 | wojons-mythos | 10 | 15 | 21600s | coding-hermes |
 | uhlp | 9 | 15 | 3600s | coding-hermes |
 | gitreins-poc | 8 | 15 | 21600s | coding-hermes |
@@ -53,7 +53,7 @@
 | helios | 8 | 10 | 3600s | coding-hermes |
 | inference-estimator | 8 | 10 | 21600s | coding-hermes |
 | mafia-ai-benchmark | 8 | 10 | 3600s | coding-hermes |
-| dexdat-core | 5 | 10 | 3600s | coding-hermes |
+| dexdat-core | 5 | 10 | 21600s | coding-hermes |
 | escalation-doctrine | 5 | 10 | 21600s | coding-hermes |
 | h3-sdk-typescript-foreman | 5 | 10 | 21600s | coding-hermes |
 | heading | 5 | 10 | 21600s | coding-hermes |
