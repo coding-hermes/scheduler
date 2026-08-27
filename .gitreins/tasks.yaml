@@ -2074,3 +2074,13 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:27:26.428095+00:00'
   completed_at: '2026-08-27T09:28:24.174777+00:00'
+- id: SCHED-GAP-074
+  title: Tick-session persistence for quality review linkage
+  criteria:
+  - 'Every scheduler tick session is linkable: scheduler stores a durable session
+    handle (or gateway session id from the spawn response) in the tick row / spawn
+    record; per-model token/tool rollups carry real data for all ticks, not only the
+    ~39% that currently persist'
+  status: complete
+  created_at: '2026-08-27T09:38:06.522899+00:00'
+  completed_at: '2026-08-27T10:17:57.296515+00:00'
