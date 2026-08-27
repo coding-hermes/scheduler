@@ -63,6 +63,13 @@ type Spawner struct {
 	// on hosts without the env var) = router disabled, spawns resolve
 	// exactly as before the router (fail-open).
 	router *RouterClient
+	// circuit records (provider, model) spawn outcomes into the shared
+	// circuit-breaker state via router_circuit.py (TASK-ROUTER-002).
+	// Wired from SCHEDULER_CIRCUIT_CMD in NewSpawner; nil (the default
+	// in tests and on hosts without the env var) = recording disabled,
+	// spawns behave exactly as before the breaker (fail-open — the
+	// circuit script is a side effect, never a gate).
+	circuit *CircuitClient
 	// pendingCounter reads board pending counts for idle-tick routing
 	// (SCHED-GAP-065). Defaults to the package-level shared instance; nil
 	// (tests, tooling) biases every spawn to the work chain — the
@@ -111,7 +118,13 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		// pre-router resolution exactly (fail-open default). The command
 		// is a full vector so the binary + flags are overridable; the
 		// project and --format json are appended at resolve time.
-		router:            routerFromEnv(),
+		router: routerFromEnv(),
+		// TASK-ROUTER-002: the circuit recorder is OPT-IN via env —
+		// hosts without SCHEDULER_CIRCUIT_CMD (and every test) keep the
+		// pre-breaker behavior exactly (fail-open default). Same full
+		// command vector contract as the router; the subcommand + pair
+		// are appended at record time.
+		circuit:           circuitFromEnv(),
 		pendingCounter:    defaultPendingCounter,
 		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
@@ -157,6 +170,37 @@ func (s *Spawner) noteSpawnFailure(project string) {
 		project); err != nil {
 		log.Printf("WARN: consecutive_failures increment for %s: %v", project, err)
 	}
+}
+
+// recordCircuitFailure opens (or extends) the circuit for the pair that
+// just failed, via router_circuit.py record-failure (TASK-ROUTER-002). The
+// breaker cooldown (5m → double per consecutive failure → 1h cap) becomes
+// the cross-tick backoff: router_spawn.py excludes the pair from chain
+// heads while open_until is in the future. Fire-and-forget: a missing or
+// broken circuit script only logs a WARN — it must NEVER fail or stall a
+// spawn. Empty pairs (custom-command spawns) are skipped.
+func (s *Spawner) recordCircuitFailure(provider, model, reason string) {
+	if s.circuit == nil || !s.circuit.Enabled() {
+		return
+	}
+	if provider == "" || model == "" {
+		return
+	}
+	s.circuit.RecordFailure(context.Background(), provider, model, reason)
+}
+
+// recordCircuitSuccess closes the circuit for the pair that just succeeded,
+// via router_circuit.py record-success (TASK-ROUTER-002). No-op for pairs
+// without recorded failures. Fire-and-forget, same fail-open contract as
+// recordCircuitFailure. Empty pairs (custom-command spawns) are skipped.
+func (s *Spawner) recordCircuitSuccess(provider, model string) {
+	if s.circuit == nil || !s.circuit.Enabled() {
+		return
+	}
+	if provider == "" || model == "" {
+		return
+	}
+	s.circuit.RecordSuccess(context.Background(), provider, model)
 }
 
 // gatewayKeyRejected is the terminal classification path for GAP-035: a
@@ -231,6 +275,15 @@ func (s *Spawner) SetPendingCounter(c *PendingTaskCounter) {
 // from SCHEDULER_ROUTER_CMD in NewSpawner.
 func (s *Spawner) SetRouterClient(rc *RouterClient) {
 	s.router = rc
+}
+
+// SetCircuitClient installs the circuit-breaker recorder (TASK-ROUTER-002).
+// Pass nil to disable — spawns then behave exactly as before the breaker
+// (fail-open; the circuit script is a side effect, never a gate). Tests
+// inject fake circuit scripts here; the daemon wires the real script from
+// SCHEDULER_CIRCUIT_CMD in NewSpawner.
+func (s *Spawner) SetCircuitClient(cc *CircuitClient) {
+	s.circuit = cc
 }
 
 // gatewayKeyProbeTimeout bounds the pre-dispatch per-project key validation
@@ -465,6 +518,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 	var cmd *exec.Cmd
 
+	// model/provider are the resolved (provider, model) pair for this
+	// spawn. Custom-command spawns never resolve a pair — they stay
+	// empty and the circuit recorder skips them (TASK-ROUTER-002).
+	var model, provider string
+
 	if project.Command != "" {
 		// Custom command.
 		if strings.Contains(project.Command, "bash -c") {
@@ -498,7 +556,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// chain instead of jumping straight to the work lane.
 		idle := s.tickIsIdle(project)
 		chain := s.spawnChainForKind(project, idle)
-		model, provider := resolveChain(chain)
+		model, provider = resolveChain(chain)
 		// TASK-ROUTER-001: ask the task router for the project's
 		// cheapest HEALTHY head BEFORE the SPAWN line, so the gateway
 		// POST, the exec branch, the SPAWN line, and the tick's
@@ -634,6 +692,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// chain otherwise — so the retry advances within the SAME chain
 			// the tick was spawned with.
 			retryModel, retryProvider, hasRetry := nextChainResolution(chain)
+			// TASK-ROUTER-002: circuitFailureRecorded tracks whether the
+			// closure below already recorded the primary pair (the 401/403
+			// path records BEFORE the retry hop). The GATEWAY FAIL block
+			// must not record the same pair twice — a double
+			// record-failure would double the breaker cooldown.
+			circuitFailureRecorded := false
 			resp, gwErr := func() (*Response, error) {
 				// The heartbeat goroutine must never outlive the request —
 				// stop it on every return path (success AND failure).
@@ -643,11 +707,25 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry {
 					return r, err
 				}
+				// TASK-ROUTER-002: the gateway rejected the pair — record
+				// the failure in the circuit state BEFORE advancing. The
+				// breaker cooldown (open_until, 5m → double per
+				// consecutive failure → 1h cap, managed by
+				// router_circuit.py) becomes the backoff: the pair is
+				// excluded from future router heads until it cools, and
+				// this tick never re-sends it (max 1 attempt per hop).
+				s.recordCircuitFailure(provider, model, "gateway 401/403 rejected pair")
+				circuitFailureRecorded = true
 				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
 					project.Name, tickID, model, provider, retryModel, retryProvider)
 				r2, err2 := s.gateway.SendResponse(ctx, prompt, retryModel, retryProvider, project.GatewayKey)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
+				} else if errors.Is(err2, ErrGatewayKeyRejected) {
+					// The retry hop is rejected too — record it as well.
+					// No further hops: max 1 attempt per hop per tick,
+					// and the breaker cooldown IS the cross-tick backoff.
+					s.recordCircuitFailure(retryProvider, retryModel, "gateway 401/403 retry hop rejected")
 				}
 				return r2, err2
 			}()
@@ -666,6 +744,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// completion moment here corrupted the API field).
 				_, _ = s.db.Exec(`UPDATE projects SET consecutive_failures = 0 WHERE name = ?`,
 					project.Name)
+
+				// TASK-ROUTER-002: the pair that ACTUALLY ran succeeded —
+				// close its circuit (record-success is a no-op for pairs
+				// with no recorded failures; fire-and-forget).
+				s.recordCircuitSuccess(provider, model)
 
 				// S-GAP-003: persist the REAL gateway session id (resp.ID);
 				// fall back to the placeholder tick id when the gateway
@@ -694,6 +777,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			// TASK-ROUTER-002: the attempted pair failed (timeout, HTTP
+			// error, gateway failure) — record it so the breaker cools it
+			// across ticks. The 401/403 path already recorded the primary
+			// pair before its retry hop, so skip it here (a double
+			// record-failure would double the cooldown).
+			if !circuitFailureRecorded {
+				s.recordCircuitFailure(provider, model, "gateway failure: "+gwErr.Error())
+			}
 			// GAP-035: an AUTH rejection is terminal. Falling back to exec
 			// would silently mask a key regression and keep flooding the
 			// fleet with disguised failures — fail fast with a classified
@@ -751,19 +842,26 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		s.noteSpawnFailure(project.Name)
+		s.recordCircuitFailure(provider, model, "exec stdout pipe error")
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		s.noteSpawnFailure(project.Name)
+		s.recordCircuitFailure(provider, model, "exec stderr pipe error")
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		s.noteSpawnFailure(project.Name)
+		s.recordCircuitFailure(provider, model, "exec start error: "+err.Error())
 		return nil, fmt.Errorf("start process: %w", err)
 	}
+
+	// TASK-ROUTER-002: the exec spawn started with the resolved pair —
+	// close its circuit (no-op for pairs without recorded failures).
+	s.recordCircuitSuccess(provider, model)
 
 	s.mu.Lock()
 	s.active[tickID] = cmd
@@ -781,6 +879,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		spawner: s,
 		// SCHED-GAP-029: carry workdir for potential future metric enrichment.
 		workdir: project.Workdir,
+		// TASK-ROUTER-002: carry the resolved provider alongside model so
+		// the completion path can record (provider, model) failures.
+		model:    model,
+		provider: provider,
 	}
 	// S-GAP-003: keep the tick row's heartbeat fresh for the life of the
 	// process; Wait() stops the goroutine. The gateway branch above runs
@@ -889,8 +991,12 @@ type SpawnedTick struct {
 	completeAt time.Time
 
 	// SCHED-GAP-029: real usage + context for outcome metrics.
-	usage    Usage     // gateway response token usage (gateway path only)
-	model    string    // model used for this tick (for cost lookup)
+	usage Usage  // gateway response token usage (gateway path only)
+	model string // model used for this tick (for cost lookup)
+	// TASK-ROUTER-002: provider used for this tick — the completion path
+	// records (provider, model) failures into the circuit state on
+	// timeout/failed outcomes.
+	provider string    // provider used for this tick (for circuit recording)
 	workdir  string    // project workdir for git commit/file counting
 	reqStart time.Time // request start time (before SendResponse) for git window
 }
@@ -978,6 +1084,18 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	outcome.ExitCode = st.cmd.ProcessState.ExitCode()
 	outcome.Duration = finished.Sub(st.Started)
+
+	// TASK-ROUTER-002: a tick that ran with a (provider, model) pair and
+	// ended TIMED OUT or FAILED records the failure into the circuit
+	// state — the breaker cooldown then cools the pair across ticks
+	// (router_spawn.py excludes open pairs from future heads). Completed
+	// ticks already recorded success at spawn time. Empty pairs
+	// (custom-command spawns) are skipped by the recorder.
+	if (outcome.Status == TickTimeout || outcome.Status == TickFailed) && st.spawner != nil {
+		if st.provider != "" || st.model != "" {
+			st.spawner.recordCircuitFailure(st.provider, st.model, "tick "+string(outcome.Status))
+		}
+	}
 
 	// Cost: prefer REAL per-tick cost from the foreman's Hermes state.db
 	// (session_model_usage.estimated/actual_cost_usd overlapping this tick's

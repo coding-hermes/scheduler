@@ -31,9 +31,19 @@ import (
 // The Spawn() integration point sits between the existing chain resolution
 // (SCHED-GAP-064/065) and the SPAWN log line, so the router's head feeds
 // the gateway POST body, the exec branch, the SPAWN line, and the tick's
-// model/provider cost lookup alike. The 401/403 gateway retry semantics
-// (nextChainResolution / chain walking) are untouched — that is
-// TASK-ROUTER-002's scope.
+// model/provider cost lookup alike.
+//
+// TASK-ROUTER-002 (implemented): the gateway 401/403 retry now records the
+// rejected pair into the circuit breaker (router_circuit.py record-failure)
+// BEFORE advancing via nextChainResolution — max 1 attempt per hop per
+// tick, and the breaker cooldown (5m → double → 1h cap, managed by the
+// script) is the cross-tick backoff. Spawn failures (gateway error,
+// exec-start error, tick timeout/failed) record record-failure; successful
+// gateway/exec spawns record record-success. Open-circuit pairs are
+// excluded at RESOLVE time by router_spawn.py --health; the scheduler's
+// own retry path advances to the next chain hop instead of re-sending the
+// same pair. Recording is fail-open (CircuitClient, SCHEDULER_CIRCUIT_CMD)
+// and never gates or stalls a spawn.
 
 // routerTimeout bounds a single router invocation. The real router is fast
 // (~0.12s, read-only duckdb); this cap only guards against a wedged
