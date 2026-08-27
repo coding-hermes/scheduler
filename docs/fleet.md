@@ -1,6 +1,6 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-08-26 17:26 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-08-27 01:12 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
@@ -8,10 +8,10 @@
 |---------|-------|
 | Active projects (enabled) | 42 |
 | Total projects (incl. disabled) | 74 |
-| Active ticks | 2 |
+| Active ticks | 1 |
 | Budget | 100 |
-| Last evaluation | 2026-08-26T17:22:28Z |
-| Recent outcomes | completed=17353, failed=38960, timeout=4117 |
+| Last evaluation | 2026-08-27T01:09:46Z |
+| Recent outcomes | completed=17477, failed=38960, timeout=4118 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
 ## Fleet (74 projects, 42 enabled)
@@ -25,11 +25,11 @@
 | asce | 10 | 15 | 21600s | coding-hermes |
 | bunker | 10 | 15 | 21600s | coding-hermes |
 | chimera-v2 | 10 | 15 | 21600s | coding-hermes |
-| coding-hermes-scheduler | 10 | 15 | 60s | coding-hermes |
+| coding-hermes-scheduler | 10 | 15 | 21600s | coding-hermes |
 | consensus | 10 | 15 | 21600s | coding-hermes |
 | deepseek-dashboard | 10 | 15 | 21600s | coding-hermes |
 | dexdat-memory | 10 | 10 | 21600s | coding-hermes |
-| duckbrain | 10 | 10 | 21600s | coding-hermes |
+| duckbrain | 10 | 10 | 3600s | coding-hermes |
 | h3 | 10 | 15 | 21600s | coding-hermes |
 | h3-sdk-python-foreman | 10 | 15 | 21600s | coding-hermes |
 | h3-shim-foreman | 10 | 15 | 21600s | coding-hermes |
@@ -45,7 +45,7 @@
 | speclang | 10 | 15 | 21600s | coding-hermes |
 | terminal-jail | 10 | 15 | 21600s | coding-hermes |
 | totalstack | 10 | 15 | 21600s | coding-hermes |
-| warpfs | 10 | 15 | 60s | coding-hermes |
+| warpfs | 10 | 15 | 21600s | coding-hermes |
 | wojons-mythos | 10 | 15 | 21600s | coding-hermes |
 | uhlp | 9 | 15 | 3600s | coding-hermes |
 | gitreins-poc | 8 | 15 | 21600s | coding-hermes |
