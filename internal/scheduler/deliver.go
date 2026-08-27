@@ -62,7 +62,10 @@ func isRetryableSendError(err error, output string) bool {
 // deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
 // Strips terminal tool output (diffs, review panels, worker prompts) and delivers
 // the foreman's actual summary. No length cap — full detail preserved.
-func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
+// trigger is "command" (custom command/script spawn) or "prompt" (LLM prompt
+// spawn) — carried in the subject (top line) and the footer (bottom line) so
+// the thread shows how the run was launched (Bane 2026-08-27).
+func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		log.Printf("DELIVER: %s tick=%s — no output", project, tickID)
 		return
@@ -74,7 +77,7 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	}
 
 	body := trimToolNoise(strings.TrimSpace(output.String()))
-	body = fmt.Sprintf("%s\n\n_%s_", body, tickID)
+	body = fmt.Sprintf("%s\n\n_%s · %s_", body, tickID, trigger)
 
 	f, err := os.CreateTemp("", fmt.Sprintf("chtick-%s-*.txt", tickID))
 	if err != nil {
@@ -90,7 +93,7 @@ func deliverOutput(project, tickID, deliver string, output *bytes.Buffer) {
 	}
 	f.Close()
 
-	subject := fmt.Sprintf("🤖 %s [%s]", project, tickID)
+	subject := fmt.Sprintf("🤖 %s [%s] · %s", project, tickID, trigger)
 	out, ok := sendWithRetry("--to", deliver, "--subject", subject, "--file", f.Name())
 	if !ok {
 		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))

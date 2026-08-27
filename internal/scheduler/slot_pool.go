@@ -218,7 +218,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 
 		// Deliver output (suppressed in test-verify mode).
 		if !noDeliver {
-			deliverOutput(outcome.Project, outcome.TickID, st.Deliver, &st.Output)
+			deliverOutput(outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &st.Output)
 		}
 
 		// Auto-slowdown: if tick signals IDLE, gently slow down.

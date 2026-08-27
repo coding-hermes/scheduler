@@ -61,7 +61,7 @@ func readCapture(t *testing.T, path string) string {
 func TestDeliverOutput_NilBuffer(t *testing.T) {
 	_, captureFile := setupFakeHermes(t)
 
-	deliverOutput("testproj", "tick-001", "telegram:123", nil)
+	deliverOutput("testproj", "tick-001", "telegram:123", "prompt", nil)
 
 	// Should not call hermes — nil buffer returns early
 	content := readCapture(t, captureFile)
@@ -74,7 +74,7 @@ func TestDeliverOutput_EmptyBuffer(t *testing.T) {
 	_, captureFile := setupFakeHermes(t)
 
 	var buf bytes.Buffer
-	deliverOutput("testproj", "tick-001", "telegram:123", &buf)
+	deliverOutput("testproj", "tick-001", "telegram:123", "prompt", &buf)
 
 	// Empty buffer returns early — no hermes call
 	content := readCapture(t, captureFile)
@@ -88,7 +88,7 @@ func TestDeliverOutput_EmptyDeliver(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString("some output")
-	deliverOutput("testproj", "tick-001", "", &buf)
+	deliverOutput("testproj", "tick-001", "", "prompt", &buf)
 
 	// Empty deliver target returns early — no hermes call
 	content := readCapture(t, captureFile)
@@ -102,7 +102,7 @@ func TestDeliverOutput_Success(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString("foreman tick summary: all checks passed")
-	deliverOutput("testproj", "tick-001", "telegram:123", &buf)
+	deliverOutput("testproj", "tick-001", "telegram:123", "prompt", &buf)
 
 	args := readCapture(t, captureFile)
 	if args == "" {
@@ -119,6 +119,31 @@ func TestDeliverOutput_Success(t *testing.T) {
 	}
 }
 
+func TestDeliverOutput_TriggerInSubject(t *testing.T) {
+	_, captureFile := setupFakeHermes(t)
+
+	for _, tc := range []struct {
+		trigger string
+		want    string
+	}{
+		{"command", "🤖 testproj [tick-001] · command"},
+		{"prompt", "🤖 testproj [tick-001] · prompt"},
+	} {
+		var buf bytes.Buffer
+		buf.WriteString("foreman tick summary: all checks passed")
+		deliverOutput("testproj", "tick-001", "telegram:123", tc.trigger, &buf)
+
+		args := readCapture(t, captureFile)
+		if !strings.Contains(args, tc.want) {
+			t.Errorf("trigger=%s: expected subject %q in args, got: %s", tc.trigger, tc.want, args)
+		}
+		// Reset capture for the next iteration.
+		if err := os.Remove(captureFile); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("reset capture: %v", err)
+		}
+	}
+}
+
 func TestDeliverOutput_WithToolNoise(t *testing.T) {
 	_, captureFile := setupFakeHermes(t)
 
@@ -129,7 +154,7 @@ func TestDeliverOutput_WithToolNoise(t *testing.T) {
 	buf.WriteString("┊ review diff\n")
 	buf.WriteString("---\n")
 	buf.WriteString("Human summary of completed work with enough length to pass the 50-char threshold test.")
-	deliverOutput("noiseproj", "tick-002", "telegram:456", &buf)
+	deliverOutput("noiseproj", "tick-002", "telegram:456", "prompt", &buf)
 
 	args := readCapture(t, captureFile)
 	if !strings.Contains(args, "--to telegram:456") {
@@ -146,7 +171,7 @@ func TestDeliverOutput_TrimNoiseShortFallback(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		buf.WriteString("┊ review panel line that gets stripped away\n")
 	}
-	deliverOutput("noiseproj", "tick-003", "telegram:789", &buf)
+	deliverOutput("noiseproj", "tick-003", "telegram:789", "prompt", &buf)
 
 	args := readCapture(t, captureFile)
 	if !strings.Contains(args, "telegram:789") {
@@ -161,7 +186,7 @@ func TestDeliverOutput_ExecFailure(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString("output text")
-	deliverOutput("testproj", "tick-001", "telegram:123", &buf)
+	deliverOutput("testproj", "tick-001", "telegram:123", "prompt", &buf)
 
 	// Should not panic — logs the error
 	content := readCapture(t, captureFile)
@@ -173,7 +198,7 @@ func TestDeliverOutput_TickIDInSubject(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString("foreman work summary with tick id appended")
-	deliverOutput("myproject", "tick-ABC-123", "telegram:999", &buf)
+	deliverOutput("myproject", "tick-ABC-123", "telegram:999", "prompt", &buf)
 
 	args := readCapture(t, captureFile)
 	if !strings.Contains(args, "tick-ABC-123") {

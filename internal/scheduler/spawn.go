@@ -586,6 +586,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			cmd = exec.Command(parts[0], parts[1:]...)
 		}
 		cmd.Dir = project.Workdir
+		// DAGGER-FOREMAN (2026-08-27): custom-command spawns need the same
+		// tick identity the Hermes branch gets — the dagger driver derives
+		// its board-event tick id from CODING_HERMES_TICK so ledger rows and
+		// board events share one id.
+		cmd.Env = append(os.Environ(),
+			"CODING_HERMES_TICK="+tickID,
+			"CODING_HERMES_SOURCE=scheduler",
+			"CODING_HERMES_PROJECT="+project.Name,
+		)
 	} else {
 		// SCHED-GAP-064: resolve the spawn model/provider through the
 		// fallback CHAIN: project primary → project fallback → global
@@ -856,6 +865,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					model:    model,
 					workdir:  project.Workdir,
 					reqStart: reqStart,
+					// Gateway spawns are always prompt-based (Bane 2026-08-27).
+					Trigger: "prompt",
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
@@ -972,6 +983,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// the completion path can record (provider, model) failures.
 		model:    model,
 		provider: provider,
+		// Bane 2026-08-27: report the trigger kind in delivered reports.
+		Trigger: map[bool]string{true: "command", false: "prompt"}[project.Command != ""],
 	}
 	// S-GAP-003: keep the tick row's heartbeat fresh for the life of the
 	// process; Wait() stops the goroutine. The gateway branch above runs
@@ -1078,6 +1091,13 @@ type SpawnedTick struct {
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
 	completeAt time.Time
+
+	// Trigger records how this tick was launched: "command" for custom
+	// command/script spawns (project.Command), "prompt" for LLM prompt
+	// spawns (gateway or hermes-chat exec fallback). Carried into the
+	// delivered report's top/bottom lines so the thread shows whether
+	// the run was command- or prompt-based (Bane 2026-08-27).
+	Trigger string
 
 	// SCHED-GAP-029: real usage + context for outcome metrics.
 	usage Usage  // gateway response token usage (gateway path only)
