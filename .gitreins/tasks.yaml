@@ -2017,3 +2017,16 @@ tasks:
   status: complete
   created_at: '2026-08-27T01:11:41.212525+00:00'
   completed_at: '2026-08-27T01:13:58.536275+00:00'
+- id: TASK-ROUTER-001
+  title: 'Task router: spawn-time model/provider resolution (router_spawn.py) in schedulerd
+    spawn path'
+  criteria:
+  - Spawner invokes router_spawn.py <project> --format json before the gateway POST;
+    the router head model/provider is used in the /v1/responses body and appears in
+    the SPAWN log line; router absence/failure/empty-head falls back to the existing
+    chain resolution (fail-open) with a warning log; unit tests cover router success,
+    router failure, and empty-head cases; make build, go vet ./internal/scheduler/,
+    gofmt -l, and go test -count=1 -short -p 1 ./... all pass.
+  status: complete
+  created_at: '2026-08-27T05:20:43.062036+00:00'
+  completed_at: '2026-08-27T05:37:54.962963+00:00'
