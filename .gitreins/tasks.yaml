@@ -2030,3 +2030,20 @@ tasks:
   status: complete
   created_at: '2026-08-27T05:20:43.062036+00:00'
   completed_at: '2026-08-27T05:37:54.962963+00:00'
+- id: TASK-ROUTER-002
+  title: Circuit breaker + retry/backoff + health-state exclusion in spawn failure
+    path
+  criteria:
+  - '1) spawn/tick failure records (provider,model) via router_circuit.py record-failure;
+    success records record-success (exact argv + ordering covered by tests) 2) in-tick
+    401/403 retry advances to next chain hop (nextChainResolution), never re-sends
+    an open-circuit pair; max 1 spawn attempt per hop per tick 3) existing consecutive_failures/fallback
+    columns remain last-resort when router unavailable; nil/empty CircuitClient =
+    byte-identical pre-breaker behavior (fail-open; circuit script errors never fail
+    or stall a spawn) 4) full gate battery green: make build, go vet, gofmt clean,
+    go test -count=1 -short -p 1 ./... 9/9, golangci-lint 0 issues 5) forced head-pair
+    failure hops to chain hop 2 and circuit-state.json shows the open entry (test
+    drives the real router_circuit.py with temp HOME)'
+  status: complete
+  created_at: '2026-08-27T07:07:43.254786+00:00'
+  completed_at: '2026-08-27T07:10:01.837881+00:00'
