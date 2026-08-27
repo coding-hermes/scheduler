@@ -782,6 +782,32 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					// No further hops: max 1 attempt per hop per tick,
 					// and the breaker cooldown IS the cross-tick backoff.
 					s.recordCircuitFailure(retryProvider, retryModel, "gateway 401/403 retry hop rejected")
+					// Bane 2026-08-27 (final-fallback rule): when the whole
+					// chain is exhausted (or empty), make ONE final attempt
+					// with the FOREMAN FALLBACK — the config-set ultimate
+					// (resolveModelProvider: project primary → project
+					// fallback → global env tiers; e.g.
+					// deepseek-v4-flash/deepseek-foreman = DeepSeek V4
+					// PAYG). Only when that ALSO rejects does the tick fail
+					// with the terminal GAP-035 classification. The fallback
+					// is skipped when it duplicates a pair already attempted
+					// (single-tier projects keep the legacy fail-fast).
+					ffModel, ffProvider := s.resolveModelProvider(project)
+					if ffModel != "" && ffProvider != "" &&
+						(ffModel != model || ffProvider != provider) &&
+						(ffModel != retryModel || ffProvider != retryProvider) {
+						log.Printf("GATEWAY FOREMAN FALLBACK: %s tick=%s chain exhausted (primary=%q/%q retry=%q/%q) — final attempt model=%q provider=%q",
+							project.Name, tickID, model, provider, retryModel, retryProvider, ffModel, ffProvider)
+						r3, err3 := s.gateway.SendResponseWithSessionKey(ctx, prompt, ffModel, ffProvider, project.GatewayKey, tickID)
+						if err3 == nil {
+							model, provider = ffModel, ffProvider
+							return r3, nil
+						}
+						if errors.Is(err3, ErrGatewayKeyRejected) {
+							s.recordCircuitFailure(ffProvider, ffModel, "gateway 401/403 foreman fallback rejected")
+						}
+						return r3, err3
+					}
 				}
 				return r2, err2
 			}()

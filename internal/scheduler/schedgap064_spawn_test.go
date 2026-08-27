@@ -32,11 +32,13 @@ import (
 // provider matches rejectModel/rejectProvider. Every dispatch's resolved
 // model/provider is recorded from the request body.
 type chainGatewayServer struct {
-	mu             sync.Mutex
-	rejectAll      bool
-	rejectModel    string
-	rejectProvider string
-	dispatches     []dispatchRecord
+	mu                sync.Mutex
+	rejectAll         bool
+	rejectModel       string
+	rejectProvider    string
+	allowOnlyModel    string // when set, ONLY this model+provider pair is accepted
+	allowOnlyProvider string
+	dispatches        []dispatchRecord
 }
 
 type dispatchRecord struct {
@@ -59,7 +61,8 @@ func (g *chainGatewayServer) handler() http.HandlerFunc {
 			status := http.StatusOK
 			if g.rejectAll ||
 				(req.Model != "" && req.Model == g.rejectModel) ||
-				(req.Provider != "" && req.Provider == g.rejectProvider) {
+				(req.Provider != "" && req.Provider == g.rejectProvider) ||
+				(g.allowOnlyModel != "" && (req.Model != g.allowOnlyModel || req.Provider != g.allowOnlyProvider)) {
 				status = http.StatusUnauthorized
 			}
 			g.mu.Lock()
