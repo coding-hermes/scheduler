@@ -57,6 +57,12 @@ type Spawner struct {
 	// exactly like work ticks).
 	idleModel    string
 	idleProvider string
+	// router resolves the spawn model/provider to the task router's
+	// cheapest HEALTHY head at spawn time (TASK-ROUTER-001). Wired from
+	// SCHEDULER_ROUTER_CMD in NewSpawner; nil (the default in tests and
+	// on hosts without the env var) = router disabled, spawns resolve
+	// exactly as before the router (fail-open).
+	router *RouterClient
 	// pendingCounter reads board pending counts for idle-tick routing
 	// (SCHED-GAP-065). Defaults to the package-level shared instance; nil
 	// (tests, tooling) biases every spawn to the work chain — the
@@ -90,16 +96,22 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		to = timeout[0]
 	}
 	return &Spawner{
-		db:                db,
-		maxConcurrent:     maxConcurrent,
-		active:            make(map[string]*exec.Cmd),
-		timeout:           to,
-		model:             getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
-		provider:          getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
-		fallbackModel:     getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", ""),
-		fallbackProvider:  getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", ""),
-		idleModel:         getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
-		idleProvider:      getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		db:               db,
+		maxConcurrent:    maxConcurrent,
+		active:           make(map[string]*exec.Cmd),
+		timeout:          to,
+		model:            getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
+		provider:         getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
+		fallbackModel:    getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", ""),
+		fallbackProvider: getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", ""),
+		idleModel:        getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
+		idleProvider:     getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		// TASK-ROUTER-001: the task router is OPT-IN via env — hosts
+		// without SCHEDULER_ROUTER_CMD (and every test) keep the
+		// pre-router resolution exactly (fail-open default). The command
+		// is a full vector so the binary + flags are overridable; the
+		// project and --format json are appended at resolve time.
+		router:            routerFromEnv(),
 		pendingCounter:    defaultPendingCounter,
 		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
@@ -113,6 +125,27 @@ func getEnvOrDefault(envVar, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// routerFromEnv wires the task router from SCHEDULER_ROUTER_CMD
+// (TASK-ROUTER-001). The variable is a full shell command line
+// (e.g. "/home/kara/.hermes/venvs/board/bin/python3
+// /home/kara/.hermes/scripts/router_spawn.py"); it is split on spaces so
+// binary + flags stay overridable, and the project + --format json are
+// appended at resolve time. Unset/empty = router disabled (fail-open
+// default). A command that would not survive the split (e.g. an
+// argument containing a space) is treated as disabled rather than
+// mis-executed.
+func routerFromEnv() *RouterClient {
+	cmd := os.Getenv("SCHEDULER_ROUTER_CMD")
+	if cmd == "" {
+		return nil
+	}
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return nil
+	}
+	return NewRouterClient(parts, 0)
 }
 
 // noteSpawnFailure increments the project's consecutive spawn-failure counter,
@@ -190,6 +223,14 @@ func (s *Spawner) SetEventLogger(el *EventLogger) {
 // routing (SCHED-GAP-065). Pass nil to force the work chain for every spawn.
 func (s *Spawner) SetPendingCounter(c *PendingTaskCounter) {
 	s.pendingCounter = c
+}
+
+// SetRouterClient installs the task router (TASK-ROUTER-001). Pass nil to
+// disable — spawns then resolve exactly as before the router (fail-open).
+// Tests inject fake router scripts here; the daemon wires the real router
+// from SCHEDULER_ROUTER_CMD in NewSpawner.
+func (s *Spawner) SetRouterClient(rc *RouterClient) {
+	s.router = rc
 }
 
 // gatewayKeyProbeTimeout bounds the pre-dispatch per-project key validation
@@ -458,6 +499,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		idle := s.tickIsIdle(project)
 		chain := s.spawnChainForKind(project, idle)
 		model, provider := resolveChain(chain)
+		// TASK-ROUTER-001: ask the task router for the project's
+		// cheapest HEALTHY head BEFORE the SPAWN line, so the gateway
+		// POST, the exec branch, the SPAWN line, and the tick's
+		// model/provider cost lookup all reflect the router's choice.
+		// Fail-open: any router unavailability keeps the chain-resolved
+		// values below (warning logged). The router applies to BOTH idle
+		// and work ticks — its head is the cheapest healthy option
+		// regardless of tick kind. The idle chain (SCHED-GAP-065) and
+		// the 401/403 nextChainResolution retry remain the fallbacks
+		// when the router is down; the chain-walking retry semantics are
+		// untouched (TASK-ROUTER-002's scope).
+		if rModel, rProvider, used := s.resolveRouterHead(project); used {
+			model, provider = rModel, rProvider
+		}
 		chainKind := "work"
 		if idle {
 			chainKind = "idle"
