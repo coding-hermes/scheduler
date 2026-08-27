@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -512,6 +513,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		FallbackModel:    pd.FallbackModel,
 		FallbackProvider: pd.FallbackProvider,
 		NoGlobalFallback: pd.NoGlobalFallback,
+		ModelChain:       serializeModelChain(pd.ModelChain),
 		IdleModel:        pd.IdleModel,
 		IdleProvider:     pd.IdleProvider,
 		GatewayKey:       pd.GatewayKey,
@@ -564,4 +566,17 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		Enabled:     enabled,
 		Description: nd.Description,
 	}
+}
+
+// serializeModelChain converts a []string model_chain config value to a JSON
+// string for storage in the database. Empty input yields "" (not "null" or "[]").
+func serializeModelChain(chain []string) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(chain)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

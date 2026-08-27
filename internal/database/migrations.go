@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 16
+const latestMigration = 17
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -253,6 +253,13 @@ ALTER TABLE projects ADD COLUMN final_budget_usd REAL NOT NULL DEFAULT 0.0;
 		stmt: `
 ALTER TABLE projects ADD COLUMN idle_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE projects ADD COLUMN idle_provider TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 17,
+		desc:    "add ordered model chain column to projects (SCHED-GAP-075)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

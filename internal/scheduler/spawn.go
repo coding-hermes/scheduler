@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -439,20 +440,23 @@ func nextChainResolution(chain []chainEntry) (model, provider string, ok bool) {
 	return "", "", false
 }
 
-// spawnChain builds the project's fallback chain (project primary + project
-// fallback + global tiers unless NoGlobalFallback): the ordered list of
-// model/provider entries the spawn resolution walks, and the gateway 401/403
-// retry advances one step through. resolveChain(chain) equals
-// resolveModelProvider's result for the same project.
+// spawnChain builds the project's fallback chain. SCHED-GAP-075: when
+// project.ModelChain is set (non-empty JSON array), it becomes the
+// project-tier entries. Otherwise falls back to the SCHED-GAP-064
+// model/provider + fallback_model/fallback_provider pattern.
+//
+// Chain order: project chain entries → global tiers (unless NoGlobalFallback).
 func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
-	chain := []chainEntry{
-		{model: project.Model, provider: project.Provider},
-		{model: project.FallbackModel, provider: project.FallbackProvider},
+	var chain []chainEntry
+	if project.ModelChain != "" {
+		chain = parseModelChain(project.ModelChain)
+	} else {
+		chain = []chainEntry{
+			{model: project.Model, provider: project.Provider},
+			{model: project.FallbackModel, provider: project.FallbackProvider},
+		}
 	}
-	// The no_global_fallback flag is the ONLY gate for steps 3-4: a project
-	// with empty project tiers and no flag keeps the legacy contract
-	// ("empty = use spawner default") and still resolves to the global
-	// primary (step 3), with the env fallback (step 4) reachable behind it.
+	// Global tiers appended unless no_global_fallback is set.
 	if !project.NoGlobalFallback {
 		chain = append(chain,
 			chainEntry{model: s.model, provider: s.provider},
@@ -460,6 +464,23 @@ func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
 		)
 	}
 	return chain
+}
+
+// parseModelChain parses a JSON array of "model@provider" strings into
+// chainEntry slices. Each "model@provider" entry is split on "@" — entries
+// without "@" use the whole string as model with empty provider.
+// Invalid JSON or empty input yields nil (caller falls back to legacy chain).
+func parseModelChain(raw string) []chainEntry {
+	var parts []string
+	if err := json.Unmarshal([]byte(raw), &parts); err != nil || len(parts) == 0 {
+		return nil
+	}
+	entries := make([]chainEntry, 0, len(parts))
+	for _, p := range parts {
+		m, prov, _ := strings.Cut(p, "@")
+		entries = append(entries, chainEntry{model: m, provider: prov})
+	}
+	return entries
 }
 
 // tickIsIdle reports whether this spawn is an IDLE tick: the project's board
@@ -499,6 +520,34 @@ func (s *Spawner) spawnChainForKind(project PackedProject, idle bool) []chainEnt
 		idleTiers = append(idleTiers, chainEntry{model: s.idleModel, provider: s.idleProvider})
 	}
 	return append(idleTiers, regular...)
+}
+
+// mergedChain inserts the router chain entries between the project entries
+// and the global tiers of the base chain. The base chain is split at the
+// boundary: entries before the first global tier are "project" entries;
+// everything from the first global tier onward is "global" entries. The
+// router chain is spliced in between. For chains built via model_chain
+// (SCHED-GAP-075) the global tiers are at the end (gated by
+// NoGlobalFallback); for legacy chains they're the last 2 entries.
+func (s *Spawner) mergedChain(project PackedProject, base []chainEntry, routerChain []chainEntry) []chainEntry {
+	// Split base into project-portion and global-portion.
+	// The global portion starts at the first entry that matches a global tier.
+	globalStart := len(base)
+	globalTier0 := chainEntry{model: s.model, provider: s.provider}
+	for i, e := range base {
+		if e == globalTier0 {
+			globalStart = i
+			break
+		}
+	}
+	projectPart := base[:globalStart]
+	globalPart := base[globalStart:]
+	// Build merged: project + router + global
+	merged := make([]chainEntry, 0, len(projectPart)+len(routerChain)+len(globalPart))
+	merged = append(merged, projectPart...)
+	merged = append(merged, routerChain...)
+	merged = append(merged, globalPart...)
+	return merged
 }
 
 // canSpawn checks concurrency limits.
@@ -557,19 +606,26 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		idle := s.tickIsIdle(project)
 		chain := s.spawnChainForKind(project, idle)
 		model, provider = resolveChain(chain)
-		// TASK-ROUTER-001: ask the task router for the project's
-		// cheapest HEALTHY head BEFORE the SPAWN line, so the gateway
-		// POST, the exec branch, the SPAWN line, and the tick's
-		// model/provider cost lookup all reflect the router's choice.
-		// Fail-open: any router unavailability keeps the chain-resolved
-		// values below (warning logged). The router applies to BOTH idle
-		// and work ticks — its head is the cheapest healthy option
-		// regardless of tick kind. The idle chain (SCHED-GAP-065) and
-		// the 401/403 nextChainResolution retry remain the fallbacks
-		// when the router is down; the chain-walking retry semantics are
-		// untouched (TASK-ROUTER-002's scope).
-		if rModel, rProvider, used := s.resolveRouterHead(project); used {
-			model, provider = rModel, rProvider
+		// TASK-ROUTER-001 + SCHED-GAP-075: single router resolve call.
+		// The router returns both the head (preferred model/provider) and
+		// the full chain (ordered eligible hops). The head overrides the
+		// resolved model/provider. The chain is merged INTO the spawn chain
+		// between project entries and global tiers, so 401/403 retry walks
+		// through all hops including router entries.
+		// Fail-open: any router unavailability keeps the chain-resolved values.
+		if res, ok := s.resolveRouterFull(project); ok {
+			if m, p, headOK := res.OpenHead(); headOK {
+				model, provider = m, p
+				log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
+			}
+			if routerChain := res.OpenChain(); len(routerChain) > 0 {
+				chain = s.mergedChain(project, chain, routerChain)
+				model, provider = resolveChain(chain)
+				// Re-apply router head after merge
+				if m, p, headOK := res.OpenHead(); headOK {
+					model, provider = m, p
+				}
+			}
 		}
 		chainKind := "work"
 		if idle {

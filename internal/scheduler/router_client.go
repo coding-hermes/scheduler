@@ -67,7 +67,14 @@ type RouterResult struct {
 	Project string      `json:"project"`
 	Profile string      `json:"profile"`
 	Head    *RouterHead `json:"head"`
+	Chain   []RouterHop `json:"chain"` // SCHED-GAP-075: full ordered hop list from the router
 	Gate    string      `json:"gate"`
+}
+
+// RouterHop is a single entry in the router's ordered chain.
+type RouterHop struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 // OpenHead returns the router's usable model/provider pair. A pair is
@@ -82,6 +89,21 @@ func (r *RouterResult) OpenHead() (model, provider string, ok bool) {
 		return "", "", false
 	}
 	return r.Head.Model, r.Head.Provider, true
+}
+
+// OpenChain returns the full router chain as chainEntry slices — every
+// eligible hop in price/health order. Returns nil when the result is nil,
+// gate is not OPEN, or the chain is empty. The caller prepends project
+// entries and appends global tiers; the router chain sits in the middle.
+func (r *RouterResult) OpenChain() []chainEntry {
+	if r == nil || r.Gate != "OPEN" || len(r.Chain) == 0 {
+		return nil
+	}
+	entries := make([]chainEntry, 0, len(r.Chain))
+	for _, h := range r.Chain {
+		entries = append(entries, chainEntry{model: h.Model, provider: h.Provider})
+	}
+	return entries
 }
 
 // RouterClient runs the router command for a project and parses its JSON
@@ -177,27 +199,19 @@ func truncate(s string, n int) string {
 	return string(runes[:n]) + "..."
 }
 
-// resolveRouterHead asks the router for the project's cheapest healthy
-// model/provider pair and logs a provenance line either way. Returns the
-// router's head when the router is enabled AND returns an open head; a nil
-// client, a disabled client, or any router failure yields the fallback
-// signal and a ROUTER warning. The spawn continues with the chain values
-// — the router is a suggestion, never a gate.
-func (s *Spawner) resolveRouterHead(project PackedProject) (model, provider string, used bool) {
+// resolveRouterFull runs the router and returns the full result. Returns
+// ok=false for any failure mode (nil client, disabled, script error, etc.)
+// with a ROUTER warning logged. Used by the spawn path for both head
+// resolution and SCHED-GAP-075 chain merge.
+func (s *Spawner) resolveRouterFull(project PackedProject) (RouterResult, bool) {
 	if !s.router.Enabled() {
 		log.Printf("ROUTER: %s unavailable (router not configured) — using chain fallback", project.Name)
-		return "", "", false
+		return RouterResult{}, false
 	}
 	res, ok, reason := s.router.Resolve(context.Background(), project.Name)
 	if !ok {
 		log.Printf("ROUTER: %s unavailable — using chain fallback (%s)", project.Name, reason)
-		return "", "", false
+		return res, false
 	}
-	m, p, headOK := res.OpenHead()
-	if !headOK {
-		log.Printf("ROUTER: %s unavailable — using chain fallback (no open head)", project.Name)
-		return "", "", false
-	}
-	log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
-	return m, p, true
+	return res, true
 }

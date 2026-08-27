@@ -17,6 +17,7 @@ type Project struct {
 	FallbackModel     string  `json:"fallback_model"`      // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
 	FallbackProvider  string  `json:"fallback_provider"`   // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
 	NoGlobalFallback  bool    `json:"no_global_fallback"`  // true → skip the spawner-level (env) fallback tier entirely (SCHED-GAP-064)
+	ModelChain        string  `json:"model_chain"`         // ordered list of "model@provider" hops (JSON array); empty = use model/provider + fallback_model/provider (SCHED-GAP-075)
 	IdleModel         string  `json:"idle_model"`          // optional: idle-tick model tier, prepended to the spawn chain when the board has zero pending tasks (SCHED-GAP-065)
 	IdleProvider      string  `json:"idle_provider"`       // optional: idle-tick provider tier (SCHED-GAP-065)
 	DailyBudgetUSD    float64 `json:"daily_budget_usd"`    // per-UTC-day spend cap; <= 0 = unlimited (SCHED-GAP-066)
@@ -101,6 +102,7 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	setString("Provider", &p.Provider)
 	setString("FallbackModel", &p.FallbackModel)
 	setString("FallbackProvider", &p.FallbackProvider)
+	setString("ModelChain", &p.ModelChain)
 	setString("IdleModel", &p.IdleModel)
 	setString("IdleProvider", &p.IdleProvider)
 	if !p.NoGlobalFallback {
