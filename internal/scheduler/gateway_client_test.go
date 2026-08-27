@@ -11,6 +11,110 @@ import (
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
+// Regression tests for SCHED-GAP-074 (2026-08-27): every scheduler tick
+// spawn must carry the tick id as a durable session handle on the gateway
+// POST (X-Hermes-Session-Key header) so fleet-quality review can link each
+// /v1/responses run to its state.db session deterministically — independent
+// of the unreliable time-window + prompt-marker heuristic used for
+// historical ticks.
+
+func TestGatewayClient_SendResponseWithSessionKey_SetsHeader(t *testing.T) {
+	var gotHeader string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Hermes-Session-Key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_sesskey",
+			"status": "completed",
+			"output": []map[string]any{},
+			"usage":  map[string]int{},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	const wantKey = "coding-hermes-scheduler-2026-08-27-09-36-40"
+	resp, err := client.SendResponseWithSessionKey(t.Context(), "test prompt", "test-model", "", "", wantKey)
+	if err != nil {
+		t.Fatalf("SendResponseWithSessionKey: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+		return
+	}
+	if gotHeader != wantKey {
+		t.Fatalf("X-Hermes-Session-Key header = %q, want exactly %q — tick sessions would stay unlinkable!", gotHeader, wantKey)
+	}
+
+	t.Logf("OK: X-Hermes-Session-Key=%q sent verbatim on /v1/responses POST", gotHeader)
+}
+
+func TestGatewayClient_SendResponse_OmitsSessionKeyHeader(t *testing.T) {
+	var gotHeader string
+	var hadHeader bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Hermes-Session-Key")
+		hadHeader = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_nosesskey",
+			"status": "completed",
+			"output": []map[string]any{},
+			"usage":  map[string]int{},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	if _, err := client.SendResponse(t.Context(), "hello", "test-model", "", ""); err != nil {
+		t.Fatalf("SendResponse: %v", err)
+	}
+	if !hadHeader {
+		t.Fatal("handler never ran")
+	}
+	if gotHeader != "" {
+		t.Fatalf("legacy SendResponse must send NO X-Hermes-Session-Key header, got %q", gotHeader)
+	}
+
+	t.Log("OK: legacy SendResponse sends no X-Hermes-Session-Key header")
+}
+
+func TestGatewayClient_SendResponseWithSessionKey_EmptyKeyOmitsHeader(t *testing.T) {
+	var gotHeader string
+	var hadHeader bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Hermes-Session-Key")
+		hadHeader = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_emptykey",
+			"status": "completed",
+			"output": []map[string]any{},
+			"usage":  map[string]int{},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	if _, err := client.SendResponseWithSessionKey(t.Context(), "hello", "test-model", "", "", ""); err != nil {
+		t.Fatalf("SendResponseWithSessionKey(empty): %v", err)
+	}
+	if !hadHeader {
+		t.Fatal("handler never ran")
+	}
+	if gotHeader != "" {
+		t.Fatalf("empty sessionKey must omit the header entirely, got %q (gateway _parse_session_key_header treats empty as absent, but the wire contract should not rely on it)", gotHeader)
+	}
+
+	t.Log("OK: empty sessionKey sends no X-Hermes-Session-Key header")
+}
+
 func TestGatewayClient_SendResponse_DisablesApprovals(t *testing.T) {
 	// Capture the request body sent to the gateway and verify
 	// require_approval=false is always present.

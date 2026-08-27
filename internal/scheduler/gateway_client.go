@@ -168,6 +168,17 @@ func (g *GatewayClient) health(ctx context.Context, key string) error {
 // project.GatewayKey when set, so each foreman authenticates with its own
 // key (Bane 2026-07-31).
 func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, provider, key string) (*Response, error) {
+	return g.SendResponseWithSessionKey(ctx, prompt, model, provider, key, "")
+}
+
+// SendResponseWithSessionKey is SendResponse plus the optional
+// X-Hermes-Session-Key header. A non-empty sessionKey scopes the run under
+// that stable identifier (SCHED-GAP-074): scheduler ticks pass their tick id
+// so every spawned session carries a durable, self-describing handle for
+// fleet-quality review linkage, independent of the per-request resp_* id
+// that lands in ticks.session_id. An empty sessionKey sends no header,
+// matching legacy behavior exactly.
+func (g *GatewayClient) SendResponseWithSessionKey(ctx context.Context, prompt, model, provider, key, sessionKey string) (*Response, error) {
 	noApproval := false
 	reqBody := ResponseRequest{
 		Input:           prompt,
@@ -186,6 +197,9 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, provide
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if sessionKey != "" {
+		req.Header.Set("X-Hermes-Session-Key", sessionKey)
+	}
 	g.setAuth(req, key)
 
 	resp, err := g.httpClient.Do(req)

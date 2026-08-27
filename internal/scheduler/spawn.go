@@ -703,7 +703,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// stop it on every return path (success AND failure).
 				defer close(stopHeartbeat)
 				defer cancel()
-				r, err := s.gateway.SendResponse(ctx, prompt, model, provider, project.GatewayKey)
+				r, err := s.gateway.SendResponseWithSessionKey(ctx, prompt, model, provider, project.GatewayKey, tickID)
 				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry {
 					return r, err
 				}
@@ -718,7 +718,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				circuitFailureRecorded = true
 				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
 					project.Name, tickID, model, provider, retryModel, retryProvider)
-				r2, err2 := s.gateway.SendResponse(ctx, prompt, retryModel, retryProvider, project.GatewayKey)
+				r2, err2 := s.gateway.SendResponseWithSessionKey(ctx, prompt, retryModel, retryProvider, project.GatewayKey, tickID)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
 				} else if errors.Is(err2, ErrGatewayKeyRejected) {
@@ -800,6 +800,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			}
 		}
 
+		// SCHED-GAP-074: the exec fallback cannot carry the tick id as a
+		// session key — the CLI derives its own session identity. The
+		// prompt's "[Scheduler tick: <id>]" prefix remains the linkage
+		// marker for exec-spawned sessions (same as historical gateway
+		// ticks), which is acceptable: exec fallback is disabled by default
+		// (--no-exec-fallback) and only ever fires when the gateway is
+		// unreachable, i.e. no /v1/responses row exists to lose.
 		args := []string{
 			"chat", "-q", prompt,
 			"-m", model,
