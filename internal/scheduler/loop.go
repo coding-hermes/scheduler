@@ -40,7 +40,6 @@ type Loop struct {
 	autoDisablePolicy autoDisablePolicy
 
 	mu       sync.RWMutex
-	running  sync.WaitGroup
 	stopCh   chan struct{}
 	pauseCh  chan bool
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
@@ -83,6 +82,11 @@ type Loop struct {
 	// one second).
 	simSeq    atomic.Uint64
 	noDeliver bool // suppress Telegram delivery (verify mode, tests)
+
+	// stopGrace is how long Stop() waits for in-flight ticks to finish
+	// before aborting them (SCHED-GAP-077). Defaults to 15s in NewLoop;
+	// tests may shorten it.
+	stopGrace time.Duration
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -131,6 +135,7 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		pauseCh:         make(chan bool, 1),
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
+		stopGrace:       15 * time.Second,
 	}
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
@@ -351,18 +356,97 @@ func (l *Loop) Run() {
 }
 
 // Stop stops the evaluation loop and waits for in-flight ticks.
+//
+// SCHED-GAP-077: the drain is driven by the SlotPool — a slot is held for the
+// WHOLE tick (Acquire→Spawn→st.Wait()→Complete→Release), so
+// slotPool.Running()/Wait(ctx) is the in-flight truth. The previous drain
+// waited on l.running (a sync.WaitGroup with NO Add()/Done() callers anywhere
+// in the repo), so it returned instantly while gateway requests were still
+// blocking — logging 'all in-flight ticks completed' and orphaning running
+// tick rows with stale heartbeats on shutdown (deepseek-dashboard 17:33:55
+// incident, recovered only by a manual UPDATE).
+//
+// Stop waits up to stopGrace (default 15s) for in-flight ticks to finish. On
+// drain timeout, every tick row still status='running' is marked 'failed'
+// (schema-legal status; the ticks CHECK at internal/database/migrations.go
+// allows queued/running/completed/failed/timeout) with a HIGH event, and all
+// slots are released so the process can exit. No row survives shutdown as
+// 'running' with a stale heartbeat. The startup reaper (tick_process.go
+// reapZombies, S-GAP-003/SCHED-GAP-030) stays untouched as the backstop for
+// rows orphaned by a hard crash.
 func (l *Loop) Stop() {
 	close(l.stopCh)
-	done := make(chan struct{})
-	go func() {
-		l.running.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
+	if l.slotPool == nil {
 		log.Println("LOOP: all in-flight ticks completed")
-	case <-time.After(15 * time.Second):
-		log.Println("LOOP: timed out waiting for in-flight ticks — forcing shutdown")
+		return
+	}
+	grace := l.stopGrace
+	if grace <= 0 {
+		grace = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := l.slotPool.Wait(ctx); err == nil {
+		log.Println("LOOP: all in-flight ticks completed")
+		return
+	}
+	log.Printf("LOOP: shutdown drain timed out after %v — marking in-flight ticks failed", grace)
+	l.abortInFlightTicks()
+	l.slotPool.ReleaseAll()
+}
+
+// abortInFlightTicks marks every tick row still status='running' as 'failed'
+// (schema-legal status — the ticks CHECK allows queued/running/completed/
+// failed/timeout; no new status without a migration), logs each row with its
+// tick id and project, and emits a HIGH event listing the affected tick ids.
+// Called by Stop() when the drain grace expires with gateway requests still
+// blocking.
+func (l *Loop) abortInFlightTicks() {
+	rows, err := l.db.Query(`SELECT id, project_name FROM ticks WHERE status = ?`, string(TickRunning))
+	if err != nil {
+		log.Printf("LOOP: shutdown drain: query running ticks: %v", err)
+		l.EmitHighEvent("loop", "shutdown drain timed out — failed to query in-flight ticks", map[string]any{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type stuckTick struct {
+		id      string
+		project string
+	}
+	var stuck []stuckTick
+	var ids []string
+	for rows.Next() {
+		var t stuckTick
+		if err := rows.Scan(&t.id, &t.project); err != nil {
+			log.Printf("LOOP: shutdown drain: scan running tick: %v", err)
+			continue
+		}
+		stuck = append(stuck, t)
+		ids = append(ids, t.id)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("LOOP: shutdown drain: iterate running ticks: %v", err)
+	}
+
+	for _, t := range stuck {
+		finished := time.Now()
+		err := l.lifecycle.Complete(TickOutcome{
+			TickID:   t.id,
+			Project:  t.project,
+			Started:  finished,
+			Finished: finished,
+			Status:   TickFailed,
+			Error:    "aborted by graceful shutdown — drain timed out with tick in flight",
+		})
+		if err != nil {
+			log.Printf("LOOP: shutdown drain: mark tick %s (project %s) failed: %v", t.id, t.project, err)
+			continue
+		}
+		log.Printf("LOOP: shutdown drain timed out — marked tick %s (project %s) failed", t.id, t.project)
+	}
+	if len(stuck) > 0 {
+		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain timed out — marking %d in-flight ticks failed", len(stuck)), map[string]any{"tick_ids": ids})
 	}
 }
 
