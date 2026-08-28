@@ -137,6 +137,18 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		stopCh:          make(chan struct{}),
 		stopGrace:       15 * time.Second,
 	}
+	// CI-003: eagerly create the slot pool. The former lazy-init sites
+	// (Run, SpawnNow, evaluate) assigned l.slotPool from goroutines while
+	// Stop() read it unsynchronized — a data race the CI Race Detector
+	// step caught in TestNewLoop_Defaults (loop_test.go:29 Stop() vs
+	// loop_test.go:23 go loop.Run()). Constructed here, before any
+	// goroutine can observe the Loop, the field is immutable for the
+	// Loop's lifetime; the SCHED-GAP-077 drain (Wait/abortInFlightTicks/
+	// ReleaseAll in Stop) is unchanged. 2*time.Hour matches the lazy
+	// sites' default — SlotPool.timeout is never read, so the value has
+	// no behavioral effect.
+	l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
 	l.spawner.SetEventLogger(l.events)
@@ -200,16 +212,13 @@ func (l *Loop) simTickID(projName string, now time.Time) string {
 	return fmt.Sprintf("sim-%s-%s-%d", projName, now.Format("150405"), seq)
 }
 
-// SetTickTimeout updates the real spawner's per-tick timeout and initializes
-// the concurrent slot pool if needed (BUG-007).
+// SetTickTimeout updates the real spawner's per-tick timeout. The slot pool
+// is created eagerly in NewLoop (CI-003) — no lazy init here.
 func (l *Loop) SetTickTimeout(timeout time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.spawner != nil {
 		l.spawner.timeout = timeout
-	}
-	if l.slotPool == nil {
-		l.slotPool = NewSlotPool(l.maxConcur, timeout, l.spawner, l.lifecycle)
 	}
 }
 
@@ -276,11 +285,6 @@ func (l *Loop) Run() {
 
 	healthTicker := time.NewTicker(30 * time.Second)
 	defer healthTicker.Stop()
-
-	// Initialize slot pool if lazy-init hasn't happened yet (test_verify, tests).
-	if l.slotPool == nil {
-		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
-	}
 
 	// SlotFreed() spawns one internal polling goroutine. Capture the channel
 	// once so the select loop isn't creating new goroutines on every iteration.
@@ -529,10 +533,8 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	}
 
 	// Fire the spawn session (async — the row is already queued, so the
-	// returned id resolves regardless of slot availability).
-	if l.slotPool == nil {
-		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
-	}
+	// returned id resolves regardless of slot availability). The slot pool
+	// exists from NewLoop (CI-003).
 	l.slotPool.SpawnEnqueued(proj, tickID, time.Now(), noDeliver, l.db)
 	return tickID, nil
 }

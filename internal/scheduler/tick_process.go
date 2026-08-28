@@ -125,11 +125,6 @@ func (l *Loop) evaluate() {
 	l.mu.Unlock()
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
-	// Lazy-init the slot pool if not already created (test_verify, tests).
-	if l.slotPool == nil {
-		l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
-	}
-
 	// Gateway liveness check: ping before spawning. If gateway is dead,
 	// release all slots and skip this cycle. Retry next eval.
 	// DOGFOOD-007: simulation mode must not depend on a live gateway —
