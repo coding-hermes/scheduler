@@ -93,10 +93,10 @@ type RouterHop struct {
 // the router did not price this pair — the caller falls back to the static
 // maps / flat estimate.
 type routerRate struct {
-	usd1m  float64 // blended public $/1M (>= 0 when known)
-	inPerM float64 // public input $/1M  (>= 0 when known)
+	usd1m   float64 // blended public $/1M (>= 0 when known)
+	inPerM  float64 // public input $/1M  (>= 0 when known)
 	outPerM float64 // public output $/1M (>= 0 when known)
-	known  bool
+	known   bool
 }
 
 // hopRate converts nullable JSON price pointers into a routerRate.
