@@ -637,6 +637,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// empty and the circuit recorder skips them (TASK-ROUTER-002).
 	var model, provider string
 
+	// SCHED-GAP-078: routerRes holds the spawn-time router result so the
+	// cost of the pair that ACTUALLY runs (head, retry hop, or foreman
+	// fallback) can be looked up without a second invocation. rate is the
+	// router's PUBLIC price for the current (provider, model); unknown
+	// pairs (router down / pair not priced) fall back to the static maps.
+	var routerRes RouterResult
+	rate := routerRate{}
+
 	if project.Command != "" {
 		// Custom command.
 		if strings.Contains(project.Command, "bash -c") {
@@ -687,7 +695,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// between project entries and global tiers, so 401/403 retry walks
 		// through all hops including router entries.
 		// Fail-open: any router unavailability keeps the chain-resolved values.
+		// SCHED-GAP-078: the resolved result is kept in scope so the price of
+		// the pair that ACTUALLY runs (head, retry hop, or foreman fallback)
+		// feeds the tick's cost — provider-aware, public-price-first.
 		if res, ok := s.resolveRouterFull(project); ok {
+			routerRes = res
 			if m, p, headOK := res.OpenHead(); headOK {
 				model, provider = m, p
 				log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
@@ -825,6 +837,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				r2, err2 := s.gateway.SendResponseWithSessionKey(ctx, prompt, retryModel, retryProvider, project.GatewayKey, tickID)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
+					// SCHED-GAP-078: the tick's cost follows the pair that
+					// actually ran — look up its router price in the
+					// SPAWN-TIME result (no re-invocation; the chain is
+					// static for this tick). Pairs the router never priced
+					// leave rate unknown → static map fallback.
+					if rr, ok := routerRes.HopRate(provider, model); ok {
+						rate = rr
+					}
 				} else if errors.Is(err2, ErrGatewayKeyRejected) {
 					// The retry hop is rejected too — record it as well.
 					// No further hops: max 1 attempt per hop per tick,
@@ -849,6 +869,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						r3, err3 := s.gateway.SendResponseWithSessionKey(ctx, prompt, ffModel, ffProvider, project.GatewayKey, tickID)
 						if err3 == nil {
 							model, provider = ffModel, ffProvider
+							// SCHED-GAP-078: cost follows the pair that ran.
+							if rr, ok := routerRes.HopRate(provider, model); ok {
+								rate = rr
+							}
 							return r3, nil
 						}
 						if errors.Is(err3, ErrGatewayKeyRejected) {
@@ -902,6 +926,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					// SCHED-GAP-029: carry real usage + context for outcome metrics.
 					usage:    resp.Usage,
 					model:    model,
+					provider: provider,
+					rate:     rate, // SCHED-GAP-078: router PUBLIC price for the pair that ran
 					workdir:  project.Workdir,
 					reqStart: reqStart,
 					// Gateway spawns are always prompt-based (Bane 2026-08-27).
@@ -1022,6 +1048,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// the completion path can record (provider, model) failures.
 		model:    model,
 		provider: provider,
+		rate:     rate, // SCHED-GAP-078: router PUBLIC price for the pair that ran
 		// Bane 2026-08-27: report the trigger kind in delivered reports.
 		Trigger: map[bool]string{true: "command", false: "prompt"}[project.Command != ""],
 	}
@@ -1144,7 +1171,11 @@ type SpawnedTick struct {
 	// TASK-ROUTER-002: provider used for this tick — the completion path
 	// records (provider, model) failures into the circuit state on
 	// timeout/failed outcomes.
-	provider string    // provider used for this tick (for circuit recording)
+	provider string // provider used for this tick (for circuit recording)
+	// SCHED-GAP-078: the task router's PUBLIC price for the (provider,
+	// model) pair that actually ran. known=false (no router / pair not
+	// priced) falls back to the static maps in computeCostUSD.
+	rate     routerRate
 	workdir  string    // project workdir for git commit/file counting
 	reqStart time.Time // request start time (before SendResponse) for git window
 }
@@ -1168,15 +1199,17 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	// Gateway-spawned ticks are already complete — return immediately.
 	// SCHED-GAP-029: populate real tokens/cost/commits/files from gateway
 	// usage + git. Previously every gateway tick returned zero metrics.
+	// SCHED-GAP-078: cost uses the router's PUBLIC price for the
+	// (provider, model) pair that actually ran.
 	if st.completed {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
-		cost := computeCostUSD(st.model, tokensIn, tokensOut)
+		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
 		log.Printf("TICK: %s %s → %s (%v) %s",
 			st.Project, st.TickID, TickCompleted,
 			st.completeAt.Sub(st.Started).Round(time.Second),
-			formatCostSummary(st.model, tokensIn, tokensOut, cost, commits, files))
+			formatCostSummary(st.provider, st.model, tokensIn, tokensOut, cost, commits, files))
 		return TickOutcome{
 			TickID:       st.TickID,
 			Project:      st.Project,
@@ -1260,10 +1293,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		outcome.CostUSD = cost
 		if !isReal {
 			// Still record the estimated token counts so aggregation works
-			// even when telemetry is missing.
+			// even when telemetry is missing. SCHED-GAP-078: price the
+			// estimate with the router's PUBLIC rate for the pair that ran
+			// (then the static maps) instead of the flat constants.
 			tin, tout, _ := estimateTickCost()
 			outcome.TokensIn = tin
 			outcome.TokensOut = tout
+			outcome.CostUSD = computeCostUSD(st.provider, st.model, st.rate, tin, tout)
 		} else {
 			outcome.TokensIn = 0
 			outcome.TokensOut = 0

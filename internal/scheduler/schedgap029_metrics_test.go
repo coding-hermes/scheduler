@@ -85,8 +85,8 @@ func TestSCHEDGAP029_GatewayWaitReturnsRealTokens(t *testing.T) {
 // ── Test: cost computation for known + unknown models ──
 
 func TestSCHEDGAP029_ComputeCost_KnownModel(t *testing.T) {
-	// deepseek-v4-flash: $0.14/1M in, $0.28/1M out
-	cost := computeCostUSD("deepseek-v4-flash", 1000000, 1000000)
+	// deepseek-v4-flash: $0.14/1M in, $0.28/1M out (static map fallback)
+	cost := computeCostUSD("deepseek", "deepseek-v4-flash", routerRate{}, 1000000, 1000000)
 	wantIn := 0.14
 	wantOut := 0.28
 	want := wantIn + wantOut
@@ -97,7 +97,7 @@ func TestSCHEDGAP029_ComputeCost_KnownModel(t *testing.T) {
 
 func TestSCHEDGAP029_ComputeCost_UnknownModel(t *testing.T) {
 	// Unknown model falls back to fixed per-token rates.
-	cost := computeCostUSD("totally-unknown-model", 1000, 500)
+	cost := computeCostUSD("", "totally-unknown-model", routerRate{}, 1000, 500)
 	want := float64(1000)*estCostPerIn + float64(500)*estCostPerOut
 	if cost < want*0.99 || cost > want*1.01 {
 		t.Errorf("cost for unknown model = %.6f, want ~%.6f (fallback)", cost, want)
@@ -108,7 +108,7 @@ func TestSCHEDGAP029_ComputeCost_UnknownModel(t *testing.T) {
 }
 
 func TestSCHEDGAP029_ComputeCost_ZeroTokens(t *testing.T) {
-	cost := computeCostUSD("deepseek-v4-flash", 0, 0)
+	cost := computeCostUSD("deepseek", "deepseek-v4-flash", routerRate{}, 0, 0)
 	if cost != 0 {
 		t.Errorf("cost for 0 tokens = %f, want 0", cost)
 	}
@@ -250,7 +250,7 @@ func TestSCHEDGAP029_FullFlow_PersistsMetrics(t *testing.T) {
 	tokensIn := 25000
 	tokensOut := 5000
 	model := "deepseek-v4-flash"
-	cost := computeCostUSD(model, tokensIn, tokensOut)
+	cost := computeCostUSD("deepseek", model, routerRate{}, tokensIn, tokensOut)
 	commits, files := 0, 0
 	if hasGit {
 		commits, files = 1, 1

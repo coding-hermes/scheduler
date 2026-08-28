@@ -16,11 +16,14 @@ type modelRate struct {
 	outPerM float64 // output $/1M tokens
 }
 
-// modelRates holds pricing for models the coding-hermes fleet actually uses.
-// Prices are approximate per-1M-token USD rates from public pricing pages as
-// of 2026-08. The table is intentionally small — it exists so cost_usd is in
-// the right ballpark for fleet reporting, not to be a billing-grade catalog.
-// Unknown models fall back to estimateTickCost constants.
+// modelRates holds PUBLIC list pricing for models the coding-hermes fleet
+// actually uses, keyed by model name — the LAST-RESORT fallback for cost
+// reporting (SCHED-GAP-078). Prices are public per-1M-token USD rates
+// (models.dev / provider pricing pages, as of 2026-08). The task router's
+// per-hop public price is the PRIMARY source (provider-aware, tick-accurate);
+// this map only fires when the router was unavailable or didn't price the
+// pair. providerModelRates overrides by "provider/model" when a provider's
+// public rate differs materially from the model-wide default.
 var modelRates = map[string]modelRate{
 	"deepseek-v4-flash": {0.14, 0.28},
 	"deepseek-v4-pro":   {0.27, 1.10},
@@ -28,6 +31,7 @@ var modelRates = map[string]modelRate{
 	"kimi-k3":           {0.60, 2.50},
 	"minimax-m3":        {1.00, 3.00},
 	"gemma":             {0.10, 0.10},
+	"mimo-v2.5":         {0.14, 0.28}, // models.dev sticker (opencode-go lane)
 	"gpt-5.6-luna":      {2.50, 10.00},
 	"gpt-5.6-sol":       {2.50, 10.00},
 	"gpt-5.6-terra":     {2.50, 10.00},
@@ -35,18 +39,44 @@ var modelRates = map[string]modelRate{
 	"step-3.7-flash":    {0.20, 0.80},
 }
 
-// computeCostUSD returns the estimated cost in USD for a tick based on token
-// usage and the model's per-1M-token rates. Unknown models fall back to the
-// fixed estimate constants (estCostPerIn / estCostPerOut) so cost aggregation
-// is never zero.
-func computeCostUSD(model string, tokensIn, tokensOut int) float64 {
-	rate, ok := modelRates[model]
-	if !ok {
-		// Fallback: use the fixed per-token estimates so unknown models
-		// still produce a non-zero, roughly proportional cost.
-		return float64(tokensIn)*estCostPerIn + float64(tokensOut)*estCostPerOut
+// providerModelRates keys are "provider/model" — a provider-specific PUBLIC
+// rate that differs from the model-wide default (e.g. a reseller lane whose
+// sticker is not the underlying provider's list).
+var providerModelRates = map[string]modelRate{}
+
+// computeCostUSD returns the estimated PUBLIC cost in USD for a tick, in
+// priority order (SCHED-GAP-078, Bane 2026-08-28):
+//
+//  1. the task router's public in/out per-1M rates for the resolved
+//     (provider, model) lane — provider-aware and tick-accurate;
+//  2. the router's blended public usd_1m for the lane;
+//  3. the provider-qualified static map, then the model map — last resort
+//     when the router did not price the pair;
+//  4. the fixed flat per-token estimates so aggregation is never zero.
+//
+// A routerRate with known=true but all components 0.0 is a FREE lane — cost
+// legitimately computes to 0 (never fall through to the maps for a free
+// lane: that would bill a $0 lane at the model's sticker).
+func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut int) float64 {
+	if rr.known {
+		if rr.inPerM >= 0 && rr.outPerM >= 0 {
+			return float64(tokensIn)/1e6*rr.inPerM + float64(tokensOut)/1e6*rr.outPerM
+		}
+		if rr.usd1m >= 0 {
+			return rr.usd1m * float64(tokensIn+tokensOut) / 1e6
+		}
 	}
-	return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
+	if provider != "" {
+		if rate, ok := providerModelRates[provider+"/"+model]; ok {
+			return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
+		}
+	}
+	if rate, ok := modelRates[model]; ok {
+		return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
+	}
+	// Fallback: use the fixed per-token estimates so unknown models
+	// still produce a non-zero, roughly proportional cost.
+	return float64(tokensIn)*estCostPerIn + float64(tokensOut)*estCostPerOut
 }
 
 // gitCommitCountInWindow returns the number of commits in workdir between [since, until].
@@ -153,7 +183,7 @@ func countGitChanges(workdir string, start, end time.Time) (int, int) {
 }
 
 // formatCostSummary returns a one-line log-friendly summary string.
-func formatCostSummary(model string, tin, tout int, cost float64, commits, files int) string {
-	return fmt.Sprintf("model=%s tokens=%d/%d cost=$%.4f commits=%d files=%d",
-		model, tin, tout, cost, commits, files)
+func formatCostSummary(provider, model string, tin, tout int, cost float64, commits, files int) string {
+	return fmt.Sprintf("provider=%s model=%s tokens=%d/%d cost=$%.4f commits=%d files=%d",
+		provider, model, tin, tout, cost, commits, files)
 }

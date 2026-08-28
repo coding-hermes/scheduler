@@ -51,13 +51,18 @@ import (
 const routerTimeout = 5 * time.Second
 
 // RouterHead is the router's preferred (provider, model) pair — the head
-// of the eligible chain.
+// of the eligible chain. Price fields are the PUBLIC per-1M-token rates
+// (Bane 2026-08-28: cost reporting quotes provider list prices, not the
+// internal normalized rates). Pointers distinguish "priced at $0" (free
+// lane) from "price unknown" (null).
 type RouterHead struct {
-	Hop       int     `json:"hop"`
-	Provider  string  `json:"provider"`
-	Model     string  `json:"model"`
-	USD1M     float64 `json:"usd_1m"`
-	DataClass string  `json:"data_class"`
+	Hop       int      `json:"hop"`
+	Provider  string   `json:"provider"`
+	Model     string   `json:"model"`
+	USD1M     *float64 `json:"usd_1m"`
+	InPerM    *float64 `json:"in_per_m"`
+	OutPerM   *float64 `json:"out_per_m"`
+	DataClass string   `json:"data_class"`
 }
 
 // RouterResult is the parsed subset of the router's JSON output the
@@ -71,10 +76,62 @@ type RouterResult struct {
 	Gate    string      `json:"gate"`
 }
 
-// RouterHop is a single entry in the router's ordered chain.
+// RouterHop is a single entry in the router's ordered chain. Price fields
+// are the PUBLIC per-1M rates for the hop (usd_1m = blended; in/out = the
+// exact split), null when the router only knows the normalized rate.
 type RouterHop struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Provider string   `json:"provider"`
+	Model    string   `json:"model"`
+	USD1M    *float64 `json:"usd_1m"`
+	InPerM   *float64 `json:"in_per_m"`
+	OutPerM  *float64 `json:"out_per_m"`
+}
+
+// routerRate is the router-resolved PUBLIC price for one (provider, model)
+// lane. -1 marks an unknown component (the router never emits negative
+// prices, so 0.0 stays a legitimate "free lane" price). known=false means
+// the router did not price this pair — the caller falls back to the static
+// maps / flat estimate.
+type routerRate struct {
+	usd1m  float64 // blended public $/1M (>= 0 when known)
+	inPerM float64 // public input $/1M  (>= 0 when known)
+	outPerM float64 // public output $/1M (>= 0 when known)
+	known  bool
+}
+
+// hopRate converts nullable JSON price pointers into a routerRate.
+func hopRate(usd, in, out *float64) routerRate {
+	rr := routerRate{known: true, usd1m: -1, inPerM: -1, outPerM: -1}
+	if usd != nil {
+		rr.usd1m = *usd
+	}
+	if in != nil {
+		rr.inPerM = *in
+	}
+	if out != nil {
+		rr.outPerM = *out
+	}
+	return rr
+}
+
+// HopRate returns the router-reported PUBLIC price for a (provider, model)
+// pair — the head when it matches, else the matching chain hop. ok=false
+// when the pair is not in the resolved result at all (e.g. a project-tier
+// or global-tier entry the router never priced) — the caller must fall back
+// to the static rate maps.
+func (r *RouterResult) HopRate(provider, model string) (rr routerRate, ok bool) {
+	if r == nil {
+		return routerRate{}, false
+	}
+	for _, h := range r.Chain {
+		if h.Provider == provider && h.Model == model {
+			return hopRate(h.USD1M, h.InPerM, h.OutPerM), true
+		}
+	}
+	if r.Head != nil && r.Head.Provider == provider && r.Head.Model == model {
+		return hopRate(r.Head.USD1M, r.Head.InPerM, r.Head.OutPerM), true
+	}
+	return routerRate{}, false
 }
 
 // OpenHead returns the router's usable model/provider pair. A pair is
