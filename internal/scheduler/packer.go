@@ -106,6 +106,8 @@ type scored struct {
 	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
 	promptMode          string // "append" (default) | "replace"
 	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
+	namespaceID         string // namespace_id (empty = no namespace)
+	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -115,7 +117,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       p.last_tick_completed,
 		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
-		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''),
+		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0),
 		       p.consecutive_failures
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -139,7 +141,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
-			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt,
+			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -225,15 +227,34 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	used := 0
 	packed := make([]PackedProject, 0, max(1, len(list)/2))
 
+	// Per-namespace running counts (Bane 2026-08-27): a namespace with
+	// max_concurrent > 0 may have at most that many ticks running at
+	// once. Count the already-running projects per namespace, then
+	// increment as we pack so one cycle never overshoots the cap.
+	nsRunning := make(map[string]int)
+	for _, s := range list {
+		if spawnerRunning[s.name] {
+			nsRunning[s.namespaceID]++
+		}
+	}
+
 	totalChecked := 0
 	totalSkippedBudget := 0
 	totalSkippedCooldown := 0
 	totalSkippedRunning := 0
+	totalSkippedNamespace := 0
 
 	for _, s := range list {
 		totalChecked++
 		if spawnerRunning[s.name] {
 			totalSkippedRunning++
+			continue
+		}
+		// Per-namespace concurrency cap: skip when the namespace already
+		// has max_concurrent running ticks (including ones packed earlier
+		// in this same cycle). 0 = unlimited — only the global cap applies.
+		if s.namespaceMaxConc > 0 && nsRunning[s.namespaceID] >= s.namespaceMaxConc {
+			totalSkippedNamespace++
 			continue
 		}
 		if used+s.weight > p.budget {
@@ -293,11 +314,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		})
 		used += s.weight
 		currRunning++
+		nsRunning[s.namespaceID]++
 	}
 
 	if len(packed) == 0 {
-		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d, total-running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, currRunning, p.maxConcurrent)
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d namespace-cap=%d, total-running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }

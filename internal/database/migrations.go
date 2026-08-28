@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 18
+const latestMigration = 19
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS namespaces (
     weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
     reserved    INTEGER NOT NULL DEFAULT 1 CHECK(reserved >= 0),
     hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
+    max_concurrent INTEGER NOT NULL DEFAULT 0 CHECK(max_concurrent >= 0),
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
     description TEXT,
     default_prompt TEXT NOT NULL DEFAULT '',
@@ -272,6 +273,13 @@ ALTER TABLE projects ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
 ALTER TABLE projects ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
 ALTER TABLE projects ADD COLUMN prompt_mode TEXT NOT NULL DEFAULT 'append';
 ALTER TABLE namespaces ADD COLUMN default_prompt TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 19,
+		desc:    "per-namespace max_concurrent: cap ticks running at once per namespace (Bane 2026-08-27, duckbrain-sync serialization)",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0 CHECK(max_concurrent >= 0);
 `,
 	},
 }

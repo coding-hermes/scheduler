@@ -216,6 +216,7 @@ type Namespace struct {
 	Weight        int    `json:"weight"`         // 1..100 — relative weight for proportional allocation
 	Reserved      int    `json:"reserved"`       // >= 0 — guaranteed floor budget units
 	HardCap       int    `json:"hard_cap"`       // >= 0 — maximum budget; 0 means no cap (interpret as B)
+	MaxConcurrent int    `json:"max_concurrent"` // >= 0 — max ticks running at once in this namespace; 0 = unlimited (global cap still applies)
 	Enabled       bool   `json:"enabled"`        // disabled namespaces get zero allocation
 	Description   string `json:"description"`    // human-readable label
 	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
@@ -228,6 +229,7 @@ type NamespacePatch struct {
 	Weight        *int    `json:"weight,omitempty"`
 	Reserved      *int    `json:"reserved,omitempty"`
 	HardCap       *int    `json:"hard_cap,omitempty"`
+	MaxConcurrent *int    `json:"max_concurrent,omitempty"`
 	Enabled       *bool   `json:"enabled,omitempty"`
 	Description   *string `json:"description,omitempty"`
 	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default

@@ -577,6 +577,13 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 	if hardCap <= 0 {
 		hardCap = defaultNamespaceHardCap
 	}
+	// max_concurrent: 0 (unset) = unlimited — the global --max-concurrent
+	// cap still applies. Only an explicitly positive value limits the
+	// number of ticks running simultaneously in this namespace.
+	maxConcurrent := nd.MaxConcurrent
+	if maxConcurrent < 0 {
+		maxConcurrent = 0
+	}
 	enabled := true
 	if nd.Enabled != nil {
 		enabled = *nd.Enabled
@@ -586,6 +593,7 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		Weight:        weight,
 		Reserved:      reserved,
 		HardCap:       hardCap,
+		MaxConcurrent: maxConcurrent,
 		Enabled:       enabled,
 		Description:   nd.Description,
 		DefaultPrompt: nd.DefaultPrompt,

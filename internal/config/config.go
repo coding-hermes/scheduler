@@ -208,10 +208,11 @@ type ProjectDef struct {
 // meaningful to set declaratively. ID is the only required field.
 type NamespaceDef struct {
 	ID            string `toml:"id"`
-	Weight        int    `toml:"weight"`   // default 10 if <= 0
-	Reserved      int    `toml:"reserved"` // default 1 if <= 0
-	HardCap       int    `toml:"hard_cap"` // default 100 if <= 0
-	Enabled       *bool  `toml:"enabled"`  // default true if nil
+	Weight        int    `toml:"weight"`         // default 10 if <= 0
+	Reserved      int    `toml:"reserved"`       // default 1 if <= 0
+	HardCap       int    `toml:"hard_cap"`       // default 100 if <= 0
+	MaxConcurrent int    `toml:"max_concurrent"` // 0 = unlimited (global --max-concurrent still applies); positive = max ticks running at once in this namespace
+	Enabled       *bool  `toml:"enabled"`        // default true if nil
 	Description   string `toml:"description"`
 	DefaultPrompt string `toml:"default_prompt"` // Bane 2026-08-27: foreman prompt default for all projects in this namespace; empty = built-in
 }
