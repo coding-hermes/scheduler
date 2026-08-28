@@ -210,7 +210,16 @@ func (s *Spawner) resolveRouterFull(project PackedProject) (RouterResult, bool) 
 	}
 	res, ok, reason := s.router.Resolve(context.Background(), project.Name)
 	if !ok {
-		log.Printf("ROUTER: %s unavailable — using chain fallback (%s)", project.Name, reason)
+		if strings.Contains(reason, "not in registry") {
+			// ROUTER-MISS: the project is unknown to the router registry —
+			// dynamic routing degraded to a static chain. This is the
+			// fleet.toml-vs-registry completeness gap (2026-08-27: sync
+			// projects missing from registry). Grep ROUTER-MISS to find
+			// degraded projects in seconds; see scripts/test_registry_completeness.py.
+			log.Printf("ROUTER-MISS: %s missing from router registry — dynamic routing degraded, static chain fallback (%s)", project.Name, truncate(reason, 120))
+		} else {
+			log.Printf("ROUTER: %s unavailable — using chain fallback (%s)", project.Name, reason)
+		}
 		return res, false
 	}
 	return res, true
