@@ -42,6 +42,30 @@ func (m *MultiPoolPacker) Pack(
 	globalRunning := len(runningSet)
 	globalSelected := 0
 
+	// Per-namespace concurrency caps (Bane 2026-08-27): nsCapMap[nsID] =
+	// max_concurrent (0 = unlimited), nsRunningMap[nsID] = already-running
+	// ticks of that namespace (name-keyed running set resolved via
+	// NamespaceID). Used by Phase-2 (local copy) and Phase-3 re-pack.
+	nsCapMap := make(map[string]int, len(namespaces))
+	nsRunningMap := make(map[string]int, len(namespaces))
+	for _, ns := range namespaces {
+		cap := ns.MaxConcurrent
+		if cap < 0 {
+			cap = 0
+		}
+		nsCapMap[ns.ID] = cap
+		nsRunningMap[ns.ID] = 0
+	}
+	for name := range runningSet {
+		for i := range projects {
+			p := &projects[i]
+			if p.Name == name && p.NamespaceID != nil {
+				nsRunningMap[*p.NamespaceID]++
+				break
+			}
+		}
+	}
+
 	type nsPackState struct {
 		ns         database.Namespace
 		alloc      int
@@ -97,6 +121,14 @@ func (m *MultiPoolPacker) Pack(
 		if totalWeightInNS == 0 {
 			totalWeightInNS = 1 // avoid div-by-zero
 		}
+
+		// Per-namespace concurrency cap (Bane 2026-08-27): a namespace with
+		// max_concurrent > 0 may have at most that many ticks in flight.
+		// Running counts were resolved once into nsRunningMap above (name-keyed
+		// running set → NamespaceID); the per-cycle pack adds to the count as
+		// it selects (len(st.selected)).
+		nsRunning := nsRunningMap[ns.ID]
+		nsCap := nsCapMap[ns.ID]
 
 		// Compute urgency + effective weight for each project.
 		scored := make([]ProjectUrgency, 0, len(nsProjects))
@@ -197,6 +229,10 @@ func (m *MultiPoolPacker) Pack(
 
 			// Concurrency cap check (global across all namespaces).
 			if globalRunning+globalSelected >= m.maxConcurrent {
+				break
+			}
+			// Per-namespace concurrency cap (Bane 2026-08-27): 0 = unlimited.
+			if nsCap > 0 && nsRunning+len(st.selected) >= nsCap {
 				break
 			}
 
@@ -303,6 +339,12 @@ func (m *MultiPoolPacker) Pack(
 				stillQueued = append(stillQueued, pu)
 				continue
 			}
+			// Per-namespace cap in the borrow re-pack (Bane 2026-08-27):
+			// borrowed budget must not exceed the namespace's concurrency cap.
+			if cap := nsCapMap[id]; cap > 0 && nsRunningMap[id]+len(st.selected) >= cap {
+				stillQueued = append(stillQueued, pu)
+				continue
+			}
 			if pu.EffectiveWeight > budgetRemaining {
 				stillQueued = append(stillQueued, pu)
 				continue
@@ -349,12 +391,17 @@ func (m *MultiPoolPacker) Pack(
 				FallbackModel:    pu.Project.FallbackModel,
 				FallbackProvider: pu.Project.FallbackProvider,
 				NoGlobalFallback: pu.Project.NoGlobalFallback,
+				ModelChain:       pu.Project.ModelChain,
 				IdleModel:        pu.Project.IdleModel,
 				IdleProvider:     pu.Project.IdleProvider,
 				WorkerModel:      pu.Project.WorkerModel,
 				WorkerProvider:   pu.Project.WorkerProvider,
 				GatewayKey:       pu.Project.GatewayKey,
 				Deliver:          pu.Project.Deliver,
+				Prompt:           pu.Project.Prompt,
+				PromptMode:       pu.Project.PromptMode,
+				NamespacePrompt:  ns.DefaultPrompt,
+				NamespaceChain:   ns.ModelChain,
 			})
 		}
 		result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{

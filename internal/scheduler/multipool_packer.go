@@ -239,12 +239,15 @@ func (m *MultiPoolPacker) packFlat(
 			FallbackModel:    s.proj.FallbackModel,
 			FallbackProvider: s.proj.FallbackProvider,
 			NoGlobalFallback: s.proj.NoGlobalFallback,
+			ModelChain:       s.proj.ModelChain,
 			IdleModel:        s.proj.IdleModel,
 			IdleProvider:     s.proj.IdleProvider,
 			WorkerModel:      s.proj.WorkerModel,
 			WorkerProvider:   s.proj.WorkerProvider,
 			GatewayKey:       s.proj.GatewayKey,
 			Deliver:          s.proj.Deliver,
+			Prompt:           s.proj.Prompt,
+			PromptMode:       s.proj.PromptMode,
 		})
 		used += s.proj.Weight
 		budgetRemaining -= s.proj.Weight
