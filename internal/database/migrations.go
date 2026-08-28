@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 19
+const latestMigration = 20
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS namespaces (
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
     description TEXT,
     default_prompt TEXT NOT NULL DEFAULT '',
+    model_chain    TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -280,6 +281,13 @@ ALTER TABLE namespaces ADD COLUMN default_prompt TEXT NOT NULL DEFAULT '';
 		desc:    "per-namespace max_concurrent: cap ticks running at once per namespace (Bane 2026-08-27, duckbrain-sync serialization)",
 		stmt: `
 ALTER TABLE namespaces ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0 CHECK(max_concurrent >= 0);
+`,
+	},
+	{
+		version: 20,
+		desc:    "namespace-level model chain: [[namespaces]].model_chain override tier between project and router (Bane 2026-08-27, 3-tier routing)",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

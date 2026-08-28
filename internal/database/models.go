@@ -220,6 +220,7 @@ type Namespace struct {
 	Enabled       bool   `json:"enabled"`        // disabled namespaces get zero allocation
 	Description   string `json:"description"`    // human-readable label
 	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
+	ModelChain    string `json:"model_chain"`    // ordered "model@provider" hops (JSON array); namespace tier between project and router (Bane 2026-08-27)
 	CreatedAt     string `json:"created_at"`     // RFC3339
 	UpdatedAt     string `json:"updated_at"`     // RFC3339
 }
@@ -233,6 +234,7 @@ type NamespacePatch struct {
 	Enabled       *bool   `json:"enabled,omitempty"`
 	Description   *string `json:"description,omitempty"`
 	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
+	ModelChain    *string `json:"model_chain,omitempty"`    // namespace model chain (JSON array string)
 }
 
 // NamespaceTick records per-namespace utilization for a single evaluation cycle.

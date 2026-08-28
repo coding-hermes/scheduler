@@ -502,7 +502,10 @@ func nextChainResolution(chain []chainEntry) (model, provider string, ok bool) {
 // project-tier entries. Otherwise falls back to the SCHED-GAP-064
 // model/provider + fallback_model/fallback_provider pattern.
 //
-// Chain order: project chain entries → global tiers (unless NoGlobalFallback).
+// Chain order: project chain entries → namespace chain (Bane 2026-08-27,
+// [[namespaces]].model_chain — the workspace tier, sits between project and
+// router so mergedChain keeps it ahead of the router entries) → global tiers
+// (unless NoGlobalFallback).
 func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
 	var chain []chainEntry
 	if project.ModelChain != "" {
@@ -512,6 +515,11 @@ func (s *Spawner) spawnChain(project PackedProject) []chainEntry {
 			{model: project.Model, provider: project.Provider},
 			{model: project.FallbackModel, provider: project.FallbackProvider},
 		}
+	}
+	// Namespace tier: parsed from the namespace model_chain JSON array.
+	// Empty/parse-failure contributes nothing (chain falls through).
+	if project.NamespaceChain != "" {
+		chain = append(chain, parseModelChain(project.NamespaceChain)...)
 	}
 	// Global tiers appended unless no_global_fallback is set.
 	if !project.NoGlobalFallback {

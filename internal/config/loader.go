@@ -597,6 +597,7 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		Enabled:       enabled,
 		Description:   nd.Description,
 		DefaultPrompt: nd.DefaultPrompt,
+		ModelChain:    serializeModelChain(nd.ModelChain),
 	}
 }
 
