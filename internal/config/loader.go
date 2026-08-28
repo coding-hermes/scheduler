@@ -25,8 +25,13 @@ const (
 	defaultProjectPriority  = 5
 	defaultProjectCooldown  = 7200 // 2h baseline (Bane 08-07 3-speed policy) — was 900 (hot default); unpinned projects must not run hot
 	defaultProjectDecayRate = 1.0
-	defaultProjectModel     = "your-model-name"    // agent fills in
-	defaultProjectProvider  = "your-provider-name" // agent fills in
+	// Bane 2026-08-27: a fleet.toml project without model/provider stays
+	// EMPTY — the spawn chain resolves it (namespace model_chain → global
+	// env → schema placeholder). Writing the legacy 'your-model-name'
+	// placeholder into the DB made it a PRESENT chain entry that shadowed
+	// the namespace tier (sync projects spawned with the placeholder).
+	defaultProjectModel    = "" // unset → chain-resolved
+	defaultProjectProvider = "" // unset → chain-resolved
 
 	defaultNamespaceWeight   = 10
 	defaultNamespaceReserved = 1
