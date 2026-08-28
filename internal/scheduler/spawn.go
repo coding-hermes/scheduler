@@ -887,6 +887,80 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
 				now := time.Now()
+
+				// SCHED-GAP-079: a gateway 2xx is NOT automatically a
+				// completed tick. The gateway accepted the request, but a
+				// response whose status is an explicit failure, or that
+				// carries neither output text nor a persisted session id
+				// (zero-output-with-no-session), is a FAILED tick — recording
+				// it completed/committed would be a false success (heading-sync
+				// field test 10:06Z 2026-08-28). Gate rule:
+				//   (a) explicit failure statuses always fail;
+				//   (b) empty output AND empty session id fails (a tool-only
+				//       tick has a real resp.ID and stays completed — NEVER
+				//       gate on output length alone);
+				//   (c) everything else stays completed.
+				failureStatuses := map[string]bool{
+					"failed":                     true,
+					"session_persistence_failed": true,
+					"error":                      true,
+					"cancelled":                  true,
+					"timeout":                    true,
+				}
+				failed := failureStatuses[resp.Status] || (strings.TrimSpace(text) == "" && resp.ID == "")
+				if failed {
+					var errText string
+					switch {
+					case resp.Error != nil && resp.Error.Message != "":
+						errText = fmt.Sprintf("gateway response %s (len=%d): %s", resp.Status, len(text), resp.Error.Message)
+					case failureStatuses[resp.Status]:
+						errText = fmt.Sprintf("gateway response %s (len=%d): no error detail", resp.Status, len(text))
+					default:
+						// Empty-output-AND-empty-session rule: name the
+						// missing session so the row is diagnosable.
+						errText = fmt.Sprintf("gateway response %s (len=%d): no session persisted and no output text", resp.Status, len(text))
+					}
+					log.Printf("GATEWAY FAIL: %s tick=%s status=%s — recorded failed: %s", project.Name, tickID, resp.Status, errText)
+					// TASK-ROUTER-002: the pair produced a failed session —
+					// cool it so the breaker stops routing it to heads.
+					s.recordCircuitFailure(provider, model, "gateway response "+resp.Status)
+					s.noteSpawnFailure(project.Name)
+					// Corruption / session-persistence failures are fleet-wide
+					// signals (gateway state.db broken, sessions not landing):
+					// surface a HIGH event with tick id + project immediately.
+					if s.events != nil && (strings.Contains(errText, "session_persistence_failed") || strings.Contains(errText, "database disk image is malformed")) {
+						s.events.Emit(context.Background(), SeverityHigh, "spawn",
+							"gateway tick recorded failed: "+resp.Status, map[string]any{
+								"project": project.Name,
+								"tick_id": tickID,
+								"error":   errText,
+							})
+					}
+					// Return a NON-completed tick: Wait() yields TickFailed and
+					// slot_pool's existing lifecycle.Complete path persists
+					// status=failed / outcome=failed / error=<gateway text>.
+					// Do NOT increment spawnCountHTTP beyond the one above and
+					// do NOT reset consecutive_failures — this is a failure.
+					return &SpawnedTick{
+						TickID:     tickID,
+						Project:    project.Name,
+						SessionID:  tickID, // placeholder — no real session persisted
+						Started:    reqStart,
+						Deliver:    project.Deliver,
+						spawner:    s,
+						completed:  false,
+						completeAt: now,
+						gwFailErr:  errText,
+						usage:      resp.Usage,
+						model:      model,
+						provider:   provider,
+						rate:       rate,
+						workdir:    project.Workdir,
+						reqStart:   reqStart,
+						Trigger:    "prompt",
+					}, nil
+				}
+
 				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
 				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
 				// removed in GAP-002 — it referenced non-existent columns
@@ -910,6 +984,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				sessionID := resp.ID
 				if sessionID == "" {
 					sessionID = tickID
+				}
+				// SCHED-GAP-079: a completed tick with empty text but a REAL
+				// persisted session (tool-only tick — DuckBrain writes etc.)
+				// is legitimately completed; surface it as INFO so it is
+				// distinguishable from the zero-output-no-session failures.
+				if strings.TrimSpace(text) == "" && s.events != nil {
+					s.events.Emit(context.Background(), SeverityInfo, "spawn",
+						"gateway tick completed with no text output (tool-only)", map[string]any{
+							"project":    project.Name,
+							"tick_id":    tickID,
+							"session_id": sessionID,
+						})
 				}
 				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
 					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
@@ -942,6 +1028,21 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// record-failure would double the cooldown).
 			if !circuitFailureRecorded {
 				s.recordCircuitFailure(provider, model, "gateway failure: "+gwErr.Error())
+			}
+			// SCHED-GAP-079: when the gateway wraps a session failure in the
+			// response error envelope, gateway_client.go (read-only) classifies
+			// it as a transport error BEFORE the completion gate — the text
+			// still lands in the tick error (slot_pool persists Spawn's error),
+			// and the HIGH event below keeps the fleet-wide signal (gateway
+			// state.db corruption, sessions not persisting) visible with tick
+			// id + project on this path too.
+			if s.events != nil && (strings.Contains(gwErr.Error(), "database disk image is malformed") || strings.Contains(gwErr.Error(), "session_persistence_failed")) {
+				s.events.Emit(context.Background(), SeverityHigh, "spawn",
+					"gateway tick recorded failed: session error", map[string]any{
+						"project": project.Name,
+						"tick_id": tickID,
+						"error":   gwErr.Error(),
+					})
 			}
 			// GAP-035: an AUTH rejection is terminal. Falling back to exec
 			// would silently mask a key regression and keep flooding the
@@ -1158,6 +1259,15 @@ type SpawnedTick struct {
 	completed  bool
 	completeAt time.Time
 
+	// gwFailErr is set (gateway path only) when the response failed the
+	// SCHED-GAP-079 completion gate: an explicit failure status
+	// (failed / session_persistence_failed / error / cancelled / timeout)
+	// or empty-output-AND-empty-session. Wait() yields TickFailed with
+	// this text so slot_pool's lifecycle.Complete records status=failed,
+	// outcome=failed and the gateway's error text in the error column —
+	// never completed/committed.
+	gwFailErr string
+
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
 	// spawns (gateway or hermes-chat exec fallback). Carried into the
@@ -1195,6 +1305,35 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// SCHED-GAP-079: gateway ticks whose response failed the completion
+	// gate (explicit failure status, or empty-output-AND-empty-session)
+	// carry gwFailErr. Yield TickFailed so the EXISTING lifecycle.Complete
+	// path in slot_pool persists status=failed / outcome=failed /
+	// error=<gateway text> — never completed/committed. The deferred
+	// cleanup (heartbeat stop, active-map delete) still runs via defer.
+	if st.gwFailErr != "" {
+		tokensIn := st.usage.InputTokens
+		tokensOut := st.usage.OutputTokens
+		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
+		log.Printf("TICK: %s %s → %s (%v): %s",
+			st.Project, st.TickID, TickFailed,
+			st.completeAt.Sub(st.Started).Round(time.Second), st.gwFailErr)
+		return TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickFailed,
+			ExitCode:  -1,
+			Error:     st.gwFailErr,
+			Duration:  st.completeAt.Sub(st.Started),
+			TokensIn:  tokensIn,
+			TokensOut: tokensOut,
+			CostUSD:   cost,
+		}
+	}
 
 	// Gateway-spawned ticks are already complete — return immediately.
 	// SCHED-GAP-029: populate real tokens/cost/commits/files from gateway
