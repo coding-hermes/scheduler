@@ -30,6 +30,9 @@ type PackedProject struct {
 	WorkerProvider   string // optional: suggested worker provider (foreman can override)
 	GatewayKey       string // per-foreman Hermes gateway key (empty = shared --gateway-key)
 	Deliver          string // delivery target (telegram:chat_id:thread_id)
+	Prompt           string // Bane 2026-08-27: per-project extra foreman prompt (append or replace per PromptMode)
+	PromptMode       string // "append" (default) | "replace"
+	NamespacePrompt  string // namespace default_prompt (empty = built-in prompt)
 }
 
 // Packer selects which projects run given a weight budget and running set.
@@ -100,19 +103,24 @@ type scored struct {
 	workerProvider      string
 	gatewayKey          string
 	deliver             string
+	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
+	promptMode          string // "append" (default) | "replace"
+	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
 func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedProject, error) {
 	rows, err := p.db.Query(`
-		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
-		       last_tick_completed,
-		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(fallback_model, ''), COALESCE(fallback_provider, ''), COALESCE(no_global_fallback, 0), COALESCE(model_chain, ''), COALESCE(idle_model, ''), COALESCE(idle_provider, ''), COALESCE(daily_budget_usd, 0.0), COALESCE(weekly_budget_usd, 0.0), COALESCE(final_budget_usd, 0.0), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
-		       consecutive_failures
-		FROM projects
-		WHERE enabled = 1
-		ORDER BY name
+		SELECT p.name, p.weight, p.priority, p.decay_rate, p.enabled, p.cooldown_s,
+		       p.last_tick_completed,
+		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
+		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
+		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''),
+		       p.consecutive_failures
+		FROM projects p
+		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+		WHERE p.enabled = 1
+		ORDER BY p.name
 	`)
 	if err != nil {
 		return nil, err
@@ -131,6 +139,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -278,6 +287,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			WorkerProvider:   s.workerProvider,
 			GatewayKey:       s.gatewayKey,
 			Deliver:          s.deliver,
+			Prompt:           s.prompt,
+			PromptMode:       s.promptMode,
+			NamespacePrompt:  s.namespaceDefaultPmt,
 		})
 		used += s.weight
 		currRunning++

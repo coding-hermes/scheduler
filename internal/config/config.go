@@ -197,6 +197,8 @@ type ProjectDef struct {
 	FinalBudgetUSD   *float64 `toml:"final_budget_usd"`   // SCHED-GAP-066: one-time lifetime spend cap, never resets; nil or <= 0 = unlimited
 	GatewayKey       string   `toml:"gateway_key"`        // per-foreman Hermes gateway key; empty = shared --gateway-key
 	Command          string   `toml:"command"`
+	Prompt           string   `toml:"prompt"`       // Bane 2026-08-27: extra foreman prompt; appended to namespace default_prompt unless prompt_mode="replace"
+	PromptMode       string   `toml:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
 	NamespaceID      string   `toml:"namespace_id"` // optional FK → namespaces.id
 	Deliver          string   `toml:"deliver"`
 	Enabled          *bool    `toml:"enabled"` // default true if nil
@@ -205,10 +207,11 @@ type ProjectDef struct {
 // NamespaceDef mirrors the subset of database.Namespace fields that are
 // meaningful to set declaratively. ID is the only required field.
 type NamespaceDef struct {
-	ID          string `toml:"id"`
-	Weight      int    `toml:"weight"`   // default 10 if <= 0
-	Reserved    int    `toml:"reserved"` // default 1 if <= 0
-	HardCap     int    `toml:"hard_cap"` // default 100 if <= 0
-	Enabled     *bool  `toml:"enabled"`  // default true if nil
-	Description string `toml:"description"`
+	ID            string `toml:"id"`
+	Weight        int    `toml:"weight"`   // default 10 if <= 0
+	Reserved      int    `toml:"reserved"` // default 1 if <= 0
+	HardCap       int    `toml:"hard_cap"` // default 100 if <= 0
+	Enabled       *bool  `toml:"enabled"`  // default true if nil
+	Description   string `toml:"description"`
+	DefaultPrompt string `toml:"default_prompt"` // Bane 2026-08-27: foreman prompt default for all projects in this namespace; empty = built-in
 }

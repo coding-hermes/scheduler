@@ -370,6 +370,63 @@ func WorkerDefaults(project PackedProject) string {
 	)
 }
 
+// builtinForemanPrompt is the fallback foreman instruction body used when a
+// project's namespace has no default_prompt configured. It is the historical
+// hardcoded scheduler prompt with the dynamic bits (workdir, worker
+// model/provider) removed — those are always appended by buildForemanPrompt.
+// Bane 2026-08-27: the prompt is now DATA — namespaces carry a
+// default_prompt in fleet.toml ([[namespaces]]), and projects can append
+// their own prompt or replace the default entirely (prompt_mode="replace").
+const builtinForemanPrompt = "" +
+	"Load skills coding-hermes-map and coding-hermes-foreman at start. " +
+	"Use the map to pull additional skills LAZILY as each phase needs them " +
+	"(board read, worker dispatch, gitreins, debugging, etc.) — never preload the whole toolbox. " +
+	"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. " +
+	"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. " +
+	"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. " +
+	"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: " +
+	"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` " +
+	"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. " +
+	"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. " +
+	"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. " +
+	"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. " +
+	"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. " +
+	"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. " +
+	"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. " +
+	"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean (optional — the fleet default keeps completed tasks for audit). " +
+	"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. " +
+	"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. " +
+	"Format your final output as clean, well-structured markdown with tables and sections. " +
+	"Report result."
+
+// buildForemanPrompt assembles the tick prompt for a project (Bane 2026-08-27).
+//
+// Prompt resolution order:
+//  1. base = namespace default_prompt (fleet.toml [[namespaces]].default_prompt);
+//     empty namespace default falls back to the built-in prompt.
+//  2. project prompt (fleet.toml [[projects]].prompt):
+//     - prompt_mode="replace" → the project prompt REPLACES the base entirely
+//     - prompt_mode="append" (default) → the project prompt is APPENDED to the base
+//
+// The scheduler always injects the dynamic environment footer (tick id,
+// workdir, worker model/provider) so no config prompt can lose them.
+func buildForemanPrompt(project PackedProject, tickID string) string {
+	base := project.NamespacePrompt
+	if base == "" {
+		base = builtinForemanPrompt
+	}
+	if project.Prompt != "" {
+		if project.PromptMode == "replace" {
+			base = project.Prompt
+		} else {
+			base = base + "\n\n" + project.Prompt
+		}
+	}
+	return "[Scheduler tick: " + tickID + "] " + base +
+		"\nWorkdir: " + project.Workdir + "." +
+		"\nWorker model/provider: " + WorkerDefaults(project) + "."
+}
+
 // chainEntry is one step of the model/provider fallback chain (SCHED-GAP-064).
 // An entry is PRESENT when at least one of model/provider is non-empty; a
 // present entry contributes its non-empty fields, and any field still empty
@@ -642,33 +699,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		}
 		log.Printf("SPAWN: %s tick=%s chain=%s model=%q provider=%q", project.Name, tickID, chainKind, model, provider)
 
-		prompt := fmt.Sprintf(
-			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-map and coding-hermes-foreman at start. "+
-				"Use the map to pull additional skills LAZILY as each phase needs them "+
-				"(board read, worker dispatch, gitreins, debugging, etc.) — never preload the whole toolbox. "+
-				"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
-				"Workdir: %s. "+
-				"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. "+
-				"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. "+
-				"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: "+
-				"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
-				"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. "+
-				"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. "+
-				"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. "+
-				"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. "+
-				"Worker model/provider: %s. "+
-				"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. "+
-				"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. "+
-				"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. "+
-				"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean (optional — the fleet default keeps completed tasks for audit). "+
-				"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. "+
-				"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. "+
-				"Format your final output as clean, well-structured markdown with tables and sections. "+
-				"Report result.",
-			tickID, project.Workdir,
-			WorkerDefaults(project),
-		)
+		prompt := buildForemanPrompt(project, tickID)
 
 		// GAP-048: when the gateway was unreachable at startup and
 		// noExecFallback is set, the spawner has no HTTP client (gateway is

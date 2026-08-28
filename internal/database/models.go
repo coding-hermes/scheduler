@@ -27,6 +27,8 @@ type Project struct {
 	WorkerProvider    string  `json:"worker_provider"`     // optional: suggested worker provider (foreman can override)
 	GatewayKey        string  `json:"gateway_key"`         // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
 	Command           string  `json:"command"`             // optional: custom spawn command (overrides default hermes chat)
+	Prompt            string  `json:"prompt"`              // optional: extra foreman prompt text; appended to the namespace default_prompt unless PromptMode=replace (Bane 2026-08-27)
+	PromptMode        string  `json:"prompt_mode"`         // "append" (default): project prompt appends to namespace default; "replace": project prompt replaces it entirely
 	NamespaceID       *string `json:"namespace_id"`        // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
 	Deliver           string  `json:"deliver"`             // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
 	Enabled           bool    `json:"enabled"`             // disabled projects are never scheduled
@@ -210,23 +212,25 @@ type Event struct {
 // Each namespace gets a share of the global budget (B=100) via a two-phase
 // allocation algorithm: reserved floor + proportional remainder, capped by hard_cap.
 type Namespace struct {
-	ID          string `json:"id"`          // PRIMARY KEY — unique slug (e.g. "coding-hermes")
-	Weight      int    `json:"weight"`      // 1..100 — relative weight for proportional allocation
-	Reserved    int    `json:"reserved"`    // >= 0 — guaranteed floor budget units
-	HardCap     int    `json:"hard_cap"`    // >= 0 — maximum budget; 0 means no cap (interpret as B)
-	Enabled     bool   `json:"enabled"`     // disabled namespaces get zero allocation
-	Description string `json:"description"` // human-readable label
-	CreatedAt   string `json:"created_at"`  // RFC3339
-	UpdatedAt   string `json:"updated_at"`  // RFC3339
+	ID            string `json:"id"`             // PRIMARY KEY — unique slug (e.g. "coding-hermes")
+	Weight        int    `json:"weight"`         // 1..100 — relative weight for proportional allocation
+	Reserved      int    `json:"reserved"`       // >= 0 — guaranteed floor budget units
+	HardCap       int    `json:"hard_cap"`       // >= 0 — maximum budget; 0 means no cap (interpret as B)
+	Enabled       bool   `json:"enabled"`        // disabled namespaces get zero allocation
+	Description   string `json:"description"`    // human-readable label
+	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
+	CreatedAt     string `json:"created_at"`     // RFC3339
+	UpdatedAt     string `json:"updated_at"`     // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
 type NamespacePatch struct {
-	Weight      *int    `json:"weight,omitempty"`
-	Reserved    *int    `json:"reserved,omitempty"`
-	HardCap     *int    `json:"hard_cap,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	Description *string `json:"description,omitempty"`
+	Weight        *int    `json:"weight,omitempty"`
+	Reserved      *int    `json:"reserved,omitempty"`
+	HardCap       *int    `json:"hard_cap,omitempty"`
+	Enabled       *bool   `json:"enabled,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
 }
 
 // NamespaceTick records per-namespace utilization for a single evaluation cycle.

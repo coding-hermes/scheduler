@@ -381,7 +381,19 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 	for _, nd := range cfg.Namespaces {
 		if _, err := database.GetNamespace(ctx, db, nd.ID); err == nil {
-			log.Printf("Config: namespace %q already exists, skipped", nd.ID)
+			// Bane 2026-08-27: an existing namespace gets its default_prompt
+			// updated when the fleet.toml entry carries one (prompt config is
+			// data, and the fleet.toml entry is authoritative for it).
+			if nd.DefaultPrompt != "" {
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					DefaultPrompt: &nd.DefaultPrompt,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q default_prompt: %w", nd.ID, err)
+				}
+				log.Printf("Config: updated namespace %q default_prompt (%d chars)", nd.ID, len(nd.DefaultPrompt))
+			} else {
+				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
+			}
 			continue
 		} else if !errors.Is(err, database.ErrNamespaceNotFound) {
 			return fmt.Errorf("lookup namespace %q: %w", nd.ID, err)
@@ -449,6 +461,15 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			}
 			if pd.FinalBudgetUSD != nil {
 				updates.FinalBudgetUSD = pd.FinalBudgetUSD
+			}
+			// Bane 2026-08-27: per-project prompt text + mode pin when
+			// explicitly set in fleet.toml (API-assigned prompts survive
+			// a restart with a keyless entry — GatewayKey-style conditional).
+			if pd.Prompt != "" {
+				updates.Prompt = &pd.Prompt
+			}
+			if pd.PromptMode != "" {
+				updates.PromptMode = &pd.PromptMode
 			}
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
@@ -518,6 +539,8 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		IdleProvider:     pd.IdleProvider,
 		GatewayKey:       pd.GatewayKey,
 		Command:          pd.Command,
+		Prompt:           pd.Prompt,
+		PromptMode:       pd.PromptMode,
 		Deliver:          pd.Deliver,
 		Enabled:          enabled,
 	}
@@ -559,12 +582,13 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		enabled = *nd.Enabled
 	}
 	return &database.Namespace{
-		ID:          nd.ID,
-		Weight:      weight,
-		Reserved:    reserved,
-		HardCap:     hardCap,
-		Enabled:     enabled,
-		Description: nd.Description,
+		ID:            nd.ID,
+		Weight:        weight,
+		Reserved:      reserved,
+		HardCap:       hardCap,
+		Enabled:       enabled,
+		Description:   nd.Description,
+		DefaultPrompt: nd.DefaultPrompt,
 	}
 }
 

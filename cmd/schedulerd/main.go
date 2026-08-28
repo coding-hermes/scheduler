@@ -38,7 +38,7 @@ func main() {
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
-	duckbrainNS := flag.String("duckbrain-ns", "coding-hermes", "DuckBrain namespace for sync")
+	duckbrainNS := flag.String("duckbrain-ns", "scheduler", "DuckBrain namespace for sync (Bane 2026-08-27: sync consolidated under the scheduler namespace)")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")

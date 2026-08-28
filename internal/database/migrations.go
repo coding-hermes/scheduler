@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 17
+const latestMigration = 18
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS projects (
     daily_budget_usd  REAL NOT NULL DEFAULT 0.0,
     weekly_budget_usd REAL NOT NULL DEFAULT 0.0,
     final_budget_usd  REAL NOT NULL DEFAULT 0.0,
+    prompt            TEXT NOT NULL DEFAULT '',
+    prompt_mode       TEXT NOT NULL DEFAULT 'append',
     deliver    TEXT NOT NULL DEFAULT '',
     enabled    INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -115,6 +117,7 @@ CREATE TABLE IF NOT EXISTS namespaces (
     hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
     description TEXT,
+    default_prompt TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -260,6 +263,15 @@ ALTER TABLE projects ADD COLUMN idle_provider TEXT NOT NULL DEFAULT '';
 		desc:    "add ordered model chain column to projects (SCHED-GAP-075)",
 		stmt: `
 ALTER TABLE projects ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 18,
+		desc:    "configurable foreman prompts: namespace default_prompt + per-project prompt/prompt_mode (Bane 2026-08-27)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN prompt_mode TEXT NOT NULL DEFAULT 'append';
+ALTER TABLE namespaces ADD COLUMN default_prompt TEXT NOT NULL DEFAULT '';
 `,
 	},
 }
