@@ -1411,6 +1411,34 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		tokensOut := st.usage.OutputTokens
 		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
+		// SCHED-GAP-085: closure-evidence gate. A row closed within this
+		// tick's window with NO reasoning/commit_hash/worker_summary rejects
+		// the tick (lifecycle.Complete records status=failed/outcome=failed).
+		// Pre-existing violations are flagged (WARN + HIGH board_closure
+		// event) and do NOT fail the tick. Runs AFTER countGitChanges so the
+		// git metrics are still recorded on rejection; the gwFailErr early
+		// return above keeps SCHED-GAP-079 semantics unchanged.
+		if err := st.boardClosureGate(st.reqStart, st.completeAt); err != nil {
+			log.Printf("TICK: %s %s → %s (%v): %s",
+				st.Project, st.TickID, TickFailed,
+				st.completeAt.Sub(st.Started).Round(time.Second), err)
+			return TickOutcome{
+				TickID:       st.TickID,
+				Project:      st.Project,
+				SessionID:    st.SessionID,
+				Started:      st.Started,
+				Finished:     st.completeAt,
+				Status:       TickFailed,
+				ExitCode:     -1,
+				Error:        err.Error(),
+				Duration:     st.completeAt.Sub(st.Started),
+				TokensIn:     tokensIn,
+				TokensOut:    tokensOut,
+				CostUSD:      cost,
+				Commits:      commits,
+				FilesChanged: files,
+			}
+		}
 		log.Printf("TICK: %s %s → %s (%v) %s",
 			st.Project, st.TickID, TickCompleted,
 			st.completeAt.Sub(st.Started).Round(time.Second),
@@ -1517,10 +1545,31 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		}
 	}
 
+	// SCHED-GAP-085: closure-evidence gate on the EXEC completion path. Runs
+	// after the git work was measured and only when the tick otherwise
+	// completes — a row closed within this tick's window with NO
+	// reasoning/commit_hash/worker_summary turns the completed outcome into a
+	// failed one (lifecycle.Complete records status=failed/outcome=failed).
+	// Pre-existing violations are flagged inside the gate (WARN + HIGH
+	// board_closure event) and leave the outcome untouched. gwFailErr early
+	// return above is SCHED-GAP-079's gate — unchanged.
+	if outcome.Status == TickCompleted {
+		windowEnd := st.completeAt
+		if windowEnd.IsZero() {
+			windowEnd = finished
+		}
+		if err := st.boardClosureGate(st.Started, windowEnd); err != nil {
+			outcome.Status = TickFailed
+			outcome.Error = err.Error()
+			outcome.ExitCode = -1
+		}
+	}
+
 	log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
 	return outcome
 }
 
+// closePipes closes the process pipes (exec path only).
 func (st *SpawnedTick) closePipes() {
 	if st.stdout != nil {
 		_ = st.stdout.Close()
@@ -1528,6 +1577,108 @@ func (st *SpawnedTick) closePipes() {
 	if st.stderr != nil {
 		_ = st.stderr.Close()
 	}
+}
+
+// boardClosureGate runs the SCHED-GAP-085 closure-evidence gate on the tick's
+// board: rows CLOSED within the tick window [windowStart, windowEnd] (i.e.
+// completed_at inside the window) without any of reasoning/commit_hash/
+// worker_summary evidence reject the tick. Pre-existing violations
+// (completed_at before windowStart) are flagged via WARN log + HIGH
+// board_closure event but do NOT fail the tick. Projects without a board file
+// (findBoardFile false) are a no-op. Returns a non-empty error when the tick
+// must be rejected (status=failed / outcome=failed via lifecycle.Complete).
+func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error {
+	if st == nil || st.workdir == "" {
+		return nil
+	}
+	boardPath, ok := findBoardFile(st.workdir)
+	if !ok {
+		return nil // no board file — gate is a no-op
+	}
+	violations, err := BoardClosureViolations(boardPath)
+	if err != nil {
+		// Unreadable board: never fail the tick on a side-file read error.
+		log.Printf("WARN [board_closure]: cannot read board %s: %v", boardPath, err)
+		return nil
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+
+	var rejected []ClosureViolation
+	var flagged []ClosureViolation
+	for _, v := range violations {
+		closedAt, ok := parseBoardCompletedAt(v.CompletedAt)
+		if !ok || closedAt.Before(windowStart) || closedAt.After(windowEnd) {
+			// Unparseable or pre-existing (closed before this tick's window) —
+			// flag, never reject: the tick did not cause it.
+			flagged = append(flagged, v)
+			continue
+		}
+		rejected = append(rejected, v)
+	}
+
+	if len(flagged) > 0 {
+		var names []string
+		for _, v := range flagged {
+			names = append(names, v.ID+"(missing "+strings.Join(v.MissingFields, ",")+")")
+		}
+		log.Printf("WARN [board_closure]: pre-existing closure-evidence violations on %s (tick %s closed %d row(s) in-window): %s",
+			st.Project, st.TickID, len(rejected), strings.Join(names, ", "))
+		if st.spawner != nil && st.spawner.events != nil {
+			details := make([]map[string]any, 0, len(flagged))
+			for _, v := range flagged {
+				details = append(details, map[string]any{
+					"id":             v.ID,
+					"missing_fields": v.MissingFields,
+					"completed_at":   v.CompletedAt,
+				})
+			}
+			st.spawner.events.Emit(context.Background(), SeverityHigh, "board_closure",
+				"pre-existing board closure-evidence violations", map[string]any{
+					"project":    st.Project,
+					"tick_id":    st.TickID,
+					"violations": details,
+				})
+		}
+	}
+
+	if len(rejected) == 0 {
+		return nil
+	}
+	var names []string
+	for _, v := range rejected {
+		names = append(names, v.ID+"(missing "+strings.Join(v.MissingFields, ",")+")")
+	}
+	return fmt.Errorf("board closure-evidence gate: %d row(s) closed within this tick's window without evidence: %s",
+		len(rejected), strings.Join(names, ", "))
+}
+
+// parseBoardCompletedAt parses the completed_at formats found on this board:
+// RFC3339 ("2026-08-14T04:55:29Z", "2026-08-30T05:55:00+00:00") and the
+// appender's naive UTC stamps ("2026-08-28 00:15:20", with optional
+// fractional seconds). Naive stamps are read as UTC — the appender writes
+// UTC (event timestamps match tick IDs, which are UTC by convention).
+func parseBoardCompletedAt(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func splitCommand(cmd string) []string {

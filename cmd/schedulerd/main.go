@@ -38,6 +38,7 @@ func main() {
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
+	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	duckbrainNS := flag.String("duckbrain-ns", "scheduler", "DuckBrain namespace for sync (Bane 2026-08-27: sync consolidated under the scheduler namespace)")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
@@ -115,6 +116,26 @@ func main() {
 		if err := testVerify(*testVerifyFlag); err != nil {
 			log.Fatalf("VERIFY FAILED: %v", err)
 		}
+		return
+	}
+
+	// ── Verify-board mode: check closure evidence on a tasks.jsonl board ──
+	// SCHED-GAP-085 machine-checkable pass criterion. Runs BEFORE the main
+	// database is opened (no DB needed — board JSONL only). Prints each
+	// violation (id + missing fields), exits 0 when none / 1 when any.
+	if *verifyBoardPath != "" {
+		violations, err := scheduler.BoardClosureViolations(*verifyBoardPath)
+		if err != nil {
+			log.Fatalf("VERIFY-BOARD FAILED: %v", err)
+		}
+		for _, v := range violations {
+			fmt.Printf("VIOLATION %s: missing [%s] completed_at=%s\n",
+				v.ID, strings.Join(v.MissingFields, ", "), v.CompletedAt)
+		}
+		if len(violations) > 0 {
+			log.Fatalf("VERIFY-BOARD FAILED: %d closure-evidence violation(s)", len(violations))
+		}
+		fmt.Println("VERIFY-BOARD OK: no closure-evidence violations")
 		return
 	}
 
