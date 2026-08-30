@@ -2084,15 +2084,3 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:38:06.522899+00:00'
   completed_at: '2026-08-27T10:17:57.296515+00:00'
-- id: SCHED-GAP-075
-  title: "P1 Ordered Model Chain \u2014 per-project ordered list of (model@provider)\
-    \ hops, spawn walks chain until first success, router chain[] merged in"
-  criteria:
-  - '1) fleet.toml accepts model_chain = [''model@provider'', ...] per project with
-    back-compat (model/provider = first entry shorthand). 2) DB migration v17 adds
-    model_chain TEXT column. 3) spawn chain = project model_chain list + router chain[]
-    + global env chain (no_global_fallback gates global tiers). 4) 401/403 retry walks
-    full merged chain. 5) Tests: N-length chain walk, first-success stops, exhaustion
-    returns error. 6) go build, go vet, go test pass, 0 lint issues.'
-  status: in_progress
-  created_at: '2026-08-27T14:37:07.368651+00:00'
