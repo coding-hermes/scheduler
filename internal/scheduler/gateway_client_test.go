@@ -2,8 +2,10 @@ package scheduler_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -338,5 +340,123 @@ func TestGatewayClient_SendResponse_ErrorResponse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "model not found") {
 		t.Errorf("error should mention 'model not found', got: %v", err)
+	}
+}
+
+// --- SCHED-GAP-080 transient classification (2026-08-29) ---
+
+// TestGatewayClient_IsTransient_HTTP500 — a gateway 5xx is transient: the
+// classifier must report true, the status code must be reachable via
+// errors.As, and the error text must keep the legacy shape ('HTTP 500' +
+// the gateway's detail) so downstream error-column persistence is unchanged.
+func TestGatewayClient_IsTransient_HTTP500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{
+				"type":    "server_error",
+				"message": "Internal server error: database disk image is malformed",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	_, err := client.SendResponseWithSessionKey(t.Context(), "hello", "test-model", "", "", "tick-1")
+	if err == nil {
+		t.Fatal("expected error on HTTP 500, got nil")
+	}
+	if !scheduler.IsTransientGatewayErr(err) {
+		t.Errorf("IsTransientGatewayErr = false for HTTP 500, want true")
+	}
+	var gse *scheduler.GatewayStatusError
+	if !errors.As(err, &gse) {
+		t.Fatalf("error is %T, want *scheduler.GatewayStatusError", err)
+	}
+	if gse.StatusCode != http.StatusInternalServerError {
+		t.Errorf("GatewayStatusError.StatusCode = %d, want 500", gse.StatusCode)
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("error = %q, want it to carry 'HTTP 500'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "database disk image is malformed") {
+		t.Errorf("error = %q, want the gateway detail 'database disk image is malformed'", err.Error())
+	}
+}
+
+// TestGatewayClient_IsTransient_401NotTransient — 401 stays terminal: it
+// classifies as ErrGatewayKeyRejected (GAP-035) and the transient classifier
+// MUST reject it, so the SCHED-GAP-080 retry path can never burn attempts on
+// auth rejections.
+func TestGatewayClient_IsTransient_401NotTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{
+				"type":    "auth_error",
+				"message": "Invalid gateway API key",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	_, err := client.SendResponseWithSessionKey(t.Context(), "hello", "test-model", "", "", "tick-1")
+	if err == nil {
+		t.Fatal("expected error on HTTP 401, got nil")
+	}
+	if !errors.Is(err, scheduler.ErrGatewayKeyRejected) {
+		t.Errorf("errors.Is(err, ErrGatewayKeyRejected) = false, want true")
+	}
+	if scheduler.IsTransientGatewayErr(err) {
+		t.Errorf("IsTransientGatewayErr = true for HTTP 401, want false — auth rejection must stay terminal")
+	}
+}
+
+// TestGatewayClient_IsTransient_Timeout — a client-side timeout surfaces as a
+// *url.Error from client.Do and must be classified transient.
+func TestGatewayClient_IsTransient_Timeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 100*time.Millisecond)
+	_, err := client.SendResponseWithSessionKey(t.Context(), "hello", "test-model", "", "", "tick-1")
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error is %T, want *url.Error (client.Do timeout)", err)
+	}
+	if !scheduler.IsTransientGatewayErr(err) {
+		t.Errorf("IsTransientGatewayErr = false for timeout, want true")
+	}
+}
+
+// TestGatewayClient_IsTransient_Unmarshal — a 200 with a garbage body is a
+// transient unmarshal failure (ErrGatewayTransient wrapped).
+func TestGatewayClient_IsTransient_Unmarshal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("this is not json {{{"))
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
+	_, err := client.SendResponseWithSessionKey(t.Context(), "hello", "test-model", "", "", "tick-1")
+	if err == nil {
+		t.Fatal("expected unmarshal error, got nil")
+	}
+	if !errors.Is(err, scheduler.ErrGatewayTransient) {
+		t.Errorf("errors.Is(err, ErrGatewayTransient) = false, want true")
+	}
+	if !scheduler.IsTransientGatewayErr(err) {
+		t.Errorf("IsTransientGatewayErr = false for unmarshal failure, want true")
 	}
 }

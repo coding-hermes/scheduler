@@ -120,6 +120,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"evaluation_age_seconds": evalAge,
 		"spawns_http":            httpCount,
 		"spawns_exec":            execCount,
+		// SCHED-GAP-080: transient gateway spawn failures since restart
+		// (auth rejections never counted), alongside the spawn counters.
+		"gateway_errors": s.loop.GatewayErrorCount(),
 	})
 }
 
@@ -183,6 +186,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		status["zero_select_consecutive"] = zsCount
 		status["zero_select_eligible"] = zsEligible
 		status["zero_select_last_at"] = zsLast
+		// SCHED-GAP-080: transient gateway spawn failures since restart
+		// (auth rejections never counted), alongside the health endpoint's
+		// spawns_http/spawns_exec counters.
+		status["gateway_errors"] = s.loop.GatewayErrorCount()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()

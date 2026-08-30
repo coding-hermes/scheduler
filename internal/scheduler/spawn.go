@@ -95,6 +95,12 @@ type Spawner struct {
 	// Prometheus-style spawn counters since last restart.
 	spawnCountHTTP int64
 	spawnCountExec int64
+
+	// spawnGatewayErrors counts transient gateway spawn failures (HTTP 5xx,
+	// network/timeout, read/unmarshal) since last restart (SCHED-GAP-080).
+	// Auth rejections (401/403, ErrGatewayKeyRejected) are NEVER counted —
+	// they are terminal, not transient. Exposed via GatewayErrorCount().
+	spawnGatewayErrors int64
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -292,6 +298,26 @@ func (s *Spawner) SetCircuitClient(cc *CircuitClient) {
 // latency to a spawn, and a slow probe must not stall the tick.
 const gatewayKeyProbeTimeout = 5 * time.Second
 
+// SCHED-GAP-080: bounded transient-gateway retry. gatewayRetryMaxAttempts is
+// the number of retries AFTER the initial attempt (so a persistently-failing
+// gateway sees 1 + gatewayRetryMaxAttempts = 4 POSTs). gatewayRetryBackoff
+// returns the exponential backoff for retry attempt k: 500ms → 1s → 2s → 4s
+// cap (≈3.5s worst-case added latency, far below the tick timeout). The tick
+// context is the outer bound: a ctx cancel anywhere in the loop aborts
+// immediately, so a persistently-5xx gateway still fails the tick instead of
+// hanging it (SCHED-GAP-080 acceptance: bounded attempts, ctx-bounded).
+const gatewayRetryMaxAttempts = 3
+
+// gatewayRetryBackoff returns the backoff duration for the given retry
+// attempt (1-based), capped at 4s.
+func gatewayRetryBackoff(attempt int) time.Duration {
+	d := 500 * time.Millisecond << (attempt - 1)
+	if d > 4*time.Second {
+		return 4 * time.Second
+	}
+	return d
+}
+
 // GatewayAvailable returns true if the gateway client is configured and reachable.
 func (s *Spawner) GatewayAvailable() bool {
 	if s.gateway == nil {
@@ -303,6 +329,12 @@ func (s *Spawner) GatewayAvailable() bool {
 // SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
 func (s *Spawner) SpawnMethodCounts() (httpCount, execCount int64) {
 	return atomic.LoadInt64(&s.spawnCountHTTP), atomic.LoadInt64(&s.spawnCountExec)
+}
+
+// GatewayErrorCount returns the number of transient gateway spawn failures
+// since last restart (SCHED-GAP-080). Auth rejections are never counted.
+func (s *Spawner) GatewayErrorCount() int64 {
+	return atomic.LoadInt64(&s.spawnGatewayErrors)
 }
 
 // ActiveCount returns the number of currently running spawns.
@@ -820,6 +852,40 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				defer close(stopHeartbeat)
 				defer cancel()
 				r, err := s.gateway.SendResponseWithSessionKey(ctx, prompt, model, provider, project.GatewayKey, tickID)
+				// SCHED-GAP-080: transient-only bounded retry on the SAME
+				// model/provider pair. A gateway HTTP 5xx, network/timeout or
+				// read/unmarshal failure is a transport blip — retry it with
+				// exponential backoff BEFORE the SKIP decision so a blip that
+				// recovers completes the tick instead of silently dropping it
+				// (the 2026-08-28 05:01-05:03 + 07:56 corruption burst dropped 7
+				// ticks with zero retries). 401/403 (ErrGatewayKeyRejected) never
+				// enter this path — auth stays terminal (GAP-035) and the
+				// chain-hop logic below is untouched. The tick context bounds the
+				// loop, so a persistently-5xx gateway still fails the tick.
+				if err != nil && IsTransientGatewayErr(err) {
+					atomic.AddInt64(&s.spawnGatewayErrors, 1)
+					for attempt := 1; attempt <= gatewayRetryMaxAttempts; attempt++ {
+						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q error=%v",
+							project.Name, tickID, attempt, gatewayRetryMaxAttempts, model, provider, err)
+						select {
+						case <-ctx.Done():
+							return r, err
+						case <-time.After(gatewayRetryBackoff(attempt)):
+						}
+						r, err = s.gateway.SendResponseWithSessionKey(ctx, prompt, model, provider, project.GatewayKey, tickID)
+						if err == nil {
+							break
+						}
+						if IsTransientGatewayErr(err) {
+							atomic.AddInt64(&s.spawnGatewayErrors, 1)
+							if ctx.Err() != nil {
+								break
+							}
+							continue
+						}
+						break
+					}
+				}
 				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry {
 					return r, err
 				}

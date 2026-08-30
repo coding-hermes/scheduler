@@ -728,6 +728,12 @@ func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) {
 	return l.spawner.SpawnMethodCounts()
 }
 
+// GatewayErrorCount returns transient gateway spawn failures since last
+// restart (SCHED-GAP-080); auth rejections are never counted.
+func (l *Loop) GatewayErrorCount() int64 {
+	return l.spawner.GatewayErrorCount()
+}
+
 // noteZeroSelect records a zero-project evaluation (GAP-043). Called from
 // evaluate() while l.mu is held (write lock). When eligible projects exist
 // and the consecutive count reaches zeroSelectThreshold, a distinct

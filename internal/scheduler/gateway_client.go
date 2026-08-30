@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -20,6 +21,56 @@ import (
 // path treats it as terminal (no exec fallback, no retry flood) and emits a
 // HIGH event so a key regression is immediately visible.
 var ErrGatewayKeyRejected = errors.New("gateway key rejected")
+
+// ErrGatewayTransient is the classification for transport-level gateway
+// failures that are worth a bounded retry (SCHED-GAP-080): response-body
+// read errors and unmarshal errors. HTTP 5xx responses are classified via
+// *GatewayStatusError instead, and network/timeout failures via *url.Error;
+// IsTransientGatewayErr recognizes all three. It is never used for 401/403 —
+// those stay ErrGatewayKeyRejected (terminal, GAP-035, no retry flood).
+var ErrGatewayTransient = errors.New("gateway transient error")
+
+// GatewayStatusError carries the HTTP status code of a non-2xx, non-auth
+// gateway response (SCHED-GAP-080). The message is byte-identical to the
+// legacy plain-error text ("gateway POST: HTTP <code>: <detail>") so
+// existing assertions on error text keep passing; the StatusCode field lets
+// the spawn path classify 5xx as transient and retry.
+type GatewayStatusError struct {
+	StatusCode int
+	msg        string
+}
+
+// Error returns the legacy gateway error text (unchanged from pre-GAP-080).
+func (e *GatewayStatusError) Error() string {
+	return e.msg
+}
+
+// IsTransientGatewayErr reports whether err is a transient gateway failure
+// worth a bounded same-pair retry (SCHED-GAP-080): HTTP 5xx responses,
+// network/timeout errors from client.Do (*url.Error), and read/unmarshal
+// failures (ErrGatewayTransient). 401/403 are NEVER transient — they classify
+// as ErrGatewayKeyRejected (terminal, GAP-035) and the retry path must not
+// touch them. nil is never transient.
+func IsTransientGatewayErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Auth rejections stay terminal — the 2026-08-04 flood guard (GAP-035).
+	if errors.Is(err, ErrGatewayKeyRejected) {
+		return false
+	}
+	var gse *GatewayStatusError
+	if errors.As(err, &gse) {
+		return gse.StatusCode >= http.StatusInternalServerError
+	}
+	// client.Do wraps network failures, timeouts and context cancellation in
+	// *url.Error — all transient (the tick context bounds the retry window).
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	return errors.Is(err, ErrGatewayTransient)
+}
 
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
 type GatewayClient struct {
@@ -220,17 +271,27 @@ func (g *GatewayClient) SendResponseWithSessionKey(ctx context.Context, prompt, 
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("gateway POST: HTTP %d: %s", resp.StatusCode, authErrorDetail(body))
+		// SCHED-GAP-080: carry the status code so the spawn path can
+		// classify 5xx as transient. Error() text is byte-identical to the
+		// legacy plain error ("gateway POST: HTTP <code>: <detail>").
+		return nil, &GatewayStatusError{
+			StatusCode: resp.StatusCode,
+			msg:        fmt.Sprintf("gateway POST: HTTP %d: %s", resp.StatusCode, authErrorDetail(body)),
+		}
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		// SCHED-GAP-080: a body-read failure is transport-level transient —
+		// the response was accepted but never fully received.
+		return nil, fmt.Errorf("read response: %w: %w", ErrGatewayTransient, err)
 	}
 
 	var result Response
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+		// SCHED-GAP-080: an unparseable 2xx body is a gateway-side transient
+		// (e.g. a 500 HTML error page behind a 200, or mid-restart garbage).
+		return nil, fmt.Errorf("unmarshal response: %w: %w", ErrGatewayTransient, err)
 	}
 
 	if result.Error != nil {

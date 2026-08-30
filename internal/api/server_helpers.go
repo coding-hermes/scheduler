@@ -373,7 +373,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Daemon health check",
         "responses": {
-          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts"}
+          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count"}
         }
       }
     },
@@ -381,7 +381,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Fleet overview",
         "responses": {
-          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes"}
+          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart)"}
         }
       }
     },

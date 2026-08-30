@@ -188,6 +188,46 @@ func TestAPI_Status(t *testing.T) {
 	}
 }
 
+// TestSCHEDGAP080_StatusExposesGatewayErrors (2026-08-29): /api/v1/status and
+// /api/v1/health both expose gateway_errors (transient gateway spawn failures
+// since restart) alongside spawns_http/spawns_exec — 0 on a fresh server,
+// and the field must be present (guarded by s.loop, which the test harness
+// wires).
+func TestSCHEDGAP080_StatusExposesGatewayErrors(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	ge, ok := body["gateway_errors"]
+	if !ok {
+		t.Fatalf("gateway_errors missing from /api/v1/status: %v", body)
+	}
+	if n, ok := ge.(float64); !ok || int(n) != 0 {
+		t.Errorf("gateway_errors = %v, want 0 on a fresh server", ge)
+	}
+
+	healthStatus, healthBody := a.do(t, "GET", "/api/v1/health", nil)
+	if healthStatus != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", healthStatus)
+	}
+	if _, ok := healthBody["spawns_http"]; !ok {
+		t.Errorf("spawns_http missing from /api/v1/health: %v", healthBody)
+	}
+	if _, ok := healthBody["spawns_exec"]; !ok {
+		t.Errorf("spawns_exec missing from /api/v1/health: %v", healthBody)
+	}
+	geHealth, ok := healthBody["gateway_errors"]
+	if !ok {
+		t.Fatalf("gateway_errors missing from /api/v1/health: %v", healthBody)
+	}
+	if n, ok := geHealth.(float64); !ok || int(n) != 0 {
+		t.Errorf("gateway_errors = %v in /api/v1/health, want 0 on a fresh server", geHealth)
+	}
+}
+
 // TestAPI_Status_ProjectsFailureRates (SCHED-GAP-018) verifies the
 // projects_failure_rates field is present in /api/v1/status with the correct
 // shape and per-project failure-rate math.
