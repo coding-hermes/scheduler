@@ -25,6 +25,14 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 ## Getting Started (5 minutes)
 
+> ## ⚠️ BROKEN/STALE warning — verify before you trust this guide (GAP-042)
+>
+> **The public repo may be broken or stale relative to local fleet fixes.** This warning was written against `origin/main` commit `bb104c8` (`bb104c841edcc79a87166fef1dd5b551e8327d63`) on 2026-08-30.
+>
+> Verified state at that commit: a **fresh clone passes `make test`** — the repo is not currently known-broken, and no unpushed fleet fixes were found at write time. But the fleet's canonical checkout is a separate working copy: local fixes land there first and can lag this public repo, so what is on `main` here may be broken or stale relative to what the fleet actually runs at any later time.
+>
+> **Always run `make test` on a fresh clone before trusting the steps below.** If it fails or the steps misbehave, open a [release-check task](.github/ISSUE_TEMPLATE/release-check.md) and let a human gate the fix and push — agents never auto-push.
+
 This guide takes you from zero to a running scheduler with your existing cron jobs imported.
 
 ### 1. Prerequisites
