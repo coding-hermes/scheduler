@@ -101,6 +101,16 @@ type Spawner struct {
 	// Auth rejections (401/403, ErrGatewayKeyRejected) are NEVER counted —
 	// they are terminal, not transient. Exposed via GatewayErrorCount().
 	spawnGatewayErrors int64
+
+	// consecutiveGatewayDrops counts CONSECUTIVE gateway-failed spawn DROPS
+	// per project (GAP-050): a spawn that fails with a non-auth gateway error
+	// while exec fallback is disabled drops the tick, and each such drop
+	// increments this project's counter. Reset to zero by the next
+	// successful spawn; at exactly 2 consecutive drops an alert HIGH event
+	// fires (never re-firing beyond the threshold until a reset). Auth
+	// rejections (ErrGatewayKeyRejected) NEVER touch this map — they stay
+	// terminal on the GAP-035 path. Guarded by s.mu.
+	consecutiveGatewayDrops map[string]int
 }
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
@@ -229,6 +239,60 @@ func (s *Spawner) gatewayKeyRejected(project, tickID string, err error) error {
 		})
 	}
 	return fmt.Errorf("gateway key rejected for %s: %w", project, err)
+}
+
+// recordGatewayDrop records a gateway-caused tick drop (GAP-050): emits the
+// per-drop HIGH spawn event — component 'spawn', details carrying project,
+// tick_id and the gateway error text — and advances the per-project
+// consecutive-drop counter, alerting at exactly 2 consecutive drops. A
+// dropped tick yields EXACTLY one HIGH spawn event with its project+tick_id
+// (the alert deliberately carries no tick_id so the per-drop count stays 1).
+// Auth rejections NEVER reach this path — they stay terminal on GAP-035's
+// gatewayKeyRejected and do not increment the counter.
+func (s *Spawner) recordGatewayDrop(project, tickID string, dropErr error) {
+	if s.events != nil {
+		s.events.Emit(context.Background(), SeverityHigh, "spawn", "gateway spawn dropped", map[string]any{
+			"project": project,
+			"tick_id": tickID,
+			"error":   dropErr.Error(),
+		})
+	}
+	s.bumpConsecutiveDrops(project, dropErr)
+}
+
+// bumpConsecutiveDrops advances the per-project consecutive gateway-drop
+// counter and fires the >=2-consecutive-drop alert on the transition to
+// exactly 2 (GAP-050). The alert is a distinct HIGH spawn event naming the
+// project and the drop count; it never re-fires per tick beyond the
+// threshold until a successful spawn resets the counter. The per-drop HIGH
+// event is the CALLER's job — paths that already emit their own drop event
+// (the GAP-048 nil-gateway path) call this directly so a dropped tick still
+// yields exactly one HIGH spawn event carrying its project + tick_id.
+func (s *Spawner) bumpConsecutiveDrops(project string, dropErr error) {
+	s.mu.Lock()
+	if s.consecutiveGatewayDrops == nil {
+		s.consecutiveGatewayDrops = make(map[string]int)
+	}
+	s.consecutiveGatewayDrops[project]++
+	count := s.consecutiveGatewayDrops[project]
+	s.mu.Unlock()
+	if s.events != nil && count == 2 {
+		s.events.Emit(context.Background(), SeverityHigh, "spawn",
+			fmt.Sprintf("gateway consecutive spawn drops: %s dropped %d ticks in a row", project, count),
+			map[string]any{
+				"project": project,
+				"count":   count,
+				"error":   dropErr.Error(),
+			})
+	}
+}
+
+// resetGatewayDrops clears the per-project consecutive gateway-drop counter
+// after a successful spawn (GAP-050). No-op for projects without a counter.
+func (s *Spawner) resetGatewayDrops(project string) {
+	s.mu.Lock()
+	delete(s.consecutiveGatewayDrops, project)
+	s.mu.Unlock()
 }
 
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.
@@ -764,6 +828,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		if s.gateway == nil && s.noExecFallback {
 			log.Printf("SKIPPED: %s tick=%s no gateway client and exec fallback disabled — staying idle", project.Name, tickID)
 			s.noteSpawnFailure(project.Name)
+			dropErr := fmt.Errorf("no gateway client and exec fallback disabled for %s", project.Name)
 			if s.events != nil {
 				s.events.Emit(context.Background(), SeverityHigh, "spawn",
 					"gateway unavailable and exec fallback disabled — tick dropped", map[string]any{
@@ -771,9 +836,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						"tick_id":          tickID,
 						"gateway":          "nil",
 						"no_exec_fallback": true,
+						"error":            dropErr.Error(),
 					})
 			}
-			return nil, fmt.Errorf("no gateway client and exec fallback disabled for %s", project.Name)
+			// GAP-050: a nil gateway is a gateway-caused drop too — advance
+			// the consecutive-drop counter (the event above is this tick's
+			// per-drop HIGH event, so bumpConsecutiveDrops emits only the
+			// >=2-consecutive alert, keeping one event per dropped tick).
+			s.bumpConsecutiveDrops(project.Name, dropErr)
+			return nil, dropErr
 		}
 
 		// Try HTTP gateway spawn first (zero process overhead).
@@ -1038,6 +1109,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// completion moment here corrupted the API field).
 				_, _ = s.db.Exec(`UPDATE projects SET consecutive_failures = 0 WHERE name = ?`,
 					project.Name)
+				// GAP-050: a successful gateway spawn resets the per-project
+				// consecutive-drop counter (the next drop restarts at 1).
+				s.resetGatewayDrops(project.Name)
 
 				// TASK-ROUTER-002: the pair that ACTUALLY ran succeeded —
 				// close its circuit (record-success is a no-op for pairs
@@ -1101,15 +1175,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// still lands in the tick error (slot_pool persists Spawn's error),
 			// and the HIGH event below keeps the fleet-wide signal (gateway
 			// state.db corruption, sessions not persisting) visible with tick
-			// id + project on this path too.
-			if s.events != nil && (strings.Contains(gwErr.Error(), "database disk image is malformed") || strings.Contains(gwErr.Error(), "session_persistence_failed")) {
-				s.events.Emit(context.Background(), SeverityHigh, "spawn",
-					"gateway tick recorded failed: session error", map[string]any{
-						"project": project.Name,
-						"tick_id": tickID,
-						"error":   gwErr.Error(),
-					})
-			}
+			// id + project on this path too. It only fires when exec fallback
+			// continues the tick — a DROPPED tick gets its single per-drop
+			// event from recordGatewayDrop instead (GAP-050), whose details
+			// carry the same corruption text.
 			// GAP-035: an AUTH rejection is terminal. Falling back to exec
 			// would silently mask a key regression and keep flooding the
 			// fleet with disguised failures — fail fast with a classified
@@ -1121,7 +1190,25 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			if s.noExecFallback {
 				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
 				s.noteSpawnFailure(project.Name)
+				// GAP-050: every gateway-failed spawn drop emits exactly ONE
+				// HIGH spawn event (component 'spawn', details carrying
+				// project, tick_id and the gateway error text) and advances
+				// the per-project consecutive-drop counter, alerting at >=2
+				// consecutive drops. Previously this path dropped ticks
+				// SILENTLY (log line + consecutive_failures bump only), so
+				// fleet-wide sync death from a corrupt gateway state.db went
+				// unnoticed. Auth rejections never reach this block — they
+				// stay terminal on GAP-035 above and never touch the counter.
+				s.recordGatewayDrop(project.Name, tickID, gwErr)
 				return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
+			}
+			if s.events != nil && (strings.Contains(gwErr.Error(), "database disk image is malformed") || strings.Contains(gwErr.Error(), "session_persistence_failed")) {
+				s.events.Emit(context.Background(), SeverityHigh, "spawn",
+					"gateway tick recorded failed: session error", map[string]any{
+						"project": project.Name,
+						"tick_id": tickID,
+						"error":   gwErr.Error(),
+					})
 			}
 		}
 
@@ -1194,6 +1281,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// TASK-ROUTER-002: the exec spawn started with the resolved pair —
 	// close its circuit (no-op for pairs without recorded failures).
 	s.recordCircuitSuccess(provider, model)
+	// GAP-050: a successful exec spawn (exec fallback or custom command)
+	// resets the per-project consecutive-drop counter too — the tick ran.
+	s.resetGatewayDrops(project.Name)
 
 	s.mu.Lock()
 	s.active[tickID] = cmd
