@@ -124,10 +124,10 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		maxConcurrent:    maxConcurrent,
 		active:           make(map[string]*exec.Cmd),
 		timeout:          to,
-		model:            getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
-		provider:         getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
-		fallbackModel:    getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", ""),
-		fallbackProvider: getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", ""),
+		model:            getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
+		provider:         getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
+		fallbackModel:    getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
+		fallbackProvider: getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
 		idleModel:        getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
 		idleProvider:     getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
 		// TASK-ROUTER-001: the task router is OPT-IN via env — hosts
@@ -917,6 +917,21 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// must not record the same pair twice — a double
 			// record-failure would double the breaker cooldown.
 			circuitFailureRecorded := false
+			// isKeyRejection distinguishes the two 401/403 meanings the
+			// gateway can surface (2026-08-31, Bane router audit): a
+			// rejection whose envelope MESSAGE is "Invalid gateway API
+			// key" means the API KEY itself is rejected — TERMINAL
+			// (GAP-035), retrying a different model/provider pair is
+			// pointless and re-opens the 2026-08-04 bad-key retry flood
+			// (that outage produced exactly this message). Any OTHER
+			// rejection message ("provider rejected", pass-through
+			// upstream errors) means the key is valid but the PAIR was
+			// refused — the only case TASK-ROUTER-002 advances the chain
+			// (one hop). The message is the discriminator, not the
+			// envelope type: both meanings travel as type "auth_error".
+			isKeyRejection := func(err error) bool {
+				return err != nil && strings.Contains(err.Error(), "Invalid gateway API key")
+			}
 			resp, gwErr := func() (*Response, error) {
 				// The heartbeat goroutine must never outlive the request —
 				// stop it on every return path (success AND failure).
@@ -957,7 +972,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						break
 					}
 				}
-				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry {
+				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry || isKeyRejection(err) {
+					// GAP-035 terminal on key rejection (auth_error): the
+					// key itself is refused — no pair can fix it, no chain
+					// advance, no retry flood (2026-08-04 outage).
 					return r, err
 				}
 				// TASK-ROUTER-002: the gateway rejected the pair — record
