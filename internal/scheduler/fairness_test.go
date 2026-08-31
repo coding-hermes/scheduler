@@ -3,6 +3,8 @@ package scheduler
 import (
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // Unit tests for the S-GAP-001 selection-fairness and spawn-failure-backoff
@@ -87,6 +89,57 @@ func TestIsStarving(t *testing.T) {
 			if got := isStarving(c.cooldownS, c.failures, c.lastAtt, c.createdAt, now); got != c.want {
 				t.Errorf("isStarving(cooldown=%d, failures=%d) = %v, want %v",
 					c.cooldownS, c.failures, got, c.want)
+			}
+		})
+	}
+}
+
+// TestIsOverdue covers the GAP-011 due predicate: a project is due when the
+// time since its last completed tick is STRICTLY greater than 2x its
+// effective cooldown. A never-completed project counts as never
+// cooldown-satisfied (created_at is the reference clock, matching
+// isStarving); failure backoff and blackout multipliers extend the threshold
+// exactly as they extend the packer's cooldown check; a skip-mode blackout
+// suspends due selection entirely. All timestamps are in-memory (no RFC3339
+// round-trip), so the exactly-2x case is deterministic.
+func TestIsOverdue(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) *time.Time {
+		tm := now.Add(-d)
+		return &tm
+	}
+	mk := func(lastTick *time.Time, createdAt time.Time, cooldown, failures int) scored {
+		return scored{lastTickAt: lastTick, createdAt: createdAt, cooldownS: cooldown,
+			consecutiveFailures: failures, priority: 5}
+	}
+	calc := NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	allDay := []config.BlackoutWindow{{Start: "00:00", End: "23:59", Multiplier: 2.0}}
+	allDaySkip := []config.BlackoutWindow{{Start: "00:00", End: "23:59", Multiplier: 0}}
+
+	cases := []struct {
+		name    string
+		s       scored
+		windows []config.BlackoutWindow
+		want    bool
+	}{
+		{"3h past 2x 900s cooldown → overdue", mk(ago(3*time.Hour), time.Time{}, 900, 0), nil, true},
+		{"exactly 2x cooldown → NOT overdue (strictly greater only)", mk(ago(1800*time.Second), time.Time{}, 900, 0), nil, false},
+		{"inside cooldown → not overdue", mk(ago(10*time.Minute), time.Time{}, 3600, 0), nil, false},
+		{"never completed, created past 2x → overdue", mk(nil, now.Add(-3*time.Hour), 900, 0), nil, true},
+		{"never completed, created recently → not overdue", mk(nil, now.Add(-10*time.Minute), 900, 0), nil, false},
+		{"no usable timestamp → never overdue", mk(nil, time.Time{}, 900, 0), nil, false},
+		{"future completion (clock skew) → not overdue", mk(ago(-5*time.Minute), time.Time{}, 900, 0), nil, false},
+		{"failure backoff extends threshold (4 fails → 2x of 2h cap)", mk(ago(3*time.Hour), time.Time{}, 900, 4), nil, false},
+		{"failure-backoff threshold elapsed → overdue", mk(ago(5*time.Hour), time.Time{}, 900, 4), nil, true},
+		{"blackout 2x multiplier extends threshold", mk(ago(2000*time.Second), time.Time{}, 900, 0), allDay, false},
+		{"blackout multiplier elapsed → overdue", mk(ago(5*time.Hour), time.Time{}, 900, 0), allDay, true},
+		{"skip-mode blackout suspends due selection", mk(ago(3*time.Hour), time.Time{}, 900, 0), allDaySkip, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := NewPacker(nil, calc, 100, 5, c.windows)
+			if got := p.isOverdue(c.s, now); got != c.want {
+				t.Errorf("isOverdue = %v, want %v", got, c.want)
 			}
 		})
 	}

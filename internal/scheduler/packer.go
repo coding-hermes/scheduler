@@ -84,6 +84,7 @@ type scored struct {
 	decayRate           float64
 	cooldownS           int
 	consecutiveFailures int
+	budgetBlocked       bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
 	lastTickAt          *time.Time
 	createdAt           time.Time
 	workdir             string
@@ -148,13 +149,16 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
-		// SCHED-GAP-066: budget-exhausted projects are never picked. The
-		// gate filters NEW spawns only — a running tick is never touched.
+		// SCHED-GAP-066: budget-exhausted projects are excluded from the
+		// greedy pack — but kept in the candidate list, flagged, so the
+		// GAP-011 overdue force-select below can still pick them (a spend
+		// gate must not starve an overdue project). The gate filters NEW
+		// spawns only — a running tick is never touched.
 		if p.budgetGate != nil {
 			if detail, blocked := p.budgetGate(s.name, s.dailyBudgetUSD, s.weeklyBudgetUSD, s.finalBudgetUSD); blocked {
-				log.Printf("BUDGET: %s blocked (%s) — excluded from selection; running ticks untouched", s.name, detail)
+				s.budgetBlocked = true
 				skippedBudgetCap++
-				continue
+				log.Printf("BUDGET: %s blocked (%s) — excluded from greedy selection; running ticks untouched", s.name, detail)
 			}
 		}
 		s.createdAt, _ = time.Parse(time.RFC3339, createdAtStr)
@@ -259,6 +263,32 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalSkippedNamespace++
 			continue
 		}
+		// GAP-011: hard due-aware selection. Any enabled, not-running
+		// project whose time since last completed tick is STRICTLY greater
+		// than 2x its effective cooldown MUST be selected — force-select it
+		// before greedy budget packing so neither the weight budget nor the
+		// SCHED-GAP-066 spend gate can exclude it. Forced selections do NOT
+		// consume the weight budget (the gate's jurisdiction is the greedy
+		// pack below) but DO occupy concurrency slots.
+		if p.isOverdue(s, now) {
+			if currRunning >= p.maxConcurrent {
+				log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
+				break
+			}
+			log.Printf("OVERDUE: %s force-selected (age=%v past 2x cooldown) — bypassing budget gate",
+				s.name, starvationAge(s.lastTickAt, s.createdAt, now))
+			packed = append(packed, s.packed())
+			currRunning++
+			nsRunning[s.namespaceID]++
+			continue
+		}
+		// SCHED-GAP-066: budget-exhausted projects are never picked by the
+		// greedy pack (the GAP-011 overdue pass above is the only path that
+		// may select them).
+		if s.budgetBlocked {
+			totalSkippedBudget++
+			continue
+		}
 		if used+s.weight > p.budget {
 			totalSkippedBudget++
 			continue
@@ -267,54 +297,16 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
 			break
 		}
-		cooldownDur := time.Duration(s.cooldownS) * time.Second
-		if s.cooldownS == 0 {
-			// Dynamic: derive from priority via urgency calculator.
-			cooldownDur = p.calculator.ComputeInterval(s.priority)
-		}
-		// S-GAP-001: consecutive spawn failures back off exponentially.
-		if s.consecutiveFailures > 0 {
-			cooldownDur = FailureBackoff(cooldownDur, s.consecutiveFailures)
-		}
-		// Apply blackout slowdown if inside a peak-pricing window.
-		if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout {
-			if mult <= 0 {
-				totalSkippedCooldown++
-				continue // skip mode — don't spawn at all
-			}
-			if mult > 1.0 {
-				cooldownDur = time.Duration(float64(cooldownDur) * mult)
-			}
+		cooldownDur, skipMode := p.effectiveCooldownDur(s, now)
+		if skipMode {
+			totalSkippedCooldown++
+			continue // skip mode — don't spawn at all
 		}
 		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 			totalSkippedCooldown++
 			continue
 		}
-		packed = append(packed, PackedProject{
-			Name:             s.name,
-			Priority:         s.priority,
-			Weight:           s.weight,
-			Urgency:          s.urgency,
-			Workdir:          s.workdir,
-			RepoURL:          s.repoURL,
-			Command:          s.command,
-			Model:            s.model,
-			Provider:         s.provider,
-			FallbackModel:    s.fallbackModel,
-			FallbackProvider: s.fallbackProvider,
-			NoGlobalFallback: s.noGlobalFallback,
-			ModelChain:       s.modelChain,
-			IdleModel:        s.idleModel,
-			IdleProvider:     s.idleProvider,
-			WorkerModel:      s.workerModel,
-			WorkerProvider:   s.workerProvider,
-			GatewayKey:       s.gatewayKey,
-			Deliver:          s.deliver,
-			Prompt:           s.prompt,
-			PromptMode:       s.promptMode,
-			NamespacePrompt:  s.namespaceDefaultPmt,
-			NamespaceChain:   s.namespaceChain,
-		})
+		packed = append(packed, s.packed())
 		used += s.weight
 		currRunning++
 		nsRunning[s.namespaceID]++
@@ -325,6 +317,90 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
+}
+
+// effectiveCooldownDur returns the cooldown a project must wait before it
+// may be re-packed, using the same arithmetic as the greedy pack and
+// loop.go's countEligibleProjects (GAP-050): the explicit cooldown_s, or
+// the priority-derived dynamic interval when cooldown_s <= 0, then the
+// S-GAP-001 exponential failure backoff, then the blackout-window
+// multiplier. skipMode reports a blackout multiplier <= 0 — during a
+// skip-mode window no project spawns at all.
+func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time.Duration, skipMode bool) {
+	cooldownDur = time.Duration(s.cooldownS) * time.Second
+	if s.cooldownS == 0 {
+		// Dynamic: derive from priority via urgency calculator.
+		cooldownDur = p.calculator.ComputeInterval(s.priority)
+	}
+	// S-GAP-001: consecutive spawn failures back off exponentially.
+	if s.consecutiveFailures > 0 {
+		cooldownDur = FailureBackoff(cooldownDur, s.consecutiveFailures)
+	}
+	// Apply blackout slowdown if inside a peak-pricing window.
+	if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout {
+		if mult <= 0 {
+			return cooldownDur, true // skip mode — don't spawn at all
+		}
+		if mult > 1.0 {
+			cooldownDur = time.Duration(float64(cooldownDur) * mult)
+		}
+	}
+	return cooldownDur, false
+}
+
+// isOverdue reports whether an enabled, not-running project is due under the
+// GAP-011 hard rule: its time since last completed tick is STRICTLY greater
+// than 2x its effective cooldown. The reference clock is last_tick_completed,
+// falling back to created_at for projects that have never completed — a
+// never-completed project counts as never cooldown-satisfied, so once past
+// 2x it is due. Projects with no usable timestamp are never overdue; a
+// skip-mode blackout (multiplier <= 0) suspends due selection entirely.
+func (p *Packer) isOverdue(s scored, now time.Time) bool {
+	cd, skipMode := p.effectiveCooldownDur(s, now)
+	if skipMode {
+		return false
+	}
+	ref := s.createdAt
+	if s.lastTickAt != nil {
+		ref = *s.lastTickAt
+	}
+	if ref.IsZero() {
+		return false
+	}
+	age := now.Sub(ref)
+	if age < 0 {
+		return false
+	}
+	return age > 2*cd
+}
+
+// packed renders the scored project as a PackedProject for selection output.
+func (s scored) packed() PackedProject {
+	return PackedProject{
+		Name:             s.name,
+		Priority:         s.priority,
+		Weight:           s.weight,
+		Urgency:          s.urgency,
+		Workdir:          s.workdir,
+		RepoURL:          s.repoURL,
+		Command:          s.command,
+		Model:            s.model,
+		Provider:         s.provider,
+		FallbackModel:    s.fallbackModel,
+		FallbackProvider: s.fallbackProvider,
+		NoGlobalFallback: s.noGlobalFallback,
+		ModelChain:       s.modelChain,
+		IdleModel:        s.idleModel,
+		IdleProvider:     s.idleProvider,
+		WorkerModel:      s.workerModel,
+		WorkerProvider:   s.workerProvider,
+		GatewayKey:       s.gatewayKey,
+		Deliver:          s.deliver,
+		Prompt:           s.prompt,
+		PromptMode:       s.promptMode,
+		NamespacePrompt:  s.namespaceDefaultPmt,
+		NamespaceChain:   s.namespaceChain,
+	}
 }
 
 // Budget returns the current weight budget.

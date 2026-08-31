@@ -496,3 +496,218 @@ func TestPacker_BlackoutSlowdown_SkipMode(t *testing.T) {
 		t.Fatalf("skip mode: expected 0 projects, got %d", len(packed))
 	}
 }
+
+// ── GAP-011: due-aware force selection ────────────────────────────────────
+//
+// A project whose time since last completed tick is STRICTLY greater than 2x
+// its effective cooldown MUST be selected regardless of weight, urgency, or
+// ordering — force-selected before greedy budget packing so neither the
+// weight budget nor the SCHED-GAP-066 spend gate can starve it.
+
+// setLastTick stamps last_tick_completed for a project (the packer's
+// cooldown/due clock). The timestamp is second-aligned so RFC3339
+// round-trips through the DB are exact, making the exactly-2x boundary
+// deterministic.
+func setLastTick(t *testing.T, db *sql.DB, name string, ts time.Time) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`,
+		ts.UTC().Format(time.RFC3339), name); err != nil {
+		t.Fatalf("set last_tick_completed for %s: %v", name, err)
+	}
+}
+
+// packedNames returns the names in a flat Pick result.
+func packedNames(ps []scheduler.PackedProject) []string {
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, p.Name)
+	}
+	return names
+}
+
+// mustCreateWave creates two high-weight, high-priority projects that were
+// created after `now` — never completed, not overdue — so the greedy pack
+// alone fills a 100-weight budget exactly (2 × 50).
+func mustCreateWave(t *testing.T, db *sql.DB) {
+	t.Helper()
+	mustCreateProjectAt(t, db, "wave-a", 50, 10, 600, 1.0)
+	mustCreateProjectAt(t, db, "wave-b", 50, 10, 600, 1.0)
+}
+
+// TestPick_Gap011_OverdueSelectedDuringBudgetWave is THE acceptance test for
+// GAP-011 criterion (a): an overdue low-weight project is force-selected
+// while a high-weight wave fills the weight budget — the greedy pack alone
+// would have excluded it (100 + 20 > 100).
+func TestPick_Gap011_OverdueSelectedDuringBudgetWave(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateWave(t, db)
+	// Overdue low-weight project: last completed tick 3h ago (> 2x 900s).
+	mustCreateProjectAt(t, db, "starved-low", 20, 1, 900, 1.0)
+	setLastTick(t, db, "starved-low", now.Add(-3*time.Hour))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if !containsName(names, "starved-low") {
+		t.Errorf("overdue starved-low not selected: %v (force-select must bypass the weight budget)", names)
+	}
+	if !containsName(names, "wave-a") || !containsName(names, "wave-b") {
+		t.Errorf("wave projects should still be selected: %v", names)
+	}
+}
+
+// TestPick_Gap011_Exactly2xNotForced pins the strictly-greater boundary: a
+// project exactly 2x cooldown past its last tick is NOT force-selected and,
+// with the budget already consumed by the wave, is not packed at all.
+func TestPick_Gap011_Exactly2xNotForced(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateWave(t, db)
+	// Last completed tick EXACTLY 2x cooldown (1800s) ago.
+	mustCreateProjectAt(t, db, "exact-2x", 20, 1, 900, 1.0)
+	setLastTick(t, db, "exact-2x", now.Add(-1800*time.Second))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if containsName(names, "exact-2x") {
+		t.Errorf("exact-2x must NOT be forced (only strictly greater than 2x): %v", names)
+	}
+	if len(names) != 2 {
+		t.Errorf("Pick returned %v, want exactly the 2 wave projects", names)
+	}
+}
+
+// TestPick_Gap011_WithinCooldownStaysIneligible pins that a project inside
+// its cooldown window is neither force-selected nor greedily packed.
+func TestPick_Gap011_WithinCooldownStaysIneligible(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateWave(t, db)
+	// Last completed tick 10 min ago, cooldown 3600s — inside cooldown and
+	// well inside the 2x due threshold.
+	mustCreateProjectAt(t, db, "in-cooldown", 20, 1, 3600, 1.0)
+	setLastTick(t, db, "in-cooldown", now.Add(-10*time.Minute))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if containsName(names, "in-cooldown") {
+		t.Errorf("in-cooldown project must stay ineligible: %v", names)
+	}
+}
+
+// TestPick_Gap011_NeverCompletedPast2x pins that a never-completed project
+// counts as never cooldown-satisfied: once its created_at age passes 2x
+// cooldown it is force-selected, while a fresh never-completed project is
+// not (it loses to the budget-filled wave in the greedy pack).
+func TestPick_Gap011_NeverCompletedPast2x(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateWave(t, db)
+	mustCreateProjectAt(t, db, "old-never", 20, 1, 900, 1.0)
+	mustCreateProjectAt(t, db, "fresh-never", 20, 1, 900, 1.0)
+	// Backdate old-never's created_at to 3h before now (never completed).
+	if _, err := db.Exec(`UPDATE projects SET created_at = ? WHERE name = ?`,
+		now.Add(-3*time.Hour).UTC().Format(time.RFC3339), "old-never"); err != nil {
+		t.Fatalf("backdate created_at for old-never: %v", err)
+	}
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if !containsName(names, "old-never") {
+		t.Errorf("never-completed project past 2x cooldown must be force-selected: %v", names)
+	}
+	if containsName(names, "fresh-never") {
+		t.Errorf("fresh never-completed project must not be forced: %v", names)
+	}
+}
+
+// TestPick_Gap011_DisabledAndRunningNeverForced pins that disabled projects
+// (excluded by the enabled=1 query) and currently-running projects are never
+// force-selected, even when overdue.
+func TestPick_Gap011_DisabledAndRunningNeverForced(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateWave(t, db)
+	// Overdue but currently running — must stay out.
+	mustCreateProjectAt(t, db, "running-overdue", 20, 1, 900, 1.0)
+	setLastTick(t, db, "running-overdue", now.Add(-3*time.Hour))
+	// Overdue but disabled — the enabled=1 query excludes it outright.
+	disabled := makeProject("disabled-overdue", 20, 1, 900, 1.0)
+	disabled.Enabled = false
+	if err := database.CreateProject(ctx, db, disabled); err != nil {
+		t.Fatalf("CreateProject disabled-overdue: %v", err)
+	}
+	setLastTick(t, db, "disabled-overdue", now.Add(-3*time.Hour))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	got, err := p.Pick(now, map[string]bool{"running-overdue": true})
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if containsName(names, "running-overdue") {
+		t.Errorf("running overdue project must never be force-selected: %v", names)
+	}
+	if containsName(names, "disabled-overdue") {
+		t.Errorf("disabled overdue project must never be force-selected: %v", names)
+	}
+	if !containsName(names, "wave-a") || !containsName(names, "wave-b") {
+		t.Errorf("wave projects should still be selected: %v", names)
+	}
+}
+
+// TestPick_Gap011_OverdueBypassesSpendGate pins that the SCHED-GAP-066 USD
+// spend gate — which excludes a budget-exhausted project from the greedy
+// pack — cannot exclude an overdue project: the force-select still picks it.
+func TestPick_Gap011_OverdueBypassesSpendGate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	// Fixed midday UTC: the completed cost tick at -3h falls inside the
+	// daily window, so the spend gate reliably blocks the project.
+	now := time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)
+
+	mustCreateWave(t, db)
+	mustCreateProjectAt(t, db, "capped-overdue", 20, 1, 900, 1.0)
+	setBudgetCaps(t, db, "capped-overdue", 5.0, 0, 0)
+	insertCostTick(t, db, "t-cap-overdue", "capped-overdue", "completed", now.Add(-3*time.Hour), 6.25)
+	setLastTick(t, db, "capped-overdue", now.Add(-3*time.Hour))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
+	p.SetBudgetGate(scheduler.NewBudgetGate(ctx, db, now))
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	names := packedNames(got)
+	if !containsName(names, "capped-overdue") {
+		t.Errorf("overdue project must bypass the SCHED-GAP-066 spend gate: %v", names)
+	}
+}
