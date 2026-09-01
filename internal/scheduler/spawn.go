@@ -1340,17 +1340,26 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	teeReader := io.TeeReader(stdout, &st.Output)
 
 	// Parse session ID from stdout and persist it. The scanner goroutine must
-	// exit when the process exits or times out so it cannot leak.
+	// exit when the process exits or times out so it cannot leak. scanDone is
+	// closed when the scanner exits (drain finished) — the completion path
+	// waits on it (bounded) before closing the pipes (SCHED-GAP-081).
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
 	st.scanCancel = scanCancel
+	st.scanDone = make(chan struct{})
 
-	// Close stdout when context expires — unblocks scanner.Scan().
+	// Close stdout when the scan context expires — backstop that unblocks a
+	// scanner wedged on a pipe whose write end never closed (orphaned
+	// grandchild holding it). The context only expires on the real tick
+	// timeout or after the scanner itself exits; the completion path no
+	// longer cancels it early (SCHED-GAP-081: an early close truncated
+	// captured output and surfaced "file already closed" on normal ticks).
 	go func() {
 		<-scanCtx.Done()
 		_ = stdout.Close()
 	}()
 
 	go func() {
+		defer close(st.scanDone)
 		defer scanCancel()
 		defer func() {
 			if r := recover(); r != nil {
@@ -1372,14 +1381,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				continue
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			// Expected on timeout (pipe closed) or process exit — not a leak.
-			if !errors.Is(err, io.EOF) {
-				log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
-			}
+		if err := scanner.Err(); err != nil && !scannerErrIsBenign(err) {
+			log.Printf("WARN: stdout scanner error for tick %s: %v", tickID, err)
 		}
 	}()
-
 	// Update tick to running with PID for zombie detection.
 	// S-GAP-003: also stamp session_id (placeholder = tick id — the stdout
 	// scanner above overwrites it with the real parsed session id when a
@@ -1402,6 +1407,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	return st, nil
 }
 
+// scannerErrIsBenign reports whether a stdout scanner error is expected
+// end-of-output rather than a real read failure (SCHED-GAP-081): io.EOF
+// (process exited, pipe drained) or os.ErrClosed (the pipe's read end was
+// closed by the timeout backstop or the completion-path pipe close while the
+// scanner was still blocked on it — the tail of the pipe buffer is simply
+// not delivered, which is inherent to closing a pipe and not a leak).
+func scannerErrIsBenign(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed)
+}
+
 // SpawnedTick represents a running foreman process.
 type SpawnedTick struct {
 	TickID     string
@@ -1416,6 +1431,7 @@ type SpawnedTick struct {
 	stderr     interface{ Close() error }
 	spawner    *Spawner
 	scanCancel context.CancelFunc
+	scanDone   chan struct{} // closed when the stdout scanner exits (drain finished)
 	mu         sync.Mutex
 
 	// stopHeartbeat is closed by Wait() to stop the tick-row heartbeat
@@ -1567,10 +1583,23 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		}
 	}
 
-	defer st.closePipes()
-	if st.scanCancel != nil {
-		defer st.scanCancel()
-	}
+	// SCHED-GAP-081: give the stdout scanner a bounded window to drain the
+	// pipe tail before the read ends are closed. Previously this path
+	// canceled the scan context, which fired the close-stdout goroutine while
+	// the scanner was still mid-drain — surfacing "file already closed" WARNs
+	// on ~14 normal ticks/day and truncating captured output (delivery and
+	// slowdown analysis read st.Output). The scanner exits by itself on EOF
+	// (process exit closes the write end); the close here is only a backstop
+	// for a wedged pipe, and a scanner interrupted by it is now benign.
+	defer func() {
+		if st.scanDone != nil {
+			select {
+			case <-st.scanDone:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		st.closePipes()
+	}()
 
 	timer := time.AfterFunc(st.spawner.timeout, func() {
 		if st.cmd.Process != nil {
