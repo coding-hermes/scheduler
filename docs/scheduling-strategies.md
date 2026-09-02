@@ -36,19 +36,21 @@ type ScoreContext struct {
 }
 ```
 
-Ship 4 strategies behind it (v1):
+Ship 3 strategies behind it (v1):
 
 1. **current** (default) — priority-decay + starvation boost, as today.
    `Explain()` = "urgency 0.72 (idle 4h2m, priority 3)".
 2. **EDF** (earliest-deadline-first) — per-project SLA from fleet.toml
    (`target_interval`); score = minutes overdue. Best when cadence promises
    matter more than priority labels.
-3. **cost-aware value** — expected board value (open P1s present? breach risk?)
-   ÷ recent cost-per-tick. Favors cheap projects when budget tight; the
-   billing data already exists in `ticks`.
-4. **lottery** — weighted random by urgency². Preserves urgency ordering in
+3. **lottery** — weighted random by urgency². Preserves urgency ordering in
    expectation but breaks the deterministic head-of-line pattern the PM
    digest keeps hitting; useful as an A/B baseline.
+
+> **DOCTRINE (Bane 2026-09-02):** work is picked by CORRECT ORDERING within
+> the project (urgency/priority). Cost NEVER drives work selection — price
+> only ranks eligible *models* at spawn time (task-router). A cost-aware
+> selection strategy was considered and REJECTED on these grounds.
 
 ## Integration points (all exist today)
 
