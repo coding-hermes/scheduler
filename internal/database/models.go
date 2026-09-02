@@ -184,6 +184,15 @@ type Tick struct {
 	WeightUsed   int         `json:"weight_used"`
 	Error        string      `json:"error"`
 	CreatedAt    string      `json:"created_at"`
+	// SCHED-GAP-091: session resume-after-restart. OrphanedAt is stamped
+	// the moment a previously-running tick's owner (gateway/daemon)
+	// is known to be gone; OrphanReason records which drop path fired.
+	// NudgeCount counts continuation re-spawns — capped at
+	// scheduler.MaxNudgesPerTick so a flapping gateway cannot resurrect
+	// a tick forever (anti zombie-resurrection).
+	OrphanedAt   string `json:"orphaned_at,omitempty"`
+	OrphanReason string `json:"orphan_reason,omitempty"`
+	NudgeCount   int    `json:"nudge_count"`
 }
 
 // EventSeverity enumerates the severity tiers for event log entries.

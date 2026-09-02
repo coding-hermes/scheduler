@@ -144,6 +144,12 @@ func (l *Loop) evaluate() {
 		if l.gatewayDead {
 			log.Printf("GATEWAY reconnected — resuming spawns")
 			l.gatewayDead = false
+			// SCHED-GAP-091: gateway health returned — scan for ticks
+			// orphaned by the drop and re-nudge them with continuation
+			// prompts (the orphan-scan job rides this existing flip; no
+			// new cron, scheduler-owned timing per fleet doctrine).
+			l.resumeOrphans("reconnect")
+			l.resumeNeedsHuman("reconnect")
 		}
 	}
 
@@ -325,6 +331,11 @@ func (l *Loop) cleanDanglingOnStartup() {
 		dead = append(dead, deadTick{id: gt.id, project: gt.project, pid: 0})
 	}
 
+	// SCHED-GAP-091: remember which reaped rows were orphaned by the
+	// daemon's own absence (crash / restart mid-tick) so the
+	// gateway-health-return scan can re-nudge them.
+	reapedOrphans := make(map[string]string, len(dead))
+
 	if len(dead) == 0 {
 		log.Printf("DANGLING: startup cleanup — no dead-pid or stale-gateway ticks found (live gateway ticks left running)")
 		return
@@ -368,9 +379,18 @@ func (l *Loop) cleanDanglingOnStartup() {
 			continue
 		}
 		cleaned++
+		// SCHED-GAP-091: reap succeeded — the pid/heartbeat died while the
+		// daemon was absent (crash / restart), so this is a drop. Stamp it
+		// so the resume scan re-nudges the tick.
+		reapedOrphans[dt.id] = OrphanReasonStartupReap
 	}
 	if cleaned > 0 {
 		log.Printf("DANGLING: cleaned %d dead running tick(s) from previous process (dead pid or stale gateway heartbeat)", cleaned)
+	}
+	// SCHED-GAP-091: stamp the reaped rows as orphans so the resume scan
+	// (startup, when the gateway is back) re-nudges them.
+	for id, reason := range reapedOrphans {
+		l.stampOrphaned(id, reason)
 	}
 }
 
@@ -399,6 +419,11 @@ func (l *Loop) reapZombies() {
 	}
 	rows.Close()
 
+	// SCHED-GAP-091: rows successfully reaped below get the zombie-reap
+	// orphan stamp so a gateway drop that outlived a live daemon is also
+	// resumable.
+	reapedOrphans := make(map[string]string)
+
 	var reaped int
 	for _, id := range dead {
 		// outcome stays unset — see the CHECK-constraint comment in
@@ -411,6 +436,7 @@ func (l *Loop) reapZombies() {
 			continue
 		}
 		reaped++
+		reapedOrphans[id] = OrphanReasonZombieReap
 	}
 	if reaped > 0 {
 		log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
@@ -429,8 +455,15 @@ func (l *Loop) reapZombies() {
 			continue
 		}
 		gwReaped++
+		reapedOrphans[gt.id] = OrphanReasonZombieReap
 	}
 	if gwReaped > 0 {
 		log.Printf("ZOMBIE: reaped %d gateway tick(s) (stale heartbeat)", gwReaped)
+	}
+	// SCHED-GAP-091: stamp all zombie-reaped rows (dead-pid + stale
+	// heartbeat) as orphans — the resume scan re-nudges them on the next
+	// gateway-health-return.
+	for id, reason := range reapedOrphans {
+		l.stampOrphaned(id, reason)
 	}
 }

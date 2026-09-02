@@ -280,6 +280,12 @@ func (l *Loop) Run() {
 
 	l.cleanDanglingOnStartup()
 
+	// SCHED-GAP-091: if the daemon booted with a live gateway, any ticks
+	// orphaned before the restart (gateway drop, previous crash) are
+	// re-nudged now — before the first eval, so interrupted work resumes
+	// instead of sitting until the next reconnect flip.
+	l.resumeOrphansAtStartup()
+
 	reaper := time.NewTicker(60 * time.Second)
 	defer reaper.Stop()
 
@@ -447,6 +453,10 @@ func (l *Loop) abortInFlightTicks() {
 			log.Printf("LOOP: shutdown drain: mark tick %s (project %s) failed: %v", t.id, t.project, err)
 			continue
 		}
+		// SCHED-GAP-091: the owner was alive but the drain gave up — this
+		// is a drop. Stamp it so the gateway-health-return scan re-nudges
+		// the tick instead of leaving the session lost.
+		l.stampOrphaned(t.id, OrphanReasonDrainTimeout)
 		log.Printf("LOOP: shutdown drain timed out — marked tick %s (project %s) failed", t.id, t.project)
 	}
 	if len(stuck) > 0 {

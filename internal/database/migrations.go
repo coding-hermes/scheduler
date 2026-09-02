@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 20
+const latestMigration = 21
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -288,6 +288,15 @@ ALTER TABLE namespaces ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0 CHEC
 		desc:    "namespace-level model chain: [[namespaces]].model_chain override tier between project and router (Bane 2026-08-27, 3-tier routing)",
 		stmt: `
 ALTER TABLE namespaces ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 21,
+		desc:    "session resume-after-restart (SCHED-GAP-091): orphan tracking + nudge counter on ticks",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN orphaned_at TEXT;
+ALTER TABLE ticks ADD COLUMN orphan_reason TEXT;
+ALTER TABLE ticks ADD COLUMN nudge_count INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }
