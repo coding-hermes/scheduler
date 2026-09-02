@@ -51,6 +51,7 @@ type DuckBrainSync struct {
 	spooled         int    // pending spooled writes (cached from count)
 	alertedDown     bool   // HIGH event already emitted for current outage
 	keyRejectedFlag bool   // API key rejected (SCHED-GAP-072) — sync cycles skipped until a probe succeeds
+	rateLimitedFlag bool   // daemon returned 429 this cycle — sweep stops early, no batch re-blasting
 
 	// pendingSpool buffers failed writes during a sync cycle. They are
 	// flushed to sync_spool AFTER all syncs complete, because sync
@@ -109,6 +110,14 @@ func NewDuckBrainSync(db *sql.DB, namespace, baseURL string) *DuckBrainSync {
 	}
 }
 
+// SetInterval overrides the sync loop interval (used by the -duckbrain-interval
+// schedulerd flag; default remains 5m when never called). Must run before Run.
+func (d *DuckBrainSync) SetInterval(iv time.Duration) {
+	if iv > 0 {
+		d.interval = iv
+	}
+}
+
 // Health returns a snapshot of sync health, safe for concurrent reads.
 func (d *DuckBrainSync) Health() HealthSnapshot {
 	d.mu.Lock()
@@ -159,6 +168,12 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 // + SDLC events + tick lifecycle.
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
+
+	// Fresh cycle: clear last cycle's 429 latch so a recovered daemon
+	// resumes the spool sweep immediately (flag is per-cycle, Bane 2026-09-01).
+	d.mu.Lock()
+	d.rateLimitedFlag = false
+	d.mu.Unlock()
 
 	// Key-rejection gate (SCHED-GAP-072): while the API key is rejected,
 	// skip the whole cycle. Writes would 401 and spooling them is what
@@ -263,6 +278,20 @@ func (d *DuckBrainSync) keyRejected() bool {
 	return d.keyRejectedFlag
 }
 
+// rateLimited reports whether the current cycle already hit a 429.
+func (d *DuckBrainSync) rateLimited() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.rateLimitedFlag
+}
+
+// setRateLimited latches the 429 backpressure state for this cycle.
+func (d *DuckBrainSync) setRateLimited() {
+	d.mu.Lock()
+	d.rateLimitedFlag = true
+	d.mu.Unlock()
+}
+
 // validateKey probes DuckBrain with a cheap, side-effect-free GET
 // (/api/namespaces for this namespace) that exercises the same X-API-Key
 // auth gate as writes (SCHED-GAP-072). Behavior:
@@ -355,6 +384,13 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 	}
 	replayed := 0
 	for _, e := range entries {
+		// Backpressure (Bane 2026-09-01): a 429 means the DuckBrain daemon is
+		// throttling. Stop the sweep immediately — do NOT keep blasting the
+		// remaining batch (which 429s every one of them and burns attempt
+		// counters toward the 50-strike prune). The interval ticker retries.
+		if d.rateLimited() {
+			break
+		}
 		// Parse the original content JSON back into raw bytes for posting.
 		contentJSON := []byte(e.Content)
 		body := map[string]any{
@@ -367,6 +403,10 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 		if postErr != nil {
 			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID, postErr.Error())
 			log.Printf("SYNC: replay %s failed (attempt %d): %v", e.MemKey, e.Attempts+1, postErr)
+			if strings.Contains(postErr.Error(), "duckbrain rate limited (429)") {
+				d.setRateLimited()
+				break
+			}
 			continue
 		}
 		if err := database.DeleteSpooledMemory(ctx, d.db, e.ID); err != nil {

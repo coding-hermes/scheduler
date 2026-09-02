@@ -41,6 +41,7 @@ func main() {
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	duckbrainNS := flag.String("duckbrain-ns", "scheduler", "DuckBrain namespace for sync (Bane 2026-08-27: sync consolidated under the scheduler namespace)")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
+	duckbrainInterval := flag.Duration("duckbrain-interval", 5*time.Minute, "DuckBrain sync interval (spool replay cadence)")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
@@ -300,6 +301,7 @@ func main() {
 	// /api/v1/status (fallback state: reachable, spool depth). Its Run loop
 	// starts later in background (see below).
 	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
+	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
 	// SCHED-GAP-034: snapshot the ACTIVE three-layer config (TOML < env <
