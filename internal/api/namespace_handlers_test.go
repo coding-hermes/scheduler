@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -228,5 +229,58 @@ func TestMoveProjectToNamespace(t *testing.T) {
 	}
 	if p.NamespaceID == nil || *p.NamespaceID != "target-ns" {
 		t.Errorf("namespace_id = %v, want target-ns", p.NamespaceID)
+	}
+}
+
+// --- delete namespace ---
+
+func TestDeleteNamespace(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "retire-me")
+
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/retire-me", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", status, resp)
+	}
+	if resp["status"] != "deleted" {
+		t.Errorf("status field = %v, want deleted", resp["status"])
+	}
+	if resp["namespace"] != "retire-me" {
+		t.Errorf("namespace = %v, want retire-me", resp["namespace"])
+	}
+	// Soft delete: the row is retained with enabled=false, so the namespace
+	// can be restored via PUT enabled=true.
+	ns, err := database.GetNamespace(context.Background(), a.db, "retire-me")
+	if err != nil {
+		t.Fatalf("GetNamespace after delete: %v", err)
+	}
+	if ns.Enabled {
+		t.Errorf("Enabled = true after delete, want false")
+	}
+}
+
+func TestDeleteNamespaceNotFound(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/no-such-ns", nil)
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404: %v", status, resp)
+	}
+	if errMsg, _ := resp["error"].(string); !strings.Contains(errMsg, "not found") {
+		t.Errorf("error = %v, want containing 'not found'", resp["error"])
+	}
+}
+
+func TestDeleteNamespaceWrongMethod(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "keep-me")
+	// PATCH is not a supported method on /namespaces/{id} → 405.
+	status, resp := a.do(t, "PATCH", "/api/v1/namespaces/keep-me", map[string]interface{}{
+		"weight": 40,
+	})
+	if status != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405: %v", status, resp)
+	}
+	if errMsg, _ := resp["error"].(string); errMsg != "GET, PUT, or DELETE only" {
+		t.Errorf("error = %v, want 'GET, PUT, or DELETE only'", resp["error"])
 	}
 }

@@ -566,6 +566,13 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NamespaceNotFound' }
         '405': { $ref: '#/components/responses/NamespaceMethods' }
+    delete:
+      operationId: deleteNamespace
+      responses:
+        '200':
+          description: '{"status":"deleted","namespace":id}'
+        '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '405': { $ref: '#/components/responses/NamespaceMethods' }
   /namespaces/{id}/projects:
     get:
       operationId: listNamespaceProjects
@@ -671,7 +678,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-          example: { error: "GET, PUT, or POST only" }
+          example: { error: "GET, PUT, or DELETE only" }
 ```
 
 ### 11.3 Error Messages
@@ -685,7 +692,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
 || `404` | `"project not found"` | Move references absent project |
 || `409` | `"namespace already exists"` | Duplicate namespace id |
 || `405` | `"GET or POST only"` | Wrong method on /namespaces |
-|| `405` | `"GET, PUT, or POST only"` | Wrong method on /namespaces/{id} |
+|| `405` | `"GET, PUT, or DELETE only"` | Wrong method on /namespaces/{id} |
 || `405` | `"GET only"` | Wrong method on /namespaces/{id}/projects |
 || `405` | `"POST only"` | Wrong method on /namespaces/{id}/move |
 

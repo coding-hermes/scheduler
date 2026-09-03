@@ -59,7 +59,7 @@ func (s *Server) createNamespace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, ns)
 }
 
-// handleNamespaceByID handles GET, PUT on /namespaces/:id and sub-routes.
+// handleNamespaceByID handles GET, PUT, DELETE on /namespaces/:id and sub-routes.
 func (s *Server) handleNamespaceByID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/")
 	parts := splitPath(path)
@@ -96,8 +96,10 @@ func (s *Server) handleNamespaceByID(w http.ResponseWriter, r *http.Request) {
 		s.getNamespace(w, r, id)
 	case http.MethodPut:
 		s.updateNamespace(w, r, id)
+	case http.MethodDelete:
+		s.deleteNamespace(w, r, id)
 	default:
-		writeError(w, 405, "GET or PUT only")
+		writeError(w, 405, "GET, PUT, or DELETE only")
 	}
 }
 
@@ -131,6 +133,21 @@ func (s *Server) updateNamespace(w http.ResponseWriter, r *http.Request, id stri
 	}
 	ns, _ := database.GetNamespace(context.Background(), s.db, id)
 	writeJSON(w, 200, ns)
+}
+
+// deleteNamespace retires a namespace via database soft delete (enabled=0).
+// The row is retained so historical namespace_ticks stay referentially valid;
+// the namespace can be restored with PUT enabled=true.
+func (s *Server) deleteNamespace(w http.ResponseWriter, r *http.Request, id string) {
+	if err := database.DeleteNamespace(context.Background(), s.db, id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, 404, "namespace not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"status": "deleted", "namespace": id})
 }
 
 func (s *Server) listNamespaceProjects(w http.ResponseWriter, r *http.Request, id string) {

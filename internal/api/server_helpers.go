@@ -520,6 +520,15 @@ var openapiSpec = []byte(`{
           "400": {"description": "Invalid JSON"},
           "404": {"description": "Namespace not found"}
         }
+      },
+      "delete": {
+        "summary": "Delete (retire) a namespace — soft delete sets enabled=false, row retained",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{\"status\":\"deleted\",\"namespace\":\"<id>\"}"},
+          "404": {"description": "Namespace not found"},
+          "405": {"description": "Wrong method"}
+        }
       }
     },
     "/api/v1/namespaces/{id}/projects": {
