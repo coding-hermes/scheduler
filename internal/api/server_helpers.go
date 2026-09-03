@@ -561,6 +561,121 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/groups": {
+      "get": {
+        "summary": "List deploy groups (JSONL-backed)",
+        "responses": {
+          "200": {"description": "{\"groups\": [<Group>, ...]} sorted by name"}
+        }
+      },
+      "post": {
+        "summary": "Create a deploy group",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Group"}}}
+        },
+        "responses": {
+          "201": {"description": "Created group"},
+          "400": {"description": "Invalid body (name required, no whitespace)"},
+          "409": {"description": "Group already exists"}
+        }
+      }
+    },
+    "/api/v1/groups/{name}": {
+      "get": {
+        "summary": "Get a deploy group",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Group object"},
+          "404": {"description": "Group not found"}
+        }
+      },
+      "put": {
+        "summary": "Partial-update a deploy group (name is immutable — comes from the path)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GroupUpdate"}}}
+        },
+        "responses": {
+          "200": {"description": "Updated group"},
+          "400": {"description": "Invalid body"},
+          "404": {"description": "Group not found"}
+        }
+      },
+      "delete": {
+        "summary": "Delete a deploy group (JSONL row removed)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Group deleted"},
+          "404": {"description": "Group not found"}
+        }
+      }
+    },
+    "/api/v1/groups/{name}/deploy": {
+      "post": {
+        "summary": "Deploy a template to a group — appends the template's task rows to each member project's .coding-hermes/board/tasks.jsonl. Idempotent per (template, date, project): members whose board already carries the deployment are skipped. dry_run=true returns the plan without writing. One event-log entry per deploy.",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeployRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Per-project deploy results (appended / skipped / error — errors never abort the batch)"},
+          "400": {"description": "Invalid body (template required) or empty group/template"},
+          "404": {"description": "Group or template not found"}
+        }
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "summary": "List deploy templates (JSONL-backed)",
+        "responses": {
+          "200": {"description": "{\"templates\": [<Template>, ...]} sorted by name"}
+        }
+      },
+      "post": {
+        "summary": "Create a deploy template",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Template"}}}
+        },
+        "responses": {
+          "201": {"description": "Created template"},
+          "400": {"description": "Invalid body (name required; at least one task with a title)"},
+          "409": {"description": "Template already exists"}
+        }
+      }
+    },
+    "/api/v1/templates/{name}": {
+      "get": {
+        "summary": "Get a deploy template",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Template object"},
+          "404": {"description": "Template not found"}
+        }
+      },
+      "put": {
+        "summary": "Partial-update a deploy template (name is immutable)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TemplateUpdate"}}}
+        },
+        "responses": {
+          "200": {"description": "Updated template"},
+          "400": {"description": "Invalid body"},
+          "404": {"description": "Template not found"}
+        }
+      },
+      "delete": {
+        "summary": "Delete a deploy template (JSONL row removed)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Template deleted"},
+          "404": {"description": "Template not found"}
+        }
+      }
+    },
     "/api/v1/ticks": {
       "get": {
         "summary": "List ticks with optional filters",
@@ -723,6 +838,66 @@ var openapiSpec = []byte(`{
         "required": ["project"],
         "properties": {
           "project": {"type": "string", "description": "Name of the project to assign to this namespace"}
+        }
+      },
+      "Group": {
+        "type": "object",
+        "required": ["name"],
+        "description": "A named list of scheduler projects a template can be deployed to in one operation. JSONL-backed (groups.jsonl).",
+        "properties": {
+          "name": {"type": "string", "description": "Unique group name (no whitespace)"},
+          "projects": {"type": "array", "items": {"type": "string"}, "description": "Scheduler project names (projects table primary keys)"},
+          "description": {"type": "string"}
+        }
+      },
+      "GroupUpdate": {
+        "type": "object",
+        "description": "Partial group update — only supplied fields are applied (pointer semantics). The name is immutable and comes from the URL path.",
+        "properties": {
+          "projects": {"type": "array", "items": {"type": "string"}},
+          "description": {"type": "string"}
+        }
+      },
+      "Template": {
+        "type": "object",
+        "required": ["name", "tasks"],
+        "description": "A named list of task definitions deployable to every project in a group. JSONL-backed (templates.jsonl).",
+        "properties": {
+          "name": {"type": "string", "description": "Unique template name (no whitespace)"},
+          "description": {"type": "string"},
+          "tasks": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/TemplateTask"},
+            "description": "At least one task required"
+          }
+        }
+      },
+      "TemplateTask": {
+        "type": "object",
+        "required": ["title"],
+        "description": "One task definition inside a template. id_pattern defaults to \"{TEMPLATE}-{DATE}-{PROJECT}-{TASK}\" — placeholders: {TEMPLATE} name, {DATE} UTC YYYYMMDD, {PROJECT} member project, {TASK} 1-based task ordinal. A pattern without a task ordinal gets -{TASK} appended. Title/Detail also substitute {TEMPLATE}/{DATE}/{PROJECT}. Labels become the board row's capability_tags.",
+        "properties": {
+          "id_pattern": {"type": "string"},
+          "title": {"type": "string"},
+          "detail": {"type": "string", "description": "Long-form task spec; written to the board row's reasoning.note (canonical injected-row convention)"},
+          "labels": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "TemplateUpdate": {
+        "type": "object",
+        "description": "Partial template update — only supplied fields are applied. The name is immutable and comes from the URL path.",
+        "properties": {
+          "description": {"type": "string"},
+          "tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TemplateTask"}}
+        }
+      },
+      "DeployRequest": {
+        "type": "object",
+        "required": ["template"],
+        "description": "Body for POST /api/v1/groups/{name}/deploy.",
+        "properties": {
+          "template": {"type": "string", "description": "Name of the template to deploy to every group member"},
+          "dry_run": {"type": "boolean", "default": false, "description": "true = return the plan without writing to any board"}
         }
       },
       "EmptyBody": {

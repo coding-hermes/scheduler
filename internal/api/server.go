@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
@@ -38,6 +39,12 @@ type Server struct {
 	// priority-only scores in that case (tests construct the Server without
 	// SetResolvedConfig).
 	urgencyCalc *scheduler.UrgencyCalculator
+
+	// blocksStore is the JSONL-backed deploy groups/templates store
+	// (internal/blocks). Installed by main.go via SetBlocksStore; when nil
+	// the /api/v1/groups* and /api/v1/templates* endpoints answer 503
+	// (store not configured) instead of panicking.
+	blocksStore *blocks.Store
 }
 
 // NewServer creates an API server.
@@ -64,6 +71,16 @@ func (s *Server) SetDuckBrainHealth(fn func() map[string]interface{}) {
 	s.duckbrainHealth = fn
 }
 
+// SetBlocksStore installs the JSONL-backed deploy groups/templates store
+// served by the /api/v1/groups* and /api/v1/templates* endpoints (including
+// the template deploy action). main.go resolves the store paths (--db dir by
+// default, --groups-file/--templates-file or [scheduler] TOML overrides) and
+// calls this before the HTTP server starts. A Server without a store answers
+// 503 on those routes.
+func (s *Server) SetBlocksStore(st *blocks.Store) {
+	s.blocksStore = st
+}
+
 // Handler returns an http.Handler for all API routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -74,6 +91,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)
+	// JSONL-backed deploy groups + templates (internal/blocks).
+	mux.HandleFunc("/api/v1/groups", s.handleGroups)
+	mux.HandleFunc("/api/v1/groups/", s.handleGroupByID)
+	mux.HandleFunc("/api/v1/templates", s.handleTemplates)
+	mux.HandleFunc("/api/v1/templates/", s.handleTemplateByID)
 	mux.HandleFunc("/api/v1/ticks", s.handleTicks)
 	mux.HandleFunc("/api/v1/ticks/", s.handleTickByID)
 	mux.HandleFunc("/api/v1/evaluate", s.evaluate)

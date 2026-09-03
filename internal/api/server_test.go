@@ -9,12 +9,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
@@ -44,6 +46,13 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 	// tick_id) holds without a live spawn.
 	loop.SetNoExecFallback(true)
 	srv := api.NewServer(db, loop)
+	// Wire a temp-dir JSONL groups/templates store so the new
+	// /api/v1/groups* + /api/v1/templates* routes are live in every test.
+	storeDir := t.TempDir()
+	srv.SetBlocksStore(blocks.NewStore(
+		filepath.Join(storeDir, "groups.jsonl"),
+		filepath.Join(storeDir, "templates.jsonl"),
+	))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -964,7 +973,7 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
-// documentedPaths mirrors the route table in docs/api.md (§4–§10, 19 paths).
+// documentedPaths mirrors the route table in docs/api.md (§4–§10, 24 paths).
 // The openapi.json spec must contain exactly this set — a client generator
 // needs every live route (GAP-057).
 var documentedPaths = []string{
@@ -980,6 +989,11 @@ var documentedPaths = []string{
 	"/api/v1/namespaces/{id}",
 	"/api/v1/namespaces/{id}/projects",
 	"/api/v1/namespaces/{id}/move",
+	"/api/v1/groups",
+	"/api/v1/groups/{name}",
+	"/api/v1/groups/{name}/deploy",
+	"/api/v1/templates",
+	"/api/v1/templates/{name}",
 	"/api/v1/ticks",
 	"/api/v1/ticks/{id}",
 	"/api/v1/events",
@@ -1008,8 +1022,9 @@ func TestAPI_OpenAPI_Success(t *testing.T) {
 		t.Fatalf("openapi.json paths missing or not an object: %v", body["paths"])
 	}
 
-	// (b) path set == docs/api.md route table (19 paths, incl. the two
-	// namespace sub-routes that were missing before GAP-057).
+	// (b) path set == docs/api.md route table (24 paths, incl. the two
+	// namespace sub-routes that were missing before GAP-057 and the five
+	// JSONL groups/templates paths).
 	if len(paths) != len(documentedPaths) {
 		t.Errorf("openapi.json path count = %d, want %d (docs/api.md route table)", len(paths), len(documentedPaths))
 	}
