@@ -27,6 +27,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/mcp"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/sync"
+	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 func main() {
@@ -63,7 +64,15 @@ func main() {
 	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
+	showVersion := flag.Bool("version", false, "Print version/build info and exit")
 	flag.Parse()
+
+	// --version exits before any state is touched (DB, gateway, ports).
+	if *showVersion {
+		fmt.Printf("schedulerd %s (commit: %s, built: %s)\n",
+			version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
+		return
+	}
 
 	// Resolve SCHEDULER_* env-var overrides BEFORE the --schema/--show-config
 	// early exits so those commands print EFFECTIVE values (DOGFOOD-012).

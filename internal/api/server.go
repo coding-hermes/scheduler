@@ -9,6 +9,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 // Server is the HTTP API server for the fleet scheduler.
@@ -135,6 +136,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	httpCount, execCount := s.loop.SpawnMethodCounts()
 	writeJSON(w, 200, map[string]interface{}{
 		"status":                 "ok",
+		"version":                version.Current(),
 		"uptime":                 time.Since(s.started).String(),
 		"db":                     dbOK,
 		"active_ticks":           activeTicks,

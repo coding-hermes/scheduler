@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/scheduler"
+	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 // Server is the MCP-over-HTTP server for Hermes integration.
@@ -227,7 +228,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, req MCPRequest) {
 		},
 		"serverInfo": map[string]interface{}{
 			"name":    "coding-hermes-scheduler",
-			"version": "1.0.0",
+			"version": version.Current(),
 		},
 	})
 }

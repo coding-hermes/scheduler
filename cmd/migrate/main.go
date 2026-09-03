@@ -13,6 +13,7 @@ import (
 
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 // CronJob mirrors the actual Hermes cron job config format.
@@ -38,6 +39,7 @@ func main() {
 	jobsFile := flag.String("jobs", os.ExpandEnv("$HOME/.hermes/cron/jobs.json"), "Path to cron jobs.json")
 	dbFile := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	dryRun := flag.Bool("dry-run", false, "Print what would be imported without writing")
+	showVersion := flag.Bool("version", false, "Print version/build info and exit")
 	flag.Usage = func() {
 		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [flags]\n\n", os.Args[0])
 		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Imports Hermes cron jobs from jobs.json into the scheduler database.\n\n")
@@ -45,6 +47,13 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	// --version exits before any state is touched (DB, jobs file).
+	if *showVersion {
+		fmt.Printf("migrate %s (commit: %s, built: %s)\n",
+			version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
+		return
+	}
 
 	jobs, err := loadJobs(*jobsFile)
 	if err != nil {

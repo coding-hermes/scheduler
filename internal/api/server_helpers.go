@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 // -- helpers --
@@ -364,7 +365,7 @@ var openapiSpec = []byte(`{
   "openapi": "3.0.3",
   "info": {
     "title": "Coding Hermes Scheduler API",
-    "version": "1.0.0",
+    "version": "` + version.Current() + `",
     "description": "REST API for the Coding Hermes fleet scheduler — manage projects, namespaces, ticks, and fleet health."
   },
   "servers": [{"url": "http://127.0.0.1:9090", "description": "Local scheduler daemon"}],

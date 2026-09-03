@@ -1,8 +1,19 @@
 .PHONY: build test test-full run install clean lint fmt migrate deploy deploy-install
 
+# Build identity (KB-GAP-040 class fix): every build target must pass
+# $(LDFLAGS) — bare `go build` falls back to the vcs buildinfo resolver in
+# internal/version, so even ldflags-less builds never report a stale version.
+VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS    := -s -w \
+  -X github.com/coding-hermes/scheduler/internal/version.Version=$(VERSION) \
+  -X github.com/coding-hermes/scheduler/internal/version.Commit=$(COMMIT) \
+  -X github.com/coding-hermes/scheduler/internal/version.BuildDate=$(BUILD_DATE)
+
 build:
-	go build -o bin/schedulerd ./cmd/schedulerd/
-	go build -o bin/migrate ./cmd/migrate/
+	go build -ldflags "$(LDFLAGS)" -o bin/schedulerd ./cmd/schedulerd/
+	go build -ldflags "$(LDFLAGS)" -o bin/migrate ./cmd/migrate/
 
 test:
 	go test -short -count=1 ./...
@@ -14,7 +25,7 @@ run: build
 	./bin/schedulerd
 
 install:
-	go install ./...
+	go install -ldflags "$(LDFLAGS)" ./...
 
 clean:
 	rm -rf bin/
