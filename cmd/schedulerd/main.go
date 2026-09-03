@@ -12,6 +12,7 @@ import (
 	_ "net/http/pprof" // registers handlers on DefaultServeMux
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -56,6 +58,8 @@ func main() {
 	autoDisableRate := flag.Float64("auto-disable-failure-rate", 0, "Per-project failure-rate threshold (0.0–1.0) for auto-disable; 0 = off (SCHED-GAP-018)")
 	autoDisableWindow := flag.Int("auto-disable-window", 100, "Ticks per project over which auto-disable failure rate is computed")
 	autoDisableMinTicks := flag.Int("auto-disable-min-ticks", 50, "Minimum ticks in window before auto-disable can fire")
+	groupsFile := flag.String("groups-file", "", "JSONL file for deploy groups (default <db dir>/groups.jsonl when blocks store enabled; empty = default paths)")
+	templatesFile := flag.String("templates-file", "", "JSONL file for deploy templates (default <db dir>/templates.jsonl when blocks store enabled; empty = default paths)")
 	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
@@ -304,6 +308,17 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// Deploy blocks (groups/templates) JSONL store: default paths next to the
+	// DB when either flag is unset, overridable via --groups-file/--templates-file.
+	// Deploy blocks store: resolve default JSONL paths next to the DB when flags are empty.
+	groupsPath, templatesPath := *groupsFile, *templatesFile
+	if groupsPath == "" {
+		groupsPath = filepath.Join(filepath.Dir(*dbPath), "groups.jsonl")
+	}
+	if templatesPath == "" {
+		templatesPath = filepath.Join(filepath.Dir(*dbPath), "templates.jsonl")
+	}
+	apiServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
 	// SCHED-GAP-034: snapshot the ACTIVE three-layer config (TOML < env <
 	// CLI) for GET /api/v1/config. By this point the flag vars carry the
 	// resolved values — TOML overrides were applied above where flags sat
