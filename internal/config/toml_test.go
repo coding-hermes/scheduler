@@ -609,7 +609,7 @@ func TestApplyFleetConfig_AdaptiveCooldownPins(t *testing.T) {
 
 	// Re-pin with the flag absent flips a previously-on project back OFF —
 	// fleet.toml is the durable switch, mirroring enabled/cooldown_s.
-	p, err = database.GetProject(ctx, db, "adaptive-on")
+	_, err = database.GetProject(ctx, db, "adaptive-on")
 	if err != nil {
 		t.Fatalf("GetProject(adaptive-on): %v", err)
 	}
