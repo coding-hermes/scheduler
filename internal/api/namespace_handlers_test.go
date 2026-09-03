@@ -232,41 +232,247 @@ func TestMoveProjectToNamespace(t *testing.T) {
 	}
 }
 
-// --- delete namespace ---
+// --- delete namespace (SCHED-GAP-097) ---
 
-func TestDeleteNamespace(t *testing.T) {
+// TestDeleteNamespaceNoConfirm verifies DELETE without the confirm=true
+// query param is refused with 400 and an actionable message, and the
+// namespace is left untouched.
+func TestDeleteNamespaceNoConfirm(t *testing.T) {
 	a := newAPITestServer(t)
-	createTestNamespace(t, a.db, "retire-me")
+	createTestNamespace(t, a.db, "doomed")
 
-	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/retire-me", nil)
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/doomed", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+	// Namespace still present and untouched.
+	ns, err := database.GetNamespace(context.Background(), a.db, "doomed")
+	if err != nil {
+		t.Fatalf("GetNamespace after refused delete: %v", err)
+	}
+	if !ns.Enabled {
+		t.Error("namespace disabled by DELETE without confirm")
+	}
+}
+
+// TestDeleteNamespacePurgeWithoutConfirm verifies purge has its OWN confirm
+// requirement: ?purge=true without confirm=true is refused with 400 and the
+// row is left untouched.
+func TestDeleteNamespacePurgeWithoutConfirm(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "purgedummy")
+
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/purgedummy?purge=true", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (purge without confirm): %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+	if _, err := database.GetNamespace(context.Background(), a.db, "purgedummy"); err != nil {
+		t.Errorf("GetNamespace after refused purge: %v", err)
+	}
+}
+
+// TestDeleteNamespaceEnabledMemberRefused verifies a namespace that still has
+// an ENABLED member project is refused with 409 even with confirm=true, the
+// error body lists the member project name, and nothing is changed. The
+// confirm gate runs FIRST: a bare DELETE of the same namespace is 400, not
+// 409.
+func TestDeleteNamespaceEnabledMemberRefused(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "live-ns")
+	mustCreateAPITestProject(t, a.db, "live-member") // enabled
+	nsID := "live-ns"
+	if err := database.UpdateProject(context.Background(), a.db, "live-member", database.ProjectUpdates{NamespaceID: &nsID}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/live-ns", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (confirm checked before enabled-member guard): %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/namespaces/live-ns?confirm=true", nil)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %v", status, resp)
+	}
+	msg, _ = resp["error"].(string)
+	if !strings.Contains(msg, "live-member") {
+		t.Errorf("error = %q, want it to list the enabled member project name", msg)
+	}
+	if !strings.Contains(msg, "pause or move them first") {
+		t.Errorf("error = %q, want the pause-or-move guard message", msg)
+	}
+	// Namespace row intact and still enabled.
+	ns, err := database.GetNamespace(context.Background(), a.db, "live-ns")
+	if err != nil {
+		t.Fatalf("GetNamespace: %v", err)
+	}
+	if !ns.Enabled {
+		t.Error("namespace disabled by refused delete")
+	}
+	// Member still assigned and enabled.
+	p, err := database.GetProject(context.Background(), a.db, "live-member")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.NamespaceID == nil || *p.NamespaceID != "live-ns" {
+		t.Errorf("member namespace_id = %v, want live-ns (must stay assigned)", p.NamespaceID)
+	}
+	if !p.Enabled {
+		t.Error("member disabled by refused delete")
+	}
+}
+
+// TestDeleteNamespaceSoftDeleteUnassignsMember verifies the full guard flow:
+// after the member is paused, confirm=true soft-deletes the namespace (200,
+// status=deleted, row retained with enabled=false) and the member's
+// namespace_id becomes NULL — the retained row never fires the FK ON DELETE
+// SET NULL, so the handler must unassign members explicitly.
+func TestDeleteNamespaceSoftDeleteUnassignsMember(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "retire-ns")
+	mustCreateAPITestProject(t, a.db, "member-a") // enabled
+	nsID := "retire-ns"
+	if err := database.UpdateProject(context.Background(), a.db, "member-a", database.ProjectUpdates{NamespaceID: &nsID}); err != nil {
+		t.Fatalf("assign member: %v", err)
+	}
+	// Pause the member before the delete (the guard's required pre-step).
+	if err := database.UpdateProject(context.Background(), a.db, "member-a", database.ProjectUpdates{Enabled: database.BoolPtr(false)}); err != nil {
+		t.Fatalf("pause member: %v", err)
+	}
+
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/retire-ns?confirm=true", nil)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %v", status, resp)
 	}
 	if resp["status"] != "deleted" {
 		t.Errorf("status field = %v, want deleted", resp["status"])
 	}
-	if resp["namespace"] != "retire-me" {
-		t.Errorf("namespace = %v, want retire-me", resp["namespace"])
+	if resp["namespace"] != "retire-ns" {
+		t.Errorf("namespace field = %v, want retire-ns", resp["namespace"])
 	}
-	// Soft delete: the row is retained with enabled=false, so the namespace
-	// can be restored via PUT enabled=true.
-	ns, err := database.GetNamespace(context.Background(), a.db, "retire-me")
+	// Soft delete: row retained with enabled=false (restorable via PUT).
+	ns, err := database.GetNamespace(context.Background(), a.db, "retire-ns")
 	if err != nil {
 		t.Fatalf("GetNamespace after delete: %v", err)
 	}
 	if ns.Enabled {
-		t.Errorf("Enabled = true after delete, want false")
+		t.Error("namespace still enabled after soft delete")
+	}
+	// Member unassigned: namespace_id NULL.
+	p, err := database.GetProject(context.Background(), a.db, "member-a")
+	if err != nil {
+		t.Fatalf("GetProject after delete: %v", err)
+	}
+	if p.NamespaceID != nil {
+		t.Errorf("member namespace_id after delete = %v, want NULL", p.NamespaceID)
 	}
 }
 
+// TestDeleteNamespacePurgeSuccess verifies confirm=true&purge=true
+// hard-deletes: 200 with status=purged, the row disappears from the DB, a
+// historical namespace_tick survives (its FK is NO ACTION — the purge must
+// disable FK enforcement for the DELETE), the member's namespace_id is NULL,
+// and a purge audit event is logged.
+func TestDeleteNamespacePurgeSuccess(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "purge-ns")
+	mustCreateAPITestProject(t, a.db, "member-b") // enabled
+	nsID := "purge-ns"
+	if err := database.UpdateProject(context.Background(), a.db, "member-b", database.ProjectUpdates{NamespaceID: &nsID}); err != nil {
+		t.Fatalf("assign member: %v", err)
+	}
+	// Pause the member — the guard requires no ENABLED members.
+	if err := database.UpdateProject(context.Background(), a.db, "member-b", database.ProjectUpdates{Enabled: database.BoolPtr(false)}); err != nil {
+		t.Fatalf("pause member: %v", err)
+	}
+	// A historical namespace_tick referencing the namespace — blocks the
+	// DELETE while FK enforcement is on.
+	if err := database.InsertNamespaceTick(context.Background(), a.db, &database.NamespaceTick{
+		TickGroup:   "2026-09-02-00-00-00",
+		NamespaceID: "purge-ns",
+		Allocated:   5,
+		Used:        2,
+		JobCount:    1,
+	}); err != nil {
+		t.Fatalf("InsertNamespaceTick: %v", err)
+	}
+
+	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/purge-ns?confirm=true&purge=true", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", status, resp)
+	}
+	if resp["status"] != "purged" {
+		t.Errorf("status field = %v, want purged", resp["status"])
+	}
+	if resp["namespace"] != "purge-ns" {
+		t.Errorf("namespace field = %v, want purge-ns", resp["namespace"])
+	}
+	// Row gone from the namespaces table.
+	if _, err := database.GetNamespace(context.Background(), a.db, "purge-ns"); err == nil {
+		t.Error("purged namespace still present in DB")
+	}
+	// Member project kept but unassigned: namespace_id NULL.
+	p, err := database.GetProject(context.Background(), a.db, "member-b")
+	if err != nil {
+		t.Fatalf("GetProject after purge: %v", err)
+	}
+	if p.NamespaceID != nil {
+		t.Errorf("member namespace_id after purge = %v, want NULL", p.NamespaceID)
+	}
+	// Historical namespace_tick retained.
+	var n int
+	if err := a.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM namespace_ticks WHERE namespace_id = 'purge-ns'`).Scan(&n); err != nil {
+		t.Fatalf("count namespace_ticks: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("namespace_ticks after purge = %d, want 1 (historical ticks retained)", n)
+	}
+	// Purge audit event logged by the handler (component api, INFO).
+	evs, err := database.ListEvents(context.Background(), a.db, "", "api", 10, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	found := false
+	for _, ev := range evs {
+		if ev.Message == "namespace purged (hard delete): purge-ns" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no purge audit event with message 'namespace purged (hard delete): purge-ns'")
+	}
+}
+
+// TestDeleteNamespaceNotFound verifies an unknown namespace id maps to 404
+// on ANY DELETE variant — bare, confirm=true, and confirm=true&purge=true.
 func TestDeleteNamespaceNotFound(t *testing.T) {
 	a := newAPITestServer(t)
-	status, resp := a.do(t, "DELETE", "/api/v1/namespaces/no-such-ns", nil)
-	if status != http.StatusNotFound {
-		t.Errorf("status = %d, want 404: %v", status, resp)
-	}
-	if errMsg, _ := resp["error"].(string); !strings.Contains(errMsg, "not found") {
-		t.Errorf("error = %v, want containing 'not found'", resp["error"])
+	for _, path := range []string{
+		"/api/v1/namespaces/no-such-ns",
+		"/api/v1/namespaces/no-such-ns?confirm=true",
+		"/api/v1/namespaces/no-such-ns?confirm=true&purge=true",
+	} {
+		status, resp := a.do(t, "DELETE", path, nil)
+		if status != http.StatusNotFound {
+			t.Errorf("DELETE %s: status = %d, want 404: %v", path, status, resp)
+		}
+		if errMsg, _ := resp["error"].(string); !strings.Contains(errMsg, "not found") {
+			t.Errorf("DELETE %s: error = %v, want containing 'not found'", path, resp["error"])
+		}
 	}
 }
 

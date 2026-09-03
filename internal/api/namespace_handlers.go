@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -135,11 +136,25 @@ func (s *Server) updateNamespace(w http.ResponseWriter, r *http.Request, id stri
 	writeJSON(w, 200, ns)
 }
 
-// deleteNamespace retires a namespace via database soft delete (enabled=0).
-// The row is retained so historical namespace_ticks stay referentially valid;
-// the namespace can be restored with PUT enabled=true.
+// deleteNamespace removes a namespace. With only confirm=true it soft-deletes
+// (sets enabled=false; the row is retained so historical namespace_ticks stay
+// referentially valid) and unassigns member projects (namespace_id → NULL —
+// the retained row never fires the FK ON DELETE SET NULL). With
+// confirm=true&purge=true it hard-deletes the row permanently
+// (SCHED-GAP-097): member projects are unassigned and historical
+// namespace_ticks keep their namespace_id. It requires an explicit
+// confirm=true query param (purge has its own confirm requirement —
+// ?purge=true alone is refused just like a bare DELETE) and refuses
+// namespaces that still have ENABLED member projects, so a stray DELETE can
+// never silently unassign live fleet members.
 func (s *Server) deleteNamespace(w http.ResponseWriter, r *http.Request, id string) {
-	if err := database.DeleteNamespace(context.Background(), s.db, id); err != nil {
+	ctx := context.Background()
+	q := r.URL.Query()
+	purge := q.Get("purge") == "true"
+
+	// Existence checked before the confirm gate: an unknown namespace id
+	// 404s on any DELETE variant (bare, confirm, or purge).
+	if _, err := database.GetNamespace(ctx, s.db, id); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "namespace not found")
 			return
@@ -147,7 +162,52 @@ func (s *Server) deleteNamespace(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"status": "deleted", "namespace": id})
+	// Confirm flag checked before the enabled-member guard: even a
+	// namespace with enabled members must not be touched without explicit
+	// confirmation.
+	if q.Get("confirm") != "true" {
+		writeError(w, 400, "confirm=true query param required — this soft-deletes the namespace (enabled=false); add purge=true to permanently remove the row")
+		return
+	}
+	// Enabled-member guard: deleting a namespace that live fleet members
+	// still belong to would silently unassign them — require the operator
+	// to pause or move them first. Disabled members are fine to unassign.
+	members, err := database.ListProjectsByNamespace(ctx, s.db, id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	var enabledNames []string
+	for _, m := range members {
+		if m.Enabled {
+			enabledNames = append(enabledNames, m.Name)
+		}
+	}
+	if len(enabledNames) > 0 {
+		writeError(w, 409, "namespace has enabled project(s) assigned — pause or move them first: "+strings.Join(enabledNames, ", "))
+		return
+	}
+	if purge {
+		if err := database.PurgeNamespace(ctx, s.db, id); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		// The row is gone, so a soft-delete entry makes no sense; log a
+		// purge audit event instead.
+		_ = database.LogEvent(ctx, s.db, &database.Event{
+			Severity:  database.SeverityInfo,
+			Component: "api",
+			Message:   fmt.Sprintf("namespace purged (hard delete): %s", id),
+			Details:   `{"namespace":"` + id + `","action":"purge","via":"DELETE ?confirm=true&purge=true"}`,
+		})
+		writeJSON(w, 200, map[string]string{"status": "purged", "namespace": id})
+		return
+	}
+	if err := database.DeleteNamespace(ctx, s.db, id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "deleted", "namespace": id})
 }
 
 func (s *Server) listNamespaceProjects(w http.ResponseWriter, r *http.Request, id string) {

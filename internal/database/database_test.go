@@ -1140,6 +1140,128 @@ func TestDeleteNamespace_NotFound(t *testing.T) {
 	}
 }
 
+// TestDeleteNamespace_UnassignsMembers pins the SCHED-GAP-097 soft-delete
+// contract: because the row is retained (enabled=0), the projects FK ON
+// DELETE SET NULL never fires — DeleteNamespace must explicitly unassign
+// member projects so they are not left pinned to a dead pool.
+func TestDeleteNamespace_UnassignsMembers(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "retire-ns", Weight: 5, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	nsID := "retire-ns"
+	p := sampleProject("member-x")
+	p.NamespaceID = &nsID
+	p.Enabled = false // disabled member — the state the API guard allows deleting
+	if err := CreateProject(ctx, db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	got, err := GetProject(ctx, db, "member-x")
+	if err != nil {
+		t.Fatalf("GetProject before delete: %v", err)
+	}
+	if got.NamespaceID == nil || *got.NamespaceID != "retire-ns" {
+		t.Fatalf("member namespace_id before delete = %v, want retire-ns", got.NamespaceID)
+	}
+
+	if err := DeleteNamespace(ctx, db, "retire-ns"); err != nil {
+		t.Fatalf("DeleteNamespace: %v", err)
+	}
+
+	// Row retained (soft delete) with enabled=0.
+	ns, err := GetNamespace(ctx, db, "retire-ns")
+	if err != nil {
+		t.Fatalf("GetNamespace after delete: %v", err)
+	}
+	if ns.Enabled {
+		t.Error("namespace still enabled after DeleteNamespace")
+	}
+	// Member unassigned — namespace_id must be NULL.
+	got, err = GetProject(ctx, db, "member-x")
+	if err != nil {
+		t.Fatalf("GetProject after delete: %v", err)
+	}
+	if got.NamespaceID != nil {
+		t.Errorf("member namespace_id after soft delete = %v, want NULL (explicit unassign)", got.NamespaceID)
+	}
+}
+
+// TestPurgeNamespace_HardDelete pins the SCHED-GAP-097 purge contract: the
+// namespace row is removed permanently while historical namespace_ticks
+// (FK NO ACTION) survive, member projects are unassigned, and FK
+// enforcement is restored afterwards.
+func TestPurgeNamespace_HardDelete(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if err := CreateNamespace(ctx, db, &Namespace{ID: "purge-ns", Weight: 5, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	nsID := "purge-ns"
+	p := sampleProject("member-y")
+	p.NamespaceID = &nsID
+	p.Enabled = false
+	if err := CreateProject(ctx, db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	// A historical namespace_tick referencing the namespace — its FK is
+	// NO ACTION, so purge must disable FK enforcement for the DELETE and
+	// the tick must survive the purge.
+	if err := InsertNamespaceTick(ctx, db, &NamespaceTick{
+		TickGroup:   "2026-09-02-00-00-00",
+		NamespaceID: "purge-ns",
+		Allocated:   5,
+		Used:        2,
+		JobCount:    1,
+	}); err != nil {
+		t.Fatalf("InsertNamespaceTick: %v", err)
+	}
+
+	if err := PurgeNamespace(ctx, db, "purge-ns"); err != nil {
+		t.Fatalf("PurgeNamespace: %v", err)
+	}
+
+	// Row is gone from the namespaces table.
+	if _, err := GetNamespace(ctx, db, "purge-ns"); !errors.Is(err, ErrNamespaceNotFound) {
+		t.Fatalf("GetNamespace after purge = %v, want ErrNamespaceNotFound", err)
+	}
+	// Member project retained (only the namespace is purged) but
+	// unassigned — namespace_id must be NULL.
+	got, err := GetProject(ctx, db, "member-y")
+	if err != nil {
+		t.Fatalf("GetProject after purge: %v", err)
+	}
+	if got.NamespaceID != nil {
+		t.Errorf("member namespace_id after purge = %v, want NULL", got.NamespaceID)
+	}
+	// Historical namespace_tick retained.
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM namespace_ticks WHERE namespace_id = 'purge-ns'`).Scan(&n); err != nil {
+		t.Fatalf("count namespace_ticks: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("namespace_ticks for purged namespace = %d, want 1 (historical ticks must be retained)", n)
+	}
+	// FK enforcement restored: an orphan namespace_tick insert is refused.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO namespace_ticks (tick_group, namespace_id, allocated, used, job_count, created_at)
+		 VALUES ('orphan', 'nope', 1, 1, 0, '2026-09-02T00:00:00Z')`); err == nil {
+		t.Error("orphan namespace_tick insert succeeded — foreign keys not restored after purge")
+	}
+}
+
+func TestPurgeNamespace_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	err := PurgeNamespace(ctx, db, "no-such-ns")
+	if !errors.Is(err, ErrNamespaceNotFound) {
+		t.Fatalf("PurgeNamespace(no-such-ns) = %v, want ErrNamespaceNotFound", err)
+	}
+}
+
 // TestMigrate_FallbackChainColumns pins migration v14 (SCHED-GAP-064): the
 // projects table must gain fallback_model/fallback_provider/no_global_fallback
 // so fleet.toml fallback chains persist across restarts.

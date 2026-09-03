@@ -145,6 +145,65 @@ func UpdateNamespace(ctx context.Context, db *sql.DB, id string, patch Namespace
 
 // DeleteNamespace soft-deletes a namespace by setting enabled=0. The row
 // is retained so historical namespace_ticks remain referentially valid.
+// Member projects are explicitly unassigned (namespace_id → NULL): because
+// the row is retained, the projects.namespace_id FK ON DELETE SET NULL
+// (migration v4) never fires — without this update a soft-deleted
+// namespace would keep pinning its members to a dead pool.
 func DeleteNamespace(ctx context.Context, db *sql.DB, id string) error {
-	return UpdateNamespace(ctx, db, id, NamespacePatch{Enabled: BoolPtr(false)})
+	if err := UpdateNamespace(ctx, db, id, NamespacePatch{Enabled: BoolPtr(false)}); err != nil {
+		return err
+	}
+	return UnassignNamespaceProjects(ctx, db, id)
+}
+
+// UnassignNamespaceProjects clears namespace_id on every project assigned
+// to the given namespace. Enabled and disabled members alike are
+// unassigned; the API guard refuses namespaces with enabled members before
+// a delete, so this never silently detaches a live fleet project.
+func UnassignNamespaceProjects(ctx context.Context, db *sql.DB, namespaceID string) error {
+	if _, err := db.ExecContext(ctx,
+		`UPDATE projects SET namespace_id = NULL WHERE namespace_id = ?`, namespaceID); err != nil {
+		return fmt.Errorf("unassign projects from namespace %q: %w", namespaceID, err)
+	}
+	return nil
+}
+
+// PurgeNamespace permanently removes a namespace row from the namespaces
+// table (hard delete — SCHED-GAP-097). Historical namespace_ticks are
+// retained: they reference the namespace by id string, and queries filter
+// to existing namespaces, so a purged namespace's ticks never resurface as
+// ghosts.
+//
+// namespace_ticks.namespace_id is an FK with NO ACTION and 92k+ live rows,
+// so the FK would normally block the DELETE. Purge therefore disables FK
+// enforcement for the duration of the DELETE on the single shared
+// connection (SetMaxOpenConns(1) makes this race-free) and restores it via
+// defer — the same pattern as PurgeProject.
+//
+// Member projects are unassigned explicitly BEFORE the FK-disable window:
+// while foreign_keys=OFF, SQLite does not apply the ON DELETE SET NULL
+// action from migration v4, so the hard delete alone would orphan member
+// rows to a namespace id that no longer exists.
+func PurgeNamespace(ctx context.Context, db *sql.DB, id string) error {
+	if err := UnassignNamespaceProjects(ctx, db, id); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("purge namespace %q: disable foreign keys: %w", id, err)
+	}
+	defer func() { _, _ = db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
+	res, err := db.ExecContext(ctx, `DELETE FROM namespaces WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("purge namespace %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("purge namespace %q: rows affected: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrNamespaceNotFound, id)
+	}
+	return nil
 }

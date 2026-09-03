@@ -522,12 +522,17 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
-        "summary": "Delete (retire) a namespace — soft delete sets enabled=false, row retained",
-        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "summary": "Delete a namespace. confirm=true soft-deletes (enabled=false, row retained, member projects unassigned); confirm=true&purge=true permanently removes the row (SCHED-GAP-097)",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "confirm", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "purge", "in": "query", "required": false, "schema": {"type": "string"}, "description": "true = hard-delete the row permanently; requires confirm=true too; historical namespace_ticks are retained"}
+        ],
         "responses": {
-          "200": {"description": "{\"status\":\"deleted\",\"namespace\":\"<id>\"}"},
+          "200": {"description": "Namespace soft-deleted (enabled=false) or purged (row removed)"},
+          "400": {"description": "Missing confirm=true query param (or purge=true without confirm)"},
           "404": {"description": "Namespace not found"},
-          "405": {"description": "Wrong method"}
+          "409": {"description": "Namespace has enabled project(s) assigned — pause or move them first"}
         }
       }
     },

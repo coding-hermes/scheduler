@@ -568,10 +568,15 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
         '405': { $ref: '#/components/responses/NamespaceMethods' }
     delete:
       operationId: deleteNamespace
+      parameters:
+        - { name: confirm, in: query, required: true, schema: { type: string }, description: 'required — true = this is an intentional delete (soft unless purge=true)' }
+        - { name: purge, in: query, required: false, schema: { type: string }, description: 'true = hard-delete the row permanently; requires confirm=true too; historical namespace_ticks are retained' }
       responses:
         '200':
-          description: '{"status":"deleted","namespace":id}'
+          description: 'Soft delete {"status":"deleted","namespace":id} or purge {"status":"purged","namespace":id}. Soft delete retains the row (enabled=false) and unassigns member projects (namespace_id → NULL); purge removes the row permanently.'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NamespaceNotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '405': { $ref: '#/components/responses/NamespaceMethods' }
   /namespaces/{id}/projects:
     get:
@@ -688,9 +693,11 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
 || `400` | `"namespace id required"` | Create/update with empty id |
 || `400` | `"invalid JSON: <decoder error>"` | POST/PUT body decode failure |
 || `400` | `"project name required"` | Move without project field |
+|| `400` | `"confirm=true query param required — this soft-deletes the namespace (enabled=false); add purge=true to permanently remove the row"` | DELETE namespace omits the confirm flag (or purge=true without confirm) |
 || `404` | `"namespace not found"` | GET/PUT/DELETE on absent namespace |
 || `404` | `"project not found"` | Move references absent project |
 || `409` | `"namespace already exists"` | Duplicate namespace id |
+|| `409` | `"namespace has enabled project(s) assigned — pause or move them first: <names>"` | DELETE namespace with enabled member projects still assigned |
 || `405` | `"GET or POST only"` | Wrong method on /namespaces |
 || `405` | `"GET, PUT, or DELETE only"` | Wrong method on /namespaces/{id} |
 || `405` | `"GET only"` | Wrong method on /namespaces/{id}/projects |
@@ -704,7 +711,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
 - **`PUT /namespaces/{id}`**: Partial update. Omitted fields unchanged. `updated_at` auto-set.
 - **`GET /namespaces/{id}/projects`**: Lists all projects assigned to this namespace (same shape as `GET /projects`).
 - **`POST /namespaces/{id}/move`**: Moves a project into this namespace. Body: `{"project":"<name>"}`. Project must exist. Returns `{"status":"moved","namespace":"<id>","project":"<name>"}`.
-- **Namespace deletion**: Not exposed via API. Use SQLite directly or MCP for safety (prevents accidental mass unassignment).
+- **`DELETE /namespaces/{id}` (SCHED-GAP-097)**: Retires or purges a namespace. Requires `confirm=true` (else `400` — purge has its own confirm requirement: `?purge=true` alone is refused like a bare DELETE). An unknown id returns `404` on any variant. A namespace that still has ENABLED member projects is refused with `409` listing them (pause or move them first); disabled members are fine to unassign. With `confirm=true` only, the namespace is soft-deleted via `database.DeleteNamespace` — `enabled=0`, row retained so historical `namespace_ticks` stay referentially valid, and every member project is explicitly unassigned (`namespace_id → NULL`, since the retained row never fires the projects FK `ON DELETE SET NULL`) — returning `200 {"status":"deleted","namespace":id}`. With `confirm=true&purge=true`, `database.PurgeNamespace` hard-deletes the row permanently (FK enforcement disabled for the DELETE so the `namespace_ticks` NO ACTION FK cannot block it, mirroring `PurgeProject`; member projects are unassigned first), logs an INFO audit event (`namespace purged (hard delete): <id>`, component `api`), and returns `200 {"status":"purged","namespace":id}`.
 
 ### 11.5 Testing
 
