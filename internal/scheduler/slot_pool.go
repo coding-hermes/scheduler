@@ -222,8 +222,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		}
 
 		// Auto-slowdown: if tick signals IDLE, gently slow down.
+		// Adaptive cooldown (opt-in per project) takes precedence when
+		// enabled — it accounts for the tick outcome itself (commits + board
+		// row growth) instead of parsing the VERDICT line, and escalates
+		// well past autoSlowdown's 1h operator-set guard, so the two must
+		// never both run on the same tick.
 		if db != nil {
-			autoSlowdown(db, outcome.Project, &st.Output)
+			if !adaptiveCooldown(db, outcome.Project, proj.Workdir, outcome) {
+				autoSlowdown(db, outcome.Project, &st.Output)
+			}
 		}
 
 		// Timeout notification: log and alert, but do NOT back off.

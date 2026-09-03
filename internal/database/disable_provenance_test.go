@@ -277,26 +277,49 @@ func TestMigration13_BackfillsLegacyDisableProvenance(t *testing.T) {
 	// Pre-upgrade state: schema at v12.
 	applyMigrationsUpTo(t, db, 12)
 
-	// A legacy disabled row (disabled before GAP-044 — empty provenance).
-	if err := CreateProject(ctx, db, sampleProject("legacy-a")); err != nil {
-		t.Fatalf("create legacy-a: %v", err)
+	// insertV12Project inserts a row using ONLY columns that existed at
+	// schema v12 (the era this test simulates). CreateProject now writes the
+	// post-v12 adaptive-cooldown columns (migration v22) and would fail
+	// against this frozen old table — a mid-upgrade binary never creates
+	// projects before Migrate() has caught the schema up, so raw SQL is the
+	// faithful way to seed the legacy state.
+	insertV12Project := func(name string) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `INSERT INTO projects
+			(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
+			 model, provider, worker_model, worker_provider, fallback_model,
+			 fallback_provider, no_global_fallback, idle_model, idle_provider,
+			 daily_budget_usd, weekly_budget_usd, final_budget_usd,
+			 prompt, prompt_mode, command, gateway_key, namespace_id, deliver,
+			 enabled, created_at, updated_at,
+			 last_tick_started, last_tick_completed, consecutive_failures,
+			 disabled_at, disabled_by, disabled_reason)
+			VALUES (?, 'https://github.com/example/' || ?, '/tmp/work/' || ?,
+			 10, 5, 900, 1.0, 'deepseek-v4-pro', 'deepseek-foreman',
+			 '', '', '', '', 0, '', '', 0.0, 0.0, 0.0,
+			 '', 'append', '', '', NULL, '',
+			 1, datetime('now'), datetime('now'),
+			 NULL, NULL, 0, NULL, '', '')`,
+			name, name, name)
+		if err != nil {
+			t.Fatalf("insert legacy v12 project %s: %v", name, err)
+		}
 	}
+
+	// A legacy disabled row (disabled before GAP-044 — empty provenance).
+	insertV12Project("legacy-a")
 	if _, err := db.ExecContext(ctx,
 		`UPDATE projects SET enabled = 0, disabled_by = '', disabled_reason = '', disabled_at = NULL WHERE name = 'legacy-a'`); err != nil {
 		t.Fatalf("legacy disable legacy-a: %v", err)
 	}
 	// A row that already carries provenance — must NOT be touched.
-	if err := CreateProject(ctx, db, sampleProject("stamped-a")); err != nil {
-		t.Fatalf("create stamped-a: %v", err)
-	}
+	insertV12Project("stamped-a")
 	if _, err := db.ExecContext(ctx,
 		`UPDATE projects SET enabled = 0, disabled_by = 'api-pause', disabled_reason = 'paused earlier', disabled_at = '2026-08-14T00:00:00Z' WHERE name = 'stamped-a'`); err != nil {
 		t.Fatalf("disable stamped-a: %v", err)
 	}
 	// An enabled row — must NOT be touched.
-	if err := CreateProject(ctx, db, sampleProject("enabled-a")); err != nil {
-		t.Fatalf("create enabled-a: %v", err)
-	}
+	insertV12Project("enabled-a")
 
 	// Upgrade: Migrate applies v13 (backfill) and any later migrations.
 	if err := Migrate(ctx, db); err != nil {

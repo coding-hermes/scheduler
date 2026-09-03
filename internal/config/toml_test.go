@@ -526,3 +526,103 @@ func TestApplyFleetConfig_IdleChainPins(t *testing.T) {
 		t.Errorf("IdleProvider after re-pin = %q, want opencode-go (set key re-pins)", p.IdleProvider)
 	}
 }
+
+// TestApplyFleetConfig_AdaptiveCooldownPins covers the fleet.toml config
+// surface for adaptive cooldown: explicit keys land on the row, a keyless
+// entry pins the feature OFF (fleet.toml is the durable on/off switch, same
+// doctrine as enabled/cooldown_s), and enabling with only the flag resolves
+// floor/ceiling/threshold to effective values.
+func TestApplyFleetConfig_AdaptiveCooldownPins(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	adaptive := true
+	cfg := &FleetConfig{
+		Projects: []ProjectDef{
+			{
+				Name: "adaptive-on", RepoURL: "https://github.com/example/adaptive-on",
+				Workdir: "/home/kara/adaptive-on", CooldownS: 3600,
+				AdaptiveCooldown:    &adaptive,
+				CooldownFloorS:      7200,
+				CooldownCeilingS:    100000,
+				NoProgressThreshold: 3,
+			},
+			{
+				Name: "adaptive-defaults", RepoURL: "https://github.com/example/adaptive-defaults",
+				Workdir: "/home/kara/adaptive-defaults", CooldownS: 1800,
+				AdaptiveCooldown: &adaptive, // no numeric keys — built-in defaults
+			},
+			{
+				// Keyless entry: adaptive must pin OFF (default).
+				Name: "adaptive-absent", RepoURL: "https://github.com/example/adaptive-absent",
+				Workdir: "/home/kara/adaptive-absent", CooldownS: 900,
+			},
+		},
+	}
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig: %v", err)
+	}
+
+	// Explicit values land verbatim (floor overrides the cooldown snapshot).
+	p, err := database.GetProject(ctx, db, "adaptive-on")
+	if err != nil {
+		t.Fatalf("GetProject(adaptive-on): %v", err)
+	}
+	if !p.AdaptiveCooldown || p.CooldownFloorS != 7200 || p.CooldownCeilingS != 100000 || p.NoProgressThreshold != 3 {
+		t.Errorf("adaptive-on policy = (%v, floor=%d, ceiling=%d, threshold=%d), want (true, 7200, 100000, 3)",
+			p.AdaptiveCooldown, p.CooldownFloorS, p.CooldownCeilingS, p.NoProgressThreshold)
+	}
+
+	// Flag-only enablement resolves to effective defaults on the row.
+	p, err = database.GetProject(ctx, db, "adaptive-defaults")
+	if err != nil {
+		t.Fatalf("GetProject(adaptive-defaults): %v", err)
+	}
+	if !p.AdaptiveCooldown {
+		t.Error("adaptive-defaults adaptive_cooldown = false, want true")
+	}
+	if p.CooldownFloorS != 1800 {
+		t.Errorf("adaptive-defaults floor = %d, want 1800 (default = fleet cooldown_s)", p.CooldownFloorS)
+	}
+	if p.CooldownCeilingS != database.DefaultAdaptiveCooldownCeilingS {
+		t.Errorf("adaptive-defaults ceiling = %d, want %d (built-in weekly)", p.CooldownCeilingS, database.DefaultAdaptiveCooldownCeilingS)
+	}
+	if p.NoProgressThreshold != database.DefaultAdaptiveCooldownThreshold {
+		t.Errorf("adaptive-defaults threshold = %d, want %d (built-in)", p.NoProgressThreshold, database.DefaultAdaptiveCooldownThreshold)
+	}
+
+	// Keyless entries pin the flag off.
+	p, err = database.GetProject(ctx, db, "adaptive-absent")
+	if err != nil {
+		t.Fatalf("GetProject(adaptive-absent): %v", err)
+	}
+	if p.AdaptiveCooldown {
+		t.Error("adaptive-absent adaptive_cooldown = true, want false (absent key = off by default)")
+	}
+	if p.CooldownFloorS != 0 {
+		t.Errorf("adaptive-absent floor = %d, want 0 (policy only materialized when enabled)", p.CooldownFloorS)
+	}
+
+	// Re-pin with the flag absent flips a previously-on project back OFF —
+	// fleet.toml is the durable switch, mirroring enabled/cooldown_s.
+	p, err = database.GetProject(ctx, db, "adaptive-on")
+	if err != nil {
+		t.Fatalf("GetProject(adaptive-on): %v", err)
+	}
+	off := false
+	cfg.Projects[0].AdaptiveCooldown = &off
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (re-pin off): %v", err)
+	}
+	p, err = database.GetProject(ctx, db, "adaptive-on")
+	if err != nil {
+		t.Fatalf("GetProject after re-pin: %v", err)
+	}
+	if p.AdaptiveCooldown {
+		t.Error("adaptive_cooldown = true after re-pin with adaptive_cooldown = false, want false")
+	}
+}

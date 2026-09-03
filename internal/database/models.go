@@ -2,6 +2,27 @@ package database
 
 import "encoding/json"
 
+// Adaptive-cooldown built-in defaults (shared by the DB update layer, which
+// normalizes rows when the feature is enabled, and the scheduler runtime,
+// which falls back to these when a column is 0). Semantics:
+//
+//   - floor:        the base cooldown a project resets to on ANY progress.
+//     0 = unset (normalized to the cooldown_s in force at enable
+//     time); for dynamic (cooldown_s = 0) projects it stays 0
+//     and adaptive only tracks the streak, never escalates.
+//   - ceiling:      escalation cap in seconds. Default is weekly (604800):
+//     a parked project is still re-checked at least weekly.
+//   - threshold:    consecutive no-progress ticks before escalation begins.
+//   - no_progress_ticks: live counter of the consecutive no-progress streak
+//     (observable via the API; reset on any progress).
+//   - board_rows_seen: last observed tasks.jsonl row count (-1 = never
+//     observed) — the "new work" signal for injected board rows.
+const (
+	DefaultAdaptiveCooldownCeilingS  = 604800 // 7 days — parked projects re-checked weekly, never abandoned
+	DefaultAdaptiveCooldownThreshold = 10
+	AdaptiveUnseenBoardRows          = -1 // board_rows_seen sentinel: no baseline yet
+)
+
 // Project is a single managed codebase the scheduler may spawn ticks against.
 // Field ordering matches the projects table column order for scan ergonomics.
 type Project struct {
@@ -51,6 +72,25 @@ type Project struct {
 	// exponential selection backoff (S-GAP-001). Internal scheduler state —
 	// not user-editable via ProjectUpdates.
 	ConsecutiveFailures int `json:"consecutive_failures"`
+
+	// Adaptive-cooldown policy (opt-in per project). When AdaptiveCooldown
+	// is false (the default) the legacy autoSlowdown verdict behavior is
+	// unchanged. When true, the scheduler counts consecutive no-progress
+	// ticks (0 commits AND no new tasks.jsonl rows since the previous tick)
+	// and, once the streak reaches NoProgressThreshold, multiplies the
+	// effective cooldown (cooldown_s) progressively up to CooldownCeilingS.
+	// ANY progress — a non-zero-commit tick or a new board row — resets the
+	// streak and drops cooldown_s back to CooldownFloorS (the speed-up
+	// path: a UPD-* board wave instantly re-accelerates a parked project).
+	// Zero values on the config columns mean "use the built-in default"
+	// (see DefaultAdaptiveCooldown*); the update layer normalizes them to
+	// effective values whenever the feature transitions to enabled.
+	AdaptiveCooldown    bool `json:"adaptive_cooldown"`
+	CooldownFloorS      int  `json:"cooldown_floor_s"`
+	CooldownCeilingS    int  `json:"cooldown_ceiling_s"`
+	NoProgressThreshold int  `json:"no_progress_threshold"`
+	NoProgressTicks     int  `json:"no_progress_ticks"`
+	BoardRowsSeen       int  `json:"board_rows_seen"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are
@@ -140,6 +180,14 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	setString("DisabledAt", &p.DisabledAt)
 	setString("DisabledBy", &p.DisabledBy)
 	setString("DisabledReason", &p.DisabledReason)
+	if !p.AdaptiveCooldown {
+		if raw, ok := legacy["AdaptiveCooldown"]; ok {
+			_ = json.Unmarshal(raw, &p.AdaptiveCooldown)
+		}
+	}
+	setInt("CooldownFloorS", &p.CooldownFloorS)
+	setInt("CooldownCeilingS", &p.CooldownCeilingS)
+	setInt("NoProgressThreshold", &p.NoProgressThreshold)
 	return nil
 }
 

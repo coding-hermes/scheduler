@@ -427,6 +427,19 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				Provider:  &p.Provider,
 				Enabled:   &p.Enabled,
 			}
+			// Adaptive cooldown pins like enabled/cooldown_s: the fleet.toml
+			// entry is authoritative for the flag (absent key = off), so the
+			// file remains the durable on/off switch. Policy numbers pin
+			// only when the file explicitly sets them; projectFromDef already
+			// resolved floor/ceiling/threshold to effective values when the
+			// flag is on, so pass them through — the DB enable-transition
+			// normalization in UpdateProject is a no-op when they are set.
+			updates.AdaptiveCooldown = &p.AdaptiveCooldown
+			if p.AdaptiveCooldown {
+				updates.CooldownFloorS = &p.CooldownFloorS
+				updates.CooldownCeilingS = &p.CooldownCeilingS
+				updates.NoProgressThreshold = &p.NoProgressThreshold
+			}
 			// GatewayKey is pinned ONLY when fleet.toml explicitly sets one —
 			// a per-foreman key assigned via API must never be cleared by a
 			// restart with a keyless fleet.toml entry.
@@ -527,6 +540,11 @@ func projectFromDef(pd ProjectDef) *database.Project {
 	if pd.Enabled != nil {
 		enabled = *pd.Enabled
 	}
+	// Adaptive cooldown is OPT-IN: absent key = false (default off).
+	adaptive := false
+	if pd.AdaptiveCooldown != nil {
+		adaptive = *pd.AdaptiveCooldown
+	}
 
 	p := &database.Project{
 		Name:             pd.Name,
@@ -550,6 +568,27 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		PromptMode:       pd.PromptMode,
 		Deliver:          pd.Deliver,
 		Enabled:          enabled,
+		AdaptiveCooldown: adaptive,
+	}
+	// Normalize the adaptive policy for enabled projects so the stored row
+	// carries EFFECTIVE values: floor = the fleet cooldown, ceiling and
+	// threshold = the built-in defaults when the file omits them.
+	if adaptive {
+		if pd.CooldownFloorS > 0 {
+			p.CooldownFloorS = pd.CooldownFloorS
+		} else {
+			p.CooldownFloorS = cooldown
+		}
+		if pd.CooldownCeilingS > 0 {
+			p.CooldownCeilingS = pd.CooldownCeilingS
+		} else {
+			p.CooldownCeilingS = database.DefaultAdaptiveCooldownCeilingS
+		}
+		if pd.NoProgressThreshold > 0 {
+			p.NoProgressThreshold = pd.NoProgressThreshold
+		} else {
+			p.NoProgressThreshold = database.DefaultAdaptiveCooldownThreshold
+		}
 	}
 	// SCHED-GAP-066: budget caps are opt-in — absent or <= 0 means unlimited,
 	// which is also the schema default (0.0), so only positive values map.

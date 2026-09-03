@@ -28,6 +28,11 @@ final_budget_usd = 0                      # optional: one-time lifetime cap, NEV
 namespace_id = "coding-hermes"            # DuckBrain namespace for context
 deliver = "telegram:-1003310984808:12345" # platform:chat_id:thread_id for delivery
 enabled = true                            # false = excluded from scheduling
+# ── Adaptive cooldown (auto slow-down / speed-up) — OPT-IN ───────────────
+# adaptive_cooldown = true                 # arm the no-progress escalator (absent key = off, unchanged legacy behavior)
+# cooldown_floor_s = 7200                  # base cooldown reset target on ANY progress; 0/absent = the cooldown_s in force when enabled
+# cooldown_ceiling_s = 604800              # escalation cap; 0/absent = 604800 (weekly) — parked projects are re-checked at least weekly, never abandoned
+# no_progress_threshold = 10               # consecutive no-progress ticks (0 commits AND no new tasks.jsonl rows) before cooldown_s doubles per tick; 0/absent = 10
 
 # ── Namespaces ──────────────────────────────────────────────────────────
 

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 21
+const latestMigration = 22
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -297,6 +297,18 @@ ALTER TABLE namespaces ADD COLUMN model_chain TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN orphaned_at TEXT;
 ALTER TABLE ticks ADD COLUMN orphan_reason TEXT;
 ALTER TABLE ticks ADD COLUMN nudge_count INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 22,
+		desc:    "opt-in per-project adaptive cooldown (auto slow-down / speed-up): no-progress streaks escalate cooldown_s to a ceiling; new board rows or commits reset it",
+		stmt: `
+ALTER TABLE projects ADD COLUMN adaptive_cooldown INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN cooldown_floor_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN cooldown_ceiling_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN no_progress_threshold INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN no_progress_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN board_rows_seen INTEGER NOT NULL DEFAULT -1;
 `,
 	},
 }

@@ -202,6 +202,19 @@ type ProjectDef struct {
 	NamespaceID      string   `toml:"namespace_id"` // optional FK → namespaces.id
 	Deliver          string   `toml:"deliver"`
 	Enabled          *bool    `toml:"enabled"` // default true if nil
+	// Adaptive cooldown (auto slow-down / speed-up) — OPT-IN per project.
+	// adaptive_cooldown = true arms the no-progress streak escalator:
+	// no_progress_threshold consecutive ticks with 0 commits AND no new
+	// tasks.jsonl rows multiply cooldown_s by 2 up to cooldown_ceiling_s
+	// (default 604800 = weekly); ANY progress resets cooldown_s to
+	// cooldown_floor_s (default: the cooldown_s in force at enable time).
+	// Zero-valued numeric keys fall back to the built-in defaults. Pinned
+	// like enabled/cooldown_s: a project listed here without
+	// adaptive_cooldown is re-pinned to false at every startup.
+	AdaptiveCooldown    *bool `toml:"adaptive_cooldown"`
+	CooldownFloorS      int   `toml:"cooldown_floor_s"`
+	CooldownCeilingS    int   `toml:"cooldown_ceiling_s"`
+	NoProgressThreshold int   `toml:"no_progress_threshold"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are
