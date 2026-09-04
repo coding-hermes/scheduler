@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 22
+const latestMigration = 23
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -309,6 +309,24 @@ ALTER TABLE projects ADD COLUMN cooldown_ceiling_s INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN no_progress_threshold INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN no_progress_ticks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN board_rows_seen INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		version: 23,
+		desc:    "zombie session reaper (SCHED-GAP-089): sessions table for api_server sessions + backfill ended_at for existing zombies",
+		stmt: `
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    platform   TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    ended_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_zombie ON sessions(ended_at) WHERE ended_at IS NULL;
+
+UPDATE sessions SET ended_at = COALESCE(updated_at, created_at)
+ WHERE ended_at IS NULL AND platform = 'api_server';
 `,
 	},
 }

@@ -42,6 +42,8 @@ func main() {
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
+	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
+	reapSessionsOnly := flag.Bool("reap-sessions-only", false, "Reap zombie sessions in --db once and exit (SCHED-GAP-089)")
 	duckbrainNS := flag.String("duckbrain-ns", "scheduler", "DuckBrain namespace for sync (Bane 2026-08-27: sync consolidated under the scheduler namespace)")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	duckbrainInterval := flag.Duration("duckbrain-interval", 5*time.Minute, "DuckBrain sync interval (spool replay cadence)")
@@ -175,6 +177,23 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
+
+	// SCHED-GAP-089: zombie session reaper. Closes api_server sessions whose
+	// ended_at is still NULL past a configurable age threshold (default 24h).
+	// Runs once at daemon startup; it is idempotent (safe to run repeatedly)
+	// and best-effort — a failure is logged as a warning and must never block
+	// boot. All work happens against the local SQLite --db via the existing
+	// database layer; no external HTTP endpoints are contacted. In
+	// --reap-sessions-only mode we reap once against --db and exit.
+	if *reapSessionsOnly {
+		if _, err := scheduler.ReapZombieSessions(context.Background(), db, *reapThreshold); err != nil {
+			log.Fatalf("FATAL: zombie session reaper: %v", err)
+		}
+		return
+	}
+	if _, err := scheduler.ReapZombieSessions(context.Background(), db, *reapThreshold); err != nil {
+		log.Printf("WARN: zombie session reaper at startup: %v", err)
+	}
 
 	// Declarative fleet seeding: if a fleet.toml was supplied, load and
 	// apply it before any other subsystem touches the DB. Already-existing
