@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -263,6 +264,69 @@ func TestUpdateProject_NotFound(t *testing.T) {
 	err := UpdateProject(ctx, db, "nope", ProjectUpdates{Weight: &w})
 	if !errors.Is(err, ErrProjectNotFound) {
 		t.Fatalf("expected ErrProjectNotFound, got %v", err)
+	}
+}
+
+// SCHED-GAP-095: verify Deliver and ModelChain are writable via PUT.
+func TestUpdateProject_DeliverAndModelChain(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := CreateProject(ctx, db, sampleProject("alpha")); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	deliver := "telegram:-1003310984808:12"
+	chain := `[{"model":"deepseek-v4-flash","provider":"deepseek"},{"model":"glm-5.3-flash","provider":"zai-glm"}]`
+	if err := UpdateProject(ctx, db, "alpha", ProjectUpdates{
+		Deliver:    &deliver,
+		ModelChain: &chain,
+	}); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+
+	got, err := GetProject(ctx, db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Deliver != deliver {
+		t.Errorf("deliver = %q, want %q", got.Deliver, deliver)
+	}
+	if got.ModelChain != chain {
+		t.Errorf("model_chain = %q, want %q", got.ModelChain, chain)
+	}
+
+	// Clear both fields with empty string.
+	empty := ""
+	if err := UpdateProject(ctx, db, "alpha", ProjectUpdates{
+		Deliver:    &empty,
+		ModelChain: &empty,
+	}); err != nil {
+		t.Fatalf("UpdateProject clear: %v", err)
+	}
+	got2, err := GetProject(ctx, db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got2.Deliver != "" {
+		t.Errorf("after clear: deliver = %q, want empty", got2.Deliver)
+	}
+	if got2.ModelChain != "" {
+		t.Errorf("after clear: model_chain = %q, want empty", got2.ModelChain)
+	}
+}
+
+// SCHED-GAP-095: verify legacy PascalCase keys still bind.
+func TestUpdateProject_LegacyPascalCase_Deliver(t *testing.T) {
+	var updates ProjectUpdates
+	data := []byte(`{"Deliver":"sms:+15551234567","ModelChain":"[]"}`)
+	if err := json.Unmarshal(data, &updates); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if updates.Deliver == nil || *updates.Deliver != "sms:+15551234567" {
+		t.Fatalf("Deliver not decoded from PascalCase: %v", updates.Deliver)
+	}
+	if updates.ModelChain == nil || *updates.ModelChain != "[]" {
+		t.Fatalf("ModelChain not decoded from PascalCase: %v", updates.ModelChain)
 	}
 }
 

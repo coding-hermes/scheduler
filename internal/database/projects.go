@@ -95,14 +95,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
+		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen)
@@ -122,7 +122,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -142,7 +142,7 @@ FROM projects`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
+			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
@@ -164,7 +164,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -180,7 +180,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		var nsID sql.NullString
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.IdleModel, &p.IdleProvider,
+			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
@@ -229,6 +229,8 @@ type ProjectUpdates struct {
 	Prompt           *string  `json:"prompt"`       // Bane 2026-08-27: extra foreman prompt; "" clears back to namespace default only
 	PromptMode       *string  `json:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
 	NamespaceID      *string  `json:"namespace_id"` // set to "" to unassign from namespace
+	ModelChain       *string  `json:"model_chain"`  // SCHED-GAP-095: ordered "model@provider" hops (JSON array); "" clears
+	Deliver          *string  `json:"deliver"`      // SCHED-GAP-095: delivery target platform:chat_id:thread_id; "" clears
 	Enabled          *bool    `json:"enabled"`
 	// Disable provenance overrides (GAP-044): when Enabled transitions
 	// true→false, DisabledBy/DisabledReason default to "api"/"disabled via
@@ -351,6 +353,14 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 	if u.NamespaceID == nil {
 		var v string
 		fill("NamespaceID", &v, func() { u.NamespaceID = &v })
+	}
+	if u.ModelChain == nil {
+		var v string
+		fill("ModelChain", &v, func() { u.ModelChain = &v })
+	}
+	if u.Deliver == nil {
+		var v string
+		fill("Deliver", &v, func() { u.Deliver = &v })
 	}
 	if u.Enabled == nil {
 		var v bool
@@ -555,6 +565,14 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.NamespaceID != nil {
 		setClauses = append(setClauses, "namespace_id = ?")
 		args = append(args, *updates.NamespaceID)
+	}
+	if updates.ModelChain != nil {
+		setClauses = append(setClauses, "model_chain = ?")
+		args = append(args, *updates.ModelChain)
+	}
+	if updates.Deliver != nil {
+		setClauses = append(setClauses, "deliver = ?")
+		args = append(args, *updates.Deliver)
 	}
 	if updates.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")

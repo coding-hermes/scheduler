@@ -562,6 +562,29 @@ func TestAPI_UpdateProject_NotFound(t *testing.T) {
 	}
 }
 
+// SCHED-GAP-095: verify PUT /api/v1/projects/{name} accepts deliver and model_chain.
+func TestAPI_UpdateProject_DeliverAndModelChain(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	deliver := "telegram:-1003310984808:12"
+	chain := `[{"model":"deepseek-v4-flash","provider":"deepseek"}]`
+	status, _ := a.do(t, "PUT", "/api/v1/projects/alpha", map[string]interface{}{
+		"deliver":     deliver,
+		"model_chain": chain,
+	})
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	got, _ := database.GetProject(context.Background(), a.db, "alpha")
+	if got.Deliver != deliver {
+		t.Errorf("deliver = %q, want %q", got.Deliver, deliver)
+	}
+	if got.ModelChain != chain {
+		t.Errorf("model_chain = %q, want %q", got.ModelChain, chain)
+	}
+}
+
 func TestAPI_PauseProject_Success(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
