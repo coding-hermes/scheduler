@@ -202,6 +202,17 @@ func (l *Loop) SetSimulation(successRate float64) {
 	}
 }
 
+// SetSimIdleRate sets the fraction of completed sim ticks that carry zero
+// commits, so dry-runs can exercise the adaptive-cooldown slow-down path
+// (Bane 2026-09-06). No-op outside simulation mode.
+func (l *Loop) SetSimIdleRate(rate float64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.simSpawner != nil {
+		l.simSpawner.SetIdleRate(rate)
+	}
+}
+
 // simTickID builds a unique tick ID for a simulated spawn. The sequence
 // suffix guarantees uniqueness even when multiple simulated ticks are
 // generated in the same second (DOGFOOD-007: RunBulkSim crashed with

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -57,6 +59,9 @@ func (sf *SimFixture) TestProjects() []SimProject {
 }
 
 // Setup wipes the projects table and inserts the test fixture.
+// When withBoards is true, each project also gets its own workdir containing a
+// dummy .coding-hermes/board/tasks.jsonl, so the adaptive-cooldown board-row
+// signal (countBoardRows / board_rows_seen) works in dry-runs.
 func (sf *SimFixture) Setup(projects []SimProject) error {
 	if _, err := sf.db.Exec(`DELETE FROM projects`); err != nil {
 		return fmt.Errorf("clear projects: %w", err)
@@ -68,16 +73,40 @@ func (sf *SimFixture) Setup(projects []SimProject) error {
 
 	now := time.Now().Format(time.RFC3339)
 	for _, p := range projects {
+		workdir := "/tmp/sim"
+		// Per-project workdir with a dummy board: gives the adaptive engine a
+		// real board file to observe (baseline → growth → progress reset).
+		if bd, err := ensureSimBoard(p.Name); err == nil {
+			workdir = bd
+		}
 		_, err := sf.db.Exec(`
 			INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, enabled, created_at, updated_at)
-			VALUES (?, 'local:/sim', '/tmp/sim', ?, ?, ?, 1.0, ?, ?, ?)
-		`, p.Name, p.Weight, p.Priority, p.CooldownS, p.Enabled, now, now)
+			VALUES (?, 'local:/sim', ?, ?, ?, ?, 1.0, ?, ?, ?)
+		`, p.Name, workdir, p.Weight, p.Priority, p.CooldownS, p.Enabled, now, now)
 		if err != nil {
 			return fmt.Errorf("insert %s: %w", p.Name, err)
 		}
 	}
 	log.Printf("SIM-SETUP: %d test projects inserted (budget=100, max_concurrent=8)", len(projects))
 	return nil
+}
+
+// ensureSimBoard creates /tmp/sim-boards/<name>/.coding-hermes/board/tasks.jsonl
+// with a couple of dummy rows, returning the workdir path.
+func ensureSimBoard(project string) (string, error) {
+	dir := filepath.Join("/tmp", "sim-boards", project, ".coding-hermes", "board")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	board := filepath.Join(dir, "tasks.jsonl")
+	if _, err := os.Stat(board); os.IsNotExist(err) {
+		rows := fmt.Sprintf("{\"id\": %q-1, \"title\": \"sim seed row 1\", \"status\": \"todo\"}\n"+
+			"{\"id\": %q-2, \"title\": \"sim seed row 2\", \"status\": \"todo\"}\n", project, project)
+		if err := os.WriteFile(board, []byte(rows), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Dir(filepath.Dir(dir)), nil // .../<project> (strip .coding-hermes/board)
 }
 
 // SimRunner runs multi-tick simulations and collects statistics.

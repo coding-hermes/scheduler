@@ -49,6 +49,7 @@ func main() {
 	duckbrainInterval := flag.Duration("duckbrain-interval", 5*time.Minute, "DuckBrain sync interval (spool replay cadence)")
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
+	simIdle := flag.Float64("sim-idle", 0.0, "Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs")
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
 	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
@@ -218,6 +219,7 @@ func main() {
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
 		loop.SetSimulation(*simSuccess)
+		loop.SetSimIdleRate(*simIdle)
 	}
 
 	// Load blackout windows from scheduler config (same TOML as fleet config).
