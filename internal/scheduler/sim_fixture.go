@@ -80,8 +80,8 @@ func (sf *SimFixture) Setup(projects []SimProject) error {
 			workdir = bd
 		}
 		_, err := sf.db.Exec(`
-			INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, enabled, created_at, updated_at)
-			VALUES (?, 'local:/sim', ?, ?, ?, ?, 1.0, ?, ?, ?)
+			INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, enabled, adaptive_cooldown, created_at, updated_at)
+			VALUES (?, 'local:/sim', ?, ?, ?, ?, 1.0, ?, 1, ?, ?)
 		`, p.Name, workdir, p.Weight, p.Priority, p.CooldownS, p.Enabled, now, now)
 		if err != nil {
 			return fmt.Errorf("insert %s: %w", p.Name, err)
@@ -111,8 +111,9 @@ func ensureSimBoard(project string) (string, error) {
 
 // SimRunner runs multi-tick simulations and collects statistics.
 type SimRunner struct {
-	loop    *Loop
-	fixture *SimFixture
+	loop     *Loop
+	fixture  *SimFixture
+	idleRate float64
 }
 
 // NewSimRunner creates a runner bound to an existing loop.
@@ -121,6 +122,13 @@ func NewSimRunner(loop *Loop, fixture *SimFixture) *SimRunner {
 		loop:    loop,
 		fixture: fixture,
 	}
+}
+
+// SetIdleRate sets the fraction of completed sim ticks with zero commits
+// (--sim-idle). Applied when RunMultiTick enables simulation — after the
+// sim spawner exists, so it actually sticks.
+func (sr *SimRunner) SetIdleRate(rate float64) {
+	sr.idleRate = rate
 }
 
 // RunMultiTick runs N evaluation ticks in fast-forward mode.
@@ -133,6 +141,7 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 	}
 
 	sr.loop.SetSimulation(0.85)
+	sr.loop.SetSimIdleRate(sr.idleRate)
 	report := &SimReport{
 		TickCount: tickCount,
 		Budget:    100,

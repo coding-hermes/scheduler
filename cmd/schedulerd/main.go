@@ -318,8 +318,9 @@ func main() {
 	if *simSetup {
 		fixture := scheduler.NewSimFixture(db)
 		runner := scheduler.NewSimRunner(loop, fixture)
+		runner.SetIdleRate(*simIdle)
 
-		simCtx, simCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		simCtx, simCancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer simCancel()
 
 		report, err := runner.RunMultiTick(simCtx, *simTicks)
