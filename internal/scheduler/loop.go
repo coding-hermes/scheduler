@@ -39,9 +39,18 @@ type Loop struct {
 	// or exceeds it. Zero = feature off.
 	autoDisablePolicy autoDisablePolicy
 
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	pauseCh  chan bool
+	mu     sync.RWMutex
+	stopCh chan struct{}
+	// pauseCh is a WAKE signal only (GAP-101): a parked legacy waiter or
+	// ticker stall reacts to it. It carries no state — pause state is the
+	// atomic paused flag. Buffered(1) + non-blocking sends in Pause/Resume.
+	pauseCh chan struct{}
+	// paused is the AUTHORITATIVE pause state (GAP-101, 2026-09-09).
+	// The old channel-only protocol made pauseCh carry both state and
+	// wakeup, so a redundant Resume() was consumed as a pause and wedged
+	// the loop (DOGFOOD-020). State now lives here (atomic.Bool);
+	// pauseCh is a pure, best-effort wake signal.
+	paused   atomic.Bool
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval time.Time
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
@@ -132,7 +141,7 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		weightBudget:    budget,
 		maxConcur:       maxConcur,
 		namespaceMode:   nsMode,
-		pauseCh:         make(chan bool, 1),
+		pauseCh:         make(chan struct{}, 1),
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 		stopGrace:       15 * time.Second,
@@ -333,15 +342,14 @@ func (l *Loop) Run() {
 			log.Println("LOOP: stopping")
 			return
 		case <-l.pauseCh:
-			log.Println("LOOP: paused")
-			select {
-			case <-l.stopCh:
-				return
-			case resume := <-l.pauseCh:
-				if resume {
-					log.Println("LOOP: resumed")
-				}
-			}
+			// GAP-101 (2026-09-09): pauseCh is a pure WAKE signal now.
+			// Pause/resume state lives in the paused flag (see Pause/
+			// Resume); a wake while running (redundant resume) is a
+			// no-op here. The old code treated ANY pauseCh value as
+			// "park now", so a resume-on-a-running-loop wedged the
+			// whole scheduler: "LOOP: paused" logged, slotFreedCh
+			// stopped draining, evaluation triggers died until the
+			// next pause/resume pair (DOGFOOD-020).
 		case <-reaper.C:
 			l.reapZombies()
 		case <-healthTicker.C:
@@ -560,8 +568,31 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	return tickID, nil
 }
 
-func (l *Loop) Pause()  { l.pauseCh <- false }
-func (l *Loop) Resume() { l.pauseCh <- true }
+// Pause suspends evaluation. Transition-only: the state lives in the
+// paused flag; pauseCh is a best-effort wake so a Run() parked on it
+// (legacy) or a stalled ticker reacts. Never blocks on an unread wake.
+func (l *Loop) Pause() {
+	l.paused.Store(true)
+	select {
+	case l.pauseCh <- struct{}{}:
+	default:
+	}
+}
+
+// Resume clears the pause state (GAP-101, 2026-09-09). Redundant resume
+// on a running loop is an idempotent no-op — it MUST NOT flip the loop
+// into a park (the DOGFOOD-020 wedge). Same wake semantics as Pause().
+func (l *Loop) Resume() {
+	l.paused.Store(false)
+	select {
+	case l.pauseCh <- struct{}{}:
+	default:
+	}
+}
+
+// IsPaused reports the authoritative pause state (GAP-101 observability:
+// /api/v1/status can finally distinguish "paused" from "idle").
+func (l *Loop) IsPaused() bool { return l.paused.Load() }
 
 // LastEvalTime returns when the last evaluation ran.
 func (l *Loop) LastEvalTime() time.Time {
@@ -646,6 +677,12 @@ const zeroSelectReEmitGap = 30 * time.Minute
 // non-recovered crossings (see stallMisses), so a single transient miss
 // cannot alarm while a persistently wedged loop still surfaces.
 func (l *Loop) checkEvalStall(running int) {
+	// GAP-101: a deliberately paused loop is healthy-by-choice — lastEval
+	// freezing is expected, never force evaluation against an operator
+	// pause (the old ForceEvaluate path ignored the pause entirely).
+	if l.paused.Load() {
+		return
+	}
 	l.mu.RLock()
 	lastEval := l.lastEval
 	lastForce := l.lastStallForce

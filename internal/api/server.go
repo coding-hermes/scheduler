@@ -190,6 +190,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"budget_total":           100,
 		"active_projects":        len(projects),
 		"active_ticks":           activeTicks,
+		"paused":                 s.loop != nil && s.loop.IsPaused(),
 		"recent_outcomes":        recentOutcomes,
 		"projects_failure_rates": failureRates,
 		"failure_window":         s.failureWindow,

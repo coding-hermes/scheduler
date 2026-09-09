@@ -18,6 +18,17 @@ import (
 func (l *Loop) evaluate() {
 	l.mu.Lock()
 
+	// GAP-101 (2026-09-09): single choke-point gate. ForceEvaluate fires
+	// evaluate() in a raw goroutine — with the old channel-only protocol
+	// a paused loop still spawned (tick count kept growing while paused,
+	// caught by the GAP-101 regression test). The atomic flag makes the
+	// paused state authoritative regardless of entry path.
+	if l.paused.Load() {
+		l.mu.Unlock()
+		log.Println("EVAL: skipped — loop paused")
+		return
+	}
+
 	now := time.Now()
 	l.lastEval = now
 
