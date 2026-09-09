@@ -45,11 +45,12 @@ L3 verify harness: `--test-verify 3` → **✅ SCHEDULER VERIFIED** (6 checks, 0
    --sim-ticks 10` → prints the SIMULATION REPORT and exits. **Known flake:**
    ~1/7 fresh-DB runs FATALs at boot with `clear projects: FOREIGN KEY
    constraint failed (787)` (DOGFOOD-021) — rerun on a clean db path.
-4. **Pause/resume trap (STILL LIVE):** do NOT send `POST /api/v1/resume` to a
-   loop that is not paused — it wedges evaluation (log shows `LOOP: paused`,
-   ticks stop, `paused` stays null in status). Idempotency fix never landed
-   (code unchanged since c8fcb13). Production deployers hit this on
-   restart-when-drained resume steps.
+4. **Pause/resume trap (FIXED 2026-09-09, b4e52d0):** a redundant
+   `POST /api/v1/resume` used to wedge evaluation (SCHED-GAP-101 /
+   DOGFOOD-020). Pause state is now an atomic flag (idempotent
+   Pause/Resume), `evaluate()` gates on it, the stall watchdog stays
+   quiet while paused, and `/api/v1/status` exposes `paused`.
+   Regression: `internal/scheduler/gap101_resume_wedge_test.go`.
 5. **REST dialect:** snake_case, envelopes (`{"projects":[...]}`). PUT accepts
    PascalCase too. MCP = JSON-RPC POST `/mcp`; `fleet_add` now accepts
    `repo_url` as alias (DOGFOOD-019 fixed).
