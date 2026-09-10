@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -23,7 +26,7 @@ import (
 //
 // Behavior (per project, when adaptive_cooldown is enabled):
 //
-//  1. A tick is NO-PROGRESS when it completes with 0 commits AND no new
+//  1. A tick is NO-PROGRESS when it completes with no CODE commits AND no new
 //     board rows since the previous tick. "New board rows" is measured as
 //     growth in the total row count of the workdir's
 //     .coding-hermes/board/tasks.jsonl (the canonical task board) versus the
@@ -34,6 +37,17 @@ import (
 //     progress. Only a net increase in rows means NEW work appeared
 //     (injected between ticks by a UPD-* board task, or appended by this
 //     very tick — either way it is progress).
+//     Commits get the same treatment (SCHED-GAP-104): the foreman's own
+//     board bookkeeping (tasks/events/board jsonl rewrites) is committed
+//     every tick by projects like boardctl, so a raw commits>0 test lets a
+//     permanently idle project self-report progress forever. Commits are
+//     classified by path via git: commits touching ONLY .coding-hermes/ are
+//     bookkeeping (board_commits), anything touching files outside it is
+//     real work (code_commits). Only code_commits count as progress. If git
+//     is unavailable or the window yields nothing while the tick claimed
+//     commits, the tick falls open to the legacy behavior (all commits are
+//     progress) — the detector must never punish honest work over a
+//     measurement gap.
 //  2. After no_progress_threshold consecutive no-progress ticks (default
 //     10), cooldown_s is multiplied by adaptiveCooldownFactor (2x) at each
 //     further no-progress tick, capped at cooldown_ceiling_s (default
@@ -118,7 +132,17 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		}
 	}
 
-	progress := outcome.Commits > 0 || newRows
+	// Commit "real work" signal (SCHED-GAP-104): classify the tick's commits
+	// by path. Bookkeeping-only commits (every path under .coding-hermes/)
+	// never count as progress; only code commits do. Falls open to legacy
+	// behavior (all commits are progress) whenever git measurement fails.
+	codeCommits, boardCommits := persistGitCommitSignals(db, outcome, workdir)
+	if codeCommits < 0 {
+		codeCommits = outcome.Commits // legacy fallback: count them all
+		boardCommits = 0
+	}
+
+	progress := codeCommits > 0 || newRows
 
 	if progress {
 		// Speed-up path: reset the streak and drop any elevated cooldown back
@@ -135,8 +159,8 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 				log.Printf("ADAPTIVE: %s reset write failed: %v", project, err)
 				return true
 			}
-			log.Printf("ADAPTIVE: %s progress (commits=%d new_board_rows=%v) → streak 0, cooldown %ds → %ds (floor)",
-				project, outcome.Commits, newRows, currentCD, floorS)
+			log.Printf("ADAPTIVE: %s progress (code_commits=%d board_commits=%d new_board_rows=%v) → streak 0, cooldown %ds → %ds (floor)",
+				project, codeCommits, boardCommits, newRows, currentCD, floorS)
 		}
 		return true
 	}
@@ -200,4 +224,93 @@ func countBoardRows(workdir string) (int, bool) {
 		}
 	}
 	return count, true
+}
+
+// boardPrefix is the path prefix that marks a file as fleet bookkeeping
+// (board tasks/events, fixture state) rather than product code.
+const boardPrefix = ".coding-hermes/"
+
+// isBoardPath reports whether a repo-relative path is fleet bookkeeping.
+func isBoardPath(p string) bool {
+	return strings.HasPrefix(filepath.ToSlash(p), boardPrefix)
+}
+
+// classifyGitCommits inspects the commits a tick produced in workdir and
+// splits them into code vs board-bookkeeping by touched path. ok is false
+// whenever the measurement is impossible (no git repo, git failure) or
+// untrustworthy (git shows fewer commits than the tick claimed — shallow
+// clones, clock skew) so callers can fall open to legacy behavior instead of
+// punishing honest work over a measurement gap.
+func classifyGitCommits(workdir string, since time.Time, claimed int) (code, board int, ok bool) {
+	if claimed <= 0 {
+		return 0, 0, true // nothing to classify — a valid empty measurement
+	}
+	if workdir == "" {
+		return 0, 0, false
+	}
+	if fi, err := os.Stat(filepath.Join(workdir, ".git")); err != nil || !fi.IsDir() {
+		return 0, 0, false
+	}
+	cmd := exec.Command("git", "-C", workdir, "log",
+		"--since="+since.Format(time.RFC3339),
+		"--pretty=format:@@%H", "--name-only")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, false
+	}
+	total := 0
+	for _, blk := range strings.Split(string(out), "@@") {
+		if strings.TrimSpace(blk) == "" {
+			continue
+		}
+		paths := strings.Split(blk, "\n")[1:] // first line is the hash
+		nonEmpty := make([]string, 0, len(paths))
+		for _, p := range paths {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				nonEmpty = append(nonEmpty, p)
+			}
+		}
+		if len(nonEmpty) == 0 {
+			continue
+		}
+		total++
+		isBoard := true
+		for _, p := range nonEmpty {
+			if !isBoardPath(p) {
+				isBoard = false
+				break
+			}
+		}
+		if isBoard {
+			board++
+		} else {
+			code++
+		}
+	}
+	if total < claimed {
+		// Git under-reports what the tick claimed — do not trust the split.
+		return 0, 0, false
+	}
+	return code, board, true
+}
+
+// persistGitCommitSignals classifies the outcome's commits (classifyGitCommits)
+// and, on a successful measurement, stamps the split onto the tick row for
+// fleet-wide observability. Returns (code, board); code < 0 means the
+// measurement failed and the caller must fall back to legacy behavior.
+func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (code, board int) {
+	code, board, ok := classifyGitCommits(workdir, outcome.Started, outcome.Commits)
+	if !ok {
+		return -1, 0
+	}
+	if outcome.TickID != "" {
+		if _, err := db.Exec(`UPDATE ticks SET code_commits = ?, board_commits = ? WHERE id = ?`,
+			code, board, outcome.TickID); err != nil {
+			// Observability write only — never fail the lifecycle over it.
+			log.Printf("ADAPTIVE: %s tick %s commit-signal write failed: %v",
+				outcome.Project, outcome.TickID, err)
+		}
+	}
+	return code, board
 }

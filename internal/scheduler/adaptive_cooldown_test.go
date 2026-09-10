@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -70,6 +72,45 @@ func writeBoard(t *testing.T, workdir string, rows int) {
 
 func noProgressOutcome(name string) TickOutcome {
 	return TickOutcome{Project: name, Status: TickCompleted, Commits: 0}
+}
+
+// initTickRepo turns workdir into a minimal git repo with one code file and
+// a board file, committing a baseline so later classifications have a diff
+// surface. Returns the git binary invocation prefix for tests.
+func initTickRepo(t *testing.T, workdir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(workdir, ".coding-hermes", "board"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "t"},
+		{"add", "-A"},
+		{"commit", "-m", "baseline", "--allow-empty"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", workdir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// gitCommitFiles stages and commits the given repo-relative paths.
+func gitCommitFiles(t *testing.T, workdir string, files []string, msg string) time.Time {
+	t.Helper()
+	args := make([]string, 0, 3+len(files))
+	args = append(args, "-C", workdir, "add")
+	args = append(args, files...)
+	cmd := exec.Command("git", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", workdir, "commit", "-m", msg, "--allow-empty")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	return time.Now().Add(-time.Minute)
 }
 
 // =============================================================================
@@ -375,6 +416,108 @@ func TestCountBoardRows(t *testing.T) {
 		n, ok := countBoardRows(workdir)
 		if !ok || n != 3 {
 			t.Errorf("countBoardRows = (%d, %v), want (3, true) — every non-empty line is a row", n, ok)
+		}
+	})
+}
+
+// =============================================================================
+// SCHED-GAP-104: commit-anatomy signals. Board-bookkeeping commits must NOT
+// count as progress; only code commits (paths outside .coding-hermes/) do.
+// =============================================================================
+
+func TestAdaptiveCooldown_BoardOnlyCommitIsNotProgress(t *testing.T) {
+	db := slowdownTestDB(t)
+	workdir := t.TempDir()
+	initTickRepo(t, workdir)
+	insertAdaptiveProject(t, db, "self-commit-proj", struct {
+		cooldownS, floorS, ceilingS, threshold, streak, rowsSeen int
+	}{cooldownS: 3600, floorS: 3600, ceilingS: 28800, threshold: 3, streak: 2, rowsSeen: 1})
+	db.Exec(`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('TICK-BO-1','self-commit-proj','running',datetime('now'))`)
+	writeBoard(t, workdir, 1) // board file exists with 1 row (baseline seen)
+
+	// Tick commits ONLY board bookkeeping.
+	gitCommitFiles(t, workdir, []string{".coding-hermes/board/tasks.jsonl"}, "chore: board tick")
+	outcome := noProgressOutcome("self-commit-proj")
+	outcome.Commits = 1
+	outcome.TickID = "TICK-BO-1"
+	outcome.Started = time.Now().Add(-2 * time.Minute)
+	if !adaptiveCooldown(db, "self-commit-proj", workdir, outcome) {
+		t.Fatal("adaptiveCooldown returned false for an armed project")
+	}
+	_, _, _, _, streak, _ := readAdaptiveState(t, db, "self-commit-proj")
+	if streak != 3 {
+		t.Errorf("board-only commit counted as progress: streak=%d, want 3", streak)
+	}
+	// The split must be persisted for observability.
+	var code, board int
+	if err := db.QueryRow(`SELECT code_commits, board_commits FROM ticks WHERE id='TICK-BO-1'`).
+		Scan(&code, &board); err != nil {
+		t.Fatalf("read tick signals: %v", err)
+	}
+	if code != 0 || board != 1 {
+		t.Errorf("persisted split = (%d, %d), want (0, 1)", code, board)
+	}
+}
+
+func TestAdaptiveCooldown_CodeCommitStillResets(t *testing.T) {
+	db := slowdownTestDB(t)
+	workdir := t.TempDir()
+	initTickRepo(t, workdir)
+	insertAdaptiveProject(t, db, "code-proj", struct {
+		cooldownS, floorS, ceilingS, threshold, streak, rowsSeen int
+	}{cooldownS: 7200, floorS: 3600, ceilingS: 57600, threshold: 3, streak: 4, rowsSeen: 1})
+	db.Exec(`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('TICK-CODE-1','code-proj','running',datetime('now'))`)
+	writeBoard(t, workdir, 1)
+
+	// A mixed commit: one code file + one board file.
+	if err := os.WriteFile(filepath.Join(workdir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitFiles(t, workdir, []string{"main.go", ".coding-hermes/board/tasks.jsonl"}, "feat: real work + bookkeep")
+	outcome := noProgressOutcome("code-proj")
+	outcome.Commits = 1
+	outcome.TickID = "TICK-CODE-1"
+	outcome.Started = time.Now().Add(-2 * time.Minute)
+	adaptiveCooldown(db, "code-proj", workdir, outcome)
+	cd, _, _, _, streak, _ := readAdaptiveState(t, db, "code-proj")
+	if streak != 0 {
+		t.Errorf("code commit did not reset streak: streak=%d", streak)
+	}
+	if cd != 3600 {
+		t.Errorf("cooldown not dropped to floor: %d, want 3600", cd)
+	}
+	var code, board int
+	db.QueryRow(`SELECT code_commits, board_commits FROM ticks WHERE id='TICK-CODE-1'`).Scan(&code, &board)
+	if code != 1 || board != 0 {
+		t.Errorf("persisted split = (%d, %d), want (1, 0)", code, board)
+	}
+}
+
+func TestClassifyGitCommits_Fallbacks(t *testing.T) {
+	t.Run("no repo falls open (ok=false)", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(t.TempDir(), time.Now().Add(-time.Hour), 2)
+		if ok {
+			t.Errorf("expected failed measurement, got code=%d board=%d ok=%v", code, board, ok)
+		}
+	})
+	t.Run("zero claimed is a valid empty measurement", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(t.TempDir(), time.Now().Add(-time.Hour), 0)
+		if !ok || code != 0 || board != 0 {
+			t.Errorf("claimed=0 should be (0,0,true), got (%d, %d, %v)", code, board, ok)
+		}
+	})
+	t.Run("non-repo with claimed commits → legacy fallback", func(t *testing.T) {
+		db := slowdownTestDB(t)
+		insertAdaptiveProject(t, db, "norepo", struct {
+			cooldownS, floorS, ceilingS, threshold, streak, rowsSeen int
+		}{cooldownS: 600, floorS: 600, ceilingS: 4800, threshold: 3, streak: 0, rowsSeen: 0})
+		outcome := noProgressOutcome("norepo")
+		outcome.Commits = 1 // claims work but workdir has no git
+		outcome.Started = time.Now().Add(-time.Minute)
+		adaptiveCooldown(db, "norepo", t.TempDir(), outcome)
+		_, _, _, _, streak, _ := readAdaptiveState(t, db, "norepo")
+		if streak != 0 {
+			t.Errorf("unmeasurable commits were treated as no-progress: streak=%d, want 0", streak)
 		}
 	})
 }

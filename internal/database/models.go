@@ -241,6 +241,11 @@ type Tick struct {
 	OrphanedAt   string `json:"orphaned_at,omitempty"`
 	OrphanReason string `json:"orphan_reason,omitempty"`
 	NudgeCount   int    `json:"nudge_count"`
+	// SCHED-GAP-104 commit-anatomy signals: the tick's commits split by
+	// path into product code vs fleet bookkeeping (.coding-hermes/). Only
+	// CodeCommits count as progress for adaptive cooldown.
+	CodeCommits  int `json:"code_commits"`
+	BoardCommits int `json:"board_commits"`
 }
 
 // EventSeverity enumerates the severity tiers for event log entries.

@@ -115,7 +115,7 @@ WHERE id = ?`
 
 // GetTick loads a single tick by id.
 func GetTick(ctx context.Context, db *sql.DB, id string) (*Tick, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at, code_commits, board_commits
 FROM ticks WHERE id = ?`
 	var t Tick
 	var status, outcome string
@@ -123,7 +123,7 @@ FROM ticks WHERE id = ?`
 		&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
-		&t.Error, &t.CreatedAt)
+		&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrTickNotFound, id)
 	}
@@ -140,7 +140,7 @@ FROM ticks WHERE id = ?`
 // limit caps the result count; pass 0 for an unbounded query (the caller
 // should usually bound it).
 func ListTicks(ctx context.Context, db *sql.DB, projectName string, limit int) ([]Tick, error) {
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at, code_commits, board_commits
 FROM ticks`
 	args := []any{}
 	if projectName != "" {
@@ -167,7 +167,7 @@ FROM ticks`
 			&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
-			&t.Error, &t.CreatedAt); err != nil {
+			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits); err != nil {
 			return nil, fmt.Errorf("scan tick row: %w", err)
 		}
 		t.Status = TickStatus(status)
