@@ -251,6 +251,12 @@ const boardPrefix = ".coding-hermes/"
 // Statuses follow the fleet-wide open vocabulary (pending/open/in_progress/
 // claimed/ready/todo/new/rework); unknown or missing statuses default to
 // OPEN so a malformed row never hides open work.
+//
+// Perpetual fixture rows (SCHED-GAP-106) are EXCLUDED: a NEVER-DONE audit
+// fixture is a permanent board resident, not work. Counting it would (a)
+// keep the open-row baseline forever non-zero and (b) mask real net-closed
+// signal. A row is a fixture when its id starts with "NEVER-DONE" (any
+// suffix, case-insensitive) or it carries "perpetual": true.
 func boardOpenRows(workdir string) (int, bool) {
 	boardPath, hasBoard := findBoardFile(workdir)
 	if !hasBoard {
@@ -273,17 +279,23 @@ func boardOpenRows(workdir string) (int, bool) {
 		}
 		if !isJSONL {
 			// Markdown boards: unchecked headers are open, checked are done.
-			if strings.HasPrefix(line, "## [ ] ") {
+			// Fixture rows (NEVER-DONE) are excluded here too.
+			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) {
 				count++
 			}
 			continue
 		}
 		var row struct {
-			Status string `json:"status"`
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			Perpetual bool   `json:"perpetual"`
 		}
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			count++ // malformed row — count as open, never hide work
 			continue
+		}
+		if isFixtureRow(row.ID, row.Perpetual) {
+			continue // permanent fixture — not work (SCHED-GAP-106)
 		}
 		s := strings.ToLower(row.Status)
 		switch s {
@@ -292,6 +304,29 @@ func boardOpenRows(workdir string) (int, bool) {
 		}
 	}
 	return count, true
+}
+
+// neverDonePrefix marks the fleet-standard perpetual audit fixture row
+// (SCHED-GAP-106). Boards carry exactly one; its id may carry a suffix
+// (NEVER-DONE-2, NEVERDONE...). Case-insensitive.
+const neverDonePrefix = "never-done"
+
+// isFixtureRow reports whether a board row is a perpetual fixture: id in the
+// NEVER-DONE family or an explicit perpetual flag. Fixtures are invisible to
+// adaptive cooldown and the pending-work boost — they are always on the
+// board by design and must never keep a finished project fast (or wake one).
+func isFixtureRow(id string, perpetual bool) bool {
+	if perpetual {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(id)), neverDonePrefix)
+}
+
+// isFixtureLine is the markdown-board variant of isFixtureRow: the whole
+// line is available, so the fixture test is a contains on the marker.
+func isFixtureLine(line string) bool {
+	return strings.Contains(strings.ToUpper(line), "NEVER-DONE") ||
+		strings.Contains(strings.ToLower(line), "\"perpetual\": true")
 }
 
 // isBoardPath reports whether a repo-relative path is fleet bookkeeping.

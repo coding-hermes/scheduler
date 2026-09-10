@@ -237,6 +237,19 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
 				continue // malformed line — skip
 			}
+			// SCHED-GAP-106: perpetual fixtures are never pending work.
+			if idRaw, ok := obj["id"]; ok {
+				var id string
+				if json.Unmarshal(idRaw, &id) == nil && isFixtureRow(id, false) {
+					continue
+				}
+			}
+			if perpRaw, ok := obj["perpetual"]; ok {
+				var perp bool
+				if json.Unmarshal(perpRaw, &perp) == nil && perp {
+					continue
+				}
+			}
 			statusRaw, ok := obj["status"]
 			if !ok {
 				continue
@@ -253,7 +266,7 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "## [ ] ") {
+			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) {
 				count++
 			}
 		}
