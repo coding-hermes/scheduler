@@ -70,6 +70,26 @@ func writeBoard(t *testing.T, workdir string, rows int) {
 	}
 }
 
+// writeBoardStatus writes a tasks.jsonl with rows in the given statuses
+// ("open"/"done" shorthand: open→pending, done→complete).
+func writeBoardStatus(t *testing.T, workdir string, open, done int) {
+	t.Helper()
+	dir := filepath.Join(workdir, ".coding-hermes", "board")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir board: %v", err)
+	}
+	var sb strings.Builder
+	for i := 0; i < open; i++ {
+		fmt.Fprintf(&sb, `{"id": "O-%03d", "title": "open %d", "status": "pending"}%s`, i, i, "\n")
+	}
+	for i := 0; i < done; i++ {
+		fmt.Fprintf(&sb, `{"id": "D-%03d", "title": "done %d", "status": "complete"}%s`, i, i, "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tasks.jsonl"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("write board: %v", err)
+	}
+}
+
 func noProgressOutcome(name string) TickOutcome {
 	return TickOutcome{Project: name, Status: TickCompleted, Commits: 0}
 }
@@ -277,14 +297,15 @@ func TestAdaptiveCooldown_CommitResets(t *testing.T) {
 	}
 }
 
-// TestAdaptiveCooldown_BoardRowReset verifies the speed-up path that matters
-// for the fleet: a NEW board row (e.g. a UPD-* wave injected between ticks)
-// resets an escalated project even when the tick itself committed nothing.
-func TestAdaptiveCooldown_BoardRowReset(t *testing.T) {
+// TestAdaptiveCooldown_BoardInjectionIsNotProgress pins the SCHED-GAP-105
+// semantics: sibling crons (qa-cron, error-scanner) injecting new rows onto
+// the board must NOT reset the no-progress streak — injection is input, not
+// output. Only the foreman closing rows (open count down) counts.
+func TestAdaptiveCooldown_BoardInjectionIsNotProgress(t *testing.T) {
 	db := slowdownTestDB(t)
 	workdir := t.TempDir()
-	writeBoard(t, workdir, 3)
-	insertAdaptiveProject(t, db, "board-reset", struct {
+	writeBoardStatus(t, workdir, 3, 0)
+	insertAdaptiveProject(t, db, "board-inject", struct {
 		cooldownS int
 		floorS    int
 		ceilingS  int
@@ -293,27 +314,24 @@ func TestAdaptiveCooldown_BoardRowReset(t *testing.T) {
 		rowsSeen  int
 	}{cooldownS: 600, floorS: 600, ceilingS: 604800, threshold: 1, rowsSeen: 3})
 
-	// Escalate to 1200 (no-progress tick, board unchanged at 3 rows).
-	adaptiveCooldown(db, "board-reset", workdir, noProgressOutcome("board-reset"))
-	cd, _, _, _, streak, rowsSeen := readAdaptiveState(t, db, "board-reset")
+	// Escalate to 1200 (no-progress tick, open rows unchanged at 3).
+	adaptiveCooldown(db, "board-inject", workdir, noProgressOutcome("board-inject"))
+	cd, _, _, _, streak, rowsSeen := readAdaptiveState(t, db, "board-inject")
 	if cd != 1200 || streak != 1 || rowsSeen != 3 {
 		t.Fatalf("precondition: cooldown=%d streak=%d rowsSeen=%d, want 1200/1/3", cd, streak, rowsSeen)
 	}
 
-	// A UPD-* board task injects two new rows between ticks.
-	writeBoard(t, workdir, 5)
+	// A sibling cron injects two new open rows between ticks (3→5 total).
+	writeBoardStatus(t, workdir, 5, 0)
 
-	// The next tick commits nothing but the board grew — reset to the floor.
-	handled := adaptiveCooldown(db, "board-reset", workdir, noProgressOutcome("board-reset"))
-	if !handled {
-		t.Fatal("adaptiveCooldown returned false")
+	// The next tick commits nothing and the board grew — NO reset.
+	adaptiveCooldown(db, "board-inject", workdir, noProgressOutcome("board-inject"))
+	cd, _, _, _, streak, rowsSeen = readAdaptiveState(t, db, "board-inject")
+	if cd != 2400 {
+		t.Errorf("cooldown = %d, want 2400 (injection is NOT progress — streak escalates)", cd)
 	}
-	cd, _, _, _, streak, rowsSeen = readAdaptiveState(t, db, "board-reset")
-	if cd != 600 {
-		t.Errorf("cooldown = %d, want 600 (reset to floor on new board rows)", cd)
-	}
-	if streak != 0 {
-		t.Errorf("no_progress_ticks = %d, want 0", streak)
+	if streak != 2 {
+		t.Errorf("no_progress_ticks = %d, want 2", streak)
 	}
 	if rowsSeen != 5 {
 		t.Errorf("board_rows_seen = %d, want 5 (baseline advanced)", rowsSeen)
@@ -518,6 +536,90 @@ func TestClassifyGitCommits_Fallbacks(t *testing.T) {
 		_, _, _, _, streak, _ := readAdaptiveState(t, db, "norepo")
 		if streak != 0 {
 			t.Errorf("unmeasurable commits were treated as no-progress: streak=%d, want 0", streak)
+		}
+	})
+}
+
+// =============================================================================
+// SCHED-GAP-105: open-row completion signal. The board proves output when the
+// foreman CLOSES rows (open count decreases), not when rows are added.
+// =============================================================================
+
+func TestAdaptiveCooldown_BoardCompletionResets(t *testing.T) {
+	db := slowdownTestDB(t)
+	workdir := t.TempDir()
+	writeBoardStatus(t, workdir, 5, 2)
+	insertAdaptiveProject(t, db, "closer", struct {
+		cooldownS int
+		floorS    int
+		ceilingS  int
+		threshold int
+		streak    int
+		rowsSeen  int
+	}{cooldownS: 1200, floorS: 600, ceilingS: 604800, threshold: 3, streak: 3, rowsSeen: 7})
+
+	// Establish the open baseline (first observation must not fire progress).
+	adaptiveCooldown(db, "closer", workdir, noProgressOutcome("closer"))
+
+	// Foreman closes 2 of 5 open rows (no code commits).
+	writeBoardStatus(t, workdir, 3, 4)
+	adaptiveCooldown(db, "closer", workdir, noProgressOutcome("closer"))
+
+	cd, _, _, _, streak, _ := readAdaptiveState(t, db, "closer")
+	if streak != 0 {
+		t.Errorf("streak = %d, want 0 (net open-row decrease is progress)", streak)
+	}
+	if cd != 600 {
+		t.Errorf("cooldown = %d, want 600 (dropped to floor)", cd)
+	}
+}
+
+func TestAdaptiveCooldown_BoardCompletionBaselineNotFired(t *testing.T) {
+	db := slowdownTestDB(t)
+	workdir := t.TempDir()
+	writeBoardStatus(t, workdir, 5, 0)
+	insertAdaptiveProject(t, db, "baseline-open", struct {
+		cooldownS int
+		floorS    int
+		ceilingS  int
+		threshold int
+		streak    int
+		rowsSeen  int
+	}{cooldownS: 600, floorS: 600, ceilingS: 604800, threshold: 3, streak: 0, rowsSeen: 5})
+
+	// First-ever observation: open baseline unseen (-1) — must NOT count the
+	// mere existence of open rows as progress.
+	adaptiveCooldown(db, "baseline-open", workdir, noProgressOutcome("baseline-open"))
+	_, _, _, _, streak, _ := readAdaptiveState(t, db, "baseline-open")
+	if streak != 1 {
+		t.Errorf("streak = %d, want 1 (first observation establishes baseline only)", streak)
+	}
+}
+
+func TestBoardOpenRows(t *testing.T) {
+	t.Run("counts by status vocabulary", func(t *testing.T) {
+		dir := t.TempDir()
+		writeBoardStatus(t, dir, 2, 1) // 2 pending + 1 complete
+		n, ok := boardOpenRows(dir)
+		if !ok || n != 2 {
+			t.Errorf("boardOpenRows = (%d, %v), want (2, true)", n, ok)
+		}
+	})
+	t.Run("missing board", func(t *testing.T) {
+		n, ok := boardOpenRows(t.TempDir())
+		if ok || n != 0 {
+			t.Errorf("boardOpenRows(empty) = (%d, %v), want (0, false)", n, ok)
+		}
+	})
+	t.Run("malformed row counts as open", func(t *testing.T) {
+		dir := t.TempDir()
+		d := filepath.Join(dir, ".coding-hermes", "board")
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "tasks.jsonl"),
+			[]byte(`{"id":"X","title":"broken"`+"\n"+`{"id":"Y","title":"ok","status":"complete"}`+"\n"), 0o644)
+		n, ok := boardOpenRows(dir)
+		if !ok || n != 1 {
+			t.Errorf("boardOpenRows = (%d, %v), want (1, true) — broken row stays visible", n, ok)
 		}
 	})
 }

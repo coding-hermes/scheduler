@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bufio"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"os"
 	"os/exec"
@@ -54,12 +55,14 @@ import (
 //     604800 = weekly). The project stays in normal cooldown mechanics the
 //     whole time (the packer just reads cooldown_s), so it keeps getting
 //     re-checked — it can never be abandoned.
-//  3. ANY progress — a non-zero-commit tick OR a board row-count increase —
-//     resets the streak to 0 and, when cooldown_s is above the floor
-//     (cooldown_floor_s, defaulted to the cooldown in force at enable time),
-//     drops it straight back to the floor. This is the speed-up path: the
-//     moment UPD-* work lands on the board, the very next tick snaps the
-//     project back to its base cadence.
+//  3. ANY progress — a code-commit tick OR a net DECREASE in open board rows
+//     (the project closed work) — resets the streak to 0 and, when cooldown_s
+//     is above the floor (cooldown_floor_s, defaulted to the cooldown in
+//     force at enable time), drops it straight back to the floor. This is
+//     the speed-up path: the moment the foreman completes backlog work or
+//     lands code, the very next tick snaps the project back to its base
+//     cadence. Row-count GROWTH is deliberately NOT progress (SCHED-GAP-105):
+//     growth is injection (sibling crons filing findings), not output.
 //
 // Failed spawns never reach this code (the slot-pool spawn-error path
 // completes TickFailed and returns early), so spawn-failure backoff
@@ -92,12 +95,13 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		threshold int
 		streak    int
 		rowsSeen  int
+		openSeen  int
 		currentCD int
 	)
 	err := db.QueryRow(`SELECT adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s,
-	       no_progress_threshold, no_progress_ticks, board_rows_seen, cooldown_s
+	       no_progress_threshold, no_progress_ticks, board_rows_seen, board_open_seen, cooldown_s
 	FROM projects WHERE name = ?`, project).
-		Scan(&adaptive, &floorS, &ceilingS, &threshold, &streak, &rowsSeen, &currentCD)
+		Scan(&adaptive, &floorS, &ceilingS, &threshold, &streak, &rowsSeen, &openSeen, &currentCD)
 	if err != nil {
 		return false // project gone or unreadable — let legacy autoSlowdown no-op too
 	}
@@ -114,21 +118,32 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		threshold = database.DefaultAdaptiveCooldownThreshold
 	}
 
-	// Board "new work" signal: did tasks.jsonl gain rows since the previous
-	// tick's observation? Unknown baseline (-1) or a missing board file never
-	// reports progress; only a net row-count increase does.
-	newRows := false
+	// Board "new work" signal (SCHED-GAP-105): track OPEN rows, not total
+	// rows. Total-row growth cannot distinguish "my foreman finished work"
+	// from "a sibling cron injected findings onto my board" — injection
+	// streams (qa-cron, error-scanner) would reset a no-output streak
+	// forever. Direction is the signal:
+	//   open rows DECREASED → this project closed net work  → progress
+	//   open rows increased/equal → injections or churn, no output → no progress
+	// Unknown baseline (-1) or a missing board file never reports progress.
+	netClosed := false
 	rowsNow, hasBoard := countBoardRows(workdir)
 	if hasBoard {
-		if rowsSeen >= 0 && rowsNow > rowsSeen {
-			newRows = true
-		}
-		// Record the observation for the next tick regardless (a board that
+		// Record the total-row observation for observability (a board that
 		// disappeared mid-observation keeps its old baseline — the rows did
 		// not disappear in reality, the read failed).
 		if _, err := db.Exec(`UPDATE projects SET board_rows_seen = ? WHERE name = ?`,
 			rowsNow, project); err != nil {
 			log.Printf("ADAPTIVE: %s board_rows_seen update failed: %v", project, err)
+		}
+	}
+	if openNow, openOK := boardOpenRows(workdir); openOK {
+		if openSeen >= 0 && openNow < openSeen {
+			netClosed = true // net completions — the board itself proves output
+		}
+		if _, err := db.Exec(`UPDATE projects SET board_open_seen = ? WHERE name = ?`,
+			openNow, project); err != nil {
+			log.Printf("ADAPTIVE: %s board_open_seen update failed: %v", project, err)
 		}
 	}
 
@@ -142,7 +157,7 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		boardCommits = 0
 	}
 
-	progress := codeCommits > 0 || newRows
+	progress := codeCommits > 0 || netClosed
 
 	if progress {
 		// Speed-up path: reset the streak and drop any elevated cooldown back
@@ -159,8 +174,8 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 				log.Printf("ADAPTIVE: %s reset write failed: %v", project, err)
 				return true
 			}
-			log.Printf("ADAPTIVE: %s progress (code_commits=%d board_commits=%d new_board_rows=%v) → streak 0, cooldown %ds → %ds (floor)",
-				project, codeCommits, boardCommits, newRows, currentCD, floorS)
+			log.Printf("ADAPTIVE: %s progress (code_commits=%d board_commits=%d net_board_closed=%v) → streak 0, cooldown %ds → %ds (floor)",
+				project, codeCommits, boardCommits, netClosed, currentCD, floorS)
 		}
 		return true
 	}
@@ -229,6 +244,55 @@ func countBoardRows(workdir string) (int, bool) {
 // boardPrefix is the path prefix that marks a file as fleet bookkeeping
 // (board tasks/events, fixture state) rather than product code.
 const boardPrefix = ".coding-hermes/"
+
+// boardOpenRows counts rows whose status is open/pending/in-progress etc. in
+// the project board in workdir. ok is false when the board is missing or
+// unreadable — callers must treat the observation as absent, not zero.
+// Statuses follow the fleet-wide open vocabulary (pending/open/in_progress/
+// claimed/ready/todo/new/rework); unknown or missing statuses default to
+// OPEN so a malformed row never hides open work.
+func boardOpenRows(workdir string) (int, bool) {
+	boardPath, hasBoard := findBoardFile(workdir)
+	if !hasBoard {
+		return 0, false
+	}
+	f, err := os.Open(boardPath)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	count := 0
+	isJSONL := strings.HasSuffix(boardPath, ".jsonl")
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if !isJSONL {
+			// Markdown boards: unchecked headers are open, checked are done.
+			if strings.HasPrefix(line, "## [ ] ") {
+				count++
+			}
+			continue
+		}
+		var row struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			count++ // malformed row — count as open, never hide work
+			continue
+		}
+		s := strings.ToLower(row.Status)
+		switch s {
+		case "", "pending", "open", "in_progress", "in-progress", "claimed", "ready", "todo", "new", "rework":
+			count++
+		}
+	}
+	return count, true
+}
 
 // isBoardPath reports whether a repo-relative path is fleet bookkeeping.
 func isBoardPath(p string) bool {

@@ -11,7 +11,9 @@ import (
 
 // TestAdaptiveFullCycleVerification — Bane 2026-09-06 full-cycle dry-run proof.
 // Drives the REAL adaptiveCooldown engine (not a copy): slow-down doubling to ceiling,
-// instant reset on commit progress, opt-out isolation, board-rows speed-up path.
+// instant reset on commit progress, opt-out isolation, board-completion speed-up path.
+// SCHED-GAP-105 (2026-09-10): board progress = net open-row DECREASE (completions),
+// not row growth — injection is input, not output.
 func TestAdaptiveFullCycleVerification(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "sim.db"))
@@ -21,7 +23,8 @@ func TestAdaptiveFullCycleVerification(t *testing.T) {
 	defer db.Close()
 	if _, err := db.Exec(`CREATE TABLE projects (name TEXT PRIMARY KEY, adaptive_cooldown INTEGER DEFAULT 0,
 		cooldown_floor_s INTEGER DEFAULT 0, cooldown_ceiling_s INTEGER DEFAULT 0, no_progress_threshold INTEGER DEFAULT 0,
-		no_progress_ticks INTEGER DEFAULT 0, board_rows_seen INTEGER DEFAULT -1, cooldown_s INTEGER DEFAULT 0)`); err != nil {
+		no_progress_ticks INTEGER DEFAULT 0, board_rows_seen INTEGER DEFAULT -1, board_open_seen INTEGER DEFAULT -1,
+		cooldown_s INTEGER DEFAULT 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO projects (name, adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s,
@@ -72,30 +75,39 @@ func TestAdaptiveFullCycleVerification(t *testing.T) {
 		t.Fatalf("T8: adaptive=0 must stay untouched, got %d/%d", s, cd)
 	}
 
-	// T9: BOARD-ROW PROGRESS — crons push work → instant speed-up (reset path)
+	// T9: BOARD-COMPLETION PROGRESS — the foreman CLOSES rows → instant
+	// speed-up (reset path). Row GROWTH (injection) must NOT reset (T10).
 	wd := t.TempDir()
 	boardDir := filepath.Join(wd, ".coding-hermes", "board")
 	if err := os.MkdirAll(boardDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// First observation: baseline (board absent → hasBoard=false, baseline stays -1)
+	// First observation on an absent board: baseline stays -1 (no signal).
 	adaptiveCooldown(db, "armed", wd, TickOutcome{Commits: 0})
-	// Create the board with 3 rows → net increase over -1? No: baseline -1 means "unknown",
-	// first observation records baseline only. Second call after growth proves progress.
+	// Create the board: 3 open rows → establishes the open baseline only.
 	if err := os.WriteFile(filepath.Join(boardDir, "tasks.jsonl"),
-		[]byte("{\"id\":\"A\"}\n{\"id\":\"B\"}\n{\"id\":\"C\"}\n"), 0o644); err != nil {
+		[]byte("{\"id\":\"A\",\"status\":\"pending\"}\n{\"id\":\"B\",\"status\":\"pending\"}\n{\"id\":\"C\",\"status\":\"pending\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	adaptiveCooldown(db, "armed", wd, TickOutcome{Commits: 0}) // baseline now 3
-	// Push new work like the stand-in PM/crons do:
-	f, _ := os.OpenFile(filepath.Join(boardDir, "tasks.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-	f.WriteString("{\"id\":\"D\"}\n")
+	adaptiveCooldown(db, "armed", wd, TickOutcome{Commits: 0}) // open baseline now 3
+	// The foreman closes 2 of 3 open rows (marks them complete in place):
+	f, _ := os.OpenFile(filepath.Join(boardDir, "tasks.jsonl"), os.O_TRUNC|os.O_WRONLY, 0o644)
+	f.WriteString("{\"id\":\"A\",\"status\":\"complete\"}\n{\"id\":\"B\",\"status\":\"complete\"}\n{\"id\":\"C\",\"status\":\"pending\"}\n")
 	f.Close()
-	// streak was 1 after the two idle-ish ticks above; new rows must RESET it (progress)
+	// Open went 3→1: net completions must RESET the streak (progress).
 	adaptiveCooldown(db, "armed", wd, TickOutcome{Commits: 0})
 	if s, cd := get("armed"); s != 0 {
-		t.Fatalf("T9: new board rows must reset streak to 0, got %d", s)
+		t.Fatalf("T9: board completion (open 3→1) must reset streak to 0, got %d", s)
 	} else if cd != 60 {
 		t.Logf("T9 note: cooldown=%d (floor reset only applies when elevated)", cd)
+	}
+	// T10: INJECTION IS NOT PROGRESS — a sibling cron appends a new open row;
+	// the streak must build, not reset.
+	f, _ = os.OpenFile(filepath.Join(boardDir, "tasks.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("{\"id\":\"D\",\"status\":\"pending\"}\n")
+	f.Close()
+	adaptiveCooldown(db, "armed", wd, TickOutcome{Commits: 0})
+	if s, _ := get("armed"); s != 1 {
+		t.Fatalf("T10: injection (open 1→2) must NOT reset streak, want 1, got %d", s)
 	}
 }

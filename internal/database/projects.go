@@ -456,9 +456,10 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 			return fmt.Errorf("read current adaptive state for %q: %w", name, err)
 		}
 		if curAdaptive == 0 {
-			// Fresh enablement — reset the runtime streak.
+			// Fresh enablement — reset the runtime streak and both board
+			// baselines (SCHED-GAP-105: open-row baseline joins the reset).
 			setClauses = append(setClauses,
-				"no_progress_ticks = 0", "board_rows_seen = -1")
+				"no_progress_ticks = 0", "board_rows_seen = -1", "board_open_seen = -1")
 			if updates.CooldownFloorS == nil && curCD > 0 {
 				floor := curCD
 				updates.CooldownFloorS = &floor

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 24
+const latestMigration = 25
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -335,6 +335,13 @@ UPDATE sessions SET ended_at = COALESCE(updated_at, created_at)
 		stmt: `
 ALTER TABLE ticks ADD COLUMN code_commits INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ticks ADD COLUMN board_commits INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 25,
+		desc:    "open-row baseline (SCHED-GAP-105): track open board rows so completion (not injection) is the board progress signal",
+		stmt: `
+ALTER TABLE projects ADD COLUMN board_open_seen INTEGER NOT NULL DEFAULT -1;
 `,
 	},
 }
