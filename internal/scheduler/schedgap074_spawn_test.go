@@ -41,7 +41,11 @@ func TestSpawn_GatewaySendsTickIDAsSessionKey(t *testing.T) {
 			"id":     "resp_sgap074",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  800,
+				"output_tokens": 20,
+				"total_tokens":  820,
+			},
 		})
 	}))
 	defer srv.Close()

@@ -88,7 +88,11 @@ func (g *gatewayKeyGuardServer) handler() http.HandlerFunc {
 				"id":     "resp_gap035",
 				"status": "completed",
 				"output": []map[string]any{},
-				"usage":  map[string]int{},
+				"usage": map[string]int{
+					"input_tokens":  800,
+					"output_tokens": 20,
+					"total_tokens":  820,
+				},
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)

@@ -30,7 +30,11 @@ func gatewaySpawnOKHandler(capturedAuth *string) http.HandlerFunc {
 			"id":     "resp_gap001",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  800,
+				"output_tokens": 20,
+				"total_tokens":  820,
+			},
 		})
 	}
 }
@@ -218,7 +222,11 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 			"id":     "resp_gap060",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  800,
+				"output_tokens": 20,
+				"total_tokens":  820,
+			},
 		})
 	}))
 	defer srv.Close()
@@ -296,7 +304,11 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 			"id":     "resp_gap060",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  800,
+				"output_tokens": 20,
+				"total_tokens":  820,
+			},
 		})
 	}))
 	defer srv.Close()

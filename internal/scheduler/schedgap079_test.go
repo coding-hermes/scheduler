@@ -215,7 +215,10 @@ func TestSCHEDGAP079_Normal200StillCommitted(t *testing.T) {
 // successful tick that only made tool calls (DuckBrain writes etc.) has empty
 // text but a REAL persisted session id — it must stay completed. Never gate
 // on output length alone. The INFO event makes the tool-only case visible
-// without failing it.
+// without failing it. (SCHED-GAP-102: usage now carries the real billed
+// prompt tokens — a tool-only tick's LLM WAS invoked, so zero-token gating
+// never applies; the old 0/0 fixture was byte-identical to the auth-death
+// shape and is now covered by TestSCHED_GAP_102_ZeroTokensEmptyOutputFails.)
 func TestSCHEDGAP079_ToolOnlyEmptyOutputKeptCompleted(t *testing.T) {
 	db := newTestDB(t)
 
@@ -226,7 +229,11 @@ func TestSCHEDGAP079_ToolOnlyEmptyOutputKeptCompleted(t *testing.T) {
 			"id":     "resp_tool",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  1200,
+				"output_tokens": 45,
+				"total_tokens":  1245,
+			},
 		})
 	})
 	spawner.SetEventLogger(NewEventLogger(db))

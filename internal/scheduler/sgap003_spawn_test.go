@@ -31,7 +31,13 @@ func gatedGatewayHandler(arrived, release chan struct{}, respID string) http.Han
 			"id":     respID,
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			// SCHED-GAP-102: successful dispatches carry billed tokens —
+			// 0/0 + empty output is gated as provider instant-death.
+			"usage": map[string]int{
+				"input_tokens":  500,
+				"output_tokens": 10,
+				"total_tokens":  510,
+			},
 		})
 	}
 }

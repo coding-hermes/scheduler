@@ -48,7 +48,11 @@ func blockingGatewayHandler(requestSeen, release chan struct{}) http.HandlerFunc
 			"id":     "resp_sgap077",
 			"status": "completed",
 			"output": []map[string]any{},
-			"usage":  map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  800,
+				"output_tokens": 20,
+				"total_tokens":  820,
+			},
 		})
 	}
 }

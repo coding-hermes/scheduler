@@ -1062,7 +1062,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					"cancelled":                  true,
 					"timeout":                    true,
 				}
-				failed := failureStatuses[resp.Status] || (strings.TrimSpace(text) == "" && resp.ID == "")
+				// SCHED-GAP-102: a gateway 2xx response with zero tokens AND
+				// empty output text is a provider-instant-death (auth
+				// rejection, "No usable credentials", etc.) — the LLM was
+				// never invoked. Even though resp.ID may be non-empty
+				// (placeholder), no work was done. Classify as failed to
+				// prevent phantom greens from masking outages.
+				zeroTokens := resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0
+				failed := failureStatuses[resp.Status] ||
+					(strings.TrimSpace(text) == "" && resp.ID == "") ||
+					(zeroTokens && strings.TrimSpace(text) == "")
 				if failed {
 					var errText string
 					switch {
@@ -1070,6 +1079,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						errText = fmt.Sprintf("gateway response %s (len=%d): %s", resp.Status, len(text), resp.Error.Message)
 					case failureStatuses[resp.Status]:
 						errText = fmt.Sprintf("gateway response %s (len=%d): no error detail", resp.Status, len(text))
+					case zeroTokens && strings.TrimSpace(text) == "" && resp.ID != "":
+						// SCHED-GAP-102: non-failure status, non-empty
+						// (placeholder) session id, but the LLM was never
+						// invoked — the auth-death shape.
+						errText = "provider instant-death (0 tokens, empty output) — likely auth rejection"
 					default:
 						// Empty-output-AND-empty-session rule: name the
 						// missing session so the row is diagnosable.

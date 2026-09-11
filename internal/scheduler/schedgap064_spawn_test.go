@@ -82,7 +82,14 @@ func (g *chainGatewayServer) handler() http.HandlerFunc {
 				"id":     "resp_gap064",
 				"status": "completed",
 				"output": []map[string]any{},
-				"usage":  map[string]int{},
+				// SCHED-GAP-102: a successful dispatch must carry billed
+				// tokens — 0/0 + empty output is now gated as provider
+				// instant-death. Tool-only ticks still have input tokens.
+				"usage": map[string]int{
+					"input_tokens":  800,
+					"output_tokens": 20,
+					"total_tokens":  820,
+				},
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
