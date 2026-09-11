@@ -34,6 +34,15 @@ type SlotPool struct {
 	// channel itself), so it serializes only the tiny map critical sections.
 	mu      sync.Mutex
 	running map[string]int
+
+	// reserved holds project names claimed by an in-flight Spawn whose
+	// goroutine has not yet been tracked by `running`. SCHED-GAP-103: Spawn
+	// is fire-and-forget, so between the caller launching the goroutine and
+	// that goroutine calling Acquire there is a window in which the project
+	// looks idle to RunningSet — a second eval cycle (slot-freed debounce or
+	// ForceEvaluate) in that window double-spawned the project. Guarded by
+	// mu, same critical-section discipline as running.
+	reserved map[string]bool
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
@@ -46,6 +55,7 @@ func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lif
 		lifecycle: lifecycle,
 		freedCh:   make(chan struct{}, maxConcurrent),
 		running:   make(map[string]int),
+		reserved:  make(map[string]bool),
 	}
 	return p
 }
@@ -60,16 +70,50 @@ func (p *SlotPool) Running() int {
 	return len(p.sem)
 }
 
-// RunningSet returns the set of project names currently occupying slots.
-// Used by the packer to prevent duplicate spawns.
+// RunningSet returns the set of project names currently occupying slots —
+// plus names RESERVED by an in-flight Spawn that has not acquired its slot
+// yet (SCHED-GAP-103). Used by the packer and the evaluation-loop dedup to
+// prevent duplicate spawns, so it must be the conservative view: a project
+// waiting on a slot is still "already scheduled" and must not be re-fired.
 func (p *SlotPool) RunningSet() map[string]bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	set := make(map[string]bool, len(p.running))
+	set := make(map[string]bool, len(p.running)+len(p.reserved))
 	for name := range p.running {
 		set[name] = true
 	}
+	for name := range p.reserved {
+		set[name] = true
+	}
 	return set
+}
+
+// tryReserve atomically checks-and-sets a project name as reserved for
+// spawning. Returns true if the project was NOT already running or reserved
+// (caller should proceed to spawn). Returns false if the project already
+// holds a slot or has been reserved by an in-flight Spawn call — the caller
+// must skip (SCHED-GAP-103: the TOCTOU window between Spawn() returning
+// and the goroutine calling Acquire() allowed a second eval cycle to
+// double-spawn the same project).
+func (p *SlotPool) tryReserve(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running[name] > 0 || p.reserved[name] {
+		return false
+	}
+	p.reserved[name] = true
+	return true
+}
+
+// clearReserve removes a reservation. Called by the spawn goroutine on EVERY
+// exit path (slot timeout, enqueue failure, spawn failure, normal
+// completion) via a deferred call, so a reservation can never outlive the
+// attempt that made it. Deferred panics still run defers, so a panic inside
+// the goroutine does not leak the reservation either.
+func (p *SlotPool) clearReserve(name string) {
+	p.mu.Lock()
+	delete(p.reserved, name)
+	p.mu.Unlock()
 }
 
 // Acquire blocks until a slot is free, then marks it occupied with the
@@ -131,6 +175,11 @@ func (p *SlotPool) ReleaseAll() {
 			}
 		default:
 			p.running = make(map[string]int)
+			// SCHED-GAP-103: reservations belong to the in-flight spawn
+			// attempts that ReleaseAll is abandoning (gateway dead → every
+			// spawn from this cycle is void). Clearing them keeps the next
+			// eval cycle from being blocked by phantom reservations.
+			p.reserved = make(map[string]bool)
 			return
 		}
 	}
@@ -167,7 +216,31 @@ func (p *SlotPool) SpawnEnqueued(proj PackedProject, tickID string, now time.Tim
 // enqueued is true the row already exists (status queued) and the goroutine
 // only transitions it to running; otherwise it enqueues first.
 func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB, enqueued bool) {
+	// SCHED-GAP-103: atomically check-and-reserve BEFORE launching the
+	// goroutine. Spawn is fire-and-forget: the caller launches the goroutine
+	// and returns, but the goroutine only becomes visible to RunningSet when
+	// its Acquire() call lands. A second evaluation cycle in that window
+	// (slot-freed debounce or ForceEvaluate) saw the project as idle and
+	// fired a second Spawn for it — two concurrent ticks on one project,
+	// bypassing cooldown (asce-qa: 55s gap against a 43200s cooldown;
+	// crier-sync: 2s gap). Reserve here so the project is deduped from the
+	// instant the caller decides to spawn it.
+	if !p.tryReserve(proj.Name) {
+		log.Printf("DEDUP: skipping %s (tick %s) — already running or reserved", proj.Name, tickID)
+		return
+	}
+
 	go func() {
+		// Clear the reservation on EVERY exit path. Deferred at goroutine
+		// entry so it survives panics too; LIFO ordering means the
+		// p.Release below runs FIRST on normal completion (dropping the
+		// running refcount, which is what keeps RunningSet honest for a
+		// completed tick) and the reservation is dropped last. On an early
+		// exit before Acquire succeeds, Release is a no-op (running[name]
+		// == 0) and clearReserve alone frees the claim.
+		defer p.clearReserve(proj.Name)
+		defer p.Release(proj.Name)
+
 		// Wait for a free slot.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -175,7 +248,6 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			return
 		}
-		defer p.Release(proj.Name)
 
 		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
 
