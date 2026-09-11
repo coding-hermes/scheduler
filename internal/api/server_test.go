@@ -1109,5 +1109,71 @@ func TestAPI_OpenAPI_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestPUT_Project_AdaptiveCooldownRoundtrip covers the API surface of adaptive
+// cooldown: PUT /api/v1/projects/{name} with the adaptive policy keys must
+// store them, GET must read them back verbatim, and a follow-up PUT with
+// adaptive_cooldown=false must flip the flag OFF while leaving the stored
+// policy values untouched (the schema contract: false is not a clear).
+func TestPUT_Project_AdaptiveCooldownRoundtrip(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "adaptive-rt")
+
+	// --- PUT the full adaptive policy ---
+	status, body := a.do(t, "PUT", "/api/v1/projects/adaptive-rt", map[string]interface{}{
+		"adaptive_cooldown":     true,
+		"cooldown_floor_s":      3600,
+		"cooldown_ceiling_s":    86400,
+		"no_progress_threshold": 5,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200 (body: %v)", status, body)
+	}
+	if enabled, ok := body["adaptive_cooldown"].(bool); !ok || !enabled {
+		t.Errorf("PUT response adaptive_cooldown = %v, want true", body["adaptive_cooldown"])
+	}
+
+	// --- GET reads the policy back ---
+	status, body = a.do(t, "GET", "/api/v1/projects/adaptive-rt", nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", status)
+	}
+	proj, ok := body["project"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("GET response missing project object: %v", body)
+	}
+	if enabled, ok := proj["adaptive_cooldown"].(bool); !ok || !enabled {
+		t.Errorf("GET adaptive_cooldown = %v, want true", proj["adaptive_cooldown"])
+	}
+	if floor, ok := proj["cooldown_floor_s"].(float64); !ok || floor != 3600 {
+		t.Errorf("GET cooldown_floor_s = %v, want 3600", proj["cooldown_floor_s"])
+	}
+	if ceiling, ok := proj["cooldown_ceiling_s"].(float64); !ok || ceiling != 86400 {
+		t.Errorf("GET cooldown_ceiling_s = %v, want 86400", proj["cooldown_ceiling_s"])
+	}
+	if threshold, ok := proj["no_progress_threshold"].(float64); !ok || threshold != 5 {
+		t.Errorf("GET no_progress_threshold = %v, want 5", proj["no_progress_threshold"])
+	}
+
+	// --- PUT adaptive_cooldown=false: flag off, stored policy values survive ---
+	status, body = a.do(t, "PUT", "/api/v1/projects/adaptive-rt", map[string]interface{}{
+		"adaptive_cooldown": false,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("PUT(false) status = %d, want 200 (body: %v)", status, body)
+	}
+	if enabled, ok := body["adaptive_cooldown"].(bool); !ok || enabled {
+		t.Errorf("PUT(false) response adaptive_cooldown = %v, want false", body["adaptive_cooldown"])
+	}
+	if floor, ok := body["cooldown_floor_s"].(float64); !ok || floor != 3600 {
+		t.Errorf("PUT(false) response cooldown_floor_s = %v, want 3600 (false must not clear stored policy)", body["cooldown_floor_s"])
+	}
+	if ceiling, ok := body["cooldown_ceiling_s"].(float64); !ok || ceiling != 86400 {
+		t.Errorf("PUT(false) response cooldown_ceiling_s = %v, want 86400 (false must not clear stored policy)", body["cooldown_ceiling_s"])
+	}
+	if threshold, ok := body["no_progress_threshold"].(float64); !ok || threshold != 5 {
+		t.Errorf("PUT(false) response no_progress_threshold = %v, want 5 (false must not clear stored policy)", body["no_progress_threshold"])
+	}
+}
+
 // Compile-time sanity: use fmt so the import isn't unused when we add debug later.
 var _ = fmt.Sprintf

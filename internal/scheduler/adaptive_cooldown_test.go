@@ -623,3 +623,59 @@ func TestBoardOpenRows(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// Per-project opt-in isolation: adaptive escalation on one project must never
+// touch a sibling legacy project in the same DB, even when both experience
+// identical no-progress ticks. This pins the fleet-wide arming safety story
+// (SCHED-GAP-100): arming project A cannot leak policy onto project B.
+// =============================================================================
+
+func TestAdaptiveCooldown_OptInIsolation(t *testing.T) {
+	db := slowdownTestDB(t)
+
+	// Armed project: explicit policy columns (threshold 2, floor/ceiling set).
+	insertAdaptiveProject(t, db, "optin-armed", struct {
+		cooldownS int
+		floorS    int
+		ceilingS  int
+		threshold int
+		streak    int
+		rowsSeen  int
+	}{cooldownS: 60, floorS: 60, ceilingS: 86400, threshold: 2})
+
+	// Legacy sibling: adaptive_cooldown = 0 (schema default), same base cooldown.
+	insertSlowdownProject(t, db, "optin-legacy", 60)
+
+	// Drive BOTH projects through threshold+1 identical no-progress ticks.
+	for i := 0; i < 3; i++ {
+		if !adaptiveCooldown(db, "optin-armed", "", noProgressOutcome("optin-armed")) {
+			t.Fatalf("tick %d: adaptiveCooldown returned false for the armed project (feature is on)", i+1)
+		}
+		// The legacy project runs the same outcome through the same entry
+		// point — it must fall through (handled=false) to autoSlowdown.
+		if adaptiveCooldown(db, "optin-legacy", "", noProgressOutcome("optin-legacy")) {
+			t.Fatalf("tick %d: adaptiveCooldown returned true for the legacy project (feature is off)", i+1)
+		}
+	}
+
+	// Armed project: tick 2 hit the threshold (60→120), tick 3 doubled again
+	// (120→240). Escalation happened.
+	armedCD, _, _, _, armedStreak, _ := readAdaptiveState(t, db, "optin-armed")
+	if armedCD <= 60 {
+		t.Errorf("armed cooldown = %d, want > 60 (doubled past threshold 2)", armedCD)
+	}
+	if armedStreak != 3 {
+		t.Errorf("armed no_progress_ticks = %d, want 3", armedStreak)
+	}
+
+	// Legacy sibling: identical tick history, untouched cooldown and streak.
+	legacyCD := getSlowdownCooldown(t, db, "optin-legacy")
+	if legacyCD != 60 {
+		t.Errorf("legacy cooldown = %d, want 60 (adaptive escalation must not leak across projects)", legacyCD)
+	}
+	_, _, _, _, legacyStreak, _ := readAdaptiveState(t, db, "optin-legacy")
+	if legacyStreak != 0 {
+		t.Errorf("legacy no_progress_ticks = %d, want 0 (streak tracking is armed-project-only)", legacyStreak)
+	}
+}

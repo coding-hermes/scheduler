@@ -626,3 +626,81 @@ func TestApplyFleetConfig_AdaptiveCooldownPins(t *testing.T) {
 		t.Error("adaptive_cooldown = true after re-pin with adaptive_cooldown = false, want false")
 	}
 }
+
+// TestFleetConfig_AdaptiveCooldownKeys pins the TOML→ProjectDef parse of the
+// adaptive-cooldown keys (the file surface operators actually write): explicit
+// keys decode verbatim, and a project block WITHOUT them leaves AdaptiveCooldown
+// nil (= not armed) with the numeric policy fields at 0 — effective values are
+// resolved at apply time, never fabricated by the parser.
+func TestFleetConfig_AdaptiveCooldownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.toml")
+
+	tomlContent := `[[projects]]
+name = "adaptive-full"
+repo_url = "https://github.com/example/adaptive-full"
+workdir = "/home/kara/adaptive-full"
+cooldown_s = 3600
+adaptive_cooldown = true
+cooldown_floor_s = 3600
+cooldown_ceiling_s = 86400
+no_progress_threshold = 5
+
+[[projects]]
+name = "adaptive-bare"
+repo_url = "https://github.com/example/adaptive-bare"
+workdir = "/home/kara/adaptive-bare"
+cooldown_s = 900
+`
+	if err := os.WriteFile(path, []byte(tomlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFleetConfig(path)
+	if err != nil {
+		t.Fatalf("LoadFleetConfig: %v", err)
+	}
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(cfg.Projects))
+	}
+
+	// Explicit keys decode verbatim into the ProjectDef.
+	full := findProject(cfg, "adaptive-full")
+	if full == nil {
+		t.Fatal("project adaptive-full not found")
+	}
+	if full.AdaptiveCooldown == nil {
+		t.Fatal("adaptive-full AdaptiveCooldown = nil, want non-nil true")
+	}
+	if !*full.AdaptiveCooldown {
+		t.Error("adaptive-full adaptive_cooldown = false, want true")
+	}
+	if full.CooldownFloorS != 3600 {
+		t.Errorf("adaptive-full cooldown_floor_s = %d, want 3600", full.CooldownFloorS)
+	}
+	if full.CooldownCeilingS != 86400 {
+		t.Errorf("adaptive-full cooldown_ceiling_s = %d, want 86400", full.CooldownCeilingS)
+	}
+	if full.NoProgressThreshold != 5 {
+		t.Errorf("adaptive-full no_progress_threshold = %d, want 5", full.NoProgressThreshold)
+	}
+
+	// Keyless block: flag nil (not armed), numeric defaults 0 — the parser
+	// must not invent effective values; resolution happens at apply time.
+	bare := findProject(cfg, "adaptive-bare")
+	if bare == nil {
+		t.Fatal("project adaptive-bare not found")
+	}
+	if bare.AdaptiveCooldown != nil {
+		t.Errorf("adaptive-bare AdaptiveCooldown = %v, want nil (absent key = not armed)", *bare.AdaptiveCooldown)
+	}
+	if bare.CooldownFloorS != 0 {
+		t.Errorf("adaptive-bare cooldown_floor_s = %d, want 0 (resolved at runtime)", bare.CooldownFloorS)
+	}
+	if bare.CooldownCeilingS != 0 {
+		t.Errorf("adaptive-bare cooldown_ceiling_s = %d, want 0 (resolved at runtime)", bare.CooldownCeilingS)
+	}
+	if bare.NoProgressThreshold != 0 {
+		t.Errorf("adaptive-bare no_progress_threshold = %d, want 0 (resolved at runtime)", bare.NoProgressThreshold)
+	}
+}
