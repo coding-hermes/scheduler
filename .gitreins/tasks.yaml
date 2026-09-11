@@ -2084,3 +2084,12 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:38:06.522899+00:00'
   completed_at: '2026-08-27T10:17:57.296515+00:00'
+- id: SCHED-GAP-102
+  title: Provider-auth-failed spawns recorded as completed (0 tokens)
+  criteria:
+  - The SCHED-GAP-079 completion gate in spawn.go must classify a gateway 2xx response
+    with zero tokens (InputTokens==0 AND OutputTokens==0) AND empty output text as
+    a FAILED tick, not completed. Build+vet+lint+test must pass.
+  status: complete
+  created_at: '2026-09-11T01:45:18.817057+00:00'
+  completed_at: '2026-09-11T02:12:56.159088+00:00'
