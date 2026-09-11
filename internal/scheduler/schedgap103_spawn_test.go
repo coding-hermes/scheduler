@@ -149,8 +149,11 @@ func TestSlotPool_ReservationBlocksSecondSpawn(t *testing.T) {
 
 	now := time.Now()
 	pool.Spawn(PackedProject{Name: blockerName, Workdir: t.TempDir()}, now, true, nil)
+	// SCHED-GAP-103: wait for the blocker to actually ACQUIRE its slot (Running()==1),
+	// not just appear in RunningSet — the reservation fix makes RunningSet include
+	// reserved names, which are set before the goroutine calls Acquire.
 	waitForPool(t, 5*time.Second, "blocker to acquire the only slot", func() bool {
-		return pool.RunningSet()[blockerName]
+		return pool.Running() == 1
 	})
 
 	// Eval cycle #1 fires the target — no free slot, so its goroutine parks
