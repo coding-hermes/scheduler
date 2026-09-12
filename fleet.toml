@@ -22,6 +22,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:92897"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 900
+cooldown_ceiling_s = 7200
 
 # chimera-v2 — feature-complete, all 6 dogfood P0/P1/P2 items closed at tick #75.
 # Foreman self-pause: 0 pending tasks -> CooldownS=7200 (Bane 07-31 policy, NOT 43200).
@@ -41,6 +44,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:50404"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 900
+cooldown_ceiling_s = 7200
 
 # hermes-canopy — active build (Phase 11+: TM-03 done, TM-04 in flight).
 # OPERATOR PIN 7200s (2h) per INFRA-001 (tick 287, Bane-approved): wake/stand-in
@@ -58,6 +64,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:92776"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 7200
+cooldown_ceiling_s = 57600
 
 # helios — v1.0 feature-complete, 81+ idle ticks, client-deliverable phase.
 # Bane: 12h cadence. Pin cooldown_s=43200 so daemon restarts + fleet-auto-heal
@@ -75,6 +84,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:4297"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 43200
+cooldown_ceiling_s = 345600
 
 # musterflow — feature-complete, 0 pending actionable (NEVER-DONE standing audit
 # + E2E-001 periodic only; DOCKER-GHCR-001 blocked-human). Bane 07-31 policy:
@@ -92,6 +104,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:64245"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 7200
+cooldown_ceiling_s = 57600
 
 # ring-runner — active build (Sonic-style platformer, config-driven levels).
 # 2026-08-02: bumped weight 10→15, priority 5→10 — was registered but NEVER
@@ -109,6 +124,9 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:109397"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 900
+cooldown_ceiling_s = 7200
 
 # h3 — umbrella coordination repo (get-h3). 2026-08-04 (H3-GAP-003): idle
 # ticks flood the board (50+/24h, tasks.md 7,888 lines/580KB). Pin cooldown
@@ -127,3 +145,6 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:84802"
 enabled = true
+adaptive_cooldown = true
+cooldown_floor_s = 21600
+cooldown_ceiling_s = 172800
