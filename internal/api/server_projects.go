@@ -181,6 +181,12 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 		case "spawn":
 			s.spawnProject(w, r, name)
 			return
+		case "bump":
+			s.bumpProject(w, r, name)
+			return
+		case "unbump":
+			s.unbumpProject(w, r, name)
+			return
 		}
 		writeError(w, 404, "not found")
 		return
@@ -406,4 +412,133 @@ func (s *Server) spawnProject(w http.ResponseWriter, r *http.Request, name strin
 		"project": name,
 		"tick_id": tickID,
 	})
+}
+
+// bumpRequestBody is the JSON body for POST /api/v1/projects/{name}/bump
+// (SCHED-GAP-107). Zero-valued fields take the defaults (ticks=5,
+// cooldown=7200); reason is REQUIRED — an unattributed speed-up is
+// unauditable.
+type bumpRequestBody struct {
+	Ticks    *int    `json:"ticks"`
+	Cooldown *int    `json:"cooldown"`
+	Reason   *string `json:"reason"`
+}
+
+// bumpProject handles POST /api/v1/projects/{name}/bump — temporarily
+// accelerate the project to a small cooldown (>= the 7200s killer-lane
+// floor) for at most 8 ticks, then auto-revert. Validation: reason
+// non-empty (400), ticks 1..8 with default 5 (400), cooldown >= 7200 with
+// default 7200 (400), project exists (404), project enabled (409 — a
+// paused project cannot consume bump ticks), no active bump (409 — clear
+// it first or let it expire).
+func (s *Server) bumpProject(w http.ResponseWriter, r *http.Request, name string) {
+	var body bumpRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	ctx := context.Background()
+	p, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	if !p.Enabled {
+		writeError(w, 409, "project is disabled — resume it before bumping (a paused project cannot consume bump ticks)")
+		return
+	}
+	if p.BumpActive {
+		writeError(w, 409, fmt.Sprintf("bump already active (%d tick(s) remaining, reason %q) — let it expire or POST /projects/%s/unbump", p.BumpRemainingTicks, p.BumpReason, name))
+		return
+	}
+	reason := ""
+	if body.Reason != nil {
+		reason = strings.TrimSpace(*body.Reason)
+	}
+	if reason == "" {
+		writeError(w, 400, "reason is required — a bump is an auditable speed-up, name why")
+		return
+	}
+	ticks := database.DefaultBumpTicks
+	if body.Ticks != nil {
+		ticks = *body.Ticks
+	}
+	if ticks < 1 || ticks > database.MaxBumpTicks {
+		writeError(w, 400, fmt.Sprintf("ticks must be 1..%d (got %d)", database.MaxBumpTicks, ticks))
+		return
+	}
+	cooldown := database.DefaultBumpCooldown
+	if body.Cooldown != nil {
+		cooldown = *body.Cooldown
+	}
+	if cooldown < database.MinBumpCooldown {
+		writeError(w, 400, fmt.Sprintf("cooldown must be >= %ds — the 6h cooldown law floor applies to bumps too (got %d)", database.MinBumpCooldown, cooldown))
+		return
+	}
+	updated, err := database.BumpProject(ctx, s.db, name, ticks, cooldown, reason)
+	if err != nil {
+		if errors.Is(err, database.ErrProjectNotFound) {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	// Audit trail: every bump gets an events-table entry with who/why.
+	details, _ := json.Marshal(map[string]any{
+		"project":  name,
+		"ticks":    ticks,
+		"cooldown": cooldown,
+		"reason":   reason,
+		"saved": map[string]int{
+			"cooldown_s":         updated.BumpSavedCooldownS,
+			"cooldown_floor_s":   updated.BumpSavedFloorS,
+			"cooldown_ceiling_s": updated.BumpSavedCeilingS,
+			"no_progress_ticks":  updated.BumpSavedNoProgress,
+		},
+	})
+	_ = database.LogEvent(ctx, s.db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "api",
+		Message:   fmt.Sprintf("project bumped: %s (%d ticks @ %ds — %s)", name, ticks, cooldown, reason),
+		Details:   string(details),
+	})
+	writeJSON(w, 200, updated)
+}
+
+// unbumpProject handles POST /api/v1/projects/{name}/unbump — manually
+// abort an active bump. This is Phase A ONLY (restore the saved pre-bump
+// state); no Phase B adaptive re-evaluation runs because an explicit cancel
+// wants the pre-bump state verbatim, not a fresh verdict over whatever the
+// last tick did.
+func (s *Server) unbumpProject(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := context.Background()
+	if err := database.ClearBump(ctx, s.db, name); err != nil {
+		if errors.Is(err, database.ErrProjectNotFound) {
+			writeError(w, 404, "project not found")
+			return
+		}
+		if errors.Is(err, database.ErrNoActiveBump) {
+			writeError(w, 409, "no active bump to clear")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	p, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	_ = database.LogEvent(ctx, s.db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "api",
+		Message:   "bump manually cleared: " + name,
+		Details:   `{"project":"` + name + `","via":"POST /projects/` + name + `/unbump"}`,
+	})
+	writeJSON(w, 200, p)
 }

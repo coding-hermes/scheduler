@@ -34,6 +34,8 @@ Route index (all 19 `/api/v1/*` routes):
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/resume` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/spawn` | [§5](#5-projects) |
+| POST | `/api/v1/projects/{name}/bump` | [§5](#5-projects) |
+| POST | `/api/v1/projects/{name}/unbump` | [§5](#5-projects) |
 | GET, POST | `/api/v1/namespaces` | [§6](#6-namespaces) |
 | GET, PUT | `/api/v1/namespaces/{id}` | [§6](#6-namespaces) |
 | GET | `/api/v1/namespaces/{id}/projects` | [§6](#6-namespaces) |
@@ -417,6 +419,54 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/spawn
 curl -s http://127.0.0.1:9090/api/v1/ticks/my-project-2026-08-18-06-55-00
 # 200 — the returned tick_id always resolves
 ```
+
+### POST /api/v1/projects/{name}/bump
+
+**Purpose:** Temporarily accelerate a project (SCHED-GAP-107): run it at a
+small cooldown for N completed ticks, then auto-revert. Replaces manual
+cooldown hand-PUTs with a first-class, self-expiring mechanism. The bump
+overrides both the legacy `cooldown_s` and the adaptive floor/ceiling while
+active and carries a large urgency boost (same class as the pending-work
+boost), so the bumped project actually gets its fast ticks. Normal adaptive
+tick-end evaluation CONTINUES during the bump — real work extends speed,
+idle ticks burn bump ticks without extending anything. At expiry the
+two-phase revert runs: Phase A restores the saved pre-bump state
+(`cooldown_s`, floor, ceiling, `no_progress_ticks`), Phase B immediately
+re-runs the adaptive evaluation over the last tick outcome — real work
+lands the project at the floor, idle bumps resume the decay law exactly
+where it was. A 12h hard cap force-reverts a stuck bump regardless of
+remaining ticks.
+
+**Body:**
+
+```json
+{"ticks": 5, "cooldown": 7200, "reason": "clear the injected backlog"}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ticks` | int | Completed bump ticks before auto-revert. 1..8, default 5 |
+| `cooldown` | int | Bump cooldown seconds. >= 7200 (the 6h cooldown law floor applies to bumps), default 7200 |
+| `reason` | string | REQUIRED — every bump is auditable; empty/whitespace is a 400 |
+
+**Response 200:** the updated project — `bump_active=true`,
+`bump_remaining_ticks=N`, `cooldown_s` already at the bump value
+(immediate effect), and the `bump_saved_*` snapshot of the pre-bump policy.
+
+**Errors:** 400 (missing `reason`, `ticks` outside 1..8, `cooldown` < 7200);
+404 unknown project; 409 project disabled (a paused project cannot consume
+bump ticks) or a bump is already active (let it expire or `unbump`).
+
+Bump state is pure DB — it survives daemon restarts with the remaining
+count intact, and `GET /api/v1/status` surfaces active bumps in a `bumps`
+array (`[{project, remaining_ticks, cooldown_s, reason, started_at}]`).
+
+### POST /api/v1/projects/{name}/unbump
+
+**Purpose:** Manually abort an active bump. Phase A only — restores the
+saved pre-bump cooldown policy verbatim; no adaptive re-evaluation runs,
+because an explicit cancel wants the pre-bump state back, not a fresh
+verdict. Errors: 404 unknown project; 409 no active bump.
 
 ## 6. Namespaces
 

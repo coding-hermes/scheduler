@@ -91,6 +91,23 @@ type Project struct {
 	NoProgressThreshold int  `json:"no_progress_threshold"`
 	NoProgressTicks     int  `json:"no_progress_ticks"`
 	BoardRowsSeen       int  `json:"board_rows_seen"`
+
+	// Task bump (SCHED-GAP-107): a temporary project-wide speed-up that
+	// runs the project at BumpCooldownS for BumpRemainingTicks completed
+	// bump ticks, then auto-reverts through the two-phase restore
+	// (Phase A: restore the pre-bump snapshot below; Phase B: re-run the
+	// adaptive evaluation over the tick outcome). A bump can never
+	// permanently ratchet cooldown state — the saved_* columns hold the
+	// pre-bump values so the revert is exact.
+	BumpActive          bool   `json:"bump_active"`
+	BumpRemainingTicks  int    `json:"bump_remaining_ticks"`
+	BumpCooldownS       int    `json:"bump_cooldown_s"`
+	BumpReason          string `json:"bump_reason"`
+	BumpSavedCooldownS  int    `json:"bump_saved_cooldown_s"`
+	BumpSavedFloorS     int    `json:"bump_saved_floor_s"`
+	BumpSavedCeilingS   int    `json:"bump_saved_ceiling_s"`
+	BumpSavedNoProgress int    `json:"bump_saved_no_progress_ticks"`
+	BumpStartedAt       string `json:"bump_started_at"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are
@@ -246,6 +263,10 @@ type Tick struct {
 	// CodeCommits count as progress for adaptive cooldown.
 	CodeCommits  int `json:"code_commits"`
 	BoardCommits int `json:"board_commits"`
+	// SCHED-GAP-107: 1 when this tick was spawned while the project had an
+	// active bump (it ran at bump cooldown and consumes one bump tick).
+	// 0 = normal tick. Lets yield analysis compare bump vs normal ticks.
+	Bump int `json:"bump"`
 }
 
 // EventSeverity enumerates the severity tiers for event log entries.

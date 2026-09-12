@@ -162,12 +162,23 @@ func (m *MultiPoolPacker) Pack(
 					urgency = pendingBoostUrgencyFor(pending)
 				}
 			}
+			// SCHED-GAP-107: active bump — the bump cooldown overrides the
+			// stored value in the cooldown gates below, and the project gets
+			// the bump urgency tier (same class as the pending-work boost).
+			bumpCD := 0
+			if p.BumpActive && p.BumpCooldownS > 0 {
+				bumpCD = p.BumpCooldownS
+				if urgency < bumpBoostUrgency {
+					urgency = bumpBoostUrgency
+				}
+			}
 
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
 			scored = append(scored, ProjectUrgency{
 				Project:         p,
 				Urgency:         urgency,
 				EffectiveWeight: effW,
+				BumpCooldownS:   bumpCD,
 			})
 		}
 
@@ -208,7 +219,12 @@ func (m *MultiPoolPacker) Pack(
 
 			// Cooldown check with blackout slowdown.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
-				cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+				cd := pu.Project.CooldownS
+				// SCHED-GAP-107: an active bump owns the effective cooldown.
+				if pu.BumpCooldownS > 0 {
+					cd = pu.BumpCooldownS
+				}
+				cooldownDur := time.Duration(cd) * time.Second
 				// S-GAP-001: consecutive spawn failures back off exponentially.
 				if pu.Project.ConsecutiveFailures > 0 {
 					cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)
@@ -256,7 +272,12 @@ func (m *MultiPoolPacker) Pack(
 			if !puInList(pu, st.selected) && !puInList(pu, st.queued) {
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
-					cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+					cd := pu.Project.CooldownS
+					// SCHED-GAP-107: an active bump owns the effective cooldown.
+					if pu.BumpCooldownS > 0 {
+						cd = pu.BumpCooldownS
+					}
+					cooldownDur := time.Duration(cd) * time.Second
 					// S-GAP-001: consecutive spawn failures back off exponentially.
 					if pu.Project.ConsecutiveFailures > 0 {
 						cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)

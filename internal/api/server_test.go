@@ -996,7 +996,7 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
-// documentedPaths mirrors the route table in docs/api.md (§4–§10, 24 paths).
+// documentedPaths mirrors the route table in docs/api.md (§4–§10, 26 paths).
 // The openapi.json spec must contain exactly this set — a client generator
 // needs every live route (GAP-057).
 var documentedPaths = []string{
@@ -1008,6 +1008,8 @@ var documentedPaths = []string{
 	"/api/v1/projects/{name}/pause",
 	"/api/v1/projects/{name}/resume",
 	"/api/v1/projects/{name}/spawn",
+	"/api/v1/projects/{name}/bump",
+	"/api/v1/projects/{name}/unbump",
 	"/api/v1/namespaces",
 	"/api/v1/namespaces/{id}",
 	"/api/v1/namespaces/{id}/projects",

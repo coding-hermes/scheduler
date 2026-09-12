@@ -262,6 +262,10 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			log.Printf("SPAWN: start %s: %v", proj.Name, err)
 			return
 		}
+		// SCHED-GAP-107: flag the tick as a bump tick when the project has
+		// an active bump — the flag both marks it for yield analysis and
+		// makes its completion consume one bump tick.
+		markBumpTick(db, proj.Name, tickID)
 
 		// Spawn.
 		st, err := p.spawner.Spawn(proj, tickID)
@@ -299,7 +303,11 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// row growth) instead of parsing the VERDICT line, and escalates
 		// well past autoSlowdown's 1h operator-set guard, so the two must
 		// never both run on the same tick.
+		// SCHED-GAP-107: bump accounting runs FIRST. When it performs the
+		// Phase A revert, the adaptiveCooldown call below doubles as the
+		// Phase B re-evaluation against the restored baseline.
 		if db != nil {
+			bumpTickCompleted(db, outcome.Project, proj.Workdir, outcome)
 			if !adaptiveCooldown(db, outcome.Project, proj.Workdir, outcome) {
 				autoSlowdown(db, outcome.Project, &st.Output)
 			}

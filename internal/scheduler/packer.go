@@ -107,6 +107,9 @@ type scored struct {
 	deliver             string
 	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
 	promptMode          string // "append" (default) | "replace"
+	bumpActive          bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
+	bumpCooldownS       int
+	bumpRemaining       int
 	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
 	namespaceID         string // namespace_id (empty = no namespace)
 	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
@@ -121,6 +124,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
+		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -145,6 +149,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
+			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -168,6 +173,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				lastCompleted = &t
 			}
 		}
+		// SCHED-GAP-107: an active bump overrides the stored cooldown for
+		// selection AND boosts urgency into the pending-work tier — a
+		// bumped project must outrank every ordinary eligible project so
+		// its N fast ticks actually run. Cooldown mechanics (backoff,
+		// blackout) still apply on top of the bump value.
+		if s.bumpActive && s.bumpCooldownS > 0 {
+			s.cooldownS = s.bumpCooldownS
+		}
 		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
 		// S-GAP-001 fairness: starvation boost in the flat path too, or the
 		// two selection paths would diverge. Monotonic in starvation age so
@@ -185,6 +198,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			if pending := p.pendingCounter.CountPending(s.workdir); pending > 0 && s.urgency < pendingBoostUrgency {
 				s.urgency = pendingBoostUrgencyFor(pending)
 			}
+		}
+		// SCHED-GAP-107: bump urgency boost — same class as the pending-work
+		// boost (above organic, below starvation), applied after it so an
+		// active bump always carries the boost even on a quiet board.
+		if s.bumpActive && s.urgency < bumpBoostUrgency {
+			s.urgency = bumpBoostUrgency
 		}
 		s.lastTickAt = lastCompleted
 		list = append(list, s)

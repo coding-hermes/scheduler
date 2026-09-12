@@ -79,6 +79,14 @@ const (
 	// pendingBoostMaxCount caps the count term added to the boost so a board
 	// with thousands of pending tasks does not inflate urgency unboundedly.
 	pendingBoostMaxCount = 1000
+
+	// bumpBoostUrgency is the SCHED-GAP-107 bump tier: an actively bumped
+	// project runs at bump cooldown for N ticks and must actually get those
+	// ticks, so it gets the same urgency class as the pending-work boost —
+	// far above any organic urgency, below the starvation guarantee.
+	// Slightly above pendingBoostUrgency so a bumped project wins ties
+	// against other pending-boosted projects in the same eval.
+	bumpBoostUrgency = pendingBoostUrgency + 1e6
 )
 
 // pendingBoostUrgencyFor returns the board-awareness-boosted urgency for a

@@ -63,6 +63,9 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 
 	sessionID := fmt.Sprintf("sim-%s-%d", tickID[:8], rand.Intn(99999))
 	_, _ = s.db.Exec(`UPDATE ticks SET session_id = ? WHERE id = ?`, sessionID, tickID)
+	// SCHED-GAP-107: flag the tick as a bump tick when the project has an
+	// active bump, exactly like the real slot-pool spawn path.
+	markBumpTick(s.db, project.Name, tickID)
 
 	spawned := &SimSpawned{
 		TickID:    tickID,
@@ -88,11 +91,13 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
 		s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
 		// Feed the outcome through the SAME post-tick hook the real spawner
-		// uses (adaptive cooldown first, legacy autoSlowdown as fallback) so
+		// uses (bump accounting first, adaptive cooldown second — doubling
+		// as bump Phase B on revert — legacy autoSlowdown as fallback) so
 		// dry-runs exercise the speed-control engine identically to live
 		// ticks (Bane 2026-09-06). PackedProject carries the project's
 		// configured workdir (sim fixture gives each project a dummy board).
 		if s.db != nil {
+			bumpTickCompleted(s.db, outcome.Project, project.Workdir, outcome)
 			if !adaptiveCooldown(s.db, outcome.Project, project.Workdir, outcome) {
 				autoSlowdown(s.db, outcome.Project, nil)
 			}

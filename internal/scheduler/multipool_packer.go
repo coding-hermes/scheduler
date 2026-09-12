@@ -18,6 +18,9 @@ type ProjectUrgency struct {
 	Project         database.Project
 	Urgency         float64
 	EffectiveWeight int
+	// BumpCooldownS, when > 0 (SCHED-GAP-107), is the active bump cooldown
+	// that overrides Project.CooldownS in the cooldown gates.
+	BumpCooldownS int
 }
 
 // NamespaceTickData holds per-namespace utilization for a single evaluation
@@ -129,9 +132,10 @@ func (m *MultiPoolPacker) packFlat(
 	}
 
 	type scored struct {
-		proj     database.Project
-		urgency  float64
-		lastTick *time.Time
+		proj          database.Project
+		urgency       float64
+		lastTick      *time.Time
+		bumpCooldownS int // SCHED-GAP-107: >0 = active bump; overrides proj.CooldownS
 	}
 	list := make([]scored, 0, len(projects))
 	for i := range projects {
@@ -173,7 +177,18 @@ func (m *MultiPoolPacker) packFlat(
 				urgency = pendingBoostUrgencyFor(pending)
 			}
 		}
-		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
+		// SCHED-GAP-107: active bump — override the stored cooldown with the
+		// bump value and apply the bump urgency tier (same class as the
+		// pending boost). Normal cooldown mechanics (backoff, blackout)
+		// still apply on top.
+		bumpCD := 0
+		if p.BumpActive && p.BumpCooldownS > 0 {
+			bumpCD = p.BumpCooldownS
+			if urgency < bumpBoostUrgency {
+				urgency = bumpBoostUrgency
+			}
+		}
+		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick, bumpCooldownS: bumpCD})
 	}
 
 	// Urgency desc, priority desc, oldest-last-tick first.
@@ -209,7 +224,13 @@ func (m *MultiPoolPacker) packFlat(
 		}
 		// Cooldown check.
 		if s.lastTick != nil {
-			cooldownDur := time.Duration(s.proj.CooldownS) * time.Second
+			cd := s.proj.CooldownS
+			// SCHED-GAP-107: an active bump owns the effective cooldown —
+			// it overrides the stored value in every selection path.
+			if s.bumpCooldownS > 0 {
+				cd = s.bumpCooldownS
+			}
+			cooldownDur := time.Duration(cd) * time.Second
 			// S-GAP-001: consecutive spawn failures back off exponentially.
 			if s.proj.ConsecutiveFailures > 0 {
 				cooldownDur = FailureBackoff(cooldownDur, s.proj.ConsecutiveFailures)

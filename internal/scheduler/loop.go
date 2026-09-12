@@ -857,7 +857,7 @@ func (l *Loop) resetZeroSelect() {
 // the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0) FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0) FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -869,11 +869,18 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		var cooldown int
 		var lastComp string
 		var consecFailures int
-		if err := rows.Scan(&name, &cooldown, &lastComp, &consecFailures); err != nil {
+		var bumpActive, bumpCD int
+		if err := rows.Scan(&name, &cooldown, &lastComp, &consecFailures, &bumpActive, &bumpCD); err != nil {
 			continue
 		}
 		if runningSet[name] {
 			continue
+		}
+		// SCHED-GAP-107: an active bump owns the effective cooldown — the
+		// eligibility mirror must use the bump value, exactly like the
+		// packer's selection paths.
+		if bumpActive == 1 && bumpCD > 0 {
+			cooldown = bumpCD
 		}
 		if lastComp == "" {
 			eligible++

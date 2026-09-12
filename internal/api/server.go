@@ -204,6 +204,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"min_ticks": adMinTicks,
 		},
 	}
+	// SCHED-GAP-107: active bump badge + remaining count per project.
+	status["bumps"] = listActiveBumps(projects)
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
 	if s.loop != nil {
@@ -230,6 +232,35 @@ func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.loop.ForceEvaluate()
 	writeJSON(w, 200, map[string]string{"status": "evaluation triggered"})
+}
+
+// activeBump is one entry in the /api/v1/status "bumps" array (SCHED-GAP-107).
+type activeBump struct {
+	Project        string `json:"project"`
+	RemainingTicks int    `json:"remaining_ticks"`
+	CooldownS      int    `json:"cooldown_s"`
+	Reason         string `json:"reason"`
+	StartedAt      string `json:"started_at"`
+}
+
+// listActiveBumps extracts the active-bump view from a project list. An
+// empty (non-nil) slice is returned when no project is bumped so the status
+// JSON carries "bumps": [] rather than null.
+func listActiveBumps(projects []database.Project) []activeBump {
+	out := make([]activeBump, 0)
+	for _, p := range projects {
+		if !p.BumpActive {
+			continue
+		}
+		out = append(out, activeBump{
+			Project:        p.Name,
+			RemainingTicks: p.BumpRemainingTicks,
+			CooldownS:      p.BumpCooldownS,
+			Reason:         p.BumpReason,
+			StartedAt:      p.BumpStartedAt,
+		})
+	}
+	return out
 }
 
 // pause suspends the scheduler loop.

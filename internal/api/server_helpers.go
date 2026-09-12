@@ -485,6 +485,36 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/projects/{name}/bump": {
+      "post": {
+        "summary": "Temporarily accelerate the project (SCHED-GAP-107): run at a small cooldown for N ticks, then auto-revert (Phase A restore + Phase B adaptive re-eval)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BumpRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Bump active — returns the updated project with bump_* fields and cooldown_s set to the bump value"},
+          "400": {"description": "Missing reason, ticks outside 1..8, or cooldown below the 7200s floor"},
+          "404": {"description": "Project not found"},
+          "409": {"description": "Project disabled, or a bump is already active"}
+        }
+      }
+    },
+    "/api/v1/projects/{name}/unbump": {
+      "post": {
+        "summary": "Manually abort an active bump — restores the saved pre-bump cooldown state verbatim (no adaptive re-evaluation)",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
+        "responses": {
+          "200": {"description": "Bump cleared — returns the restored project"},
+          "404": {"description": "Project not found"},
+          "409": {"description": "No active bump to clear"}
+        }
+      }
+    },
     "/api/v1/namespaces": {
       "get": {
         "summary": "List namespaces",
@@ -930,6 +960,16 @@ var openapiSpec = []byte(`{
         "properties": {
           "template": {"type": "string", "description": "Name of the template to deploy to every group member"},
           "dry_run": {"type": "boolean", "default": false, "description": "true = return the plan without writing to any board"}
+        }
+      },
+      "BumpRequest": {
+        "type": "object",
+        "required": ["reason"],
+        "description": "Body for POST /api/v1/projects/{name}/bump (SCHED-GAP-107): temporarily run the project at a small cooldown for N ticks, then auto-revert. The bump overrides both the legacy cooldown and the adaptive floor/ceiling while active; normal adaptive tick-end evaluation continues so real work extends speed and idle ticks burn bump ticks.",
+        "properties": {
+          "ticks": {"type": "integer", "minimum": 1, "maximum": 8, "default": 5, "description": "Completed bump ticks before auto-revert"},
+          "cooldown": {"type": "integer", "minimum": 7200, "default": 7200, "description": "Bump cooldown in seconds — the 6h cooldown law floor applies"},
+          "reason": {"type": "string", "description": "REQUIRED. Why the bump was issued (auditable)"}
         }
       },
       "EmptyBody": {

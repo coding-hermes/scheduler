@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 25
+const latestMigration = 26
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -342,6 +342,22 @@ ALTER TABLE ticks ADD COLUMN board_commits INTEGER NOT NULL DEFAULT 0;
 		desc:    "open-row baseline (SCHED-GAP-105): track open board rows so completion (not injection) is the board progress signal",
 		stmt: `
 ALTER TABLE projects ADD COLUMN board_open_seen INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		version: 26,
+		desc:    "task bump (SCHED-GAP-107): temporary project-wide speed-up — bump state + pre-bump snapshot on projects, bump flag on ticks",
+		stmt: `
+ALTER TABLE projects ADD COLUMN bump_active INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_remaining_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_cooldown_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN bump_saved_cooldown_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_saved_floor_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_saved_ceiling_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_saved_no_progress_ticks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN bump_started_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN bump INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }

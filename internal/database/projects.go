@@ -95,7 +95,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
@@ -105,7 +105,8 @@ FROM projects WHERE name = ?`
 		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
-		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen)
+		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
+		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -122,7 +123,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -146,7 +147,8 @@ FROM projects`
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
-			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen); err != nil {
+			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
+			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -164,7 +166,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1)
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -184,7 +186,8 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
-			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen); err != nil {
+			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
+			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -690,3 +693,117 @@ func boolToInt(b bool) int {
 
 // BoolPtr returns a pointer to b — a convenience for ProjectUpdates callers.
 func BoolPtr(b bool) *bool { return &b }
+
+// ---------------------------------------------------------------------------
+// Task bump (SCHED-GAP-107)
+// ---------------------------------------------------------------------------
+
+// Bump limits and defaults. The 6h cooldown law floor applies — 7200 is the
+// minimum bump cooldown (killer-lane floor), and a bump may run at most 8
+// ticks before auto-revert.
+const (
+	DefaultBumpTicks    = 5
+	DefaultBumpCooldown = 7200
+	MaxBumpTicks        = 8
+	MinBumpCooldown     = 7200
+)
+
+// BumpProject activates a project-wide bump: the project runs at the bump
+// cooldown for ticks completed ticks, then auto-reverts (Phase A restore +
+// Phase B adaptive re-evaluation — see the scheduler's tick completion hook).
+// The pre-bump cooldown policy (cooldown_s, floor, ceiling, no-progress
+// streak) is snapshotted into the bump_saved_* columns FIRST so the revert
+// is exact — a bump can never permanently ratchet cooldown state. The caller
+// is responsible for validation (reason non-empty, ticks 1..8, cooldown >=
+// MinBumpCooldown, project enabled, no active bump); this function is
+// mechanical. Returns the updated project.
+func BumpProject(ctx context.Context, db *sql.DB, name string, ticks, cooldown int, reason string) (*Project, error) {
+	now := nowUTC()
+	res, err := db.ExecContext(ctx, `
+UPDATE projects SET
+	bump_active = 1,
+	bump_remaining_ticks = ?,
+	bump_cooldown_s = ?,
+	bump_reason = ?,
+	bump_saved_cooldown_s = COALESCE(cooldown_s, 0),
+	bump_saved_floor_s = COALESCE(cooldown_floor_s, 0),
+	bump_saved_ceiling_s = COALESCE(cooldown_ceiling_s, 0),
+	bump_saved_no_progress_ticks = COALESCE(no_progress_ticks, 0),
+	bump_started_at = ?,
+	cooldown_s = ?,
+	updated_at = ?
+WHERE name = ? AND COALESCE(bump_active, 0) = 0`,
+		ticks, cooldown, reason, now, cooldown, now, name)
+	if err != nil {
+		return nil, fmt.Errorf("bump project %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("bump project %q: rows affected: %w", name, err)
+	}
+	if n == 0 {
+		// Either the project is missing or a bump is already active —
+		// distinguish for the caller's error mapping.
+		var exists int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM projects WHERE name = ?`, name).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("bump project %q: existence check: %w", name, err)
+		}
+		if exists == 0 {
+			return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+		}
+		return nil, fmt.Errorf("bump project %q: a bump is already active — wait for it to expire or clear it first", name)
+	}
+	return GetProject(ctx, db, name)
+}
+
+// ErrNoActiveBump is returned by ClearBump when the project has no active
+// bump to clear.
+var ErrNoActiveBump = errors.New("no active bump")
+
+// ClearBump performs Phase A of the bump revert ONLY: restore the saved
+// pre-bump state and clear all bump fields. Phase B — re-running the normal
+// adaptive evaluation over the current tick outcome — belongs to the caller
+// (the scheduler's tick completion hook), which invokes adaptiveCooldown
+// AFTER this restore so the evaluation sees the correct baseline. Manual
+// clears (operator aborting a bump via API) intentionally skip Phase B: the
+// restored pre-bump state IS the desired end state for an explicit cancel.
+func ClearBump(ctx context.Context, db *sql.DB, name string) error {
+	res, err := db.ExecContext(ctx, `
+UPDATE projects SET
+	cooldown_s = CASE WHEN bump_saved_cooldown_s > 0 THEN bump_saved_cooldown_s ELSE COALESCE(cooldown_s, 0) END,
+	cooldown_floor_s = bump_saved_floor_s,
+	cooldown_ceiling_s = bump_saved_ceiling_s,
+	no_progress_ticks = bump_saved_no_progress_ticks,
+	bump_active = 0,
+	bump_remaining_ticks = 0,
+	bump_cooldown_s = 0,
+	bump_reason = '',
+	bump_saved_cooldown_s = 0,
+	bump_saved_floor_s = 0,
+	bump_saved_ceiling_s = 0,
+	bump_saved_no_progress_ticks = 0,
+	bump_started_at = '',
+	updated_at = ?
+WHERE name = ? AND COALESCE(bump_active, 0) = 1`,
+		nowUTC(), name)
+	if err != nil {
+		return fmt.Errorf("clear bump %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("clear bump %q: rows affected: %w", name, err)
+	}
+	if n == 0 {
+		var exists int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM projects WHERE name = ?`, name).Scan(&exists); err != nil {
+			return fmt.Errorf("clear bump %q: existence check: %w", name, err)
+		}
+		if exists == 0 {
+			return fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+		}
+		return ErrNoActiveBump
+	}
+	return nil
+}
