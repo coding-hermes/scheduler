@@ -420,12 +420,25 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			// daemon restart; fleet.toml is the durable pin." Without this,
 			// the file's "cooldown overrides" comment lies and foreman
 			// self-pause + restart drift wins every time.
+			existing, _ := database.GetProject(ctx, db, pd.Name)
 			p := projectFromDef(pd)
 			updates := database.ProjectUpdates{
 				CooldownS: &p.CooldownS,
 				Model:     &p.Model,
 				Provider:  &p.Provider,
 				Enabled:   &p.Enabled,
+			}
+			// SCHED-GAP-107: when a bump is active, the bump owns cooldown_s.
+			// The fleet.toml pin would clobber the bump cooldown and break the
+			// bump's auto-revert (the saved cooldown was captured at bump time;
+			// re-pinning from fleet.toml makes the revert restore a stale value).
+			// Skip the cooldown pin entirely while bump_active=1; the bump's
+			// auto-revert restores the pre-bump cooldown, and the NEXT regen
+			// after the bump expires re-pins normally.
+			if existing != nil && existing.BumpActive {
+				updates.CooldownS = nil
+				updates.CooldownFloorS = nil
+				updates.CooldownCeilingS = nil
 			}
 			// Adaptive cooldown pins like enabled/cooldown_s: the fleet.toml
 			// entry is authoritative for the flag (absent key = off), so the
