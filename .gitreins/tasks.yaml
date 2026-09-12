@@ -2084,3 +2084,12 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:38:06.522899+00:00'
   completed_at: '2026-08-27T10:17:57.296515+00:00'
+- id: INT-002
+  title: Integration tests for blocks store + REST API
+  criteria:
+  - 'Handler-level httptest coverage for blocks API: full CRUD on groups/templates
+    (404/409/400), deploy dry_run + real deploy + per-project failure, torn JSONL
+    line tolerance, concurrent writes with -race'
+  status: complete
+  created_at: '2026-09-12T00:06:56.211072+00:00'
+  completed_at: '2026-09-12T00:36:39.199867+00:00'
