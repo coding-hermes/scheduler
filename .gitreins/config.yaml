@@ -10,7 +10,7 @@ guards:
 evaluator:
   max_iterations: 100
   max_time: "30m"
-  max_input_tokens: "4M"
+  max_input_tokens: "8M"
   max_output_tokens: "0.5M"
   tool_call_weight: 0.1
   static_analysis_diagnostics: false

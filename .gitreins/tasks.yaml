@@ -2090,5 +2090,5 @@ tasks:
   - zero-output committed ticks dropped >50% after 48h of arming; fleet.toml + DB
     show foreman lanes armed
   status: complete
-  created_at: '2026-09-12T12:04:39.031629+00:00'
-  completed_at: '2026-09-12T12:08:12.519976+00:00'
+  created_at: '2026-09-12T12:23:52.816790+00:00'
+  completed_at: '2026-09-12T12:23:53.250318+00:00'
