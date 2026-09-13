@@ -400,6 +400,9 @@ func (l *Loop) cleanDanglingOnStartup() {
 		// daemon was absent (crash / restart), so this is a drop. Stamp it
 		// so the resume scan re-nudges the tick.
 		reapedOrphans[dt.id] = OrphanReasonStartupReap
+		// SCHED-GAP-114 (S12 §8.2 item 3): a reaped wave tick's worker rows
+		// flip to 'abandoned' (§10.3). Shared step, unchanged tick semantics.
+		l.reapWaveAbandoned(ctx, dt.id)
 	}
 	if cleaned > 0 {
 		log.Printf("DANGLING: cleaned %d dead running tick(s) from previous process (dead pid or stale gateway heartbeat)", cleaned)
@@ -454,6 +457,9 @@ func (l *Loop) reapZombies() {
 		}
 		reaped++
 		reapedOrphans[id] = OrphanReasonZombieReap
+		// SCHED-GAP-114 (S12 §8.2 item 3): same shared wave step as the
+		// startup path — reaped wave tick → its worker rows go 'abandoned'.
+		l.reapWaveAbandoned(ctx, id)
 	}
 	if reaped > 0 {
 		log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
@@ -473,6 +479,8 @@ func (l *Loop) reapZombies() {
 		}
 		gwReaped++
 		reapedOrphans[gt.id] = OrphanReasonZombieReap
+		// SCHED-GAP-114: gateway-drop wave ticks abandon their workers too.
+		l.reapWaveAbandoned(ctx, gt.id)
 	}
 	if gwReaped > 0 {
 		log.Printf("ZOMBIE: reaped %d gateway tick(s) (stale heartbeat)", gwReaped)

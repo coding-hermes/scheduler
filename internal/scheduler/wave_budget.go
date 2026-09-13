@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -115,13 +116,58 @@ func (s *Spawner) waveBudget(project PackedProject) (n int, inject bool) {
 // §6.2 composition layer). Namespaces without a cap — and every error path
 // in waveBudget — return the body BYTE-IDENTICAL to buildForemanPrompt
 // (asserted by test), so default-off fleets see zero prompt change.
+//
+// SCHED-GAP-114 (S12 §8.2 item 5): before any of that, the recover-before-
+// dispatch check runs. When the project's workdir holds a wave manifest
+// whose own tick row is terminal and whose finished_at is empty (the
+// foreman died before closing its wave), this tick is a RECOVERY tick: the
+// tick row is stamped wave_recovery=1 and a fenced recovery preamble is
+// prepended (after the "[Scheduler tick: <id>]" linkage prefix) listing the
+// unfinished worker set and instructing the foreman to recover it FIRST.
+// Clean projects — no waves dir, no unfinished manifest — get the exact
+// pre-114 prompt bytes (asserted by test). One recovery tick at a time:
+// recovery rides the NORMAL tick (one slot, normal cooldown, §8.2 item 6);
+// the scheduler never spawns an extra parallel recovery process.
 func (s *Spawner) buildSpawnPrompt(project PackedProject, tickID string) string {
 	prompt := buildForemanPrompt(project, tickID)
+	if block := s.waveRecoveryBlock(project, tickID); block != "" {
+		prefix := "[Scheduler tick: " + tickID + "] "
+		prompt = prefix + "This is a WAVE RECOVERY tick — recover the unfinished wave below BEFORE dispatching any new work.\n\n" +
+			block + "\n\n" + strings.TrimPrefix(prompt, prefix)
+	}
 	n, inject := s.waveBudget(project)
 	if !inject {
 		return prompt
 	}
 	return prompt + "\n" + waveBudgetLine(n)
+}
+
+// waveRecoveryBlock resolves the recovery preamble for one spawn (S12
+// §8.2 item 5, SCHED-GAP-114). It scans <workdir>/.coding-hermes/waves/
+// (bounded readdir, tolerant parse) for manifests whose tick row is
+// terminal and whose finished_at is empty; on the first such manifest the
+// tick row is stamped wave_recovery=1 (§9.1: set at spawn so the row
+// records the recovery phase) and the rendered preamble block is returned.
+// Returns "" — and touches nothing — for a clean project (no waves dir,
+// no candidate manifest, empty workdir), which is what keeps the clean
+// prompt byte-identical and the serial default-off fleet at zero cost.
+func (s *Spawner) waveRecoveryBlock(project PackedProject, tickID string) string {
+	if project.Workdir == "" {
+		return ""
+	}
+	manifests := unfinishedWaveManifests(context.Background(), s.db, project.Workdir)
+	if len(manifests) == 0 {
+		return ""
+	}
+	if err := markTickWaveRecovery(context.Background(), s.db, tickID); err != nil {
+		// Best-effort stamp: the preamble is the load-bearing half (the
+		// foreman does the recovering); a failed flag only costs
+		// observability, never the recovery itself.
+		log.Printf("WARN [wave]: %v", err)
+	}
+	log.Printf("WAVE-RECOVERY: %s tick=%s — %d unfinished wave manifest(s): recovery tick, preamble injected",
+		project.Name, tickID, len(manifests))
+	return waveRecoveryPreamble(manifests)
 }
 
 // resolveWaveShed returns the per-cycle set of namespace IDs in
