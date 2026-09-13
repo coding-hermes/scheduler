@@ -76,7 +76,6 @@ type Spawner struct {
 	// (tests, tooling) biases every spawn to the work chain — the
 	// conservative default that never cheap-routes real work.
 	pendingCounter *PendingTaskCounter
-	skills         string
 	foremanHome    string         // HERMES_HOME for foreman config
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
@@ -143,7 +142,6 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		// are appended at record time.
 		circuit:           circuitFromEnv(),
 		pendingCounter:    defaultPendingCounter,
-		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
 		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
 		heartbeatInterval: 5 * time.Minute,
 	}

@@ -24,7 +24,6 @@ import (
 type SlotPool struct {
 	sem       chan struct{} // buffered channel = counting semaphore
 	maxSlots  int
-	timeout   time.Duration
 	spawner   *Spawner
 	lifecycle *LifecycleTracker
 	freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
@@ -46,11 +45,10 @@ type SlotPool struct {
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
-func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool {
+func NewSlotPool(maxConcurrent int, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool {
 	p := &SlotPool{
 		sem:       make(chan struct{}, maxConcurrent),
 		maxSlots:  maxConcurrent,
-		timeout:   timeout,
 		spawner:   spawner,
 		lifecycle: lifecycle,
 		freedCh:   make(chan struct{}, maxConcurrent),

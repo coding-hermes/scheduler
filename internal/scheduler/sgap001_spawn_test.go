@@ -119,7 +119,7 @@ func TestSlotPool_SpawnFailureAdvancesAttemptClock(t *testing.T) {
 	spawner.SetNoExecFallback(true)
 
 	lc := NewLifecycleTracker(db)
-	pool := NewSlotPool(1, 10*time.Second, spawner, lc)
+	pool := NewSlotPool(1, spawner, lc)
 
 	now := time.Now()
 	tickID := pool.Spawn(PackedProject{Name: "sgap001-clock", Workdir: t.TempDir()}, now, true, db)

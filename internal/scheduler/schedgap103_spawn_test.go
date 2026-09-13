@@ -35,7 +35,7 @@ func TestSlotPool_TryReservePreventsDoubleSpawn(t *testing.T) {
 	db := newTestDB(t)
 	lc := NewLifecycleTracker(db)
 	sp := NewSpawner(db, 1)
-	pool := NewSlotPool(1, 10*time.Second, sp, lc)
+	pool := NewSlotPool(1, sp, lc)
 
 	if !pool.tryReserve("gap103-proj") {
 		t.Fatal("first tryReserve = false, want true (project was idle)")
@@ -58,7 +58,7 @@ func TestSlotPool_TryReserveRefusedWhileRunning(t *testing.T) {
 	db := newTestDB(t)
 	lc := NewLifecycleTracker(db)
 	sp := NewSpawner(db, 1)
-	pool := NewSlotPool(1, 10*time.Second, sp, lc)
+	pool := NewSlotPool(1, sp, lc)
 
 	if !pool.Acquire(context.Background(), "gap103-running") {
 		t.Fatal("Acquire")
@@ -80,7 +80,7 @@ func TestSlotPool_RunningSetIncludesReserved(t *testing.T) {
 	db := newTestDB(t)
 	lc := NewLifecycleTracker(db)
 	sp := NewSpawner(db, 1)
-	pool := NewSlotPool(1, 10*time.Second, sp, lc)
+	pool := NewSlotPool(1, sp, lc)
 
 	if !pool.tryReserve("gap103-proj") {
 		t.Fatal("tryReserve")
@@ -145,7 +145,7 @@ func TestSlotPool_ReservationBlocksSecondSpawn(t *testing.T) {
 	spawner.SetNoExecFallback(true)
 
 	lc := NewLifecycleTracker(db)
-	pool := NewSlotPool(1, 30*time.Second, spawner, lc)
+	pool := NewSlotPool(1, spawner, lc)
 
 	now := time.Now()
 	pool.Spawn(PackedProject{Name: blockerName, Workdir: t.TempDir()}, now, true, nil)

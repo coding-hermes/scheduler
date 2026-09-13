@@ -87,7 +87,7 @@ func TestSlotPool_OutOfOrderCompletionKeepsRunningMarker(t *testing.T) {
 	spawner.SetNoExecFallback(true)
 
 	lc := NewLifecycleTracker(db)
-	pool := NewSlotPool(2, 30*time.Second, spawner, lc)
+	pool := NewSlotPool(2, spawner, lc)
 
 	now := time.Now()
 	pool.Spawn(PackedProject{Name: slowName, Workdir: t.TempDir()}, now, true, nil)

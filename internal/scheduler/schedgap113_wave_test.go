@@ -42,7 +42,7 @@ func TestSlotPool_WaveTickOccupiesOneSlot(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 10)
-	pool := scheduler.NewSlotPool(8, 30*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(8, sp, lc)
 
 	// A 3-worker wave tick: one slot, one running entry, one RunningSet entry.
 	if !pool.Acquire(context.Background(), "wave-proj") {
@@ -85,7 +85,7 @@ func TestRunningSet_UnaffectedByWorkerCount(t *testing.T) {
 	}
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 10)
-	pool := scheduler.NewSlotPool(8, 30*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(8, sp, lc)
 
 	pool.Acquire(context.Background(), "w3-a")
 	pool.Acquire(context.Background(), "w3-b")

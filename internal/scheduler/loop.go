@@ -26,12 +26,15 @@ type Loop struct {
 	lifecycle       *LifecycleTracker
 	events          *EventLogger
 	db              *sql.DB
-	interval        time.Duration
 	weightBudget    int
 	maxConcur       int
 	namespaceMode   bool
-	gatewayClient   *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
-	gatewayDead     bool           // true when last ping failed
+	// minInterval is the configured --min-interval (ADV-R02). Immutable
+	// after NewLoop; it drives the eval-stall watchdog threshold
+	// (10x min-interval) via evalStallThreshold().
+	minInterval   time.Duration
+	gatewayClient *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
+	gatewayDead   bool           // true when last ping failed
 
 	// autoDisablePolicy holds the configurable per-project failure-rate
 	// auto-disable settings (SCHED-GAP-018). When the failure-rate threshold
@@ -137,10 +140,10 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		lifecycle:       NewLifecycleTracker(db),
 		events:          NewEventLogger(db),
 		db:              db,
-		interval:        30 * time.Second,
 		weightBudget:    budget,
 		maxConcur:       maxConcur,
 		namespaceMode:   nsMode,
+		minInterval:     minI,
 		pauseCh:         make(chan struct{}, 1),
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
@@ -153,10 +156,8 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// loop_test.go:23 go loop.Run()). Constructed here, before any
 	// goroutine can observe the Loop, the field is immutable for the
 	// Loop's lifetime; the SCHED-GAP-077 drain (Wait/abortInFlightTicks/
-	// ReleaseAll in Stop) is unchanged. 2*time.Hour matches the lazy
-	// sites' default — SlotPool.timeout is never read, so the value has
-	// no behavioral effect.
-	l.slotPool = NewSlotPool(l.maxConcur, 2*time.Hour, l.spawner, l.lifecycle)
+	// ReleaseAll in Stop) is unchanged.
+	l.slotPool = NewSlotPool(l.maxConcur, l.spawner, l.lifecycle)
 
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
@@ -605,14 +606,23 @@ func (l *Loop) LastEvalTime() time.Time {
 }
 
 // evalStallThreshold is the lastEval age at which the event-driven loop is
-// considered stalled (GAP-042): 10x the 30s min-interval = 5 minutes. A
+// considered stalled (GAP-042): 10x the configured min-interval (5 minutes
+// at the default 30s min-interval). A
 // healthy loop re-evaluates on every slot-freed event (5s debounce), so
 // lastEval never ages this far while ticks are completing; when the fleet
 // is fully idle (every project in cooldown, 0 running ticks) NOTHING
 // triggers an evaluation — cooldown-expired projects can sit unscheduled
 // for up to their cooldown (observed 66-min silent gap 2026-08-13
 // 13:08-14:14 local, recovered only by manual POST /api/v1/evaluate).
-const evalStallThreshold = 10 * 30 * time.Second // 10 x min-interval
+//
+// ADV-R02: derived from the Loop's configured min-interval at runtime
+// instead of a hardcoded 30s constant, so a host running a non-default
+// --min-interval gets a proportionally scaled stall threshold. The field
+// is immutable for the Loop's lifetime (set once in NewLoop), so reading
+// it here needs no lock.
+func (l *Loop) evalStallThreshold() time.Duration {
+	return 10 * l.minInterval
+}
 
 // evalStallReEmitGap re-emits the stall event while a stall persists
 // (forced re-evaluations not restoring the loop), so a wedged loop stays
@@ -694,7 +704,7 @@ func (l *Loop) checkEvalStall(running int) {
 		return // never evaluated — the initial eval fires at startup
 	}
 	age := time.Since(lastEval)
-	if age < evalStallThreshold || running > 0 {
+	if age < l.evalStallThreshold() || running > 0 {
 		return // healthy: evaluating on cadence, or work in flight
 	}
 
@@ -773,12 +783,12 @@ func (l *Loop) checkEvalStall(running int) {
 		message = "eval loop stalled — forced re-evaluation (unrecovered)"
 	}
 	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v, recovered=%t, misses=%d)",
-		age.Round(time.Second), running, evalStallThreshold, recovered, misses)
+		age.Round(time.Second), running, l.evalStallThreshold(), recovered, misses)
 	l.events.Emit(context.Background(), severity, "loop", message, map[string]any{
 		"age_seconds":  age.Seconds(),
 		"last_eval":    lastEval.Format(time.RFC3339),
 		"active_ticks": running,
-		"threshold_s":  evalStallThreshold.Seconds(),
+		"threshold_s":  l.evalStallThreshold().Seconds(),
 		"recovered":    recovered,
 		"misses":       misses,
 	})

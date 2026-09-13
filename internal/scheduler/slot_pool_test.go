@@ -43,7 +43,7 @@ func TestSlotPool_AcquireRelease(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 1)
-	pool := scheduler.NewSlotPool(1, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(1, sp, lc)
 
 	if !pool.Acquire(context.Background(), "test") {
 		t.Fatal("Acquire should succeed")
@@ -62,7 +62,7 @@ func TestSlotPool_AcquireTimeout(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 1)
-	pool := scheduler.NewSlotPool(1, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(1, sp, lc)
 
 	if !pool.Acquire(context.Background(), "a") {
 		t.Fatal("first Acquire")
@@ -79,7 +79,7 @@ func TestSlotPool_RunningSet(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 5)
-	pool := scheduler.NewSlotPool(5, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(5, sp, lc)
 
 	for _, n := range []string{"alpha", "beta", "gamma"} {
 		if !pool.Acquire(context.Background(), n) {
@@ -125,7 +125,7 @@ func TestSlotPool_ReleaseOutOfOrderPreservesMarkers(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 3)
-	pool := scheduler.NewSlotPool(3, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(3, sp, lc)
 
 	// A acquires first and runs long; B and C acquire after.
 	for _, n := range []string{"a-long", "b-short", "c-short"} {
@@ -168,7 +168,7 @@ func TestSlotPool_ReleaseUnknownNameIsNoOp(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 2)
-	pool := scheduler.NewSlotPool(2, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(2, sp, lc)
 
 	pool.Acquire(context.Background(), "a")
 	pool.Acquire(context.Background(), "b")
@@ -201,7 +201,7 @@ func TestSlotPool_NoGoroutineLeak(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 2)
-	pool := scheduler.NewSlotPool(2, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(2, sp, lc)
 
 	before := runtime.NumGoroutine()
 
@@ -227,7 +227,7 @@ func TestSlotPool_SlotFreedFiresOnRelease(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 2)
-	pool := scheduler.NewSlotPool(2, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(2, sp, lc)
 
 	// Fill both slots.
 	pool.Acquire(context.Background(), "a")
@@ -250,7 +250,7 @@ func TestSlotPool_SlotFreedMultipleReleases(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 5)
-	pool := scheduler.NewSlotPool(5, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(5, sp, lc)
 
 	pool.Acquire(context.Background(), "a")
 	pool.Acquire(context.Background(), "b")
@@ -290,7 +290,7 @@ func TestSlotPool_ReleaseAll(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 5)
-	pool := scheduler.NewSlotPool(5, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(5, sp, lc)
 
 	// Acquire 3 slots.
 	for _, n := range []string{"alpha", "beta", "gamma"} {
@@ -317,7 +317,7 @@ func TestSlotPool_ReleaseAll_Empty(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 3)
-	pool := scheduler.NewSlotPool(3, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(3, sp, lc)
 
 	// ReleaseAll on empty pool is a no-op and should not block.
 	pool.ReleaseAll()

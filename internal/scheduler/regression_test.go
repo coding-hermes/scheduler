@@ -20,7 +20,7 @@ func TestSlotPool_ConcurrentAcquireStress(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 10)
-	pool := scheduler.NewSlotPool(10, 30*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(10, sp, lc)
 
 	const (
 		workers = 100
@@ -66,7 +66,7 @@ func TestSlotPool_DebounceCoalescing(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 5)
-	pool := scheduler.NewSlotPool(5, 10*time.Second, sp, lc)
+	pool := scheduler.NewSlotPool(5, sp, lc)
 
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
 		if !pool.Acquire(context.Background(), n) {
@@ -369,7 +369,7 @@ func TestSlotPool_TickTimeout(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 1)
-	pool := scheduler.NewSlotPool(1, 100*time.Millisecond, sp, lc)
+	pool := scheduler.NewSlotPool(1, sp, lc)
 
 	if !pool.Acquire(context.Background(), "holder") {
 		t.Fatal("first Acquire should succeed")
