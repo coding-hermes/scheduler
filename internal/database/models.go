@@ -1,6 +1,9 @@
 package database
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Adaptive-cooldown built-in defaults (shared by the DB update layer, which
 // normalizes rows when the feature is enabled, and the scheduler runtime,
@@ -267,6 +270,10 @@ type Tick struct {
 	// active bump (it ran at bump cooldown and consumes one bump tick).
 	// 0 = normal tick. Lets yield analysis compare bump vs normal ticks.
 	Bump int `json:"bump"`
+	// S12 concurrent wave scheduling (SCHED-GAP-109): worker attribution
+	// on the tick row itself.
+	WorkerCount  int `json:"worker_count"`  // worker sessions the foreman dispatched inside this tick (0 = serial tick; sessions = 1 + worker_count)
+	WaveRecovery int `json:"wave_recovery"` // 1 = this tick ran the wave-recovery phase first (S12 §8.2)
 }
 
 // EventSeverity enumerates the severity tiers for event log entries.
@@ -304,8 +311,14 @@ type Namespace struct {
 	Description   string `json:"description"`    // human-readable label
 	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
 	ModelChain    string `json:"model_chain"`    // ordered "model@provider" hops (JSON array); namespace tier between project and router (Bane 2026-08-27)
-	CreatedAt     string `json:"created_at"`     // RFC3339
-	UpdatedAt     string `json:"updated_at"`     // RFC3339
+	// S12 concurrent wave scheduling (SCHED-GAP-109): namespace-level wave
+	// config, all default-off. WaveEnabled=false leaves scheduling
+	// byte-identical to pre-v27 behavior.
+	WaveEnabled     bool   `json:"wave_enabled"`      // true → ticks in this namespace may compose waves (S12 §4)
+	WaveTickTimeout string `json:"wave_tick_timeout"` // duration string; "" = inherit scheduler tick timeout (S12 §4)
+	WaveWorkersCap  int    `json:"wave_workers_cap"`  // max concurrent worker processes across the namespace's running ticks; 0 = unlimited (S12 §6)
+	CreatedAt       string `json:"created_at"`        // RFC3339
+	UpdatedAt       string `json:"updated_at"`        // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
@@ -318,6 +331,85 @@ type NamespacePatch struct {
 	Description   *string `json:"description,omitempty"`
 	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
 	ModelChain    *string `json:"model_chain,omitempty"`    // namespace model chain (JSON array string)
+	// S12 wave config (SCHED-GAP-109): applied only when non-nil, same as
+	// every other field above.
+	WaveEnabled     *bool   `json:"wave_enabled,omitempty"`      // namespace wave switch (default off)
+	WaveTickTimeout *string `json:"wave_tick_timeout,omitempty"` // "" = inherit scheduler tick timeout
+	WaveWorkersCap  *int    `json:"wave_workers_cap,omitempty"`  // 0 = unlimited
+}
+
+// TickWorker is one dispatched worker inside a wave tick (S12 §9.2,
+// SCHED-GAP-109). One row per worker session the foreman reports in its
+// wave manifest: which task, which branch, which judge verdict, which
+// merge outcome. Rows are created at manifest ingestion (SCHED-GAP-110)
+// and closed by the foreman or the reaper (SCHED-GAP-114).
+//
+// W4 MONEY INVARIANT: CostUSD is ATTRIBUTION ONLY — the worker sessions
+// already run in the foreman's Hermes home, so resolveRealTickCost has
+// already counted them inside ticks.cost_usd. TickWorker.CostUSD is never
+// added to ticks.cost_usd or any fleet total; it exists solely to split a
+// tick's cost per task/branch in reporting (SCHED-GAP-115).
+type TickWorker struct {
+	ID        int64   `json:"id"`         // AUTOINCREMENT PK
+	TickID    string  `json:"tick_id"`    // FK → ticks.id (ON DELETE CASCADE)
+	TaskID    string  `json:"task_id"`    // board task the worker was dispatched for
+	Branch    string  `json:"branch"`     // wt/<task-id>
+	Worktree  string  `json:"worktree"`   // absolute worktree path; "" when unreported
+	CommitSHA string  `json:"commit_sha"` // branch tip reported by the foreman; "" when unreported
+	Judge     string  `json:"judge"`      // pass | fail | withdrawn | unknown
+	Merge     string  `json:"merge"`      // merged | conflict | preserved | pending
+	State     string  `json:"state"`      // running | done | abandoned (S12 §10.3)
+	CostUSD   float64 `json:"cost_usd"`   // attribution ONLY (W4) — never summed into ticks.cost_usd
+	TokensIn  int64   `json:"tokens_in"`
+	TokensOut int64   `json:"tokens_out"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+// TickWorker judge vocabulary (S12 §9.1 CHECK constraint).
+const (
+	TickWorkerJudgePass      = "pass"
+	TickWorkerJudgeFail      = "fail"
+	TickWorkerJudgeWithdrawn = "withdrawn"
+	TickWorkerJudgeUnknown   = "unknown"
+)
+
+// TickWorker merge vocabulary (S12 §9.1 CHECK constraint).
+const (
+	TickWorkerMergeMerged    = "merged"
+	TickWorkerMergeConflict  = "conflict"
+	TickWorkerMergePreserved = "preserved"
+	TickWorkerMergePending   = "pending"
+)
+
+// TickWorker state vocabulary (S12 §9.1 CHECK constraint / §10.3).
+const (
+	TickWorkerStateRunning   = "running"
+	TickWorkerStateDone      = "done"
+	TickWorkerStateAbandoned = "abandoned"
+)
+
+// Validate checks the enum fields against the vocabularies the tick_workers
+// CHECK constraints enforce, returning a field-named error instead of
+// letting the raw constraint fire at INSERT time. The DB CHECKs remain the
+// authority; this is the caller-friendly pre-flight (S12 §13).
+func (w *TickWorker) Validate() error {
+	switch w.Judge {
+	case TickWorkerJudgePass, TickWorkerJudgeFail, TickWorkerJudgeWithdrawn, TickWorkerJudgeUnknown:
+	default:
+		return fmt.Errorf("tick worker %q: invalid judge %q (want pass|fail|withdrawn|unknown)", w.TaskID, w.Judge)
+	}
+	switch w.Merge {
+	case TickWorkerMergeMerged, TickWorkerMergeConflict, TickWorkerMergePreserved, TickWorkerMergePending:
+	default:
+		return fmt.Errorf("tick worker %q: invalid merge %q (want merged|conflict|preserved|pending)", w.TaskID, w.Merge)
+	}
+	switch w.State {
+	case TickWorkerStateRunning, TickWorkerStateDone, TickWorkerStateAbandoned:
+	default:
+		return fmt.Errorf("tick worker %q: invalid state %q (want running|done|abandoned)", w.TaskID, w.State)
+	}
+	return nil
 }
 
 // NamespaceTick records per-namespace utilization for a single evaluation cycle.

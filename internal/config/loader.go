@@ -647,16 +647,31 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 	if nd.Enabled != nil {
 		enabled = *nd.Enabled
 	}
+	// S12 wave config is default-off: an absent key means waves disabled,
+	// timeout inherited, cap unlimited. Negative caps normalize to 0
+	// (unlimited) so a typo'd TOML value cannot trip the CHECK constraint
+	// at CREATE time.
+	waveEnabled := false
+	if nd.WaveEnabled != nil {
+		waveEnabled = *nd.WaveEnabled
+	}
+	waveWorkersCap := nd.WaveWorkersCap
+	if waveWorkersCap < 0 {
+		waveWorkersCap = 0
+	}
 	return &database.Namespace{
-		ID:            nd.ID,
-		Weight:        weight,
-		Reserved:      reserved,
-		HardCap:       hardCap,
-		MaxConcurrent: maxConcurrent,
-		Enabled:       enabled,
-		Description:   nd.Description,
-		DefaultPrompt: nd.DefaultPrompt,
-		ModelChain:    serializeModelChain(nd.ModelChain),
+		ID:              nd.ID,
+		Weight:          weight,
+		Reserved:        reserved,
+		HardCap:         hardCap,
+		MaxConcurrent:   maxConcurrent,
+		Enabled:         enabled,
+		Description:     nd.Description,
+		DefaultPrompt:   nd.DefaultPrompt,
+		ModelChain:      serializeModelChain(nd.ModelChain),
+		WaveEnabled:     waveEnabled,
+		WaveTickTimeout: nd.WaveTickTimeout,
+		WaveWorkersCap:  waveWorkersCap,
 	}
 }
 

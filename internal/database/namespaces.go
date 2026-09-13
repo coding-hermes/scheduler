@@ -22,11 +22,13 @@ func CreateNamespace(ctx context.Context, db *sql.DB, ns *Namespace) error {
 		ns.UpdatedAt = ns.CreatedAt
 	}
 	const q = `INSERT INTO namespaces
-(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, wave_enabled, wave_tick_timeout, wave_workers_cap, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		ns.ID, ns.Weight, ns.Reserved, ns.HardCap, ns.MaxConcurrent, boolToInt(ns.Enabled),
-		nullableString(ns.Description), ns.DefaultPrompt, ns.ModelChain, ns.CreatedAt, ns.UpdatedAt)
+		nullableString(ns.Description), ns.DefaultPrompt, ns.ModelChain,
+		boolToInt(ns.WaveEnabled), ns.WaveTickTimeout, ns.WaveWorkersCap,
+		ns.CreatedAt, ns.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create namespace %q: %w", ns.ID, err)
 	}
@@ -36,13 +38,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?)`
 // GetNamespace loads a single namespace by id. Returns ErrNamespaceNotFound
 // if no row matches.
 func GetNamespace(ctx context.Context, db *sql.DB, id string) (*Namespace, error) {
-	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), created_at, updated_at
+	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), created_at, updated_at
 FROM namespaces WHERE id = ?`
 	var ns Namespace
-	var enabled int
+	var enabled, waveEnabled int
 	err := db.QueryRowContext(ctx, q, id).Scan(
 		&ns.ID, &ns.Weight, &ns.Reserved, &ns.HardCap, &ns.MaxConcurrent, &enabled,
-		&ns.Description, &ns.DefaultPrompt, &ns.ModelChain, &ns.CreatedAt, &ns.UpdatedAt)
+		&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
+		&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.CreatedAt, &ns.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrNamespaceNotFound, id)
 	}
@@ -50,13 +53,14 @@ FROM namespaces WHERE id = ?`
 		return nil, fmt.Errorf("get namespace %q: %w", id, err)
 	}
 	ns.Enabled = enabled != 0
+	ns.WaveEnabled = waveEnabled != 0
 	return &ns, nil
 }
 
 // ListNamespaces returns all namespaces, ordered by id. If enabledOnly is
 // true, only enabled=1 rows are returned.
 func ListNamespaces(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Namespace, error) {
-	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), created_at, updated_at
+	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), created_at, updated_at
 FROM namespaces`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -72,13 +76,15 @@ FROM namespaces`
 	var out []Namespace
 	for rows.Next() {
 		var ns Namespace
-		var enabled int
+		var enabled, waveEnabled int
 		if err := rows.Scan(
 			&ns.ID, &ns.Weight, &ns.Reserved, &ns.HardCap, &ns.MaxConcurrent, &enabled,
-			&ns.Description, &ns.DefaultPrompt, &ns.ModelChain, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
+			&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
+			&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan namespace row: %w", err)
 		}
 		ns.Enabled = enabled != 0
+		ns.WaveEnabled = waveEnabled != 0
 		out = append(out, ns)
 	}
 	if err := rows.Err(); err != nil {
@@ -124,6 +130,18 @@ func UpdateNamespace(ctx context.Context, db *sql.DB, id string, patch Namespace
 	if patch.ModelChain != nil {
 		setClauses = append(setClauses, "model_chain = ?")
 		args = append(args, *patch.ModelChain)
+	}
+	if patch.WaveEnabled != nil {
+		setClauses = append(setClauses, "wave_enabled = ?")
+		args = append(args, boolToInt(*patch.WaveEnabled))
+	}
+	if patch.WaveTickTimeout != nil {
+		setClauses = append(setClauses, "wave_tick_timeout = ?")
+		args = append(args, *patch.WaveTickTimeout)
+	}
+	if patch.WaveWorkersCap != nil {
+		setClauses = append(setClauses, "wave_workers_cap = ?")
+		args = append(args, *patch.WaveWorkersCap)
 	}
 
 	args = append(args, id)

@@ -229,4 +229,9 @@ type NamespaceDef struct {
 	Description   string   `toml:"description"`
 	DefaultPrompt string   `toml:"default_prompt"` // Bane 2026-08-27: foreman prompt default for all projects in this namespace; empty = built-in
 	ModelChain    []string `toml:"model_chain"`    // Bane 2026-08-27: namespace-level model chain ("model@provider" hops); tier between project chain and router
+	// S12 concurrent wave scheduling (SCHED-GAP-109), all default-off:
+	// wave_enabled = false leaves namespace behavior byte-identical.
+	WaveEnabled     *bool  `toml:"wave_enabled"`      // optional; default false (waves off)
+	WaveTickTimeout string `toml:"wave_tick_timeout"` // duration string; "" = inherit scheduler tick timeout (S12 §4)
+	WaveWorkersCap  int    `toml:"wave_workers_cap"`  // max concurrent worker processes across the namespace's running ticks; 0 = unlimited (S12 §6)
 }

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 26
+const latestMigration = 27
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -358,6 +358,42 @@ ALTER TABLE projects ADD COLUMN bump_saved_ceiling_s INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN bump_saved_no_progress_ticks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN bump_started_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN bump INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 27,
+		desc:    "concurrent wave scheduling (S12): worker attribution on ticks + wave config on namespaces + tick_workers table",
+		stmt: `
+-- v27: concurrent wave scheduling (S12)
+ALTER TABLE ticks ADD COLUMN worker_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN wave_recovery INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE namespaces ADD COLUMN wave_enabled INTEGER NOT NULL DEFAULT 0 CHECK(wave_enabled IN (0, 1));
+ALTER TABLE namespaces ADD COLUMN wave_tick_timeout TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN wave_workers_cap INTEGER NOT NULL DEFAULT 0 CHECK(wave_workers_cap >= 0);
+
+CREATE TABLE IF NOT EXISTS tick_workers (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick_id      TEXT NOT NULL REFERENCES ticks(id) ON DELETE CASCADE,
+    task_id      TEXT NOT NULL,
+    branch       TEXT NOT NULL,
+    worktree     TEXT NOT NULL DEFAULT '',
+    commit_sha   TEXT NOT NULL DEFAULT '',
+    judge        TEXT NOT NULL DEFAULT 'unknown'
+                 CHECK(judge IN ('pass','fail','withdrawn','unknown')),
+    merge        TEXT NOT NULL DEFAULT 'pending'
+                 CHECK(merge IN ('merged','conflict','preserved','pending')),
+    state        TEXT NOT NULL DEFAULT 'running'
+                 CHECK(state IN ('running','done','abandoned')),
+    cost_usd     REAL NOT NULL DEFAULT 0,
+    tokens_in    INTEGER NOT NULL DEFAULT 0,
+    tokens_out   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tick_workers_tick ON tick_workers(tick_id);
+CREATE INDEX IF NOT EXISTS idx_tick_workers_task ON tick_workers(task_id);
 `,
 	},
 }
