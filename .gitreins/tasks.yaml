@@ -2310,3 +2310,17 @@ tasks:
   status: complete
   created_at: '2026-09-13T17:34:01.468989+00:00'
   completed_at: '2026-09-13T17:44:24.500098+00:00'
+- id: MYPROJECT-GAP-049
+  title: Split ledger reconciliation drift from open work
+  criteria:
+  - The PM digest reports drift-closable, genuinely open, stale-drift, and no-ID-match
+    counts separately instead of using one unreachable stuck<20 bar.
+  - Reconciliation re-evaluates stale ledger items against board truth and exposes
+    completed stale rows without silently treating stale as healthy terminal state.
+  - No-ID-match output includes a project-level flag and deterministic title-similarity
+    candidates for manual review, including hivemind-work HW-GAP-006..010.
+  - Tests use temporary fixtures only and prove all classifications without writing
+    the live ledger.
+  status: complete
+  created_at: '2026-09-13T18:37:27.686632+00:00'
+  completed_at: '2026-09-13T19:15:15.234175+00:00'
