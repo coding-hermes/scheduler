@@ -210,3 +210,41 @@ func WaveWorkersCapConfigured(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	return ok, nil
 }
+
+// RunningWaveCosts sums the attributed per-worker cost (tick_workers.cost_usd)
+// over each RUNNING wave tick (SCHED-GAP-115, S12 §11). Returns the per-tick
+// map (tick id → attributed USD) and the fleet total — wave_cost_total, the
+// cost twin of wave_depth_total. Attribution is written at completion
+// (attributeTickWorkers), so a freshly-spawned wave reads 0 until its rows
+// exist; the query is an honest read of what the replica holds, never a
+// fabricated estimate (W4: attribution only, never additive).
+//
+// One indexed join over running ticks (idx_tick_workers_tick) — the same
+// O(running ticks) class as ListRunningWaves.
+func RunningWaveCosts(ctx context.Context, db *sql.DB) (map[string]float64, float64, error) {
+	const q = `SELECT t.id, COALESCE(SUM(w.cost_usd), 0)
+FROM ticks t JOIN tick_workers w ON w.tick_id = t.id
+WHERE t.status='running' AND t.worker_count > 0
+GROUP BY t.id`
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, 0, fmt.Errorf("running wave costs: %w", err)
+	}
+	defer rows.Close()
+
+	perTick := make(map[string]float64)
+	total := 0.0
+	for rows.Next() {
+		var id string
+		var cost float64
+		if err := rows.Scan(&id, &cost); err != nil {
+			return nil, 0, fmt.Errorf("scan running wave cost: %w", err)
+		}
+		perTick[id] = cost
+		total += cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate running wave costs: %w", err)
+	}
+	return perTick, total, nil
+}

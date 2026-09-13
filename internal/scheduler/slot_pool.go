@@ -311,6 +311,18 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			} else if n > 0 {
 				log.Printf("WAVE: %s tick=%s ingested %d worker rows", outcome.Project, outcome.TickID, n)
 			}
+			// SCHED-GAP-115 (S12 §11): per-worker cost attribution on the
+			// same completion hook as ingest. Runs only when ingest left
+			// worker rows (a serial tick is a no-op — its cost path stays
+			// byte-identical to pre-115). W4: tick_workers.cost_usd is
+			// attribution only; ticks.cost_usd gains JUST the worktree-side
+			// GitReins judge cost — new money invisible to
+			// resolveRealTickCost, never the manifest's model-cost figures.
+			// Same fail-safe contract as ingest: a fault here is logged and
+			// can never fail the completion path.
+			if _, err := attributeTickWorkers(context.Background(), db, outcome.TickID, outcome.Started, outcome.Finished); err != nil {
+				log.Printf("WARN [wave]: cost attribution %s: %v", outcome.TickID, err)
+			}
 		}
 
 		// Deliver output (suppressed in test-verify mode).

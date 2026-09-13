@@ -214,6 +214,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	status["wave_depth_total"] = waveDepthTotal(waves)
 	status["wave_workers_cap_configured"] = waveWorkersCapConfigured(ctx, s.db)
 	status["waves"] = waves
+	// SCHED-GAP-115 (S12 §11): attributed wave cost — the cost twin of
+	// wave_depth_total. Sum of tick_workers.cost_usd over running waves;
+	// attribution-only figures (W4), so this is what the replica holds,
+	// not an additive fleet total.
+	status["wave_cost_total"] = s.runningWaveCostTotal(ctx)
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
 	if s.loop != nil {
@@ -272,14 +277,17 @@ func listActiveBumps(projects []database.Project) []activeBump {
 }
 
 // activeWave is one entry in the /api/v1/status "waves" array (SCHED-GAP-112,
-// S12 §9.4) — an in-flight tick dispatching worker sessions.
+// S12 §9.4) — an in-flight tick dispatching worker sessions. Cost is the
+// attributed per-worker sum for this wave so far (SCHED-GAP-115, S12 §11):
+// 0 until attribution rows exist, attribution-only (W4).
 type activeWave struct {
-	Project     string `json:"project"`
-	TickID      string `json:"tick_id"`
-	Namespace   string `json:"namespace"`
-	WorkerCount int    `json:"worker_count"`
-	StartedAt   string `json:"started_at"`
-	AgeS        int64  `json:"age_s"`
+	Project     string  `json:"project"`
+	TickID      string  `json:"tick_id"`
+	Namespace   string  `json:"namespace"`
+	WorkerCount int     `json:"worker_count"`
+	Cost        float64 `json:"cost"`
+	StartedAt   string  `json:"started_at"`
+	AgeS        int64   `json:"age_s"`
 }
 
 // listRunningWaves builds the /api/v1/status waves view from the running-wave
@@ -293,6 +301,14 @@ func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
 	if err != nil {
 		log.Printf("status: list running waves: %v", err)
 		return make([]activeWave, 0)
+	}
+	// SCHED-GAP-115: per-tick attributed cost — one indexed join, shared
+	// with runningWaveCostTotal. A failed lookup leaves costs at 0 (the
+	// status surface must never 500 on a dirty read).
+	costs, _, err := database.RunningWaveCosts(ctx, s.db)
+	if err != nil {
+		log.Printf("status: running wave costs: %v", err)
+		costs = nil
 	}
 	out := make([]activeWave, 0, len(rows))
 	for _, w := range rows {
@@ -311,11 +327,25 @@ func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
 			TickID:      w.TickID,
 			Namespace:   w.NamespaceID,
 			WorkerCount: w.WorkerCount,
+			Cost:        costs[w.TickID],
 			StartedAt:   w.StartedAt,
 			AgeS:        age,
 		})
 	}
 	return out
+}
+
+// runningWaveCostTotal sums the attributed per-worker cost over all running
+// waves (SCHED-GAP-115) — /api/v1/status wave_cost_total. A failed query
+// returns 0 (attribution is observability; a dirty read must never 500 the
+// status surface).
+func (s *Server) runningWaveCostTotal(ctx context.Context) float64 {
+	_, total, err := database.RunningWaveCosts(ctx, s.db)
+	if err != nil {
+		log.Printf("status: running wave costs: %v", err)
+		return 0
+	}
+	return total
 }
 
 // waveDepthTotal sums worker_count over the running-wave rows — the fleet's

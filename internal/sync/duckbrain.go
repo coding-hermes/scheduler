@@ -430,10 +430,14 @@ type fleetSummary struct {
 	// of running ticks dispatching workers; WaveDepthTotal is the sum of
 	// their worker_count (NOT active_ticks — W1/W3); WaveWorkers is the
 	// compact §9.4 array. Read-replica only — SQLite stays authoritative.
-	ActiveWaves    int             `json:"active_waves"`
-	WaveDepthTotal int             `json:"wave_depth_total"`
-	WaveWorkers    []waveWorkerRef `json:"wave_workers"`
-	SyncedAt       string          `json:"synced_at"`
+	ActiveWaves    int `json:"active_waves"`
+	WaveDepthTotal int `json:"wave_depth_total"`
+	// SCHED-GAP-115 (S12 §11): attributed per-worker cost summed over
+	// running waves — the cost twin of WaveDepthTotal. Read-replica only
+	// (W4: attribution figures, never an additive fleet total).
+	WaveCostTotal float64         `json:"wave_cost_total"`
+	WaveWorkers   []waveWorkerRef `json:"wave_workers"`
+	SyncedAt      string          `json:"synced_at"`
 }
 
 // waveWorkerRef is the compact per-wave entry in the DuckBrain fleet
@@ -476,6 +480,15 @@ func (d *DuckBrainSync) syncFleetSummary(ctx context.Context) error {
 		})
 		waveDepth += w.WorkerCount
 	}
+	// SCHED-GAP-115: attributed wave cost. One indexed join (shared shape
+	// with the /api/v1/status path); an error is surfaced — the snapshot
+	// must not silently claim $0 when attribution could not be read.
+	waveCost := 0.0
+	if _, total, err := database.RunningWaveCosts(ctx, d.db); err == nil {
+		waveCost = total
+	} else {
+		return fmt.Errorf("running wave costs: %w", err)
+	}
 
 	summary := fleetSummary{
 		TotalProjects:  total,
@@ -483,6 +496,7 @@ func (d *DuckBrainSync) syncFleetSummary(ctx context.Context) error {
 		ActiveTicks:    activeTicks,
 		ActiveWaves:    len(waveRows),
 		WaveDepthTotal: waveDepth,
+		WaveCostTotal:  waveCost,
 		WaveWorkers:    waveWorkers,
 		SyncedAt:       time.Now().Format(time.RFC3339),
 	}
