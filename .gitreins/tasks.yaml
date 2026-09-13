@@ -2084,3 +2084,24 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:38:06.522899+00:00'
   completed_at: '2026-08-27T10:17:57.296515+00:00'
+- id: SCHED-GAP-107-VER
+  title: SCHED-GAP-107 bump verification suite (RED-check proof)
+  criteria:
+  - New tests land under internal/database|internal/api|internal/scheduler covering
+    migration v26 columns, BumpProject/ClearBump snapshot+restore, the bump API contract
+    (ticks 1..8, cooldown >= 7200, reason required, 404/409 guards, unbump, status
+    bumps array), the two-phase auto-revert, the 12h hard cap, only-bump-flagged ticks
+    consuming the countdown, the packer cooldown override in every selection path,
+    and the ApplyFleetConfig bump-active pin skip
+  - docs/verification/sched-gap-107-bump.md exists with a criterion -> test -> RED-check
+    mutation table
+  - 'Each of at least three RED checks was actually performed: the mutation applied,
+    the named test''s FAIL output captured, and the tree reverted so no mutation ships
+    in the commit'
+  - gofmt clean for touched files, go build ./... passes, go vet ./internal/... passes,
+    go test -count=1 -short -p 1 ./... passes, golangci-lint reports 0 issues
+  - 'Committed with author totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+    and the trailer Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>, pushed to
+    origin main with git rev-list --count origin/main..HEAD = 0'
+  status: in_progress
+  created_at: '2026-09-13T03:34:11.594231+00:00'
