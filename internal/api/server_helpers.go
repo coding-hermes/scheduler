@@ -209,15 +209,18 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 		       COALESCE(tokens_out,0) as tokens_out,
 		       COALESCE(cost_usd,0.0) as cost_usd,
 		       COALESCE(urgency,0.0) as urgency,
-		       COALESCE(weight_used,0) as weight_used,
+		       COALESCE(weight_used,0.0) as weight_used,
 		       COALESCE(error,'') as error,
-		       created_at
+		       created_at,
+		       COALESCE(worker_count,0) as worker_count,
+		       COALESCE(wave_recovery,0) as wave_recovery
 		FROM ticks WHERE id = ?
 	`, id)
 	var t database.Tick
 	err := row.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed, &t.Error, &t.CreatedAt)
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed, &t.Error, &t.CreatedAt,
+		&t.WorkerCount, &t.WaveRecovery)
 	if err != nil {
 		return nil, err
 	}

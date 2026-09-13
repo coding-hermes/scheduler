@@ -152,3 +152,61 @@ WHERE t.status='running' AND p.namespace_id = ?`
 	}
 	return n, nil
 }
+
+// RunningWave is one in-flight wave tick for the status surfaces (S12 §9.4 /
+// §9.5). StartedAt is spawned_at, falling back to created_at for rows that
+// never got a spawn stamp.
+type RunningWave struct {
+	TickID      string
+	Project     string
+	NamespaceID string
+	WorkerCount int
+	StartedAt   string
+}
+
+// ListRunningWaves returns every running tick with worker_count > 0, joined
+// to projects for the namespace (SCHED-GAP-112). One indexed query over
+// running ticks (idx_ticks_status) — O(running ticks), no per-project loop —
+// so the /api/v1/status wave block stays inside its <2ms budget (S12 §14).
+// A tick whose project row was purged still surfaces (LEFT JOIN) with an
+// empty namespace. The result is always non-nil so callers can JSON-encode
+// it directly as [] rather than null.
+func ListRunningWaves(ctx context.Context, db *sql.DB) ([]RunningWave, error) {
+	const q = `SELECT t.id, t.project_name, COALESCE(p.namespace_id,''),
+COALESCE(t.worker_count,0), COALESCE(NULLIF(t.spawned_at,''), t.created_at)
+FROM ticks t LEFT JOIN projects p ON p.name = t.project_name
+WHERE t.status='running' AND t.worker_count > 0
+ORDER BY t.spawned_at, t.id`
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list running waves: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]RunningWave, 0)
+	for rows.Next() {
+		var w RunningWave
+		if err := rows.Scan(&w.TickID, &w.Project, &w.NamespaceID,
+			&w.WorkerCount, &w.StartedAt); err != nil {
+			return nil, fmt.Errorf("scan running wave row: %w", err)
+		}
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate running waves: %w", err)
+	}
+	return out, nil
+}
+
+// WaveWorkersCapConfigured reports whether at least one namespace sets a
+// positive wave_workers_cap (S12 §6.2 item 3) — the
+// status.wave_workers_cap_configured flag of S12 §9.4. The namespaces table
+// is a handful of rows, so this EXISTS probe is effectively free.
+func WaveWorkersCapConfigured(ctx context.Context, db *sql.DB) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM namespaces WHERE wave_workers_cap > 0)`
+	var ok bool
+	if err := db.QueryRowContext(ctx, q).Scan(&ok); err != nil {
+		return false, fmt.Errorf("wave workers cap configured: %w", err)
+	}
+	return ok, nil
+}

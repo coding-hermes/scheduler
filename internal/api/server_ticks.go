@@ -52,7 +52,25 @@ func (s *Server) handleTickByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "tick not found")
 		return
 	}
-	writeJSON(w, 200, tick)
+	// SCHED-GAP-112 / S12 §9.4: include the worker-attribution rows when
+	// present. Embedding the Tick (rather than re-listing its fields)
+	// guarantees the wave envelope carries every Tick field, present and
+	// future; tick_workers rides alongside. When no rows exist the handler
+	// writes the Tick directly, so serial-tick responses stay
+	// byte-identical to the pre-v27 shape.
+	workers, err := database.ListTickWorkersByTick(ctx, s.db, id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if len(workers) == 0 {
+		writeJSON(w, 200, tick)
+		return
+	}
+	writeJSON(w, 200, struct {
+		*database.Tick
+		TickWorkers []database.TickWorker `json:"tick_workers"`
+	}{tick, workers})
 }
 
 // events returns the event log with optional filters.

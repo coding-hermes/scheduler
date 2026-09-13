@@ -423,10 +423,27 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 
 // fleetSummary is the payload sent to DuckBrain for /fleet/summary.
 type fleetSummary struct {
-	TotalProjects int    `json:"total_projects"`
-	Enabled       int    `json:"enabled"`
-	ActiveTicks   int    `json:"active_ticks"`
-	SyncedAt      string `json:"synced_at"`
+	TotalProjects int `json:"total_projects"`
+	Enabled       int `json:"enabled"`
+	ActiveTicks   int `json:"active_ticks"`
+	// S12 §9.5 / SCHED-GAP-112: live wave load. ActiveWaves is the number
+	// of running ticks dispatching workers; WaveDepthTotal is the sum of
+	// their worker_count (NOT active_ticks — W1/W3); WaveWorkers is the
+	// compact §9.4 array. Read-replica only — SQLite stays authoritative.
+	ActiveWaves    int             `json:"active_waves"`
+	WaveDepthTotal int             `json:"wave_depth_total"`
+	WaveWorkers    []waveWorkerRef `json:"wave_workers"`
+	SyncedAt       string          `json:"synced_at"`
+}
+
+// waveWorkerRef is the compact per-wave entry in the DuckBrain fleet
+// snapshot (S12 §9.5) — the §9.4 array without the derived age_s.
+type waveWorkerRef struct {
+	Project     string `json:"project"`
+	TickID      string `json:"tick_id"`
+	Namespace   string `json:"namespace"`
+	WorkerCount int    `json:"worker_count"`
+	StartedAt   string `json:"started_at"`
 }
 
 // syncFleetSummary queries aggregate fleet stats and pushes to DuckBrain.
@@ -441,12 +458,33 @@ func (d *DuckBrainSync) syncFleetSummary(ctx context.Context) error {
 	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&activeTicks); err != nil {
 		return fmt.Errorf("count active ticks: %w", err)
 	}
+	// S12 §9.5: one indexed query for the wave view; empty (non-nil) slice
+	// when no wave is running so the payload carries [] not null.
+	waveRows, err := database.ListRunningWaves(ctx, d.db)
+	if err != nil {
+		return fmt.Errorf("list running waves: %w", err)
+	}
+	waveWorkers := make([]waveWorkerRef, 0, len(waveRows))
+	waveDepth := 0
+	for _, w := range waveRows {
+		waveWorkers = append(waveWorkers, waveWorkerRef{
+			Project:     w.Project,
+			TickID:      w.TickID,
+			Namespace:   w.NamespaceID,
+			WorkerCount: w.WorkerCount,
+			StartedAt:   w.StartedAt,
+		})
+		waveDepth += w.WorkerCount
+	}
 
 	summary := fleetSummary{
-		TotalProjects: total,
-		Enabled:       enabled,
-		ActiveTicks:   activeTicks,
-		SyncedAt:      time.Now().Format(time.RFC3339),
+		TotalProjects:  total,
+		Enabled:        enabled,
+		ActiveTicks:    activeTicks,
+		ActiveWaves:    len(waveRows),
+		WaveDepthTotal: waveDepth,
+		WaveWorkers:    waveWorkers,
+		SyncedAt:       time.Now().Format(time.RFC3339),
 	}
 
 	return d.postMemory(ctx, "/fleet/summary", "config", summary)

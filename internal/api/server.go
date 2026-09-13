@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"log"
 	"net/http"
 	"time"
 
@@ -206,6 +207,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	// SCHED-GAP-107: active bump badge + remaining count per project.
 	status["bumps"] = listActiveBumps(projects)
+	// SCHED-GAP-112 / S12 §9.4: live wave load. ONE indexed query over
+	// running ticks (no per-project loop, <2ms budget per S12 §14) —
+	// workers NEVER enter active_ticks (W1/W3).
+	waves := s.listRunningWaves(ctx)
+	status["wave_depth_total"] = waveDepthTotal(waves)
+	status["wave_workers_cap_configured"] = waveWorkersCapConfigured(ctx, s.db)
+	status["waves"] = waves
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
 	if s.loop != nil {
@@ -261,6 +269,75 @@ func listActiveBumps(projects []database.Project) []activeBump {
 		})
 	}
 	return out
+}
+
+// activeWave is one entry in the /api/v1/status "waves" array (SCHED-GAP-112,
+// S12 §9.4) — an in-flight tick dispatching worker sessions.
+type activeWave struct {
+	Project     string `json:"project"`
+	TickID      string `json:"tick_id"`
+	Namespace   string `json:"namespace"`
+	WorkerCount int    `json:"worker_count"`
+	StartedAt   string `json:"started_at"`
+	AgeS        int64  `json:"age_s"`
+}
+
+// listRunningWaves builds the /api/v1/status waves view from the running-wave
+// rows (one indexed query). AgeS is seconds since started_at; a started_at
+// that fails to parse as RFC3339 yields age 0 rather than an error — the
+// status surface must never 500 on a dirty row. An empty (non-nil) slice is
+// returned when no wave is running so the JSON carries "waves": [] rather
+// than null (the bumps convention).
+func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
+	rows, err := database.ListRunningWaves(ctx, s.db)
+	if err != nil {
+		log.Printf("status: list running waves: %v", err)
+		return make([]activeWave, 0)
+	}
+	out := make([]activeWave, 0, len(rows))
+	for _, w := range rows {
+		var age int64
+		if ts, err := time.Parse(time.RFC3339, w.StartedAt); err == nil {
+			age = int64(time.Since(ts).Seconds())
+			if age < 0 {
+				age = 0
+			}
+			// Normalize to RFC3339 UTC, matching the bumps convention
+			// (activeBump.StartedAt) and last_evaluation.
+			w.StartedAt = ts.UTC().Format(time.RFC3339)
+		}
+		out = append(out, activeWave{
+			Project:     w.Project,
+			TickID:      w.TickID,
+			Namespace:   w.NamespaceID,
+			WorkerCount: w.WorkerCount,
+			StartedAt:   w.StartedAt,
+			AgeS:        age,
+		})
+	}
+	return out
+}
+
+// waveDepthTotal sums worker_count over the running-wave rows — the fleet's
+// live worker-process load. It is deliberately NOT active_ticks: a 3-worker
+// wave is one tick (W1/W3) but three workers.
+func waveDepthTotal(waves []activeWave) int {
+	total := 0
+	for _, w := range waves {
+		total += w.WorkerCount
+	}
+	return total
+}
+
+// waveWorkersCapConfigured reports whether any namespace sets
+// wave_workers_cap > 0 (S12 §9.4). DB errors degrade to false, never a 500.
+func waveWorkersCapConfigured(ctx context.Context, db *sql.DB) bool {
+	ok, err := database.WaveWorkersCapConfigured(ctx, db)
+	if err != nil {
+		log.Printf("status: wave workers cap configured: %v", err)
+		return false
+	}
+	return ok
 }
 
 // pause suspends the scheduler loop.
