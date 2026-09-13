@@ -2109,25 +2109,47 @@ tasks:
 - id: SCHED-GAP-109
   title: Migration v27 + wave model plumbing (S12 row 1)
   criteria:
-  - "Migration v27 lands: latestMigration=27; ticks gains worker_count + wave_recovery\
-    \ (INTEGER NOT NULL DEFAULT 0); namespaces gains wave_enabled (0/1 CHECK), wave_tick_timeout\
-    \ (TEXT DEFAULT ''), wave_workers_cap (>=0 CHECK); tick_workers table per spec\
-    \ S12 \xA79.1 with judge/merge/state CHECK constraints and idx_tick_workers_tick\
-    \ + idx_tick_workers_task indexes"
+  - "Migration v27 lands: latestMigration=27; ticks gains worker_count + wave_recovery;\
+    \ namespaces gains wave_enabled (0/1 CHECK), wave_tick_timeout (TEXT DEFAULT ''),\
+    \ wave_workers_cap (>=0 CHECK); tick_workers table per spec S12 \xA79.1 with judge/merge/state\
+    \ CHECK constraints and idx_tick_workers_tick + idx_tick_workers_task indexes"
   - "Tick model gains WorkerCount/WaveRecovery, Namespace gains WaveEnabled/WaveTickTimeout/WaveWorkersCap,\
     \ TickWorker struct per \xA79.2, NamespacePatch gains the three wave pointers\
     \ \u2014 all with the \xA79.2 json tags"
   - tick_workers CRUD exists (create/update/list-by-tick returning empty non-nil slice/worker-count
     set/namespace running-worker count) with parameterized SQL only
-  - All tick SELECT/scan paths (CreateTick/GetTick/ListTicks/ListAllTicks) carry the
-    new columns via COALESCE
+  - All tick SELECT/scan paths carry the new columns via COALESCE
   - 'Tests prove: migration columns/indexes/CHECKs, CRUD round-trip incl. namespace
     running-worker count, namespace patch apply of the new fields, tick round-trip
     defaults and set values'
   - 'Gates green: gofmt clean (touched files), go build ./..., go vet ./internal/...,
+    go test -count=1 -short -p 1 ./..., golangci-lint 0 issues'
+  - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+    trailer; pushed to origin main (commit 0d3fc32, rev-list --count origin/main..HEAD
+    = 0)'
+  status: complete
+  created_at: '2026-09-13T04:35:37.754683+00:00'
+  completed_at: '2026-09-13T04:35:44.062803+00:00'
+- id: SCHED-GAP-111
+  title: Effective tick deadline (S12 row 3)
+  criteria:
+  - 'Spawn-path deadline resolution: when the project''s namespace has wave_enabled=1
+    AND non-empty wave_tick_timeout, the foreman session ctx deadline (spawn.go:854)
+    resolves to that value; every failure path (unknown/NULL namespace, unparseable
+    duration, db error) falls back to s.timeout so serial behavior is byte-identical'
+  - SCHEDULER_WAVE_TICK_TIMEOUT env override supported at the resolution site; unparseable
+    env value logs a warning and falls back to the namespace value; no runtime extension,
+    no heartbeat lease
+  - 'Config validation: wave_tick_timeout above 4h is rejected at fleet-config validation
+    with a field-named error naming namespace + field; unparseable non-empty value
+    also rejected; 4h itself accepted; never silently clamped'
+  - fleet.example.toml documents the three wave keys as optional and default-off
+  - "Tests: TestEffectiveTickTimeout_WaveNamespace, TestEffectiveTickTimeout_SerialNamespaceInherits,\
+    \ TestConfig_RejectsWaveTickTimeoutAboveCeiling per spec S12 \xA712, plus env-override\
+    \ precedence and unparseable-env fallback"
+  - 'Gates green: gofmt clean (touched files), go build ./..., go vet ./internal/...,
     go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
   - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
     trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
-  status: complete
-  created_at: '2026-09-13T03:40:14.944979+00:00'
-  completed_at: '2026-09-13T04:04:25.402965+00:00'
+  status: in_progress
+  created_at: '2026-09-13T04:36:00.470699+00:00'
