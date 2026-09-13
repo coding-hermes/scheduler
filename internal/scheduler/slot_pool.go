@@ -292,6 +292,27 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			log.Printf("SPAWN: complete %s: %v", tickID, err)
 		}
 
+		// SCHED-GAP-110: ingest the foreman's wave manifest (S12 §9.3) now
+		// that the tick row is terminal — ticks.worker_count + tick_workers
+		// rows in one transaction. Runs for completed AND timed-out ticks
+		// (the same gate resolveRealTickCost uses inside Wait): a timed-out
+		// wave still spent its workers, and attribution rows are what the
+		// reaper later marks abandoned. Best-effort by contract: a manifest
+		// problem costs at most one WARN event and can never change the
+		// tick's status, outcome, cost, or anything after this point — the
+		// outcome was already persisted above.
+		if db != nil && proj.Workdir != "" &&
+			(outcome.Status == TickCompleted || outcome.Status == TickTimeout) {
+			n, err := ingestWaveManifest(context.Background(), db, proj.Workdir, outcome.Project, outcome.TickID)
+			if err != nil {
+				// Infrastructure fault only (tx begin/commit); parse
+				// problems were already surfaced as WARN events inside.
+				log.Printf("WARN [wave]: manifest ingest %s: %v", outcome.TickID, err)
+			} else if n > 0 {
+				log.Printf("WAVE: %s tick=%s ingested %d worker rows", outcome.Project, outcome.TickID, n)
+			}
+		}
+
 		// Deliver output (suppressed in test-verify mode).
 		if !noDeliver {
 			deliverOutput(outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &st.Output)
