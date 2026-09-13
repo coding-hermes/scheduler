@@ -2178,5 +2178,28 @@ tasks:
     go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
   - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
     trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
-  status: in_progress
+  status: complete
   created_at: '2026-09-13T05:20:24.183520+00:00'
+  completed_at: '2026-09-13T05:45:42.438496+00:00'
+- id: SCHED-GAP-112
+  title: /api/v1/status wave surface (S12 row 4)
+  criteria:
+  - /api/v1/status gains wave_depth_total = SUM(worker_count) over RUNNING ticks (never
+    active_ticks), wave_workers_cap_configured (any namespace with cap>0), and waves[]
+    = [{project,tick_id,namespace,worker_count,started_at,age_s}] for running ticks
+    with worker_count>0; waves is always [] never null
+  - "One indexed query over running ticks; no per-project loop; <2ms added to /api/v1/status\
+    \ (S12 \xA714)"
+  - GET /api/v1/ticks/{id} includes worker_count, wave_recovery and tick_workers[]
+    when present; serial-tick responses byte-identical to before
+  - DuckBrain fleet snapshot gains ActiveWaves, WaveDepthTotal, WaveWorkers; SQLite
+    stays authoritative, read-replica only
+  - 'Tests: running 3-worker wave -> wave_depth_total 3 + waves[0].worker_count 3
+    + active_ticks 1; empty fleet -> decoded waves non-nil empty; serial-tick shape
+    regression; DuckBrain snapshot fields'
+  - 'Gates green: gofmt clean (touched files), go build ./..., go vet ./internal/...,
+    go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
+  - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+    trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
+  status: in_progress
+  created_at: '2026-09-13T05:46:08.370566+00:00'
