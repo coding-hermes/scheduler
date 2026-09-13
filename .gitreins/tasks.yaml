@@ -2292,3 +2292,13 @@ tasks:
   status: complete
   created_at: '2026-09-13T12:06:40.407698+00:00'
   completed_at: '2026-09-13T12:06:40.883913+00:00'
+- id: MYPROJECT-GAP-048-R1
+  title: Complete amended GAP-048 live-script versioning scope
+  criteria:
+  - Repository HEAD tracks pm-standin-tick.sh, dagger-role-report.py, and ledger_board_reconcile.py
+    byte-identically; install.sh idempotently deploys all three live symlinks with
+    safe backups and documented rollback; isolated install/rollback/reinstall and
+    live default dry-run preserve ledger state; full Tier 1 guard passes.
+  status: complete
+  created_at: '2026-09-13T12:20:21.895257+00:00'
+  completed_at: '2026-09-13T12:20:34.120023+00:00'
