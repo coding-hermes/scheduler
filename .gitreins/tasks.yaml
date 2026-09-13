@@ -2151,5 +2151,32 @@ tasks:
     go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
   - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
     trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
-  status: in_progress
+  status: complete
   created_at: '2026-09-13T04:36:00.470699+00:00'
+  completed_at: '2026-09-13T05:19:49.117481+00:00'
+- id: SCHED-GAP-110
+  title: Wave manifest ingest (S12 row 2)
+  criteria:
+  - "internal/scheduler/wave_manifest.go: WaveManifest/WaveWorker structs per spec\
+    \ \xA79.3, waveManifestPath = <workdir>/.coding-hermes/waves/<tick_id>.json, 64KiB\
+    \ size bound, 8-worker ingest bound with typed truncation signal, tick_id mismatch\
+    \ rejection, Judge/Merge normalization to the DB CHECK sets"
+  - 'ingestWaveManifest: absent file -> 0 workers + NO event; malformed/oversize/mismatch
+    -> 0 workers + exactly one WARN event naming tick+path; success -> ONE transaction
+    updating ticks.worker_count + inserting tick_workers rows via parameterized SQL
+    only'
+  - 'W4 money invariant holds: manifest cost_usd written to tick_workers as attribution
+    ONLY; ticks.cost_usd never modified by ingestion (RED-checked by a test)'
+  - 'Ingestion wired into the spawn.go tick-completion path adjacent to resolveRealTickCost,
+    strictly best-effort: can never change tick status/outcome/cost or fail the completion
+    callback'
+  - waveManifestUnfinished(path) helper exists for the SCHED-GAP-114 recovery scan
+    (true iff manifest parses and finished_at is empty)
+  - "Tests: the five \xA712 TestParseWaveManifest_* cases + oversize + no-double-count\
+    \ + serial-tick-no-event, all passing with -count=1 -short"
+  - 'Gates green: gofmt clean (touched files), go build ./..., go vet ./internal/...,
+    go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
+  - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+    trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
+  status: in_progress
+  created_at: '2026-09-13T05:20:24.183520+00:00'
