@@ -1,32 +1,61 @@
 #!/usr/bin/env python3
-"""Reconcile the stand-in PM ledger with project boards (board task GAP-047).
+"""Reconcile the stand-in PM ledger with project boards (GAP-047, split GAP-049).
 
 The stand-in ledger (~/.hermes/stand-in/ledger.json) never learned about board
 closures: items stay status='added'/'picked_up' for weeks while their board row
 in <workdir>/.coding-hermes/board/tasks.jsonl is already 'complete'. That drift
 feeds a dead-end escalation loop and blocks the PM propose leg.
 
-This script reads the ledger, resolves each item's project to its board via
-scheduler.db (table `projects`, column `workdir`, opened read-only), matches the
-ledger id to a board row, and — only when the board row is 'complete' and the
-ledger item is non-terminal — flips the ledger item to 'verified' with evidence.
+GAP-049 split: aged ledger items are NOT one homogeneous "stuck" problem.
+This version classifies every aged non-terminal item into explicit,
+machine-readable categories and re-evaluates stale items against board truth:
+
+    board_open_work   board row exists and is genuinely open (not complete).
+                      Legitimate open work — never "drift", never closable.
+    drift_closable    board row is 'complete' but the ledger item is not
+                      reconciled. The ONLY category eligible for auto-close,
+                      and only on --apply.
+    stale_drift       ledger status 'stale' (previous terminal state) whose
+                      board row is now 'complete'. Re-evaluated, surfaced, and
+                      reconciled to 'verified' with evidence on --apply.
+    stale_terminal    stale ledger item whose board row is still genuinely
+                      open. Stays terminal; only surfaced, never written.
+    board_missing     no board found for the project.
+    no_id_match       board exists but no board row matches the item id;
+                      accompanied by per-project manual-review candidates
+                      (title similarity — advisory only, NEVER auto-closed).
+    ambiguous         multiple suffix-match candidates (previous fuzzy logic).
+    age_unknown       added_at unparseable, so age cannot be computed.
 
 Status vocabulary (verified mapping):
     board 'complete'      -> ledger 'verified'
-    terminal ledger set   = {verified, complete, stale}
-    non-terminal ledger   = {added, picked_up, blocked, in_progress}
+    terminal ledger set   = {verified, complete}   (stale is RE-EVALUATED, not
+                                                    silently treated as healthy)
+    non-terminal ledger   = {added, picked_up, blocked, in_progress, stale}
+
+Success semantics (GAP-049): there is NO universal "stuck < N" bar. Genuine
+open work is not drift and must not fail a repair target. The actionable
+measure is closable drift (drift_closable + stale_drift) plus the honest
+manual-work buckets (board_missing, no_id_match, ambiguous, age_unknown).
 
 Only three ledger fields are ever touched: status, last_checked_at,
 verification_evidence. No other field is read-modified or rewritten.
 
 Modes:
-    (default)  dry-run: print what would change, per-project counts, totals; exit 0
-    --apply    copy ledger.json -> ledger.json.bak-20260913, then write the new
-               ledger atomically (tmp file in the same dir + os.replace).
-               Refuses to write when the dry-run change count is 0 (nothing to do
-               is not an error: exits 0 with a note).
+    (default)  dry-run: print classifications, per-project counts, totals,
+               and a machine-readable summary JSON (between
+               <<<RECONCILE-SUMMARY-JSON-BEGIN/END>>> markers); exit 0.
+               Nothing is ever written.
+    --apply    copy ledger.json -> ledger.json.<backup-suffix>, then write the
+               new ledger atomically (tmp file in the same dir + os.replace).
+               Refuses to write when the change count is 0 (nothing to do is
+               not an error: exits 0 with a note).
 
-Stdlib only: json, sqlite3, os, sys, datetime, argparse.
+digest_input() additionally powers the PM tick digest generator embedded in
+pm-standin-tick.sh (imported from the live reconciler symlink), so the digest
+and this tool share one classification implementation.
+
+Stdlib only: json, sqlite3, os, sys, datetime, argparse, difflib, re.
 """
 
 import argparse
@@ -36,6 +65,7 @@ import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 
 LEDGER_DEFAULT = os.path.expanduser("~/.hermes/stand-in/ledger.json")
 SCHEDULER_DB_DEFAULT = os.path.expanduser("~/.hermes/coding-hermes/scheduler.db")
@@ -48,10 +78,28 @@ EVIDENCE_TPL = (
     " (GAP-047 closure tick): board row {id} complete in {path}"
 )
 
-TERMINAL_STATUSES = {"verified", "complete", "stale"}
-NON_TERMINAL_STATUSES = {"added", "picked_up", "blocked", "in_progress"}
+# GAP-049: 'stale' moved OUT of the terminal set — a stale ledger item is
+# re-evaluated against board truth (drift if its board row is complete).
+TERMINAL_STATUSES = {"verified", "complete"}
+NON_TERMINAL_STATUSES = {"added", "picked_up", "blocked", "in_progress", "stale"}
 BOARD_DONE = "complete"
 STUCK_AGE_HOURS = 48.0
+
+# Classification categories (machine-readable, stable order).
+CATEGORIES = (
+    "board_open_work", "drift_closable", "stale_drift", "stale_terminal",
+    "board_missing", "no_id_match", "ambiguous", "age_unknown",
+)
+# Categories that --apply may write to the ledger. Exact board-ID match on a
+# complete board row remains the ONLY automatic closure authority.
+ACTIONABLE_CATEGORIES = ("drift_closable", "stale_drift")
+
+# Title-similarity candidates (advisory, manual review only).
+CANDIDATE_LIMIT = 3
+CANDIDATE_MIN_SCORE = 0.30
+
+SUMMARY_JSON_BEGIN = "<<<RECONCILE-SUMMARY-JSON-BEGIN>>>"
+SUMMARY_JSON_END = "<<<RECONCILE-SUMMARY-JSON-END>>>"
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +220,318 @@ def match_board_row(item_id, board_rows):
     return None, None, "no_id_match"
 
 
+# --------------------------------------------------------------------------- #
+# GAP-049 classification + title-similarity helpers (pure, testable)
+# --------------------------------------------------------------------------- #
+def classify_item(status, board_status, board_found):
+    """Pure classification per GAP-049.
+
+    status        : ledger status string
+    board_status  : board row status (ignored when board_found is False)
+    board_found   : whether a board row was matched for the item
+    Returns one of CATEGORIES.
+    """
+    if not board_found:
+        return "board_missing"
+    if status == "stale":
+        return "stale_drift" if board_status == BOARD_DONE else "stale_terminal"
+    if board_status == BOARD_DONE:
+        return "drift_closable"
+    return "board_open_work"
+
+
+def title_similarity(a, b):
+    """Deterministic 0.0..1.0 title similarity (difflib SequenceMatcher on
+    lowercased, whitespace-collapsed titles)."""
+    na = re.sub(r"\s+", " ", str(a or "").strip().lower())
+    nb = re.sub(r"\s+", " ", str(b or "").strip().lower())
+    if not na or not nb:
+        return 0.0
+    return SequenceMatcher(None, na, nb).ratio()
+
+
+def title_candidates(item_title, board_rows, limit=CANDIDATE_LIMIT,
+                     min_score=CANDIDATE_MIN_SCORE):
+    """Deterministic, bounded advisory candidates for one unmatched item.
+
+    Returns the top `limit` board rows by similarity >= min_score, ties broken
+    by board id (stable order). NEVER applied automatically — these exist only
+    to point a human at plausible matches.
+
+    Each candidate: {board_id, board_title, board_status, score}.
+    """
+    scored = []
+    for bid in sorted(board_rows):
+        row = board_rows[bid]
+        score = title_similarity(item_title, row.get("title") or row.get("summary") or "")
+        if score >= min_score:
+            scored.append((score, bid))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    out = []
+    for score, bid in scored[:limit]:
+        row = board_rows[bid]
+        out.append({
+            "board_id": bid,
+            "board_title": str(row.get("title") or "")[:120],
+            "board_status": row.get("status") or "",
+            "score": round(score, 4),
+        })
+    return out
+
+
+def build_no_id_matches(no_id_items, rows_cache):
+    """Per-project no_id_match detail with advisory title candidates.
+
+    no_id_items : {project: [ledger item dicts without a board-id match]}
+    rows_cache  : {project: board rows dict or None}
+
+    Returns {project: {"no_id_match": True, "count": N, "items": [...]}} —
+    projects with zero unmatched items are absent. Deterministic: items sorted
+    by item id, candidates from a sorted board-id walk, capped per item.
+    """
+    details = {}
+    for project in sorted(no_id_items):
+        unmatched = no_id_items[project]
+        if not unmatched:
+            continue
+        rows = rows_cache.get(project) or {}
+        entries = []
+        for item in sorted(unmatched, key=lambda it: str(it.get("id") or "")):
+            entries.append({
+                "item_id": str(item.get("id") or ""),
+                "title": str(item.get("title") or "")[:120],
+                "ledger_status": item.get("status") or "",
+                "candidates": title_candidates(item.get("title") or "", rows),
+            })
+        details[project] = {
+            "no_id_match": True,
+            "count": len(entries),
+            "items": entries,
+        }
+    return details
+
+
+def classify_aged_items(items, board_loader, now):
+    """Classify every aged non-terminal ledger item against board truth.
+
+    items        : ledger items list
+    board_loader : callable project -> rows dict, or None when the project has
+                   no board (single source of board access; callers may wrap
+                   ProjectResolver + read_jsonl_rows, or inject a fixture).
+    now          : aware UTC datetime reference for age computation.
+
+    Aged = non-terminal status AND age(added_at) > STUCK_AGE_HOURS. Younger
+    items and terminal items are ignored (they were never the drift set).
+
+    Returns {"records": [...], "totals": {...}, "per_project": {...},
+             "no_id_items": {project: [item]}, "rows_cache": {project: rows}}.
+    Each record: {item, project, item_id, age, category, board_id, row, how}
+    (board_id/row/how are None when no board row was matched; age is None for
+    age_unknown items).
+    """
+    rows_cache = {}
+    resolved_rows = {}   # project -> rows | None (None = board missing)
+    per_project = {}
+    no_id_items = {}
+    records = []
+    totals = {k: 0 for k in CATEGORIES}
+    totals["aged_nonterminal"] = 0
+    totals["fuzzy"] = 0
+
+    def counts_for(project):
+        return per_project.setdefault(project, dict(
+            {k: 0 for k in CATEGORIES}, aged_nonterminal=0, fuzzy=0))
+
+    for item in items:
+        status = item.get("status")
+        if status not in NON_TERMINAL_STATUSES:
+            continue
+        age = age_hours(item.get("added_at"), now)
+        if age is not None and age <= STUCK_AGE_HOURS:
+            continue
+        project = item.get("project") or "<none>"
+        item_id = str(item.get("id"))
+        counts = counts_for(project)
+        counts["aged_nonterminal"] += 1
+        totals["aged_nonterminal"] += 1
+
+        if age is None:
+            category = "age_unknown"
+            board_id = row = how = None
+        else:
+            if project not in resolved_rows:
+                resolved_rows[project] = board_loader(project)
+            rows = resolved_rows[project]
+            rows_cache[project] = rows
+            if rows is None:
+                category, board_id, row, how = "board_missing", None, None, None
+            else:
+                board_id, row, how = match_board_row(item_id, rows)
+                if board_id is None:
+                    if how.startswith("ambiguous"):
+                        category = "ambiguous"
+                    else:
+                        category = "no_id_match"
+                        no_id_items.setdefault(project, []).append(item)
+                else:
+                    category = classify_item(status, row.get("status"), True)
+                    if how == "fuzzy":
+                        counts["fuzzy"] += 1
+                        totals["fuzzy"] += 1
+
+        counts[category] += 1
+        totals[category] += 1
+        records.append({
+            "item": item, "project": project, "item_id": item_id,
+            "age": age, "category": category,
+            "board_id": board_id, "row": row, "how": how,
+        })
+
+    return {
+        "records": records,
+        "totals": totals,
+        "per_project": per_project,
+        "no_id_items": no_id_items,
+        "rows_cache": rows_cache,
+    }
+
+
+def board_loader_from_resolver(resolver):
+    """Wrap a ProjectResolver into a board_loader callable for
+    classify_aged_items: project -> rows dict, or None when no board exists."""
+
+    def loader(project):
+        board_path, _workdir, _source = resolver.resolve(project)
+        if board_path is None:
+            return None
+        rows, _malformed = read_jsonl_rows(board_path)
+        return rows
+
+    return loader
+
+
+# --------------------------------------------------------------------------- #
+# PM tick digest generation (shared with pm-standin-tick.sh)
+# --------------------------------------------------------------------------- #
+def digest_input(ledger_path, init_path, out_path, board_loader=None, now=None):
+    """Build the PM digest bundle with the GAP-049 reconciliation split.
+
+    board_loader None  -> reconciler unavailable: legacy status counts only,
+                          the four GAP-049 counts are None (honest absence).
+    board_loader given -> aged non-terminal items classified against board
+                          truth; stuck_48h lists board_open_work items ONLY.
+
+    Writes the bundle JSON to out_path (indent=1, live format) and returns the
+    bundle dict.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    with open(ledger_path, "r", encoding="utf-8") as fh:
+        led = json.load(fh)
+    items = led.get("items", led if isinstance(led, list) else [])
+    counts = {}
+    for it in items:
+        st = it.get("status", "?")
+        counts[st] = counts.get(st, 0) + 1
+
+    oldest = []
+    current_added = []
+    for it in items:
+        if it.get("status") not in TERMINAL_STATUSES:
+            oldest.append({"id": it.get("id"), "project": it.get("project"),
+                           "title": (it.get("title") or "")[:80],
+                           "status": it.get("status"), "added_at": it.get("added_at", "")})
+        if it.get("status") == "added":
+            current_added.append({"id": it.get("id"), "project": it.get("project"),
+                                  "title": (it.get("title") or "")[:100]})
+    oldest.sort(key=lambda x: x.get("added_at", ""))
+
+    reconciliation = None
+    if board_loader is not None:
+        report = classify_aged_items(items, board_loader, now)
+        totals = report["totals"]
+        no_id_details = build_no_id_matches(report["no_id_items"], report["rows_cache"])
+        open_items = []
+        for rec in report["records"]:
+            if rec["category"] != "board_open_work":
+                continue
+            open_items.append({
+                "id": rec["item_id"], "project": rec["project"],
+                "title": (rec["item"].get("title") or "")[:80],
+                "age_h": round(rec["age"], 1),
+            })
+        open_items.sort(key=lambda x: (x.get("age_h") or 0), reverse=True)
+        reconciliation = {
+            "available": True,
+            "aged_nonterminal": totals["aged_nonterminal"],
+            "categories": {k: totals[k] for k in CATEGORIES},
+            "closable_drift": totals["drift_closable"] + totals["stale_drift"],
+            "no_id_matches": no_id_details,
+            "note": (
+                "board_open_work = genuine open work (NOT drift); "
+                "drift_closable + stale_drift are the only auto-closable "
+                "categories (--apply, exact board-ID authority); "
+                "no_id_match candidates are manual-review only."),
+        }
+        stuck = open_items
+        stuck_count = len(open_items)
+        stuck_note = (
+            "stuck_48h/stuck_count list board_open_work items ONLY since "
+            "GAP-049 (genuine open work) — pre-GAP-049 they conflated all "
+            "aged non-terminal items; use the reconciliation counts.")
+    else:
+        reconciliation = None
+        stuck = []
+        for it in items:
+            if it.get("status") in TERMINAL_STATUSES:
+                continue
+            age = age_hours(it.get("added_at"), now)
+            if age is not None and age > STUCK_AGE_HOURS:
+                stuck.append({"id": it.get("id"), "project": it.get("project"),
+                              "title": (it.get("title") or "")[:80],
+                              "age_h": round(age, 1)})
+        stuck.sort(key=lambda x: x.get("age_h") or 0, reverse=True)
+        stuck_count = len(stuck)
+        stuck_note = (
+            "reconciler unavailable — legacy conflation: stuck_48h/stuck_count "
+            "mix genuine open work with potentially closable drift.")
+
+    try:
+        with open(init_path, "r", encoding="utf-8") as fh:
+            ini = json.load(fh)
+        init_status = [(i.get("id"), i.get("status"), (i.get("last_updated") or "")[:19])
+                       for i in ini.get("initiatives", [])]
+    except Exception as exc:  # honest degrade, never crash the digest
+        init_status = [("ERROR", str(exc), "")]
+
+    bundle = {
+        "generated_at": now.isoformat(),
+        "ledger_total": len(items),
+        "counts": counts,
+        "oldest_unverified": oldest[:5],
+        "stuck_48h": stuck[:8],
+        "stuck_count": stuck_count,
+        "stuck_count_legacy_note": stuck_note,
+        "current_added": current_added,
+        "initiatives": init_status,
+        "digest_valid": True,
+        # --- GAP-049 digest-facing split (AC4) ---
+        "reconciliation_available": reconciliation is not None,
+        "reconciliation": reconciliation,
+        "drift_closable_count": (reconciliation["categories"]["drift_closable"]
+                                 if reconciliation else None),
+        "board_open_work_count": (reconciliation["categories"]["board_open_work"]
+                                  if reconciliation else None),
+        "stale_drift_count": (reconciliation["categories"]["stale_drift"]
+                              if reconciliation else None),
+        "no_id_match_count": (reconciliation["categories"]["no_id_match"]
+                              if reconciliation else None),
+    }
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(bundle, fh, indent=1)
+    return bundle
+
+
 def load_ledger(path):
     with open(path, "r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -243,7 +603,7 @@ def main(argv=None):
     mode = "APPLY" if args.apply else "DRY-RUN"
 
     print("=" * 78)
-    print("ledger_board_reconcile.py  mode={}  (GAP-047)".format(mode))
+    print("ledger_board_reconcile.py  mode={}  (GAP-047 + GAP-049 split)".format(mode))
     print("=" * 78)
     print("now (UTC)     : {}".format(now_iso))
     print("ledger        : {}".format(args.ledger))
@@ -257,8 +617,6 @@ def main(argv=None):
         print("FATAL: ledger has no 'items' list", file=sys.stderr)
         return 2
     print("ledger items  : {}".format(len(items)))
-    if len(items) != 1803:
-        print("NOTE          : item count != 1803 (expected baseline)")
 
     resolver = ProjectResolver(args.scheduler_db)
     print("db projects   : {} rows{}".format(
@@ -266,101 +624,96 @@ def main(argv=None):
         "" if not resolver.db_error else "  [ERROR: {}]".format(resolver.db_error)))
     print("")
 
-    # ---- per-project board cache ------------------------------------------ #
-    board_cache = {}      # project -> (board_path, source, rows, malformed)
-    planned = []          # (project, item, board_id, board_path, how)
-    per_project = {}      # project -> dict(counts)
-    resolution_lines = []
+    # ---- classify (single pass; boards loaded once per project) ------------ #
+    resolved = {}    # project -> (board_path, source) for the resolution table
+    row_counts = {}  # project -> (rows, malformed) for the resolution table
 
-    for item in items:
-        status = item.get("status")
-        if status not in NON_TERMINAL_STATUSES:
-            continue
-        project = item.get("project") or "<none>"
-        counts = per_project.setdefault(project, {
-            "candidates": 0, "would_close": 0, "still_pending": 0,
-            "board_missing": 0, "no_id_match": 0, "ambiguous": 0, "fuzzy": 0,
-        })
-        counts["candidates"] += 1
-
-        if project not in board_cache:
-            board_path, workdir, source = resolver.resolve(project)
-            if board_path is None:
-                board_cache[project] = (None, source, {}, 0)
-                resolution_lines.append(
-                    "  {:<28} -> NO BOARD   ({})".format(project, source))
-            else:
-                rows, malformed = read_jsonl_rows(board_path)
-                board_cache[project] = (board_path, source, rows, malformed)
-                resolution_lines.append(
-                    "  {:<28} -> {}  [{}]  rows={} malformed={}".format(
-                        project, board_path, source, len(rows), malformed))
-
-        board_path, source, rows, malformed = board_cache[project]
+    def loader(project):
+        board_path, _workdir, source = resolver.resolve(project)
+        resolved[project] = (board_path, source)
         if board_path is None:
-            counts["board_missing"] += 1
-            continue
+            return None
+        rows, malformed = read_jsonl_rows(board_path)
+        row_counts[project] = (rows, malformed)
+        return rows
 
-        board_id, row, how = match_board_row(str(item.get("id")), rows)
-        if board_id is None:
-            if how.startswith("ambiguous"):
-                counts["ambiguous"] += 1
-            else:
-                counts["no_id_match"] += 1
-            continue
-
-        row_status = row.get("status")
-        if row_status != BOARD_DONE:
-            counts["still_pending"] += 1
-            continue
-
-        counts["would_close"] += 1
-        if how == "fuzzy":
-            counts["fuzzy"] += 1
-        planned.append((project, item, board_id, board_path, how))
+    report = classify_aged_items(items, loader, now)
+    records = report["records"]
+    per_project = report["per_project"]
+    totals = report["totals"]
+    no_id_details = build_no_id_matches(report["no_id_items"], report["rows_cache"])
 
     # ---- board resolution table ------------------------------------------- #
     print("-" * 78)
-    print("BOARD RESOLUTION ({} projects with non-terminal ledger items)".format(
-        len(board_cache)))
+    print("BOARD RESOLUTION ({} projects with aged non-terminal ledger items)".format(
+        len(resolved)))
     print("-" * 78)
-    for line in resolution_lines:
-        print(line)
+    for project in sorted(resolved):
+        board_path, source = resolved[project]
+        if board_path is None:
+            print("  {:<28} -> NO BOARD   ({})".format(project, source))
+        else:
+            rows, malformed = row_counts.get(project, ({}, 0))
+            print("  {:<28} -> {}  [{}]  rows={} malformed={}".format(
+                project, board_path, source, len(rows), malformed))
     print("")
 
-    # ---- planned changes -------------------------------------------------- #
+    # ---- classification table --------------------------------------------- #
     print("-" * 78)
-    print("PLANNED LEDGER CLOSURES (board row 'complete' + ledger non-terminal)")
+    print("CLASSIFICATION (GAP-049: aged non-terminal ledger items vs board truth)")
     print("-" * 78)
-    for project, item, board_id, board_path, how in planned:
-        extra = "" if how == "exact" else "  [{}]".format(how)
-        print("  {:<28} {:<16} {} -> verified{}".format(
-            project, str(item.get("id")), item.get("status"), extra))
-        if how == "fuzzy":
-            print("      fuzzy match: ledger {} <-> board {}".format(
-                item.get("id"), board_id))
-    print("")
-    print("PER-PROJECT COUNTS (non-terminal candidates -> would_close)")
     for project in sorted(per_project):
         c = per_project[project]
-        print("  {:<28} cand={:<3} close={:<3} pending={:<3} missing={:<3} "
-              "nomatch={:<3} ambiguous={:<3} fuzzy={}".format(
-                  project, c["candidates"], c["would_close"], c["still_pending"],
-                  c["board_missing"], c["no_id_match"], c["ambiguous"], c["fuzzy"]))
+        print("  {:<28} aged={:<3} open_work={:<3} drift_close={:<3} "
+              "stale_drift={:<3} stale_term={:<3} missing={:<3} nomatch={:<3} "
+              "ambiguous={:<3} age_unknown={:<3} fuzzy={}".format(
+                  project, c["aged_nonterminal"], c["board_open_work"],
+                  c["drift_closable"], c["stale_drift"], c["stale_terminal"],
+                  c["board_missing"], c["no_id_match"], c["ambiguous"],
+                  c["age_unknown"], c["fuzzy"]))
+    print("")
+    print("TOTALS: " + " ".join(
+        "{}={}".format(k, totals[k])
+        for k in ("aged_nonterminal",) + CATEGORIES + ("fuzzy",)))
     print("")
 
-    totals = {
-        k: sum(c[k] for c in per_project.values())
-        for k in ("candidates", "would_close", "still_pending",
-                  "board_missing", "no_id_match", "ambiguous", "fuzzy")
-    }
-    print("TOTALS: candidates={candidates} would_close={would_close} "
-          "still_pending={still_pending} board_missing={board_missing} "
-          "no_id_match={no_id_match} ambiguous={ambiguous} fuzzy={fuzzy}".format(**totals))
+    # ---- no_id_match manual-review candidates ----------------------------- #
+    print("-" * 78)
+    print("NO-ID-MATCH MANUAL-REVIEW CANDIDATES (title similarity — advisory "
+          "only, never auto-applied)")
+    print("-" * 78)
+    if not no_id_details:
+        print("  (none)")
+    else:
+        for project in sorted(no_id_details):
+            detail = no_id_details[project]
+            print("  {}: {} unmatched item(s) — MANUAL REVIEW ONLY".format(
+                project, detail["count"]))
+            for entry in detail["items"]:
+                print("    ledger item: {}  ({})".format(
+                    entry["item_id"], entry["title"]))
+                if not entry["candidates"]:
+                    print("      (no title-similarity candidates above threshold)")
+                for cand in entry["candidates"]:
+                    print("      ? board {}  score={:.4f}  [{}]  {}".format(
+                        cand["board_id"], cand["score"], cand["board_status"],
+                        cand["board_title"]))
     print("")
 
-    # ---- apply / dry-run -------------------------------------------------- #
-    changes = totals["would_close"]
+    # ---- planned changes --------------------------------------------------- #
+    planned = [rec for rec in records if rec["category"] in ACTIONABLE_CATEGORIES]
+    print("-" * 78)
+    print("PLANNED LEDGER CLOSURES (board row 'complete'; drift_closable + "
+          "stale_drift only — board-ID authority, never title match)")
+    print("-" * 78)
+    for rec in planned:
+        extra = "" if rec["how"] == "exact" else "  [{}]".format(rec["how"])
+        print("  {:<28} {:<20} {} -> verified  [{}]{}".format(
+            rec["project"], rec["item_id"], rec["item"].get("status"),
+            rec["category"], extra))
+    print("")
+
+    changes = len(planned)
     applied = False
     backup_path = None
     if args.apply:
@@ -371,6 +724,7 @@ def main(argv=None):
             print("nothing to do: 0 ledger items would change; NOT writing "
                   "(exit 0).")
         else:
+            board_paths = {p: resolved[p][0] for p in resolved if resolved[p][0]}
             with open(args.ledger, "r", encoding="utf-8") as fh:
                 raw_before = fh.read()
             indent, trailing_nl, ensure_ascii = detect_format(raw_before)
@@ -380,105 +734,84 @@ def main(argv=None):
                   "trailing_newline={}, ensure_ascii={}]".format(
                       "IDENTICAL" if roundtrip else "MISMATCH",
                       indent, trailing_nl, ensure_ascii))
-            for project, item, board_id, board_path, how in planned:
+            for rec in planned:
+                item = rec["item"]
                 item["status"] = "verified"
                 item["last_checked_at"] = now_iso
                 item["verification_evidence"] = EVIDENCE_TPL.format(
-                    id=board_id, path=board_path)
-            backup_path, fmt = write_ledger_atomic(args.ledger, doc, args.backup_suffix)
+                    id=rec["board_id"], path=board_paths[rec["project"]])
+            backup_path, _fmt = write_ledger_atomic(
+                args.ledger, doc, args.backup_suffix)
             applied = True
             print("backup written : {}".format(backup_path))
-            print("ledger written : {} (atomic tmp + os.replace, format-preserving)".
-                  format(args.ledger))
+            print("ledger written : {} (atomic tmp + os.replace, "
+                  "format-preserving)".format(args.ledger))
             print("fields touched : status, last_checked_at, verification_evidence")
             print("items closed   : {}".format(changes))
     else:
         print("-" * 78)
-        print("DRY-RUN: {} ledger item(s) would be closed; nothing written.".format(changes))
+        print("DRY-RUN: {} ledger item(s) would be closed; nothing written.".format(
+            changes))
         print("Re-run with --apply to write (atomic + backup).")
         print("-" * 78)
 
-    # ---- residual stuck analysis (reads the ledger fresh from disk) -------- #
-    fresh = load_ledger(args.ledger)
-    fresh_items = fresh.get("items", [])
-    residual = []
-    age_unknown = []
-    for item in fresh_items:
-        status = item.get("status")
-        if status not in NON_TERMINAL_STATUSES:
-            continue
-        age = age_hours(item.get("added_at"), now)
-        if age is None:
-            age_unknown.append(item)
-            residual.append((item, None))
-        elif age > STUCK_AGE_HOURS:
-            residual.append((item, age))
-
-    print("")
-    print("=" * 78)
-    print("RESIDUAL STUCK SET (recomputed from ledger on disk after this run)")
-    print("=" * 78)
-    print("definition    : ledger status in {} AND age(added_at) > {}h (UTC)".format(
-        sorted(NON_TERMINAL_STATUSES), int(STUCK_AGE_HOURS)))
-    print("ledger items  : {}".format(len(fresh_items)))
-    print("stuck_48h     : {}".format(len(residual)))
-    print("age_unknown   : {} (added_at unparseable -> counted in stuck)".format(
-        len(age_unknown)))
-    print("mode          : {}{}".format(
-        mode,
-        "" if applied else " (ledger on disk is the PRE-apply state; "
-        "closeable rows below appear here because nothing was written)"))
-    print("PASS target   : stuck_48h < 20  -> {}".format(
-        "PASS" if len(residual) < 20 else "FAIL (honest residual)"))
-
-    reasons = {
-        "board_still_pending": [],   # board row exists but is NOT 'complete'
-        "board_complete_unwritten": [],  # closeable now, only possible pre-write
-        "board_missing": [],
-        "no_id_match": [],
-        "ambiguous": [],
-        "age_unknown": [],
+    # ---- summary JSON (GAP-049 machine-readable output) -------------------- #
+    summary = {
+        "schema": "pm-ledger-reconcile-summary/1",
+        "mode": mode,
+        "generated_at": now_iso,
+        "ledger": args.ledger,
+        "ledger_items": len(items),
+        "aged_nonterminal": totals["aged_nonterminal"],
+        "categories": {k: totals[k] for k in CATEGORIES},
+        "closable_drift": totals["drift_closable"] + totals["stale_drift"],
+        "applied": applied,
+        "backup": backup_path,
+        "drift_closable_count": totals["drift_closable"],
+        "board_open_work_count": totals["board_open_work"],
+        "stale_drift_count": totals["stale_drift"],
+        "stale_terminal_count": totals["stale_terminal"],
+        "board_missing_count": totals["board_missing"],
+        "no_id_match_count": totals["no_id_match"],
+        "ambiguous_count": totals["ambiguous"],
+        "age_unknown_count": totals["age_unknown"],
+        "drift_closable_items": [
+            {"id": rec["item_id"], "project": rec["project"],
+             "from_status": rec["item"].get("status"),
+             "board_id": rec["board_id"], "match": rec["how"]}
+            for rec in planned if rec["category"] == "drift_closable"],
+        "stale_drift_items": [
+            {"id": rec["item_id"], "project": rec["project"],
+             "from_status": rec["item"].get("status"),
+             "board_id": rec["board_id"], "match": rec["how"]}
+            for rec in planned if rec["category"] == "stale_drift"],
+        "board_open_work_items": [
+            {"id": rec["item_id"], "project": rec["project"],
+             "board_id": rec["board_id"], "board_status": rec["row"].get("status")}
+            for rec in records if rec["category"] == "board_open_work"][:20],
+        "no_id_matches": no_id_details,
+        # legacy field, honestly relabelled for pre-GAP-049 consumers
+        "stuck_48h": [
+            {"id": rec["item_id"], "project": rec["project"]}
+            for rec in records if rec["category"] == "board_open_work"][:8],
+        "stuck_count_legacy_note": (
+            "stuck_48h lists board_open_work items ONLY since GAP-049 "
+            "(genuine open work) — pre-GAP-049 it conflated all aged "
+            "non-terminal items; use the per-category counts instead."),
     }
-    for item, age in residual:
-        project = item.get("project") or "<none>"
-        item_id = str(item.get("id"))
-        if age is None:
-            reasons["age_unknown"].append((project, item_id, "added_at unparseable"))
-            continue
-        board_path, source, rows, malformed = board_cache.get(
-            project, (None, "not resolved this run", {}, 0))
-        if board_path is None:
-            reasons["board_missing"].append((project, item_id, source))
-            continue
-        board_id, row, how = match_board_row(item_id, rows)
-        if board_id is None:
-            key = "ambiguous" if how.startswith("ambiguous") else "no_id_match"
-            reasons[key].append((project, item_id, how))
-        elif row.get("status") == BOARD_DONE:
-            reasons["board_complete_unwritten"].append(
-                (project, item_id, "board {} status=complete but ledger still {}".format(
-                    board_id, item.get("status"))))
-        else:
-            reasons["board_still_pending"].append(
-                (project, item_id, "board {} status={}".format(board_id, row.get("status"))))
-
-    for key in ("board_still_pending", "board_complete_unwritten", "board_missing",
-                "no_id_match", "ambiguous", "age_unknown"):
-        bucket = reasons[key]
-        print("")
-        print("  {}: {}".format(key, len(bucket)))
-        by_project = {}
-        for project, item_id, detail in bucket:
-            by_project.setdefault(project, []).append((item_id, detail))
-        for project in sorted(by_project):
-            entries = by_project[project]
-            print("    {:<28} {} item(s)".format(project, len(entries)))
-            for item_id, detail in sorted(entries):
-                print("        {}  {}".format(item_id, detail))
-
     print("")
-    print("SUMMARY: items_closed={} applied={} residual_stuck={} backup={}".format(
-        changes, applied, len(residual), backup_path or "none"))
+    print("=" * 78)
+    print("SUMMARY JSON (machine-readable; GAP-049 split)")
+    print("=" * 78)
+    print(SUMMARY_JSON_BEGIN)
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(SUMMARY_JSON_END)
+
+    residual_open = (totals["board_open_work"] + totals["stale_terminal"]
+                     + totals["age_unknown"])
+    print("")
+    print("SUMMARY: items_closed={} applied={} residual_open_work={} backup={}".format(
+        changes, applied, residual_open, backup_path or "none"))
     return 0
 
 

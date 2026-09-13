@@ -11,9 +11,10 @@ symlinks. Untracked live edits are never copied upstream.
 
 | File | Live destination | Role |
 |------|------------------|------|
-| `pm-standin-tick.sh` | `~/.hermes/scripts/pm-standin-tick.sh` | The PM stand-in driver. The tracked copy IS the live file. Edit and commit here; do not edit the live path. |
-| `dagger-role-report.py` | `~/.hermes/scripts/dagger-role-report.py` | The role-report helper (invoked by the driver, line 320). The tracked copy IS the live file. |
-| `ledger_board_reconcile.py` | `~/.hermes/stand-in/ledger_board_reconcile.py` | Ledger ↔ board reconciler (board task GAP-047). Stdlib-only, **defaults to dry-run**; `--apply` mutates ledger state — see the warning below. The tracked copy IS the live file. |
+| `pm-standin-tick.sh` | `~/.hermes/scripts/pm-standin-tick.sh` | The PM stand-in driver. The tracked copy IS the live file. Edit and commit here; do not edit the live path. Its digest generator imports the reconciler (see below) with a labelled legacy fallback. |
+| `dagger-role-report.py` | `~/.hermes/scripts/dagger-role-report.py` | The role-report helper (invoked by the driver). The tracked copy IS the live file. |
+| `ledger_board_reconcile.py` | `~/.hermes/stand-in/ledger_board_reconcile.py` | Ledger ↔ board reconciler (GAP-047, split GAP-049). Stdlib-only, **defaults to dry-run**; `--apply` mutates ledger state — see the warning below. The tracked copy IS the live file. |
+| `test_ledger_board_reconcile.py` | (not deployed) | Deterministic unittest suite for the reconciler (temp fixtures only; never touches live paths). Run from this directory: `python3 -m unittest test_ledger_board_reconcile -v`. |
 | `install.sh` | (not deployed) | Idempotent installer — symlinks the three live paths to the tracked copies, backing up any pre-existing regular files first. |
 
 ## The reconciler is dry-run by default — `--apply` mutates ledger state
@@ -21,17 +22,65 @@ symlinks. Untracked live edits are never copied upstream.
 `ledger_board_reconcile.py` reads the stand-in ledger
 (`~/.hermes/stand-in/ledger.json`), resolves each item's project to its
 board via `scheduler.db` (opened read-only), and — with `--apply` — flips
-non-terminal ledger items to `verified` when their board row is complete.
+eligible ledger items to `verified` when their board row is complete.
 Behavior:
 
-- **Default (no flags): dry-run.** Prints what would change, per-project
-  counts, and totals; exits 0; writes nothing.
-- **`--apply`: mutates the ledger.** Copies `ledger.json` to a timestamped
-  backup, then atomically rewrites the ledger (tmp file + `os.replace`).
+- **Default (no flags): dry-run.** Prints classifications, per-project
+  counts, totals, manual-review candidates, and a machine-readable summary
+  JSON between `<<<RECONCILE-SUMMARY-JSON-BEGIN>>>` /
+  `<<<RECONCILE-SUMMARY-JSON-END>>>` markers; exits 0; writes nothing.
+- **`--apply`: mutates the ledger.** Copies `ledger.json` to a
+  `<backup-suffix>` backup, then atomically rewrites the ledger (tmp file +
+  `os.replace`), preserving the file's existing JSON formatting.
 
-Only three ledger fields are ever touched by `--apply` (status,
-last_checked_at, verification_evidence). Ops tasks in this repository must
-NOT run `--apply` — verify with the default dry-run only.
+### GAP-049: drift is split from open work
+
+Aged non-terminal ledger items are no longer one "stuck" bucket. Each is
+classified against board truth:
+
+| Category | Meaning | `--apply` action |
+|----------|---------|------------------|
+| `board_open_work` | Board row exists and is genuinely open. Legitimate work — NOT drift. | never touched |
+| `drift_closable` | Board row `complete`, ledger item not reconciled. | → `verified` with evidence |
+| `stale_drift` | Ledger status `stale` (formerly terminal) whose board row is now `complete` — re-evaluated. | → `verified` with evidence |
+| `stale_terminal` | Ledger `stale` but board row still open. | never touched (stays terminal) |
+| `board_missing` | No board found for the project. | never touched |
+| `no_id_match` | Board exists but no row matches the item id. | never touched; advisory candidates only |
+| `ambiguous` | Multiple fuzzy suffix-match candidates. | never touched |
+| `age_unknown` | `added_at` unparseable. | never touched |
+
+Safety semantics (unchanged in spirit, stricter in fact):
+
+- **Exact board-ID match on a `complete` board row is the ONLY automatic
+  closure authority.** Title-similarity candidates for `no_id_match` items
+  (bounded, deterministic, with board id + score) are **manual-review
+  only** — never auto-applied.
+- **`verified` / `complete` remain terminal.** `stale` is re-evaluated, not
+  blindly trusted.
+- **There is NO universal "stuck < N" success bar.** Genuine open work must
+  not fail a repair target; the actionable measure is closable drift
+  (`drift_closable` + `stale_drift`).
+- Only three ledger fields are ever touched by `--apply` (status,
+  last_checked_at, verification_evidence).
+
+Ops tasks in this repository must NOT run `--apply` — verify with the
+default dry-run only.
+
+### PM tick digest (`pm-standin-tick.sh`) shares this classification
+
+The tick's digest generator imports the reconciler module and calls
+`digest_input()`, so the digest and the reconciler use ONE implementation.
+The digest bundle exposes separate machine-readable counts —
+`drift_closable_count`, `board_open_work_count`, `stale_drift_count`,
+`no_id_match_count` — plus a `reconciliation` block with the full category
+split and per-project `no_id_matches` candidates. The legacy `stuck_48h` /
+`stuck_count` fields are kept for compatibility but now list
+`board_open_work` items ONLY and carry an honest `stuck_count_legacy_note`.
+If the reconciler module cannot be imported or loaded, the tick falls back
+to the pre-GAP-049 conflation generator and labels the bundle
+`reconciliation_available: false` with `digest_generator: legacy-conflation
+(pre-GAP-049 fallback)` (split counts `null`), so the tick still produces
+output instead of failing.
 
 ## Install
 
@@ -110,13 +159,20 @@ cmp -s ops/pm-standin/pm-standin-tick.sh ~/.hermes/scripts/pm-standin-tick.sh &&
 cmp -s ops/pm-standin/dagger-role-report.py ~/.hermes/scripts/dagger-role-report.py && echo helper-ok
 cmp -s ops/pm-standin/ledger_board_reconcile.py ~/.hermes/stand-in/ledger_board_reconcile.py && echo reconciler-ok
 
-# Payload hashes (driver 86a2e15d…, helper 5975cc4a…, reconciler 14c88afc…):
+# Payload hashes (driver 57f3a5f1…, helper 5975cc4a…, reconciler dd4e20e8…):
 sha256sum ops/pm-standin/pm-standin-tick.sh \
           ops/pm-standin/dagger-role-report.py \
           ops/pm-standin/ledger_board_reconcile.py
 
 # Reconciler sanity check — DEFAULT DRY-RUN (never run --apply from ops):
 python3 ~/.hermes/stand-in/ledger_board_reconcile.py
+
+# Focused unittest suite (temp fixtures only; never touches live paths):
+cd /home/kara/coding-hermes-scheduler/coding-herms-scheduler/ops/pm-standin
+python3 -m unittest test_ledger_board_reconcile -v
+
+# Shell syntax check for the driver:
+bash -n /home/kara/coding-hermes-scheduler/coding-herms-scheduler/ops/pm-standin/pm-standin-tick.sh
 ```
 
 ## Scheduler command paths stay unchanged

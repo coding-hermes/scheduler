@@ -64,55 +64,93 @@ if [ -n "$PM_TARGET" ] && [ ! -d "$PM_WORKDIR" ]; then
 fi
 export PM_WORKDIR
 
-# ---- generate the COMPLETE digest bundle (same generator as dagger-daily.sh) ----
-python3 - "$LEDGER" "$INITIATIVES" "$DIGEST_BUNDLE_PATH" <<'PYEOF'
+# ---- generate the digest bundle (GAP-049 split). Classification lives in the
+# ledger reconciler (ledger_board_reconcile.py) so the digest and the
+# reconciler share ONE implementation. The reconciler only ever READS the
+# ledger / scheduler.db (read-only URI) / boards; it writes just the digest
+# bundle. If the reconciler is unavailable the legacy conflation generator
+# below is used as a labelled fallback so the tick still produces output.
+python3 - "$LEDGER" "$INITIATIVES" "$DIGEST_BUNDLE_PATH" \
+  "$STANDIN/ledger_board_reconcile.py" <<'PYEOF'
 import json, sys, datetime
-ledger_path, init_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    led = json.load(open(ledger_path))
-except Exception as e:
-    print(json.dumps({"error": f"ledger read failed: {e}", "digest_valid": False}))
-    sys.exit(0)
-items = led.get("items", led if isinstance(led, list) else [])
-counts = {}
-for it in items:
-    counts[it.get("status", "?")] = counts.get(it.get("status", "?"), 0) + 1
+ledger_path, init_path, out_path, reconciler_path = sys.argv[1:5]
 now = datetime.datetime.now(datetime.timezone.utc)
-oldest = []
-stuck = []
-for it in items:
-    if it.get("status") not in ("verified", "complete", "stale"):
-        at = it.get("added_at", "")
-        oldest.append({"id": it.get("id"), "project": it.get("project"),
-                       "title": (it.get("title") or "")[:80], "status": it.get("status"), "added_at": at})
-        try:
-            d = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
-            if (now - d).total_seconds() > 48 * 3600:
-                stuck.append({"id": it.get("id"), "project": it.get("project"),
-                              "title": (it.get("title") or "")[:80], "age_h": round((now - d).total_seconds() / 3600, 1)})
-        except Exception:
-            pass
-oldest.sort(key=lambda x: x.get("added_at", ""))
-current_added = [{"id": it.get("id"), "project": it.get("project"),
-                  "title": (it.get("title") or "")[:100]} for it in items if it.get("status") == "added"]
+
+def legacy_digest():
+    """Pre-GAP-049 conflation generator — fallback only (honestly labelled)."""
+    try:
+        led = json.load(open(ledger_path))
+    except Exception as e:
+        print(json.dumps({"error": f"ledger read failed: {e}", "digest_valid": False}))
+        return None, None
+    items = led.get("items", led if isinstance(led, list) else [])
+    counts = {}
+    for it in items:
+        counts[it.get("status", "?")] = counts.get(it.get("status", "?"), 0) + 1
+    oldest = []
+    stuck = []
+    for it in items:
+        if it.get("status") not in ("verified", "complete", "stale"):
+            at = it.get("added_at", "")
+            oldest.append({"id": it.get("id"), "project": it.get("project"),
+                           "title": (it.get("title") or "")[:80], "status": it.get("status"), "added_at": at})
+            try:
+                d = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
+                if (now - d).total_seconds() > 48 * 3600:
+                    stuck.append({"id": it.get("id"), "project": it.get("project"),
+                                  "title": (it.get("title") or "")[:80], "age_h": round((now - d).total_seconds() / 3600, 1)})
+            except Exception:
+                pass
+    oldest.sort(key=lambda x: x.get("added_at", ""))
+    current_added = [{"id": it.get("id"), "project": it.get("project"),
+                      "title": (it.get("title") or "")[:100]} for it in items if it.get("status") == "added"]
+    try:
+        ini = json.load(open(init_path))
+        init_status = [(i.get("id"), i.get("status"), (i.get("last_updated") or "")[:19]) for i in ini.get("initiatives", [])]
+    except Exception as e:
+        init_status = [("ERROR", str(e), "")]
+    bundle = {
+        "generated_at": now.isoformat(),
+        "ledger_total": len(items),
+        "counts": counts,
+        "oldest_unverified": oldest[:5],
+        "stuck_48h": stuck[:8],
+        "stuck_count": len(stuck),
+        "current_added": current_added,
+        "initiatives": init_status,
+        "digest_valid": True,
+        "reconciliation_available": False,
+        "digest_generator": "legacy-conflation (pre-GAP-049 fallback)",
+    }
+    json.dump(bundle, open(out_path, "w"), indent=1)
+    return len(items), len(stuck)
+
 try:
-    ini = json.load(open(init_path))
-    init_status = [(i.get("id"), i.get("status"), (i.get("last_updated") or "")[:19]) for i in ini.get("initiatives", [])]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ledger_board_reconcile", reconciler_path)
+    lbr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lbr)
+    loader = lbr.board_loader_from_resolver(lbr.ProjectResolver(lbr.SCHEDULER_DB_DEFAULT))
+    bundle = lbr.digest_input(ledger_path, init_path, out_path, board_loader=loader, now=now)
+    rec = bundle.get("reconciliation")
+    if rec:
+        cats = rec["categories"]
+        print("digest bundle: {n} items, counts={c}, drift_closable={dc} "
+              "board_open_work={bo} stale_drift={sd} no_id_match={nm} "
+              "stuck_count={sc} (stuck = board_open_work only)".format(
+                  n=bundle["ledger_total"], c=bundle["counts"],
+                  dc=cats["drift_closable"], bo=cats["board_open_work"],
+                  sd=cats["stale_drift"], nm=cats["no_id_match"],
+                  sc=bundle["stuck_count"]))
+    else:
+        print("digest bundle: reconciler imported but unavailable — legacy "
+              "conflation digest (stuck_count={})".format(bundle.get("stuck_count")))
 except Exception as e:
-    init_status = [("ERROR", str(e), "")]
-bundle = {
-    "generated_at": now.isoformat(),
-    "ledger_total": len(items),
-    "counts": counts,
-    "oldest_unverified": oldest[:5],
-    "stuck_48h": stuck[:8],
-    "stuck_count": len(stuck),
-    "current_added": current_added,
-    "initiatives": init_status,
-    "digest_valid": True
-}
-json.dump(bundle, open(out_path, "w"), indent=1)
-print(f"digest bundle: {len(items)} items, counts={counts}, stuck={len(stuck)}")
+    print("PM-STANDIN: GAP-049 digest unavailable ({}: {}) — legacy fallback".format(
+        type(e).__name__, e))
+    n, sc = legacy_digest()
+    if n is not None:
+        print(f"digest bundle: {n} items, stuck={sc} (legacy conflation)")
 PYEOF
 
 # Free port per run (no stale-serve reuse).
