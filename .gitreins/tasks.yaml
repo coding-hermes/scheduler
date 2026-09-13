@@ -2281,3 +2281,14 @@ tasks:
   status: complete
   created_at: '2026-09-13T07:32:23.716127+00:00'
   completed_at: '2026-09-13T07:32:31.604839+00:00'
+- id: MYPROJECT-GAP-048
+  title: Version PM stand-in live scripts
+  criteria:
+  - Repository HEAD tracks ops/pm-standin/pm-standin-tick.sh and ops/pm-standin/dagger-role-report.py;
+    both are byte-identical to the live ~/.hermes/scripts symlinks; install.sh provides
+    an idempotent documented deployment and safe rollback path; bash syntax, Python
+    compilation, payload hashes, scheduler command-path preservation, and the full
+    Tier 1 guard pass.
+  status: complete
+  created_at: '2026-09-13T12:06:40.407698+00:00'
+  completed_at: '2026-09-13T12:06:40.883913+00:00'
