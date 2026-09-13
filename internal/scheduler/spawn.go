@@ -726,6 +726,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		return nil, fmt.Errorf("max concurrency %d reached", s.maxConcurrent)
 	}
 
+	// SCHED-GAP-111 (S12 §4.3): resolve the effective tick deadline ONCE for
+	// this spawn — the single resolution site. The gateway session ctx, the
+	// exec stdout-scanner ctx, and the exec kill timer below all consume this
+	// value because they bound the SAME foreman session. Unnamespaced /
+	// waves-off projects resolve to s.timeout unchanged (byte-identical
+	// serial behavior, spec §15); wave-enabled namespaces may override via
+	// SCHEDULER_WAVE_TICK_TIMEOUT or namespaces.wave_tick_timeout.
+	effectiveTimeout := s.effectiveTickTimeout(project)
+
 	var cmd *exec.Cmd
 
 	// model/provider are the resolved (provider, model) pair for this
@@ -851,7 +860,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		if s.gateway != nil {
 			reqStart := time.Now() // SCHED-GAP-029: capture before SendResponse for git window
 
-			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+			// SCHED-GAP-111 (S12 §4.3): the foreman session deadline.
+			// Previously this ctx always wrapped s.timeout; for a
+			// wave-enabled namespace it now wraps the resolved
+			// effectiveTickTimeout (env > namespace > --tick-timeout).
+			ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
 
 			// GAP-035: validate a per-project gateway key BEFORE dispatch.
 			// The 2026-08-04 outage had the fleet send revoked fk-* keys
@@ -1338,6 +1351,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		model:    model,
 		provider: provider,
 		rate:     rate, // SCHED-GAP-078: router PUBLIC price for the pair that ran
+		// SCHED-GAP-111: the effective session deadline (wave override or
+		// base --tick-timeout) so Wait()'s kill timer agrees with the
+		// session/scanner ctx set above.
+		tickTimeout: effectiveTimeout,
 		// Bane 2026-08-27: report the trigger kind in delivered reports.
 		Trigger: map[bool]string{true: "command", false: "prompt"}[project.Command != ""],
 	}
@@ -1357,7 +1374,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// exit when the process exits or times out so it cannot leak. scanDone is
 	// closed when the scanner exits (drain finished) — the completion path
 	// waits on it (bounded) before closing the pipes (SCHED-GAP-081).
-	scanCtx, scanCancel := context.WithTimeout(context.Background(), s.timeout)
+	// SCHED-GAP-111: the scanner ctx bounds the SAME foreman session as the
+	// gateway ctx above (and the kill timer below) — it must expire on the
+	// effective (possibly wave-extended) deadline, not the base one, or a
+	// wave tick's stdout backstop would close the pipe at base timeout while
+	// the session itself runs on.
+	scanCtx, scanCancel := context.WithTimeout(context.Background(), effectiveTimeout)
 	st.scanCancel = scanCancel
 	st.scanDone = make(chan struct{})
 
@@ -1462,6 +1484,12 @@ type SpawnedTick struct {
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
 	completeAt time.Time
+
+	// tickTimeout (SCHED-GAP-111): the EFFECTIVE session deadline resolved
+	// by effectiveTickTimeout at spawn time (wave namespace override or base
+	// --tick-timeout). Wait()'s kill timer consumes it so the exec kill and
+	// the session ctx always agree — even for gateway-fail exec fallbacks.
+	tickTimeout time.Duration
 
 	// gwFailErr is set (gateway path only) when the response failed the
 	// SCHED-GAP-079 completion gate: an explicit failure status
@@ -1615,7 +1643,12 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		st.closePipes()
 	}()
 
-	timer := time.AfterFunc(st.spawner.timeout, func() {
+	// SCHED-GAP-111: the exec kill timer must fire on the SAME effective
+	// session deadline as the scanner ctx set in Spawn(). Using
+	// st.spawner.timeout here would SIGKILL a wave tick at the base
+	// --tick-timeout even though its session ctx was extended — the tick
+	// would die mid-merge with no terminal state.
+	timer := time.AfterFunc(st.tickTimeout, func() {
 		if st.cmd.Process != nil {
 			// Each scheduler-owned worker has its own process group. Killing the
 			// group prevents shells, Hermes workers, and test runners from

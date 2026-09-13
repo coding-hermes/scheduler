@@ -91,7 +91,10 @@ func printSchema() {
           "reserved": { "type": "integer", "default": 1 },
           "hard_cap": { "type": "integer", "default": 100 },
           "enabled": { "type": "boolean", "default": true },
-          "description": { "type": "string" }
+          "description": { "type": "string" },
+          "wave_enabled": { "type": "boolean", "default": false, "description": "S12 concurrent wave scheduling; false/absent = waves off (byte-identical pre-v27 behavior)." },
+          "wave_tick_timeout": { "type": "string", "default": "", "description": "Tick deadline override for wave-enabled namespaces. Recommended 3h (1.5x base); hard ceiling 4h enforced at config validation (S12 §4.3). Empty = inherit scheduler.tick_timeout. Env override at the spawn site: SCHEDULER_WAVE_TICK_TIMEOUT." },
+          "wave_workers_cap": { "type": "integer", "default": 0, "description": "Max concurrent worker processes across the namespace's running ticks; 0 = unlimited (S12 §6)." }
         }
       }
     }
@@ -168,6 +171,7 @@ url = %q
 		"SCHEDULER_BUDGET":                    os.Getenv("SCHEDULER_BUDGET"),
 		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
 		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
+		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
 		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
 		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
 		"SCHEDULER_AUTO_DISABLE_WINDOW":       os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),

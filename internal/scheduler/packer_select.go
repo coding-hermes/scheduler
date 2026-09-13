@@ -423,6 +423,9 @@ func (m *MultiPoolPacker) Pack(
 				PromptMode:       pu.Project.PromptMode,
 				NamespacePrompt:  ns.DefaultPrompt,
 				NamespaceChain:   ns.ModelChain,
+				// SCHED-GAP-111: thread the namespace id for
+				// effectiveTickTimeout in the spawn path.
+				NamespaceID: ns.ID,
 			})
 		}
 		result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{

@@ -309,6 +309,13 @@ func (r *RootConfig) Validate() error {
 	for i, n := range r.Namespaces {
 		if n.ID == "" {
 			errs = append(errs, fmt.Errorf("namespaces[%d]: id is required", i))
+			continue
+		}
+		// S12 §4.3 (SCHED-GAP-111): same wave_tick_timeout contract as
+		// LoadFleetConfig — a root TOML carrying fleet declarations gets
+		// the identical field-named rejection.
+		if err := validateWaveTickTimeout(n.ID, n.WaveTickTimeout); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -327,6 +334,34 @@ func parseDurationErr(s, field string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s: parse duration %q: %w", field, s, err)
 	}
 	return d, nil
+}
+
+// WaveTickTimeoutCeiling is the hard upper bound on a namespace's
+// wave_tick_timeout (S12 §4.3 item 2). Anything above it is a config error —
+// never silently clamped — because the scheduler's reaper staleness windows
+// and the fleet's operational expectation ("a stuck project is visible
+// within a few hours") are calibrated below it. The recommended value for
+// wave-enabled namespaces is 3h (1.5x the 2h base: workers run concurrently,
+// only merges are serial — 3x would hand a serial tick budget it does not
+// need). --tick-timeout itself is NOT bounded by this ceiling.
+const WaveTickTimeoutCeiling = 4 * time.Hour
+
+// validateWaveTickTimeout enforces the S12 §4.3 contract on one namespace
+// definition's wave_tick_timeout: empty (inherit) is always fine; a non-empty
+// value must parse AND stay <= 4h. Errors are field-named after the TOML
+// path (namespaces[id].wave_tick_timeout) so an operator can find the line.
+func validateWaveTickTimeout(nsID, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("namespaces[%s].wave_tick_timeout: parse duration %q: %w", nsID, raw, err)
+	}
+	if d > WaveTickTimeoutCeiling {
+		return fmt.Errorf("namespaces[%s].wave_tick_timeout: %s exceeds the 4h ceiling (S12 §4.3)", nsID, d)
+	}
+	return nil
 }
 
 // LoadFleetConfig reads and decodes the TOML file at path into a FleetConfig.
@@ -351,6 +386,12 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 	for i, n := range cfg.Namespaces {
 		if n.ID == "" {
 			errs = append(errs, fmt.Errorf("namespaces[%d]: id is required", i))
+			continue
+		}
+		// S12 §4.3 (SCHED-GAP-111): wave_tick_timeout must parse and stay
+		// <= 4h — field-named rejection, never a silent clamp.
+		if err := validateWaveTickTimeout(n.ID, n.WaveTickTimeout); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -387,6 +428,13 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 // resolves cleanly.
 func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 	for _, nd := range cfg.Namespaces {
+		// S12 §4.3 (SCHED-GAP-111): the 4h ceiling guards the DB write too —
+		// FleetConfigs can be built in code (tests, tooling) or from
+		// already-loaded files, so the create path re-checks the wave
+		// timeout instead of trusting the caller's validation.
+		if err := validateWaveTickTimeout(nd.ID, nd.WaveTickTimeout); err != nil {
+			return err
+		}
 		if _, err := database.GetNamespace(ctx, db, nd.ID); err == nil {
 			// Bane 2026-08-27: an existing namespace gets its default_prompt
 			// updated when the fleet.toml entry carries one (prompt config is

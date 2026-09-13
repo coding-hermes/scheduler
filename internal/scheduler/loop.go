@@ -544,6 +544,9 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		WorkerProvider:   project.WorkerProvider,
 		GatewayKey:       project.GatewayKey,
 		Deliver:          project.Deliver,
+		// SCHED-GAP-111: thread the namespace id for effectiveTickTimeout
+		// in the spawn path (manual spawns resolve the wave deadline too).
+		NamespaceID: nsIDOf(project),
 	}
 
 	// Simulation mode: the sim spawner inserts the row itself (status

@@ -45,5 +45,5 @@ description = "Core coding-hermes fleet namespace"
 enabled = true                            # false = entire namespace paused
 # ── S12 concurrent wave scheduling (optional, default-off) ─────────────
 # wave_enabled = true                     # false/absent = waves off; scheduling byte-identical to pre-v27
-# wave_tick_timeout = "3h"                # duration; ""/absent = inherit scheduler tick_timeout (S12 recommends 3h, ceiling 4h)
+# wave_tick_timeout = "3h"                # duration; ""/absent = inherit scheduler tick_timeout (recommended 3h = 1.5x base; HARD CEILING 4h — larger values are rejected at config validation, never clamped; S12 §4.3). Env override at spawn: SCHEDULER_WAVE_TICK_TIMEOUT
 # wave_workers_cap = 3                    # max concurrent worker processes across running ticks in this namespace; 0/absent = unlimited

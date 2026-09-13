@@ -34,6 +34,11 @@ type PackedProject struct {
 	PromptMode       string // "append" (default) | "replace"
 	NamespacePrompt  string // namespace default_prompt (empty = built-in prompt)
 	NamespaceChain   string // namespace model_chain (JSON array); tier between project chain and router (Bane 2026-08-27)
+	// NamespaceID (SCHED-GAP-111): the project's namespace, threaded from
+	// the packer's namespace join. Spawn() uses it to resolve the effective
+	// tick deadline for wave-enabled namespaces (S12 §4.3). Empty = no
+	// namespace → base --tick-timeout, no lookup (byte-identical serial path).
+	NamespaceID string
 }
 
 // Packer selects which projects run given a weight budget and running set.
@@ -419,6 +424,7 @@ func (s scored) packed() PackedProject {
 		PromptMode:       s.promptMode,
 		NamespacePrompt:  s.namespaceDefaultPmt,
 		NamespaceChain:   s.namespaceChain,
+		NamespaceID:      s.namespaceID,
 	}
 }
 

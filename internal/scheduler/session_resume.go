@@ -290,6 +290,9 @@ func (l *Loop) packedProjectFrom(p database.Project) PackedProject {
 		Deliver:          p.Deliver,
 		Prompt:           p.Prompt,
 		PromptMode:       p.PromptMode,
+		// SCHED-GAP-111: thread the namespace id so resume spawns also
+		// resolve the wave deadline (S12 §4.3 applies to every spawn).
+		NamespaceID: nsIDOf(p),
 	}
 }
 

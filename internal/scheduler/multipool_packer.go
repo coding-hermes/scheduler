@@ -269,6 +269,9 @@ func (m *MultiPoolPacker) packFlat(
 			Deliver:          s.proj.Deliver,
 			Prompt:           s.proj.Prompt,
 			PromptMode:       s.proj.PromptMode,
+			// SCHED-GAP-111: thread the namespace id (may be nil for
+			// unassigned projects) for effectiveTickTimeout.
+			NamespaceID: nsIDOf(s.proj),
 		})
 		used += s.proj.Weight
 		budgetRemaining -= s.proj.Weight
