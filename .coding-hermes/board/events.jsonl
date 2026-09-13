@@ -753,3 +753,4 @@
 {"timestamp":"2026-09-13 07:24:52.786744","event_type":"task_created","task_id":"ADV-R12","actor":"foreman","detail":"{\"id\":\"ADV-R12\",\"status\":\"pending\"}","id":746}
 {"timestamp":"2026-09-13 07:24:52.80901","event_type":"task_created","task_id":"ADV-R13","actor":"foreman","detail":"{\"id\":\"ADV-R13\",\"status\":\"pending\"}","id":747}
 {"timestamp":"2026-09-13 07:24:52.830352","event_type":"task_created","task_id":"ADV-R14","actor":"foreman","detail":"{\"id\":\"ADV-R14\",\"status\":\"pending\"}","id":748}
+{"timestamp":"2026-09-13 13:10:00.000000","event_type":"task_completed","task_id":"SCHED-GAP-114","actor":"foreman","detail":"{\"commit\":\"e5d227a\",\"guard\":\"PASS 4/4 (full mode)\",\"judge\":\"PASS cbd36350 (8/8) after criteria-mismatch re-judge (round-1 FAIL 1239b5fd = brief over-spec, not code)\",\"tick\":568,\"files\":\"4 files, +761\"}"}

@@ -2228,29 +2228,55 @@ tasks:
   status: complete
   created_at: '2026-09-13T06:01:54.743730+00:00'
   completed_at: '2026-09-13T06:33:55.379066+00:00'
-- id: SCHED-GAP-114
-  title: Wave reaper + recovery + dispatch preamble (S12 row 6)
+- id: SCHED-GAP-115
+  title: Wave cost attribution (S12 row 7)
   criteria:
-  - 'Reaper abandonment: reaping a deadline-expired wave tick marks the tick wave_recovery=abandoned
-    and its tick_workers rows abandoned; orphan worker PIDs enumerated from tick_workers
-    and killed via the existing reaper kill path (no double-kill); grep-able REAPER:
-    line with tick id, wave size, abandoned count'
-  - "Recovery (\xA710 normative): recoverAbandonedWave re-emits the manifest as a\
-    \ NEW tick with wave_recovery=recovered and parent linkage, respecting current\
-    \ namespace wave_workers_cap via 113 wave_budget arithmetic and slot availability;\
-    \ capped re-wave carries the truncated worker set in manifest priority order"
-  - 'Consecutive-recovery guard: after the spec''s N consecutive failed recoveries
-    the wave is parked (wave_recovery=parked) with a HIGH event instead of looping
-    forever'
-  - 'Recover-before-dispatch preamble in spawn.go: when the project''s previous tick
-    was an abandoned wave, every new spawn (incl. serial) prepends a fenced recovery
-    block listing the unfinished worker set and instructing finish-first; pure testable
-    function; clean projects keep byte-identical prompts'
-  - 'Tests: reaper abandonment marks tick+workers, recovery re-emits + truncation
-    under cap, parking guard at N consecutive failures, preamble present/absent cases'
+  - 'Per-worker attribution at tick completion: each tick_workers row carries its
+    realized cost (foreman report) or falls back to the manifest estimated_cost_per_worker;
+    tick cost becomes wave-attributed instead of flat; W4 no-double-count discipline
+    applies to cost (realized wins per worker; recovered waves never double-count
+    against the abandoned parent)'
+  - 'Serial-tick cost path byte-compatible: non-wave ticks produce identical cost
+    figures as before the change (regression-tested)'
+  - /api/v1/status gains wave_cost_total beside wave_depth_total; /api/v1/ticks/{id}
+    tick_workers[] carries per-worker cost; DuckBrain snapshot gains WaveCostTotal
+    (read-replica only)
+  - 'Tests: 3-worker wave sum = tick cost; mixed realized+estimated resolution; serial
+    regression; recovery-survives attribution; DuckBrain field'
   - 'Gates green: gofmt clean (touched files), go build ./..., go vet ./internal/...,
     go test -count=1 -short -p 1 ./..., golangci-lint 0 issues, daemon builds to /tmp'
   - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
     trailer; pushed to origin main with rev-list --count origin/main..HEAD = 0'
   status: in_progress
-  created_at: '2026-09-13T06:34:31.894256+00:00'
+  created_at: '2026-09-13T07:26:39.177103+00:00'
+- id: SCHED-GAP-114
+  title: Wave reaper + recovery + dispatch preamble (S12 row 6)
+  criteria:
+  - "Reaper abandonment: reapers (cleanDanglingOnStartup, reapZombies) keep tick semantics\
+    \ and gain ONE shared step flipping the reaped tick's tick_workers rows state=running->abandoned\
+    \ (collect-ids-close-rows-UPDATE); grep-able REAPER: line with tick id, wave size,\
+    \ abandoned count. NO orphan-PID kill exists or is required: S12 \xA79.1 has no\
+    \ pid column (workers are grandchildren of a dead foreman; nothing to double-kill)"
+  - "Invariant W6: reaper never touches worktrees \u2014 no git worktree call, no\
+    \ os.RemoveAll on manifest/worktree data (asserted by no-fs/no-git test)"
+  - "Recovery trigger per \xA78.3: bounded readdir of .coding-hermes/waves/*.json\
+    \ with tolerant parse sets the project next tick wave_recovery=1 only when a manifest\
+    \ tick row is terminal AND finished_at empty; non-empty finished_at is NOT a candidate\
+    \ (recovery is FOREMAN-SIDE next-tick, not a re-emit-as-new-tick \u2014 no recoverAbandonedWave\
+    \ new-tick API exists in the spec)"
+  - 'Recover-before-dispatch preamble: waveRecoveryPreamble injected into the foreman
+    prompt for recovery ticks (re-run gates per preserved branch, merge or fixup worker
+    in fresh worktree, then compose new wave)'
+  - One recovery tick at a time, always one slot; a reaped wave tick does not double-count
+    progress (worker_count persists, tick_workers read abandoned, adaptive cooldown
+    treats timed-out wave as no-progress)
+  - "Tests per \xA712: TestReaper_MarksTickWorkersAbandoned (RED-check on the tick_workers\
+    \ step), TestReaper_DoesNotTouchWorktrees, TestWaveRecoveryFlag_OnlyForTerminalUnfinishedManifest,\
+    \ plus preamble prompt tests"
+  - 'Gates green: go build ./..., gofmt clean, go vet, go test -short -p 1 ./...,
+    golangci-lint 0 issues, daemon builds'
+  - 'Authored totalwindupflightsystems with Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+    trailer; pushed to origin main'
+  status: complete
+  created_at: '2026-09-13T07:32:23.716127+00:00'
+  completed_at: '2026-09-13T07:32:31.604839+00:00'
