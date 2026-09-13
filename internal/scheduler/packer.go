@@ -39,6 +39,14 @@ type PackedProject struct {
 	// tick deadline for wave-enabled namespaces (S12 §4.3). Empty = no
 	// namespace → base --tick-timeout, no lookup (byte-identical serial path).
 	NamespaceID string
+	// WaveSerial (SCHED-GAP-113, S12 §6.2 admission layer): set by the
+	// packer when the project's namespace has wave_workers_cap > 0 AND a
+	// live wave (running tick with worker_count > 0) was in flight at pack
+	// time — the namespace is in wave-shed, so this tick must run SERIAL.
+	// Spawn()'s WAVE_BUDGET resolution treats it as authoritative: budget 0,
+	// no re-read of live depth. It carries NO slot semantics (W1/W3): the
+	// tick still occupies exactly one slot / RunningSet entry.
+	WaveSerial bool
 }
 
 // Packer selects which projects run given a weight budget and running set.

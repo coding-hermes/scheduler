@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"math"
@@ -61,6 +62,11 @@ type MultiPoolPacker struct {
 	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
 	// nil = no budget enforcement (tests, spend-query failure fail-open).
 	budgetGate BudgetGate
+	// waveShedDB, when non-nil, backs the per-cycle wave-shed scan
+	// (SCHED-GAP-113, S12 §6.2 admission layer). Installed per evaluation
+	// cycle by the loop via SetWaveShedDB; nil (tests, tooling) = shed
+	// scanning disabled, packing byte-identical to pre-SCHED-GAP-113.
+	waveShedDB *sql.DB
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
@@ -84,6 +90,28 @@ func (m *MultiPoolPacker) SetPendingCounter(c *PendingTaskCounter) {
 // to disable budget enforcement.
 func (m *MultiPoolPacker) SetBudgetGate(g BudgetGate) {
 	m.budgetGate = g
+}
+
+// SetWaveShedDB installs the DB handle used for the SCHED-GAP-113 wave-shed
+// scan (S12 §6.2 admission layer) for ONE evaluation cycle. The packer is
+// deliberately DB-less at construction (its inputs arrive per call); the
+// shed scan rides the same per-cycle injection pattern as SetBudgetGate.
+// Pass nil (or leave unset — tests, tooling) to disable shed scanning
+// entirely: no namespace is ever marked WaveSerial and packing is
+// byte-identical to pre-SCHED-GAP-113 behavior.
+func (m *MultiPoolPacker) SetWaveShedDB(db *sql.DB) {
+	m.waveShedDB = db
+}
+
+// waveShedSet resolves the per-cycle wave-shed set (SCHED-GAP-113). nil DB
+// (shed disabled) or no capped namespace → nil map (nothing is shed, zero
+// DB work). See resolveWaveShed in wave_budget.go for the query and the
+// fail-open error policy.
+func (m *MultiPoolPacker) waveShedSet(namespaces []database.Namespace) map[string]bool {
+	if m.waveShedDB == nil {
+		return nil
+	}
+	return resolveWaveShed(context.Background(), m.waveShedDB, namespaces)
 }
 
 // budgetBlocked reports the block detail for a budget-exhausted project, or

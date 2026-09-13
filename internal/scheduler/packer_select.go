@@ -48,6 +48,12 @@ func (m *MultiPoolPacker) Pack(
 	// NamespaceID). Used by Phase-2 (local copy) and Phase-3 re-pack.
 	nsCapMap := make(map[string]int, len(namespaces))
 	nsRunningMap := make(map[string]int, len(namespaces))
+	// SCHED-GAP-113 (S12 §6.2 admission layer): waveShed[nsID] = the
+	// namespace has wave_workers_cap > 0 AND a live wave (running tick
+	// with worker_count > 0) in flight. Selected projects there run
+	// SERIAL (WaveSerial → WAVE_BUDGET: 0 at spawn); the packer may still
+	// select them — this is a coarse tick-boundary shed, not a block.
+	waveShed := m.waveShedSet(namespaces)
 	for _, ns := range namespaces {
 		cap := ns.MaxConcurrent
 		if cap < 0 {
@@ -426,6 +432,9 @@ func (m *MultiPoolPacker) Pack(
 				// SCHED-GAP-111: thread the namespace id for
 				// effectiveTickTimeout in the spawn path.
 				NamespaceID: ns.ID,
+				// SCHED-GAP-113: a namespace in wave-shed still gets its
+				// projects packed — serially (WAVE_BUDGET: 0 at spawn).
+				WaveSerial: waveShed[ns.ID],
 			})
 		}
 		result.NamespaceTicks = append(result.NamespaceTicks, NamespaceTickData{

@@ -824,7 +824,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		}
 		log.Printf("SPAWN: %s tick=%s chain=%s model=%q provider=%q", project.Name, tickID, chainKind, model, provider)
 
-		prompt := buildForemanPrompt(project, tickID)
+		prompt := s.buildSpawnPrompt(project, tickID)
 
 		// GAP-048: when the gateway was unreachable at startup and
 		// noExecFallback is set, the spawner has no HTTP client (gateway is

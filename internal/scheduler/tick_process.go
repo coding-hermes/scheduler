@@ -62,6 +62,12 @@ func (l *Loop) evaluate() {
 			l.packer.SetBudgetGate(gate)
 		}
 	}
+	// SCHED-GAP-113: arm the per-cycle wave-shed scan (S12 §6.2 admission
+	// layer). The scan itself is inert unless a namespace sets
+	// wave_workers_cap > 0 (resolveWaveShed returns nil before any query).
+	if l.multiPoolPacker != nil {
+		l.multiPoolPacker.SetWaveShedDB(l.db)
+	}
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
