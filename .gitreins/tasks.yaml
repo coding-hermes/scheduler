@@ -2084,11 +2084,3 @@ tasks:
   status: complete
   created_at: '2026-08-27T09:38:06.522899+00:00'
   completed_at: '2026-08-27T10:17:57.296515+00:00'
-- id: SCHED-GAP-108
-  title: "SPEC: concurrent wave scheduling \u2014 scheduler-side support"
-  criteria:
-  - 'Spec doc with decisions + rationale for 5 wave-scheduling questions: tick wall-clock,
-    cost/visibility, concurrency accounting, bump interplay, failure shape'
-  status: complete
-  created_at: '2026-09-13T03:10:01.289514+00:00'
-  completed_at: '2026-09-13T03:14:48.192000+00:00'
