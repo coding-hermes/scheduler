@@ -197,6 +197,19 @@ precisely because it drives the decision:
 This means **adding worker costs to `ticks.cost_usd` would double-count**. The
 schema change must therefore be attribution-only.
 
+**One gap is real, and it is the judge cost, not the model cost.** GitReins usage
+is read from `<project-workdir>/.gitreins/usage.jsonl`, and that file is
+**gitignored** in this fleet (`.gitignore:45` → `/.gitreins/usage.jsonl`). A worktree
+created with `git worktree add` is a fresh checkout: it does not receive ignored
+files, so each worker's judge usage lands in
+`<worktree>/.gitreins/usage.jsonl` — a path `resolveRealTickCost` never reads. In a
+wave, **worker judge spend is therefore invisible to the scheduler** while the same
+judge spend on a serial tick (main workdir) is counted. The fix belongs with the
+manifest work (§9.3, row 7): the per-worker `cost_usd` in the manifest is the
+scheduler's only reliable view of worktree-side spend, and it must stay
+non-additive only where it would double-count model cost — judge cost from a
+worktree is *new* money and should be rolled in explicitly once row 7 lands.
+
 ### 5.2 DECISION 2 — `worker_count` on `ticks` + a `tick_workers` attribution table; money counted exactly once
 
 1. `ticks.worker_count INTEGER NOT NULL DEFAULT 0` — the number of **worker
@@ -785,7 +798,7 @@ by dependency: 1 → 2 → (3,4) → (5,6).
 | 4 | `SCHED-GAP-112` — `/api/v1/status` wave surface | `waves[]`, `wave_depth_total`, per-tick `tick_workers[]` on `/api/v1/ticks/{id}`, DuckBrain snapshot fields | 110 |
 | 5 | `SCHED-GAP-113` — namespace worker cap + `WAVE_BUDGET` | `wave_workers_cap` enforcement: prompt injection at spawn, tick-boundary shed in `packer_select.go` | 109, 110 |
 | 6 | `SCHED-GAP-114` — reaper + recovery trigger | `tick_workers` → `abandoned` in `cleanDanglingOnStartup`/`reapZombies`, `wave_recovery` flag from the manifest scan, "recover before dispatch" prompt preamble | 110 |
-| 7 | `SCHED-GAP-115` — wave cost attribution in reporting | per-worker average + per-task attribution in the cost/hop-rate rollup; explicitly **non-additive** (W4); observatory column | 110 |
+| 7 | `SCHED-GAP-115` — wave cost attribution in reporting | per-worker average + per-task attribution in the cost/hop-rate rollup; **non-additive for model cost** (W4, already summed by `resolveRealTickCost`), **additive for worktree-side GitReins judge cost** (gitignored `usage.jsonl`, invisible today); observatory column | 110 |
 
 Deliberately **out of scope** here, with rationale:
 
