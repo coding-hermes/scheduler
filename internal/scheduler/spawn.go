@@ -43,8 +43,19 @@ type Spawner struct {
 	active        map[string]*exec.Cmd // tickID -> running process
 	mu            sync.Mutex
 	timeout       time.Duration
-	model         string
-	provider      string
+	// gatewayResponseTimeout (SCHED-GAP-117) is the per-turn deadline applied
+	// to a single gateway /v1/responses POST — deliberately SHORTER than the
+	// tick deadline (timeout / effectiveTickTimeout). A hung POST previously
+	// consumed the whole --tick-timeout slot undetected (measured:
+	// completed_at = spawned_at + exactly 7200s, zero tool calls in the
+	// foreman's agent.log). The turn ctx is a child of the session ctx, so
+	// the effective POST deadline is min(gatewayResponseTimeout,
+	// effectiveTickTimeout); a trip while the tick deadline is still alive
+	// classifies the tick as a stalled failure instead of waiting for the 2h
+	// backstop.
+	gatewayResponseTimeout time.Duration
+	model                  string
+	provider               string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
 	// chain. Applied AFTER the project's primary and fallback tiers; skipped
 	// entirely when a project sets NoGlobalFallback.
@@ -119,16 +130,17 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		to = timeout[0]
 	}
 	return &Spawner{
-		db:               db,
-		maxConcurrent:    maxConcurrent,
-		active:           make(map[string]*exec.Cmd),
-		timeout:          to,
-		model:            getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
-		provider:         getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
-		fallbackModel:    getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
-		fallbackProvider: getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
-		idleModel:        getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
-		idleProvider:     getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		db:                     db,
+		maxConcurrent:          maxConcurrent,
+		active:                 make(map[string]*exec.Cmd),
+		timeout:                to,
+		gatewayResponseTimeout: gatewayResponseTimeoutFromEnv(),
+		model:                  getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
+		provider:               getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
+		fallbackModel:          getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
+		fallbackProvider:       getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
+		idleModel:              getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
+		idleProvider:           getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
 		// TASK-ROUTER-001: the task router is OPT-IN via env — hosts
 		// without SCHEDULER_ROUTER_CMD (and every test) keep the
 		// pre-router resolution exactly (fail-open default). The command
@@ -153,6 +165,60 @@ func getEnvOrDefault(envVar, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// DefaultGatewayResponseTimeout is the default per-turn deadline applied to a
+// gateway /v1/responses POST (SCHED-GAP-117): 30 minutes. One POST is one LLM
+// turn (the fleet's longest healthy turns run well under this — model thinking
+// + tool loops complete in single-digit minutes; only a wedged provider or a
+// dead gateway connection exceeds it), so 30m tolerates slow providers while
+// catching a hang 4x faster than the 2h --tick-timeout backstop.
+const DefaultGatewayResponseTimeout = 30 * time.Minute
+
+// envGatewayResponseTimeout is the SCHEDULER_* override for the per-turn
+// gateway deadline (SCHED-GAP-117).
+const envGatewayResponseTimeout = "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"
+
+// gatewayResponseTimeoutFromEnv resolves the per-turn gateway POST deadline
+// from the environment (SCHED-GAP-117). Unset → the 30m default; "0s" (or
+// "0") → 0, the explicit DISABLE (per-turn deadline off, pre-117 behavior);
+// any other unparseable or negative value → WARN + default (a garbage value
+// must never insta-fail every spawn).
+func gatewayResponseTimeoutFromEnv() time.Duration {
+	v := os.Getenv(envGatewayResponseTimeout)
+	if v == "" {
+		return DefaultGatewayResponseTimeout
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("WARN: %s=%q unparseable — using default %v",
+			envGatewayResponseTimeout, v, DefaultGatewayResponseTimeout)
+		return DefaultGatewayResponseTimeout
+	}
+	if d < 0 {
+		log.Printf("WARN: %s=%q negative — using default %v",
+			envGatewayResponseTimeout, v, DefaultGatewayResponseTimeout)
+		return DefaultGatewayResponseTimeout
+	}
+	return d // 0 = explicitly disabled
+}
+
+// SetGatewayResponseTimeout overrides the per-turn gateway POST deadline
+// (SCHED-GAP-117). 0 DISABLES the per-turn deadline (the POST then runs on
+// the tick deadline alone, pre-117 behavior); only negative values are
+// ignored as nonsensical. The daemon wires --gateway-response-timeout here,
+// tests shrink it.
+func (s *Spawner) SetGatewayResponseTimeout(d time.Duration) {
+	if d < 0 {
+		return
+	}
+	s.gatewayResponseTimeout = d
+}
+
+// GatewayResponseTimeout returns the armed per-turn gateway POST deadline
+// (SCHED-GAP-117); 0 when no deadline is armed.
+func (s *Spawner) GatewayResponseTimeout() time.Duration {
+	return s.gatewayResponseTimeout
 }
 
 // routerFromEnv wires the task router from SCHEDULER_ROUTER_CMD
@@ -864,6 +930,34 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// effectiveTickTimeout (env > namespace > --tick-timeout).
 			ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
 
+			// SCHED-GAP-117: the per-turn deadline. turnCtx is a CHILD of
+			// the session ctx and bounds ONLY the gateway /v1/responses
+			// POST (+ its bounded GAP-080 retry loop), NOT the exec kill
+			// timer or the stdout scanner — those keep the full
+			// effectiveTimeout. Effective POST deadline:
+			// min(gatewayResponseTimeout, effectiveTimeout), so a short
+			// --tick-timeout can never be extended by this knob and a
+			// turned-off knob (0) leaves the pre-117 behavior byte-for-byte.
+			// Live evidence: a hung POST burned the WHOLE 7200s slot
+			// (completed_at = spawned_at + exactly 7200s) with zero tool
+			// calls ever running. The trip below fails the tick as a
+			// STALLED failure long before the 2h backstop.
+			turnCtx, turnCancel := func() (context.Context, context.CancelFunc) {
+				if s.gatewayResponseTimeout <= 0 || s.gatewayResponseTimeout >= effectiveTimeout {
+					return context.WithCancel(ctx)
+				}
+				return context.WithTimeout(ctx, s.gatewayResponseTimeout)
+			}()
+			defer turnCancel()
+
+			// stalledTurn classifies a per-turn-deadline trip. Evaluated via
+			// the capture defer INSIDE the POST closure below (which runs
+			// before the closure's deferred cancel(), LIFO) — after the
+			// closure returns, the session ctx is canceled and the
+			// distinction between "turn deadline tripped" and "tick
+			// deadline tripped" is unrecoverable.
+			var turnStalled bool
+
 			// GAP-035: validate a per-project gateway key BEFORE dispatch.
 			// The 2026-08-04 outage had the fleet send revoked fk-* keys
 			// blindly — every spawn burned a full gateway cycle, failed, and
@@ -948,7 +1042,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// stop it on every return path (success AND failure).
 				defer close(stopHeartbeat)
 				defer cancel()
-				r, err := s.gateway.SendResponseWithSessionKey(ctx, prompt, model, provider, project.GatewayKey, tickID)
+				// SCHED-GAP-117: capture the stall classification BEFORE the
+				// deferred cancel() fires (LIFO: this defer runs first).
+				// turnStalled is true only when the TURN deadline tripped
+				// while the session ctx was still alive.
+				defer func() {
+					turnStalled = turnCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
+				}()
+				r, err := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, project.GatewayKey, tickID)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
 				// model/provider pair. A gateway HTTP 5xx, network/timeout or
 				// read/unmarshal failure is a transport blip — retry it with
@@ -965,17 +1066,17 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q error=%v",
 							project.Name, tickID, attempt, gatewayRetryMaxAttempts, model, provider, err)
 						select {
-						case <-ctx.Done():
+						case <-turnCtx.Done():
 							return r, err
 						case <-time.After(gatewayRetryBackoff(attempt)):
 						}
-						r, err = s.gateway.SendResponseWithSessionKey(ctx, prompt, model, provider, project.GatewayKey, tickID)
+						r, err = s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, project.GatewayKey, tickID)
 						if err == nil {
 							break
 						}
 						if IsTransientGatewayErr(err) {
 							atomic.AddInt64(&s.spawnGatewayErrors, 1)
-							if ctx.Err() != nil {
+							if turnCtx.Err() != nil {
 								break
 							}
 							continue
@@ -1000,7 +1101,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				circuitFailureRecorded = true
 				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
 					project.Name, tickID, model, provider, retryModel, retryProvider)
-				r2, err2 := s.gateway.SendResponseWithSessionKey(ctx, prompt, retryModel, retryProvider, project.GatewayKey, tickID)
+				r2, err2 := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, retryModel, retryProvider, project.GatewayKey, tickID)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
 					// SCHED-GAP-078: the tick's cost follows the pair that
@@ -1032,7 +1133,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						(ffModel != retryModel || ffProvider != retryProvider) {
 						log.Printf("GATEWAY FOREMAN FALLBACK: %s tick=%s chain exhausted (primary=%q/%q retry=%q/%q) — final attempt model=%q provider=%q",
 							project.Name, tickID, model, provider, retryModel, retryProvider, ffModel, ffProvider)
-						r3, err3 := s.gateway.SendResponseWithSessionKey(ctx, prompt, ffModel, ffProvider, project.GatewayKey, tickID)
+						r3, err3 := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, ffModel, ffProvider, project.GatewayKey, tickID)
 						if err3 == nil {
 							model, provider = ffModel, ffProvider
 							// SCHED-GAP-078: cost follows the pair that ran.
@@ -1204,6 +1305,66 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			// SCHED-GAP-117: the per-turn deadline tripped while the tick
+			// deadline is still alive — the gateway POST made zero progress
+			// for gatewayResponseTimeout (the measured hang: a wedged
+			// /v1/responses consuming the whole 7200s slot with zero tool
+			// calls ever running). Classify as a STALLED failure, not a
+			// tick-timeout: the row lands status=failed with a
+			// "stalled: no progress" error through the existing
+			// lifecycle.Complete path, and the slot frees ~90 minutes early
+			// at the default pair (30m per-turn vs 2h tick). Exec fallback is
+			// deliberately SKIPPED: the gateway session may still be alive
+			// server-side (its /v1/responses handler has no abort contract),
+			// so an exec re-spawn would double-run the foreman on one repo.
+			// The next eval's normal cooldown re-arms the project — same
+			// recovery contract as TickTimeout ("no timeout backoff"), and
+			// the pair's circuit breaker gets its cooldown from
+			// recordCircuitFailure below.
+			if turnStalled {
+				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure",
+					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout)
+				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
+					s.gatewayResponseTimeout, effectiveTimeout)
+				if s.events != nil {
+					s.events.Emit(context.Background(), SeverityHigh, "spawn",
+						"gateway turn stalled — tick failed before tick-timeout", map[string]any{
+							"project":         project.Name,
+							"tick_id":         tickID,
+							"turn_deadline_s": int(s.gatewayResponseTimeout.Seconds()),
+							"tick_timeout_s":  int(effectiveTimeout.Seconds()),
+							"error":           stallErr,
+						})
+				}
+				// TASK-ROUTER-002: cool the pair that hung (unless the 401/403
+				// path already recorded it — a hang is never a 401/403, so
+				// circuitFailureRecorded is false here, but the guard keeps the
+				// invariant explicit).
+				if !circuitFailureRecorded {
+					s.recordCircuitFailure(provider, model, "gateway turn stalled")
+				}
+				s.noteSpawnFailure(project.Name)
+				// Return a NON-completed tick: Wait() yields TickFailed and
+				// slot_pool's existing lifecycle.Complete path persists
+				// status=failed / outcome=failed / error=stallErr.
+				return &SpawnedTick{
+					TickID:     tickID,
+					Project:    project.Name,
+					SessionID:  tickID, // placeholder — no real session persisted
+					Started:    reqStart,
+					Deliver:    project.Deliver,
+					spawner:    s,
+					completed:  false,
+					completeAt: time.Now(),
+					gwFailErr:  stallErr,
+					model:      model,
+					provider:   provider,
+					rate:       rate,
+					workdir:    project.Workdir,
+					reqStart:   reqStart,
+					Trigger:    "prompt",
+				}, nil
+			}
 			// TASK-ROUTER-002: the attempted pair failed (timeout, HTTP
 			// error, gateway failure) — record it so the breaker cools it
 			// across ticks. The 401/403 path already recorded the primary

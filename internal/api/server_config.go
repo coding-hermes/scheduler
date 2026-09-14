@@ -30,14 +30,18 @@ type DuckBrainConfigSnapshot struct {
 // GET /api/v1/config for operator introspection (SCHED-GAP-034).
 // Durations are rendered as Go duration strings (e.g. "30s", "2h").
 type ResolvedConfig struct {
-	DBPath                 string                  `json:"db_path"`
-	Listen                 string                  `json:"listen"`
-	MinInterval            string                  `json:"min_interval"`
-	MaxInterval            string                  `json:"max_interval"`
-	NumLevels              int                     `json:"num_levels"`
-	WeightBudget           int                     `json:"weight_budget"`
-	MaxConcurrent          int                     `json:"max_concurrent"`
-	TickTimeout            string                  `json:"tick_timeout"`
+	DBPath        string `json:"db_path"`
+	Listen        string `json:"listen"`
+	MinInterval   string `json:"min_interval"`
+	MaxInterval   string `json:"max_interval"`
+	NumLevels     int    `json:"num_levels"`
+	WeightBudget  int    `json:"weight_budget"`
+	MaxConcurrent int    `json:"max_concurrent"`
+	TickTimeout   string `json:"tick_timeout"`
+	// GatewayResponseTimeout (SCHED-GAP-117): the per-turn deadline for a
+	// gateway /v1/responses POST — "0s" means disabled (the POST runs on
+	// the tick deadline alone).
+	GatewayResponseTimeout string                  `json:"gateway_response_timeout"`
 	NamespaceMode          bool                    `json:"namespace_mode"`
 	AutoDisableFailureRate float64                 `json:"auto_disable_failure_rate"`
 	AutoDisableWindow      int                     `json:"auto_disable_window"`

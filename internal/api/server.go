@@ -230,6 +230,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// (auth rejections never counted), alongside the health endpoint's
 		// spawns_http/spawns_exec counters.
 		status["gateway_errors"] = s.loop.GatewayErrorCount()
+		// SCHED-GAP-117: the armed per-turn gateway POST deadline (0 =
+		// disabled; a stalled POST fails the tick as "stalled" before
+		// --tick-timeout).
+		status["gateway_response_timeout"] = s.loop.GatewayResponseTimeout().String()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()

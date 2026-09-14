@@ -243,6 +243,29 @@ func (l *Loop) SetTickTimeout(timeout time.Duration) {
 	}
 }
 
+// SetGatewayResponseTimeout updates the real spawner's per-turn gateway POST
+// deadline (SCHED-GAP-117). The daemon wires --gateway-response-timeout here
+// after SetTickTimeout; 0 disables the per-turn deadline (pre-117 behavior),
+// negative values are ignored by the spawner.
+func (l *Loop) SetGatewayResponseTimeout(d time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.spawner != nil {
+		l.spawner.SetGatewayResponseTimeout(d)
+	}
+}
+
+// GatewayResponseTimeout reports the armed per-turn gateway POST deadline
+// (SCHED-GAP-117), surfaced by /api/v1/status.
+func (l *Loop) GatewayResponseTimeout() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.spawner != nil {
+		return l.spawner.GatewayResponseTimeout()
+	}
+	return 0
+}
+
 // RunBulkSim generates N simulated ticks and exits.
 func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 	l.simulate = true

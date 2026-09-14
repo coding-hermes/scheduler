@@ -230,6 +230,12 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_TICK_TIMEOUT"); v != "" {
 		cfg.Scheduler.TickTimeout = v
 	}
+	// SCHED-GAP-117: per-turn gateway deadline env override ("0s" = the
+	// explicit disable and must survive the layering, so no parse gate
+	// here — validation happens in Validate()).
+	if v := os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"); v != "" {
+		cfg.Scheduler.GatewayResponseTimeout = v
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -273,6 +279,16 @@ func (r *RootConfig) Validate() error {
 	}
 	if _, err := parseDurationErr(r.Scheduler.TickTimeout, "scheduler.tick_timeout"); err != nil {
 		errs = append(errs, err)
+	}
+	// SCHED-GAP-117: the per-turn gateway deadline is optional — empty means
+	// "not set" (the daemon default applies). When set it must parse and be
+	// non-negative ("0s" is the explicit disable).
+	if v := r.Scheduler.GatewayResponseTimeout; v != "" {
+		if d, err := parseDurationErr(v, "scheduler.gateway_response_timeout"); err != nil {
+			errs = append(errs, err)
+		} else if d < 0 {
+			errs = append(errs, fmt.Errorf("scheduler.gateway_response_timeout (%s) must be >= 0 (\"0s\" disables)", v))
+		}
 	}
 	if minD > 0 && maxD > 0 && minD > maxD {
 		errs = append(errs, fmt.Errorf("scheduler.min_interval (%s) must be <= scheduler.max_interval (%s)",

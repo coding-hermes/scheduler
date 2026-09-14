@@ -53,6 +53,15 @@ func TestPrintSchema(t *testing.T) {
 	if maxConcurrent["default"] != float64(10) {
 		t.Errorf("max_concurrent default = %v, want 10 (main.go flag default)", maxConcurrent["default"])
 	}
+	// SCHED-GAP-117: the per-turn gateway deadline must exist in the schema
+	// and match the main.go flag default (30m prints as "30m0s").
+	gwrt := schedProps["gateway_response_timeout"].(map[string]interface{})
+	if gwrt["default"] != "30m0s" {
+		t.Errorf("gateway_response_timeout default = %v, want \"30m0s\" (main.go flag default)", gwrt["default"])
+	}
+	if gwrt["env"] != "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT" {
+		t.Errorf("gateway_response_timeout env = %v, want SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", gwrt["env"])
+	}
 
 	gwProps := props["gateway"].(map[string]interface{})["properties"].(map[string]interface{})
 	noExec, ok := gwProps["no_exec_fallback"].(map[string]interface{})
@@ -93,6 +102,7 @@ func TestPrintConfig(t *testing.T) {
 			10, 100, 10,
 			false,
 			2*60*60*1000000000,
+			30*60*1000000000,
 			"http://127.0.0.1:8642",
 			"secret",
 			"/tmp/foreman",
@@ -115,6 +125,9 @@ func TestPrintConfig(t *testing.T) {
 		"weight_budget = 100",
 		"max_concurrent = 10",
 		"tick_timeout = \"2h0m0s\"",
+		// SCHED-GAP-117: the per-turn gateway deadline must surface in
+		// --show-config output.
+		"gateway_response_timeout = \"30m0s\"",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
 		// effective value (was previously invisible to --show-config).

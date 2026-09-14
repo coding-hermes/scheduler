@@ -61,6 +61,15 @@ type SchedulerConfig struct {
 	NamespaceMode   bool             `toml:"namespace_mode"`
 	BlackoutWindows []BlackoutWindow `toml:"blackout_windows"`
 
+	// GatewayResponseTimeout (SCHED-GAP-117) is the per-turn deadline for a
+	// single gateway /v1/responses POST, stored as a duration string
+	// (e.g. "30m"; "0s" = disabled — the POST runs on the tick deadline
+	// alone). Effective POST deadline = min(this, tick_timeout). A POST
+	// that makes no progress for this long fails the tick as "stalled"
+	// BEFORE --tick-timeout, so a hung turn no longer consumes the whole
+	// 2h slot. Empty = the daemon flag default (30m).
+	GatewayResponseTimeout string `toml:"gateway_response_timeout"`
+
 	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
 	// threshold over the last AutoDisableWindow ticks at or above which the
 	// scheduler will disable the project automatically. Default 0 = feature

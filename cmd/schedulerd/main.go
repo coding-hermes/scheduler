@@ -40,6 +40,12 @@ func main() {
 	maxConcurrent := flag.Int("max-concurrent", 10, "Max concurrent foremen")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
+	// SCHED-GAP-117: shorter per-turn deadline for a single gateway
+	// /v1/responses POST. A hung POST previously consumed the whole
+	// --tick-timeout slot undetected; the turn deadline trips first and
+	// fails the tick as "stalled". Effective POST deadline is
+	// min(--gateway-response-timeout, --tick-timeout).
+	gatewayResponseTimeout := flag.Duration("gateway-response-timeout", 30*time.Minute, "Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before --tick-timeout (SCHED-GAP-117; 0 disables)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
@@ -94,6 +100,14 @@ func main() {
 			*failureWindow = n
 		}
 	}
+	// SCHED-GAP-117: per-turn gateway deadline env override, resolved BEFORE
+	// --show-config/--schema so those print EFFECTIVE values (same pattern as
+	// the auto-disable knobs above). Only a positive parseable duration wins.
+	if v := os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			*gatewayResponseTimeout = d
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -118,7 +132,7 @@ func main() {
 		printConfig(*configFile, *dbPath, *listen, *logFile,
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
-			*tickTimeout,
+			*tickTimeout, *gatewayResponseTimeout,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow)
@@ -215,6 +229,12 @@ func main() {
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
 	// Apply the tick timeout to the real spawner so Wait()/scanner cleanup use it.
 	loop.SetTickTimeout(*tickTimeout)
+	// SCHED-GAP-117: apply the per-turn gateway deadline AFTER the tick
+	// timeout (the turn ctx is a child of the session ctx, so the effective
+	// POST deadline is min(flag, tick timeout)). The flag var already
+	// carries the env override resolved above; 0 disables the per-turn
+	// deadline (POST runs on the tick deadline alone, pre-117 behavior).
+	loop.SetGatewayResponseTimeout(*gatewayResponseTimeout)
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
@@ -246,6 +266,19 @@ func main() {
 			}
 			if rootCfg.Scheduler.AutoDisableFailureRate > 0 && *autoDisableRate == 0 {
 				*autoDisableRate = rootCfg.Scheduler.AutoDisableFailureRate
+			}
+		}
+		// SCHED-GAP-117: TOML layer for the per-turn gateway deadline —
+		// applied only when the flag sits at its default (the same
+		// default-guard pattern as the auto-disable knobs above), so CLI
+		// and env keep precedence.
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			if rootCfg.Scheduler.GatewayResponseTimeout != "" && *gatewayResponseTimeout == 30*time.Minute {
+				if d, derr := time.ParseDuration(rootCfg.Scheduler.GatewayResponseTimeout); derr == nil && d >= 0 {
+					*gatewayResponseTimeout = d
+				} else {
+					log.Printf("WARN: scheduler.gateway_response_timeout=%q invalid — using %v", rootCfg.Scheduler.GatewayResponseTimeout, *gatewayResponseTimeout)
+				}
 			}
 		}
 	}
@@ -364,6 +397,7 @@ func main() {
 		WeightBudget:           *weightBudget,
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
+		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,
 		AutoDisableWindow:      *autoDisableWindow,
