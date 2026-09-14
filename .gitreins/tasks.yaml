@@ -2333,3 +2333,14 @@ tasks:
   status: complete
   created_at: '2026-09-13T23:51:44.238616+00:00'
   completed_at: '2026-09-14T00:10:20.060596+00:00'
+- id: SCHED-GAP-117
+  title: Shorter per-turn deadline (or in-flight progress/liveness) on gateway POST
+  criteria:
+  - gateway hung /v1/responses no longer consumes the full --tick-timeout slot; a
+    stalled turn is detected and killed within a per-turn deadline shorter than tick-timeout;
+    the live tick error text no longer reads completed_at = spawned_at + 7200s on
+    a stalled turn; regression test in internal/scheduler/ covers the shorter-deadline
+    path; gitreins guard 4/4 + go test ./... PASS
+  status: complete
+  created_at: '2026-09-14T11:50:25.433990+00:00'
+  completed_at: '2026-09-14T11:50:28.758936+00:00'
