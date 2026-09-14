@@ -2324,3 +2324,12 @@ tasks:
   status: complete
   created_at: '2026-09-13T18:37:27.686632+00:00'
   completed_at: '2026-09-13T19:15:15.234175+00:00'
+- id: ADV-R01
+  title: Deploy v26+v27 and verify live surface
+  criteria:
+  - Live /api/v1/status exposes waves[] and wave_depth_total; live migrations are
+    at v27; projects has bump columns; GAP-107 and GAP-109 through GAP-113 surfaces
+    are observable live.
+  status: complete
+  created_at: '2026-09-13T23:51:44.238616+00:00'
+  completed_at: '2026-09-14T00:10:20.060596+00:00'
