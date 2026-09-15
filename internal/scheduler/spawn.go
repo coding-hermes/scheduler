@@ -123,6 +123,94 @@ type Spawner struct {
 	consecutiveGatewayDrops map[string]int
 }
 
+// sendTurn (SCHED-GAP-119) is the single dispatch seam for one gateway
+// /v1/responses POST. When supervise is true (per-turn knob armed and below
+// the tick deadline) the POST is activity-aware: SendResponseStream sends
+// stream:true and applies an IDLE deadline reset by every real SSE event,
+// so a demonstrably active turn never trips it and a byte-silent hang
+// aborts at the same deadline as GAP-117. When supervise is false the
+// legacy non-streaming POST runs under turnCtx — byte-for-byte pre-119.
+//
+// Every attempt (primary + GAP-080 retry + chain hops) merges its
+// GatewayPOSTTrace into *tickTrace; logPOSTTrace persists + logs it (AC 1).
+func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
+	prompt, model, provider, key, tickID, project string, tickTrace **GatewayPOSTTrace, stall *bool) (*Response, error) {
+	if supervise {
+		deadline := s.gatewayResponseTimeout
+		if deadline > effectiveTimeout {
+			deadline = effectiveTimeout
+		}
+		r, trace, err := s.gateway.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
+		trace.Model, trace.Provider = model, provider
+		trace.TickID, trace.Project = tickID, project
+		mergePostTrace(tickTrace, trace)
+		// Fold the stall classification HERE, while the session ctx is
+		// still alive — the closure's deferred cancel() would otherwise
+		// make ctx.Err()==nil unsatisfiable by the time Spawn checks it
+		// (the exact trap the GAP-117 capture-defer comment describes).
+		// Also stamp the deadline-abort classification on the merged
+		// trace for the JSON-fallback path (the SSE path sets it inline).
+		var turnAbort *TurnDeadlineError
+		if errors.As(err, &turnAbort) {
+			if sessionCtx.Err() == nil {
+				*stall = true
+			}
+			if *tickTrace != nil {
+				(*tickTrace).Classification = "aborted-by-turn-deadline"
+				(*tickTrace).IdleFired = true
+			}
+		}
+		return r, err
+	}
+	r, err := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
+	if err == nil {
+		// Legacy path carries no per-POST supervision, but AC 1 still wants
+		// the trace: record a minimal completed/wall entry for the attempt.
+		now := time.Now()
+		mergePostTrace(tickTrace, &GatewayPOSTTrace{
+			TickID:         tickID,
+			Project:        project,
+			Model:          model,
+			Provider:       provider,
+			Start:          now.Add(-time.Since(now)),
+			Finish:         now,
+			DeadlineMode:   "wall",
+			Classification: "completed",
+			Attempts:       1,
+		})
+	}
+	return r, err
+}
+
+// logPOSTTrace (SCHED-GAP-119 AC 1) stamps the tick/project on the merged
+// trace, persists it on the ticks row (gateway_trace JSON column, migration
+// v28) and emits the stable grep-able scheduler.log line. Best-effort: a
+// failed UPDATE logs a WARN and never fails the tick on its own.
+func (s *Spawner) logPOSTTrace(tickID string, trace *GatewayPOSTTrace) {
+	if trace == nil {
+		return
+	}
+	trace.Finish = time.Now()
+	trace.Elapsed = trace.Finish.Sub(trace.Start)
+	trace.ElapsedMS = trace.Elapsed.Milliseconds()
+	trace.DeadlineMS = trace.Deadline.Milliseconds()
+	log.Printf("GATEWAY-POST-TRACE: tick=%s project=%s model=%s provider=%s classification=%s mode=%s deadline=%v elapsed=%v events=%d attempts=%d session=%s idle_fired=%t",
+		trace.TickID, trace.Project, trace.Model, trace.Provider,
+		trace.Classification, trace.DeadlineMode, trace.Deadline, trace.Elapsed,
+		trace.Events, trace.Attempts, trace.SessionID, trace.IdleFired)
+	if s.db == nil {
+		return
+	}
+	blob, err := json.Marshal(trace)
+	if err != nil {
+		log.Printf("WARN: marshal gateway trace for %s: %v", tickID, err)
+		return
+	}
+	if _, err := s.db.Exec(`UPDATE ticks SET gateway_trace = ? WHERE id = ?`, string(blob), tickID); err != nil {
+		log.Printf("WARN: persist gateway trace for %s: %v", tickID, err)
+	}
+}
+
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
 func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawner {
 	to := 30 * time.Minute
@@ -942,12 +1030,21 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// (completed_at = spawned_at + exactly 7200s) with zero tool
 			// calls ever running. The trip below fails the tick as a
 			// STALLED failure long before the 2h backstop.
-			turnCtx, turnCancel := func() (context.Context, context.CancelFunc) {
-				if s.gatewayResponseTimeout <= 0 || s.gatewayResponseTimeout >= effectiveTimeout {
-					return context.WithCancel(ctx)
-				}
-				return context.WithTimeout(ctx, s.gatewayResponseTimeout)
-			}()
+			//
+			// SCHED-GAP-119: when the knob is ACTIVE (0 < knob < tick
+			// deadline) the POST is instead supervised ACTIVITY-AWARE:
+			// SendResponseStream sends stream:true and applies an IDLE
+			// deadline that resets on every real SSE event, so a turn that
+			// is demonstrably active never trips it. First live day of the
+			// pure wall clock (16c166d): 15 "stalled: no progress" failures
+			// across 13 projects in 5h — including a hermes-dagger tick
+			// whose window contains real work (fix e87d709 at 16:38, board
+			// close c27d5c3 at 16:49, git-verified) yet was recorded as a
+			// zero-accounted failure. turnCtx below therefore bounds only
+			// the LEGACY non-streaming POST (knob off, or collapsed onto
+			// the tick deadline) — byte-for-byte the pre-119 behavior.
+			superviseTurn := s.gatewayResponseTimeout > 0 && s.gatewayResponseTimeout < effectiveTimeout
+			turnCtx, turnCancel := context.WithCancel(ctx)
 			defer turnCancel()
 
 			// stalledTurn classifies a per-turn-deadline trip. Evaluated via
@@ -956,7 +1053,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// closure returns, the session ctx is canceled and the
 			// distinction between "turn deadline tripped" and "tick
 			// deadline tripped" is unrecoverable.
+			// SCHED-GAP-119: on the supervised (activity-aware) path the
+			// trip surfaces as *TurnDeadlineError from the POST itself; the
+			// turnCtx form below remains the LEGACY path's classifier.
 			var turnStalled bool
+			var postTrace *GatewayPOSTTrace
 
 			// GAP-035: validate a per-project gateway key BEFORE dispatch.
 			// The 2026-08-04 outage had the fleet send revoked fk-* keys
@@ -1047,9 +1148,22 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// turnStalled is true only when the TURN deadline tripped
 				// while the session ctx was still alive.
 				defer func() {
+					if superviseTurn {
+						// Supervised path: folded at send time (sendTurn), while
+						// the session ctx was still alive. turnCtx here is a plain
+						// WithCancel and never DeadlineExceeded, so the legacy
+						// expression below would CLOBBER the fold.
+						return
+					}
 					turnStalled = turnCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 				}()
-				r, err := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, project.GatewayKey, tickID)
+				// sendTurn (SCHED-GAP-119) picks the supervised activity-aware
+				// POST when the knob is armed, else the legacy non-streaming
+				// POST under turnCtx — one seam for every attempt below.
+				send := func(m, p string) (*Response, error) {
+					return s.sendTurn(ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, project.GatewayKey, tickID, project.Name, &postTrace, &turnStalled)
+				}
+				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
 				// model/provider pair. A gateway HTTP 5xx, network/timeout or
 				// read/unmarshal failure is a transport blip — retry it with
@@ -1070,7 +1184,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 							return r, err
 						case <-time.After(gatewayRetryBackoff(attempt)):
 						}
-						r, err = s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, project.GatewayKey, tickID)
+						r, err = send(model, provider)
 						if err == nil {
 							break
 						}
@@ -1101,7 +1215,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				circuitFailureRecorded = true
 				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
 					project.Name, tickID, model, provider, retryModel, retryProvider)
-				r2, err2 := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, retryModel, retryProvider, project.GatewayKey, tickID)
+				r2, err2 := send(retryModel, retryProvider)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
 					// SCHED-GAP-078: the tick's cost follows the pair that
@@ -1133,7 +1247,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						(ffModel != retryModel || ffProvider != retryProvider) {
 						log.Printf("GATEWAY FOREMAN FALLBACK: %s tick=%s chain exhausted (primary=%q/%q retry=%q/%q) — final attempt model=%q provider=%q",
 							project.Name, tickID, model, provider, retryModel, retryProvider, ffModel, ffProvider)
-						r3, err3 := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, ffModel, ffProvider, project.GatewayKey, tickID)
+						r3, err3 := send(ffModel, ffProvider)
 						if err3 == nil {
 							model, provider = ffModel, ffProvider
 							// SCHED-GAP-078: cost follows the pair that ran.
@@ -1150,6 +1264,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}
 				return r2, err2
 			}()
+			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
+			// outcome (completed, aborted-by-turn-deadline, transport-error).
+			s.logPOSTTrace(tickID, postTrace)
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
@@ -1326,6 +1443,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout)
 				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
 					s.gatewayResponseTimeout, effectiveTimeout)
+				// SCHED-GAP-119: preserve the REAL gateway session id on the
+				// stalled row (the SSE X-Hermes-Session-Id header, else the
+				// tick-id placeholder) and count the work the turn actually
+				// landed — the 2026-09-15 16:26 hermes-dagger tick committed
+				// e87d709+c27d5c3 mid-window yet was recorded with
+				// commits=0/tokens=0 (zero-accounted silent loss). The session
+				// link lets GAP-079 reconciliation re-attach usage later.
+				stallSessionID := tickID
+				if postTrace != nil && postTrace.SessionID != "" {
+					stallSessionID = postTrace.SessionID
+				}
+				stallCommits, stallFiles := countGitChanges(project.Workdir, reqStart, time.Now())
 				if s.events != nil {
 					s.events.Emit(context.Background(), SeverityHigh, "spawn",
 						"gateway turn stalled — tick failed before tick-timeout", map[string]any{
@@ -1350,7 +1479,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				return &SpawnedTick{
 					TickID:     tickID,
 					Project:    project.Name,
-					SessionID:  tickID, // placeholder — no real session persisted
+					SessionID:  stallSessionID, // SCHED-GAP-119: real session id when observed
 					Started:    reqStart,
 					Deliver:    project.Deliver,
 					spawner:    s,
@@ -1363,6 +1492,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					workdir:    project.Workdir,
 					reqStart:   reqStart,
 					Trigger:    "prompt",
+					// SCHED-GAP-119: pre-counted work so the failed row keeps
+					// its commits/files even though no gateway usage arrived.
+					gwFailCounted: true,
+					gwFailCommits: stallCommits,
+					gwFailFiles:   stallFiles,
 				}, nil
 			}
 			// TASK-ROUTER-002: the attempted pair failed (timeout, HTTP
@@ -1658,6 +1792,13 @@ type SpawnedTick struct {
 	// outcome=failed and the gateway's error text in the error column —
 	// never completed/committed.
 	gwFailErr string
+	// gwFailCounted/gwFailCommits/gwFailFiles (SCHED-GAP-119): git work
+	// pre-counted at the failure site for ticks that failed AFTER doing
+	// real work (e.g. a turn-deadline abort mid-commit). Wait()'s
+	// gwFailErr branch persists them instead of zeros.
+	gwFailCounted bool
+	gwFailCommits int
+	gwFailFiles   int
 
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
@@ -1723,6 +1864,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
 			CostUSD:   cost,
+			// SCHED-GAP-119: keep real work on failed rows (stalled ticks
+			// that landed commits mid-window — see 2026-09-15 evidence).
+			Commits:      st.gwFailCommits,
+			FilesChanged: st.gwFailFiles,
 		}
 	}
 

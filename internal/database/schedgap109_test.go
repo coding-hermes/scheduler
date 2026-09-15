@@ -40,9 +40,14 @@ func TestMigrateV27_WaveColumnsAndTickWorkers(t *testing.T) {
 	if err := Migrate(ctx, db); err != nil {
 		t.Fatalf("Migrate (initial): %v", err)
 	}
-	// Rewind to exactly v26: remove the v27 recording and its artifacts.
-	if _, err := db.Exec(`DELETE FROM migrations WHERE version = 27`); err != nil {
-		t.Fatalf("un-apply v27 (migrations row): %v", err)
+	// Rewind to exactly v26: remove the v27+ recording and its artifacts.
+	// (v28+, SCHED-GAP-119: gateway_trace — rewind every migration above
+	// v26 the same way; the ladder re-applies them on the Migrate below.)
+	if _, err := db.Exec(`DELETE FROM migrations WHERE version >= 27`); err != nil {
+		t.Fatalf("un-apply v27+ (migrations rows): %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE ticks DROP COLUMN gateway_trace`); err != nil {
+		t.Fatalf("un-apply v28 (ticks.gateway_trace): %v", err)
 	}
 	if _, err := db.Exec(`DROP TABLE IF EXISTS tick_workers`); err != nil {
 		t.Fatalf("un-apply v27 (tick_workers): %v", err)
@@ -80,15 +85,15 @@ func TestMigrateV27_WaveColumnsAndTickWorkers(t *testing.T) {
 		t.Errorf("migration v27 took %v, want < 2s (smoke guard, not perf gate)", elapsed)
 	}
 
-	if latestMigration != 27 {
-		t.Errorf("latestMigration = %d, want 27", latestMigration)
+	if latestMigration < 27 {
+		t.Errorf("latestMigration = %d, want >= 27", latestMigration)
 	}
 	v2, err := MigrationVersion(ctx, db)
 	if err != nil {
 		t.Fatalf("MigrationVersion: %v", err)
 	}
-	if v2 != 27 {
-		t.Errorf("applied migration version = %d, want 27", v2)
+	if v2 != latestMigration {
+		t.Errorf("applied migration version = %d, want %d (ladder re-applies v27+ from the v26 rewind)", v2, latestMigration)
 	}
 	var rec int
 	if err := db.QueryRow(`SELECT count(*) FROM migrations WHERE version = 27`).Scan(&rec); err != nil {

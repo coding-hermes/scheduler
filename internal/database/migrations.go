@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 27
+const latestMigration = 28
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -394,6 +394,13 @@ CREATE TABLE IF NOT EXISTS tick_workers (
 
 CREATE INDEX IF NOT EXISTS idx_tick_workers_tick ON tick_workers(tick_id);
 CREATE INDEX IF NOT EXISTS idx_tick_workers_task ON tick_workers(task_id);
+`,
+	},
+	{
+		version: 28,
+		desc:    "per-POST gateway trace on ticks (SCHED-GAP-119): start/finish/elapsed, deadline applied + mode, classification, session link, event count",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN gateway_trace TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

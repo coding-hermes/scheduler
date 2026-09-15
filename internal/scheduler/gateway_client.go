@@ -98,6 +98,10 @@ type ResponseRequest struct {
 	Model           string `json:"model,omitempty"`
 	Provider        string `json:"provider,omitempty"`         // empty = gateway default (was silently defaulting fleet spawns to the main key)
 	RequireApproval *bool  `json:"require_approval,omitempty"` // nil = use gateway default, false = disable approvals
+	// Stream (SCHED-GAP-119): true asks the gateway for the SSE surface so
+	// the scheduler can observe turn activity and apply an IDLE deadline
+	// instead of GAP-117's wall clock. Omitted (nil) on the legacy path.
+	Stream *bool `json:"stream,omitempty"`
 }
 
 // Response mirrors the Hermes /v1/responses response body.
