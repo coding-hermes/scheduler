@@ -64,6 +64,29 @@ if [ -n "$PM_TARGET" ] && [ ! -d "$PM_WORKDIR" ]; then
 fi
 export PM_WORKDIR
 
+# DAGGER_TOOL_MODEL (DAGGER-130 fail-closed; bridge 422f292/1f6e8c0): raw
+# tool() calls inside the pipeline REQUIRE an explicit provider/model route —
+# the bridge rejects an empty one BEFORE any egress instead of billing the
+# gateway PAYG default. Resolve the project's router head (the same lane the
+# agent nodes bill via PM_PROJECT) and export it for the bridge's Tool().
+export DAGGER_TOOL_MODEL="$(
+  "${BOARD_VENV_PY:-$HOME/.hermes/venvs/board/bin/python3}" \
+    "$HOME/.hermes/scripts/router_spawn.py" "$PM_TARGET" --format json 2>/dev/null \
+  | "${BOARD_VENV_PY:-$HOME/.hermes/venvs/board/bin/python3}" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin); h = d.get("head") or {}
+    if h.get("provider") and h.get("model"):
+        print(h["provider"] + "/" + h["model"])
+except Exception:
+    pass
+' 2>/dev/null
+)"
+if [ -z "$DAGGER_TOOL_MODEL" ]; then
+  echo "PM-STANDIN: FATAL: router resolved no tool() lane for project '${PM_TARGET:-<unset>}' (DAGGER_TOOL_MODEL empty) — refusing a tick the fail-closed bridge would reject at the first tool() node (DAGGER-130)." >&2
+  exit 1
+fi
+
 # ---- generate the digest bundle (GAP-049 split). Classification lives in the
 # ledger reconciler (ledger_board_reconcile.py) so the digest and the
 # reconciler share ONE implementation. The reconciler only ever READS the
