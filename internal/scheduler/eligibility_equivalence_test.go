@@ -40,6 +40,10 @@ func insertEligibilityProject(t *testing.T, db *sql.DB, name string, cooldownS, 
 //	projD: cd=3600s, bump(cd=10s), last=now-12s → eligible via bump (12s >= 10s;
 //	       without the bump 12s < 3600s would skip — this row proves BOTH
 //	       sites consume bump_cooldown_s, not cooldown_s)
+//	projE: cd=0 (dynamic), 0 failures, last=now-5s → SKIPPED (cooldown_s==0
+//	       means the priority-derived dynamic interval, NOT zero cooldown;
+//	       G5 pins this alignment at every site — see the INTENTIONAL
+//	       SEMANTIC ALIGNMENT note on effectiveCooldown)
 //
 // (Brief deltas, arithmetic-forced: projA's last must be ≥60s old and
 // projD's ≥10s old for the stated "eligible" outcomes; 90s/12s satisfy.)
@@ -49,9 +53,10 @@ func insertEligibilityFleet(t *testing.T, db *sql.DB, now time.Time) {
 	insertEligibilityProject(t, db, "projB", 60, 5, 2, now.Add(-30*time.Second), 0, 0)
 	insertEligibilityProject(t, db, "projC", 60, 5, 5, now.Add(-10*time.Second), 0, 0)
 	insertEligibilityProject(t, db, "projD", 3600, 5, 0, now.Add(-12*time.Second), 1, 10)
+	insertEligibilityProject(t, db, "projE", 0, 5, 0, now.Add(-5*time.Second), 0, 0)
 }
 
-var eligibilityFleet = []string{"projA", "projB", "projC", "projD"}
+var eligibilityFleet = []string{"projA", "projB", "projC", "projD", "projE"}
 
 // packerEligibleSet runs the REAL production packer path (Loop's own packer,
 // Pick: SQL scan → bump fold → sort → overdue/cooldown gates) and returns
@@ -106,6 +111,18 @@ func TestEligibilityEquivalence_BumpBackoffBlackout(t *testing.T) {
 	if d, skip := effectiveCooldown(60, 5, 5, nil, time.Now(), calc); skip || d != 960*time.Second {
 		t.Fatalf("effectiveCooldown(60s,5 failures) = %v skip=%v, want 960s (60<<4)", d, skip)
 	}
+	// G5 pinned semantics: cooldown_s == 0 means the priority-derived dynamic
+	// interval, NOT a zero cooldown. This is the term the consolidation
+	// deliberately propagated to the four sites that previously treated 0 as
+	// "always eligible"; assert it here so a future re-inlining cannot quietly
+	// restore the old divergence (see projE below).
+	dyn, skip := effectiveCooldown(0, 5, 0, nil, time.Now(), calc)
+	if skip || dyn <= 0 {
+		t.Fatalf("effectiveCooldown(cooldown_s=0) = %v skip=%v, want a positive dynamic interval", dyn, skip)
+	}
+	if dyn < time.Minute {
+		t.Fatalf("effectiveCooldown(cooldown_s=0) = %v, want the priority interval (>= 1m), not near-zero", dyn)
+	}
 
 	// --- Phase 1: no blackout ---
 	now := time.Now().UTC().Truncate(time.Second)
@@ -115,7 +132,7 @@ func TestEligibilityEquivalence_BumpBackoffBlackout(t *testing.T) {
 
 	packer := packerEligibleSet(t, l, now)
 	watchdog := watchdogEligibleSet(t, l, now)
-	want := map[string]bool{"projA": true, "projB": false, "projC": false, "projD": true}
+	want := map[string]bool{"projA": true, "projB": false, "projC": false, "projD": true, "projE": false}
 	assertEligibilityAgreement(t, "no-blackout", packer, watchdog, want)
 
 	// --- Phase 2: live blackout window, multiplier 0.5 ---

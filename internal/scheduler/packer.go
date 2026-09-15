@@ -370,6 +370,21 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 // priority is float64 because the dynamic-interval path feeds it straight
 // into calc.ComputeInterval(priority float64); the integer-priority call
 // sites convert losslessly with float64(...).
+//
+// ⚠️ INTENTIONAL SEMANTIC ALIGNMENT (cooldown_s == 0): the dynamic-interval
+// branch is part of this authority BY DESIGN — the G5 filing names it among
+// the terms to single-source. Before this consolidation only packer.go's
+// method carried it; packer_select.go's two gates, multipool_packer.go's
+// packFlat and loop.go's watchdog went straight from cooldownS*second to the
+// failure backoff, so a cooldown_s==0 project was "always eligible" there
+// while the greedy pack treated it as a full priority interval (the same
+// packer-vs-watchdog disagreement GAP-050 produced). All consumers now apply
+// the identical branch, which is a deliberate behavior change at those four
+// sites rather than a no-op refactor: cooldown_s==0 + a recent completion is
+// no longer instantly eligible anywhere. No live project uses cooldown_s==0
+// (0/256 at the time of the change), and the semantics are pinned by
+// TestEligibilityEquivalence_BumpBackoffBlackout's projE row — do NOT
+// "restore" the old per-site behavior without re-opening G5.
 func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int, blackoutWindows []config.BlackoutWindow, now time.Time, calc *UrgencyCalculator) (cooldownDur time.Duration, skipMode bool) {
 	cooldownDur = time.Duration(cooldownS) * time.Second
 	if cooldownS == 0 {
