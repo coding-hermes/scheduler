@@ -2426,3 +2426,27 @@ tasks:
   status: complete
   created_at: '2026-09-15T19:25:09.497503+00:00'
   completed_at: '2026-09-15T19:55:27.644120+00:00'
+- id: SCHED-GAP-119
+  title: Per-turn gateway deadline must distinguish a hung idle turn from a long productive
+    turn (SCHED-GAP-117 regression)
+  criteria:
+  - 'Per-POST trace: every gateway /v1/responses POST records start + finish timestamps,
+    elapsed, the deadline applied, and a classification (completed | aborted-by-turn-deadline
+    | transport-error), emitted as a stable grep-able scheduler.log line AND persisted
+    per tick, with a unit test asserting it'
+  - 'A gateway turn that is demonstrably active must not be failed by the per-turn
+    deadline: live evidence 2026-09-15T16:26:12 hermes-dagger landed a fix commit
+    at 16:38 and a board close at 16:49 yet was recorded stalled with tokens_in=0/commits=0;
+    the idle window closes only on NO activity for the configured deadline'
+  - 'Fail-open: when the activity signal is unavailable (route error, no session row,
+    unsupported probe), behavior falls back to the wall-clock deadline exactly as
+    today; no new blind burn and no behavior change on that path'
+  - 'Existing SCHED-GAP-117 tests keep passing unchanged: a stalled turn still ends
+    status=failed with ''stalled: no progress'' and the slot is released well before
+    the tick deadline'
+  - 'Gates green on a fresh run: make build, gofmt -l empty, go vet ./internal/scheduler/,
+    go test -count=1 -short -p 1 ./... (11/11 packages), golangci-lint 0 issues; a
+    migration is added if new tick columns are introduced'
+  status: complete
+  created_at: '2026-09-15T21:59:03.853224+00:00'
+  completed_at: '2026-09-15T23:12:53.140751+00:00'
