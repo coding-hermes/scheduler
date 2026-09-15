@@ -32,7 +32,13 @@ type Loop struct {
 	// minInterval is the configured --min-interval (ADV-R02). Immutable
 	// after NewLoop; it drives the eval-stall watchdog threshold
 	// (10x min-interval) via evalStallThreshold().
-	minInterval   time.Duration
+	minInterval time.Duration
+	// nowFn is the loop's clock seam (ADV-R04 / G6): evaluate() reads
+	// the decision instant exclusively through this func so tests can
+	// pin it to a fixed time. Defaults to time.Now (set in NewLoop);
+	// SetClock overrides it, nil-guarded. Runtime behavior with the
+	// default is identical to the previous direct time.Now() read.
+	nowFn         func() time.Time
 	gatewayClient *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
 	gatewayDead   bool           // true when last ping failed
 
@@ -144,6 +150,7 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		maxConcur:       maxConcur,
 		namespaceMode:   nsMode,
 		minInterval:     minI,
+		nowFn:           time.Now, // clock seam (ADV-R04); SetClock overrides
 		pauseCh:         make(chan struct{}, 1),
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
@@ -163,6 +170,28 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// through the loop's event logger.
 	l.spawner.SetEventLogger(l.events)
 	return l
+}
+
+// SetClock overrides the loop's clock seam (ADV-R04 / G6). evaluate()
+// reads its decision instant through this func; the default is time.Now,
+// so production behavior is unchanged. Passing nil keeps the current seam.
+// Tests install a fixed clock here to make evaluate() deterministic.
+func (l *Loop) SetClock(now func() time.Time) {
+	if now == nil {
+		return // nil keeps the default/current seam
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.nowFn = now
+}
+
+// nowLocked returns the current instant through the clock seam. Callers
+// must hold l.mu (evaluate does).
+func (l *Loop) nowLocked() time.Time {
+	if l.nowFn == nil {
+		return time.Now()
+	}
+	return l.nowFn()
 }
 
 // SetNamespaceMode enables or disables multi-namespace scheduling.

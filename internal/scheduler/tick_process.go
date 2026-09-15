@@ -29,7 +29,12 @@ func (l *Loop) evaluate() {
 		return
 	}
 
-	now := time.Now()
+	// ADV-R04 (G6): the decision instant comes from the loop's clock seam
+	// (Loop.nowFn, default time.Now) — the only clock read in the evaluate
+	// path. The single `now` value flows to every consumer below (budget
+	// gate, packers, zero-select note, sim tick IDs, slot-pool spawns,
+	// escalator); no second read of the seam happens inside evaluate().
+	now := l.nowLocked()
 	l.lastEval = now
 
 	if goroCount := runtime.NumGoroutine(); goroCount > 100 {
