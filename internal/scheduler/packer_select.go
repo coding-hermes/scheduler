@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -223,26 +222,19 @@ func (m *MultiPoolPacker) Pack(
 				continue
 			}
 
-			// Cooldown check with blackout slowdown.
+			// Cooldown check (ADV-R03/G5: shared effectiveCooldown —
+			// the bump value feeds cooldownS, so the bump, the
+			// S-GAP-001 failure backoff, and the blackout multiplier
+			// all apply in the one shared place).
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cd := pu.Project.CooldownS
 				// SCHED-GAP-107: an active bump owns the effective cooldown.
 				if pu.BumpCooldownS > 0 {
 					cd = pu.BumpCooldownS
 				}
-				cooldownDur := time.Duration(cd) * time.Second
-				// S-GAP-001: consecutive spawn failures back off exponentially.
-				if pu.Project.ConsecutiveFailures > 0 {
-					cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)
-				}
-				// Apply blackout slowdown if inside a peak-pricing window.
-				if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
-					if mult <= 0 {
-						continue // skip mode
-					}
-					if mult > 1.0 {
-						cooldownDur = time.Duration(float64(cooldownDur) * mult)
-					}
+				cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+				if skipMode {
+					continue // skip mode
 				}
 				if now.Sub(lt) < cooldownDur {
 					continue
@@ -283,19 +275,12 @@ func (m *MultiPoolPacker) Pack(
 					if pu.BumpCooldownS > 0 {
 						cd = pu.BumpCooldownS
 					}
-					cooldownDur := time.Duration(cd) * time.Second
-					// S-GAP-001: consecutive spawn failures back off exponentially.
-					if pu.Project.ConsecutiveFailures > 0 {
-						cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)
-					}
-					// Apply blackout slowdown if inside a peak-pricing window.
-					if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
-						if mult <= 0 {
-							continue // skip mode — not queued
-						}
-						if mult > 1.0 {
-							cooldownDur = time.Duration(float64(cooldownDur) * mult)
-						}
+					// ADV-R03/G5: same shared predicate as the selection
+					// gate above — a project the packer would skip must
+					// not be queued either.
+					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+					if skipMode {
+						continue // skip mode — not queued
 					}
 					if now.Sub(lt) < cooldownDur {
 						continue // cooldown-skip, not queued

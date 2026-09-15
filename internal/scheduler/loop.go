@@ -893,7 +893,7 @@ func (l *Loop) resetZeroSelect() {
 // the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0) FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0) FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -903,10 +903,11 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 	for rows.Next() {
 		var name string
 		var cooldown int
+		var priority int
 		var lastComp string
 		var consecFailures int
 		var bumpActive, bumpCD int
-		if err := rows.Scan(&name, &cooldown, &lastComp, &consecFailures, &bumpActive, &bumpCD); err != nil {
+		if err := rows.Scan(&name, &cooldown, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD); err != nil {
 			continue
 		}
 		if runningSet[name] {
@@ -914,7 +915,11 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		}
 		// SCHED-GAP-107: an active bump owns the effective cooldown — the
 		// eligibility mirror must use the bump value, exactly like the
-		// packer's selection paths.
+		// packer's selection paths. (ADV-R03/G5: packer.go's Pick folds
+		// bump_cooldown_s into its scored.cooldownS while scanning rows,
+		// so its effectiveCooldownDur wrapper already sees the bumped
+		// value; here the bump substitution stays SQL-side and the
+		// bumped cooldown feeds the same shared effectiveCooldown.)
 		if bumpActive == 1 && bumpCD > 0 {
 			cooldown = bumpCD
 		}
@@ -927,22 +932,16 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			eligible++ // unknown completion time — treat as eligible
 			continue
 		}
-		base := time.Duration(cooldown) * time.Second
-		// S-GAP-001: consecutive spawn failures back off exponentially
-		// (identical arithmetic to the packer's cooldown check).
-		if consecFailures > 0 {
-			base = FailureBackoff(base, consecFailures)
+		// ADV-R03/G5: the shared predicate — identical arithmetic to
+		// every packer selection path (dynamic interval when cooldown
+		// is 0, S-GAP-001 failure backoff, blackout multiplier +
+		// skip-mode). The loop's calculator matches the packer's (both
+		// are built from the same minI/maxI/numLevels in NewLoop).
+		cooldownDur, skipMode := effectiveCooldown(cooldown, float64(priority), consecFailures, l.packer.blackoutWindows, now, l.calculator)
+		if skipMode {
+			continue // skip-mode blackout: packer skips this project
 		}
-		// Apply blackout slowdown if inside a peak-pricing window.
-		if mult, inBlackout := config.ActiveMultiplier(l.packer.blackoutWindows, now); inBlackout {
-			if mult <= 0 {
-				continue // skip-mode blackout: packer skips this project
-			}
-			if mult > 1.0 {
-				base = time.Duration(float64(base) * mult)
-			}
-		}
-		if now.Sub(comp) >= base {
+		if now.Sub(comp) >= cooldownDur {
 			eligible++
 		}
 	}

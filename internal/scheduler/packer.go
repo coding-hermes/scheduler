@@ -351,25 +351,39 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	return packed, nil
 }
 
-// effectiveCooldownDur returns the cooldown a project must wait before it
-// may be re-packed, using the same arithmetic as the greedy pack and
-// loop.go's countEligibleProjects (GAP-050): the explicit cooldown_s, or
-// the priority-derived dynamic interval when cooldown_s <= 0, then the
-// S-GAP-001 exponential failure backoff, then the blackout-window
-// multiplier. skipMode reports a blackout multiplier <= 0 — during a
-// skip-mode window no project spawns at all.
-func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time.Duration, skipMode bool) {
-	cooldownDur = time.Duration(s.cooldownS) * time.Second
-	if s.cooldownS == 0 {
-		// Dynamic: derive from priority via urgency calculator.
-		cooldownDur = p.calculator.ComputeInterval(s.priority)
+// effectiveCooldown is the SINGLE SOURCE of TRUTH (ADV-R03 / G5) for the
+// composed-cooldown arithmetic every eligibility site must agree on:
+//
+//	cooldownDur = cooldownS seconds, OR the priority-derived dynamic
+//	              interval via calc.ComputeInterval when cooldownS == 0
+//	if consecutiveFailures > 0: cooldownDur = FailureBackoff(...)
+//	if inBlackout: mult <= 0 → skipMode (never eligible); mult > 1.0 →
+//	              cooldownDur *= mult
+//
+// skipMode = true means the caller must NEVER count the project as
+// eligible. Consumers: packer.go's greedy pack and isOverdue (via the
+// *Packer.effectiveCooldownDur wrapper), packer_select.go's two
+// namespace-path gates, multipool_packer.go's packFlat, and loop.go's
+// countEligibleProjects watchdog mirror — the GAP-050 drift site this
+// consolidation exists to kill.
+//
+// priority is float64 because the dynamic-interval path feeds it straight
+// into calc.ComputeInterval(priority float64); the integer-priority call
+// sites convert losslessly with float64(...).
+func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int, blackoutWindows []config.BlackoutWindow, now time.Time, calc *UrgencyCalculator) (cooldownDur time.Duration, skipMode bool) {
+	cooldownDur = time.Duration(cooldownS) * time.Second
+	if cooldownS == 0 {
+		// Dynamic: derive from priority via the urgency calculator.
+		if calc != nil {
+			cooldownDur = calc.ComputeInterval(priority)
+		}
 	}
 	// S-GAP-001: consecutive spawn failures back off exponentially.
-	if s.consecutiveFailures > 0 {
-		cooldownDur = FailureBackoff(cooldownDur, s.consecutiveFailures)
+	if consecutiveFailures > 0 {
+		cooldownDur = FailureBackoff(cooldownDur, consecutiveFailures)
 	}
 	// Apply blackout slowdown if inside a peak-pricing window.
-	if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout {
+	if mult, inBlackout := config.ActiveMultiplier(blackoutWindows, now); inBlackout {
 		if mult <= 0 {
 			return cooldownDur, true // skip mode — don't spawn at all
 		}
@@ -378,6 +392,18 @@ func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time
 		}
 	}
 	return cooldownDur, false
+}
+
+// effectiveCooldownDur resolves the receiver's calculator and blackout
+// windows and delegates to the shared effectiveCooldown (ADV-R03 / G5).
+// Kept as a method so packer.go's internal callers (the greedy pack and
+// isOverdue) are unchanged. s.cooldownS is the POST-BUMP cooldown: Pick
+// folds bump_cooldown_s into s.cooldownS while scoring rows (see the
+// SCHED-GAP-107 block above), so the bump is already reflected here —
+// which is why loop.go's watchdog feeds its own SQL-side bump value into
+// the same package-level function instead.
+func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time.Duration, skipMode bool) {
+	return effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator)
 }
 
 // isOverdue reports whether an enabled, not-running project is due under the

@@ -250,7 +250,10 @@ func (m *MultiPoolPacker) packFlat(
 		if s.proj.Weight > budgetRemaining {
 			continue
 		}
-		// Cooldown check.
+		// Cooldown check (ADV-R03/G5: shared effectiveCooldown — the
+		// bump value feeds cooldownS, so the bump, the S-GAP-001
+		// failure backoff, and the blackout multiplier all apply in
+		// the one shared place).
 		if s.lastTick != nil {
 			cd := s.proj.CooldownS
 			// SCHED-GAP-107: an active bump owns the effective cooldown —
@@ -258,18 +261,9 @@ func (m *MultiPoolPacker) packFlat(
 			if s.bumpCooldownS > 0 {
 				cd = s.bumpCooldownS
 			}
-			cooldownDur := time.Duration(cd) * time.Second
-			// S-GAP-001: consecutive spawn failures back off exponentially.
-			if s.proj.ConsecutiveFailures > 0 {
-				cooldownDur = FailureBackoff(cooldownDur, s.proj.ConsecutiveFailures)
-			}
-			if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
-				if mult <= 0 {
-					continue
-				}
-				if mult > 1.0 {
-					cooldownDur = time.Duration(float64(cooldownDur) * mult)
-				}
+			cooldownDur, skipMode := effectiveCooldown(cd, float64(s.proj.Priority), s.proj.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+			if skipMode {
+				continue
 			}
 			if now.Sub(*s.lastTick) < cooldownDur {
 				continue
