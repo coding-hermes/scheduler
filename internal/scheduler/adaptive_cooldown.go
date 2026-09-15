@@ -255,8 +255,12 @@ const boardPrefix = ".coding-hermes/"
 // Perpetual fixture rows (SCHED-GAP-106) are EXCLUDED: a NEVER-DONE audit
 // fixture is a permanent board resident, not work. Counting it would (a)
 // keep the open-row baseline forever non-zero and (b) mask real net-closed
-// signal. A row is a fixture when its id starts with "NEVER-DONE" (any
-// suffix, case-insensitive) or it carries "perpetual": true.
+// signal. ADV-R05 canonicalized the exclusion: a row is a fixture when its
+// id is declared active in the board's fixtures.jsonl registry (the
+// canonical layer), carries "perpetual": true, or is in the NEVER-DONE id
+// family — see boardRowIsFixture (fixture_registry.go), which this
+// function shares with countPendingBoard so both consumers exclude
+// identically.
 func boardOpenRows(workdir string) (int, bool) {
 	boardPath, hasBoard := findBoardFile(workdir)
 	if !hasBoard {
@@ -267,6 +271,8 @@ func boardOpenRows(workdir string) (int, bool) {
 		return 0, false
 	}
 	defer f.Close()
+
+	fixtureIDs := loadFixtureRegistry(boardPath)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -279,8 +285,9 @@ func boardOpenRows(workdir string) (int, bool) {
 		}
 		if !isJSONL {
 			// Markdown boards: unchecked headers are open, checked are done.
-			// Fixture rows (NEVER-DONE) are excluded here too.
-			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) {
+			// Fixture rows (registry-declared, NEVER-DONE) are excluded here too.
+			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) &&
+				!registryDeclares(markdownTaskID(line), fixtureIDs) {
 				count++
 			}
 			continue
@@ -294,8 +301,8 @@ func boardOpenRows(workdir string) (int, bool) {
 			count++ // malformed row — count as open, never hide work
 			continue
 		}
-		if isFixtureRow(row.ID, row.Perpetual) {
-			continue // permanent fixture — not work (SCHED-GAP-106)
+		if isFixtureRow(row.ID, row.Perpetual) || registryDeclares(row.ID, fixtureIDs) {
+			continue // declared/perpetual fixture — not work (SCHED-GAP-106, ADV-R05)
 		}
 		s := strings.ToLower(row.Status)
 		switch s {
@@ -311,10 +318,15 @@ func boardOpenRows(workdir string) (int, bool) {
 // (NEVER-DONE-2, NEVERDONE...). Case-insensitive.
 const neverDonePrefix = "never-done"
 
-// isFixtureRow reports whether a board row is a perpetual fixture: id in the
-// NEVER-DONE family or an explicit perpetual flag. Fixtures are invisible to
-// adaptive cooldown and the pending-work boost — they are always on the
-// board by design and must never keep a finished project fast (or wake one).
+// isFixtureRow reports whether a board row is a perpetual fixture under the
+// FALLBACK layers (ADV-R05): an explicit perpetual flag or an id in the
+// NEVER-DONE family. The canonical layer — declaration in the board's
+// fixtures.jsonl registry — is applied by boardRowIsFixture
+// (fixture_registry.go), which both countPendingBoard and boardOpenRows
+// consult; this predicate covers rows that carry neither flag nor
+// declaration. Fixtures are invisible to adaptive cooldown and the
+// pending-work boost — they are always on the board by design and must
+// never keep a finished project fast (or wake one).
 func isFixtureRow(id string, perpetual bool) bool {
 	if perpetual {
 		return true

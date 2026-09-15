@@ -47,14 +47,18 @@ import (
 //     own board is .coding-hermes/board/{tasks,events,fixtures,board}.jsonl
 //     (git-tracked).
 //
-// (c) Fixture rows — .coding-hermes/board/fixtures.jsonl (E2E-001,
-//     NEVER-DONE, GITREINS-JUDGE) — are perpetual recurring chores, not
-//     dispatchable tasks. The foreman runs them on cadence (E2E-001 light
-//     every tick, full battery every +5; NEVER-DONE full 12-point every +3),
-//     so their tasks.jsonl rows legitimately stay status=pending/attempts=0
-//     forever. Run evidence is in each row's worker_summary and in
-//     events.jsonl detail.fixtures (e.g. "E2E-001 FULL battery ran tick #344
-//     ... next full due #349+"); pending/attempts=0 on a fixture is EXPECTED.
+// (c) Fixture rows — the ids declared active in .coding-hermes/board/
+//     fixtures.jsonl (E2E-001, NEVER-DONE, GITREINS-JUDGE) — are perpetual
+//     recurring chores, not dispatchable tasks. ADV-R05 made that registry
+//     the CANONICAL fixture representation: it is read by CountPending and
+//     boardOpenRows, and a declared fixture is excluded BY DATA whatever
+//     status its row carries (see fixture_registry.go). The foreman runs
+//     them on cadence (E2E-001 light every tick, full battery every +5;
+//     NEVER-DONE full 12-point every +3), so their rows legitimately stay
+//     status=pending/attempts=0 forever. Run evidence is in each row's
+//     worker_summary and in events.jsonl detail.fixtures (e.g. "E2E-001
+//     FULL battery ran tick #344 ... next full due #349+");
+//     pending/attempts=0 on a fixture is EXPECTED.
 //
 // (d) Blocked rows — status=blocked with blocked_reason set (e.g. FIX-STACK,
 //     "Bane defers (systemd enable decision)") — are USER-GATED and stay
@@ -63,9 +67,25 @@ import (
 //
 // (e) The boost below affects ONLY (a): pending rows raise PROJECT urgency so
 //     a project with fresh board work is picked sooner. It cannot dispatch,
-//     unblock, or complete a task row. Fixture rows count toward the pending
-//     total, so projects with active fixtures carry a permanent (benign)
-//     pending boost.
+//     unblock, or complete a task row. Fixture rows (SCHED-GAP-106, and by
+//     registry declaration since ADV-R05) never count toward the pending
+//     total — a project whose only open rows are fixtures gets NO boost.
+//
+// (f) Pending vs open (ADV-R05, rule stated): CountPending below counts
+//     ONLY status=="pending" — the one status whose semantics are
+//     "dispatchable now" fleet-wide (the foreman contract: recurring
+//     fixtures stay pending, dispatchable work is filed pending). The
+//     wider open vocabulary (todo, in_progress, claimed, ...) is
+//     intentionally invisible to the pending boost: those statuses' work-
+//     readiness varies by board (this repo's todo rows mix PM-filed
+//     proposals and real bug reports), so counting them would guess
+//     semantics and shift SCHED-GAP-065 idle-tick routing fleet-wide. The
+//     open-work signal that DOES see the wider vocabulary is boardOpenRows
+//     (adaptive_cooldown.go), which feeds adaptive cooldown, not selection.
+//     This closes the "scheduler sees 15 pending vs human sees 34 open"
+//     split from the ADV-R05 filing as INTENTIONAL: the two numbers answer
+//     different questions (dispatchable vs open) and each is correct for
+//     its own.
 
 const (
 	// pendingBoostUrgency is the BASE of the board-awareness boost — far
@@ -104,9 +124,14 @@ func pendingBoostUrgencyFor(pending int) float64 {
 }
 
 // pendingCacheEntry holds the cached pending-task count for one workdir.
+// regMtime is the mtime of the board's fixtures.jsonl registry (zero when
+// none exists): the registry decides fixture exclusion (ADV-R05), so a
+// registry edit must invalidate the cache even when tasks.jsonl is
+// untouched.
 type pendingCacheEntry struct {
 	count     int
 	mtime     time.Time
+	regMtime  time.Time
 	fetchedAt time.Time
 }
 
@@ -173,11 +198,17 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 		return 0
 	}
 
+	// ADV-R05: the fixture registry decides exclusion, so its mtime is part
+	// of the cache key — an edit to fixtures.jsonl must invalidate even when
+	// the board file itself is untouched.
+	regMtime := statMtime(fixtureRegistryPath(boardPath))
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	entry, ok := c.m[workdir]
-	cacheFresh := ok && time.Since(entry.fetchedAt) <= c.ttl && entry.mtime.Equal(fi.ModTime())
+	cacheFresh := ok && time.Since(entry.fetchedAt) <= c.ttl &&
+		entry.mtime.Equal(fi.ModTime()) && entry.regMtime.Equal(regMtime)
 
 	if cacheFresh {
 		return entry.count
@@ -192,6 +223,7 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 	c.m[workdir] = pendingCacheEntry{
 		count:     count,
 		mtime:     fi.ModTime(),
+		regMtime:  regMtime,
 		fetchedAt: time.Now(),
 	}
 
@@ -218,17 +250,39 @@ func findBoardFile(workdir string) (string, bool) {
 	return "", false
 }
 
+// statMtime returns a file's mtime, or the zero time if it does not exist
+// or cannot be stat'ed. Used for the cache-key mtimes where absence is an
+// ordinary condition (no registry file), not an error.
+func statMtime(path string) time.Time {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
+}
+
 // countPendingBoard reads a board file and returns the count of pending
 // tasks. For JSONL files (.jsonl extension) it parses each line as a JSON
 // object and counts those whose "status" field == "pending". For markdown
 // files it counts lines starting with "## [ ] " (unchecked task headers).
 // Malformed lines are silently skipped.
+//
+// ADV-R05: fixture exclusion is decided BY DATA — the ids declared active
+// in the fixtures.jsonl registry beside the board file (plus the
+// SCHED-GAP-106 fallback layers: "perpetual":true row flag, NEVER-DONE id
+// family) — never by a status-vocabulary accident. See fixture_registry.go.
+// The count is intentionally ONLY status=="pending": the pending-vs-open
+// rule (see the package comment in board_awareness.go) is that CountPending
+// measures dispatchable work, while boardOpenRows (adaptive_cooldown.go)
+// is the open-work signal over the wider vocabulary (todo, in_progress, ...).
 func countPendingBoard(path string, fi os.FileInfo) int {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
 	defer f.Close()
+
+	fixtureIDs := loadFixtureRegistry(path)
 
 	count := 0
 
@@ -245,18 +299,8 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
 				continue // malformed line — skip
 			}
-			// SCHED-GAP-106: perpetual fixtures are never pending work.
-			if idRaw, ok := obj["id"]; ok {
-				var id string
-				if json.Unmarshal(idRaw, &id) == nil && isFixtureRow(id, false) {
-					continue
-				}
-			}
-			if perpRaw, ok := obj["perpetual"]; ok {
-				var perp bool
-				if json.Unmarshal(perpRaw, &perp) == nil && perp {
-					continue
-				}
+			if boardRowIsFixture(obj, fixtureIDs) {
+				continue // declared/perpetual fixture — never pending work
 			}
 			statusRaw, ok := obj["status"]
 			if !ok {
@@ -274,7 +318,8 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) {
+			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) &&
+				!registryDeclares(markdownTaskID(line), fixtureIDs) {
 				count++
 			}
 		}
