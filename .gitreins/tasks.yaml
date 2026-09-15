@@ -2366,3 +2366,23 @@ tasks:
   status: complete
   created_at: '2026-09-15T02:27:04.697418+00:00'
   completed_at: '2026-09-15T02:27:09.073975+00:00'
+- id: ADV-R04
+  title: Clock seam at the evaluate decision point (G6)
+  criteria:
+  - The evaluate decision point reads time from an injectable clock seam (Loop field
+    defaulting to time.Now); no direct time.Now() call remains in the evaluate path
+    outside that seam.
+  - The seam is threaded through the evaluate path calls that consume now (packers,
+    custom-policy gate, slot pool spawn, escalation) with no new time.Now() introduced
+    in that path.
+  - 'A new deterministic exact-selection test proves the seam: constructed fleet plus
+    fixed clock, evaluate() selects exactly the expected project set (and the empty
+    case selects nothing). Test lives in internal/scheduler as package scheduler and
+    calls evaluate() directly.'
+  - The new test and the seam introduce NO wall-clock assertions (no elapsed-duration
+    bounds, no sleeps as correctness signals).
+  - 'Gates clean: make build, go vet ./internal/scheduler/, gofmt -l on changed files
+    empty, go test -count=1 -short -p 1 ./... all packages pass.'
+  status: complete
+  created_at: '2026-09-15T10:51:08.111078+00:00'
+  completed_at: '2026-09-15T11:22:58.677879+00:00'
