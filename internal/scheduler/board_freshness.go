@@ -196,6 +196,13 @@ type RowVerdict struct {
 	// Reason names the distrust cause when Status == RowUnverified
 	// (one of the Reason* constants); "" otherwise.
 	Reason string
+	// RawStatus is the row's literal status field as written on the
+	// board, lowercased and trimmed (ADV-R07: the freshness-checked
+	// pending count needs the ORIGINAL vocabulary — "pending" — because
+	// the verified classification deliberately reclassifies rows whose
+	// work verifiably landed in git; a pending row mid-flip must stop
+	// counting as dispatchable work while its verdict is flip-window).
+	RawStatus string
 	// Commit is the FULL sha of the pointed commit when one resolved
 	// (set on closed, flip-window and flip-overdue verdicts, and kept on
 	// parked verdicts whose hash resolved — evidence, not approval).
@@ -400,6 +407,7 @@ func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) Freshn
 			v.Status = RowFixture
 		default:
 			status := strings.ToLower(strings.TrimSpace(boardString(e.obj["status"])))
+			v.RawStatus = status
 			switch {
 			case completeStatuses[status]:
 				v = classifyCompleteRow(e, repoDir, repoOK, now, ids, matcher, v)

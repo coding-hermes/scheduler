@@ -563,6 +563,15 @@ func main() {
 	// Start the evaluation loop in background.
 	go loop.Run()
 
+	// ADV-R07: board-driven wake. The watcher polls enabled projects'
+	// board files and forces a re-evaluation ~5 min after a board write
+	// (bounded debounce). Ordering-only by law: cooldown stays the sole
+	// admission authority, and every watcher failure fails open to the
+	// clock cadence. A nil gateway/exec-less run keeps it armed — it
+	// only adds evaluation triggers.
+	boardWatcher := scheduler.NewBoardWakeWatcher(db, loop.ForceEvaluate)
+	boardWatcher.Start()
+
 	// Start DuckBrain sync in background.
 	go func() {
 		duckbrain.Run(context.Background())
@@ -576,6 +585,9 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("Received %v, shutting down...", sig)
+
+	// ADV-R07: stop the board watcher before the loop drains.
+	boardWatcher.Stop()
 
 	loop.Stop()
 	// Wait for in-flight ticks to complete (with a generous timeout).

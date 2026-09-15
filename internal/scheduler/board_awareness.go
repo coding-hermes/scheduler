@@ -142,10 +142,29 @@ type pendingCacheEntry struct {
 // Boards are re-read when the file mtime changes OR the cache entry is older
 // than the TTL — stats are cheap, but full reads of 50-200KB boards must be
 // bounded.
+//
+// ADV-R07: for JSONL boards the raw count is then freshness-checked through
+// the R06 git-verified reader (freshnessCheckedPending below) — a pending
+// row whose claimed work verifiably landed in git (verdict flip-window or
+// flip-overdue) is NOT dispatchable work and stops counting toward the
+// pending-boost tier. The check is fail-open: a board or repo the reader
+// cannot verify keeps the raw count (never hide work behind a reader
+// error). Markdown boards have no evidence fields by construction, so
+// their raw count passes through unchanged.
 type PendingTaskCounter struct {
 	mu  sync.Mutex
 	ttl time.Duration
 	m   map[string]pendingCacheEntry // keyed by workdir
+	// freshnessRead is the R06 reader seam (ADV-R07). A field so tests
+	// can stub the git verification; nil means the real
+	// ReadBoardFreshness with a zero-options (wall-clock) read.
+	freshnessRead func(workdir, boardPath string) FreshnessReport
+}
+
+// defaultFreshnessRead is the production freshness seam: the R06 reader
+// with its default flip window and the wall clock as the read clock.
+func defaultFreshnessRead(workdir, boardPath string) FreshnessReport {
+	return ReadBoardFreshness(workdir, boardPath, FreshnessOptions{})
 }
 
 // defaultPendingCounter is the package-level shared instance used by all
@@ -156,8 +175,9 @@ var defaultPendingCounter = NewPendingTaskCounter(60 * time.Second)
 // NewPendingTaskCounter creates a counter with the given cache TTL.
 func NewPendingTaskCounter(ttl time.Duration) *PendingTaskCounter {
 	return &PendingTaskCounter{
-		ttl: ttl,
-		m:   make(map[string]pendingCacheEntry),
+		ttl:           ttl,
+		m:             make(map[string]pendingCacheEntry),
+		freshnessRead: defaultFreshnessRead,
 	}
 }
 
@@ -219,7 +239,11 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 		prevCount = entry.count
 	}
 
-	count := countPendingBoard(boardPath, fi)
+	raw := countPendingBoard(boardPath, fi)
+	// ADV-R07: freshness-check the raw count through the R06 reader
+	// before it feeds the pending-boost tier — ordering only; cooldown
+	// admission is untouched (see the G1/G7 law in board_wake.go).
+	count := c.freshnessCheckedPending(workdir, boardPath, raw)
 	c.m[workdir] = pendingCacheEntry{
 		count:     count,
 		mtime:     fi.ModTime(),
@@ -232,6 +256,51 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 	}
 
 	return count
+}
+
+// freshnessCheckedPending applies the R06 git-verified freshness read to
+// the raw pending count (ADV-R07 integration). A pending row whose
+// claimed work verifiably landed in the commit graph (verdict
+// flip-window or flip-overdue — the implementation→board flip lag the A4
+// catalog measured at median 4.4 min) is no longer dispatchable work and
+// is subtracted. Fail-open contract: when the reader cannot verify the
+// board (unreadable, empty report, or the seam itself is nil) the RAW
+// count is returned — a reader failure never hides work.
+//
+// The subtraction is keyed on the row's RawStatus=="pending" AND its
+// verified verdict: only rows the RAW counter counted (raw pending) can
+// be subtracted, and only when git proves their work landed. Rows whose
+// pointer does not resolve stay counted (open is open — never hide
+// work).
+func (c *PendingTaskCounter) freshnessCheckedPending(workdir, boardPath string, raw int) int {
+	if raw <= 0 || !strings.HasSuffix(boardPath, ".jsonl") {
+		return raw // nothing to subtract, or a markdown board (no evidence fields)
+	}
+	reader := c.freshnessRead
+	if reader == nil {
+		return raw // nil seam — fail-open, raw count
+	}
+	rep := reader(workdir, boardPath)
+	if rep.TotalRows == 0 && rep.MalformedLines == 0 {
+		return raw // unreadable/empty board — keep the raw count
+	}
+	sub := 0
+	for _, v := range rep.Rows {
+		if v.RawStatus != "pending" {
+			continue // the raw counter never counted this row
+		}
+		if v.Status == RowFlipWindow || v.Status == RowFlipOverdue {
+			sub++
+		}
+	}
+	if sub == 0 {
+		return raw
+	}
+	log.Printf("PENDING-BOOST: <%s> freshness check subtracted %d mid-flip pending row(s) (raw=%d)", workdir, sub, raw)
+	if raw-sub < 0 {
+		return 0
+	}
+	return raw - sub
 }
 
 // findBoardFile locates the board file for a workdir. It prefers
