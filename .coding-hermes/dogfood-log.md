@@ -171,3 +171,11 @@ interleave absorbed cleanly (disjoint files, verified merged); BP-3 real-
 child rlimit tests forced to FULL mode in verification (short-skip hid the
 guarantee); BP-4 board.jsonl header-bump EOF glitch noted (row updates
 landed, cosmetic); BP-5 R12-R14 remain as designed backlog, not debt.
+
+## crier-dogfood cadence fix (Bane 09-16)
+Found at ~2h cadence (leftover docs-sprint speedup, 8 ticks/24h ~$17; two
+extra history entries were orphan-resume re-nudges of a stuck 14:52 tick,
+not spawns). Bane ruling: daily 86400 now, 3d (259200) once the stuck
+orphan drains. Applied 3-layer: ELEVATED_PINS crier-dogfood 86400 (dated) +
+fleet.toml 86400/86400/691200 + live PUT readback verified; --verify
+PARITY OK (17 pins).
