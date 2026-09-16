@@ -2450,3 +2450,22 @@ tasks:
   status: complete
   created_at: '2026-09-15T21:59:03.853224+00:00'
   completed_at: '2026-09-15T23:12:53.140751+00:00'
+- id: SEC-001
+  title: Scrub 11 plaintext leaked-credential copies + fix dexdat-specs remote URL
+  criteria:
+  - "Every file listed in SEC-001 locator greps 0 for its full secret after scrub\
+    \ (prefix\u2026REDACTED pattern); scan-git-secrets.py re-run exits with only documented\
+    \ false positives; dexdat-specs remote carries no embedded credential"
+  status: complete
+  created_at: '2026-09-16T00:34:23.605118+00:00'
+  completed_at: '2026-09-16T01:11:22.001018+00:00'
+- id: PMSTANDIN-DUCKKEY-001
+  title: 'pm-standin: DUCKBRAIN_KEY via DAGGER_ENV + scratch archive-then-truncate'
+  criteria:
+  - ops/pm-standin/pm-standin-tick.sh computes DBKEY from the sidecar token and passes
+    it in DAGGER_ENV so pm.ts trace_duck_write skips the LLM tool() echo; both DAGGER_PROPOSALS_SCRATCH
+    and ESCALATIONS_SCRATCH are archived to .consumed then truncated after append;
+    commit pushed to origin/main
+  status: complete
+  created_at: '2026-09-16T01:15:52.278766+00:00'
+  completed_at: '2026-09-16T01:15:56.159654+00:00'

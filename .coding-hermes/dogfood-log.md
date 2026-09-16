@@ -142,3 +142,12 @@ docs/dogfood/diagnostics.md (appended), skills/scheduler-usage/SKILL.md
 **Foreman:** coding-hermes-scheduler-pm Cooldown 86400s (≥14400) → PUT
 CooldownS=900 + DecayRate=1.0 via API after task commit (Enabled stayed true).
 Main coding-hermes-scheduler row already at 3600s — untouched.
+
+## PLUS ULTRA release (09-15, 越) — ADV wave to done-and-live
+Goal: R05+R06+R07 merged + deployed. Outcome: R05/R06 had ALREADY landed via
+hourly-pin ticks (13:09/19:55, judged PASS) before engagement; R07 driven
+directly (worker glm-5.2@zai-glm, commit 7d6aa0b, foreman adversarial verify
+incl. RED mutation on forceEval, pushed, CI green); R01 verified already-true
+(11:02 restart rebuilt from HEAD, migrations v27, wave surface live).
+Project paused-for-daemon 22:45Z→resumed after R07 close (verified enabled=True).
+BATTLE = won with evidence. Beyond Pass: see ledger below (cap 5).
