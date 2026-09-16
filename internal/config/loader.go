@@ -241,6 +241,13 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_SLOT_PATIENCE"); v != "" {
 		cfg.Scheduler.SlotPatience = v
 	}
+	// ADV-R11: per-spawn memory cap env override — no parse gate here,
+	// validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Scheduler.SpawnMemLimitMB = n
+		}
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -307,6 +314,13 @@ func (r *RootConfig) Validate() error {
 		} else if d <= 0 {
 			errs = append(errs, fmt.Errorf("scheduler.slot_patience (%s) must be > 0 — the slot drop always exists (use a positive duration; unset means the 5m default)", v))
 		}
+	}
+	// ADV-R11: the per-spawn memory cap is optional — 0 (or unset) means
+	// off (byte-identical spawns, no prlimit call). Negative values are
+	// invalid: there is no meaning for a negative memory cap, and silently
+	// normalizing one to "off" would hide a config typo from the operator.
+	if r.Scheduler.SpawnMemLimitMB < 0 {
+		errs = append(errs, fmt.Errorf("scheduler.spawn_mem_limit_mb (%d) must be >= 0 (0 = off; unset = off)", r.Scheduler.SpawnMemLimitMB))
 	}
 	if minD > 0 && maxD > 0 && minD > maxD {
 		errs = append(errs, fmt.Errorf("scheduler.min_interval (%s) must be <= scheduler.max_interval (%s)",

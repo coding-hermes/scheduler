@@ -85,6 +85,17 @@ type SchedulerConfig struct {
 	// TOML < env SCHEDULER_LOAD_GATE_THRESHOLD < flag).
 	LoadGateThreshold float64 `toml:"load_gate_threshold"`
 
+	// SpawnMemLimitMB (ADV-R11, GAP-048 cure) is the per-spawn RLIMIT_AS
+	// memory cap in MiB applied to spawned foreman processes. 0 = off (the
+	// default — no limit call at all, byte-identical spawns). NOT an
+	// admission gate: every selected project still spawns; the cap
+	// constrains the spawned process's resources at spawn time and is
+	// inherited by the workers it forks. Best-effort — a failed cap WARNs
+	// and the spawn continues unlimited. Linux (prlimit/RLIMIT_AS);
+	// non-Linux builds degrade to the documented no-op stub. Precedence:
+	// TOML < env SCHEDULER_SPAWN_MEM_LIMIT_MB < flag --spawn-mem-limit-mb.
+	SpawnMemLimitMB int64 `toml:"spawn_mem_limit_mb"`
+
 	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
 	// threshold over the last AutoDisableWindow ticks at or above which the
 	// scheduler will disable the project automatically. Default 0 = feature

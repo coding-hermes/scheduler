@@ -80,6 +80,23 @@ func TestPrintSchema(t *testing.T) {
 		}
 	}
 
+	// ADV-R11: the per-spawn memory cap must exist in the schema, match
+	// the main.go flag default (0 = off), and carry its env/cli mapping.
+	sml, ok := schedProps["spawn_mem_limit_mb"].(map[string]interface{})
+	if !ok {
+		t.Error("scheduler section missing spawn_mem_limit_mb property")
+	} else {
+		if sml["default"] != float64(0) {
+			t.Errorf("spawn_mem_limit_mb default = %v, want 0 (off; main.go flag default)", sml["default"])
+		}
+		if sml["env"] != "SCHEDULER_SPAWN_MEM_LIMIT_MB" {
+			t.Errorf("spawn_mem_limit_mb env = %v, want SCHEDULER_SPAWN_MEM_LIMIT_MB", sml["env"])
+		}
+		if sml["cli"] != "--spawn-mem-limit-mb" {
+			t.Errorf("spawn_mem_limit_mb cli = %v, want --spawn-mem-limit-mb", sml["cli"])
+		}
+	}
+
 	gwProps := props["gateway"].(map[string]interface{})["properties"].(map[string]interface{})
 	noExec, ok := gwProps["no_exec_fallback"].(map[string]interface{})
 	if !ok {
@@ -111,6 +128,10 @@ func TestPrintConfig(t *testing.T) {
 	// active overrides.
 	os.Setenv("SCHEDULER_SLOT_PATIENCE", "90s")
 	defer os.Unsetenv("SCHEDULER_SLOT_PATIENCE")
+	// ADV-R11: the spawn mem limit env var must be listed among the
+	// active overrides too.
+	os.Setenv("SCHEDULER_SPAWN_MEM_LIMIT_MB", "512")
+	defer os.Unsetenv("SCHEDULER_SPAWN_MEM_LIMIT_MB")
 
 	out := captureStdout(func() {
 		printConfig(
@@ -133,6 +154,7 @@ func TestPrintConfig(t *testing.T) {
 			"http://localhost:3000",
 			0.5,
 			100, 50, 100,
+			512,
 		)
 	})
 
@@ -153,6 +175,9 @@ func TestPrintConfig(t *testing.T) {
 		// ADV-R08/G3: the slot-wait patience must surface in
 		// --show-config output.
 		"slot_patience = \"5m0s\"",
+		// ADV-R11: the per-spawn memory cap must surface in --show-config
+		// output (the value passed at the call site).
+		"spawn_mem_limit_mb = 512",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
 		// effective value (was previously invisible to --show-config).
@@ -173,6 +198,7 @@ func TestPrintConfig(t *testing.T) {
 		"#   SCHEDULER_DB_PATH=testdb",
 		"#   SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5",
 		"#   SCHEDULER_SLOT_PATIENCE=90s",
+		"#   SCHEDULER_SPAWN_MEM_LIMIT_MB=512",
 	}
 	for _, substr := range checks {
 		if !strings.Contains(out, substr) {

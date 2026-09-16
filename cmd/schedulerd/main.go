@@ -51,6 +51,7 @@ func main() {
 	// slot_pool event). Default keeps the historical hardcoded 5m window.
 	slotPatience := flag.Duration("slot-patience", 5*time.Minute, "How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3)")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
+	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
@@ -157,6 +158,16 @@ func main() {
 			log.Printf("WARN: SCHEDULER_LOAD_GATE_THRESHOLD=%q invalid — gate stays %v", v, *loadGateThreshold)
 		}
 	}
+	// ADV-R11: per-spawn memory cap env override — same pattern. A positive
+	// parseable int arms the RLIMIT_AS cap; 0 keeps it off. Invalid values
+	// WARN and keep the current value (the cap must never silently change).
+	if v := os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			*spawnMemLimitMB = n
+		} else {
+			log.Printf("WARN: SCHEDULER_SPAWN_MEM_LIMIT_MB=%q invalid — limit stays %d MiB", v, *spawnMemLimitMB)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -184,7 +195,8 @@ func main() {
 			*tickTimeout, *gatewayResponseTimeout, *slotPatience,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
-			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow)
+			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
+			*spawnMemLimitMB)
 		return
 	}
 
@@ -304,6 +316,11 @@ func main() {
 	// carries the env override; TOML [scheduler] load_gate_threshold applies
 	// below only when the flag was never set (same precedence as budget).
 	scheduler.SetLoadGateThreshold(*loadGateThreshold)
+	// ADV-R11: arm the per-spawn RLIMIT_AS cap (0 = off, the default — no
+	// prlimit call at all). The flag var carries the env override; TOML
+	// [scheduler] spawn_mem_limit_mb applies below only when the flag sat
+	// at its 0 default (same precedence chain as the load gate).
+	scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
@@ -380,6 +397,15 @@ func main() {
 			if rootCfg.Scheduler.LoadGateThreshold > 0 && *loadGateThreshold == 0 {
 				*loadGateThreshold = rootCfg.Scheduler.LoadGateThreshold
 				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
+			}
+			// ADV-R11: TOML layer for the per-spawn memory cap — same
+			// default-guard pattern (only when the flag sits at its 0
+			// default, so CLI and env keep precedence). Positive values
+			// arm the RLIMIT_AS cap; a TOML 0 keeps it off.
+			if rootCfg.Scheduler.SpawnMemLimitMB > 0 && *spawnMemLimitMB == 0 {
+				*spawnMemLimitMB = rootCfg.Scheduler.SpawnMemLimitMB
+				scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
+				log.Printf("ADV-R11: spawn mem limit enabled from config — %d MiB RLIMIT_AS per spawned process", *spawnMemLimitMB)
 			}
 		}
 	}
@@ -502,6 +528,7 @@ func main() {
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		SlotPatience:           slotPatience.String(),
 		LoadGateThreshold:      *loadGateThreshold,
+		SpawnMemLimitMB:        *spawnMemLimitMB,
 		ModelRatesFile:         *modelRatesFile,
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,

@@ -51,8 +51,15 @@ type ResolvedConfig struct {
 	// event). Default "5m0s".
 	SlotPatience string `json:"slot_patience"`
 	// LoadGateThreshold (SCHED-GAP-125): defer new spawns while the 1-minute
-	// load average is >= this value. 0 = off.
+	// load average is at or above this value. 0 = the gate is off.
 	LoadGateThreshold float64 `json:"load_gate_threshold"`
+
+	// SpawnMemLimitMB (ADV-R11, GAP-048 cure): per-spawn RLIMIT_AS memory
+	// cap in MiB for spawned foreman processes. 0 = off (default — no
+	// limit call at all). NOT an admission gate: every selected project
+	// still spawns; the cap constrains the spawned process's resources at
+	// spawn time and is inherited by its workers.
+	SpawnMemLimitMB int64 `json:"spawn_mem_limit_mb"`
 	// ModelRatesFile (ADV-R09/G8): path to a JSON price-sticker file applied
 	// over the builtin maps at startup (refresh without rebuild). Empty = the
 	// builtin 2026-08 stickers.

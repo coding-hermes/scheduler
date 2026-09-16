@@ -1650,6 +1650,17 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
+	// ADV-R11 (GAP-048 cure): cap the spawned process's address space
+	// (RLIMIT_AS) when a limit is armed (--spawn-mem-limit-mb; 0 = off,
+	// the default — no prlimit call at all, byte-identical spawn path).
+	// NOT an admission gate (G7): every selected project still spawns;
+	// this only constrains the child's resources at spawn time. Applied
+	// immediately after Start so the cap covers the process's whole life;
+	// inherited by every worker/git/shell the foreman forks. Best-effort
+	// by contract: a failed cap WARNs and the spawn continues unlimited
+	// (pre-ADV-R11 behavior) — capping must never become a spawn failure.
+	applySpawnMemLimitIfArmed(int64(cmd.Process.Pid), project.Name, tickID)
+
 	// TASK-ROUTER-002: the exec spawn started with the resolved pair —
 	// close its circuit (no-op for pairs without recorded failures).
 	s.recordCircuitSuccess(provider, model)
