@@ -233,12 +233,14 @@ func TestAdaptiveCooldown_NoProgressProgression(t *testing.T) {
 	}
 }
 
-// TestAdaptiveCooldown_EscalationToWeeklyCeiling drives the default policy from
-// a 600s floor all the way to the 604800s (weekly) ceiling to pin the full
-// progression chain end-to-end.
-func TestAdaptiveCooldown_EscalationToWeeklyCeiling(t *testing.T) {
+// TestAdaptiveCooldown_EscalationToDerivedCeiling drives the default policy
+// from a 600s floor all the way to the derived ceiling (8 × 600 = 4800,
+// ADV-R10) to pin the full progression chain end-to-end. The full weekly
+// 604800 chain for an EXPLICIT ceiling is pinned by
+// TestADVR10_ExplicitCeilingPreservesWeeklyEscalation.
+func TestAdaptiveCooldown_EscalationToDerivedCeiling(t *testing.T) {
 	db := slowdownTestDB(t)
-	insertAdaptiveProject(t, db, "to-weekly", struct {
+	insertAdaptiveProject(t, db, "to-derived", struct {
 		cooldownS int
 		floorS    int
 		ceilingS  int
@@ -247,14 +249,14 @@ func TestAdaptiveCooldown_EscalationToWeeklyCeiling(t *testing.T) {
 		rowsSeen  int
 	}{cooldownS: 600, floorS: 600, ceilingS: 0, threshold: 1}) // threshold 1 = escalate on first no-progress tick
 
-	want := []int{1200, 2400, 4800, 9600, 19200, 38400, 76800, 153600, 307200, 604800, 604800}
+	want := []int{1200, 2400, 4800, 4800} // 600 × 2^n capped at 8 × 600
 	for i, w := range want {
-		if !adaptiveCooldown(db, "to-weekly", "", noProgressOutcome("to-weekly")) {
+		if !adaptiveCooldown(db, "to-derived", "", noProgressOutcome("to-derived")) {
 			t.Fatalf("tick %d: adaptiveCooldown returned false", i+1)
 		}
-		cd, _, _, _, _, _ := readAdaptiveState(t, db, "to-weekly")
+		cd, _, _, _, _, _ := readAdaptiveState(t, db, "to-derived")
 		if cd != w {
-			t.Fatalf("tick %d: cooldown = %d, want %d (600 * 2^%d capped at 604800)", i+1, cd, w, i+1)
+			t.Fatalf("tick %d: cooldown = %d, want %d (600 * 2^%d capped at 4800 = 8 × floor)", i+1, cd, w, i+1)
 		}
 	}
 }

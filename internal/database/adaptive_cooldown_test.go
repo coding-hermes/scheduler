@@ -68,8 +68,8 @@ func TestUpdateProject_AdaptiveEnableNormalizes(t *testing.T) {
 	if p.CooldownFloorS != 7200 {
 		t.Errorf("cooldown_floor_s = %d, want 7200 (snapshotted from cooldown_s at enable)", p.CooldownFloorS)
 	}
-	if p.CooldownCeilingS != DefaultAdaptiveCooldownCeilingS {
-		t.Errorf("cooldown_ceiling_s = %d, want %d (built-in weekly default)", p.CooldownCeilingS, DefaultAdaptiveCooldownCeilingS)
+	if p.CooldownCeilingS != 57600 {
+		t.Errorf("cooldown_ceiling_s = %d, want 57600 (derived default 8 × floor 7200, ADV-R10)", p.CooldownCeilingS)
 	}
 	if p.NoProgressThreshold != DefaultAdaptiveCooldownThreshold {
 		t.Errorf("no_progress_threshold = %d, want %d (built-in default)", p.NoProgressThreshold, DefaultAdaptiveCooldownThreshold)

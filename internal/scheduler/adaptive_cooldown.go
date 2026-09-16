@@ -51,10 +51,11 @@ import (
 //     measurement gap.
 //  2. After no_progress_threshold consecutive no-progress ticks (default
 //     10), cooldown_s is multiplied by adaptiveCooldownFactor (2x) at each
-//     further no-progress tick, capped at cooldown_ceiling_s (default
-//     604800 = weekly). The project stays in normal cooldown mechanics the
-//     whole time (the packer just reads cooldown_s), so it keeps getting
-//     re-checked — it can never be abandoned.
+//     further no-progress tick, capped at cooldown_ceiling_s (no explicit
+//     ceiling → the derived default 8 × floor, ADV-R10). The project stays
+//     in normal cooldown mechanics the whole time (the packer just reads
+//     cooldown_s), so it keeps getting re-checked — it can never be
+//     abandoned.
 //  3. ANY progress — a code-commit tick OR a net DECREASE in open board rows
 //     (the project closed work) — resets the streak to 0 and, when cooldown_s
 //     is above the floor (cooldown_floor_s, defaulted to the cooldown in
@@ -72,8 +73,9 @@ import (
 
 // adaptiveCooldownFactor is the per-escalation multiplier applied to
 // cooldown_s once the no-progress streak passes the threshold. 2x per
-// no-progress tick is aggressive enough to reach the weekly ceiling from any
-// fleet base in a handful of ticks while remaining monotonic and bounded.
+// no-progress tick is aggressive enough to reach the ceiling from any
+// fleet base in three steps (8 × floor = factor³) while remaining
+// monotonic and bounded.
 const adaptiveCooldownFactor = 2
 
 // adaptiveCooldown handles the opt-in per-project adaptive cooldown policy
@@ -138,7 +140,15 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// Resolve built-in defaults for zero-valued policy columns (rows enabled
 	// before the normalization existed, hand-edited SQL, etc.).
 	if ceilingS <= 0 {
-		ceilingS = database.DefaultAdaptiveCooldownCeilingS
+		// Derived default (ADV-R10): 8 × the floor (the fleet.toml pin
+		// shape) — the ONLY stable base. Deriving from the live cooldown
+		// would re-derive the cap each tick and ratchet it alongside the
+		// escalation (never capping). A floorless row (floor 0, ceiling
+		// 0 — hand-edited SQL / pre-normalization relic) stays at 0:
+		// the streak is tracked, escalation disabled, matching the
+		// documented dynamic-project semantic. The enable path always
+		// writes a floor, so properly-enabled rows never land here.
+		ceilingS = database.DefaultAdaptiveCooldownCeiling(floorS)
 	}
 	if threshold <= 0 {
 		threshold = database.DefaultAdaptiveCooldownThreshold

@@ -588,8 +588,8 @@ func TestApplyFleetConfig_AdaptiveCooldownPins(t *testing.T) {
 	if p.CooldownFloorS != 1800 {
 		t.Errorf("adaptive-defaults floor = %d, want 1800 (default = fleet cooldown_s)", p.CooldownFloorS)
 	}
-	if p.CooldownCeilingS != database.DefaultAdaptiveCooldownCeilingS {
-		t.Errorf("adaptive-defaults ceiling = %d, want %d (built-in weekly)", p.CooldownCeilingS, database.DefaultAdaptiveCooldownCeilingS)
+	if p.CooldownCeilingS != 14400 {
+		t.Errorf("adaptive-defaults ceiling = %d, want 14400 (derived default 8 × floor 1800, ADV-R10)", p.CooldownCeilingS)
 	}
 	if p.NoProgressThreshold != database.DefaultAdaptiveCooldownThreshold {
 		t.Errorf("adaptive-defaults threshold = %d, want %d (built-in)", p.NoProgressThreshold, database.DefaultAdaptiveCooldownThreshold)

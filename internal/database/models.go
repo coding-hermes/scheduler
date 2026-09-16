@@ -6,25 +6,50 @@ import (
 )
 
 // Adaptive-cooldown built-in defaults (shared by the DB update layer, which
-// normalizes rows when the feature is enabled, and the scheduler runtime,
-// which falls back to these when a column is 0). Semantics:
+// normalizes rows when the feature is enabled, the TOML loader, and the
+// scheduler runtime, which falls back to these when a column is 0).
+// Semantics:
 //
 //   - floor:        the base cooldown a project resets to on ANY progress.
 //     0 = unset (normalized to the cooldown_s in force at enable
 //     time); for dynamic (cooldown_s = 0) projects it stays 0
 //     and adaptive only tracks the streak, never escalates.
-//   - ceiling:      escalation cap in seconds. Default is weekly (604800):
-//     a parked project is still re-checked at least weekly.
+//   - ceiling:      escalation cap in seconds. When no explicit
+//     cooldown_ceiling_s is set, the default is DERIVED as 8 × the
+//     effective floor (ADV-R10) — the same shape as the fleet.toml 8×floor
+//     pins. An explicit ceiling always wins. There is NO second hardcoded
+//     default constant.
 //   - threshold:    consecutive no-progress ticks before escalation begins.
 //   - no_progress_ticks: live counter of the consecutive no-progress streak
 //     (observable via the API; reset on any progress).
 //   - board_rows_seen: last observed tasks.jsonl row count (-1 = never
 //     observed) — the "new work" signal for injected board rows.
 const (
-	DefaultAdaptiveCooldownCeilingS  = 604800 // 7 days — parked projects re-checked weekly, never abandoned
 	DefaultAdaptiveCooldownThreshold = 10
 	AdaptiveUnseenBoardRows          = -1 // board_rows_seen sentinel: no baseline yet
 )
+
+// AdaptiveCeilingFloorMultiplier is the single authority for the derived
+// default adaptive-cooldown ceiling: when a project has no explicit
+// cooldown_ceiling_s, the cap is this multiple of the effective cooldown
+// floor (ADV-R10). It matches the fleet.toml pin shape
+// (cooldown_ceiling_s = 8 × cooldown_floor_s), so a project whose fleet
+// entry loses its explicit ceiling derives the same cap the pins carry
+// instead of parking at the retired weekly constant.
+const AdaptiveCeilingFloorMultiplier = 8
+
+// DefaultAdaptiveCooldownCeiling derives the default adaptive-cooldown
+// ceiling for a project with the given floor: 8 × floor (ADV-R10). A
+// non-positive floor yields 0 — nothing is derivable, and the runtime
+// treats a 0 ceiling on a floorless project as "track the streak, never
+// escalate" (callers that still need a bounded cap pass the live cooldown
+// as the fallback base).
+func DefaultAdaptiveCooldownCeiling(floorS int) int {
+	if floorS <= 0 {
+		return 0
+	}
+	return floorS * AdaptiveCeilingFloorMultiplier
+}
 
 // Project is a single managed codebase the scheduler may spawn ticks against.
 // Field ordering matches the projects table column order for scan ergonomics.

@@ -481,9 +481,19 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 				floor := curCD
 				updates.CooldownFloorS = &floor
 			}
+			// Resolve the effective floor (explicit, else the snapshot
+			// from cooldown_s above) so the derived ceiling (ADV-R10)
+			// derives from THAT — 8 × floor, the fleet.toml pin shape.
+			// Never a second hardcoded ceiling constant.
+			floorForCeiling := 0
+			if updates.CooldownFloorS != nil {
+				floorForCeiling = *updates.CooldownFloorS
+			}
 			if updates.CooldownCeilingS == nil {
-				ceiling := DefaultAdaptiveCooldownCeilingS
-				updates.CooldownCeilingS = &ceiling
+				ceiling := DefaultAdaptiveCooldownCeiling(floorForCeiling)
+				if ceiling > 0 {
+					updates.CooldownCeilingS = &ceiling
+				}
 			}
 			if updates.NoProgressThreshold == nil {
 				threshold := DefaultAdaptiveCooldownThreshold

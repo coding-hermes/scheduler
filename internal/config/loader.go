@@ -701,7 +701,10 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		if pd.CooldownCeilingS > 0 {
 			p.CooldownCeilingS = pd.CooldownCeilingS
 		} else {
-			p.CooldownCeilingS = database.DefaultAdaptiveCooldownCeilingS
+			// Derived default (ADV-R10): 8 × the resolved floor above
+			// (explicit, else the fleet cooldown) — never a second
+			// hardcoded ceiling constant.
+			p.CooldownCeilingS = database.DefaultAdaptiveCooldownCeiling(p.CooldownFloorS)
 		}
 		if pd.NoProgressThreshold > 0 {
 			p.NoProgressThreshold = pd.NoProgressThreshold
