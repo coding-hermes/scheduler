@@ -109,6 +109,32 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		return false // opt-in feature — default unchanged
 	}
 
+	// SCHED-GAP-124: tasks-mode projects keep their admission governed by
+	// the board, so the escalation half of adaptive cooldown must not
+	// ratchet their cooldown_s (it would linger after the board drains).
+	// The speed-up reset below still runs — it restores the floor pin
+	// after progress, which is exactly the "auto kicks back in" baseline.
+	if mode := admissionModeForProject(db, project); mode == database.AdmissionModeTasks {
+		// Still persist the commit-anatomy observability columns so tick
+		// reporting stays complete for every mode.
+		codeCommits, _ := persistGitCommitSignals(db, outcome, workdir)
+		_ = codeCommits
+		if openNow, openOK := boardOpenRows(workdir); openOK && openNow == 0 {
+			// Board drained (never-done-only counts as drained): snap the
+			// cooldown back to the floor pin so the cron gate resumes at
+			// baseline the moment tasks-mode stops admitting.
+			if floorS > 0 && currentCD > floorS {
+				if _, err := db.Exec(`UPDATE projects SET cooldown_s = ?, no_progress_ticks = 0 WHERE name = ?`,
+					floorS, project); err != nil {
+					log.Printf("ADAPTIVE: %s tasks-mode floor restore failed: %v", project, err)
+					return true
+				}
+				log.Printf("ADMISSION: %s board drained (tasks mode) → cooldown %ds → %ds (floor pin)", project, currentCD, floorS)
+			}
+		}
+		return true
+	}
+
 	// Resolve built-in defaults for zero-valued policy columns (rows enabled
 	// before the normalization existed, hand-edited SQL, etc.).
 	if ceilingS <= 0 {

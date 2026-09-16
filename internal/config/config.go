@@ -232,6 +232,10 @@ type ProjectDef struct {
 	CooldownFloorS      int   `toml:"cooldown_floor_s"`
 	CooldownCeilingS    int   `toml:"cooldown_ceiling_s"`
 	NoProgressThreshold int   `toml:"no_progress_threshold"`
+	// SCHED-GAP-124: per-project admission-mode override; "" = inherit
+	// namespace default. Valid values: "cooldown" | "tasks". Pins only
+	// when explicitly set (GatewayKey-style conditional pin).
+	AdmissionMode string `toml:"admission_mode"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are
@@ -251,4 +255,8 @@ type NamespaceDef struct {
 	WaveEnabled     *bool  `toml:"wave_enabled"`      // optional; default false (waves off)
 	WaveTickTimeout string `toml:"wave_tick_timeout"` // duration string; "" = inherit scheduler tick timeout (S12 §4)
 	WaveWorkersCap  int    `toml:"wave_workers_cap"`  // max concurrent worker processes across the namespace's running ticks; 0 = unlimited (S12 §6)
+	// SCHED-GAP-124: namespace admission mode — "cooldown" (default, cron)
+	// or "tasks" (work-driven: non-perpetual pending board work admits
+	// immediately). Pins via the namespace upsert at load time.
+	AdmissionMode string `toml:"admission_mode"`
 }

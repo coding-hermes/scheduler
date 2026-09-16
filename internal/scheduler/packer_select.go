@@ -53,6 +53,12 @@ func (m *MultiPoolPacker) Pack(
 	// SERIAL (WaveSerial → WAVE_BUDGET: 0 at spawn); the packer may still
 	// select them — this is a coarse tick-boundary shed, not a block.
 	waveShed := m.waveShedSet(namespaces)
+	// SCHED-GAP-124: per-namespace admission mode map (namespace default;
+	// per-project overrides resolve in admissionModeFor).
+	nsModes := make(map[string]string, len(namespaces))
+	for _, ns := range namespaces {
+		nsModes[ns.ID] = ns.AdmissionMode
+	}
 	for _, ns := range namespaces {
 		cap := ns.MaxConcurrent
 		if cap < 0 {
@@ -236,8 +242,14 @@ func (m *MultiPoolPacker) Pack(
 				if skipMode {
 					continue // skip mode
 				}
-				if now.Sub(lt) < cooldownDur {
-					continue
+				// SCHED-GAP-124: tasks-mode admission — non-perpetual
+				// pending board work waives the last-tick spacing;
+				// backoff/blackout/skip above still applied.
+				mode := admissionModeFor(pu.Project.AdmissionMode, nsIDOf(pu.Project), nsModes)
+				if mode != database.AdmissionModeTasks || !tasksAdmissionDue(pu.Project.Workdir) {
+					if now.Sub(lt) < cooldownDur {
+						continue
+					}
 				}
 			}
 

@@ -24,19 +24,20 @@ func TestSumSessionCostInWindow(t *testing.T) {
 	_, err = db.Exec(`CREATE TABLE session_model_usage (
 		session_id TEXT, model TEXT, billing_provider TEXT DEFAULT '',
 		estimated_cost_usd REAL DEFAULT 0, actual_cost_usd REAL DEFAULT 0,
-		first_seen REAL, last_seen REAL
+		first_seen REAL, last_seen REAL,
+		input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0
 	)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ins := `INSERT INTO session_model_usage
-		(session_id, model, estimated_cost_usd, actual_cost_usd, first_seen, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?)`
+		(session_id, model, estimated_cost_usd, actual_cost_usd, first_seen, last_seen, input_tokens, output_tokens)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	for _, r := range [][]any{
-		{"in-window-est", "m", 0.10, 0, now - 100, now - 50},       // estimated only
-		{"in-window-actual", "m", 0.20, 0.30, now - 100, now - 50}, // actual wins
-		{"before-window", "m", 0.90, 0, now - 5000, now - 4900},    // excluded
-		{"after-window", "m", 0.90, 0, now + 5000, now + 5100},     // excluded
+		{"in-window-est", "m", 0.10, 0, now - 100, now - 50, 300000, 2500},       // estimated only
+		{"in-window-actual", "m", 0.20, 0.30, now - 100, now - 50, 500000, 4000}, // actual wins
+		{"before-window", "m", 0.90, 0, now - 5000, now - 4900, 999999, 999},     // excluded
+		{"after-window", "m", 0.90, 0, now + 5000, now + 5100, 888888, 888},      // excluded
 	} {
 		if _, err := db.Exec(ins, r...); err != nil {
 			t.Fatalf("insert %v: %v", r[0], err)
@@ -47,7 +48,7 @@ func TestSumSessionCostInWindow(t *testing.T) {
 	start := time.Unix(int64(now-200), 0)
 	end := time.Unix(int64(now-40), 0)
 
-	cost, n, err := sumSessionCostInWindow(tmp, start, end)
+	cost, tin, tout, n, err := sumSessionCostInWindow(tmp, start, end)
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -58,19 +59,34 @@ func TestSumSessionCostInWindow(t *testing.T) {
 	if cost < 0.39 || cost > 0.41 {
 		t.Errorf("expected ~0.40 cost, got %v", cost)
 	}
+	// ADV-R09/G8: the same rows' real token totals come back too
+	// (300000+500000 in, 2500+4000 out) — the measured usage the estimate
+	// tier must never silently stand in for.
+	if tin != 800000 {
+		t.Errorf("tokensIn = %d, want 800000", tin)
+	}
+	if tout != 6500 {
+		t.Errorf("tokensOut = %d, want 6500", tout)
+	}
 }
 
 // TestResolveRealTickCostFallback ensures a missing state.db falls back to the
 // flat estimate rather than 0 or an error.
 func TestResolveRealTickCostFallback(t *testing.T) {
-	cost, isReal := resolveRealTickCost("/nonexistent/path", "/nonexistent/workdir", "proj",
+	cost, tin, tout, isReal := resolveRealTickCost("/nonexistent/path", "/nonexistent/workdir", "proj",
 		time.Now().Add(-time.Hour), time.Now())
 	if isReal {
 		t.Errorf("expected fallback (isReal=false), got isReal=true cost=%v", cost)
 	}
-	// Fallback should be the flat estimate ($0.032), not 0.
+	// Fallback should be the flat estimate (estCostPerTick), not 0.
 	if cost <= 0 {
 		t.Errorf("expected non-zero fallback estimate, got %v", cost)
+	}
+	// The estimate tier carries NO measured tokens — zeros, so a spend
+	// surface distinguishes estimated rows from measured ones by more than
+	// the cost_source tag alone.
+	if tin != 0 || tout != 0 {
+		t.Errorf("fallback tokens = %d/%d, want 0/0", tin, tout)
 	}
 }
 

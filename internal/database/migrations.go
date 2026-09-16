@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 28
+const latestMigration = 30
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -401,6 +401,21 @@ CREATE INDEX IF NOT EXISTS idx_tick_workers_task ON tick_workers(task_id);
 		desc:    "per-POST gateway trace on ticks (SCHED-GAP-119): start/finish/elapsed, deadline applied + mode, classification, session link, event count",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN gateway_trace TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 29,
+		desc:    "cost provenance on ticks (ADV-R09/G8): measured | gateway | estimated | simulated — lets spend surfaces distinguish measured money from estimated money instead of laundering the estimate through as fact",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN cost_source TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 30,
+		desc:    "admission modes (SCHED-GAP-124): namespace admission_mode (cooldown | tasks) + per-project override; tasks mode admits on non-perpetual pending board work instead of wall-clock cooldown",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN admission_mode TEXT NOT NULL DEFAULT 'cooldown' CHECK(admission_mode IN ('cooldown','tasks'));
+ALTER TABLE projects ADD COLUMN admission_mode TEXT NOT NULL DEFAULT '' CHECK(admission_mode IN ('','cooldown','tasks'));
 `,
 	},
 }

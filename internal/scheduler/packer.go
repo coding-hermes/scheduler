@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // PackedProject is a project selected to run in this tick.
@@ -127,6 +128,8 @@ type scored struct {
 	namespaceID         string // namespace_id (empty = no namespace)
 	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
 	namespaceChain      string // namespace model_chain (JSON array string) (Bane 2026-08-27)
+	admissionNsMode     string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
+	admissionMode       string // SCHED-GAP-124: project admission_mode override ('' = inherit)
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -138,7 +141,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
-		       p.consecutive_failures
+		       p.consecutive_failures,
+		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, '')
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
 		WHERE p.enabled = 1
@@ -163,7 +167,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
-			&s.consecutiveFailures); err != nil {
+			&s.consecutiveFailures,
+			&s.admissionNsMode, &s.admissionMode); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -334,9 +339,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalSkippedCooldown++
 			continue // skip mode — don't spawn at all
 		}
-		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
-			totalSkippedCooldown++
-			continue
+		// SCHED-GAP-124: tasks-mode admission (legacy non-namespace path).
+		// Non-perpetual pending board work waives last-tick spacing;
+		// backoff/blackout/skip above still applied.
+		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
+		if mode != database.AdmissionModeTasks || !tasksAdmissionDue(s.workdir) {
+			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
+				totalSkippedCooldown++
+				continue
+			}
 		}
 		packed = append(packed, s.packed())
 		used += s.weight

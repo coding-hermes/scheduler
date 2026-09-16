@@ -129,6 +129,11 @@ func (s *Server) updateNamespace(w http.ResponseWriter, r *http.Request, id stri
 			writeError(w, 404, "namespace not found")
 			return
 		}
+		// SCHED-GAP-124: invalid admission_mode surfaces as 400.
+		if strings.Contains(err.Error(), "invalid admission_mode") {
+			writeError(w, 400, err.Error())
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

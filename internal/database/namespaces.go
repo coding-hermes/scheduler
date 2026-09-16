@@ -21,13 +21,25 @@ func CreateNamespace(ctx context.Context, db *sql.DB, ns *Namespace) error {
 	if ns.UpdatedAt == "" {
 		ns.UpdatedAt = ns.CreatedAt
 	}
+	// SCHED-GAP-124: normalize the admission mode on write — a zero-value
+	// struct must always produce a valid row ("" → the cooldown default),
+	// and an unknown value fails here with a readable error instead of a
+	// raw CHECK violation.
+	switch ns.AdmissionMode {
+	case "":
+		ns.AdmissionMode = AdmissionModeCooldown
+	case AdmissionModeCooldown, AdmissionModeTasks:
+	default:
+		return fmt.Errorf("invalid admission_mode %q for namespace %q (want \"cooldown\" or \"tasks\")", ns.AdmissionMode, ns.ID)
+	}
 	const q = `INSERT INTO namespaces
-(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, wave_enabled, wave_tick_timeout, wave_workers_cap, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, wave_enabled, wave_tick_timeout, wave_workers_cap, admission_mode, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		ns.ID, ns.Weight, ns.Reserved, ns.HardCap, ns.MaxConcurrent, boolToInt(ns.Enabled),
 		nullableString(ns.Description), ns.DefaultPrompt, ns.ModelChain,
 		boolToInt(ns.WaveEnabled), ns.WaveTickTimeout, ns.WaveWorkersCap,
+		ns.AdmissionMode,
 		ns.CreatedAt, ns.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create namespace %q: %w", ns.ID, err)
@@ -38,14 +50,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetNamespace loads a single namespace by id. Returns ErrNamespaceNotFound
 // if no row matches.
 func GetNamespace(ctx context.Context, db *sql.DB, id string) (*Namespace, error) {
-	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), created_at, updated_at
+	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), created_at, updated_at
 FROM namespaces WHERE id = ?`
 	var ns Namespace
 	var enabled, waveEnabled int
 	err := db.QueryRowContext(ctx, q, id).Scan(
 		&ns.ID, &ns.Weight, &ns.Reserved, &ns.HardCap, &ns.MaxConcurrent, &enabled,
 		&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
-		&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.CreatedAt, &ns.UpdatedAt)
+		&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.AdmissionMode, &ns.CreatedAt, &ns.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrNamespaceNotFound, id)
 	}
@@ -60,7 +72,7 @@ FROM namespaces WHERE id = ?`
 // ListNamespaces returns all namespaces, ordered by id. If enabledOnly is
 // true, only enabled=1 rows are returned.
 func ListNamespaces(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Namespace, error) {
-	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), created_at, updated_at
+	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), created_at, updated_at
 FROM namespaces`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -80,7 +92,7 @@ FROM namespaces`
 		if err := rows.Scan(
 			&ns.ID, &ns.Weight, &ns.Reserved, &ns.HardCap, &ns.MaxConcurrent, &enabled,
 			&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
-			&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
+			&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.AdmissionMode, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan namespace row: %w", err)
 		}
 		ns.Enabled = enabled != 0
@@ -142,6 +154,17 @@ func UpdateNamespace(ctx context.Context, db *sql.DB, id string, patch Namespace
 	if patch.WaveWorkersCap != nil {
 		setClauses = append(setClauses, "wave_workers_cap = ?")
 		args = append(args, *patch.WaveWorkersCap)
+	}
+	// SCHED-GAP-124: namespace admission mode (cooldown | tasks) — the
+	// default for every member project without its own override.
+	if patch.AdmissionMode != nil {
+		switch m := *patch.AdmissionMode; m {
+		case AdmissionModeCooldown, AdmissionModeTasks:
+			setClauses = append(setClauses, "admission_mode = ?")
+			args = append(args, m)
+		default:
+			return fmt.Errorf("invalid admission_mode %q for namespace %q (want \"cooldown\" or \"tasks\")", m, id)
+		}
 	}
 
 	args = append(args, id)

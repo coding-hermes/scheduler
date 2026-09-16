@@ -480,7 +480,25 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 					return fmt.Errorf("update namespace %q default_prompt: %w", nd.ID, err)
 				}
 				log.Printf("Config: updated namespace %q default_prompt (%d chars)", nd.ID, len(nd.DefaultPrompt))
-			} else {
+			}
+			// SCHED-GAP-124: admission_mode pins when the fleet.toml entry
+			// explicitly sets a valid value; invalid values warn and skip
+			// (never crash boot over a typo).
+			if nd.AdmissionMode != "" {
+				switch nd.AdmissionMode {
+				case database.AdmissionModeCooldown, database.AdmissionModeTasks:
+					m := nd.AdmissionMode
+					if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+						AdmissionMode: &m,
+					}); err != nil {
+						return fmt.Errorf("update namespace %q admission_mode: %w", nd.ID, err)
+					}
+					log.Printf("Config: pinned namespace %q admission_mode=%s", nd.ID, m)
+				default:
+					log.Printf("Config: namespace %q has invalid admission_mode %q — skipped (want \"cooldown\" or \"tasks\")", nd.ID, nd.AdmissionMode)
+				}
+			}
+			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
 			}
 			continue
@@ -585,6 +603,12 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			}
 			if pd.PromptMode != "" {
 				updates.PromptMode = &pd.PromptMode
+			}
+			// SCHED-GAP-124: admission_mode pins ONLY when fleet.toml
+			// explicitly sets it — a mode flipped via API survives a
+			// restart with a keyless entry (GatewayKey-style conditional).
+			if pd.AdmissionMode != "" {
+				updates.AdmissionMode = &pd.AdmissionMode
 			}
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
@@ -754,6 +778,19 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		WaveEnabled:     waveEnabled,
 		WaveTickTimeout: nd.WaveTickTimeout,
 		WaveWorkersCap:  waveWorkersCap,
+		AdmissionMode:   nsAdmissionMode(nd),
+	}
+}
+
+// nsAdmissionMode resolves the effective admission mode for a fleet.toml
+// namespace entry: the explicit key when valid, "cooldown" otherwise
+// (empty or unknown values normalize to the cron default — SCHED-GAP-124).
+func nsAdmissionMode(nd NamespaceDef) string {
+	switch nd.AdmissionMode {
+	case database.AdmissionModeTasks:
+		return database.AdmissionModeTasks
+	default:
+		return database.AdmissionModeCooldown
 	}
 }
 

@@ -165,6 +165,10 @@ func (m *MultiPoolPacker) packFlat(
 		lastTick      *time.Time
 		bumpCooldownS int // SCHED-GAP-107: >0 = active bump; overrides proj.CooldownS
 	}
+	// SCHED-GAP-124: admission-mode lookup for the flat path. Flat handles
+	// unassigned/dangling projects, so an empty nsModes map yields cooldown
+	// semantics unless the PROJECT itself overrides to tasks.
+	nsModes := map[string]string{}
 	list := make([]scored, 0, len(projects))
 	for i := range projects {
 		p := &projects[i]
@@ -265,8 +269,13 @@ func (m *MultiPoolPacker) packFlat(
 			if skipMode {
 				continue
 			}
-			if now.Sub(*s.lastTick) < cooldownDur {
-				continue
+			// SCHED-GAP-124: tasks-mode admission (flat fallback path) —
+			// non-perpetual pending board work waives last-tick spacing.
+			mode := admissionModeFor(s.proj.AdmissionMode, nsIDOf(s.proj), nsModes)
+			if mode != database.AdmissionModeTasks || !tasksAdmissionDue(s.proj.Workdir) {
+				if now.Sub(*s.lastTick) < cooldownDur {
+					continue
+				}
 			}
 		}
 		packed = append(packed, PackedProject{

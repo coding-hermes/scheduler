@@ -111,6 +111,13 @@ type Project struct {
 	BumpSavedCeilingS   int    `json:"bump_saved_ceiling_s"`
 	BumpSavedNoProgress int    `json:"bump_saved_no_progress_ticks"`
 	BumpStartedAt       string `json:"bump_started_at"`
+
+	// SCHED-GAP-124: per-project admission-mode override of the
+	// namespace's admission_mode. "" (default) = inherit the namespace;
+	// "cooldown" = cron admission; "tasks" = work-driven admission
+	// (non-perpetual pending board work admits immediately, cooldown
+	// pin applies when the board is drained). Validated at write time.
+	AdmissionMode string `json:"admission_mode"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are
@@ -248,7 +255,8 @@ type Tick struct {
 	TokensIn     int64       `json:"tokens_in"`
 	TokensOut    int64       `json:"tokens_out"`
 	CostUSD      float64     `json:"cost_usd"`
-	Urgency      float64     `json:"urgency"` // urgency score at spawn time
+	CostSource   string      `json:"cost_source"` // ADV-R09/G8: measured | gateway | estimated | simulated | "" (legacy)
+	Urgency      float64     `json:"urgency"`     // urgency score at spawn time
 	WeightUsed   int         `json:"weight_used"`
 	Error        string      `json:"error"`
 	CreatedAt    string      `json:"created_at"`
@@ -317,8 +325,15 @@ type Namespace struct {
 	WaveEnabled     bool   `json:"wave_enabled"`      // true → ticks in this namespace may compose waves (S12 §4)
 	WaveTickTimeout string `json:"wave_tick_timeout"` // duration string; "" = inherit scheduler tick timeout (S12 §4)
 	WaveWorkersCap  int    `json:"wave_workers_cap"`  // max concurrent worker processes across the namespace's running ticks; 0 = unlimited (S12 §6)
-	CreatedAt       string `json:"created_at"`        // RFC3339
-	UpdatedAt       string `json:"updated_at"`        // RFC3339
+	// SCHED-GAP-124 admission mode: how member projects become eligible
+	// for selection. "cooldown" (default) = wall-clock cron semantics —
+	// last_tick_completed + cooldown_s gates each tick. "tasks" = work
+	// driven — a project with non-perpetual pending board work is
+	// admitted immediately (priority + namespace caps still apply);
+	// when its board has none, the cooldown pin applies again.
+	AdmissionMode string `json:"admission_mode"` // "cooldown" | "tasks"
+	CreatedAt     string `json:"created_at"`     // RFC3339
+	UpdatedAt     string `json:"updated_at"`     // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
@@ -336,6 +351,9 @@ type NamespacePatch struct {
 	WaveEnabled     *bool   `json:"wave_enabled,omitempty"`      // namespace wave switch (default off)
 	WaveTickTimeout *string `json:"wave_tick_timeout,omitempty"` // "" = inherit scheduler tick timeout
 	WaveWorkersCap  *int    `json:"wave_workers_cap,omitempty"`  // 0 = unlimited
+	// SCHED-GAP-124: admission mode override; must be "cooldown" or
+	// "tasks" when non-nil (validated by UpdateNamespace).
+	AdmissionMode *string `json:"admission_mode,omitempty"`
 }
 
 // TickWorker is one dispatched worker inside a wave tick (S12 §9.2,
