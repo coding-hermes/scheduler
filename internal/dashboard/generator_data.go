@@ -237,10 +237,16 @@ type HealthData struct {
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {
+	// ADV-R09/G8: the effective budget from the resolution chain; 0 (tests,
+	// SetWeightBudget never called) renders the documented default of 100.
+	budgetTotal := g.weightBudget
+	if budgetTotal <= 0 {
+		budgetTotal = 100
+	}
 	data := FleetData{
 		Title:       "Fleet Overview",
 		GeneratedAt: time.Now().Format(time.RFC3339),
-		BudgetTotal: 100,
+		BudgetTotal: budgetTotal,
 	}
 
 	// ── Projects: batch query with per-project stats via LEFT JOINs ──

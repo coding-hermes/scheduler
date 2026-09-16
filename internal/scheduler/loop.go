@@ -673,6 +673,15 @@ func (l *Loop) LastEvalTime() time.Time {
 	return l.lastEval
 }
 
+// WeightBudget returns the scheduling weight budget this loop was built
+// with (ADV-R09/G8 — budget authority chain). The value is immutable for
+// the Loop's lifetime (set once in NewLoop from the --budget flag /
+// SCHEDULER_BUDGET env / TOML weight_budget resolution), so reading it
+// needs no lock. It is the SINGLE authority every budget surface (API
+// /api/v1/status, MCP fleet status, dashboard) reports — no surface may
+// hardcode a budget number again.
+func (l *Loop) WeightBudget() int { return l.weightBudget }
+
 // evalStallThreshold is the lastEval age at which the event-driven loop is
 // considered stalled (GAP-042): 10x the configured min-interval (5 minutes
 // at the default 30s min-interval). A

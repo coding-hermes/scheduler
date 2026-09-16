@@ -38,14 +38,22 @@ type ResolvedConfig struct {
 	WeightBudget  int    `json:"weight_budget"`
 	MaxConcurrent int    `json:"max_concurrent"`
 	TickTimeout   string `json:"tick_timeout"`
+	// BudgetSource (ADV-R09/G8): which config layer owned the effective
+	// weight_budget — "toml", "env", "flag", or "flag-default" (no layer
+	// set it; the documented unset behavior of 100 weight units applies).
+	BudgetSource string `json:"budget_source"`
 	// GatewayResponseTimeout (SCHED-GAP-117): the per-turn deadline for a
-	// gateway /v1/responses POST — "0s" means disabled (the POST runs on
-	// the tick deadline alone).
+	// gateway /v1/responses POST — "0s" means disabled (the POST runs on the
+	// tick deadline alone).
 	GatewayResponseTimeout string `json:"gateway_response_timeout"`
 	// SlotPatience (ADV-R08/G3): how long a spawn waits for a free slot
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event). Default "5m0s".
-	SlotPatience           string                  `json:"slot_patience"`
+	SlotPatience string `json:"slot_patience"`
+	// ModelRatesFile (ADV-R09/G8): path to a JSON price-sticker file applied
+	// over the builtin maps at startup (refresh without rebuild). Empty = the
+	// builtin 2026-08 stickers.
+	ModelRatesFile         string                  `json:"model_rates_file"`
 	NamespaceMode          bool                    `json:"namespace_mode"`
 	AutoDisableFailureRate float64                 `json:"auto_disable_failure_rate"`
 	AutoDisableWindow      int                     `json:"auto_disable_window"`

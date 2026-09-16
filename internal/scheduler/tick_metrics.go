@@ -3,10 +3,13 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,14 +19,31 @@ type modelRate struct {
 	outPerM float64 // output $/1M tokens
 }
 
+// modelRatesAsOf is the AS-OF date of the builtin modelRates stickers
+// (ADV-R09/G8): the month the prices were verified against models.dev /
+// provider pricing pages. A sticker refresh changes this constant together
+// with the map (or, better, ships a rates file via ApplyModelRatesFile so no
+// rebuild is needed). Surfaced through PriceMapAsOf() so every cost figure
+// carries its price vintage.
+const modelRatesAsOf = "2026-08"
+
+// unknownModelFallbackRate is the DOCUMENTED pricing policy for a model that
+// is in NEITHER the task router, providerModelRates, nor modelRates
+// (ADV-R09/G8): a flat $2.00/$8.00 per 1M in/out blend — roughly the fleet's
+// mid-tier lane mix — so an unknown sticker still yields a non-zero,
+// proportional cost instead of $0. This is a POLICY value, not a
+// measurement; changing it is a pricing decision, not a bug fix.
+var unknownModelFallbackRate = modelRate{inPerM: 2.00, outPerM: 8.00}
+
 // modelRates holds PUBLIC list pricing for models the coding-hermes fleet
 // actually uses, keyed by model name — the LAST-RESORT fallback for cost
-// reporting (SCHED-GAP-078). Prices are public per-1M-token USD rates
-// (models.dev / provider pricing pages, as of 2026-08). The task router's
-// per-hop public price is the PRIMARY source (provider-aware, tick-accurate);
-// this map only fires when the router was unavailable or didn't price the
-// pair. providerModelRates overrides by "provider/model" when a provider's
-// public rate differs materially from the model-wide default.
+// reporting (SCHED-GAP-078). Prices are public per-1M-token USD rates as of
+// modelRatesAsOf. The task router's per-hop public price is the PRIMARY
+// source (provider-aware, tick-accurate); this map only fires when the router
+// was unavailable or didn't price the pair. providerModelRates overrides by
+// "provider/model" when a provider's public rate differs materially from the
+// model-wide default. Both maps can be refreshed without a rebuild via
+// ApplyModelRatesFile (SCHEDULER_MODEL_RATES_FILE / --model-rates-file).
 var modelRates = map[string]modelRate{
 	"deepseek-v4-flash": {0.14, 0.28},
 	"deepseek-v4-pro":   {0.27, 1.10},
@@ -43,6 +63,96 @@ var modelRates = map[string]modelRate{
 // rate that differs from the model-wide default (e.g. a reseller lane whose
 // sticker is not the underlying provider's list).
 var providerModelRates = map[string]modelRate{}
+
+// priceMapMu guards the price maps + their metadata. computeCostUSD is called
+// from every completion goroutine; ApplyModelRatesFile swaps the maps wholesale
+// under the write lock (startup or test), so readers never see a torn map.
+var priceMapMu sync.RWMutex
+
+// priceMapSource records where the ACTIVE stickers came from: "builtin", or
+// "file:<path>" after a successful ApplyModelRatesFile. Surfaced next to every
+// spend figure so an operator can tell compiled-in stickers from a refreshed
+// file (ADV-R09/G8).
+var priceMapSource = "builtin"
+
+// PriceMapAsOf returns the as-of date of the ACTIVE price stickers — the
+// builtin modelRatesAsOf, or the file's as_of after a rates-file refresh.
+func PriceMapAsOf() string {
+	priceMapMu.RLock()
+	defer priceMapMu.RUnlock()
+	if appliedRatesAsOf != "" {
+		return appliedRatesAsOf
+	}
+	return modelRatesAsOf
+}
+
+// PriceMapSource returns the provenance of the ACTIVE price stickers
+// ("builtin" or "file:<path>").
+func PriceMapSource() string {
+	priceMapMu.RLock()
+	defer priceMapMu.RUnlock()
+	return priceMapSource
+}
+
+// appliedRatesAsOf is the as_of carried by the last successfully applied
+// rates file (empty = builtin vintage).
+var appliedRatesAsOf string
+
+// modelRatesDoc is the JSON shape accepted by ApplyModelRatesFile.
+type modelRatesDoc struct {
+	AsOf      string                   `json:"as_of"`
+	Models    map[string]modelRateJSON `json:"models"`
+	Providers map[string]modelRateJSON `json:"providers"`
+}
+
+// modelRateJSON is the wire form of one rate entry.
+type modelRateJSON struct {
+	InPerM  float64 `json:"in_per_m"`
+	OutPerM float64 `json:"out_per_m"`
+}
+
+// ApplyModelRatesFile loads a JSON price-sticker file and merges it OVER the
+// builtin maps (per-key override; keys not present keep the builtin sticker),
+// adopting the file's as_of date. This is the refresh path (ADV-R09/G8):
+// stickers can update without a rebuild via --model-rates-file /
+// SCHEDULER_MODEL_RATES_FILE. Negative rates are rejected; a rejected file
+// leaves the builtin maps untouched.
+func ApplyModelRatesFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("model rates file: %w", err)
+	}
+	var doc modelRatesDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("model rates file %s: %w", path, err)
+	}
+	models := make(map[string]modelRate, len(doc.Models))
+	for name, r := range doc.Models {
+		if r.InPerM < 0 || r.OutPerM < 0 {
+			return fmt.Errorf("model rates file %s: negative rate for model %q", path, name)
+		}
+		models[name] = modelRate{inPerM: r.InPerM, outPerM: r.OutPerM}
+	}
+	providers := make(map[string]modelRate, len(doc.Providers))
+	for name, r := range doc.Providers {
+		if r.InPerM < 0 || r.OutPerM < 0 {
+			return fmt.Errorf("model rates file %s: negative rate for provider lane %q", path, name)
+		}
+		providers[name] = modelRate{inPerM: r.InPerM, outPerM: r.OutPerM}
+	}
+
+	priceMapMu.Lock()
+	defer priceMapMu.Unlock()
+	for name, r := range models {
+		modelRates[name] = r
+	}
+	for name, r := range providers {
+		providerModelRates[name] = r
+	}
+	appliedRatesAsOf = doc.AsOf
+	priceMapSource = "file:" + path
+	return nil
+}
 
 // computeCostUSD returns the estimated PUBLIC cost in USD for a tick, in
 // priority order (SCHED-GAP-078, Bane 2026-08-28):
@@ -66,6 +176,8 @@ func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut i
 			return rr.usd1m * float64(tokensIn+tokensOut) / 1e6
 		}
 	}
+	priceMapMu.RLock()
+	defer priceMapMu.RUnlock()
 	if provider != "" {
 		if rate, ok := providerModelRates[provider+"/"+model]; ok {
 			return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
@@ -74,9 +186,13 @@ func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut i
 	if rate, ok := modelRates[model]; ok {
 		return float64(tokensIn)/1e6*rate.inPerM + float64(tokensOut)/1e6*rate.outPerM
 	}
-	// Fallback: use the fixed per-token estimates so unknown models
-	// still produce a non-zero, roughly proportional cost.
-	return float64(tokensIn)*estCostPerIn + float64(tokensOut)*estCostPerOut
+	// Unknown model — the documented fallback policy (ADV-R09/G8):
+	// unknownModelFallbackRate, a flat mid-tier blend per 1M tokens so an
+	// unpriced model still yields a non-zero, proportional cost. The old
+	// behavior billed unknown models at the per-token estCostPer* constants
+	// with no declared policy.
+	return float64(tokensIn)/1e6*unknownModelFallbackRate.inPerM +
+		float64(tokensOut)/1e6*unknownModelFallbackRate.outPerM
 }
 
 // gitCommitCountInWindow returns the number of commits in workdir between [since, until].

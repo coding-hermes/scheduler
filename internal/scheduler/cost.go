@@ -33,13 +33,17 @@ import (
 // estimate so aggregation still works.
 
 // sumSessionCostInWindow queries a Hermes state.db for the total estimated
-// cost of sessions whose activity window overlaps [start, end].
-func sumSessionCostInWindow(stateDB string, start, end time.Time) (float64, int, error) {
+// cost AND the real input/output token totals of sessions whose activity
+// window overlaps [start, end]. Tokens come from the same rows the cost does
+// (session_model_usage.input_tokens/output_tokens) — before ADV-R09 the exec
+// path recorded real USD but wrote 0/0 tokens, hiding the measured per-tick
+// usage the estimate should have been calibrated against.
+func sumSessionCostInWindow(stateDB string, start, end time.Time) (cost float64, tokensIn, tokensOut int, n int, err error) {
 	if stateDB == "" || start.IsZero() {
-		return 0, 0, fmt.Errorf("no state db / start time")
+		return 0, 0, 0, 0, fmt.Errorf("no state db / start time")
 	}
-	if _, err := os.Stat(stateDB); err != nil {
-		return 0, 0, fmt.Errorf("state db %s: %w", stateDB, err)
+	if _, serr := os.Stat(stateDB); serr != nil {
+		return 0, 0, 0, 0, fmt.Errorf("state db %s: %w", stateDB, serr)
 	}
 	if end.IsZero() {
 		end = time.Now()
@@ -48,9 +52,9 @@ func sumSessionCostInWindow(stateDB string, start, end time.Time) (float64, int,
 	// session_model_usage.first_seen / last_seen are unix-epoch floats.
 	// Match sessions whose activity overlaps the tick window:
 	//   first_seen <= end  AND  last_seen >= start
-	db, err := sql.Open("sqlite", stateDB)
-	if err != nil {
-		return 0, 0, err
+	db, oerr := sql.Open("sqlite", stateDB)
+	if oerr != nil {
+		return 0, 0, 0, 0, oerr
 	}
 	defer db.Close()
 
@@ -58,35 +62,41 @@ func sumSessionCostInWindow(stateDB string, start, end time.Time) (float64, int,
 	// fall back to estimated. Sum over overlapping sessions.
 	q := `
 SELECT COALESCE(SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE estimated_cost_usd END), 0),
+       COALESCE(SUM(input_tokens), 0),
+       COALESCE(SUM(output_tokens), 0),
        COUNT(*)
   FROM session_model_usage
  WHERE first_seen <= ? AND last_seen >= ?`
-	var cost float64
-	var n int
-	err = db.QueryRow(q, end.Unix(), start.Unix()).Scan(&cost, &n)
+	err = db.QueryRow(q, end.Unix(), start.Unix()).Scan(&cost, &tokensIn, &tokensOut, &n)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	return cost, n, nil
+	return cost, tokensIn, tokensOut, n, nil
 }
 
-// resolveRealTickCost returns the real cost of a tick, falling back to the flat
-// estimate when real telemetry is unavailable. It sums:
+// resolveRealTickCost returns the real cost AND real token totals of a tick,
+// falling back to the flat estimate when real telemetry is unavailable. It
+// sums:
 //   - foreman + worker sessions in the foreman's Hermes state.db overlapping
 //     the tick window (the dominant cost), and
 //   - GitReins judge usage recorded in <workdir>/.gitreins/usage.jsonl within
 //     the same window (gitreins uses its own LLM client, so it never appears
 //     in Hermes telemetry).
 //
-// Returns (cost, isReal).
-func resolveRealTickCost(foremanHome, workdir, project string, start, end time.Time) (float64, bool) {
+// Returns (cost, tokensIn, tokensOut, isReal). Token totals cover the Hermes
+// telemetry rows only (the judge usage.jsonl rows carry tokens too but are
+// priced inline; folding them in would double-report usage across surfaces).
+func resolveRealTickCost(foremanHome, workdir, project string, start, end time.Time) (float64, int, int, bool) {
 	total := 0.0
+	tin, tout := 0, 0
 	real := false
 
-	// 1) Foreman + worker cost from Hermes telemetry.
+	// 1) Foreman + worker cost + tokens from Hermes telemetry.
 	stateDB := filepath.Join(foremanHome, "state.db")
-	if sessionCost, n, err := sumSessionCostInWindow(stateDB, start.Add(-2*time.Minute), end); err == nil {
+	if sessionCost, sTin, sTout, n, err := sumSessionCostInWindow(stateDB, start.Add(-2*time.Minute), end); err == nil {
 		total += sessionCost
+		tin += sTin
+		tout += sTout
 		if n > 0 && sessionCost > 0 {
 			real = true
 		}
@@ -104,9 +114,9 @@ func resolveRealTickCost(foremanHome, workdir, project string, start, end time.T
 
 	if !real || total <= 0 {
 		_, _, est := estimateTickCost()
-		return est, false
+		return est, 0, 0, false
 	}
-	return total, true
+	return total, tin, tout, true
 }
 
 // sumGitreinsUsageInWindow reads .gitreins/usage.jsonl lines whose ts falls in

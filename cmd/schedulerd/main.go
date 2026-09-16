@@ -63,6 +63,7 @@ func main() {
 	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
 	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
+	modelRatesFile := flag.String("model-rates-file", os.Getenv("SCHEDULER_MODEL_RATES_FILE"), "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild")
 	noExecFallback := flag.Bool("no-exec-fallback", true, "Disable exec.Command fallback when gateway fails (default true for safety)")
 	foremanHome := flag.String("foreman-home", os.ExpandEnv("$HOME/.hermes/foreman"), "HERMES_HOME path for foreman sessions")
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 13 dry-run projects (12 enabled + 1 disabled)")
@@ -79,6 +80,19 @@ func main() {
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
 	showVersion := flag.Bool("version", false, "Print version/build info and exit")
 	flag.Parse()
+
+	// ADV-R09/G8 — budget provenance: which config layer owned the effective
+	// --budget value. flag.Visit reports ONLY explicitly-set flags; the env
+	// and TOML layers below claim provenance when they apply. The chain is
+	// flag > env > TOML > flag-default; no layer setting it is itself the
+	// documented unset behavior: the fleet schedules against 100 weight
+	// units (admission currency, NOT dollars).
+	budgetSource := "flag-default"
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "budget" {
+			budgetSource = "flag"
+		}
+	})
 
 	// --version exits before any state is touched (DB, gateway, ports).
 	if *showVersion {
@@ -102,6 +116,16 @@ func main() {
 	if v := os.Getenv("SCHEDULER_FAILURE_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			*failureWindow = n
+		}
+	}
+	// ADV-R09/G8: weight budget env override (SCHEDULER_BUDGET), same
+	// pattern — applies only when no explicit --budget flag was passed
+	// (flag.Visit captured that above); a positive parseable int wins and
+	// claims provenance.
+	if v := os.Getenv("SCHEDULER_BUDGET"); v != "" && budgetSource == "flag-default" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*weightBudget = n
+			budgetSource = "env"
 		}
 	}
 	// SCHED-GAP-117: per-turn gateway deadline env override, resolved BEFORE
@@ -240,6 +264,18 @@ func main() {
 	}
 
 	// ── Create the evaluation loop.
+	// ADV-R09/G8: price-sticker refresh path. Applied BEFORE the loop is
+	// created so every cost computation from the first tick uses the
+	// refreshed maps. A bad file is a hard boot error — silently falling
+	// back to stale builtin stickers while the operator believes their
+	// refresh took effect would be exactly the G8 class of lie.
+	if *modelRatesFile != "" {
+		if err := scheduler.ApplyModelRatesFile(*modelRatesFile); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
+		log.Printf("Model rates: file %s applied (as-of %s)", *modelRatesFile, scheduler.PriceMapAsOf())
+	}
+
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
 	// Apply the tick timeout to the real spawner so Wait()/scanner cleanup use it.
 	loop.SetTickTimeout(*tickTimeout)
@@ -284,6 +320,15 @@ func main() {
 			}
 			if rootCfg.Scheduler.AutoDisableFailureRate > 0 && *autoDisableRate == 0 {
 				*autoDisableRate = rootCfg.Scheduler.AutoDisableFailureRate
+			}
+			// ADV-R09/G8: TOML layer for the weight budget — the same
+			// default-guard pattern (applied only when the flag sits at its
+			// 100 default AND no env var set it), so CLI and env keep
+			// precedence. Provenance: TOML wins only when no higher layer
+			// configured the budget.
+			if rootCfg.Scheduler.WeightBudget > 0 && *weightBudget == 100 && budgetSource == "flag-default" {
+				*weightBudget = rootCfg.Scheduler.WeightBudget
+				budgetSource = "toml"
 			}
 		}
 		// SCHED-GAP-117: TOML layer for the per-turn gateway deadline —
@@ -428,10 +473,12 @@ func main() {
 		MaxInterval:            maxInterval.String(),
 		NumLevels:              *numLevels,
 		WeightBudget:           *weightBudget,
+		BudgetSource:           budgetSource,
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		SlotPatience:           slotPatience.String(),
+		ModelRatesFile:         *modelRatesFile,
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,
 		AutoDisableWindow:      *autoDisableWindow,
@@ -464,6 +511,9 @@ func main() {
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
+	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
+	// was built with — never an independent literal.
+	dashGen.SetWeightBudget(loop.WeightBudget())
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()

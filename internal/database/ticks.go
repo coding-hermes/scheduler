@@ -23,14 +23,14 @@ func CreateTick(ctx context.Context, db *sql.DB, t *Tick) error {
 		t.Status = StatusQueued
 	}
 	const q = `INSERT INTO ticks
-(id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at, bump, worker_count, wave_recovery)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, cost_source, urgency, weight_used, error, created_at, bump, worker_count, wave_recovery)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		t.ID, t.ProjectName, nullableString(t.SessionID), string(t.Status),
 		nullableString(string(t.Outcome)),
 		nullableString(t.SpawnedAt), nullableString(t.CompletedAt),
 		t.ExitCode, t.Commits, t.FilesChanged, t.TokensIn, t.TokensOut,
-		t.CostUSD, t.Urgency, t.WeightUsed, nullableString(t.Error), t.CreatedAt,
+		t.CostUSD, t.CostSource, t.Urgency, t.WeightUsed, nullableString(t.Error), t.CreatedAt,
 		t.Bump, t.WorkerCount, t.WaveRecovery)
 	if err != nil {
 		return fmt.Errorf("create tick %q: %w", t.ID, err)
@@ -116,14 +116,14 @@ WHERE id = ?`
 
 // GetTick loads a single tick by id.
 func GetTick(ctx context.Context, db *sql.DB, id string) (*Tick, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
 FROM ticks WHERE id = ?`
 	var t Tick
 	var status, outcome string
 	err := db.QueryRowContext(ctx, q, id).Scan(
 		&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource, &t.Urgency, &t.WeightUsed,
 		&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 		&t.Bump, &t.WorkerCount, &t.WaveRecovery)
 	if err == sql.ErrNoRows {
@@ -142,7 +142,7 @@ FROM ticks WHERE id = ?`
 // limit caps the result count; pass 0 for an unbounded query (the caller
 // should usually bound it).
 func ListTicks(ctx context.Context, db *sql.DB, projectName string, limit int) ([]Tick, error) {
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
 FROM ticks`
 	args := []any{}
 	if projectName != "" {
@@ -168,7 +168,7 @@ FROM ticks`
 		if err := rows.Scan(
 			&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
+			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource, &t.Urgency, &t.WeightUsed,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 			&t.Bump, &t.WorkerCount, &t.WaveRecovery); err != nil {
 			return nil, fmt.Errorf("scan tick row: %w", err)
@@ -186,7 +186,7 @@ FROM ticks`
 // ListAllTicks returns ticks across all projects, newest first, with offset
 // pagination. limit caps the result count; pass 0 for an unbounded query.
 func ListAllTicks(ctx context.Context, db *sql.DB, limit, offset int) ([]Tick, error) {
-	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), urgency, weight_used, COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
 FROM ticks ORDER BY created_at DESC, id DESC`
 
 	q := baseQuery
@@ -215,7 +215,7 @@ FROM ticks ORDER BY created_at DESC, id DESC`
 		if err := rows.Scan(
 			&t.ID, &t.ProjectName, &t.SessionID, &status, &outcome,
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed,
+			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource, &t.Urgency, &t.WeightUsed,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 			&t.Bump, &t.WorkerCount, &t.WaveRecovery); err != nil {
 			return nil, fmt.Errorf("scan all tick row: %w", err)

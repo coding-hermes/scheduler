@@ -14,10 +14,17 @@ func (s *Server) toolFleetStatus(ctx context.Context) (string, error) {
 	projects, _ := database.ListProjects(ctx, s.db, true)
 	activeTicks := 0
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&activeTicks)
+	// ADV-R09/G8: budget flows from the loop (the --budget/SCHEDULER_BUDGET/
+	// TOML resolution) — never a literal. The MCP tool description says
+	// "budget" in weight units; the field keeps its name for compatibility.
+	budget := 100
+	if s.loop != nil {
+		budget = s.loop.WeightBudget()
+	}
 	return jsonString(map[string]interface{}{
 		"total_projects": len(projects),
 		"active_ticks":   activeTicks,
-		"budget":         100,
+		"budget":         budget,
 	}), nil
 }
 

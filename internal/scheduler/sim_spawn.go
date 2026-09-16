@@ -83,10 +83,10 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		finish := outcome.Finished.Format(time.RFC3339)
 		s.db.Exec(`
 			UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?,
-				tokens_in = ?, tokens_out = ?, cost_usd = ?, commits = ?, files_changed = ?
+				tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?, commits = ?, files_changed = ?
 			WHERE id = ?
 		`, string(outcome.Status), finish, outcome.ExitCode, outcome.Error,
-			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.Commits, outcome.FilesChanged,
+			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource, outcome.Commits, outcome.FilesChanged,
 			outcome.TickID)
 		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
 		s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
@@ -137,6 +137,7 @@ func (s *SimSpawned) Wait() TickOutcome {
 		outcome.TokensIn = 2000 + rand.Intn(8000)
 		outcome.TokensOut = 500 + rand.Intn(3000)
 		outcome.CostUSD = float64(outcome.TokensIn)*0.00001 + float64(outcome.TokensOut)*0.00003
+		outcome.CostSource = CostSourceSimulated // ADV-R09/G8: sim ticks never count as measured spend
 		// idleRate split: some "completed" ticks are idle foremen (zero
 		// commits, zero files) so the adaptive-cooldown slow-down path can
 		// be exercised in dry-runs (Bane 2026-09-06). Legacy default 0 keeps

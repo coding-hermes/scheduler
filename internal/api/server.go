@@ -187,8 +187,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	} else {
 		lastEval = getLastEvalTime(ctx, s.db)
 	}
+	// ADV-R09/G8: the effective budget from the budget authority chain —
+	// the Loop the resolved --budget/SCHEDULER_BUDGET/TOML value built.
+	budgetTotal := s.effectiveBudget()
 	status := map[string]interface{}{
-		"budget_total":           100,
 		"active_projects":        len(projects),
 		"active_ticks":           activeTicks,
 		"paused":                 s.loop != nil && s.loop.IsPaused(),
@@ -196,8 +198,21 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"projects_failure_rates": failureRates,
 		"failure_window":         s.failureWindow,
 		"last_evaluation":        lastEval,
-		// GAP-047: auto-disable configuration driving the per-project
-		// auto_disable_armed flags in projects_failure_rates.
+		// ADV-R09/G8 — budget authority chain. budget_total was a literal
+		// 100 at this spot (coincidentally equal to the --budget flag
+		// DEFAULT, which is what a hardcoded surface pretends to report);
+		// it now flows from the loop the flag/env/TOML resolution built.
+		// The full chain: TOML [scheduler] weight_budget <
+		// SCHEDULER_BUDGET env < --budget flag, resolved in main.go, single
+		// source = the Loop. budget_source records the layer that owned the
+		// effective value (main.go passes it via SetResolvedConfig;
+		// "flag-default:100" means NO layer configured it — the documented
+		// unset behavior is "fall back to the --budget default of 100
+		// weight units", NOT a money budget: weight units are scheduling
+		// admission currency, per-project USD caps live in
+		// daily/weekly/final_budget_usd).
+		"budget_total":  budgetTotal,
+		"budget_source": s.budgetSource(),
 		"auto_disable": map[string]interface{}{
 			"enabled":   adThreshold > 0,
 			"threshold": adThreshold,
@@ -205,6 +220,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"min_ticks": adMinTicks,
 		},
 	}
+	// ADV-R09/G8 — spend reality block: what "recorded spend" actually is.
+	// Splits ticks.cost_usd by cost_source so measured/gateway money is
+	// never silently blended with the estimate tier, and states the price
+	// vintage the USD figures were priced at (as-of + provenance of the
+	// sticker maps). One GROUP BY, no per-project loop.
+	status["spend"] = s.spendByCostSource(ctx)
 	// SCHED-GAP-107: active bump badge + remaining count per project.
 	status["bumps"] = listActiveBumps(projects)
 	// SCHED-GAP-112 / S12 §9.4: live wave load. ONE indexed query over

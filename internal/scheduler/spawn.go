@@ -19,19 +19,53 @@ import (
 	"time"
 )
 
-// Cost estimation constants for real ticks where session export is unavailable.
-// These are conservative estimates based on typical foreman tick usage.
+// Cost estimation constants for real ticks where session export is unavailable
+// (ADV-R09/G8). estTokensIn/estTokensOut were recalibrated 2026-09-16 from
+// MEASURED fleet actuals in scheduler.db (ticks with recorded usage, Sep-2026
+// window: avg ~435K in / ~3.5K out; all-time completed avg ~888K in / ~6.5K
+// out). The prior 8000/2000 literal understated measured input ~9.3x-111x,
+// making "recorded spend vs budget" fiction. These remain ESTIMATES for
+// tick-less/telemetry-less projects only — every tick with real usage records
+// its measured tokens (cost_source=measured/gateway), and surfaces mark the
+// difference.
 const (
-	estTokensIn    = 8000     // estimated input tokens per tick
-	estTokensOut   = 2000     // estimated output tokens per tick
-	estCostPerIn   = 0.000002 // foreman-model input $/token (set via env)
-	estCostPerOut  = 0.000008 // foreman-model output $/token (set via env)
+	estTokensIn  = 435000 // estimated input tokens per tick (measured avg 2026-09)
+	estTokensOut = 3500   // estimated output tokens per tick (measured avg 2026-09)
+	// estCostPerIn/Out: per-token USD for the LEGACY estimate tier and the
+	// gitreins judge usage conversion (cost.go). $2/$8 per 1M — the same
+	// documented blend as unknownModelFallbackRate.
+	estCostPerIn   = 0.000002
+	estCostPerOut  = 0.000008
 	estCostPerTick = float64(estTokensIn)*estCostPerIn + float64(estTokensOut)*estCostPerOut
+)
+
+// Cost source classifications (ADV-R09/G8). Every persisted tick row carries
+// one of these in ticks.cost_source so any spend surface can distinguish
+// measured money from estimated money instead of laundering the estimate
+// through as fact:
+//
+//	measured  — exec-path tick; real USD from Hermes state.db telemetry AND
+//	            the session's real input/output tokens (recorded since
+//	            ADV-R09; previously these rows wrote 0/0 tokens).
+//	gateway   — gateway-path tick; the gateway response's own usage block
+//	            (input/output tokens + router-priced cost).
+//	estimated — no telemetry was available; the recalibrated estTokens*
+//	            constants above stand in. THE ONLY ESTIMATE TIER.
+//	simulated — dry-run sim ticks (sim_spawn.go).
+//	""        — legacy rows written before cost_source existed. Spend
+//	            surfaces classify them by the same heuristics (see
+//	            api.CostSourceOf) rather than rewriting history.
+const (
+	CostSourceMeasured  = "measured"
+	CostSourceGateway   = "gateway"
+	CostSourceEstimated = "estimated"
+	CostSourceSimulated = "simulated"
 )
 
 // estimateTickCost returns estimated token counts and cost for a real tick.
 // Real session export (hermes sessions export) is a future task; for now we
-// use fixed estimates so cost aggregation works from day one.
+// use the measured-average constants so cost aggregation works from day one,
+// marked estimated (never presented as measured spend).
 func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 	return estTokensIn, estTokensOut, estCostPerTick
 }
@@ -1864,6 +1898,8 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
 			CostUSD:   cost,
+			// ADV-R09/G8: gateway response usage = gateway-sourced figures.
+			CostSource: CostSourceGateway,
 			// SCHED-GAP-119: keep real work on failed rows (stalled ticks
 			// that landed commits mid-window — see 2026-09-15 evidence).
 			Commits:      st.gwFailCommits,
@@ -1905,6 +1941,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 				TokensIn:     tokensIn,
 				TokensOut:    tokensOut,
 				CostUSD:      cost,
+				CostSource:   CostSourceGateway,
 				Commits:      commits,
 				FilesChanged: files,
 			}
@@ -1924,6 +1961,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			TokensIn:     tokensIn,
 			TokensOut:    tokensOut,
 			CostUSD:      cost,
+			CostSource:   CostSourceGateway,
 			Commits:      commits,
 			FilesChanged: files,
 		}
@@ -2010,7 +2048,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		if st.cmd != nil && st.cmd.Dir != "" {
 			workdir = st.cmd.Dir
 		}
-		cost, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished)
+		cost, tin, tout, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished)
 		outcome.CostUSD = cost
 		if !isReal {
 			// Still record the estimated token counts so aggregation works
@@ -2021,9 +2059,16 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			outcome.TokensIn = tin
 			outcome.TokensOut = tout
 			outcome.CostUSD = computeCostUSD(st.provider, st.model, st.rate, tin, tout)
+			outcome.CostSource = CostSourceEstimated
 		} else {
-			outcome.TokensIn = 0
-			outcome.TokensOut = 0
+			// ADV-R09/G8: measured rows now record the REAL token totals
+			// from the same telemetry rows the USD came from — previously
+			// these rows wrote 0/0 tokens, so the measured per-tick usage
+			// (avg ~888K in / ~6.5K out across 19.5K completed ticks) was
+			// invisible and the 8000/2000 estimate was never corrected.
+			outcome.TokensIn = tin
+			outcome.TokensOut = tout
+			outcome.CostSource = CostSourceMeasured
 		}
 		// Measure real git work the foreman produced this tick (exec path only —
 		// gateway spawns have no process/repo baseline). Best-effort: a non-git

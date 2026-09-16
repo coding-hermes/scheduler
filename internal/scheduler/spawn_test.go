@@ -378,15 +378,26 @@ func TestSpawnMethodCounts_Initial(t *testing.T) {
 	}
 }
 
+// TestEstimateTickCost_ReturnsConstants (ADV-R09/G8): the estimate tier's
+// constants are recalibrated against MEASURED fleet actuals — the prior
+// 8000/2000 literal understated measured input ~9.3x-111x (measured Sep-2026
+// window avg ~435K in / ~3.5K out). The test pins the recalibrated values so
+// a regression to a made-up number fails here, and asserts the estimate is
+// IN the measured ballpark (within 2x) rather than fiction.
 func TestEstimateTickCost_ReturnsConstants(t *testing.T) {
 	tin, tout, cost := estimateTickCost()
-	if tin != 8000 {
-		t.Errorf("tokensIn = %d, want 8000", tin)
+	if tin != estTokensIn || tout != estTokensOut {
+		t.Errorf("tokens = %d/%d, want %d/%d", tin, tout, estTokensIn, estTokensOut)
 	}
-	if tout != 2000 {
-		t.Errorf("tokensOut = %d, want 2000", tout)
+	if cost != estCostPerTick {
+		t.Errorf("costUSD = %f, want %f", cost, estCostPerTick)
 	}
-	if cost <= 0 {
-		t.Errorf("costUSD = %f, want > 0", cost)
+	// Sanity: the estimate must sit within 2x of the measured Sep-2026
+	// averages it was calibrated from (435042 in / 3531 out).
+	if tin < 435042/2 || tin > 435042*2 {
+		t.Errorf("tokensIn = %d, outside measured band [%d, %d]", tin, 435042/2, 435042*2)
+	}
+	if tout < 3531/2 || tout > 3531*2 {
+		t.Errorf("tokensOut = %d, outside measured band [%d, %d]", tout, 3531/2, 3531*2)
 	}
 }

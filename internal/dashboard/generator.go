@@ -43,7 +43,12 @@ type Generator struct {
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
 	started           time.Time
-	spawnCounts       func() (httpCount, execCount int64) // optional; /health panel
+	// weightBudget (ADV-R09/G8): the effective weight budget from the
+	// --budget/SCHEDULER_BUDGET/TOML resolution, set by main.go via
+	// SetWeightBudget. Zero (tests, unset) renders the documented default
+	// of 100 — never a bare literal at the render site.
+	weightBudget int
+	spawnCounts  func() (httpCount, execCount int64) // optional; /health panel
 	// CI conclusion cache (DASH-PERF-001): `gh run list` is a ~0.7s
 	// subprocess; running it once per project on EVERY fleet render cost
 	// ~30s. Conclusions are cached per workdir for ciTTL (60s default) and
@@ -104,6 +109,16 @@ func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
 // panel can probe it (mirrors gateway probing). Optional.
 func (g *Generator) SetDuckBrainURL(u string) {
 	g.duckbrainURL = strings.TrimRight(u, "/")
+}
+
+// SetWeightBudget sets the effective scheduling weight budget rendered on
+// the fleet page (ADV-R09/G8). Zero or negative keeps the documented
+// default of 100. This is the dashboard's ONLY budget input — main.go passes
+// the same resolved --budget value the Loop was built with.
+func (g *Generator) SetWeightBudget(n int) {
+	if n > 0 {
+		g.weightBudget = n
+	}
 }
 
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.

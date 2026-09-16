@@ -47,6 +47,7 @@ type TickOutcome struct {
 	TokensIn     int     // simulated or real
 	TokensOut    int     // simulated or real
 	CostUSD      float64 // simulated or real
+	CostSource   string  // ADV-R09/G8: measured | gateway | estimated | simulated
 	Commits      int     // simulated or real
 	FilesChanged int     // simulated or real
 }
@@ -94,12 +95,12 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
-			tokens_in = ?, tokens_out = ?, cost_usd = ?,
+			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
 			commits = ?, files_changed = ?
 		WHERE id = ?
 	`, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
-		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD,
+		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged,
 		outcome.TickID)
 	if err != nil {
