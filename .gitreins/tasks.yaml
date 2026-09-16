@@ -2469,3 +2469,18 @@ tasks:
   status: complete
   created_at: '2026-09-16T01:15:52.278766+00:00'
   completed_at: '2026-09-16T01:15:56.159654+00:00'
+- id: ADV-R08
+  title: Slot-drop event + configurable patience (G3)
+  criteria:
+  - Dropping a project after the slot-queue patience expires emits a row in the events
+    table visible via GET /api/v1/events carrying the project name and the observed
+    wait duration (not merely a log line)
+  - Slot patience is configurable via CLI flag, SCHEDULER_* env var and the scheduler
+    TOML key, and the effective value is shown in --show-config output
+  - 'A test covers the expiry path (slot held by another project, waiting spawn''s
+    patience elapses, event emitted and no tick row spawned); gates green: make build,
+    go vet ./internal/scheduler/, gofmt -l empty, go test -count=1 -short -p 1 ./...,
+    golangci-lint 0 issues'
+  status: complete
+  created_at: '2026-09-16T02:59:49.472951+00:00'
+  completed_at: '2026-09-16T03:23:06.980372+00:00'
