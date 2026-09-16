@@ -50,6 +50,9 @@ type ResolvedConfig struct {
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event). Default "5m0s".
 	SlotPatience string `json:"slot_patience"`
+	// LoadGateThreshold (SCHED-GAP-125): defer new spawns while the 1-minute
+	// load average is >= this value. 0 = off.
+	LoadGateThreshold float64 `json:"load_gate_threshold"`
 	// ModelRatesFile (ADV-R09/G8): path to a JSON price-sticker file applied
 	// over the builtin maps at startup (refresh without rebuild). Empty = the
 	// builtin 2026-08 stickers.

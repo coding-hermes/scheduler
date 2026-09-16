@@ -134,6 +134,11 @@ func (s *Server) updateNamespace(w http.ResponseWriter, r *http.Request, id stri
 			writeError(w, 400, err.Error())
 			return
 		}
+		// SCHED-GAP-125: invalid load_gate surfaces as 400.
+		if strings.Contains(err.Error(), "invalid load_gate") {
+			writeError(w, 400, err.Error())
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

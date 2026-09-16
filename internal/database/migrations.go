@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 30
+const latestMigration = 31
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -416,6 +416,13 @@ ALTER TABLE ticks ADD COLUMN cost_source TEXT NOT NULL DEFAULT '';
 		stmt: `
 ALTER TABLE namespaces ADD COLUMN admission_mode TEXT NOT NULL DEFAULT 'cooldown' CHECK(admission_mode IN ('cooldown','tasks'));
 ALTER TABLE projects ADD COLUMN admission_mode TEXT NOT NULL DEFAULT '' CHECK(admission_mode IN ('','cooldown','tasks'));
+`,
+	},
+	{
+		version: 31,
+		desc:    "load gate (SCHED-GAP-125): namespace load_gate ('' | off) — namespaces may opt out of the global --load-gate-threshold deferral (e.g. always-on infra)",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN load_gate TEXT NOT NULL DEFAULT '' CHECK(load_gate IN ('','off'));
 `,
 	},
 }

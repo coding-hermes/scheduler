@@ -78,6 +78,13 @@ type SchedulerConfig struct {
 	// silent no-op: the flag's <= 0 means "keep default").
 	SlotPatience string `toml:"slot_patience"`
 
+	// LoadGateThreshold (SCHED-GAP-125) defers new spawns while the 1-minute
+	// load average is at or above this value (e.g. 12.0 on a 16-core box).
+	// 0 = the gate is off (flag default). Applies only when the operator
+	// never passed --load-gate-threshold (same precedence chain as budget:
+	// TOML < env SCHEDULER_LOAD_GATE_THRESHOLD < flag).
+	LoadGateThreshold float64 `toml:"load_gate_threshold"`
+
 	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
 	// threshold over the last AutoDisableWindow ticks at or above which the
 	// scheduler will disable the project automatically. Default 0 = feature
@@ -260,4 +267,9 @@ type NamespaceDef struct {
 	// or "tasks" (work-driven: non-perpetual pending board work admits
 	// immediately). Pins via the namespace upsert at load time.
 	AdmissionMode string `toml:"admission_mode"`
+	// SCHED-GAP-125: namespace load-gate opt-out — "off" exempts this
+	// namespace's projects from the global --load-gate-threshold deferral
+	// (always-on infra lanes). Empty = gate applies when enabled globally.
+	// Pins via the namespace upsert at load time.
+	LoadGate string `toml:"load_gate"`
 }

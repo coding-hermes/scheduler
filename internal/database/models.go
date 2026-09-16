@@ -357,8 +357,11 @@ type Namespace struct {
 	// admitted immediately (priority + namespace caps still apply);
 	// when its board has none, the cooldown pin applies again.
 	AdmissionMode string `json:"admission_mode"` // "cooldown" | "tasks"
-	CreatedAt     string `json:"created_at"`     // RFC3339
-	UpdatedAt     string `json:"updated_at"`     // RFC3339
+	// SCHED-GAP-125: load-gate opt-out. "" = gate applies when globally
+	// enabled; "off" = this namespace's spawns never defer on load.
+	LoadGate  string `json:"load_gate"`  // "" | "off"
+	CreatedAt string `json:"created_at"` // RFC3339
+	UpdatedAt string `json:"updated_at"` // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
@@ -379,6 +382,9 @@ type NamespacePatch struct {
 	// SCHED-GAP-124: admission mode override; must be "cooldown" or
 	// "tasks" when non-nil (validated by UpdateNamespace).
 	AdmissionMode *string `json:"admission_mode,omitempty"`
+	// SCHED-GAP-125: load-gate opt-out; must be "off" when non-nil
+	// (validated by UpdateNamespace). Nil/empty = gate applies.
+	LoadGate *string `json:"load_gate,omitempty"`
 }
 
 // TickWorker is one dispatched worker inside a wave tick (S12 §9.2,

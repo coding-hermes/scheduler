@@ -50,6 +50,7 @@ func main() {
 	// slot before the project is dropped (the drop emits a MEDIUM
 	// slot_pool event). Default keeps the historical hardcoded 5m window.
 	slotPatience := flag.Duration("slot-patience", 5*time.Minute, "How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3)")
+	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
@@ -144,6 +145,16 @@ func main() {
 			*slotPatience = d
 		} else {
 			log.Printf("WARN: SCHEDULER_SLOT_PATIENCE=%q invalid — using %v", v, *slotPatience)
+		}
+	}
+	// SCHED-GAP-125: load-gate threshold env override — same pattern. Only a
+	// positive parseable float enables the gate; 0/negative/invalid keeps it
+	// off. The gate defers spawns while 1m loadavg >= threshold.
+	if v := os.Getenv("SCHEDULER_LOAD_GATE_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			*loadGateThreshold = f
+		} else {
+			log.Printf("WARN: SCHEDULER_LOAD_GATE_THRESHOLD=%q invalid — gate stays %v", v, *loadGateThreshold)
 		}
 	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
@@ -289,6 +300,10 @@ func main() {
 	// a MEDIUM slot_pool event. The flag var already carries the env
 	// override resolved above; <= 0 keeps the 5m default in the pool.
 	loop.SetSlotPatience(*slotPatience)
+	// SCHED-GAP-125: load-average gate (opt-in; 0 = disabled). The flag var
+	// carries the env override; TOML [scheduler] load_gate_threshold applies
+	// below only when the flag was never set (same precedence as budget).
+	scheduler.SetLoadGateThreshold(*loadGateThreshold)
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
@@ -357,6 +372,14 @@ func main() {
 				} else {
 					log.Printf("WARN: scheduler.slot_patience=%q invalid — using %v", rootCfg.Scheduler.SlotPatience, *slotPatience)
 				}
+			}
+			// SCHED-GAP-125: TOML layer for the load gate — same
+			// default-guard pattern (only when the flag sits at its 0
+			// default, so CLI and env keep precedence). Positive values
+			// enable the gate; a TOML 0 keeps it off.
+			if rootCfg.Scheduler.LoadGateThreshold > 0 && *loadGateThreshold == 0 {
+				*loadGateThreshold = rootCfg.Scheduler.LoadGateThreshold
+				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
 			}
 		}
 	}
@@ -478,6 +501,7 @@ func main() {
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		SlotPatience:           slotPatience.String(),
+		LoadGateThreshold:      *loadGateThreshold,
 		ModelRatesFile:         *modelRatesFile,
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,

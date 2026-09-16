@@ -498,7 +498,23 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 					log.Printf("Config: namespace %q has invalid admission_mode %q — skipped (want \"cooldown\" or \"tasks\")", nd.ID, nd.AdmissionMode)
 				}
 			}
-			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" {
+			// SCHED-GAP-125: load_gate pins when explicitly set ("off" is
+			// the only non-empty value today); anything else warns and
+			// skips. Empty key = keep the current DB value (no pin).
+			if nd.LoadGate != "" {
+				if nd.LoadGate == "off" {
+					v := nd.LoadGate
+					if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+						LoadGate: &v,
+					}); err != nil {
+						return fmt.Errorf("update namespace %q load_gate: %w", nd.ID, err)
+					}
+					log.Printf("Config: pinned namespace %q load_gate=%s", nd.ID, v)
+				} else {
+					log.Printf("Config: namespace %q has invalid load_gate %q — skipped (want \"off\")", nd.ID, nd.LoadGate)
+				}
+			}
+			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
 			}
 			continue
