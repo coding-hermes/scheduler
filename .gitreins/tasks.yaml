@@ -2484,3 +2484,29 @@ tasks:
   status: complete
   created_at: '2026-09-16T02:59:49.472951+00:00'
   completed_at: '2026-09-16T03:23:06.980372+00:00'
+- id: SCHED-GAP-121
+  title: Durable dagger 900s cooldown pin + DB<->toml parity tripwire
+  criteria:
+  - A regenerated fleet.toml carries hermes-dagger cooldown_s=900, cooldown_floor_s=900,
+    cooldown_ceiling_s=7200 (regen proven by running fleet-cooldown-policy.py with
+    --apply under an isolated HOME and grepping the emitted dagger block); a bare
+    invocation still prints the unchanged dry-run report.
+  - 'hermes-dagger no longer appears in the OPERATOR_7200 map: exactly one authority
+    (an explicit 900 durable pin in ELEVATED_PINS, citing Bane''s 2026-09-15 ruling)
+    defines its cooldown, and a dry run reports the project as a hard-skipped operator
+    pin without a RAISE/REDUCE action.'
+  - fleet-cooldown-policy.py gains a --verify tripwire that compares every operator
+    pin's live DB cooldown_s/cooldown_floor_s/cooldown_ceiling_s against fleet.toml,
+    prints a MISMATCH line naming project, field and both values, exits 1 on any divergence,
+    and exits 0 when parity holds (proven RED against the pre-fix pair and green after
+    the fix).
+  - 'The live pair agrees: /home/kara/.hermes/fleet.toml hermes-dagger block carries
+    900/900/7200 and the live scheduler DB row for hermes-dagger is 900/900/7200,
+    so the next restart re-pins 900 instead of silently reverting to 7200.'
+  - AGENTS.md documents that an operator cooldown pin must exist in BOTH stores (live
+    DB + fleet.toml), that a DB-only pin is drift rather than policy, and names the
+    --verify command as the tripwire, so a DB-only operator pin can never read as
+    healthy again.
+  status: complete
+  created_at: '2026-09-16T04:32:36.628154+00:00'
+  completed_at: '2026-09-16T04:53:49.527330+00:00'
