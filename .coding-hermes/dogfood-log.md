@@ -151,3 +151,23 @@ incl. RED mutation on forceEval, pushed, CI green); R01 verified already-true
 (11:02 restart rebuilt from HEAD, migrations v27, wave surface live).
 Project paused-for-daemon 22:45Z→resumed after R07 close (verified enabled=True).
 BATTLE = won with evidence. Beyond Pass: see ledger below (cap 5).
+
+## PLUS ULTRA #2 release (09-16, 越) — ADV-R09/R10/R11 battle won
+Goal: R09→R10→R11 landed+judged; SEC-002 excluded by design (Bane-only
+credential rotation). R09 (2b9672c) budget reality: budget authority chain
+TOML<env<flag, single source=Loop, budget_source provenance, price-map
+as-of+fallback policy in code, refresh path, cost_source stamps (v29),
+token estimate recalibrated from measured actuals. RED-proven (literal 100
+back -> status test FAIL). R10 (11c6dcf) adaptive-ceiling single authority:
+derived default 8x floor, explicit wins, no-second-constant guard (RED
+probe FAILed guard, green after). R11 (e3f86eb) per-spawn RLIMIT_AS at
+spawn-time, !linux stub, 0=off default; RED-proven (call disabled -> real-
+child test FAIL). Sibling lane interleaved SCHED-GAP-125 (5aa01ba) mid-
+release; merged tree suite 11pkgs ok + lint 0 + CI all green. All three
+rows closed with commit_hash; scheduler RESUMED. Remaining ADV: R12-R14
+(refinements) + 6 new GAP-126..131 (sibling PRD pass). Battle rows: 0.
+Beyond Pass (cap 5): BP-1 SEC-002 surfaced-not-blocked; BP-2 foreign-lane
+interleave absorbed cleanly (disjoint files, verified merged); BP-3 real-
+child rlimit tests forced to FULL mode in verification (short-skip hid the
+guarantee); BP-4 board.jsonl header-bump EOF glitch noted (row updates
+landed, cosmetic); BP-5 R12-R14 remain as designed backlog, not debt.
