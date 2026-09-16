@@ -8,10 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 	mcpserver "github.com/coding-hermes/scheduler/internal/mcp"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
@@ -931,4 +934,416 @@ func extractText(t *testing.T, result interface{}) string {
 		t.Fatalf("text not string: %T", first["text"])
 	}
 	return text
+}
+
+// --- CTL-001: blocks (groups/templates/deploy) + events tools ---
+
+// newBlocksTestServer builds a test server with a temp-dir JSONL blocks
+// store installed (mirrors main.go's SetBlocksStore wiring) and returns the
+// store paths for fixture assertions.
+func newBlocksTestServer(t *testing.T) *mcpTestServer {
+	t.Helper()
+	m := newMCPTestServer(t)
+	dir := t.TempDir()
+	m.server.SetBlocksStore(blocks.NewStore(
+		filepath.Join(dir, "groups.jsonl"),
+		filepath.Join(dir, "templates.jsonl"),
+	))
+	return m
+}
+
+// mustCreateMCPProjectWithWorkdir creates a project row with an explicit
+// workdir (mustCreateMCPProject hardcodes /tmp/<name>, which never exists).
+func mustCreateMCPProjectWithWorkdir(t *testing.T, db *sql.DB, name, workdir string) {
+	t.Helper()
+	if err := database.CreateProject(context.Background(), db, &database.Project{
+		Name:      name,
+		RepoURL:   "https://example.com/" + name,
+		Workdir:   workdir,
+		Weight:    10,
+		Priority:  5,
+		CooldownS: 900,
+		DecayRate: 1.0,
+		Model:     "test",
+		Provider:  "test",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("CreateProject %s: %v", name, err)
+	}
+}
+
+// makeMCPBoard creates a workdir with an empty JSONL task board and returns
+// the workdir + board path (the deploy target shape).
+func makeMCPBoard(t *testing.T) (string, string) {
+	t.Helper()
+	wd := t.TempDir()
+	path := filepath.Join(wd, ".coding-hermes", "board", "tasks.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return wd, path
+}
+
+func callTool(t *testing.T, m *mcpTestServer, id int, name string, arguments map[string]interface{}) (string, *mcpserver.MCPError) {
+	t.Helper()
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      name,
+			"arguments": arguments,
+		},
+	})
+	if resp.Error != nil {
+		return "", resp.Error
+	}
+	return extractText(t, resp.Result), nil
+}
+
+func TestMCP_ToolsList_BlocksTools(t *testing.T) {
+	m := newMCPTestServer(t)
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result not an object: %T", resp.Result)
+	}
+	toolsList, ok := result["tools"].([]interface{})
+	if !ok {
+		t.Fatalf("tools not an array: %T", result["tools"])
+	}
+	names := map[string]bool{}
+	for _, tool := range toolsList {
+		td, _ := tool.(map[string]interface{})
+		n, _ := td["name"].(string)
+		names[n] = true
+	}
+	want := []string{
+		"groups_list", "groups_get", "groups_create", "groups_update", "groups_delete",
+		"templates_list", "templates_get", "templates_create", "templates_update", "templates_delete",
+		"groups_deploy", "events_list",
+	}
+	for _, w := range want {
+		if !names[w] {
+			t.Errorf("expected tool %q in registry, missing", w)
+		}
+	}
+	if len(toolsList) != 26 {
+		t.Errorf("tool count = %d, want 26 (14 fleet_* + 12 blocks/events)", len(toolsList))
+	}
+}
+
+func TestMCP_GroupsLifecycle(t *testing.T) {
+	m := newBlocksTestServer(t)
+
+	// Create (flat args per the tool schema).
+	text, err := callTool(t, m, 1, "groups_create", map[string]interface{}{
+		"name":        "grp-a",
+		"description": "test group",
+		"projects":    []interface{}{"alpha", "beta"},
+	})
+	if err != nil {
+		t.Fatalf("groups_create: %+v", err)
+	}
+	if !strings.Contains(text, `"name":"grp-a"`) || !strings.Contains(text, `"alpha"`) {
+		t.Errorf("groups_create body: %s", text)
+	}
+
+	// Get.
+	text, err = callTool(t, m, 2, "groups_get", map[string]interface{}{"name": "grp-a"})
+	if err != nil {
+		t.Fatalf("groups_get: %+v", err)
+	}
+	if !strings.Contains(text, `"projects":["alpha","beta"]`) {
+		t.Errorf("groups_get body: %s", text)
+	}
+
+	// Update (partial: description only).
+	text, err = callTool(t, m, 3, "groups_update", map[string]interface{}{
+		"name":  "grp-a",
+		"patch": map[string]interface{}{"description": "updated"},
+	})
+	if err != nil {
+		t.Fatalf("groups_update: %+v", err)
+	}
+	if !strings.Contains(text, `"description":"updated"`) || !strings.Contains(text, `"alpha"`) {
+		t.Errorf("groups_update body (projects must survive a description-only patch): %s", text)
+	}
+
+	// List.
+	text, err = callTool(t, m, 4, "groups_list", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("groups_list: %+v", err)
+	}
+	if !strings.Contains(text, `"grp-a"`) {
+		t.Errorf("groups_list body: %s", text)
+	}
+
+	// Get missing → readable error.
+	_, e := callTool(t, m, 5, "groups_get", map[string]interface{}{"name": "nope"})
+	if e == nil || !strings.Contains(e.Message, "not found") {
+		t.Errorf("groups_get missing = %+v, want not-found error", e)
+	}
+
+	// Delete, then confirm gone.
+	_, err = callTool(t, m, 6, "groups_delete", map[string]interface{}{"name": "grp-a"})
+	if err != nil {
+		t.Fatalf("groups_delete: %+v", err)
+	}
+	_, e = callTool(t, m, 7, "groups_get", map[string]interface{}{"name": "grp-a"})
+	if e == nil {
+		t.Errorf("groups_get after delete should fail")
+	}
+}
+
+func TestMCP_TemplatesLifecycle(t *testing.T) {
+	m := newBlocksTestServer(t)
+
+	text, err := callTool(t, m, 1, "templates_create", map[string]interface{}{
+		"name":        "tpl-a",
+		"description": "test template",
+		"tasks": []interface{}{
+			map[string]interface{}{"title": "First task", "detail": "do it", "labels": []interface{}{"go"}},
+			map[string]interface{}{"id_pattern": "FIX-{DATE}-{PROJECT}", "title": "Second"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("templates_create: %+v", err)
+	}
+	if !strings.Contains(text, `"tpl-a"`) || !strings.Contains(text, `"First task"`) {
+		t.Errorf("templates_create body: %s", text)
+	}
+
+	text, err = callTool(t, m, 2, "templates_get", map[string]interface{}{"name": "tpl-a"})
+	if err != nil {
+		t.Fatalf("templates_get: %+v", err)
+	}
+	if !strings.Contains(text, `"tasks":[`) || !strings.Contains(text, `"Second"`) {
+		t.Errorf("templates_get body: %s", text)
+	}
+
+	// Partial update: replace tasks, keep description.
+	text, err = callTool(t, m, 3, "templates_update", map[string]interface{}{
+		"name":  "tpl-a",
+		"patch": map[string]interface{}{"tasks": []interface{}{map[string]interface{}{"title": "Only task"}}},
+	})
+	if err != nil {
+		t.Fatalf("templates_update: %+v", err)
+	}
+	if !strings.Contains(text, `"Only task"`) || !strings.Contains(text, `"test template"`) {
+		t.Errorf("templates_update body: %s", text)
+	}
+
+	text, err = callTool(t, m, 4, "templates_list", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("templates_list: %+v", err)
+	}
+	if !strings.Contains(text, `"tpl-a"`) {
+		t.Errorf("templates_list body: %s", text)
+	}
+
+	// Validation: template without tasks is rejected.
+	_, e := callTool(t, m, 5, "templates_create", map[string]interface{}{"name": "empty", "tasks": []interface{}{}})
+	if e == nil {
+		t.Errorf("templates_create with no tasks should fail validation")
+	}
+
+	_, err = callTool(t, m, 6, "templates_delete", map[string]interface{}{"name": "tpl-a"})
+	if err != nil {
+		t.Fatalf("templates_delete: %+v", err)
+	}
+	_, e = callTool(t, m, 7, "templates_get", map[string]interface{}{"name": "tpl-a"})
+	if e == nil {
+		t.Errorf("templates_get after delete should fail")
+	}
+}
+
+func TestMCP_GroupsDeployDryRun(t *testing.T) {
+	m := newBlocksTestServer(t)
+	workdir, boardPath := makeMCPBoard(t)
+	mustCreateMCPProjectWithWorkdir(t, m.db, "alpha", workdir)
+	// "ghost" is a group member but NOT in the projects table → per-project
+	// error, never a batch abort.
+	before, err := os.ReadFile(boardPath)
+	if err != nil {
+		t.Fatalf("read board: %v", err)
+	}
+
+	_, e := callTool(t, m, 1, "groups_create", map[string]interface{}{
+		"name":     "deploy-grp",
+		"projects": []interface{}{"alpha", "ghost"},
+	})
+	if e != nil {
+		t.Fatalf("groups_create: %+v", e)
+	}
+	_, e = callTool(t, m, 2, "templates_create", map[string]interface{}{
+		"name": "deploy-tpl",
+		"tasks": []interface{}{
+			map[string]interface{}{"title": "Task one"},
+			map[string]interface{}{"title": "Task two"},
+		},
+	})
+	if e != nil {
+		t.Fatalf("templates_create: %+v", e)
+	}
+
+	text, e := callTool(t, m, 3, "groups_deploy", map[string]interface{}{
+		"group":    "deploy-grp",
+		"template": "deploy-tpl",
+		"dry_run":  true,
+	})
+	if e != nil {
+		t.Fatalf("groups_deploy: %+v", e)
+	}
+	if !strings.Contains(text, `"dry_run":true`) {
+		t.Errorf("deploy body missing dry_run: %s", text)
+	}
+	if !strings.Contains(text, `"would_append"`) {
+		t.Errorf("alpha should be would_append: %s", text)
+	}
+	if !strings.Contains(text, `"ghost"`) || !strings.Contains(text, `"error"`) {
+		t.Errorf("ghost should be a per-project error: %s", text)
+	}
+	if !strings.Contains(text, `"summary"`) || !strings.Contains(text, `"task_rows":2`) {
+		t.Errorf("summary should count 2 planned rows: %s", text)
+	}
+
+	// Dry run must write NOTHING to the fixture board.
+	after, err := os.ReadFile(boardPath)
+	if err != nil {
+		t.Fatalf("read board after dry run: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("dry run modified the board: before=%q after=%q", before, after)
+	}
+
+	// A deploy against an empty group is rejected up front.
+	_, e = callTool(t, m, 4, "groups_create", map[string]interface{}{"name": "empty-grp"})
+	if e != nil {
+		t.Fatalf("groups_create empty-grp: %+v", e)
+	}
+	_, e = callTool(t, m, 5, "groups_deploy", map[string]interface{}{
+		"group": "empty-grp", "template": "deploy-tpl", "dry_run": true,
+	})
+	if e == nil || !strings.Contains(e.Message, "has no projects") {
+		t.Errorf("empty-group deploy = %+v, want has-no-projects error", e)
+	}
+
+	// Unknown template → readable not-found error, no deploy.
+	_, e = callTool(t, m, 6, "groups_deploy", map[string]interface{}{
+		"group": "deploy-grp", "template": "missing-tpl", "dry_run": true,
+	})
+	if e == nil || !strings.Contains(e.Message, "not found") {
+		t.Errorf("unknown-template deploy = %+v, want not-found error", e)
+	}
+}
+
+func TestMCP_GroupsDeployLiveWritesBoard(t *testing.T) {
+	m := newBlocksTestServer(t)
+	workdir, boardPath := makeMCPBoard(t)
+	mustCreateMCPProjectWithWorkdir(t, m.db, "alpha", workdir)
+
+	_, e := callTool(t, m, 1, "groups_create", map[string]interface{}{
+		"name":     "live-grp",
+		"projects": []interface{}{"alpha"},
+	})
+	if e != nil {
+		t.Fatalf("groups_create: %+v", e)
+	}
+	_, e = callTool(t, m, 2, "templates_create", map[string]interface{}{
+		"name":  "live-tpl",
+		"tasks": []interface{}{map[string]interface{}{"title": "Live task"}},
+	})
+	if e != nil {
+		t.Fatalf("templates_create: %+v", e)
+	}
+	text, e := callTool(t, m, 3, "groups_deploy", map[string]interface{}{
+		"group": "live-grp", "template": "live-tpl",
+	})
+	if e != nil {
+		t.Fatalf("groups_deploy live: %+v", e)
+	}
+	if !strings.Contains(text, `"appended"`) {
+		t.Fatalf("live deploy body: %s", text)
+	}
+	data, err := os.ReadFile(boardPath)
+	if err != nil {
+		t.Fatalf("read board: %v", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		t.Fatalf("live deploy wrote nothing to the board")
+	}
+	var row map[string]interface{}
+	if err := json.Unmarshal(bytes.TrimSpace(data), &row); err != nil {
+		t.Fatalf("board line not JSON: %v (%q)", err, data)
+	}
+	if row["status"] != "pending" || !strings.Contains(row["foreman_note"].(string), "live-tpl") {
+		t.Errorf("board row wrong: %v", row)
+	}
+}
+
+func TestMCP_EventsListSince(t *testing.T) {
+	m := newMCPTestServer(t)
+	ctx := context.Background()
+	seed := []database.Event{
+		{Severity: database.SeverityInfo, Component: "loop", Message: "first"},
+		{Severity: database.SeverityHigh, Component: "api", Message: "second"},
+		{Severity: database.SeverityInfo, Component: "mcp", Message: "third"},
+	}
+	for i := range seed {
+		if err := database.LogEvent(ctx, m.db, &seed[i]); err != nil {
+			t.Fatalf("LogEvent %d: %v", i, err)
+		}
+	}
+
+	// No cursor → all three.
+	text, err := callTool(t, m, 1, "events_list", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("events_list: %+v", err)
+	}
+	if !strings.Contains(text, `"count":3`) {
+		t.Errorf("events_list count: %s", text)
+	}
+
+	// Cursor after the second event → only the third.
+	text, err = callTool(t, m, 2, "events_list", map[string]interface{}{"since": seed[1].ID})
+	if err != nil {
+		t.Fatalf("events_list since: %+v", err)
+	}
+	if !strings.Contains(text, `"count":1`) || !strings.Contains(text, `"third"`) {
+		t.Errorf("events_list since body: %s", text)
+	}
+	if strings.Contains(text, `"first"`) || strings.Contains(text, `"second"`) {
+		t.Errorf("events_list since returned older rows: %s", text)
+	}
+
+	// Severity filter composes with the cursor.
+	text, err = callTool(t, m, 3, "events_list", map[string]interface{}{
+		"since": seed[0].ID, "severity": "HIGH",
+	})
+	if err != nil {
+		t.Fatalf("events_list severity: %+v", err)
+	}
+	if !strings.Contains(text, `"second"`) || strings.Contains(text, `"third"`) {
+		t.Errorf("events_list severity filter body: %s", text)
+	}
+}
+
+func TestMCP_BlocksToolsRequireStore(t *testing.T) {
+	m := newMCPTestServer(t) // no SetBlocksStore
+	_, e := callTool(t, m, 1, "groups_list", map[string]interface{}{})
+	if e == nil || !strings.Contains(e.Message, "store not configured") {
+		t.Errorf("groups_list without store = %+v, want configuration error", e)
+	}
+	_, e = callTool(t, m, 2, "events_list", map[string]interface{}{})
+	if e != nil {
+		t.Errorf("events_list must not need the blocks store: %+v", e)
+	}
 }

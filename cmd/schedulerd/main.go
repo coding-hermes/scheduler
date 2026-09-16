@@ -559,6 +559,9 @@ func main() {
 		}
 	})
 	mcpServer := mcp.NewServer(db, loop)
+	// MCP serves the SAME JSONL block stores as the REST API (CTL-001):
+	// both transports read/write one groups.jsonl + templates.jsonl.
+	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)

@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -273,4 +277,385 @@ func (s *Server) toolFleetPauseScheduler() (string, error) {
 func (s *Server) toolFleetResumeScheduler() (string, error) {
 	s.loop.Resume()
 	return jsonString(map[string]string{"status": "scheduler resumed"}), nil
+}
+
+// ── Deploy blocks (groups / templates / deploy) + events ───────────────────
+//
+// These mirror the /api/v1/groups*, /api/v1/templates* and /api/v1/events
+// REST routes (internal/api/block_handlers.go) over MCP so an agent can
+// manage deploy blocks without a second transport. Behaviour contract is
+// identical: JSONL store semantics, per-project deploy outcomes that never
+// abort the batch, one INFO event per deploy.
+
+// blocksStoreRequired returns the configured store or a readable error.
+// Mirrors api.Server.blocksStoreRequired (503 there, tool error here).
+func (s *Server) blocksStoreRequired() (*blocks.Store, error) {
+	if s.blocksStore == nil {
+		return nil, fmt.Errorf("groups/templates store not configured — daemon must be started with the default <db dir> JSONL paths or --groups-file/--templates-file")
+	}
+	return s.blocksStore, nil
+}
+
+// friendlyBlocksError maps store sentinel errors (ErrNotFound / ErrExists)
+// to readable messages; other errors pass through verbatim.
+func friendlyBlocksError(err error) error {
+	switch {
+	case errors.Is(err, blocks.ErrNotFound):
+		return fmt.Errorf("not found: %s", err)
+	case errors.Is(err, blocks.ErrExists):
+		return fmt.Errorf("already exists: %s", err)
+	default:
+		return err
+	}
+}
+
+// getBoolArg reads a boolean argument (JSON booleans arrive as bool).
+func getBoolArg(args map[string]interface{}, key string) bool {
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
+}
+
+// getTypedArg unmarshals a nested argument into a typed value via a JSON
+// round-trip. MCP arguments arrive as decoded interface{} trees, so typed
+// structs (patches, task lists) need this re-encode step.
+func getTypedArg(dst interface{}, args map[string]interface{}, key string) error {
+	v, ok := args[key]
+	if !ok {
+		return fmt.Errorf("%s is required", key)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("%s: marshal: %w", key, err)
+	}
+	if err := json.Unmarshal(b, dst); err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	return nil
+}
+
+// decodeArgsInto unmarshals the whole argument map into dst (unknown keys
+// are ignored). This is the primary path for groups_create/templates_create,
+// whose tool schema carries the record fields at the top level.
+func decodeArgsInto(dst interface{}, args map[string]interface{}) error {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return fmt.Errorf("arguments: marshal: %w", err)
+	}
+	if err := json.Unmarshal(b, dst); err != nil {
+		return fmt.Errorf("arguments: %w", err)
+	}
+	return nil
+}
+
+// getInt64Arg reads a 64-bit integer argument (JSON numbers arrive as
+// float64). Returns 0 when absent — callers treat that as the default.
+func getInt64Arg(args map[string]interface{}, key string) int64 {
+	if v, ok := args[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int64(n)
+		case int:
+			return int64(n)
+		case int64:
+			return n
+		}
+	}
+	return 0
+}
+
+func (s *Server) toolGroupsList(ctx context.Context) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	groups, err := st.ListGroups()
+	if err != nil {
+		return "", err
+	}
+	if groups == nil {
+		groups = []blocks.Group{}
+	}
+	return jsonString(map[string]interface{}{"groups": groups}), nil
+}
+
+func (s *Server) toolGroupsGet(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	g, err := st.GetGroup(name)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(g), nil
+}
+
+func (s *Server) toolGroupsCreate(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	var g blocks.Group
+	if err := decodeArgsInto(&g, args); err != nil {
+		return "", err
+	}
+	if g.Projects == nil {
+		g.Projects = []string{}
+	}
+	if err := blocks.ValidateGroup(g); err != nil {
+		return "", err
+	}
+	if err := st.CreateGroup(g); err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(g), nil
+}
+
+func (s *Server) toolGroupsUpdate(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	var patch blocks.GroupUpdate
+	if err := getTypedArg(&patch, args, "patch"); err != nil {
+		return "", err
+	}
+	updated, err := st.UpdateGroup(name, patch)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(updated), nil
+}
+
+func (s *Server) toolGroupsDelete(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if err := st.DeleteGroup(name); err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(map[string]string{"status": "deleted", "group": name}), nil
+}
+
+func (s *Server) toolTemplatesList(ctx context.Context) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	templates, err := st.ListTemplates()
+	if err != nil {
+		return "", err
+	}
+	if templates == nil {
+		templates = []blocks.Template{}
+	}
+	return jsonString(map[string]interface{}{"templates": templates}), nil
+}
+
+func (s *Server) toolTemplatesGet(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	tpl, err := st.GetTemplate(name)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(tpl), nil
+}
+
+func (s *Server) toolTemplatesCreate(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	var tpl blocks.Template
+	if err := decodeArgsInto(&tpl, args); err != nil {
+		return "", err
+	}
+	if err := blocks.ValidateTemplate(tpl); err != nil {
+		return "", err
+	}
+	if err := st.CreateTemplate(tpl); err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(tpl), nil
+}
+
+func (s *Server) toolTemplatesUpdate(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	var patch blocks.TemplateUpdate
+	if err := getTypedArg(&patch, args, "patch"); err != nil {
+		return "", err
+	}
+	updated, err := st.UpdateTemplate(name, patch)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(updated), nil
+}
+
+func (s *Server) toolTemplatesDelete(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if err := st.DeleteTemplate(name); err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	return jsonString(map[string]string{"status": "deleted", "template": name}), nil
+}
+
+// toolGroupsDeploy mirrors api.Server.deployGroup (internal/api/
+// block_handlers.go) exactly in behaviour: get group → get template →
+// reject empty groups → resolve member workdirs from the projects table →
+// dedupe by name → blocks.Deploy with a provenance ForemanNote → one INFO
+// event (component "mcp"). Deploy does file IO on member boards, so — like
+// the API handler, which uses context.Background() — it deliberately runs
+// off the 10s tools/call deadline instead of inheriting it.
+func (s *Server) toolGroupsDeploy(ctx context.Context, args map[string]interface{}) (string, error) {
+	st, err := s.blocksStoreRequired()
+	if err != nil {
+		return "", err
+	}
+	groupName := getStringArg(args, "group")
+	templateName := getStringArg(args, "template")
+	if groupName == "" {
+		return "", fmt.Errorf("group is required")
+	}
+	if templateName == "" {
+		return "", fmt.Errorf("template is required")
+	}
+	dryRun := getBoolArg(args, "dry_run")
+
+	group, err := st.GetGroup(groupName)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	template, err := st.GetTemplate(templateName)
+	if err != nil {
+		return "", friendlyBlocksError(err)
+	}
+	if len(group.Projects) == 0 {
+		return "", fmt.Errorf("group %s has no projects — add members before deploying", group.Name)
+	}
+
+	// The deploy work runs on context.Background() (see doc comment): board
+	// file IO must not die at the caller's 10s tools/call deadline, matching
+	// the API handler which never binds the request context either.
+	deployCtx := context.Background()
+	projects, err := database.ListProjects(deployCtx, s.db, false)
+	if err != nil {
+		return "", err
+	}
+	workdirByProject := make(map[string]string, len(projects))
+	for _, p := range projects {
+		workdirByProject[p.Name] = p.Workdir
+	}
+	targets := make([]blocks.ProjectTarget, 0, len(group.Projects))
+	seen := map[string]bool{}
+	for _, member := range group.Projects {
+		if seen[member] {
+			continue
+		}
+		seen[member] = true
+		targets = append(targets, blocks.ProjectTarget{Name: member, Workdir: workdirByProject[member]})
+	}
+
+	note := fmt.Sprintf("deployed via scheduler template %s to group %s", template.Name, group.Name)
+	res := blocks.Deploy(blocks.DeployRequest{
+		Group:       group,
+		Template:    template,
+		Projects:    targets,
+		DryRun:      dryRun,
+		ForemanNote: note,
+	})
+
+	// One event-log entry per deploy (INFO, component "mcp"). A failure to
+	// record it is logged but never fails the deploy — the boards already
+	// hold the authoritative result (same contract as the API handler).
+	mode := ""
+	if dryRun {
+		mode = ", dry run"
+	}
+	ev := &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "mcp",
+		Message: fmt.Sprintf("template deploy: %s → group %s (%d projects, %d task rows%s)",
+			template.Name, group.Name, res.Summary.Projects, res.Summary.TaskRows, mode),
+		Details: blocks.DeployErrorDetail(res),
+	}
+	if err := database.LogEvent(deployCtx, s.db, ev); err != nil {
+		log.Printf("WARN: deploy event-log entry failed: %v", err)
+	}
+
+	return jsonString(res), nil
+}
+
+// toolEventsList exposes the event log with an SQL-side incremental cursor
+// (id > since). severity/component filters are applied in Go on top of the
+// cursor query — ListEventsAfterID keeps the id predicate in SQL, which is
+// the point of the tool (cheap tail polling).
+func (s *Server) toolEventsList(ctx context.Context, args map[string]interface{}) (string, error) {
+	limit := getIntArg(args, "limit")
+	if limit == 0 {
+		limit = 100
+	}
+	severity := getStringArg(args, "severity")
+	component := getStringArg(args, "component")
+	since := getInt64Arg(args, "since")
+
+	events, err := database.ListEventsAfterID(ctx, s.db, since, limit)
+	if err != nil {
+		return "", err
+	}
+	if severity != "" || component != "" {
+		filtered := events[:0]
+		for _, e := range events {
+			if severity != "" && string(e.Severity) != severity {
+				continue
+			}
+			if component != "" && e.Component != component {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		events = filtered
+	}
+	if events == nil {
+		events = []database.Event{}
+	}
+	return jsonString(map[string]interface{}{"events": events, "count": len(events)}), nil
 }

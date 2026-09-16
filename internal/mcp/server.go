@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
@@ -17,11 +18,25 @@ import (
 type Server struct {
 	db   *sql.DB
 	loop *scheduler.Loop
+	// blocksStore is the JSONL-backed deploy groups/templates store
+	// (internal/blocks), shared with the API server. Installed by main.go
+	// via SetBlocksStore; when nil the blocks tools answer a clear
+	// configuration error instead of panicking.
+	blocksStore *blocks.Store
 }
 
 // NewServer creates an MCP server.
 func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
 	return &Server{db: db, loop: loop}
+}
+
+// SetBlocksStore installs the JSONL-backed deploy groups/templates store
+// behind the groups_*/templates_*/groups_deploy MCP tools. Mirrors
+// api.Server.SetBlocksStore: main.go resolves the store paths once (the
+// --db dir by default, --groups-file/--templates-file or [scheduler] TOML
+// overrides) so MCP and the REST API read and write the SAME JSONL files.
+func (s *Server) SetBlocksStore(st *blocks.Store) {
+	s.blocksStore = st
 }
 
 // Handler returns HTTP handler for MCP endpoints.
@@ -193,6 +208,163 @@ var tools = []ToolDefinition{
 		Description: "Resume the scheduler loop.",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
+	{
+		Name:        "groups_list",
+		Description: "List all deploy groups (named project lists) from the scheduler's groups.jsonl store",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "groups_get",
+		Description: "Get one deploy group by name",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Group name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "groups_create",
+		Description: "Create a deploy group (a named list of scheduler projects a template can be deployed to)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":        map[string]interface{}{"type": "string", "description": "Group name (no whitespace)"},
+				"description": map[string]interface{}{"type": "string", "description": "What the group is for"},
+				"projects":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Member project names"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "groups_update",
+		Description: "Partially update a deploy group (projects and/or description)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Group name"},
+				"patch": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"projects":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+						"description": map[string]interface{}{"type": "string"},
+					},
+				},
+			},
+			"required": []string{"name", "patch"},
+		},
+	},
+	{
+		Name:        "groups_delete",
+		Description: "Delete a deploy group",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Group name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "templates_list",
+		Description: "List all deploy templates (named task definitions) from the scheduler's templates.jsonl store",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "templates_get",
+		Description: "Get one deploy template by name",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Template name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "templates_create",
+		Description: "Create a deploy template (a named list of task definitions deployable to groups)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":        map[string]interface{}{"type": "string", "description": "Template name (no whitespace)"},
+				"description": map[string]interface{}{"type": "string", "description": "What the template deploys"},
+				"tasks": map[string]interface{}{
+					"type":        "array",
+					"description": "Task definitions ({id_pattern,title,detail,labels}); title required",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"id_pattern": map[string]interface{}{"type": "string", "description": "Task id pattern ({TEMPLATE},{DATE},{PROJECT},{TASK} placeholders)"},
+							"title":      map[string]interface{}{"type": "string", "description": "Task title"},
+							"detail":     map[string]interface{}{"type": "string", "description": "Task detail/body"},
+							"labels":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Capability tags"},
+						},
+					},
+				},
+			},
+			"required": []string{"name", "tasks"},
+		},
+	},
+	{
+		Name:        "templates_update",
+		Description: "Partially update a deploy template (description and/or tasks)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Template name"},
+				"patch": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"description": map[string]interface{}{"type": "string"},
+						"tasks": map[string]interface{}{
+							"type":  "array",
+							"items": map[string]interface{}{"type": "object"},
+						},
+					},
+				},
+			},
+			"required": []string{"name", "patch"},
+		},
+	},
+	{
+		Name:        "templates_delete",
+		Description: "Delete a deploy template",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Template name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "groups_deploy",
+		Description: "Deploy a template's task rows to every member project of a group (dry_run plans without writing)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"group":    map[string]interface{}{"type": "string", "description": "Group name"},
+				"template": map[string]interface{}{"type": "string", "description": "Template name"},
+				"dry_run":  map[string]interface{}{"type": "boolean", "description": "Plan only — write nothing (default false)"},
+			},
+			"required": []string{"group", "template"},
+		},
+	},
+	{
+		Name:        "events_list",
+		Description: "Read the scheduler event log; since returns only events with id > since (incremental tail polling)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"since":     map[string]interface{}{"type": "integer", "description": "Return only events with id > since"},
+				"limit":     map[string]interface{}{"type": "integer", "description": "Max results (default 100)"},
+				"severity":  map[string]interface{}{"type": "string", "description": "Filter by severity (CRITICAL/HIGH/MEDIUM/LOW/INFO)"},
+				"component": map[string]interface{}{"type": "string", "description": "Filter by component"},
+			},
+		},
+	},
 }
 
 // handleMCP routes MCP protocol requests.
@@ -296,6 +468,30 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFleetPauseScheduler()
 	case "fleet_resume_scheduler":
 		return s.toolFleetResumeScheduler()
+	case "groups_list":
+		return s.toolGroupsList(ctx)
+	case "groups_get":
+		return s.toolGroupsGet(ctx, args)
+	case "groups_create":
+		return s.toolGroupsCreate(ctx, args)
+	case "groups_update":
+		return s.toolGroupsUpdate(ctx, args)
+	case "groups_delete":
+		return s.toolGroupsDelete(ctx, args)
+	case "templates_list":
+		return s.toolTemplatesList(ctx)
+	case "templates_get":
+		return s.toolTemplatesGet(ctx, args)
+	case "templates_create":
+		return s.toolTemplatesCreate(ctx, args)
+	case "templates_update":
+		return s.toolTemplatesUpdate(ctx, args)
+	case "templates_delete":
+		return s.toolTemplatesDelete(ctx, args)
+	case "groups_deploy":
+		return s.toolGroupsDeploy(ctx, args)
+	case "events_list":
+		return s.toolEventsList(ctx, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
