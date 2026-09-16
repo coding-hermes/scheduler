@@ -63,6 +63,23 @@ func TestPrintSchema(t *testing.T) {
 		t.Errorf("gateway_response_timeout env = %v, want SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", gwrt["env"])
 	}
 
+	// ADV-R08/G3: the slot-wait patience must exist in the schema and
+	// match the main.go flag default (5m prints as "5m0s").
+	sp, ok := schedProps["slot_patience"].(map[string]interface{})
+	if !ok {
+		t.Error("scheduler section missing slot_patience property")
+	} else {
+		if sp["default"] != "5m0s" {
+			t.Errorf("slot_patience default = %v, want \"5m0s\" (main.go flag default)", sp["default"])
+		}
+		if sp["env"] != "SCHEDULER_SLOT_PATIENCE" {
+			t.Errorf("slot_patience env = %v, want SCHEDULER_SLOT_PATIENCE", sp["env"])
+		}
+		if sp["cli"] != "--slot-patience" {
+			t.Errorf("slot_patience cli = %v, want --slot-patience", sp["cli"])
+		}
+	}
+
 	gwProps := props["gateway"].(map[string]interface{})["properties"].(map[string]interface{})
 	noExec, ok := gwProps["no_exec_fallback"].(map[string]interface{})
 	if !ok {
@@ -90,6 +107,10 @@ func TestPrintConfig(t *testing.T) {
 	// output (main.go resolves SCHEDULER_* overrides before calling printConfig).
 	os.Setenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "0.5")
 	defer os.Unsetenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE")
+	// ADV-R08/G3: the slot-patience env var must be listed among the
+	// active overrides.
+	os.Setenv("SCHEDULER_SLOT_PATIENCE", "90s")
+	defer os.Unsetenv("SCHEDULER_SLOT_PATIENCE")
 
 	out := captureStdout(func() {
 		printConfig(
@@ -103,6 +124,7 @@ func TestPrintConfig(t *testing.T) {
 			false,
 			2*60*60*1000000000,
 			30*60*1000000000,
+			5*60*1000000000,
 			"http://127.0.0.1:8642",
 			"secret",
 			"/tmp/foreman",
@@ -128,6 +150,9 @@ func TestPrintConfig(t *testing.T) {
 		// SCHED-GAP-117: the per-turn gateway deadline must surface in
 		// --show-config output.
 		"gateway_response_timeout = \"30m0s\"",
+		// ADV-R08/G3: the slot-wait patience must surface in
+		// --show-config output.
+		"slot_patience = \"5m0s\"",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
 		// effective value (was previously invisible to --show-config).
@@ -147,6 +172,7 @@ func TestPrintConfig(t *testing.T) {
 		"# active env var overrides:",
 		"#   SCHEDULER_DB_PATH=testdb",
 		"#   SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5",
+		"#   SCHEDULER_SLOT_PATIENCE=90s",
 	}
 	for _, substr := range checks {
 		if !strings.Contains(out, substr) {

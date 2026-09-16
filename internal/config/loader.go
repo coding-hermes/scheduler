@@ -236,6 +236,11 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"); v != "" {
 		cfg.Scheduler.GatewayResponseTimeout = v
 	}
+	// ADV-R08/G3: slot-wait patience env override — no parse gate here,
+	// validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SLOT_PATIENCE"); v != "" {
+		cfg.Scheduler.SlotPatience = v
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -288,6 +293,19 @@ func (r *RootConfig) Validate() error {
 			errs = append(errs, err)
 		} else if d < 0 {
 			errs = append(errs, fmt.Errorf("scheduler.gateway_response_timeout (%s) must be >= 0 (\"0s\" disables)", v))
+		}
+	}
+	// ADV-R08/G3: the slot-wait patience is optional — empty means "not
+	// set" (the 5m daemon default applies). When set it must parse and be
+	// STRICTLY positive: the slot drop always exists (it is the pool's
+	// backstop against unbounded queueing), and the flag layer treats
+	// <= 0 as "keep default", so accepting a TOML "0s" here would be a
+	// silent no-op rather than a real setting.
+	if v := r.Scheduler.SlotPatience; v != "" {
+		if d, err := parseDurationErr(v, "scheduler.slot_patience"); err != nil {
+			errs = append(errs, err)
+		} else if d <= 0 {
+			errs = append(errs, fmt.Errorf("scheduler.slot_patience (%s) must be > 0 — the slot drop always exists (use a positive duration; unset means the 5m default)", v))
 		}
 	}
 	if minD > 0 && maxD > 0 && minD > maxD {

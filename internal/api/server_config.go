@@ -41,7 +41,11 @@ type ResolvedConfig struct {
 	// GatewayResponseTimeout (SCHED-GAP-117): the per-turn deadline for a
 	// gateway /v1/responses POST — "0s" means disabled (the POST runs on
 	// the tick deadline alone).
-	GatewayResponseTimeout string                  `json:"gateway_response_timeout"`
+	GatewayResponseTimeout string `json:"gateway_response_timeout"`
+	// SlotPatience (ADV-R08/G3): how long a spawn waits for a free slot
+	// before the project is dropped (the drop emits a MEDIUM slot_pool
+	// event). Default "5m0s".
+	SlotPatience           string                  `json:"slot_patience"`
 	NamespaceMode          bool                    `json:"namespace_mode"`
 	AutoDisableFailureRate float64                 `json:"auto_disable_failure_rate"`
 	AutoDisableWindow      int                     `json:"auto_disable_window"`

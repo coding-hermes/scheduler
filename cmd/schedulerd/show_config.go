@@ -38,6 +38,7 @@ func printSchema() {
         "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
         "gateway_response_timeout": { "type": "string", "default": "30m0s", "description": "Per-turn deadline for a gateway /v1/responses POST (SCHED-GAP-117). A POST that makes no progress for this long fails the tick as 'stalled' BEFORE --tick-timeout; '0s' disables (POST runs on the tick deadline alone). Effective POST deadline = min(this, tick_timeout).", "env": "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", "cli": "--gateway-response-timeout" },
+        "slot_patience":  { "type": "string", "default": "5m0s", "description": "How long a tick waits for a free slot before being dropped; the drop emits a MEDIUM slot_pool event (ADV-R08/G3). Must be > 0 — the drop always exists; unset means the 5m default.", "env": "SCHEDULER_SLOT_PATIENCE", "cli": "--slot-patience" },
         "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" },
         "auto_disable_failure_rate": { "type": "number", "default": 0.0, "minimum": 0.0, "maximum": 1.0, "description": "Per-project failure-rate threshold (0 = off). SCHED-GAP-018.", "env": "SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "cli": "--auto-disable-failure-rate" },
         "auto_disable_window":       { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project over which auto-disable failure rate is computed.", "env": "SCHEDULER_AUTO_DISABLE_WINDOW", "cli": "--auto-disable-window" },
@@ -113,7 +114,7 @@ func printConfig(
 	minInterval, maxInterval time.Duration,
 	numLevels, weightBudget, maxConcurrent int,
 	namespaceMode bool,
-	tickTimeout, gatewayResponseTimeout time.Duration,
+	tickTimeout, gatewayResponseTimeout, slotPatience time.Duration,
 	gatewayURL, gatewayKey, foremanHome string,
 	noExecFallback bool,
 	duckbrainNS, duckbrainURL string,
@@ -136,6 +137,7 @@ weight_budget = %d
 max_concurrent = %d
 tick_timeout = %q
 gateway_response_timeout = %q
+slot_patience = %q
 namespace_mode = %v
 auto_disable_failure_rate = %v
 auto_disable_window = %d
@@ -155,7 +157,7 @@ url = %q
 		dbPath, listen, logFile,
 		minInterval, maxInterval,
 		numLevels, weightBudget, maxConcurrent,
-		tickTimeout, gatewayResponseTimeout, namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
+		tickTimeout, gatewayResponseTimeout, slotPatience, namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
 		gatewayURL, gatewayKey, foremanHome, noExecFallback,
 		duckbrainNS, duckbrainURL,
 	)
@@ -174,6 +176,7 @@ url = %q
 		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
 		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
 		"SCHEDULER_GATEWAY_RESPONSE_TIMEOUT":  os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"),
+		"SCHEDULER_SLOT_PATIENCE":             os.Getenv("SCHEDULER_SLOT_PATIENCE"),
 		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
 		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
 		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),

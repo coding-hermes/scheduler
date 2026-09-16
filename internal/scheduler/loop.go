@@ -169,6 +169,9 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
 	l.spawner.SetEventLogger(l.events)
+	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
+	// through the same logger.
+	l.slotPool.SetEventLogger(l.events)
 	return l
 }
 
@@ -281,6 +284,19 @@ func (l *Loop) SetGatewayResponseTimeout(d time.Duration) {
 	defer l.mu.Unlock()
 	if l.spawner != nil {
 		l.spawner.SetGatewayResponseTimeout(d)
+	}
+}
+
+// SetSlotPatience sets how long a spawn waits for a free slot before the
+// project is dropped with a MEDIUM slot_pool event (ADV-R08/G3). Delegates
+// to the slot pool; a d <= 0 keeps the default (5m) — the drop always
+// exists. Must be called before Run(), same contract as the other startup
+// setters (the daemon wires it during startup).
+func (l *Loop) SetSlotPatience(d time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.slotPool != nil {
+		l.slotPool.SetPatience(d)
 	}
 }
 

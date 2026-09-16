@@ -46,6 +46,10 @@ func main() {
 	// fails the tick as "stalled". Effective POST deadline is
 	// min(--gateway-response-timeout, --tick-timeout).
 	gatewayResponseTimeout := flag.Duration("gateway-response-timeout", 30*time.Minute, "Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before --tick-timeout (SCHED-GAP-117; 0 disables)")
+	// ADV-R08/G3: slot-wait patience — how long a spawn waits for a free
+	// slot before the project is dropped (the drop emits a MEDIUM
+	// slot_pool event). Default keeps the historical hardcoded 5m window.
+	slotPatience := flag.Duration("slot-patience", 5*time.Minute, "How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3)")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
@@ -108,6 +112,16 @@ func main() {
 			*gatewayResponseTimeout = d
 		}
 	}
+	// ADV-R08/G3: slot-wait patience env override — same pattern. Only a
+	// positive parseable duration wins (the drop always exists); an
+	// invalid value WARNs and keeps the current value.
+	if v := os.Getenv("SCHEDULER_SLOT_PATIENCE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			*slotPatience = d
+		} else {
+			log.Printf("WARN: SCHEDULER_SLOT_PATIENCE=%q invalid — using %v", v, *slotPatience)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -132,7 +146,7 @@ func main() {
 		printConfig(*configFile, *dbPath, *listen, *logFile,
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
-			*tickTimeout, *gatewayResponseTimeout,
+			*tickTimeout, *gatewayResponseTimeout, *slotPatience,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow)
@@ -235,6 +249,10 @@ func main() {
 	// carries the env override resolved above; 0 disables the per-turn
 	// deadline (POST runs on the tick deadline alone, pre-117 behavior).
 	loop.SetGatewayResponseTimeout(*gatewayResponseTimeout)
+	// ADV-R08/G3: apply the configured slot-wait patience; the drop emits
+	// a MEDIUM slot_pool event. The flag var already carries the env
+	// override resolved above; <= 0 keeps the 5m default in the pool.
+	loop.SetSlotPatience(*slotPatience)
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
@@ -278,6 +296,21 @@ func main() {
 					*gatewayResponseTimeout = d
 				} else {
 					log.Printf("WARN: scheduler.gateway_response_timeout=%q invalid — using %v", rootCfg.Scheduler.GatewayResponseTimeout, *gatewayResponseTimeout)
+				}
+			}
+		}
+		// ADV-R08/G3: TOML layer for the slot-wait patience — same
+		// default-guard pattern (applied only when the flag sits at its
+		// 5m default, so CLI and env keep precedence). Only a strictly
+		// positive duration is accepted: the drop always exists, and the
+		// flag layer treats <= 0 as "keep default", so a TOML "0s" would
+		// otherwise be a silent no-op.
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			if rootCfg.Scheduler.SlotPatience != "" && *slotPatience == 5*time.Minute {
+				if d, derr := time.ParseDuration(rootCfg.Scheduler.SlotPatience); derr == nil && d > 0 {
+					*slotPatience = d
+				} else {
+					log.Printf("WARN: scheduler.slot_patience=%q invalid — using %v", rootCfg.Scheduler.SlotPatience, *slotPatience)
 				}
 			}
 		}
@@ -398,6 +431,7 @@ func main() {
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
+		SlotPatience:           slotPatience.String(),
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,
 		AutoDisableWindow:      *autoDisableWindow,

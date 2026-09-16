@@ -28,6 +28,17 @@ type SlotPool struct {
 	lifecycle *LifecycleTracker
 	freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
 
+	// patience is how long a spawn waits for a free slot before the
+	// project is dropped (ADV-R08/G3). Zero means the default
+	// (defaultSlotPatience); see SetPatience. Guarded by mu — written by
+	// startup setters, read by spawn goroutines.
+	patience time.Duration
+
+	// events optionally receives the slot-drop event (ADV-R08/G3). Nil
+	// (the default) disables emission — the pool must work without a
+	// logger. Mirrors Spawner.events.
+	events *EventLogger
+
 	// running maps project name -> number of slots it holds. Guarded by mu;
 	// the mutex never covers a blocking channel wait (Acquire blocks on the
 	// channel itself), so it serializes only the tiny map critical sections.
@@ -56,6 +67,52 @@ func NewSlotPool(maxConcurrent int, spawner *Spawner, lifecycle *LifecycleTracke
 		reserved:  make(map[string]bool),
 	}
 	return p
+}
+
+// defaultSlotPatience is the historical hardcoded slot-wait window: how long
+// a spawn goroutine waits for a free slot before the project is dropped
+// (ADV-R08/G3). The default keeps production cadence byte-identical — the
+// drop itself is unchanged; only its observability and configurability are
+// new. Dropping must ALWAYS exist (a full fleet cannot queue spawns
+// unboundedly), so the patience can never be disabled, only shortened or
+// lengthened by an operator via --slot-patience / SCHEDULER_SLOT_PATIENCE /
+// scheduler.slot_patience.
+const defaultSlotPatience = 5 * time.Minute
+
+// SetPatience sets how long a spawn waits for a free slot before being
+// dropped (ADV-R08/G3). A d <= 0 means "keep the default" (5m) — it does NOT
+// mean "never drop": the drop is the pool's backstop against unbounded
+// queueing and must always exist. Must be called before Run()/the first
+// Spawn (the daemon wires it during startup, same contract as the other
+// startup setters).
+func (p *SlotPool) SetPatience(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d <= 0 {
+		return // keep the default / current value
+	}
+	p.patience = d
+}
+
+// Patience returns the effective slot-wait patience (ADV-R08/G3): the value
+// set by SetPatience, or defaultSlotPatience when unset. Used by tests and
+// by the resolved-config verification.
+func (p *SlotPool) Patience() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.patience <= 0 {
+		return defaultSlotPatience
+	}
+	return p.patience
+}
+
+// SetEventLogger wires an optional EventLogger for the slot-drop event
+// (ADV-R08/G3), mirroring Spawner.SetEventLogger. Nil (the default)
+// disables emission — no event, no panic.
+func (p *SlotPool) SetEventLogger(el *EventLogger) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = el
 }
 
 // Available returns the number of free slots.
@@ -239,11 +296,37 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		defer p.clearReserve(proj.Name)
 		defer p.Release(proj.Name)
 
-		// Wait for a free slot.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		// Wait for a free slot. The patience is configurable
+		// (ADV-R08/G3); the default keeps the historical 5-minute
+		// window byte-identical.
+		waitStart := time.Now()
+		patience := p.Patience()
+		ctx, cancel := context.WithTimeout(context.Background(), patience)
 		defer cancel()
 		if !p.Acquire(ctx, proj.Name) {
+			waited := time.Since(waitStart)
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
+			// ADV-R08/G3: the drop was previously invisible to the
+			// events API — whether it had ever fired was unknowable.
+			// MEDIUM, matching the eval-stall demotion precedent
+			// (SCHED-GAP-061): a drop means work the evaluator
+			// selected never ran — visible, but not an alarm. Nil
+			// logger = no event, no panic.
+			p.mu.Lock()
+			events := p.events
+			p.mu.Unlock()
+			if events != nil {
+				events.Emit(context.Background(), SeverityMedium, "slot_pool",
+					"slot wait expired — dropped "+proj.Name,
+					map[string]any{
+						"project":          proj.Name,
+						"tick_id":          tickID,
+						"waited_seconds":   waited.Seconds(),
+						"patience_seconds": patience.Seconds(),
+						"max_slots":        p.maxSlots,
+						"running":          p.Running(),
+					})
+			}
 			return
 		}
 

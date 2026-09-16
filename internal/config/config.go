@@ -70,6 +70,14 @@ type SchedulerConfig struct {
 	// 2h slot. Empty = the daemon flag default (30m).
 	GatewayResponseTimeout string `toml:"gateway_response_timeout"`
 
+	// SlotPatience (ADV-R08/G3) is how long a spawn waits for a free slot
+	// before the project is dropped (the drop emits a MEDIUM slot_pool
+	// event), stored as a duration string (e.g. "5m"). Empty = the daemon
+	// flag default (5m). Must parse to > 0 — the drop always exists, so a
+	// non-positive value is invalid (a TOML "0s" would otherwise be a
+	// silent no-op: the flag's <= 0 means "keep default").
+	SlotPatience string `toml:"slot_patience"`
+
 	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
 	// threshold over the last AutoDisableWindow ticks at or above which the
 	// scheduler will disable the project automatically. Default 0 = feature
