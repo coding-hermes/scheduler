@@ -205,17 +205,32 @@ for _ in $(seq 1 25); do
 done
 [ "$OK" = "1" ] || { echo "PM-STANDIN: serve failed on :$PORT"; kill -9 "$SERVE_PID" 2>/dev/null; exit 1; }
 
-export DAGGER_ENV="LEDGER_PATH=$LEDGER,INITIATIVES_PATH=$INITIATIVES,DAGGER_PROPOSALS_SCRATCH=$DAGGER_PROPOSALS_SCRATCH,VERIFICATIONS_PATH=$VERIFICATIONS_PATH,PROPOSALS_HISTORY_PATH=$PROPOSALS_HISTORY_PATH,ESCALATIONS_PATH=$ESCALATIONS_PATH,ESCALATIONS_SCRATCH_PATH=$ESCALATIONS_SCRATCH_PATH,PUSH_SCRATCH_PATH=$PUSH_SCRATCH_PATH,DIGEST_BUNDLE_PATH=$DIGEST_BUNDLE_PATH,REAL_MODE=$REAL_MODE,PM_NAMESPACE=$PM_NAMESPACE,PM_TARGET=$PM_TARGET"
+# DBKEY for the DAGGER pipeline: pass the DuckBrain key via DAGGER_ENV so
+# pm.ts trace_duck_write uses env("DUCKBRAIN_KEY") instead of the fragile
+# LLM-mediated tool() echo of the .token file (2026-09-16 run: mediator
+# returned prose + control chars → net/http "invalid header field value for
+# X-Api-Key" 502, 3 attempts, verify chain skipped). Empty key → pm.ts
+# falls back to the old lookup path.
+DBKEY=$(tr -d '[:space:]' < "$HOME/.duckbrain/token-1787620243982.token" 2>/dev/null || true)
+export DAGGER_ENV="LEDGER_PATH=$LEDGER,INITIATIVES_PATH=$INITIATIVES,DAGGER_PROPOSALS_SCRATCH=$DAGGER_PROPOSALS_SCRATCH,VERIFICATIONS_PATH=$VERIFICATIONS_PATH,PROPOSALS_HISTORY_PATH=$PROPOSALS_HISTORY_PATH,ESCALATIONS_PATH=$ESCALATIONS_PATH,ESCALATIONS_SCRATCH_PATH=$ESCALATIONS_SCRATCH_PATH,PUSH_SCRATCH_PATH=$PUSH_SCRATCH_PATH,DIGEST_BUNDLE_PATH=$DIGEST_BUNDLE_PATH,REAL_MODE=$REAL_MODE,PM_NAMESPACE=$PM_NAMESPACE,PM_TARGET=$PM_TARGET,DUCKBRAIN_KEY=$DBKEY"
 env GATEWAY_API_KEY="$KEY" ./dagger run examples/coding-hermes/pm.ts --server "http://127.0.0.1:$PORT" \
   --log-file "$STANDIN/pm-standin.jsonl" --log-level info >/tmp/pm-standin-run.log 2>&1
 RUN_RC=$?
 
 # Scratch → history accumulation (shell owns the append).
+# BANE 2026-09-16 (tick coding-hermes-scheduler-pm-2026-09-16-00-45-32):
+# accumulators are ARCHIVE-then-TRUNCATE — a bare append re-filed the same
+# scratch batch every run (escalations.jsonl hit 145 lines / 13 unique; the
+# same escalation re-appended 85x). Archive to .consumed, then truncate.
 if [ -s "$DAGGER_PROPOSALS_SCRATCH" ]; then
   grep -v '^File not found' "$DAGGER_PROPOSALS_SCRATCH" >> "$DAGGER_PROPOSALS_PATH"
+  cat "$DAGGER_PROPOSALS_SCRATCH" >> "$DAGGER_PROPOSALS_PATH.consumed" 2>/dev/null
+  : > "$DAGGER_PROPOSALS_SCRATCH"
 fi
 if [ -s "$ESCALATIONS_SCRATCH_PATH" ]; then
   grep -v '^File not found' "$ESCALATIONS_SCRATCH_PATH" >> "$ESCALATIONS_PATH"
+  cat "$ESCALATIONS_SCRATCH_PATH" >> "$ESCALATIONS_PATH.consumed" 2>/dev/null
+  : > "$ESCALATIONS_SCRATCH_PATH"
 fi
 
 # GAP-020: run log is truth (branch-skipped nodes exit 1 even on success).
