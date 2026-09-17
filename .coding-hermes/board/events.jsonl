@@ -814,3 +814,6 @@
 {"id": 801, "timestamp": "2026-09-17 02:07:57.265954", "event_type": "task_created", "task_id": "INT-CI-005", "actor": "foreman", "detail": "{\"id\":\"INT-CI-005\",\"status\":\"pending\"}"}
 {"id": 802, "timestamp": "2026-09-17 02:13:45.235409", "event_type": "task_updated", "task_id": "SCHED-GAP-135", "actor": "foreman", "detail": "{\"status\":\"pending\"}"}
 {"id": 803, "timestamp": "2026-09-17 02:14:04.425836", "event_type": "task_updated", "task_id": "SCHED-GAP-135", "actor": "foreman", "detail": "{\"status\":\"pending\"}"}
+{"id": 804, "timestamp": "2026-09-17 02:19:35.719239", "event_type": "task_updated", "task_id": "SCHED-GAP-135", "actor": "foreman", "detail": "{\"status\":\"in_progress\"}"}
+{"id": 805, "timestamp": "2026-09-17 03:28:38.220783", "event_type": "task_updated", "task_id": "SCHED-GAP-135", "actor": "foreman", "detail": "{\"status\":\"in_progress\"}"}
+{"id": 806, "timestamp": "2026-09-17 03:44:25.748308", "event_type": "task_updated", "task_id": "SCHED-GAP-135", "actor": "foreman", "detail": "{\"status\":\"pending\"}"}

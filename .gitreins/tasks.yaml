@@ -2530,3 +2530,14 @@ tasks:
   status: complete
   created_at: '2026-09-17T00:28:42.124292+00:00'
   completed_at: '2026-09-17T00:57:46.319803+00:00'
+- id: SCHED-GAP-135
+  title: Bound gateway spawn failures and prevent phantom running slots
+  criteria:
+  - Real SlotPool/Spawner regressions on scratch DB and local gateway prove retry
+    exhaustion and stalled POST reach terminal tick state, release slots and reservations
+    and emit SlotFreed within deadline, while productive SSE survives idle supervision.
+    Reproduce defect before fixing; preserve no-exec-fallback; fresh build vet and
+    tests pass.
+  status: complete
+  created_at: '2026-09-17T03:26:33.586947+00:00'
+  completed_at: '2026-09-17T03:42:46.429911+00:00'
