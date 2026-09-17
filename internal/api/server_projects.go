@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -297,6 +299,17 @@ func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name strin
 	if p, err := database.GetProject(ctx, s.db, name); err == nil {
 		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
 	}
+	// SCHED-GAP-137b: keep fleet.toml in parity with the DB. The loader
+	// (internal/config/loader.go ApplyFleetConfig) re-pins enabled from
+	// fleet.toml at every startup, so a pause that lives only in the DB is
+	// silently undone on restart. Regenerate the toml via the official
+	// policy script (SCHED-GAP-025: it is the ONLY writer of fleet.toml).
+	// Log errors but never poison the API response: the policy script has
+	// its own success criterion (the next policy run / --verify is the
+	// backstop).
+	if err := s.regenFleetTomlViaPolicy(); err != nil {
+		log.Printf("SCHED-GAP-137b: pause %s: fleet.toml regen failed: %v", name, err)
+	}
 	writeJSON(w, 200, map[string]string{"status": "paused", "project": name})
 }
 
@@ -305,7 +318,43 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 500, err.Error())
 		return
 	}
+	// SCHED-GAP-137b: mirror pause — regenerate fleet.toml so the durable
+	// pin matches the re-enabled DB row before the next daemon restart.
+	if err := s.regenFleetTomlViaPolicy(); err != nil {
+		log.Printf("SCHED-GAP-137b: resume %s: fleet.toml regen failed: %v", name, err)
+	}
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
+}
+
+// regenFleetTomlViaPolicy regenerates ~/.hermes/fleet.toml from live DB state
+// by running the ops policy script (SCHED-GAP-025: fleet-cooldown-policy.py
+// is the ONLY writer of fleet.toml). SCHED-GAP-137b: pause/resume call this
+// so the durable toml pin matches the DB and ApplyFleetConfig cannot
+// silently re-enable a paused project on restart.
+//
+// regenFleetTomlExec is a package-level var so tests can inject a fake
+// (the test must never touch the real fleet.toml). Any failure — script
+// non-zero exit (stderr retained in the error) or exec helper failure — is
+// returned to the caller, which logs it and proceeds: the response is never
+// poisoned and the policy script's own --verify run is the backstop.
+var regenFleetTomlExec = func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python3", "/home/kara/.hermes/scripts/fleet-cooldown-policy.py", "--apply")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		// Non-zero exit is logged via the returned error, never an API
+		// failure — the policy script owns its success criterion.
+		return fmt.Errorf("policy script failed (stderr: %s): %w", strings.TrimSpace(stderr.String()), err)
+	}
+	return nil
+}
+
+// regenFleetTomlViaPolicy invokes the injectable runner. Kept as a method so
+// handlers read uniformly and tests can swap regenFleetTomlExec directly.
+func (s *Server) regenFleetTomlViaPolicy() error {
+	return regenFleetTomlExec()
 }
 
 // deleteProject removes a project. With only confirm=true it soft-deletes
