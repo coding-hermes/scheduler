@@ -2555,3 +2555,12 @@ tasks:
   status: complete
   created_at: '2026-09-17T04:11:58.095898+00:00'
   completed_at: '2026-09-17T05:02:12.511821+00:00'
+- id: SCHED-GAP-137a
+  title: lifecycle.Complete must reset consecutive_failures on TickCompleted (3rd
+    clause of SCHED-GAP-137)
+  criteria:
+  - 'See AC1-AC8 in /tmp/sched-gap-137a-brief.md; live residue: 5 lanes with cf=14/78/91
+    in scheduler.db right now (bunker/chimera-v2/crier/9router/off-by-one)'
+  status: complete
+  created_at: '2026-09-17T06:33:03.259474+00:00'
+  completed_at: '2026-09-17T06:45:01.216109+00:00'
