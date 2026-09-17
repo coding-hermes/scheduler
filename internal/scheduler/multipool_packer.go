@@ -271,8 +271,18 @@ func (m *MultiPoolPacker) packFlat(
 			}
 			// SCHED-GAP-124: tasks-mode admission (flat fallback path) —
 			// non-perpetual pending board work waives last-tick spacing.
+			// SCHED-GAP-133: FailureBackoff still gates even in tasks mode.
 			mode := admissionModeFor(s.proj.AdmissionMode, nsIDOf(s.proj), nsModes)
-			if mode != database.AdmissionModeTasks || !tasksAdmissionDue(s.proj.Workdir) {
+			if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.proj.Workdir) {
+				// SCHED-GAP-133: only gate on FailureBackoff when the project
+				// has actually failed repeatedly. Normal operation (consecutive_failures ≤ 1)
+				// keeps the original tasks-mode semantics: pending work waives cooldown.
+				if s.proj.ConsecutiveFailures > 1 {
+					if now.Sub(*s.lastTick) < cooldownDur {
+						continue // FailureBackoff not elapsed
+					}
+				}
+			} else {
 				if now.Sub(*s.lastTick) < cooldownDur {
 					continue
 				}

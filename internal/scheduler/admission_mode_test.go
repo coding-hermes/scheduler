@@ -217,3 +217,23 @@ func TestAdmissionMode_ValidationAndRoundTrip(t *testing.T) {
 }
 
 func modeStrPtr(s string) *string { return &s }
+
+// T-MODE-4: tasks-mode project with consecutive failures — FailureBackoff
+// gates admission even when board work is pending (SCHED-GAP-133).
+func TestTasksMode_FailureBackoffGatesAdmission(t *testing.T) {
+	wd := t.TempDir()
+	writeModeBoard(t, wd,
+		`{"id":"REAL-1","status":"pending"}`,
+	)
+	p := modeProject("mode-backoff", "coding-hermes", wd, "")
+	// FailureBackoff(14400s, 5) = 14400 * 2^4 = 230400s (64h)
+	p.ConsecutiveFailures = 5
+	ns := tasksNs("coding-hermes")
+
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{p}, []database.Namespace{ns},
+		map[string]time.Time{"mode-backoff": now.Add(-time.Hour)})
+	if modeSelected(t, res, "mode-backoff") {
+		t.Fatalf("T-MODE-4 FAIL: tasks-mode project with consecutive_failures=5 was selected — FailureBackoff must gate admission")
+	}
+}

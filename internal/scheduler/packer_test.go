@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -711,3 +713,41 @@ func TestPick_Gap011_OverdueBypassesSpendGate(t *testing.T) {
 		t.Errorf("overdue project must bypass the SCHED-GAP-066 spend gate: %v", names)
 	}
 }
+
+
+// T-MODE-4P: flat Packer.Pick path — tasks-mode + FailureBackoff gates
+// admission even when board work is pending (SCHED-GAP-133).
+func TestPacker_TasksMode_FailureBackoffGatesAdmission(t *testing.T) {
+	db := newTestDB(t)
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+
+	wd := t.TempDir()
+	boardDir := filepath.Join(wd, ".coding-hermes", "board")
+	if err := os.MkdirAll(boardDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(boardDir, "tasks.jsonl"), []byte(`{"id":"REAL-1","status":"pending"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	now := time.Now().UTC()
+	_, err := db.Exec(`INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, enabled, created_at, updated_at, admission_mode, consecutive_failures, last_tick_completed)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+		"mode-backoff-p", "local://mode-backoff-p", wd, 10, 5, 14400,
+		now.Format(time.RFC3339), now.Format(time.RFC3339), "tasks", 5, now.Add(-time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	p := scheduler.NewPacker(db, calc, 100, 5, nil)
+	got, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	for _, pp := range got {
+		if pp.Name == "mode-backoff-p" {
+			t.Fatalf("T-MODE-4P FAIL: Packer.Pick selected tasks-mode project with consecutive_failures=5")
+		}
+	}
+}
+

@@ -3,6 +3,8 @@ package scheduler_test
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -725,5 +727,61 @@ func TestNamespaceAllocator_SumAtMostBudget(t *testing.T) {
 	// With flooring, may be ≤ 100 but never > 100 (within ±1 rounding).
 	if total > 101 {
 		t.Errorf("total allocation %d exceeds budget 100 (±1 rounding OK)", total)
+	}
+}
+// T-MODE-4M: multipool flat-fallback path — tasks-mode + FailureBackoff
+// gates admission even when board work is pending (SCHED-GAP-133).
+func TestMultiPoolPacker_TasksMode_FailureBackoffGatesAdmission(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Namespace in tasks admission mode.
+	ns := makeNamespace("tasks-ns", 10, 5, 100, true)
+	ns.AdmissionMode = database.AdmissionModeTasks
+	mustCreateNamespace(t, db, ns)
+
+	// Project in that namespace, 4h cooldown, 5 consecutive failures.
+	p := makeProject("mode-backoff-m", 10, 5, 14400, 1.0)
+	p.NamespaceID = &ns.ID
+	p.ConsecutiveFailures = 5
+	if err := database.CreateProject(ctx, db, p); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE projects SET consecutive_failures = 5 WHERE name = ?`, "mode-backoff-m"); err != nil {
+		t.Fatalf("update consecutive_failures: %v", err)
+	}
+
+	// Write a pending board row so tasksAdmissionDue returns true.
+	wd := t.TempDir()
+	boardDir := filepath.Join(wd, ".coding-hermes", "board")
+	if err := os.MkdirAll(boardDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(boardDir, "tasks.jsonl"), []byte(`{"id":"REAL-1","status":"pending"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Update the project's workdir + last_tick_completed 1h ago.
+	if _, err := db.ExecContext(ctx, `UPDATE projects SET workdir=?, last_tick_completed=? WHERE name=?`, wd, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), "mode-backoff-m"); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+
+	projects, err := database.ListProjects(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	namespaces, err := database.ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+
+	now := time.Now().UTC()
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
+	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), map[string]time.Time{"mode-backoff-m": now.Add(-time.Hour)}, nil, now)
+
+	for _, pu := range result.Projects {
+		if pu.Name == "mode-backoff-m" {
+			t.Fatalf("T-MODE-4M FAIL: multipool selected tasks-mode project with consecutive_failures=5 — FailureBackoff must gate")
+		}
 	}
 }

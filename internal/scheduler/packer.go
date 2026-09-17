@@ -343,7 +343,25 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		// Non-perpetual pending board work waives last-tick spacing;
 		// backoff/blackout/skip above still applied.
 		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
-		if mode != database.AdmissionModeTasks || !tasksAdmissionDue(s.workdir) {
+		if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.workdir) {
+			// SCHED-GAP-133: tasks-mode admission still respects FailureBackoff.
+			// Without this, a project that has been failing repeatedly (e.g.
+			// gateway draining) re-admits instantly on every eval — the
+			// ~5/min/lane hot-loop. Normal operation (consecutive_failures ≤ 1)
+			// keeps the original tasks-mode semantics: pending work waives
+			// the cooldown pin entirely.
+			if s.consecutiveFailures > 1 {
+				backoffCD, skipMode := effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator)
+				if skipMode {
+					totalSkippedCooldown++
+					continue
+				}
+				if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < backoffCD {
+					totalSkippedCooldown++
+					continue
+				}
+			}
+		} else {
 			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 				totalSkippedCooldown++
 				continue

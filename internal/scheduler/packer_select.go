@@ -243,10 +243,18 @@ func (m *MultiPoolPacker) Pack(
 					continue // skip mode
 				}
 				// SCHED-GAP-124: tasks-mode admission — non-perpetual
-				// pending board work waives the last-tick spacing;
-				// backoff/blackout/skip above still applied.
+				// pending board work waives the last-tick spacing,
+				// but FailureBackoff still gates (SCHED-GAP-133).
 				mode := admissionModeFor(pu.Project.AdmissionMode, nsIDOf(pu.Project), nsModes)
-				if mode != database.AdmissionModeTasks || !tasksAdmissionDue(pu.Project.Workdir) {
+				if mode == database.AdmissionModeTasks && tasksAdmissionDue(pu.Project.Workdir) {
+					// SCHED-GAP-133: only gate on FailureBackoff when the project
+					// has actually failed repeatedly.
+					if pu.Project.ConsecutiveFailures > 1 {
+						if now.Sub(lt) < cooldownDur {
+							continue // FailureBackoff not elapsed
+						}
+					}
+				} else {
 					if now.Sub(lt) < cooldownDur {
 						continue
 					}
