@@ -2510,3 +2510,23 @@ tasks:
   status: complete
   created_at: '2026-09-16T04:32:36.628154+00:00'
   completed_at: '2026-09-16T04:53:49.527330+00:00'
+- id: CTL-001
+  title: 'MCP: expose blocks API (groups/templates/deploy) + events as tools'
+  criteria:
+  - tools/list shows groups_*/templates_*/groups_deploy/events_list; live MCP round-trip
+    create group -> deploy dry_run succeeds against a running daemon; go test -short
+    -p 1 ./internal/mcp/ green
+  status: complete
+  created_at: '2026-09-16T08:32:48.856622+00:00'
+  completed_at: '2026-09-16T08:55:54.695417+00:00'
+- id: SCHED-GAP-133
+  title: "Tasks-mode namespace hot-loops when gateway is down \u2014 spawn failures\
+    \ bypass cooldown"
+  criteria:
+  - 'Fix: SlotPool.spawn classifies infra-unreachable errors (connection refused /
+    503 draining) and applies failure backoff (60s doubling, cap 15m) or min-failure-cooldown.
+    RED test: mark gateway unreachable, run 3 evals, assert spawn attempts are rate-limited.
+    GREEN: go test -short -p 1 passes, build clean, lint clean.'
+  status: complete
+  created_at: '2026-09-17T00:28:42.124292+00:00'
+  completed_at: '2026-09-17T00:57:46.319803+00:00'
