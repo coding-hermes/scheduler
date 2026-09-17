@@ -58,6 +58,14 @@ func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval tim
 // the events table for the last starvation event timestamp per project.
 const starvationThrottleWindow = 30 * time.Minute
 
+// consecutiveFailureThrottleWindow is the minimum spacing between consecutive
+// consecutive-failure HIGH events for the same project (SCHED-GAP-137c). The
+// escalator is constructed fresh on every health pass (tick_process.go), so a
+// permanently-failing project would re-emit HIGH on every pass; the throttle
+// survives across escalator instances via the events table, mirroring
+// starvationThrottleWindow / CheckStarvation (SCHED-GAP-014).
+const consecutiveFailureThrottleWindow = 30 * time.Minute
+
 // lastStarvationEvent returns the created_at timestamp of the most recent
 // MEDIUM starvation event for the given project, or ok=false if none exists.
 // Uses json_extract for exact project-name matching (parameter-bound, no
@@ -69,6 +77,31 @@ func (ae *AlertEscalator) lastStarvationEvent(ctx context.Context, project strin
 		 WHERE severity = ? AND component = ? AND json_extract(details, '$.project') = ?
 		 ORDER BY created_at DESC LIMIT 1`,
 		string(SeverityMedium), "escalation", project).Scan(&ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// lastConsecutiveFailureEvent returns the created_at timestamp of the most
+// recent HIGH consecutive-failures event for the given project, or ok=false if
+// none exists. Mirrors lastStarvationEvent (SCHED-GAP-014) for SCHED-GAP-137c:
+// parameter-bound json_extract project matching (no string interpolation), so
+// similarly-named projects don't collide. The message LIKE filter keys on the
+// stable phrase "consecutive failures" because the project name is embedded in
+// the message text; json_extract alone is already exact, but the LIKE keeps
+// this query self-describing about which event class it reads.
+func (ae *AlertEscalator) lastConsecutiveFailureEvent(ctx context.Context, project string) (time.Time, bool) {
+	var ts string
+	err := ae.db.QueryRowContext(ctx,
+		`SELECT created_at FROM events
+		 WHERE severity = ? AND component = ? AND message LIKE ? AND json_extract(details, '$.project') = ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		string(SeverityHigh), "escalation", "%consecutive failures%", project).Scan(&ts)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -171,7 +204,10 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 }
 
 // CheckConsecutiveFailures emits HIGH for any project with more than 3
-// consecutive failed ticks (no completed tick interspersed).
+// consecutive failed ticks (no completed tick interspersed). Events are
+// throttled per-project via the events table (same pattern as CheckStarvation,
+// SCHED-GAP-137c) so a permanently-failing lane emits at most one HIGH event
+// per 30 minutes instead of one per health-check pass.
 func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 	// Get all enabled project names.
 	prows, err := ae.db.QueryContext(ctx, `SELECT name FROM projects WHERE enabled = 1`)
@@ -220,6 +256,15 @@ func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 		rows.Close()
 
 		if consecutive > 3 {
+			// SCHED-GAP-137c: throttle — only emit if no consecutive-failures
+			// HIGH event for this project was recorded within the throttle
+			// window (same events-table pattern as CheckStarvation), so a
+			// stuck project emits once per crossing, not once per health pass.
+			if lastEmit, ok := ae.lastConsecutiveFailureEvent(ctx, name); ok {
+				if time.Since(lastEmit) < consecutiveFailureThrottleWindow {
+					continue
+				}
+			}
 			ae.events.Emit(ctx, SeverityHigh, "escalation",
 				fmt.Sprintf("more than 3 consecutive failures: %s", name),
 				map[string]any{

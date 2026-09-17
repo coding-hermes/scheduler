@@ -352,6 +352,51 @@ func TestAlertEscalator_CheckConsecutiveFailures_BrokenStreak(t *testing.T) {
 	}
 }
 
+// TestAlertEscalator_CheckConsecutiveFailures_Throttle proves SCHED-GAP-137c:
+// consecutive CheckConsecutiveFailures calls emit at most one HIGH event per
+// consecutiveFailureThrottleWindow per project, even though the escalator is
+// constructed fresh each time (as it is in production at tick_process.go:134).
+func TestAlertEscalator_CheckConsecutiveFailures_Throttle(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "stuck-proj", 1800)
+	now := time.Now()
+	for i := 0; i < 4; i++ {
+		insertTick(t, db, "stuck-fail-"+string(rune('0'+i)), "stuck-proj", "failed",
+			now.Add(-time.Duration(4-i)*time.Minute))
+	}
+
+	// First call — should emit (first crossing of the >3 threshold).
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator.CheckConsecutiveFailures(context.Background()); err != nil {
+		t.Fatalf("CheckConsecutiveFailures #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
+		t.Fatalf("after first call: expected 1 HIGH event, got %d", n)
+	}
+
+	// Second call — fresh escalator (mirrors production), same project still
+	// stuck. Throttle must suppress: still 1 event.
+	escalator2 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator2.CheckConsecutiveFailures(context.Background()); err != nil {
+		t.Fatalf("CheckConsecutiveFailures #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
+		t.Errorf("after second call (throttled): expected 1 HIGH event, got %d", n)
+	}
+
+	// Third call — still throttled.
+	escalator3 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator3.CheckConsecutiveFailures(context.Background()); err != nil {
+		t.Fatalf("CheckConsecutiveFailures #3: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
+		t.Errorf("after third call (throttled): expected 1 HIGH event, got %d", n)
+	}
+}
+
 // TestAlertEscalator_CheckDuplicateWorkdirs emits HIGH when two ENABLED
 // projects share the same workdir (case-insensitive), and stays silent for
 // unique or disabled duplicates.
