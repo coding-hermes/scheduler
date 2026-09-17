@@ -731,6 +731,34 @@ const zeroSelectThreshold = 2
 // at threshold, subsequent ones at most once per gap.
 const zeroSelectReEmitGap = 30 * time.Minute
 
+// allRunningRowsArePhantoms reports whether the DB's running ticks are ALL
+// stale pid=0 phantoms — status='running' rows whose heartbeat (or
+// spawned_at, for pre-S-GAP-003 rows that never wrote one) is older than
+// gatewayZombieMaxAge (SCHED-GAP-135). This is the exact row shape the
+// 2026-09-16 20:07:35Z gateway-restart burst left behind: the spawn wrote
+// the placeholder session/heartbeat, exhausted its retries against a
+// refused dial, and the row never reached a terminal status. Zero running
+// rows returns false (nothing phantom to act on; the caller's legacy
+// suppression stands), and any query error fails safe the same way — this
+// helper only ever UNBLINDS the watchdog, it must never fire it on a
+// healthy fleet. Uses the same julianday() comparison as
+// staleGatewayTicksSQL: a raw string compare on RFC3339 across varying
+// offsets would be wrong.
+func (l *Loop) allRunningRowsArePhantoms() bool {
+	const q = `
+SELECT COUNT(*),
+       SUM(CASE WHEN pid = 0 AND (
+            (heartbeat_at IS NOT NULL AND julianday(heartbeat_at) < julianday('now', '-%[1]d minutes'))
+         OR (heartbeat_at IS NULL     AND julianday(spawned_at)  < julianday('now', '-%[1]d minutes')))
+           THEN 1 ELSE 0 END)
+FROM ticks WHERE status = 'running'`
+	var total, stale int
+	if err := l.db.QueryRow(fmt.Sprintf(q, int(gatewayZombieMaxAge/time.Minute))).Scan(&total, &stale); err != nil {
+		return false
+	}
+	return total > 0 && stale == total
+}
+
 // checkEvalStall is the GAP-042 in-loop stall watchdog. It runs from the
 // 30s health ticker — which always fires, unlike the escalator
 // (CheckSchedulerHealth only runs inside evaluate(), so a loop that never
@@ -781,8 +809,23 @@ func (l *Loop) checkEvalStall(running int) {
 		return // never evaluated — the initial eval fires at startup
 	}
 	age := time.Since(lastEval)
-	if age < l.evalStallThreshold() || running > 0 {
-		return // healthy: evaluating on cadence, or work in flight
+	if age < l.evalStallThreshold() {
+		return // healthy: evaluating on cadence
+	}
+	// SCHED-GAP-135: `running > 0` must not silence the watchdog when every
+	// running DB row is a stale pid=0 phantom (heartbeat older than
+	// gatewayZombieMaxAge). The 2026-09-16 20:07:35Z gateway-restart wedge
+	// left 4 such rows (9router, warpfs, off-by-one, gitreins-poc) holding
+	// 4 of 5 packer slots with no EVAL/spawn line for 4m52s — and this
+	// early return blinded GAP-042 against exactly the wedge it exists to
+	// catch. When the running set is all phantoms there is no real work in
+	// flight and no slot-freed event will ever arrive: force the
+	// re-evaluation. Chosen shape: option (b) from the GAP-135 brief —
+	// stale rows are excluded from the suppression count rather than
+	// option (a)'s blanket age trigger, so a healthy busy fleet (live rows
+	// present) still suppresses exactly as before.
+	if running > 0 && !l.allRunningRowsArePhantoms() {
+		return // healthy: work in flight
 	}
 
 	now := time.Now()
