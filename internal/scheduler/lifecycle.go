@@ -117,6 +117,22 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		log.Printf("WARN: failed to update last_tick_completed for %s: %v", outcome.Project, err)
 	}
 
+	// SCHED-GAP-137a: a successful tick clears the consecutive-failure backoff
+	// counter. Local-spawn ticks never pass through spawn.go's spawn-time reset
+	// (that path only fires on gateway spawn / new spawn), so a project that
+	// failed N times in a drain storm kept the residue across successful local
+	// completions (observed: cf=91 on bunker/chimera-v2/crier despite recent
+	// successful last_tick_completed). Failed and timeout outcomes
+	// intentionally leave the counter alone — GAP-133's FailureBackoff gate
+	// reads it to hold admission during consecutive failures.
+	if outcome.Status == TickCompleted {
+		if _, err := lt.db.Exec(`
+			UPDATE projects SET consecutive_failures = 0 WHERE name = ?
+		`, outcome.Project); err != nil {
+			log.Printf("WARN: failed to reset consecutive_failures for %s: %v", outcome.Project, err)
+		}
+	}
+
 	return nil
 }
 
