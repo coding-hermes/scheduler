@@ -1645,15 +1645,37 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// above, so reaching here always means an exec spawn (GAP-049).
 	atomic.AddInt64(&s.spawnCountExec, 1)
 
-	stdout, err := cmd.StdoutPipe()
+	// INT-CI-005: create the stdout pipe MANUALLY instead of cmd.StdoutPipe().
+	// StdoutPipe registers its read end in os/exec's parentIOPipes, and
+	// cmd.Wait() closes every parentIOPipes entry the moment the process is
+	// reaped (os/exec exec.go: closeDescriptors(c.parentIOPipes)) — racing
+	// the stdout scanner goroutine below. For a child that writes one short
+	// line and exits (echo), Wait can reap + close before the scanner's
+	// first Read lands: the scanner then wakes on os.ErrClosed with ZERO
+	// bytes delivered (a pipe close does not flush buffered data to the
+	// reader), st.Output stays empty, and the SCHED-GAP-081 drain window in
+	// Wait() never sees the data because scanDone closed instantly. This is
+	// the ~6/20 CI flake in TestSpawn_MemLimitUnderLimitSpawnRunsUnchanged
+	// and the real mechanism behind SCHED-GAP-081's daily "file already
+	// closed" WARNs + truncated captures. os/exec's own contract says it is
+	// incorrect to call Wait before all reads from the pipe have completed,
+	// but Wait is also our process-exit signal — so the read end must simply
+	// not belong to Wait. With cmd.Stdout set to an *os.File, exec passes
+	// the write end straight through to the child (no copy goroutine,
+	// nothing added to parentIOPipes); the parent closes its write-end copy
+	// right after Start so EOF semantics are unchanged.
+	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		s.noteSpawnFailure(project.Name)
 		s.recordCircuitFailure(provider, model, "exec stdout pipe error")
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
+	cmd.Stdout = stdoutWrite
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		s.noteSpawnFailure(project.Name)
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
 		s.recordCircuitFailure(provider, model, "exec stderr pipe error")
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
@@ -1661,9 +1683,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 	if err := cmd.Start(); err != nil {
 		s.noteSpawnFailure(project.Name)
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
 		s.recordCircuitFailure(provider, model, "exec start error: "+err.Error())
 		return nil, fmt.Errorf("start process: %w", err)
 	}
+	// INT-CI-005: the child holds the write end now; drop the parent's copy
+	// so stdout hits EOF when the child (and any forked descendants holding
+	// the descriptor) exit — byte-identical to the StdoutPipe() lifecycle.
+	_ = stdoutWrite.Close()
 
 	// ADV-R11 (GAP-048 cure): cap the spawned process's address space
 	// (RLIMIT_AS) when a limit is armed (--spawn-mem-limit-mb; 0 = off,
@@ -1694,7 +1722,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		Started: time.Now(),
 		Deliver: project.Deliver,
 		cmd:     cmd,
-		stdout:  stdout,
+		stdout:  stdoutRead,
 		stderr:  stderr,
 		spawner: s,
 		// SCHED-GAP-029: carry workdir for potential future metric enrichment.
@@ -1721,7 +1749,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	st.preHead, st.preCommits = gitBaseline(project.Workdir)
 
 	// Tee stdout: scanner reads session_id from one side, buffer captures full output.
-	teeReader := io.TeeReader(stdout, &st.Output)
+	teeReader := io.TeeReader(stdoutRead, &st.Output)
 
 	// Parse session ID from stdout and persist it. The scanner goroutine must
 	// exit when the process exits or times out so it cannot leak. scanDone is
@@ -1744,7 +1772,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// captured output and surfaced "file already closed" on normal ticks).
 	go func() {
 		<-scanCtx.Done()
-		_ = stdout.Close()
+		_ = stdoutRead.Close()
 	}()
 
 	go func() {
