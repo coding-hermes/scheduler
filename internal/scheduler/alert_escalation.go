@@ -322,7 +322,7 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 
 	for _, name := range names {
 		rows, err := ae.db.QueryContext(ctx,
-			`SELECT status FROM ticks
+			`SELECT status, COALESCE(error, '') FROM ticks
 			 WHERE project_name = ? AND completed_at IS NOT NULL
 			 ORDER BY spawned_at DESC LIMIT ?`,
 			name, window)
@@ -333,8 +333,16 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 
 		var failed, total int
 		for rows.Next() {
-			var status string
-			if err := rows.Scan(&status); err != nil {
+			var status, errText string
+			if err := rows.Scan(&status, &errText); err != nil {
+				continue
+			}
+			// Harness/infrastructure failures say nothing about the project:
+			// the tick never reached it. Counting them let one gateway restart
+			// mass-disable healthy lanes (SCHED-GAP-134 — 2026-09-16: six of
+			// the fleet's top foreman lanes were auto-disabled on 90/100
+			// gateway-drain 503s during a graceful gateway restart).
+			if status == "failed" && harnessFailure(errText) {
 				continue
 			}
 			total++
@@ -385,6 +393,32 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 			})
 	}
 	return nil
+}
+
+// harnessFailure reports whether a failed tick's error came from the harness
+// (gateway / scheduler infrastructure) rather than from the project itself.
+// These ticks never reached the project, so they must not feed per-project
+// health accounting (SCHED-GAP-134). Keep this list tight: only outage classes
+// where every project on the box fails identically.
+func harnessFailure(errText string) bool {
+	if errText == "" {
+		return false
+	}
+	lower := strings.ToLower(errText)
+	for _, marker := range []string{
+		"gateway unreachable",
+		"gateway is draining",
+		"gateway_auth_error",
+		"invalid gateway api key",
+		"connection refused",
+		"exec fallback disabled",
+		"aborted by graceful shutdown",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // RunAll executes all escalation checks. Errors from individual checks

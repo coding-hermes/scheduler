@@ -729,6 +729,7 @@ func TestNamespaceAllocator_SumAtMostBudget(t *testing.T) {
 		t.Errorf("total allocation %d exceeds budget 100 (±1 rounding OK)", total)
 	}
 }
+
 // T-MODE-4M: multipool flat-fallback path — tasks-mode + FailureBackoff
 // gates admission even when board work is pending (SCHED-GAP-133).
 func TestMultiPoolPacker_TasksMode_FailureBackoffGatesAdmission(t *testing.T) {

@@ -714,7 +714,6 @@ func TestPick_Gap011_OverdueBypassesSpendGate(t *testing.T) {
 	}
 }
 
-
 // T-MODE-4P: flat Packer.Pick path — tasks-mode + FailureBackoff gates
 // admission even when board work is pending (SCHED-GAP-133).
 func TestPacker_TasksMode_FailureBackoffGatesAdmission(t *testing.T) {
@@ -750,4 +749,3 @@ func TestPacker_TasksMode_FailureBackoffGatesAdmission(t *testing.T) {
 		}
 	}
 }
-

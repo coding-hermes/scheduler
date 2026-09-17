@@ -34,7 +34,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			status TEXT DEFAULT 'queued',
 			completed_at TEXT,
 			spawned_at TEXT,
-			started_at TEXT
+			started_at TEXT,
+			error TEXT DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -679,5 +680,101 @@ func TestAutoDisable_EventDetails(t *testing.T) {
 	}
 	if !strings.Contains(details, `"doomed"`) {
 		t.Errorf("auto-disable event details should reference project 'doomed': %s", details)
+	}
+}
+
+// --- SCHED-GAP-134: harness failures must not feed project health ----------
+
+// insertTickE inserts a tick with an error string (insertTick has no error
+// column support; harness-failure classification reads ticks.error).
+func insertTickE(t *testing.T, db *sql.DB, tickID, project, status, errText string, completedAt time.Time) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO ticks (id, project_name, status, error, completed_at, spawned_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		tickID, project, status, errText, completedAt.Format(time.RFC3339), completedAt.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("insert tick %s: %v", tickID, err)
+	}
+}
+
+// TestAutoDisable_IgnoresHarnessFailures (SCHED-GAP-134): 100 failed ticks whose
+// errors are all gateway-outage classes must NOT auto-disable the project — the
+// project never got to run. Regression test for the 2026-09-16 mass-disable.
+func TestAutoDisable_IgnoresHarnessFailures(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "gatewayblocked", 1800)
+	now := time.Now()
+	errText := `gateway unreachable and exec fallback disabled: gateway POST: HTTP 503: invalid_request_error: Gateway is draining existing work; retry shortly.`
+	for i := 0; i < 100; i++ {
+		insertTickE(t, db, "fail-"+string(rune('A'+i%26))+string(rune('a'+i/26)), "gatewayblocked", "failed", errText,
+			now.Add(-time.Duration(100-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.90, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if !projectEnabled(t, db, "gatewayblocked") {
+		t.Error("expected gatewayblocked to stay ENABLED — all failures were harness-side (SCHED-GAP-134)")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected no HIGH auto-disable event, got %d", n)
+	}
+}
+
+// TestAutoDisable_StillCountsProjectFailures: harness-failure exclusion must not
+// blunt the breaker — a project failing on its own terms is still disabled.
+func TestAutoDisable_StillCountsProjectFailures(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "broken", 1800)
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		insertTickE(t, db, "fail-"+string(rune('A'+i%26))+string(rune('a'+i/26)), "broken", "failed",
+			"tick timeout after 7200s: no board progress", now.Add(-time.Duration(100-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.90, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if projectEnabled(t, db, "broken") {
+		t.Error("expected broken to be disabled — its failures are project-side")
+	}
+}
+
+// TestHarnessFailureClassification pins the marker list.
+func TestHarnessFailureClassification(t *testing.T) {
+	yes := []string{
+		`gateway unreachable and exec fallback disabled: gateway POST: Post "http://127.0.0.1:8642/v1/responses": dial tcp 127.0.0.1:8642: connect: connection refused`,
+		`gateway unreachable and exec fallback disabled: gateway POST: HTTP 503: invalid_request_error: Gateway is draining existing work; retry shortly.`,
+		`aborted by graceful shutdown — drain timeout`,
+		`Invalid gateway API key (API_SERVER_KEY)`,
+	}
+	no := []string{
+		``,
+		`tick timeout after 7200s`,
+		`exit status 2`,
+		`judge rejected the criteria evidence`,
+	}
+	for _, s := range yes {
+		if !harnessFailure(s) {
+			t.Errorf("harnessFailure(%q) = false, want true", s)
+		}
+	}
+	for _, s := range no {
+		if harnessFailure(s) {
+			t.Errorf("harnessFailure(%q) = true, want false", s)
+		}
 	}
 }
