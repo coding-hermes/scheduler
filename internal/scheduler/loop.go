@@ -995,6 +995,17 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		if skipMode {
 			continue // skip-mode blackout: packer skips this project
 		}
+		// SCHED-GAP-136: tasks-mode post-tick pacing mirror (base, no
+		// jitter — deliberately the more conservative side; see
+		// tasks_pacing.go). The packer-level mirror inside the tasks
+		// branch lives in the three selection paths; this eligibility
+		// mirror must match or the GAP-043 alarm lies. Applied regardless
+		// of admission mode: in cooldown mode the cooldown check below is
+		// already ≥ the pacing floor for every pinned project, so this
+		// only bites tasks-mode rows (the intent).
+		if tasksPacingDeferred(comp, now) {
+			continue // post-tick pacing: packer defers this project
+		}
 		if now.Sub(comp) >= cooldownDur {
 			eligible++
 		}

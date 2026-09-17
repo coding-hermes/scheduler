@@ -282,6 +282,10 @@ func (m *MultiPoolPacker) packFlat(
 						continue // FailureBackoff not elapsed
 					}
 				}
+				// SCHED-GAP-136: post-tick pacing floor (see packer_select.go).
+				if tasksPacingDeferredJittered(s.lastTick, now) {
+					continue
+				}
 			} else {
 				if now.Sub(*s.lastTick) < cooldownDur {
 					continue

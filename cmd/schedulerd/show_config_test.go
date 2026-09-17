@@ -146,6 +146,7 @@ func TestPrintConfig(t *testing.T) {
 			2*60*60*1000000000,
 			30*60*1000000000,
 			5*60*1000000000,
+			60*1000000000,
 			"http://127.0.0.1:8642",
 			"secret",
 			"/tmp/foreman",
@@ -175,6 +176,8 @@ func TestPrintConfig(t *testing.T) {
 		// ADV-R08/G3: the slot-wait patience must surface in
 		// --show-config output.
 		"slot_patience = \"5m0s\"",
+		// SCHED-GAP-136: tasks-mode post-tick pacing surfaces too.
+		"tasks_pacing = \"1m0s\"",
 		// ADV-R11: the per-spawn memory cap must surface in --show-config
 		// output (the value passed at the call site).
 		"spawn_mem_limit_mb = 512",

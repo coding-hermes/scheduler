@@ -559,11 +559,26 @@ const gatewayKeyProbeTimeout = 5 * time.Second
 const gatewayRetryMaxAttempts = 3
 
 // gatewayRetryBackoff returns the backoff duration for the given retry
-// attempt (1-based), capped at 4s.
+// attempt (1-based), capped at 4s. When the failed attempt carried a
+// server-side pacing hint (SCHED-GAP-136: the gateway's drain 503 sends
+// "Retry-After: 1"), that hint acts as a FLOOR — we never sleep LESS than
+// the server asked, and exponential growth continues from there.
 func gatewayRetryBackoff(attempt int) time.Duration {
 	d := 500 * time.Millisecond << (attempt - 1)
 	if d > 4*time.Second {
 		return 4 * time.Second
+	}
+	return d
+}
+
+// gatewayRetrySleep is the wall-clock wait before retry attempt `attempt`
+// after `err`: max(exponential backoff, server Retry-After hint).
+// ctx-bounded by the caller's select.
+func gatewayRetrySleep(err error, attempt int) time.Duration {
+	d := gatewayRetryBackoff(attempt)
+	var gse *GatewayStatusError
+	if errors.As(err, &gse) && gse.RetryAfter > d {
+		return gse.RetryAfter
 	}
 	return d
 }
@@ -1216,7 +1231,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						select {
 						case <-turnCtx.Done():
 							return r, err
-						case <-time.After(gatewayRetryBackoff(attempt)):
+						case <-time.After(gatewayRetrySleep(err, attempt)):
 						}
 						r, err = send(model, provider)
 						if err == nil {

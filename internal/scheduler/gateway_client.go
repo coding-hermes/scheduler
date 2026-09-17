@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,8 +36,14 @@ var ErrGatewayTransient = errors.New("gateway transient error")
 // legacy plain-error text ("gateway POST: HTTP <code>: <detail>") so
 // existing assertions on error text keep passing; the StatusCode field lets
 // the spawn path classify 5xx as transient and retry.
+//
+// SCHED-GAP-136: retryAfter carries the server's Retry-After hint (parsed
+// seconds-form only; the gateway's 503 drain response sends
+// "Retry-After: 1"). 0 = absent/unparseable. The spawn retry loop uses it
+// as a FLOOR on its backoff sleep — never below what the server asked for.
 type GatewayStatusError struct {
 	StatusCode int
+	RetryAfter time.Duration
 	msg        string
 }
 
@@ -278,8 +285,17 @@ func (g *GatewayClient) SendResponseWithSessionKey(ctx context.Context, prompt, 
 		// SCHED-GAP-080: carry the status code so the spawn path can
 		// classify 5xx as transient. Error() text is byte-identical to the
 		// legacy plain error ("gateway POST: HTTP <code>: <detail>").
+		// SCHED-GAP-136: parse Retry-After (seconds-form) so the retry
+		// loop can honor the server's pacing hint.
+		retryAfter := time.Duration(0)
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if secs, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && secs > 0 {
+				retryAfter = time.Duration(secs) * time.Second
+			}
+		}
 		return nil, &GatewayStatusError{
 			StatusCode: resp.StatusCode,
+			RetryAfter: retryAfter,
 			msg:        fmt.Sprintf("gateway POST: HTTP %d: %s", resp.StatusCode, authErrorDetail(body)),
 		}
 	}

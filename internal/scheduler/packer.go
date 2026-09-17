@@ -361,6 +361,11 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 					continue
 				}
 			}
+			// SCHED-GAP-136: post-tick pacing floor (see packer_select.go).
+			if tasksPacingDeferredJittered(s.lastTickAt, now) {
+				totalSkippedCooldown++
+				continue
+			}
 		} else {
 			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 				totalSkippedCooldown++

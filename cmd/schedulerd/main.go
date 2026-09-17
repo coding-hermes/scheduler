@@ -50,6 +50,7 @@ func main() {
 	// slot before the project is dropped (the drop emits a MEDIUM
 	// slot_pool event). Default keeps the historical hardcoded 5m window.
 	slotPatience := flag.Duration("slot-patience", 5*time.Minute, "How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3)")
+	tasksPacing := flag.Duration("tasks-pacing", 60*time.Second, "Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); 0 = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
@@ -148,6 +149,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_SLOT_PATIENCE=%q invalid — using %v", v, *slotPatience)
 		}
 	}
+	// SCHED-GAP-136: tasks-mode post-tick pacing env override — same
+	// pattern. 0 or invalid keeps the flag value (60s in the fleet binary;
+	// an explicit SCHEDULER_TASKS_PACING=0 DISABLES pacing — the escape
+	// hatch for a lane that must tick continuously).
+	if v := os.Getenv("SCHEDULER_TASKS_PACING"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			*tasksPacing = d
+		} else {
+			log.Printf("WARN: SCHEDULER_TASKS_PACING=%q invalid — using %v", v, *tasksPacing)
+		}
+	}
 	// SCHED-GAP-125: load-gate threshold env override — same pattern. Only a
 	// positive parseable float enables the gate; 0/negative/invalid keeps it
 	// off. The gate defers spawns while 1m loadavg >= threshold.
@@ -192,7 +204,7 @@ func main() {
 		printConfig(*configFile, *dbPath, *listen, *logFile,
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
-			*tickTimeout, *gatewayResponseTimeout, *slotPatience,
+			*tickTimeout, *gatewayResponseTimeout, *slotPatience, *tasksPacing,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
@@ -312,6 +324,11 @@ func main() {
 	// a MEDIUM slot_pool event. The flag var already carries the env
 	// override resolved above; <= 0 keeps the 5m default in the pool.
 	loop.SetSlotPatience(*slotPatience)
+	// SCHED-GAP-136: tasks-mode post-tick pacing (fleet default 60s + up
+	// to 20% jitter via the flag; library default 0). The flag var carries
+	// the env override; TOML [scheduler] tasks_pacing applies below only
+	// when the flag was never set (same precedence as the load gate).
+	scheduler.SetTasksPacing(*tasksPacing)
 	// SCHED-GAP-125: load-average gate (opt-in; 0 = disabled). The flag var
 	// carries the env override; TOML [scheduler] load_gate_threshold applies
 	// below only when the flag was never set (same precedence as budget).
@@ -397,6 +414,18 @@ func main() {
 			if rootCfg.Scheduler.LoadGateThreshold > 0 && *loadGateThreshold == 0 {
 				*loadGateThreshold = rootCfg.Scheduler.LoadGateThreshold
 				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
+			}
+			// SCHED-GAP-136: TOML layer for tasks-mode post-tick pacing —
+			// same default-guard pattern (only when the flag sits at its
+			// 60s default, so CLI and env keep precedence). A TOML 0s
+			// DISABLES pacing explicitly.
+			if rootCfg.Scheduler.TasksPacing != "" && *tasksPacing == 60*time.Second {
+				if d, derr := time.ParseDuration(rootCfg.Scheduler.TasksPacing); derr == nil && d >= 0 {
+					*tasksPacing = d
+					log.Printf("TASKS-PACING: set from config — %v (+up to 20%% jitter; 0 = disabled)", d)
+				} else {
+					log.Printf("WARN: scheduler.tasks_pacing=%q invalid — using %v", rootCfg.Scheduler.TasksPacing, *tasksPacing)
+				}
 			}
 			// ADV-R11: TOML layer for the per-spawn memory cap — same
 			// default-guard pattern (only when the flag sits at its 0
@@ -527,6 +556,7 @@ func main() {
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		SlotPatience:           slotPatience.String(),
+		TasksPacing:            tasksPacing.String(),
 		LoadGateThreshold:      *loadGateThreshold,
 		SpawnMemLimitMB:        *spawnMemLimitMB,
 		ModelRatesFile:         *modelRatesFile,

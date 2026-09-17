@@ -254,6 +254,13 @@ func (m *MultiPoolPacker) Pack(
 							continue // FailureBackoff not elapsed
 						}
 					}
+					// SCHED-GAP-136: post-tick pacing floor — even a healthy
+					// tasks-mode project waits pacing+jitter after ANY terminal
+					// tick before re-admission (anti-herd spacing, Bane's
+					// "don't spawn at 0ms" ruling).
+					if tasksPacingDeferredJittered(&lt, now) {
+						continue
+					}
 				} else {
 					if now.Sub(lt) < cooldownDur {
 						continue

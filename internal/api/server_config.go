@@ -50,6 +50,10 @@ type ResolvedConfig struct {
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event). Default "5m0s".
 	SlotPatience string `json:"slot_patience"`
+	// TasksPacing (SCHED-GAP-136): minimum post-tick spacing before a
+	// tasks-mode project re-admits, plus up to 20% jitter applied at
+	// decision time. "0s" = disabled. Default "1m0s" in the fleet binary.
+	TasksPacing string `json:"tasks_pacing"`
 	// LoadGateThreshold (SCHED-GAP-125): defer new spawns while the 1-minute
 	// load average is at or above this value. 0 = the gate is off.
 	LoadGateThreshold float64 `json:"load_gate_threshold"`

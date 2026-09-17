@@ -78,6 +78,16 @@ type SchedulerConfig struct {
 	// silent no-op: the flag's <= 0 means "keep default").
 	SlotPatience string `toml:"slot_patience"`
 
+	// TasksPacing (SCHED-GAP-136) is the minimum post-tick spacing before a
+	// tasks-mode project re-admits, as a duration string (e.g. "60s");
+	// the binary adds up to 20% jitter on top. Empty = the daemon flag
+	// default (60s). "0s" explicitly disables pacing (a lane that must
+	// tick continuously). Applies only when the operator never passed
+	// --tasks-pacing (same precedence chain: TOML < env
+	// SCHEDULER_TASKS_PACING < flag). Composes with — never replaces —
+	// the S-GAP-001 failure backoff.
+	TasksPacing string `toml:"tasks_pacing"`
+
 	// LoadGateThreshold (SCHED-GAP-125) defers new spawns while the 1-minute
 	// load average is at or above this value (e.g. 12.0 on a 16-core box).
 	// 0 = the gate is off (flag default). Applies only when the operator
