@@ -2541,3 +2541,17 @@ tasks:
   status: complete
   created_at: '2026-09-17T03:26:33.586947+00:00'
   completed_at: '2026-09-17T03:42:46.429911+00:00'
+- id: SCHED-GAP-135-2026-09-17-04
+  title: "SCHED-GAP-135 \u2014 phantom running ticks + eval-stall blind"
+  criteria:
+  - 'When the gateway transport dial is refused, the spawn retry-exhaust path must
+    mark the tick failed (write to DB) and call SlotPool.Release, so that the row
+    does not stay status=''running'' with pid=0 forever. The eval-stall detector at
+    loop.go:784 must NOT return early on phantom running>0; the new test must prove
+    the row gets marked failed and the slot gets released, and prove checkEvalStall
+    is no longer silenced by a stuck-running row. Verify with go test -count=1 -short
+    -p 1 ./internal/scheduler/ and a RED mutation: force the failure write to be skipped,
+    watch the new test fail, then restore.'
+  status: complete
+  created_at: '2026-09-17T04:11:58.095898+00:00'
+  completed_at: '2026-09-17T05:02:12.511821+00:00'
