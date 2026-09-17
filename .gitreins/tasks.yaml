@@ -2564,3 +2564,21 @@ tasks:
   status: complete
   created_at: '2026-09-17T06:33:03.259474+00:00'
   completed_at: '2026-09-17T06:45:01.216109+00:00'
+- id: SCHED-GAP-137b
+  title: pause/resume API must keep ~/.hermes/fleet.toml in parity
+  criteria:
+  - pause a live project via the API, restart loader, project stays paused; a test
+    calls pause then re-loads and asserts enabled remains false; clause 1 of SCHED-GAP-137
+    closed
+  status: complete
+  created_at: '2026-09-17T07:03:23.056364+00:00'
+  completed_at: '2026-09-17T07:31:18.748077+00:00'
+- id: SCHED-GAP-137b-v2
+  title: pause/resume re-load preserves DB state (judge rework)
+  criteria:
+  - pause a live project via the API, restart loader, project stays paused; a test
+    calls pause then re-loads and asserts enabled remains false; clause 1 of SCHED-GAP-137
+    closed
+  status: complete
+  created_at: '2026-09-17T07:44:32.759068+00:00'
+  completed_at: '2026-09-17T07:44:33.226204+00:00'
