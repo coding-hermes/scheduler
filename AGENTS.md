@@ -155,6 +155,17 @@ The daemon's default DB path is `~/.hermes/coding-hermes/scheduler.db` (`--db` f
 
 - **Board-driven wake + ordering-only boost (ADV-R07, Option C).** A watcher (`internal/scheduler/board_wake.go`) polls enabled projects' board files (tasks.jsonl/tasks.md mtime, 60s cadence). A detected write arms a per-project wake that fires ~5 min later (bounded debounce — later writes never extend an armed wake; the bound covers the observed 4.4-min median implementation→board flip lag), reads the board through the R06 git-verified freshness reader, emits a `board_wake` event (row id + freshness verdict per row), and calls `ForceEvaluate`. The pending count feeding the existing `pendingBoostUrgencyFor` tier (board_awareness.go) is now freshness-checked: a pending row whose work verifiably landed in git (verdict flip-window/flip-overdue) stops counting. Ordering only — wall-clock cooldown remains the SOLE admission authority; no code path skips a spawn solely on board state. Every watcher/reader error fails open (fleet behavior identical to pre-R07; clock cadence unchanged), and a heartbeat watchdog watches the watcher (HIGH `board_wake` stall event on a silent poll loop, 30-min re-emit throttle). Any future admission gate MUST live in `SlotPool.spawn` (slot_pool.go) with a declared override — the G7 ruling; adding one anywhere else (evaluate, packers, watcher) is a design violation.
 
+- **Tier ladder (G2 ruling).** The four urgency tiers are documented policy, not an accident (G2 ruling: tiers stay, continuous scoring rejected). Tiers 2x apart are stable — no coefficient edit can silently reorder the fleet, and continuous scoring creates exactly that silent-global-reorder hazard (A5 2 G2; A1 5 confirms the code matches the corrected C12 reading).
+
+  | Tier | Base urgency | Within-tier ordering | Cap | Source |
+  |------|-------------|----------------------|-----|--------|
+  | Organic | `priority * (1 + elapsed/interval)^decay` | within-tier: priority desc, then by score | ~12k live | `internal/scheduler/urgency.go:63` |
+  | Pending-boost (board) | `5e11` | + `min(pending, pendingBoostMaxCount)` | `< 1e12` (preserves starvation guarantee) | `internal/scheduler/board_awareness.go:97` |
+  | Bump (actively bumped) | `5e11 + 1e6` | bumped project wins ties against plain pending-boost | n/a (per-bump) | `internal/scheduler/board_awareness.go:109` |
+  | Starvation (fairness) | `1e12` | + `elapsed.Seconds()` (most-starved first) | `1e12 + ~1e6s` (still >10^7× organic) | `internal/scheduler/fairness.go:42` |
+
+  Across tiers the base ladder dominates: any pending-boost project outranks any organic one, any starvation-boost outranks any pending-boost, etc. Within a tier, projects sort by their computed score. `MaxNudgesPerTick = 2` (`internal/scheduler/session_resume.go:36`) caps continuation re-spawns per tick row — a safety bound, NOT a tier knob; changing it does not reorder anything.
+
 ## Project Conventions
 
 - Go doc comments on all public functions
