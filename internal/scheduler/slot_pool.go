@@ -286,34 +286,29 @@ func (p *SlotPool) SpawnEnqueued(proj PackedProject, tickID string, now time.Tim
 // spawn is the shared goroutine body for Spawn and SpawnEnqueued. When
 // enqueued is true the row already exists (status queued) and the goroutine
 // only transitions it to running; otherwise it enqueues first.
+//
+// SCHED-GAP-171: the load-average gate (SCHED-GAP-125) is NOT consulted here
+// any more. It used to sit at the top of this function and `return` — which
+// for every caller that enqueues first (Loop.SpawnNow, resumeOrphans) left the
+// already-created row stranded in status='queued', and nothing in this process
+// dispatches an EXISTING row: the packer re-picks a project (and can strand
+// another row), SpawnNow answers ErrProjectRunning, and the orphan scan treats
+// the stranded row as in-flight — so the work was neither running nor
+// eligible. Measured 2026-09-18: 5 rows queued >1h while the load was 14-20.
+//
+// The gate now lives with the CALLER, BEFORE any row exists:
+//   - Loop.evaluate (tick_process.go) — pre-enqueue check per packed project;
+//   - Loop.SpawnNow (loop.go) — after the enqueue that makes the returned id
+//     resolvable, so the API contract holds: the row stays `queued` and the
+//     deferral is reported as a `load_gate_deferred` event carrying the id;
+//   - resumeOrphans (session_resume.go) — before the nudge is spent.
+//
+// All three pre-check, so no entry point into this pool can create work the
+// gate would refuse. This stays defer-not-drop: the project keeps its
+// selection, no cooldown is consumed, no failure is recorded, and no slot is
+// taken. The predicate itself (load_gate.go) and the `load_gate='off'`
+// namespace opt-out are unchanged and remain callable from anywhere.
 func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB, enqueued bool) {
-	// SCHED-GAP-125: load-average gate (Bane 2026-09-16). Opt-in via
-	// --load-gate-threshold (0 = off, byte-identical fleet); namespaces
-	// opt out per-namespace with load_gate='off' (migration v31, threader
-	// as LoadGateBypass by the packer). G7 ruling placement: admission
-	// gates live in SlotPool.spawn. DEFER, not drop: the project keeps its
-	// selection — the next evaluation re-picks it once load drops; no
-	// cooldown is consumed and no progress penalty is recorded.
-	if LoadGateShouldDefer(db, proj.NamespaceID) {
-		l1, _ := currentLoad1m()
-		log.Printf("LOAD-GATE: deferring %s (tick %s) — load %.2f >= threshold %.2f (work stays queued)",
-			proj.Name, tickID, l1, loadGateThreshold())
-		p.mu.Lock()
-		events := p.events
-		p.mu.Unlock()
-		if events != nil {
-			events.Emit(context.Background(), SeverityInfo, "slot_pool",
-				"load gate deferred "+proj.Name,
-				map[string]any{
-					"project":   proj.Name,
-					"tick_id":   tickID,
-					"load_1m":   l1,
-					"threshold": loadGateThreshold(),
-				})
-		}
-		return
-	}
-
 	// SCHED-GAP-103: atomically check-and-reserve BEFORE launching the
 	// goroutine. Spawn is fire-and-forget: the caller launches the goroutine
 	// and returns, but the goroutine only becomes visible to RunningSet when

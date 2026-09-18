@@ -700,6 +700,20 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		return "", fmt.Errorf("enqueue tick for %s: %w", project.Name, err)
 	}
 
+	// SCHED-GAP-171: the load gate is consulted HERE — after the enqueue that
+	// makes the returned id resolvable, before the spawn session. The API
+	// contract is preserved (the returned tickID is a stored row and the row
+	// keeps status='queued'), and the deferral is now REPORTED instead of
+	// being silent: `load_gate_deferred` with the tick id, so a caller can
+	// tell "deferred under load" from "spawned" post-hoc. Without this the
+	// row sat queued with no event naming why, and the only signal was the
+	// 409 from the next SpawnNow (ErrProjectRunning) — which reads like a
+	// stuck tick rather than a gate decision.
+	if LoadGateShouldDefer(l.db, proj.NamespaceID) {
+		l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, tickID)
+		return tickID, nil
+	}
+
 	// Fire the spawn session (async — the row is already queued, so the
 	// returned id resolves regardless of slot availability). The slot pool
 	// exists from NewLoop (CI-003).
@@ -1695,7 +1709,8 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) {
 		}
 		if packedNames[c.Name] {
 			// Selected by the packer. The load gate can still defer the
-			// spawn (it runs inside SlotPool.spawn) — that deferral IS the
+			// spawn (SCHED-GAP-171: it now runs in the evaluate LOOP, just
+			// below the emitAdmissionPass call) — that deferral IS the
 			// answer to "why is this not running", so it is its own reason.
 			if st.loadGateBlocks {
 				d.Reason = AdmissionReasonLoadGate

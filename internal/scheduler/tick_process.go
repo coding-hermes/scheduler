@@ -201,10 +201,30 @@ func (l *Loop) evaluate() {
 			// DOGFOOD-007: --simulate daemon mode must simulate, never
 			// spawn real foremen. The sim spawner inserts a tick row and
 			// completes it in 50-250ms; unique IDs come from simTickID.
+			// SCHED-GAP-171: the load gate is NOT applied to the sim path —
+			// it is an admission gate for REAL spawns (its whole purpose is
+			// not to overload the host), and a simulated tick spawns no
+			// process. Simulate behaviour is therefore byte-identical under
+			// load, which is what DOGFOOD-007 requires.
 			tickID := l.simTickID(proj.Name, now)
 			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 				log.Printf("SIM: spawn %s failed: %v", proj.Name, err)
 			}
+			continue
+		}
+		// SCHED-GAP-171: consult the load gate BEFORE the spawn — and
+		// therefore before ANY row can be created. SlotPool.Spawn used to
+		// return early on this predicate AFTER the caller had handed it a
+		// tick id, and for every caller that enqueues first (Loop.SpawnNow,
+		// resumeOrphans) that left the row stranded in status='queued' with
+		// nothing in the daemon to dispatch it (SCHED-GAP-145 class: 5 rows
+		// sat queued >1h on 2026-09-18 while the load was 14-20). Here the
+		// deferral costs nothing at all: `continue` skips the spawn, the
+		// project keeps its selection, and the next evaluation re-picks it
+		// once load drops. DEFER, not drop — no cooldown consumed, no
+		// failure recorded, no slot taken, no nudge budget spent, no row.
+		if LoadGateShouldDefer(l.db, proj.NamespaceID) {
+			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
 			continue
 		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)
@@ -224,6 +244,53 @@ func (l *Loop) evaluate() {
 		}
 	}
 }
+
+// emitLoadGateDeferred records a load-gate deferral (SCHED-GAP-125 predicate,
+// SCHED-GAP-171 placement): the grep-stable LOAD-GATE line operators already
+// watch, plus the INFO event the SLOT POOL used to emit for the same decision.
+// Keeping both in one place is what lets the deferral move out of
+// SlotPool.spawn without losing its observability.
+//
+// tickID is "" when the deferral happens BEFORE any row exists — the
+// evaluation path, where nothing was enqueued, so there is nothing to
+// correlate. The API path (Loop.SpawnNow) passes the stored row's id: the row
+// stays `queued` there (its id must resolve), so the id in the event is how a
+// caller tells "deferred" from "spawned" without polling the tick.
+//
+// The event is machine-detectable on purpose: `reason=load_gate_deferred`
+// (plus `deferred=true`) so an operator or a test can query deferrals on their
+// own instead of pattern-matching a log line. The payload otherwise matches
+// the pre-171 slot-pool event (project, tick_id when known, load_1m,
+// threshold) and adds the namespace the gate was consulted for — without it a
+// deferral cannot be attributed to the `load_gate='off'` opt-out decision.
+func (l *Loop) emitLoadGateDeferred(project, nsID, tickID string) {
+	l1, _ := currentLoad1m()
+	threshold := loadGateThreshold()
+	if tickID == "" {
+		log.Printf("LOAD-GATE: deferring %s — load %.2f >= threshold %.2f (no row enqueued; re-picked when load drops)",
+			project, l1, threshold)
+	} else {
+		log.Printf("LOAD-GATE: deferring %s (tick %s) — load %.2f >= threshold %.2f (row stays queued, not started)",
+			project, tickID, l1, threshold)
+	}
+	if l.events == nil {
+		return
+	}
+	details := map[string]any{
+		"project":   project,
+		"namespace": nsID,
+		"load_1m":   l1,
+		"threshold": threshold,
+		"reason":    "load_gate_deferred",
+		"deferred":  true,
+	}
+	if tickID != "" {
+		details["tick_id"] = tickID
+	}
+	l.events.Emit(context.Background(), SeverityInfo, "load_gate",
+		"load gate deferred "+project, details)
+}
+
 func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) {
 	running := make([]string, 0)
 	rrows, err := l.db.QueryContext(ctx, `SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)

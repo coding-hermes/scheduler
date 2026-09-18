@@ -4,20 +4,24 @@ package scheduler
 //
 // Two admission gates DEFER a spawn instead of dropping it:
 //
-//   - SCHED-GAP-125 load-average gate (load_gate.go), consulted at the top of
-//     SlotPool.spawn BEFORE tryReserve and BEFORE any enqueue;
+//   - SCHED-GAP-125 load-average gate (load_gate.go), consulted by the CALLER
+//     before any row is created — the evaluation pass (Loop.evaluate), the API
+//     spawn (Loop.SpawnNow) and the orphan nudge (resumeOrphans). SCHED-GAP-171
+//     moved it OUT of SlotPool.spawn, where a deferral returned AFTER the
+//     caller had enqueued the row and stranded it 'queued' with nothing in the
+//     daemon to dispatch it;
 //   - SCHED-GAP-142 namespace-cap gate (namespace_gate.go), consulted inside the
-//     spawn goroutine after tryReserve, before the global slot wait.
+//     spawn goroutine after tryReserve, before the global slot wait — it needs
+//     the running set, so it stays at the declared G7 admission point.
 //
 // Both are documented in PROSE only: "DEFER, not drop: the project keeps its
 // selection — the next evaluation re-picks it once load drops; no cooldown is
-// consumed and no progress penalty is recorded" (slot_pool.go:284-290) and
-// "the row stays queued and is retried — no cooldown is consumed and the lane
-// records no failure for a busy fleet" (slot_pool.go:336-344). Nothing executed
-// that contract until this file. It matters because a gate that defers
-// correctly but still charges the lane is indistinguishable from one that
-// DROPS it: the fleet only ever sees the charge (a consumed cooldown, a
-// failure counter, a spent nudge).
+// consumed and no progress penalty is recorded" and "the row stays queued and
+// is retried — no cooldown is consumed and the lane records no failure for a
+// busy fleet" (slot_pool.go, namespace_gate.go). Nothing executed that contract
+// until this file. It matters because a gate that defers correctly but still
+// charges the lane is indistinguishable from one that DROPS it: the fleet only
+// ever sees the charge (a consumed cooldown, a failure counter, a spent nudge).
 //
 // The contract pinned here, per gate:
 //
@@ -33,9 +37,10 @@ package scheduler
 //     attempt takes the slot the moment its sibling releases it. A gate that
 //     defers but never re-admits is a silent stall (the reason this test exists).
 //
-// Every assertion is made against the REAL admission path — SlotPool.spawn for
-// tests 1/2/4 and Loop.evaluate for test 3 — never against the gate helpers
-// alone, so a gate that is wired out of that path fails here.
+// Every assertion is made against the REAL admission path — Loop.evaluate for
+// the load gate (tests 1, 3 and 4) and SlotPool.spawn for the namespace cap
+// (test 2) — never against the gate helpers alone, so a gate that is wired out
+// of that path fails here.
 //
 // THE FIXTURES ARE DISTINCTIVE ON PURPOSE. A freshly created project carries
 // cooldown 900, failures 0, no_progress 0, no attempt clock — "unchanged" over
@@ -68,17 +73,21 @@ package scheduler
 //     post-re-admission read; the strict-equality assertion runs across the
 //     deferral window itself, where nothing at all may move.
 //
-// RED proof (SCHED-GAP-146 acceptance 8). Two mutations, each reverted before
-// the commit, both captured in the task report:
+// RED proof (SCHED-GAP-146 acceptance 8). SCHED-GAP-171 moved the load-gate
+// check out of SlotPool.spawn, so mutation M1 below is stated against its new
+// site; M2 was mutated and reverted before the original commit, both captured
+// in the task report:
 //
-//	M1 — slot_pool.go, the load-gate deferral path (:291-309): charge the lane
-//	     before its `return` (UPDATE projects SET last_tick_completed = now,
-//	     consecutive_failures = consecutive_failures + 1).
-//	     → TestGAP146_LoadGateDeferPreservesAllState,
-//	       TestGAP146_DeferDoesNotDoubleCountAcrossEvaluations and
-//	       TestGAP146_DeferredSpawnLeavesNoTickRow all RED on the state
-//	       assertion (got consecutiveFailures:3, lastTickCompleted:<now> —
-//	       want the fixture's 2 / 2026-09-17T00:00:00Z).
+//	M1 — charge the lane on the load-gate deferral. The site is now the
+//	     caller: tick_process.go, the evaluate spawn loop. Replacing the
+//	     `if LoadGateShouldDefer(...) { ...; continue }` guard with nothing
+//	     makes the deferral vanish entirely (a row is created and the tick
+//	     runs) → TestGAP146_LoadGateDeferPreservesAllState,
+//	     TestGAP146_DeferredSpawnLeavesNoTickRow and
+//	     TestGAP146_DeferDoesNotDoubleCountAcrossEvaluations go RED on the
+//	     "the spawn must have reached the gate and deferred" premise.
+//	     Charge-the-lane variants (status='failed' + consecutive_failures+1 on
+//	     the deferred branch) go RED on gap146AssertStateUnchanged instead.
 //	M2 — namespace_gate.go tryClaimNamespaceSlot (:116): `>= cap` → `> cap`
 //	     (admit one spawn past max_concurrent).
 //	     → TestGAP146_NamespaceCapDeferPreservesAllState RED at
@@ -97,6 +106,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // gap146State is the scheduling state a deferral must never touch.
@@ -255,10 +265,16 @@ func gap146ArmLoadGateOff(t *testing.T) {
 }
 
 // TestGAP146_LoadGateDeferPreservesAllState: the load-average gate trips, a
-// real slot-pool spawn is attempted, and NOTHING is charged to the lane and
-// nothing is written to the DB. The early return is in the CALLER's goroutine
-// (slot_pool.go:291-309, before `go func()` at :325), so the assertions are
-// synchronous by construction — no goroutine wait, no race.
+// real admission path runs, and NOTHING is charged to the lane and nothing is
+// written to the DB.
+//
+// SCHED-GAP-171 moved the gate out of SlotPool.spawn to the caller that would
+// create the row, so the deferral under test is now the evaluation pass itself
+// (Loop.evaluate) — the entry point this file exists to pin. The assertions are
+// synchronous by construction (the gate returns before SlotPool.Spawn is
+// called), so there is no goroutine wait and no race. The gateway is wired to a
+// HELD mock: if the gate ever failed to bite, the spawn lands on the mock and
+// the assertions below report it, instead of the test launching a real foreman.
 func TestGAP146_LoadGateDeferPreservesAllState(t *testing.T) {
 	db := newTestDB(t)
 	const ns = "coding-hermes"
@@ -267,6 +283,10 @@ func TestGAP146_LoadGateDeferPreservesAllState(t *testing.T) {
 	capTestNamespace(t, db, ns, 0, "cooldown")
 
 	l := NewLoop(db, time.Minute, time.Hour, 10, 100, 10)
+	l.SetClock(clock.NewFixed(fixedEvalNow())) // deterministic selection instant
+	l.noDeliver = true
+	gw := newHeldResumeGateway(t)
+	gw.wire(l)
 
 	restore := gap146ArmLoadGate(15.0)
 	defer restore()
@@ -285,29 +305,33 @@ func TestGAP146_LoadGateDeferPreservesAllState(t *testing.T) {
 	}
 
 	logbuf := admitCaptureLog(t)
-	tickID := l.slotPool.Spawn(PackedProject{Name: name, NamespaceID: ns}, time.Now(), true, db)
+	l.evaluate()
 
-	// PREMISE — the spawn was ATTEMPTED and DEFERRED (not merely never fired).
-	// This line is the gate's own evidence that the admission point was reached.
+	// PREMISE — the pass reached the packed project and DEFERRED it (not merely
+	// never fired). This line is the gate's own evidence that the admission
+	// point was reached; 0 lines means the project was never selected at all,
+	// which is a fixture problem, not a gate problem.
 	if got := gap146LogCount(logbuf, "LOAD-GATE: deferring "+name); got != 1 {
-		t.Fatalf("LOAD-GATE deferral lines for %s = %d, want 1 — the spawn must have reached the gate and deferred (tickID=%s)",
-			name, got, tickID)
+		t.Fatalf("LOAD-GATE deferral lines for %s = %d, want 1 — the evaluation pass must reach the gate for the packed project and defer it", name, got)
 	}
 
-	if got := gap146TickStatus(t, db, tickID); got != "" {
-		t.Errorf("tick row %s exists with status %q — a load-gate deferral writes no row (the enqueue sits after the gate)", tickID, got)
+	if got := gap146TickCountAll(t, db); got != 0 {
+		t.Errorf("tick rows after the deferred pass = %d, want 0 — a pre-enqueue deferral creates no row, not even a queued one", got)
 	}
 	if got := gap146TickRows(t, db, name, ""); got != 0 {
-		t.Errorf("tick rows for %s = %d, want 0 — a deferred spawn creates no row, not even a queued one", name, got)
+		t.Errorf("tick rows for %s = %d, want 0", name, got)
 	}
 	if got := gap146TickRows(t, db, name, "running"); got != 0 {
 		t.Errorf("running rows for %s = %d, want 0", name, got)
 	}
 	if got := l.slotPool.Running(); got != 0 {
-		t.Errorf("slot pool Running() = %d, want 0 — a deferred spawn takes no global slot", got)
+		t.Errorf("slot pool Running() = %d, want 0 — a deferred project takes no global slot", got)
 	}
 	if l.slotPool.RunningSet()[name] {
-		t.Errorf("%s is in RunningSet after a load-gate deferral — the gate returns before tryReserve, so no reservation (and therefore no phantom occupancy) may survive it", name)
+		t.Errorf("%s is in RunningSet after a load-gate deferral — the gate returns before the spawn, so no reservation (and therefore no phantom occupancy) may survive it", name)
+	}
+	if got := gw.spawns.Load(); got != 0 {
+		t.Errorf("the gateway saw %d spawn(s), want 0 — a deferred project must not reach the spawner", got)
 	}
 	gap146AssertStateUnchanged(t, db, name, want, "load gate")
 }
@@ -519,46 +543,90 @@ func TestGAP146_DeferDoesNotDoubleCountAcrossEvaluations(t *testing.T) {
 }
 
 // TestGAP146_DeferredSpawnLeavesNoTickRow: the DB-write half of the contract,
-// for both entry points into the pool. A load-gated spawn must leave the ticks
-// table untouched — no new row for an un-enqueued spawn, and no status change
-// for a row the caller had already enqueued (the API/nudge/wave shape).
+// for both callers that create a row. A load-gated spawn must leave the ticks
+// table untouched — no new row at all for the evaluation path, and no status
+// change for the row the API path had already enqueued (that row's id has to
+// keep resolving, so it is created, not skipped).
 func TestGAP146_DeferredSpawnLeavesNoTickRow(t *testing.T) {
-	db := newTestDB(t)
-	const ns = "coding-hermes"
-	capTestNamespace(t, db, ns, 0, "cooldown")
+	t.Run("evaluation pass writes no row", func(t *testing.T) {
+		db := newTestDB(t)
+		const ns = "coding-hermes"
+		capTestNamespace(t, db, ns, 0, "cooldown")
 
-	l := NewLoop(db, time.Minute, time.Hour, 10, 100, 10)
+		l := NewLoop(db, time.Minute, time.Hour, 10, 100, 10)
+		l.SetClock(clock.NewFixed(fixedEvalNow()))
+		l.noDeliver = true
+		gw := newHeldResumeGateway(t)
+		gw.wire(l)
 
-	restore := gap146ArmLoadGate(15.0)
-	defer restore()
+		restore := gap146ArmLoadGate(15.0)
+		defer restore()
+		if !LoadGateShouldDefer(db, ns) {
+			t.Fatalf("premise: LoadGateShouldDefer(%q) = false — the fixture does not trip the gate", ns)
+		}
 
-	t.Run("plain spawn writes no row", func(t *testing.T) {
 		const name = "gap146-lg-norow"
 		want := gap146SeedLane(t, db, name, ns)
 
-		tickID := l.slotPool.Spawn(PackedProject{Name: name, NamespaceID: ns}, time.Now(), true, db)
+		logbuf := admitCaptureLog(t)
+		l.evaluate()
 
+		// The deferral is real; without it the assertions below are vacuous.
+		if got := gap146LogCount(logbuf, "LOAD-GATE: deferring "+name); got != 1 {
+			t.Fatalf("LOAD-GATE deferral lines for %s = %d, want 1 — the pass must have reached the gate and deferred", name, got)
+		}
 		if got := gap146TickRows(t, db, name, "running"); got != 0 {
 			t.Errorf("running rows for %s = %d, want 0", name, got)
 		}
 		if got := gap146TickRows(t, db, name, ""); got != 0 {
-			t.Errorf("tick rows for %s = %d, want 0 (tickID=%s was never persisted)", name, got, tickID)
+			t.Errorf("tick rows for %s = %d, want 0 — the evaluation path defers before any row is created", name, got)
+		}
+		if got := gap146TickCountAll(t, db); got != 0 {
+			t.Errorf("tick rows in the whole DB = %d, want 0", got)
+		}
+		if got := gw.spawns.Load(); got != 0 {
+			t.Errorf("the gateway saw %d spawn(s), want 0", got)
 		}
 		gap146AssertStateUnchanged(t, db, name, want, "load gate")
 	})
 
-	t.Run("enqueued row is not started", func(t *testing.T) {
+	t.Run("API row is not started", func(t *testing.T) {
+		// Loop.SpawnNow enqueues the row BEFORE the gate is consulted — that is
+		// the API contract (the returned id must resolve), so the row exists
+		// and stays `queued`. The defer-not-drop half pinned here is that
+		// NOTHING charges or starts it; the deferral itself is reported as a
+		// `load_gate_deferred` event with that tick id, pinned in
+		// schedgap171_pre_enqueue_gate_test.go.
+		db := newTestDB(t)
+		const ns = "coding-hermes"
+		capTestNamespace(t, db, ns, 0, "cooldown")
+
+		l := NewLoop(db, time.Minute, time.Hour, 10, 100, 10)
+		l.SetClock(clock.NewFixed(fixedEvalNow()))
+		l.noDeliver = true
+		gw := newHeldResumeGateway(t)
+		gw.wire(l)
+
+		restore := gap146ArmLoadGate(15.0)
+		defer restore()
+		if !LoadGateShouldDefer(db, ns) {
+			t.Fatalf("premise: LoadGateShouldDefer(%q) = false — the fixture does not trip the gate", ns)
+		}
+
 		const name = "gap146-lg-enqueued"
-		const tickID = "gap146-lg-enqueued-t1"
 		want := gap146SeedLane(t, db, name, ns)
-		queuedTickRow(t, db, tickID, name)
 
-		l.slotPool.SpawnEnqueued(PackedProject{Name: name, NamespaceID: ns}, tickID, time.Now(), true, db)
+		p, err := database.GetProject(context.Background(), db, name)
+		if err != nil {
+			t.Fatalf("GetProject %s: %v", name, err)
+		}
+		tickID, err := l.SpawnNow(*p)
+		if err != nil || tickID == "" {
+			t.Fatalf("SpawnNow under a down gate = (%q, %v), want a stored tick id and no error", tickID, err)
+		}
 
-		// Synchronous by construction: the load gate returns before `go func()`,
-		// so there is nothing to wait for here.
 		if got := gap146TickStatus(t, db, tickID); got != "queued" {
-			t.Errorf("enqueued tick status = %q, want \"queued\" — a load-gate deferral must not start (or fail) a row it did not create", got)
+			t.Errorf("enqueued tick status = %q, want %q — a load-gate deferral must not start (or fail) the row the API created", got, "queued")
 		}
 		if got := gap146TickRows(t, db, name, "running"); got != 0 {
 			t.Errorf("running rows for %s = %d, want 0", name, got)
@@ -570,11 +638,14 @@ func TestGAP146_DeferredSpawnLeavesNoTickRow(t *testing.T) {
 			t.Errorf("nudge_count = %d, want 0 — a deferral spends no retry budget", got)
 		}
 		if l.slotPool.RunningSet()[name] {
-			t.Errorf("%s is in RunningSet after a load-gate deferral — no reservation may outlive the deferred attempt", name)
+			t.Errorf("%s is in RunningSet after a deferred API spawn — no reservation may be taken for a spawn that was refused", name)
 		}
 		if got := l.slotPool.Running(); got != 0 {
 			t.Errorf("slot pool Running() = %d, want 0", got)
 		}
-		gap146AssertStateUnchanged(t, db, name, want, "load gate (enqueued)")
+		if got := gw.spawns.Load(); got != 0 {
+			t.Errorf("the gateway saw %d spawn(s), want 0 — the deferred row must not reach the spawner", got)
+		}
+		gap146AssertStateUnchanged(t, db, name, want, "load gate (API row)")
 	})
 }
