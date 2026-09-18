@@ -745,7 +745,14 @@ func main() {
 		duckbrain.Run(context.Background())
 	}()
 
-	log.Println("schedulerd ready")
+	// SCHED-GAP-148: the startup announcement carries the build identity, so
+	// one grep of the boot log answers "which commit is this daemon running?"
+	// — the same sha this daemon serves as /api/v1/status build_sha, which
+	// ops/check-daemon-freshness.sh compares against the newest commit
+	// touching admission/scheduling code. Shape:
+	//   build version=<ver> sha=<8-char-or-injected-scope> built=<rfc3339>
+	log.Printf("schedulerd ready — build version=%s sha=%s built=%s",
+		version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
 	printStatus(db)
 
 	// Wait for signal.

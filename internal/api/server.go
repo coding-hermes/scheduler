@@ -136,8 +136,16 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	httpCount, execCount := s.loop.SpawnMethodCounts()
 	writeJSON(w, 200, map[string]interface{}{
-		"status":                 "ok",
+		"status": "ok",
+		// SCHED-GAP-148: version + build identity. The human-facing version
+		// string stays first in source order as the operator summary;
+		// build_sha/build_time are the machine-comparable fields (the
+		// freshness guard and any restart script read build_sha). Same
+		// resolution seam as version: ldflags injection wins, then vcs
+		// build info, then "unknown".
 		"version":                version.Current(),
+		"build_sha":              version.CurrentCommit(),
+		"build_time":             version.CurrentBuildDate(),
 		"uptime":                 time.Since(s.started).String(),
 		"db":                     dbOK,
 		"active_ticks":           activeTicks,
@@ -191,6 +199,15 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// the Loop the resolved --budget/SCHEDULER_BUDGET/TOML value built.
 	budgetTotal := s.effectiveBudget()
 	status := map[string]interface{}{
+		// SCHED-GAP-148: build identity on the fleet-overview endpoint too.
+		// version is the operator-facing summary; build_sha is the field the
+		// freshness guard (ops/check-daemon-freshness.sh) compares against
+		// the newest commit touching admission/scheduling code, and
+		// build_time is the RFC3339 build stamp. All three come from
+		// internal/version — never a literal.
+		"version":                version.Current(),
+		"build_sha":              version.CurrentCommit(),
+		"build_time":             version.CurrentBuildDate(),
 		"active_projects":        len(projects),
 		"active_ticks":           activeTicks,
 		"paused":                 s.loop != nil && s.loop.IsPaused(),
