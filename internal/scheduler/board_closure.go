@@ -2,8 +2,11 @@ package scheduler
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -115,4 +118,28 @@ func boardString(raw json.RawMessage) string {
 		return ""
 	}
 	return s
+}
+
+// ClosureViolationFingerprint returns a short, deterministic digest of a
+// closure-evidence violation set (SCHED-GAP-163). Each violation renders as
+// one "id|field1,field2" line (its missing fields sorted), the lines
+// themselves are sorted, and the joined text is sha256-hashed; the first 16
+// hex characters are the fingerprint. Deriving the digest from the SORTED set
+// is what makes it usable as a dedup key: board row order, line order, and
+// the order in which fields happened to be discovered cannot change it — only
+// a row entering or leaving the violation set (or a change in which fields are
+// missing) does. An empty slice returns "" (no violation set).
+func ClosureViolationFingerprint(violations []ClosureViolation) string {
+	if len(violations) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(violations))
+	for _, v := range violations {
+		fields := append([]string(nil), v.MissingFields...)
+		sort.Strings(fields)
+		lines = append(lines, v.ID+"|"+strings.Join(fields, ","))
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])[:16]
 }

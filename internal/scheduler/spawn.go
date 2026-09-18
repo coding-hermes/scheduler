@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2198,10 +2199,15 @@ func (st *SpawnedTick) closePipes() {
 // board: rows CLOSED within the tick window [windowStart, windowEnd] (i.e.
 // completed_at inside the window) without any of reasoning/commit_hash/
 // worker_summary evidence reject the tick. Pre-existing violations
-// (completed_at before windowStart) are flagged via WARN log + HIGH
-// board_closure event but do NOT fail the tick. Projects without a board file
+// (completed_at before windowStart) are flagged via WARN log + a
+// board_closure event but do NOT fail the tick; since SCHED-GAP-163 that event
+// is throttled per project (see boardClosureEmission below): one HIGH while the
+// violation set is unchanged, then nothing until closureViolationReMindGap has
+// elapsed, then a MEDIUM reminder. Projects without a board file
 // (findBoardFile false) are a no-op. Returns a non-empty error when the tick
-// must be rejected (status=failed / outcome=failed via lifecycle.Complete).
+// must be rejected (status=failed / outcome=failed via lifecycle.Complete) —
+// the in-window reject path has NO throttle and NO demotion: a fresh violation
+// always fails the tick.
 func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error {
 	if st == nil || st.workdir == "" {
 		return nil
@@ -2234,13 +2240,28 @@ func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error 
 	}
 
 	if len(flagged) > 0 {
+		// SCHED-GAP-163: the flagged set is sorted before anything is built
+		// from it — the event payload's violation order and the dedup
+		// fingerprint are both derived from the SORTED set, so a board
+		// re-append (same rows, different line order) cannot look like a
+		// change.
+		sort.Slice(flagged, func(i, j int) bool {
+			if flagged[i].ID != flagged[j].ID {
+				return flagged[i].ID < flagged[j].ID
+			}
+			return flagged[i].CompletedAt < flagged[j].CompletedAt
+		})
+		fingerprint := ClosureViolationFingerprint(flagged)
+
 		var names []string
 		for _, v := range flagged {
 			names = append(names, v.ID+"(missing "+strings.Join(v.MissingFields, ",")+")")
 		}
 		log.Printf("WARN [board_closure]: pre-existing closure-evidence violations on %s (tick %s closed %d row(s) in-window): %s",
 			st.Project, st.TickID, len(rejected), strings.Join(names, ", "))
-		if st.spawner != nil && st.spawner.events != nil {
+
+		severity, message, reminder, suppress := st.boardClosureEmission(fingerprint, len(flagged), time.Now())
+		if !suppress && st.spawner != nil && st.spawner.events != nil {
 			details := make([]map[string]any, 0, len(flagged))
 			for _, v := range flagged {
 				details = append(details, map[string]any{
@@ -2249,12 +2270,17 @@ func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error 
 					"completed_at":   v.CompletedAt,
 				})
 			}
-			st.spawner.events.Emit(context.Background(), SeverityHigh, "board_closure",
-				"pre-existing board closure-evidence violations", map[string]any{
-					"project":    st.Project,
-					"tick_id":    st.TickID,
-					"violations": details,
-				})
+			payload := map[string]any{
+				"project":         st.Project,
+				"tick_id":         st.TickID,
+				"violations":      details,
+				"fingerprint":     fingerprint,
+				"violation_count": len(flagged),
+			}
+			if reminder {
+				payload["reminder"] = true
+			}
+			st.spawner.events.Emit(context.Background(), severity, "board_closure", message, payload)
 		}
 	}
 
@@ -2267,6 +2293,122 @@ func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error 
 	}
 	return fmt.Errorf("board closure-evidence gate: %d row(s) closed within this tick's window without evidence: %s",
 		len(rejected), strings.Join(names, ", "))
+}
+
+// closureViolationMessage is the stable message of the board_closure event for
+// pre-existing closure-evidence violations. It is kept VERBATIM (SCHED-GAP-085
+// wording) because it is the dedup/query key the SCHED-GAP-163 throttle reads
+// its own prior emissions by.
+const closureViolationMessage = "pre-existing board closure-evidence violations"
+
+// closureViolationReminderMessage is the demoted re-mind form emitted when the
+// violation SET is unchanged but closureViolationReMindGap has elapsed
+// (SCHED-GAP-163). The events table has no WARN level (CHECK constraint
+// CRITICAL/HIGH/MEDIUM/LOW/INFO), so MEDIUM carries the demoted tier — same
+// precedent as SCHED-GAP-061's recovered eval-stall event.
+const closureViolationReminderMessage = "pre-existing board closure-evidence violations (still unresolved)"
+
+// closureViolationReMindGap is the minimum spacing between board_closure
+// closure-evidence events for the same project while the violation SET is
+// unchanged (SCHED-GAP-163), mirroring starvationThrottleWindow
+// (alert_escalation.go) and evalStallReEmitGap (loop.go). Without it the same
+// unrepairable legacy rows re-emit HIGH on EVERY tick that touches the project
+// — measured 337 HIGH board_closure events between 2026-09-17 and 2026-09-18
+// alone, across crier/bunker/chimera-v2/hermes-canopy/9router/h3/… — which is
+// the SCHED-GAP-061 desensitization failure repeating: permanent HIGH noise
+// hides real HIGHs. A changed set is never throttled (it emits HIGH
+// immediately); an unchanged set is re-minded at most once per window.
+const closureViolationReMindGap = 7 * 24 * time.Hour
+
+// lastBoardClosureEvent reads the most recent board_closure emission for one
+// project from the events table and returns its created_at timestamp plus the
+// fingerprint recorded in its details ("" for legacy rows written before
+// SCHED-GAP-163, which carried no fingerprint). ok=false means "no usable
+// prior emission" — no row at all, or a created_at that cannot be parsed.
+//
+// The message filter deliberately matches BOTH the original message and the
+// demoted reminder form: the reminder row is itself the latest emission, and
+// matching only the original message would make it invisible to the next tick
+// — so the reminder would re-emit on every single tick instead of once per
+// window, which is the spam class this throttle exists to close.
+//
+// The query style mirrors AlertEscalator.lastConsecutiveFailureEvent
+// (alert_escalation.go): parameter-bound json_extract on details.project so
+// similarly-named projects never collide, no string interpolation.
+func (s *Spawner) lastBoardClosureEvent(ctx context.Context, project string) (time.Time, string, bool, error) {
+	if s == nil || s.db == nil {
+		return time.Time{}, "", false, nil
+	}
+	var ts, fingerprint string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT created_at, COALESCE(json_extract(details,'$.fingerprint'),'')
+		 FROM events
+		 WHERE component = 'board_closure'
+		   AND message IN (?, ?)
+		   AND json_extract(details,'$.project') = ?
+		 ORDER BY created_at DESC, id DESC LIMIT 1`,
+		closureViolationMessage, closureViolationReminderMessage, project).Scan(&ts, &fingerprint)
+	if err == sql.ErrNoRows {
+		return time.Time{}, "", false, nil
+	}
+	if err != nil {
+		return time.Time{}, "", false, err
+	}
+	t, perr := time.Parse(time.RFC3339, ts)
+	if perr != nil {
+		// Legacy/precision variants — RFC3339Nano. Anything still unparsable
+		// is treated as "no prior emission" (fail open, emit HIGH).
+		if t2, err2 := time.Parse(time.RFC3339Nano, ts); err2 == nil {
+			t = t2
+		} else {
+			return time.Time{}, fingerprint, false, nil
+		}
+	}
+	return t, fingerprint, true, nil
+}
+
+// boardClosureEmission decides what — if anything — to emit for the current
+// pre-existing closure-evidence violation set (SCHED-GAP-163). fingerprint is
+// ClosureViolationFingerprint of the (sorted) flagged set, count its size, now
+// the tick's completion time.
+//
+// Decision table:
+//
+//	no prior emission for this project, OR the prior row carries no/legacy
+//	(empty) fingerprint, OR the fingerprint differs
+//	    -> HIGH  closureViolationMessage (first occurrence, or the set CHANGED)
+//	same fingerprint AND now-prior <  closureViolationReMindGap
+//	    -> suppress = true: emit nothing; a WARN line names the suppression and
+//	       the reminder due time
+//	same fingerprint AND now-prior >= closureViolationReMindGap
+//	    -> MEDIUM closureViolationReminderMessage, reminder = true
+//
+// Infrastructure failures FAIL OPEN: a nil spawner, a nil db, or a query error
+// all return HIGH exactly as the pre-SCHED-GAP-163 gate did, so the signal is
+// never silently swallowed (the reason is logged).
+func (st *SpawnedTick) boardClosureEmission(fingerprint string, count int, now time.Time) (severity EventSeverity, message string, reminder, suppress bool) {
+	severity, message = SeverityHigh, closureViolationMessage
+	if st.spawner == nil || st.spawner.db == nil {
+		log.Printf("WARN [board_closure]: SCHED-GAP-163 throttle unavailable for %s (spawner=%t db=%t) — emitting HIGH (fail open)",
+			st.Project, st.spawner != nil, st.spawner != nil && st.spawner.db != nil)
+		return severity, message, false, false
+	}
+	prior, priorFP, ok, err := st.spawner.lastBoardClosureEvent(context.Background(), st.Project)
+	if err != nil {
+		log.Printf("WARN [board_closure]: SCHED-GAP-163 throttle query failed for %s: %v — emitting HIGH (fail open)", st.Project, err)
+		return severity, message, false, false
+	}
+	if !ok || priorFP == "" || priorFP != fingerprint {
+		return severity, message, false, false
+	}
+	elapsed := now.Sub(prior)
+	if elapsed < closureViolationReMindGap {
+		log.Printf("WARN [board_closure]: SCHED-GAP-163 suppressed repeat closure-evidence event for %s (%d unchanged violation(s), fingerprint %s, last emitted %s ago) — reminder due %s",
+			st.Project, count, fingerprint, elapsed.Round(time.Second),
+			prior.Add(closureViolationReMindGap).Format(time.RFC3339))
+		return severity, message, false, true
+	}
+	return SeverityMedium, closureViolationReminderMessage, true, false
 }
 
 // parseBoardCompletedAt parses the completed_at formats found on this board:
