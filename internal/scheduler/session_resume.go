@@ -213,6 +213,26 @@ func (l *Loop) resumeOrphans(trigger string) {
 			}
 		}
 
+		// SCHED-GAP-146: the LOAD gate is consulted inside SlotPool.spawn —
+		// BELOW this loop — so a nudge it defers has already been enqueued
+		// and has already spent a nudge. The row is then stranded 'queued':
+		// nothing in this process dispatches an existing row, and the
+		// stranded row makes THIS scan skip the orphan forever (the
+		// NOT EXISTS clause in orphansToResume sees it as in-flight) while
+		// SpawnNow 409s the project. Check the gate HERE, with the same
+		// predicate the pool uses, exactly as the cap is checked above:
+		// SKIP this pass, consume nothing, and let the next trigger
+		// (gateway flip, restart, or the packer's own pick) resume it once
+		// load drops. Measured consequence of not doing this (probe,
+		// 2026-09-18): nudge_count 0→1 and a 'queued' nudge row that never
+		// left the queue, even after the gate reopened.
+		if LoadGateShouldDefer(l.db, nsID) {
+			l1, _ := currentLoad1m()
+			log.Printf("RESUME: deferring orphaned tick %s (project %s) — load gate active for namespace %q (load %.2f >= threshold %.2f); no nudge consumed",
+				o.id, o.project, nsID, l1, loadGateThreshold())
+			continue
+		}
+
 		count := l.bumpNudgeCount(o.id)
 		tickID := fmt.Sprintf("%s-nudge%d", o.id, count)
 		// Enqueue the nudge row BEFORE SpawnEnqueued — the pool's spawn

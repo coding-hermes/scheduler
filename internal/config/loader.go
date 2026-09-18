@@ -579,6 +579,21 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			// self-pause + restart drift wins every time.
 			existing, _ := database.GetProject(ctx, db, pd.Name)
 			p := projectFromDef(pd)
+			// SCHED-GAP-150: the loader is an enable path like any other, and
+			// it must not be the one that puts a retired dagger driver on an
+			// enabled project. fleet.toml re-pins `enabled` unconditionally,
+			// so a legacy relic row (command = a retired driver, enabled=0)
+			// that is also listed in fleet.toml would come back ENABLED with
+			// its retired command intact — the exact state the API refuses to
+			// write and the fleet gate flags. Refuse the enable and log it
+			// loudly; never fail the boot (a relic must not wedge the daemon,
+			// same doctrine as the max_concurrent=-3 normalization).
+			if p.Enabled && existing != nil {
+				if drv := retiredDriverInCommand(existing.Command); drv != "" {
+					log.Printf("Config: NOT enabling project %q — its command drives the retired driver %s; clear `command` (DB and fleet.toml) before re-enabling", pd.Name, drv)
+					p.Enabled = false
+				}
+			}
 			updates := database.ProjectUpdates{
 				CooldownS: &p.CooldownS,
 				Model:     &p.Model,
