@@ -121,6 +121,15 @@ func (l *Loop) evaluate() {
 		}
 	}
 
+	// SCHED-GAP-155: emit one grep-stable ADMIT line per candidate project
+	// for THIS pass — the selection is now final (both packer paths have
+	// run) and nothing has been spawned yet, so these lines are exactly the
+	// decision the pass acts on. Additive: EVAL / EVAL-STALL /
+	// EVAL-ZERO-SELECT are untouched (operators grep ^EVAL). Must stay
+	// before the zero-select early return below, or a pass that picked
+	// nothing — the case operators most need explained — would log nothing.
+	l.emitAdmissionPass(now, packed)
+
 	if len(packed) == 0 {
 		// GAP-043: a zero-select eval with eligible projects present is an
 		// anomaly (evaluations log nothing on empty picks — operator cannot

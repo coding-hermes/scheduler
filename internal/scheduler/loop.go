@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"runtime"
 	"sync"
@@ -105,6 +106,20 @@ type Loop struct {
 	// before aborting them (SCHED-GAP-077). Defaults to 15s in NewLoop;
 	// tests may shorten it.
 	stopGrace time.Duration
+
+	// SCHED-GAP-155 admission-decision counters. Per-PROCESS, monotonic,
+	// reset only by a restart (matching the spawn/gateway counters):
+	// admitCounts is the per-reason tally for the reason vocabulary and
+	// admitNSAdmits the per-namespace admit tally. admitPasses counts the
+	// evaluation passes the ADMIT emitter ran in — a boot-fresh value of 0
+	// with a non-zero tick count is the signature of an emitter that never
+	// fired. Guarded by admitMu (its own mutex, NOT l.mu: the emitter runs
+	// from evaluate() while l.mu is already held, and the API reads the
+	// counters from another goroutine).
+	admitMu       sync.Mutex
+	admitPasses   int
+	admitCounts   map[string]int
+	admitNSAdmits map[string]int
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -155,6 +170,15 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 		stopGrace:       15 * time.Second,
+		// SCHED-GAP-155: the admission counters start at zero for every
+		// reason in the vocabulary so /api/v1/status reports a complete,
+		// all-zero map from boot — an operator can tell "no deferrals"
+		// from "counter missing".
+		admitCounts:   make(map[string]int, len(admissionReasonVocabulary)),
+		admitNSAdmits: make(map[string]int),
+	}
+	for _, reason := range admissionReasonVocabulary {
+		l.admitCounts[reason] = 0
 	}
 	// CI-003: eagerly create the slot pool. The former lazy-init sites
 	// (Run, SpawnNow, evaluate) assigned l.slotPool from goroutines while
@@ -1066,4 +1090,591 @@ func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
 		lastEvent = l.lastZeroSelectEvent.UTC().Format(time.RFC3339)
 	}
 	return l.zeroSelectCount, l.zeroSelectEligible, lastEvent
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SCHED-GAP-155 — structured admission-decision log + counters.
+//
+// Operators could see WHAT was picked ("EVAL: N project(s) selected") and
+// what the fleet-wide anomaly counters were (EVAL-STALL, EVAL-ZERO-SELECT),
+// but never WHY an individual project was passed over: "why did project X
+// not spawn in window Y" required reading the packer's aggregate lines,
+// SQLite and the cooldown policy script side by side.
+//
+// One evaluation pass now emits ONE grep-stable line per candidate project:
+//
+//	ADMIT pass_id=7 eligible=12 admitted=2 deferred=10 ns=qa cap=1 \
+//	      inflight_running=1 inflight_queued=0 project=sat-b reason=cap
+//
+//	grep -E '^ADMIT ' scheduler.log        # every decision
+//	grep -E '^ADMIT .*project=<name>' ...  # one project's history
+//
+// The anchored grep works because the line is written prefix-free (see
+// admitWriteLine): the daemon logs with LstdFlags|Lshortfile, so a
+// log.Print-based line would start with "2026/09/18 02:28:57 loop.go:429: "
+// and no anchored ADMIT pattern would ever match.
+//
+// The line is ADDITIVE: EVAL, EVAL-STALL and EVAL-ZERO-SELECT are untouched
+// (operators grep ^EVAL). Every line starts with "ADMIT " and always carries
+// project= and reason=. Fields:
+//
+//	pass_id           monotonic per-process evaluation-pass counter
+//	eligible          candidates classified in this pass
+//	                  (enabled AND not already in flight — see below)
+//	admitted          candidates admitted (reason=ok) this pass
+//	deferred          eligible-admitted
+//	ns                the project's namespace ("" renders as "-")
+//	cap               that namespace's max_concurrent (0 = unlimited)
+//	inflight_running  ticks RUNNING in that namespace (DB count)
+//	inflight_queued   spawn attempts past the namespace gate but not yet
+//	                  running in that namespace (SlotPool claim count)
+//	project           the project name (sanitized: whitespace/=/" -> "_",
+//	                  truncated to 48 chars so the line stays < 250)
+//	reason            one of the vocabulary strings below
+//	cooldown_remaining_s  present only for reason=cooldown (seconds left)
+//
+// A project with a tick already in flight is NOT a candidate: it already
+// spawned, it is not being passed over, and it gets no line (its own
+// cooldown/timer will decide the next pass). "eligible" therefore counts
+// projects eligible FOR A DECISION this pass, so
+// eligible == admitted + deferred holds on every line of a pass.
+//
+// REASON VOCABULARY (exact strings) and the call site each one stands for:
+//
+//	ok              the packer selected the project and the spawn stage did
+//	                not defer it — the project's tick is being fired.
+//	cap             namespace at its max_concurrent (namespace_gate.go's
+//	                gate, packer_select.go:276 / packer.go:300), or the
+//	                GLOBAL slot cap consumed (packer_select.go:272
+//	                globalRunning+globalSelected / packer.go:334
+//	                currRunning). The vocabulary has no separate word for the
+//	                global cap — "cap" is the closest, and the header's
+//	                cap/inflight_* fields tell the reader which one bit
+//	                (ns cap > 0 with inflight_running >= cap == the
+//	                namespace gate).
+//	load_gate       SlotPool.spawn deferred a SELECTED project because the
+//	                1-minute load average is at/above --load-gate-threshold
+//	                (load_gate.go, SCHED-GAP-125). Defer, not drop: the work
+//	                stays selected and is re-picked once load drops.
+//	cooldown        the project's own wall-clock pin has not elapsed
+//	                (effectiveCooldown: cooldown_s, or the priority-derived
+//	                dynamic interval when cooldown_s == 0, or the
+//	                S-GAP-001 failure backoff, or a skip-mode blackout —
+//	                packer_select.go:235 / packer.go:338/371). The only
+//	                reason carrying cooldown_remaining_s.
+//	tasks_no_work   tasks-mode project (SCHED-GAP-124) whose board IS owned
+//	                by the lane but holds no non-perpetual open work
+//	                (admission_mode.go tasksAdmissionDue), so the cooldown
+//	                waiver does not fire.
+//	board_unowned   tasks-mode project whose board resolves OUTSIDE its own
+//	                workdir (admission_mode.go boardOwnedByLane /
+//	                laneOwnsBoard, SCHED-GAP-141): a time-based lane. The
+//	                waiver is refused and the cooldown pin decides — the
+//	                reason names the refusal because that is the answer to
+//	                "why is this tasks lane not running on work".
+//	budget          a budget gate blocked the project: the SCHED-GAP-066
+//	                per-project spend cap (daily/weekly/final, budget.go) or
+//	                the weight-budget/namespace-allocation arithmetic that
+//	                left no room in this pass (packer_select.go:281,
+//	                packer.go:330). "budget" is the vocabulary entry for
+//	                both — one is money, one is admission currency.
+//	tasks_deferred  tasks-mode project that HAD admissible work and still
+//	                was not admitted (the waiver was granted, so the block
+//	                was downstream: SCHED-GAP-133 failure backoff >
+//	                consecutive_failures 1, or the SCHED-GAP-136 post-tick
+//	                pacing floor with jitter). This is also the residual for
+//	                a tasks-mode project that failed every other check.
+//
+// The classification is a POST-HOC reconstruction from the same DB state
+// the packer read (one SELECT over enabled projects + the per-namespace
+// cap/inflight reads), in the order the live namespace-mode packer consults
+// the gates: tasks-mode family first (waiver or refusal), then the project's
+// own cooldown, then cap, then budget. A project blocked by several gates at
+// once reports the FIRST one in that order — a single line per candidate is
+// a hard contract (one decision per project per pass).
+
+// Admission reason vocabulary (SCHED-GAP-155). These are literal, grep-stable
+// strings shared with the admission_counters keys on /api/v1/status.
+const (
+	AdmissionReasonOK            = "ok"
+	AdmissionReasonCap           = "cap"
+	AdmissionReasonLoadGate      = "load_gate"
+	AdmissionReasonCooldown      = "cooldown"
+	AdmissionReasonTasksNoWork   = "tasks_no_work"
+	AdmissionReasonBoardUnowned  = "board_unowned"
+	AdmissionReasonBudget        = "budget"
+	AdmissionReasonTasksDeferred = "tasks_deferred"
+)
+
+// admissionReasonVocabulary is the frozen vocabulary in reporting order.
+// Every entry is initialized to zero in the counters at boot and in every
+// AdmissionCounters() snapshot, so a missing reason is never ambiguous.
+var admissionReasonVocabulary = []string{
+	AdmissionReasonOK,
+	AdmissionReasonCap,
+	AdmissionReasonLoadGate,
+	AdmissionReasonCooldown,
+	AdmissionReasonTasksNoWork,
+	AdmissionReasonBoardUnowned,
+	AdmissionReasonBudget,
+	AdmissionReasonTasksDeferred,
+}
+
+// admissionReasonIsKnown reports whether reason is part of the vocabulary.
+func admissionReasonIsKnown(reason string) bool {
+	for _, r := range admissionReasonVocabulary {
+		if r == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// admissionCandidate is one enabled project as read for the admission log —
+// only the fields the reason classification needs.
+type admissionCandidate struct {
+	Name                   string
+	NS                     string
+	Weight                 int
+	CooldownS              int
+	Priority               float64
+	ConsecutiveFailures    int
+	BumpActive             bool
+	BumpCooldownS          int
+	Workdir                string
+	AdmissionMode          string // project override ('' = inherit)
+	NamespaceAdmissionMode string // namespace default ('' = cooldown)
+	BoardOwnership         string // '' = auto, 'owner', 'shared' (SCHED-GAP-141)
+	LastCompleted          *time.Time
+	DailyBudgetUSD         float64
+	WeeklyBudgetUSD        float64
+	FinalBudgetUSD         float64
+}
+
+// effectiveAdmissionMode resolves the candidate's admission mode exactly as
+// the packers do (project override → namespace default → cooldown).
+func (c admissionCandidate) effectiveAdmissionMode() string {
+	return admissionModeFor(c.AdmissionMode, c.NS, map[string]string{c.NS: c.NamespaceAdmissionMode})
+}
+
+// admissionNSCounts is the per-namespace state the ADMIT header carries,
+// read once per namespace per pass (not once per candidate).
+type admissionNSCounts struct {
+	cap            int  // namespaces.max_concurrent (0 = unlimited)
+	inflightRun    int  // ticks RUNNING in the namespace (DB)
+	inflightQueued int  // spawn attempts holding a namespace claim
+	loadGateBlocks bool // SlotPool.spawn would defer a spawn into this ns
+}
+
+// admissionDecision is one project's decision in one evaluation pass.
+type admissionDecision struct {
+	Project            string
+	NS                 string
+	Reason             string
+	Cap                int
+	InflightRunning    int
+	InflightQueued     int
+	CooldownRemainingS float64
+	HasCooldownRem     bool
+}
+
+// AdmissionCounters returns a snapshot of the SCHED-GAP-155 admission
+// counters for /api/v1/status: one entry per reason in the vocabulary (all
+// present, 0 when never seen), one "admitted:<namespace>" entry per
+// namespace that admitted a tick (total admits per namespace), and "passes"
+// (evaluation passes the ADMIT emitter ran in). Per-process and monotonic;
+// a restart resets them, exactly like the spawn/gateway counters.
+func (l *Loop) AdmissionCounters() map[string]int {
+	l.admitMu.Lock()
+	defer l.admitMu.Unlock()
+	l.ensureAdmitCountersLocked()
+	out := make(map[string]int, len(admissionReasonVocabulary)+len(l.admitNSAdmits)+1)
+	for _, reason := range admissionReasonVocabulary {
+		out[reason] = l.admitCounts[reason]
+	}
+	for ns, n := range l.admitNSAdmits {
+		key := ns
+		if key == "" {
+			key = "-"
+		}
+		out["admitted:"+key] = n
+	}
+	out["passes"] = l.admitPasses
+	return out
+}
+
+// ensureAdmitCountersLocked lazily initializes the counter maps so a Loop
+// built as a struct literal (tests) behaves identically to a NewLoop one.
+// Callers must hold admitMu.
+func (l *Loop) ensureAdmitCountersLocked() {
+	if l.admitCounts == nil {
+		l.admitCounts = make(map[string]int, len(admissionReasonVocabulary))
+		for _, reason := range admissionReasonVocabulary {
+			l.admitCounts[reason] = 0
+		}
+	}
+	if l.admitNSAdmits == nil {
+		l.admitNSAdmits = make(map[string]int)
+	}
+}
+
+// sanitizeAdmitField renders a project or namespace identifier safe for the
+// key=value line: whitespace and the '=' / '"' delimiters become '_' so a
+// reader can split on spaces, and the value is capped at 48 chars (the
+// whole line then stays well under the ~250-char budget).
+func sanitizeAdmitField(s string) string {
+	if s == "" {
+		return ""
+	}
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch r {
+		case ' ', '	', '\n', '\r', '"', '=':
+			out = append(out, '_')
+		default:
+			out = append(out, r)
+		}
+	}
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return string(out)
+}
+
+// admitWriteLine writes one ADMIT line to the process logger's output
+// destination with NO logger prefix.
+//
+// Why not log.Print: main.go installs log.SetFlags(LstdFlags|Lshortfile), so
+// every log.Print line lands as
+//
+//	2026/09/18 02:28:57 loop.go:429: <message>
+//
+// — `grep -E '^ADMIT ' scheduler.log` could never match (verified live:
+// `grep -c '^EVAL'` on the production scheduler.log is 0 for exactly this
+// reason). The ADMIT line's whole point is the anchored grep, so it is
+// written straight to log.Writer() — the same stdout + --log-file
+// destination the logger uses, minus the prefix. ONE Write call per line so
+// concurrent emitters never interleave within a line.
+func admitWriteLine(line string) {
+	w := log.Writer()
+	if w == nil {
+		return
+	}
+	_, _ = io.WriteString(w, line+"\n")
+}
+
+// emitAdmissionDecision writes ONE grep-stable ADMIT line for a single
+// project decision and folds it into the counters. passID/eligible/admitted/
+// deferred are the pass-level header values (identical on every line of a
+// pass, so any single line answers the "why" question on its own).
+//
+// A missing reason is replaced with the vocabulary residual (a line must
+// always carry a reason), but an UNKNOWN reason is emitted VERBATIM and NOT
+// counted: a classification bug stays visible in the log instead of being
+// rounded into a plausible-looking counter.
+func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d admissionDecision) {
+	ns := sanitizeAdmitField(d.NS)
+	if ns == "" {
+		ns = "-"
+	}
+	reason := d.Reason
+	if reason == "" {
+		reason = AdmissionReasonTasksDeferred
+	}
+	line := fmt.Sprintf("ADMIT pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s cap=%d inflight_running=%d inflight_queued=%d project=%s reason=%s",
+		passID, eligible, admitted, deferred, ns, d.Cap, d.InflightRunning, d.InflightQueued,
+		sanitizeAdmitField(d.Project), reason)
+	if d.HasCooldownRem {
+		line += fmt.Sprintf(" cooldown_remaining_s=%.1f", d.CooldownRemainingS)
+	}
+	admitWriteLine(line)
+
+	if !admissionReasonIsKnown(reason) {
+		return // emitted for diagnosis; not folded into the counters
+	}
+	l.admitMu.Lock()
+	defer l.admitMu.Unlock()
+	l.ensureAdmitCountersLocked()
+	l.admitCounts[reason]++
+	if reason == AdmissionReasonOK {
+		l.admitNSAdmits[d.NS]++
+	}
+}
+
+// admissionCandidates reads every enabled project with the fields the
+// admission classification needs, in the same shape the packers see them.
+func (l *Loop) admissionCandidates(ctx context.Context) ([]admissionCandidate, error) {
+	rows, err := l.db.QueryContext(ctx, `
+SELECT p.name, COALESCE(p.namespace_id, ''), COALESCE(p.weight, 0), COALESCE(p.cooldown_s, 0),
+       COALESCE(p.priority, 0), COALESCE(p.consecutive_failures, 0),
+       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0),
+       COALESCE(p.workdir, ''), COALESCE(p.admission_mode, ''),
+       COALESCE(ns.admission_mode, ''), COALESCE(p.board_ownership, ''),
+       COALESCE(p.last_tick_completed, ''),
+       COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0)
+FROM projects p
+LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+WHERE p.enabled = 1
+ORDER BY p.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []admissionCandidate
+	for rows.Next() {
+		var c admissionCandidate
+		var lastStr string
+		if err := rows.Scan(&c.Name, &c.NS, &c.Weight, &c.CooldownS,
+			&c.Priority, &c.ConsecutiveFailures,
+			&c.BumpActive, &c.BumpCooldownS,
+			&c.Workdir, &c.AdmissionMode,
+			&c.NamespaceAdmissionMode, &c.BoardOwnership,
+			&lastStr,
+			&c.DailyBudgetUSD, &c.WeeklyBudgetUSD, &c.FinalBudgetUSD); err != nil {
+			log.Printf("ADMIT: scan candidate row: %v", err)
+			continue
+		}
+		if lastStr != "" {
+			if t, err := time.Parse(time.RFC3339, lastStr); err == nil {
+				c.LastCompleted = &t
+			}
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// admissionRunningSet is the conservative in-flight view for the admission
+// log: the slot pool's running+reserved set (SCHED-GAP-103) merged with the
+// DB's running tick rows (SCHED-GAP-030 — survivors from before a restart),
+// the same union evaluate() dedups against.
+func (l *Loop) admissionRunningSet() map[string]bool {
+	set := make(map[string]bool)
+	if l.slotPool != nil {
+		for name := range l.slotPool.RunningSet() {
+			set[name] = true
+		}
+	}
+	if l.db != nil {
+		rows, err := l.db.QueryContext(context.Background(),
+			`SELECT DISTINCT project_name FROM ticks WHERE status = 'running'`)
+		if err == nil {
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err == nil {
+					set[name] = true
+				}
+			}
+			rows.Close()
+		}
+	}
+	return set
+}
+
+// admissionNamespaceQueued reports the namespace's in-flight spawn attempts
+// that hold a claim but whose tick row is not yet running — the
+// inflight_queued field of the ADMIT header (SCHED-GAP-144's claim map).
+func (l *Loop) admissionNamespaceQueued(nsID string) int {
+	if l.slotPool == nil || nsID == "" {
+		return 0
+	}
+	return l.slotPool.NamespacePending(nsID)
+}
+
+// cooldownVerdict resolves whether the candidate is still inside its
+// wall-clock pin, and (when it is) the seconds remaining. Mirrors the
+// packer's gate exactly: the shared effectiveCooldown predicate, the
+// SCHED-GAP-107 bump substitution for an active bump, a skip-mode blackout
+// reported as deferred with no countdown (it never elapses), and a project
+// that never completed treated as not cooldown-blocked (mirror of
+// countEligibleProjects).
+func (l *Loop) cooldownVerdict(c admissionCandidate, now time.Time) (deferred bool, remainingS float64, hasRemaining bool) {
+	if c.LastCompleted == nil {
+		return false, 0, false
+	}
+	var windows []config.BlackoutWindow
+	if l.packer != nil {
+		windows = l.packer.blackoutWindows
+	}
+	cd := c.CooldownS
+	if c.BumpActive && c.BumpCooldownS > 0 {
+		cd = c.BumpCooldownS
+	}
+	cooldownDur, skipMode := effectiveCooldown(cd, c.Priority, c.ConsecutiveFailures, windows, now, l.calculator)
+	if skipMode {
+		return true, 0, false // skip-mode blackout: never eligible, no countdown
+	}
+	age := now.Sub(*c.LastCompleted)
+	if age >= cooldownDur {
+		return false, 0, false
+	}
+	return true, (cooldownDur - age).Seconds(), true
+}
+
+// admissionSpendBlocked reports whether the SCHED-GAP-066 per-project spend
+// gate blocks the candidate this cycle (nil gate / no caps = never blocked).
+func (l *Loop) admissionSpendBlocked(c admissionCandidate) bool {
+	if l.packer == nil || l.packer.budgetGate == nil {
+		return false
+	}
+	_, blocked := l.packer.budgetGate(c.Name, c.DailyBudgetUSD, c.WeeklyBudgetUSD, c.FinalBudgetUSD)
+	return blocked
+}
+
+// admissionStructuralDeferral maps the structural gates (concurrency, then
+// budget) onto the vocabulary for a candidate the packers did not select.
+// Returns "" when no structural gate explains the deferral.
+//
+// globalRunning is the in-flight count and globalSelected the projects THIS
+// pass already packed — together they are the packer's own global-cap
+// arithmetic (`globalRunning+globalSelected >= maxConcurrent`,
+// packer_select.go; `currRunning >= maxConcurrent`, packer.go), so a pass
+// that filled every slot before reaching this candidate reports "cap"
+// instead of falling through to the budget residual.
+//
+// packedWeight is the weight this pass already consumed, so the weight-budget
+// test is "would this project still fit", the same arithmetic packer.go's
+// greedy pack applies (an approximation in namespace mode, where the packer
+// spends EFFECTIVE weights against a per-namespace allocation — see the
+// residual note on the vocabulary above).
+func (l *Loop) admissionStructuralDeferral(c admissionCandidate, st admissionNSCounts, packedWeight, globalRunning, globalSelected int) string {
+	if st.cap > 0 && st.inflightRun >= st.cap {
+		return AdmissionReasonCap
+	}
+	if l.maxConcur > 0 && globalRunning+globalSelected >= l.maxConcur {
+		return AdmissionReasonCap
+	}
+	if l.admissionSpendBlocked(c) {
+		return AdmissionReasonBudget
+	}
+	if c.Weight > 0 && packedWeight+c.Weight > l.weightBudget {
+		return AdmissionReasonBudget
+	}
+	return ""
+}
+
+// classifyAdmissionDeferral maps a candidate that was NOT admitted onto one
+// vocabulary reason. Order (see the block comment above): the tasks-mode
+// family, then the candidate's own cooldown, then the structural gates, then
+// the residual.
+func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st admissionNSCounts, packedWeight, globalRunning, globalSelected int) (reason string, remainingS float64, hasRemaining bool) {
+	if c.effectiveAdmissionMode() == database.AdmissionModeTasks {
+		// The SCHED-GAP-124 waiver: pending non-perpetual board work waives
+		// the cooldown pin — but ONLY for a lane that owns the board it
+		// reads (SCHED-GAP-141). Whichever half fails names the reason.
+		if !boardOwnedByLane(c.Workdir, c.BoardOwnership) {
+			return AdmissionReasonBoardUnowned, 0, false
+		}
+		if open, ok := boardOpenRows(c.Workdir); !ok || open == 0 {
+			return AdmissionReasonTasksNoWork, 0, false
+		}
+		// Waiver granted: the block (if any) is structural or the
+		// SCHED-GAP-133/136 floors downstream.
+		if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
+			return r, 0, false
+		}
+		return AdmissionReasonTasksDeferred, 0, false
+	}
+
+	// Cooldown mode: the wall-clock pin is the first gate the live packer
+	// consults, so report it first.
+	if deferred, rem, hasRem := l.cooldownVerdict(c, now); deferred {
+		return AdmissionReasonCooldown, rem, hasRem
+	}
+	if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
+		return r, 0, false
+	}
+	// Residual: nothing else matched, so the packer skipped it on the
+	// budget/allocation arithmetic ("budget" is the closest vocabulary
+	// entry — weight budget or namespace allocation exhausted).
+	return AdmissionReasonBudget, 0, false
+}
+
+// emitAdmissionPass classifies every candidate project in one evaluation
+// pass and emits one ADMIT line per candidate. Called from evaluate() with
+// the selection resolved (both packer paths done) and BEFORE anything is
+// spawned, so the emitted decision is the decision the pass acted on.
+//
+// Callers hold l.mu (evaluate does); this function never locks it (a second
+// acquisition would deadlock) and only touches admitMu, the slot pool's own
+// mutex and the DB.
+func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) {
+	if l.db == nil {
+		return
+	}
+	cands, err := l.admissionCandidates(context.Background())
+	if err != nil {
+		log.Printf("ADMIT: candidate query failed: %v — no admission lines this pass", err)
+		return
+	}
+
+	packedNames := make(map[string]bool, len(packed))
+	packedWeight := 0
+	for _, p := range packed {
+		packedNames[p.Name] = true
+		packedWeight += p.Weight
+	}
+	running := l.admissionRunningSet()
+	globalRunning := len(running)
+	globalSelected := len(packed)
+
+	l.admitMu.Lock()
+	l.ensureAdmitCountersLocked()
+	l.admitPasses++
+	passID := l.admitPasses
+	l.admitMu.Unlock()
+
+	nsStats := make(map[string]admissionNSCounts)
+	decisions := make([]admissionDecision, 0, len(cands))
+	for _, c := range cands {
+		// A tick already in flight is not a candidate: it already spawned
+		// and nothing passed it over this pass (no line).
+		if running[c.Name] {
+			continue
+		}
+		st, ok := nsStats[c.NS]
+		if !ok {
+			st = admissionNSCounts{
+				cap:            namespaceCapDB(l.db, c.NS),
+				inflightRun:    namespaceRunningDB(l.db, c.NS),
+				inflightQueued: l.admissionNamespaceQueued(c.NS),
+				loadGateBlocks: LoadGateShouldDefer(l.db, c.NS),
+			}
+			nsStats[c.NS] = st
+		}
+		d := admissionDecision{
+			Project:         c.Name,
+			NS:              c.NS,
+			Cap:             st.cap,
+			InflightRunning: st.inflightRun,
+			InflightQueued:  st.inflightQueued,
+		}
+		if packedNames[c.Name] {
+			// Selected by the packer. The load gate can still defer the
+			// spawn (it runs inside SlotPool.spawn) — that deferral IS the
+			// answer to "why is this not running", so it is its own reason.
+			if st.loadGateBlocks {
+				d.Reason = AdmissionReasonLoadGate
+			} else {
+				d.Reason = AdmissionReasonOK
+			}
+		} else {
+			d.Reason, d.CooldownRemainingS, d.HasCooldownRem =
+				l.classifyAdmissionDeferral(c, now, st, packedWeight, globalRunning, globalSelected)
+		}
+		decisions = append(decisions, d)
+	}
+
+	admitted := 0
+	for _, d := range decisions {
+		if d.Reason == AdmissionReasonOK {
+			admitted++
+		}
+	}
+	eligible := len(decisions)
+	deferred := eligible - admitted
+	for _, d := range decisions {
+		l.emitAdmissionDecision(passID, eligible, admitted, deferred, d)
+	}
 }

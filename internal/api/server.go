@@ -255,6 +255,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// disabled; a stalled POST fails the tick as "stalled" before
 		// --tick-timeout).
 		status["gateway_response_timeout"] = s.loop.GatewayResponseTimeout().String()
+		// SCHED-GAP-155: per-reason admission-decision counters, so an
+		// operator can see WHY projects are not spawning without grepping
+		// the scheduler log. Every reason in the vocabulary is present
+		// (0 = never seen this process), plus "admitted:<namespace>"
+		// totals and "passes". Counterpart of the `ADMIT ` log lines.
+		status["admission_counters"] = s.loop.AdmissionCounters()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
