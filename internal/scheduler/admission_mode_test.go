@@ -237,3 +237,101 @@ func TestTasksMode_FailureBackoffGatesAdmission(t *testing.T) {
 		t.Fatalf("T-MODE-4 FAIL: tasks-mode project with consecutive_failures=5 was selected — FailureBackoff must gate admission")
 	}
 }
+
+// --- SCHED-GAP-141: board-ownership law for the tasks-mode waiver ---
+//
+// Measured leak (2026-09-17, live): satellite lanes (-sync/-qa/-dogfood/-pm)
+// carry a workdir whose board path is a SYMLINK into another project's
+// workdir, so tasksAdmissionDue read the PRIMARY's backlog as its own work
+// signal and never fell back to its cooldown pin (22 -sync lanes produced
+// 156 ticks/24h against a 6h pin = 4/day each). The waiver must only fire
+// for a lane that OWNS the board it reads. No names anywhere: ownership is
+// derived from where the board walk actually resolves.
+
+// linkModeBoard makes `owner`'s board reachable from `laneWorkdir` exactly the
+// way the fleet's satellite lanes do it — a board path that resolves into
+// another project's workdir.
+func linkModeBoard(t *testing.T, laneWorkdir, ownerWorkdir string) {
+	t.Helper()
+	boardDir := filepath.Join(laneWorkdir, ".coding-hermes", "board")
+	if err := os.MkdirAll(boardDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	src := filepath.Join(ownerWorkdir, ".coding-hermes", "board", "tasks.jsonl")
+	if err := os.Symlink(src, filepath.Join(boardDir, "tasks.jsonl")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+}
+
+// T-MODE-7 (SCHED-GAP-141a): tasks namespace + a lane whose board resolves
+// into ANOTHER project's workdir + open rows there → NOT admitted before its
+// cooldown elapses. The foreign backlog is not this lane's work signal.
+func TestTasksMode_ForeignBoardDoesNotWaiveCooldown(t *testing.T) {
+	ownerWd := t.TempDir()
+	writeModeBoard(t, ownerWd, `{"id":"REAL-9","status":"pending"}`)
+
+	laneWd := t.TempDir()
+	linkModeBoard(t, laneWd, ownerWd)
+
+	owner := modeProject("mode-owner", "sync-lanes", ownerWd, "")
+	lane := modeProject("mode-lane", "sync-lanes", laneWd, "")
+	ns := tasksNs("sync-lanes")
+	ns.MaxConcurrent = 8
+
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{owner, lane}, []database.Namespace{ns},
+		map[string]time.Time{
+			"mode-owner": now.Add(-time.Hour),
+			"mode-lane":  now.Add(-time.Hour),
+		})
+	if !modeSelected(t, res, "mode-owner") {
+		t.Fatalf("T-MODE-7a FAIL: the board OWNER was not admitted — its own pending work must waive the cooldown pin")
+	}
+	if modeSelected(t, res, "mode-lane") {
+		t.Fatalf("T-MODE-7b FAIL: lane reading a FOREIGN board was admitted inside its cooldown window — the tasks-mode waiver must require board ownership (SCHED-GAP-141)")
+	}
+}
+
+// T-MODE-8 (SCHED-GAP-141b): regression guard — a lane that owns its board
+// still gets the fast path (OPEN vocabulary, not just "pending").
+func TestTasksMode_OwnedBoardStillWaivesCooldown(t *testing.T) {
+	wd := t.TempDir()
+	writeModeBoard(t, wd, `{"id":"REAL-10","status":"todo"}`)
+	p := modeProject("mode-own", "own-lanes", wd, "")
+	ns := tasksNs("own-lanes")
+
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{p}, []database.Namespace{ns},
+		map[string]time.Time{"mode-own": now.Add(-time.Hour)})
+	if !modeSelected(t, res, "mode-own") {
+		t.Fatalf("T-MODE-8 FAIL: owning lane with open board rows was not admitted inside the cooldown window")
+	}
+}
+
+// T-MODE-9 (SCHED-GAP-141c): a LANE whose foreign board holds only perpetual
+// fixtures is paced by cooldown — the perpetual-only fallback (GAP-106) still
+// holds, and it holds for the shared-board case too.
+func TestTasksMode_ForeignPerpetualOnlyBoardFollowsCooldown(t *testing.T) {
+	ownerWd := t.TempDir()
+	writeModeBoard(t, ownerWd, `{"id":"NEVER-DONE","status":"pending","perpetual":true}`)
+	laneWd := t.TempDir()
+	linkModeBoard(t, laneWd, ownerWd)
+
+	owner := modeProject("mode-perp-owner", "sync-lanes", ownerWd, "")
+	lane := modeProject("mode-perp-lane", "sync-lanes", laneWd, "")
+	ns := tasksNs("sync-lanes")
+	ns.MaxConcurrent = 8
+
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{owner, lane}, []database.Namespace{ns},
+		map[string]time.Time{
+			"mode-perp-owner": now.Add(-time.Hour),
+			"mode-perp-lane":  now.Add(-time.Hour),
+		})
+	if modeSelected(t, res, "mode-perp-lane") {
+		t.Fatalf("T-MODE-9a FAIL: lane over a foreign perpetual-only board was admitted inside the cooldown window")
+	}
+	if modeSelected(t, res, "mode-perp-owner") {
+		t.Fatalf("T-MODE-9b FAIL: owner over a perpetual-only board was admitted — never-done must not count as work")
+	}
+}
