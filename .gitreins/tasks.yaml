@@ -2650,3 +2650,33 @@ tasks:
   status: complete
   created_at: '2026-09-18T07:24:40.913679+00:00'
   completed_at: '2026-09-18T07:49:47.903538+00:00'
+- id: SCHED-GAP-148
+  title: 'Daemon-freshness guard: build identity in /api/v1/status + startup log,
+    plus ops/check-daemon-freshness.sh that fails when running binary predates HEAD
+    on admission/scheduling paths'
+  criteria:
+  - 'Acceptance: (1) GET /api/v1/status returns version + build_sha + build_time fields
+    backed by internal/version.Current/CurrentCommit/CurrentBuildDate. (2) Startup
+    log line on daemon boot prints ''build version=<ver> sha=<full-or-8char-sha> built=<rfc3339>''.
+    (3) ops/check-daemon-freshness.sh compares live /api/v1/status build_sha to the
+    newest commit hash touching internal/scheduler/*.go or internal/database/migrations.go
+    (default HEAD, --against=REV override), exits 0 when live >= that commit''s date,
+    exit 1 with both shas printed when live < that commit. (4) TestADMIT-148_FreshnessGuard
+    is added in a new test file (or appended to admission_decision_test.go); pinned
+    to the ADV-R04 clock seam if it touches time. (5) All tests green under -count=1
+    -p 1 ./...; golangci-lint clean; gitleaks clean. (6) Commit message starts with
+    ''feat(scheduler): SCHED-GAP-148 ...'' and includes Co-authored-by trailer from
+    $CODING_HERMES_CO_AUTHOR.'
+  status: complete
+  created_at: '2026-09-18T08:17:31.794700+00:00'
+  completed_at: '2026-09-18T08:34:17.962931+00:00'
+- id: SCHED-GAP-151
+  title: 'Runbook: the sanctioned drain-restart, including the traps that bit us'
+  criteria:
+  - docs/runbook-drain-restart.md exists with copy-pasteable steps pause -> verify
+    active_ticks=0 -> restart -> verify version/caps/freshness/admission -> resume,
+    each with a verifiable expected output, plus recovery sections for drain-died-mid-restart,
+    the two-units trap, and stale-binary/deploy verification
+  status: complete
+  created_at: '2026-09-18T08:44:32.213957+00:00'
+  completed_at: '2026-09-18T08:54:57.159894+00:00'
