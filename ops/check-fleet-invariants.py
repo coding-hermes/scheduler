@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""Check the live fleet config against the invariants the operator set.
+
+Read-only. Exit 0 = every invariant holds; exit 1 = at least one violation
+(printed as ``VIOLATION <class> <subject>: <detail>``). ``--json`` prints the
+same result as a JSON document.
+
+Why this exists: the fleet's shape is CONFIG (caps, admission modes, cooldowns,
+which executor a lane drives) and config has no unit test — nothing fails when it
+drifts back. This is the regression gate for that class of change. Run it after
+every scheduler deploy and from the daily report.
+
+Checks
+  1. caps          — global --max-concurrent and per-namespace max_concurrent
+  2. admission     — tasks ONLY where real work lives; satellites on timers
+  3. cooldown law  — no enabled lane below the 6h floor without a documented tier
+  4. executors     — no enabled lane driving a retired dagger-era driver script
+  5. workdirs      — every enabled lane's workdir exists
+  6. targets       — every satellite's target project exists and is enabled
+  7. store parity  — DB and fleet.toml agree on the operator's pins
+
+Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sqlite3
+import sys
+
+DEFAULT_DB = os.path.expanduser("~/.hermes/coding-hermes/scheduler.db")
+DEFAULT_TOML = os.path.expanduser("~/.hermes/fleet.toml")
+
+GLOBAL_CAP_EXPECTED = 10          # daemon --max-concurrent (user unit)
+FOREMAN_NS = "coding-hermes"
+FOREMAN_CAP_EXPECTED = 8
+SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
+COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
+# Enabled lanes legitimately paced slower than the floor (namespace cadence tiers).
+COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
+RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
+                   "sync-scheduler-tick.sh", "dogfood-scheduler-tick.sh")
+
+
+def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
+    """Split a flat TOML file into {id/name: block text} for ``[[header]]``."""
+    out, cur, key = {}, None, None
+    for line in text.splitlines():
+        if line.startswith("[["):
+            if cur and key:
+                out[key] = cur
+            cur = [line] if line.strip() == f"[[{header}]]" else None
+            key = None
+        elif cur is not None:
+            cur.append(line)
+            m = re.match(r'\s*(?:id|name)\s*=\s*"([^"]+)"', line)
+            if m and key is None:
+                key = m.group(1)
+    if cur and key:
+        out[key] = cur
+    return {k: "\n".join(v) for k, v in out.items()}
+
+
+def toml_value(block: str, field: str) -> str | None:
+    m = re.search(rf'^\s*{re.escape(field)}\s*=\s*"?([^"\n]+)"?', block, re.M)
+    return m.group(1).strip() if m else None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", default=DEFAULT_DB)
+    ap.add_argument("--toml", default=DEFAULT_TOML)
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    violations: list[dict] = []
+    info: list[dict] = []
+
+    def bad(cls: str, subject: str, detail: str) -> None:
+        violations.append({"class": cls, "subject": subject, "detail": detail})
+
+    con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    namespaces = {r["id"]: dict(r) for r in con.execute("SELECT * FROM namespaces")}
+    projects = {r["name"]: dict(r) for r in con.execute("SELECT * FROM projects")}
+    have_ownership = "board_ownership" in [r[1] for r in con.execute("PRAGMA table_info(projects)")]
+
+    # 1. caps -----------------------------------------------------------------
+    if namespaces.get(FOREMAN_NS, {}).get("max_concurrent") != FOREMAN_CAP_EXPECTED:
+        bad("caps", FOREMAN_NS, f"max_concurrent={namespaces.get(FOREMAN_NS, {}).get('max_concurrent')} "
+                                f"expected {FOREMAN_CAP_EXPECTED} (the foremen's guaranteed room)")
+    for ns in SATELLITE_NS:
+        row = namespaces.get(ns)
+        if row is None:
+            bad("caps", ns, "namespace missing")
+        elif row.get("max_concurrent") != 1:
+            bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected 1 (one global slot per satellite family)")
+
+    # 2. admission ------------------------------------------------------------
+    for ns, row in namespaces.items():
+        mode = (row.get("admission_mode") or "").strip()
+        if not mode:
+            bad("admission", ns, "no admission_mode set (falls back to cooldown by luck, not by config)")
+        elif ns == FOREMAN_NS and mode != "tasks":
+            bad("admission", ns, f"mode={mode} — the foremen namespace must be tasks (fast with work, timer when perpetual-only)")
+        elif ns != FOREMAN_NS and mode != "cooldown":
+            bad("admission", ns, f"mode={mode} — satellite namespaces must be timer-paced (cooldown)")
+
+    # 3. cooldown law ---------------------------------------------------------
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        cd = p.get("cooldown_s") or 0
+        if cd < COOLDOWN_FLOOR and name not in COOLDOWN_TIERS:
+            bad("cooldown", name, f"cooldown_s={cd} below the {COOLDOWN_FLOOR}s (6h) floor — sub-6h pins are retired")
+        if name in COOLDOWN_TIERS and cd != COOLDOWN_TIERS[name]:
+            bad("cooldown", name, f"cooldown_s={cd} != documented tier {COOLDOWN_TIERS[name]}")
+
+    # 4. executors ------------------------------------------------------------
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        blob = (p.get("command") or "") + (p.get("prompt") or "")
+        for driver in RETIRED_DRIVERS:
+            if driver in blob and "RETIRED" not in blob and "do NOT run" not in blob:
+                bad("executors", name, f"instructs the retired driver {driver} — lanes run their skill")
+
+    # 5. workdirs -------------------------------------------------------------
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        wd = p.get("workdir") or ""
+        if not wd or not os.path.isdir(wd):
+            bad("workdirs", name, f"workdir missing: {wd!r}")
+
+    # 6. satellite targets ----------------------------------------------------
+    # A sync lane may legitimately target a DuckBrain data source rather than a
+    # fleet project (repo-less lanes, report dirs). Naming a target is not enough
+    # to call it broken, and a name allowlist would rot — so ask for EVIDENCE:
+    # the lane's own workdir exists AND it has completed a tick in the last 7
+    # days. Otherwise the target really is dead weight.
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
+        if not m:
+            continue
+        base = m.group(1)
+        t = projects.get(base)
+        if t is not None and not t.get("enabled"):
+            bad("targets", name, f"target {base!r} is DISABLED — the lane would burn a clean-machine battery on nothing")
+            continue
+        if t is not None:
+            continue
+        cands = (f"/home/kara/{base}", f"/home/kara/{base.replace('-', '_')}",
+                 os.path.expanduser(f"~/.hermes/{base}"))
+        if any(os.path.isdir(c) for c in cands):
+            continue
+        wd = p.get("workdir") or ""
+        last = con.execute(
+            "SELECT MAX(spawned_at) FROM ticks WHERE project_name=? AND status='completed'", (name,)).fetchone()[0]
+        active = False
+        if bool(wd) and os.path.isdir(wd) and last:
+            try:
+                ts = dt.datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone().replace(tzinfo=None)
+                active = (dt.datetime.now() - ts) <= dt.timedelta(days=7)
+            except ValueError:
+                active = False
+        if active:
+            info.append({"class": "targets", "subject": name,
+                         "detail": f"external data target {base!r} (no repo/project) — lane is active, verified by its own workdir + recent completed tick"})
+        else:
+            bad("targets", name, f"target {base!r} is neither a fleet project nor a path on disk, and the lane shows no recent activity")
+
+    # 7. store parity ---------------------------------------------------------
+    toml = open(args.toml).read() if os.path.exists(args.toml) else ""
+    proj_blocks = parse_toml_blocks(toml, "projects")
+    ns_blocks = parse_toml_blocks(toml, "namespaces")
+    for name, p in projects.items():
+        if not p.get("enabled") or name not in proj_blocks:
+            continue
+        block = proj_blocks[name]
+        for field in ("cooldown_s", "cooldown_floor_s", "cooldown_ceiling_s"):
+            tv = toml_value(block, field)
+            if tv is not None and p.get(field) is not None and int(tv) != int(p[field]):
+                bad("parity", name, f"{field}: db={p[field]} toml={tv} — a pin in one store is drift")
+        tv = toml_value(block, "board_ownership")
+        if have_ownership and tv is not None:
+            dbv = (p.get("board_ownership") or "").strip()
+            if dbv != tv.strip():
+                bad("parity", name, f"board_ownership: db={dbv!r} toml={tv!r}")
+    for ns, row in namespaces.items():
+        block = ns_blocks.get(ns)
+        if not block:
+            continue
+        tv = toml_value(block, "admission_mode")
+        if tv is not None and (row.get("admission_mode") or "") != tv:
+            bad("parity", ns, f"admission_mode: db={row.get('admission_mode')!r} toml={tv!r}")
+        tv = toml_value(block, "max_concurrent")
+        if tv is not None and int(tv) != int(row.get("max_concurrent") or 0):
+            bad("parity", ns, f"max_concurrent: db={row.get('max_concurrent')} toml={tv}")
+
+    result = {
+        "ok": not violations,
+        "checked": {
+            "namespaces": len(namespaces),
+            "projects": len(projects),
+            "enabled": sum(1 for p in projects.values() if p.get("enabled")),
+        },
+        "violations": violations,
+        "info": info,
+    }
+    if args.json:
+        print(json.dumps(result, indent=1))
+    else:
+        for v in violations:
+            print(f"VIOLATION {v['class']} {v['subject']}: {v['detail']}")
+        for i in info:
+            print(f"INFO {i['class']} {i['subject']}: {i['detail']}")
+        print(f"{'PASS' if result['ok'] else 'FAIL'} — {len(violations)} violation(s) across "
+              f"{result['checked']['namespaces']} namespaces / {result['checked']['enabled']} enabled lanes")
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

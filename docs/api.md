@@ -479,9 +479,46 @@ hard cap (S07). Namespace model:
 | `weight` | int | 1..100, relative weight for proportional allocation |
 | `reserved` | int | >= 0, guaranteed floor budget units |
 | `hard_cap` | int | >= 0, maximum budget; 0 = no cap (interpret as B) |
+| `max_concurrent` | int | >= 0, **ticks this namespace may have in flight at once**; 0 = unlimited |
+| `admission_mode` | string | `cooldown` (default) or `tasks` — see "Admission and concurrency" below |
+| `load_gate` | string | `off` opts the namespace out of the daemon-wide load gate (SCHED-GAP-125) |
+| `default_prompt` | string | Base prompt every project in the namespace inherits (project `prompt` appends to it, or replaces it per `prompt_mode`) |
+| `model_chain` | string | Optional per-namespace chain override (JSON) |
 | `enabled` | bool | Disabled namespaces get zero allocation |
 | `description` | string | Human-readable label |
 | `created_at`, `updated_at` | string | RFC3339 |
+
+### Admission and concurrency (the current fleet shape)
+
+Three dials, set by the operator — not defaults:
+
+| Dial | Value | Where |
+|------|-------|-------|
+| Global slot pool | 10 | daemon flag `--max-concurrent` (systemd user unit) |
+| `coding-hermes` (foremen) | 8 | namespace `max_concurrent` |
+| Each satellite namespace (`qa`, `pm`, `dogfood`, `duckbrain-sync`, `releases`) | 1 | namespace `max_concurrent` |
+
+The shape is deliberate: a satellite can hold at most one global slot, so the
+foremen always have room. (`coding-hermes` = 8 + at most one per satellite ≤ 13
+possible, inside the global 10 only when the budget is free — the packer admits
+by namespace weight and the pool's `--max-concurrent` is the hard ceiling.)
+
+`admission_mode` decides when a namespace's projects may be admitted:
+
+- `cooldown` — wall-clock only: a project is admitted once `cooldown_s` has
+  elapsed since its last completed tick. This is the default and the right mode
+  for satellite lanes (their work is cadence-driven).
+- `tasks` — admit immediately while the project's **own** board still has real
+  (non-perpetual) rows to work, then fall back to the cooldown timer when the
+  board is drained or holds only perpetual rows. A lane only qualifies when it
+  OWNS the board it reads (SCHED-GAP-141, migration v32 `projects.board_ownership`:
+  `''` = derived by full symlink resolution, `owner`, `shared`) — a satellite
+  reading its primary's board through a symlinked `board/` directory does not.
+
+An API `PUT` is live immediately and the `fleet.toml` regen mirrors it, so a
+restart re-pins the operator's choice. Change a namespace cap with
+`PUT /api/v1/namespaces/{id}` `{"max_concurrent": N}`; change one lane's
+admission with `PUT /api/v1/projects/{name}` `{"admission_mode": "cooldown"}`.
 
 ### GET /api/v1/namespaces
 
