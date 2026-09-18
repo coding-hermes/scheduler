@@ -2726,3 +2726,22 @@ tasks:
   status: complete
   created_at: '2026-09-18T12:02:41.926935+00:00'
   completed_at: '2026-09-18T12:18:20.238768+00:00'
+- id: SCHED-GAP-146
+  title: 'Regression test: a DEFERRED spawn must never consume a cooldown, a progress
+    penalty, or a nudge budget'
+  criteria:
+  - "TestGAP146_LoadGateDeferPreservesAllState \u2014 load gate trip + tick attempt:\
+    \ cooldown_s unchanged, last_tick_completed unchanged, consecutive_failures unchanged,\
+    \ no_progress_ticks unchanged, nudge_count unchanged, no tick row created"
+  - "TestGAP146_NamespaceCapDeferPreservesAllState \u2014 namespace cap=1 + one inflight\
+    \ + second tick attempt: same invariants as the load-gate case, AND the project\
+    \ is admitted on the next evaluation once the cap clears (re-admission contract\
+    \ \u2014 Bane: a gate that defers but never re-admits is a silent stall)"
+  - "TestGAP146_DeferDoesNotDoubleCountAcrossEvaluations \u2014 after a defer, consecutive\
+    \ evaluations re-pick the same project until it runs (not the next 5-min run forever)"
+  - "TestGAP146_DeferredSpawnLeavesNoTickRow \u2014 assert no row in ticks table with\
+    \ status='running' for the deferred project after a defer"
+  - go test ./internal/scheduler/ -count=1 -run 'TestGAP146' passes
+  status: complete
+  created_at: '2026-09-18T12:34:57.793378+00:00'
+  completed_at: '2026-09-18T12:51:51.370089+00:00'
