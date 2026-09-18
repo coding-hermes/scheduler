@@ -2921,3 +2921,35 @@ tasks:
   status: complete
   created_at: '2026-09-18T22:25:18.402551+00:00'
   completed_at: '2026-09-18T22:52:26.579069+00:00'
+- id: SCHED-GAP-171
+  title: "POOL half of SCHED-GAP-146: SlotPool.spawn defers a load-gated spawn AFTER\
+    \ the row is enqueued \u2192 the row strands 'queued' forever"
+  criteria:
+  - "When SlotPool.Spawn is invoked while LoadGateShouldDefer returns true, the row\
+    \ was already enqueued by tick_process.go:210 (or by SpawnNow for SpawnEnqueued)\
+    \ \u2014 the spawn goroutine returns leaving the row sitting in status='queued'\
+    \ with no in-flight tick to drive it. The next evaluation re-picks the same project\
+    \ and re-enqueues; SpawnNow 409s (project already running); the orphan scan treats\
+    \ the row as in-flight \u2014 work is neither running nor eligible, and queued\
+    \ rows accumulate. FIX: move the LoadGateShouldDefer gate to BEFORE the lifecycle.Enqueue\
+    \ call in (a) the evaluation path (tick_process.go Fire each project) and (b)\
+    \ the SpawnNow API path (loop.go around the l.lifecycle.Enqueue). When the gate\
+    \ is open (load below threshold OR namespace opted out), enqueue + spawn as today.\
+    \ When the gate is closed, skip enqueue, do NOT consume a slot, do NOT call tryReserve,\
+    \ do NOT bump nudge, and do NOT record failure \u2014 emit a 'load_gate_deferred'\
+    \ event with project+namespace+load_1m+threshold, and let the next evaluation\
+    \ re-pick the project. Acceptance: (1) regression test asserting that a Spawn\
+    \ against a down-gate leaves the ticks table WITHOUT a row for that (project,\
+    \ evaluation_cycle) and the project's nudge count is unchanged; (2) regression\
+    \ test asserting that a SpawnEnqueued against a down-gate leaves the row's status='queued'\
+    \ and the gate-deferral event is emitted (do NOT change SpawnNow's contract that\
+    \ the returned tickID is a stored row \u2014 the API endpoint must keep its current\
+    \ behavior: only the evaluation path may skip enqueue); (3) a live check that\
+    \ the queued-row count returns to 0 when load falls. Out of scope: changes to\
+    \ the load-gate threshold/namespace opt-out (already landed v31), SCHED-GAP-143\
+    \ transport classification, and the nudge-half of 146 (already landed). Reuse\
+    \ existing helper LoadGateShouldDefer(db, nsID); reuse existing event shape from\
+    \ slot_pool.go:300-313."
+  status: complete
+  created_at: '2026-09-18T23:01:54.517314+00:00'
+  completed_at: '2026-09-18T23:29:30.362952+00:00'
