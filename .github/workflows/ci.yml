@@ -31,6 +31,21 @@ jobs:
       - name: Build binaries
         run: make build
 
+      - name: Board closure-evidence gate (SCHED-GAP-085)
+        # A board row is CLOSED only when status==complete AND
+        # worker_status==complete AND completed_at is set; a closed row with
+        # ALL of reasoning/commit_hash/worker_summary empty is unverifiable
+        # (nobody can tell what shipped). `schedulerd --verify-board` exits 1
+        # listing each "VIOLATION <id>" line.
+        # Runs against a CLEAN fixture, never the live board: the real
+        # .coding-hermes/board/tasks.jsonl carries pre-existing violations
+        # (SCHED-GAP-086/-087/-095/-096/-097, SEC-001) and the step must stay
+        # green while the fixture pins the gate's contract.
+        # Must come after "Build binaries" — bin/ is gitignored, so
+        # ./bin/schedulerd only exists once `make build` has run.
+        if: hashFiles('ops/ci-fixture-board.jsonl') != ''
+        run: ./bin/schedulerd --verify-board ops/ci-fixture-board.jsonl
+
       - name: End-to-end scheduler verify
         run: ./bin/schedulerd --test-verify 3
 
@@ -53,7 +68,36 @@ jobs:
           go-version: "1.26"
 
       - name: golangci-lint
+        # Whole-repo run — intentionally covers internal/blocks/... and
+        # internal/scheduler/... (including adaptive_cooldown.go; note that is
+        # a FILE, not a package). CI-004 added no narrower lint job: repo-wide
+        # lint already satisfies the row's blocks + adaptive_cooldown asks.
+        # Same reasoning for the `Vet` step and `go build ./...` in the build
+        # job — both are whole-repo and cover those two packages.
         uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           args: --timeout=5m
+
+  race:
+    # CI-004: the build job's Test steps run without -race, so internal/blocks
+    # and internal/scheduler had no data-race coverage in CI. This job is the
+    # only raced lane; -p 1 mirrors the repo convention (cgroup pids limits on
+    # the fleet host make parallelism unsafe).
+    #
+    # -timeout=900s is a pure safety bound (it does not slow a green run).
+    # Measured locally on the fleet host: the raced scheduler suite takes
+    # 377s at loadavg ~6 (blocks 1.2s), and at loadavg ~30 the same command
+    # blew through 480s and died with "panic: test timed out after 8m0s".
+    # 480s left too little headroom for a loaded runner, so the bound is
+    # raised; a hung test still fails within 15 minutes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Race detector — blocks + scheduler
+        run: go test -short -race -count=1 -p 1 -timeout=900s ./internal/blocks/... ./internal/scheduler/...
