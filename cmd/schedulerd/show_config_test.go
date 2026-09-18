@@ -21,17 +21,21 @@ func TestPrintSchema(t *testing.T) {
 	if schema["title"] == nil {
 		t.Error("schema missing title")
 	}
-	// DOGFOOD-012: the description must not claim a loaded three-layer model —
-	// schedulerd.toml is NOT loaded by the daemon yet (FEAT-005 wiring only).
+	// SCHED-GAP-165 (closing row): FEAT-005 has LANDED — main.go applies the
+	// root schedulerd.toml at boot under the default-guard pattern, so the
+	// description must DECLARE the loaded resolution chain
+	// (TOML [scheduler] < env vars < CLI flags) instead of denying it. The
+	// pre-FEAT-005 "NOT yet loaded by the daemon" wording is now a
+	// surface-parity defect.
 	desc, ok := schema["description"].(string)
 	if !ok {
 		t.Fatal("schema missing description")
 	}
-	if strings.Contains(desc, "three-layer model (TOML < env vars < CLI flags)") {
-		t.Errorf("schema description still claims a loaded three-layer model: %q", desc)
+	if strings.Contains(desc, "NOT yet loaded by the daemon") {
+		t.Errorf("schema description still denies the root TOML layer is loaded: %q", desc)
 	}
-	if !strings.Contains(desc, "NOT yet loaded by the daemon") || !strings.Contains(desc, "FEAT-005") {
-		t.Errorf("schema description must state schedulerd.toml is NOT yet loaded (FEAT-005 contract): %q", desc)
+	if !strings.Contains(desc, "FEAT-005") || !strings.Contains(desc, "TOML [scheduler]") {
+		t.Errorf("schema description must declare the root TOML layer loaded (FEAT-005 landed): %q", desc)
 	}
 	props, ok := schema["properties"].(map[string]interface{})
 	if !ok {
@@ -209,14 +213,20 @@ func TestPrintConfig(t *testing.T) {
 		}
 	}
 
-	// Header honesty (DOGFOOD-012): must not claim "CLI flags only" and must
-	// state the effective-value source plus the FEAT-005 root TOML deferral.
+	// Header honesty (DOGFOOD-012, SCHED-GAP-165): must not claim "CLI flags
+	// only", must state the effective-value source, and must now declare the
+	// FEAT-005 root TOML layer LOADED (resolution CLI > env > TOML) instead of
+	// deferring it to a future feature.
 	if strings.Contains(out, "CLI flags only") {
 		t.Errorf("printConfig() header still claims 'CLI flags only'\nGot:\n%s", out)
 	}
+	if strings.Contains(out, "root TOML loading comes in FEAT-005") {
+		t.Errorf("printConfig() header still defers the root TOML layer to FEAT-005\nGot:\n%s", out)
+	}
 	if !strings.Contains(out, "effective values") ||
-		!strings.Contains(out, "root TOML loading comes in FEAT-005") {
-		t.Errorf("printConfig() header missing effective-values / FEAT-005 wording\nGot:\n%s", out)
+		!strings.Contains(out, "TOML [scheduler]") ||
+		!strings.Contains(out, "FEAT-005") {
+		t.Errorf("printConfig() header missing effective-values / FEAT-005-loaded wording\nGot:\n%s", out)
 	}
 }
 
