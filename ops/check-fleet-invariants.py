@@ -18,8 +18,18 @@ Checks
   5. workdirs      — every enabled lane's workdir exists
   6. targets       — every satellite's target project exists and is enabled
   7. store parity  — DB and fleet.toml agree on the operator's pins
+  8. board vocab   — every JSONL board row carries a dispatchable status.
+                     The board's writers are gated to
+                     BOARD_ALLOWED_STATUSES; rows still carrying a legacy
+                     closed spelling (done/completed/closed) are reported
+                     under the separate 'board-legacy-status' class so the PM
+                     cycle can sweep them in the same tick. Without this, a row
+                     minted as e.g. 'todo' is visible to the fleet but picked by
+                     nobody — the foreman prompt and the pending-boost counter
+                     both read status=="pending" only. Skipped silently when no
+                     board file is found (test rigs, old-style workdirs).
 
-Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
+Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--board PATH] [--json]
 """
 from __future__ import annotations
 
@@ -43,6 +53,54 @@ COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
 COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
 RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
                    "sync-scheduler-tick.sh", "dogfood-scheduler-tick.sh")
+
+# Board writer vocabulary (check 8). MUST stay in lockstep with
+# internal/scheduler/board_vocab.go (BoardAllowedStatuses /
+# BoardLegacyClosedStatuses) — pinned by
+# TestBoardVocabValidator_AllowedSetMatchesPythonGate. Only "pending" is
+# dispatchable by the foreman prompt; "complete"/"duplicate" are the terminal
+# states the PM cycle writes.
+BOARD_ALLOWED_STATUSES = ("pending", "complete", "duplicate")
+BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
+
+CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs",
+                 "targets", "parity", "board-vocab", "board-legacy-status")
+
+
+def find_board_path(start: str) -> str | None:
+    """Walk up from *start* looking for ``.coding-hermes/board/tasks.jsonl``."""
+    cur = os.path.abspath(start)
+    while True:
+        cand = os.path.join(cur, ".coding-hermes", "board", "tasks.jsonl")
+        if os.path.isfile(cand):
+            return cand
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def board_row_id(row: dict) -> str:
+    """Row identifier for reporting: ``id``, then ``task_id``, then ``<unknown>``.
+
+    Mirrors Go's boardRowID — only a non-empty STRING counts as an id.
+    """
+    for key in ("id", "task_id"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return "<unknown>"
+
+
+def board_row_status(row: dict) -> str:
+    """Normalised status: absent/None → "", else ``str(...).lower().strip()``.
+
+    Mirrors Go's boardRowStatus.
+    """
+    raw = row.get("status")
+    if raw is None:
+        return ""
+    return str(raw).lower().strip()
 
 
 def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
@@ -73,6 +131,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--toml", default=DEFAULT_TOML)
+    ap.add_argument("--board", default=None,
+                    help="JSONL board for check 8; default: walk up from this script "
+                         "to .coding-hermes/board/tasks.jsonl (skipped when absent)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -205,8 +266,54 @@ def main() -> int:
         if tv is not None and int(tv) != int(row.get("max_concurrent") or 0):
             bad("parity", ns, f"max_concurrent: db={row.get('max_concurrent')} toml={tv}")
 
+    # 8. board vocabulary -----------------------------------------------------
+    # Writer-side gate (SCHED-GAP-164). The daemon's READERS accept a wide open
+    # vocabulary for forward compatibility (internal/scheduler/board_freshness.go
+    # openStatuses), but only status=="pending" is dispatchable: the foreman
+    # prompt picks pending rows and the pending-boost counter
+    # (board_awareness.go) counts only those. So a row minted as "todo" /
+    # "open" / "in_progress" is visible work that no lane will ever pick up.
+    # Read-only — rows are never rewritten here. A missing board skips the check
+    # silently, so the script stays runnable in test rigs and old-style workdirs.
+    # Same rule as Go's scheduler.ValidateBoardVocab (internal/scheduler/
+    # board_vocab.go); the expected sets are pinned equal by
+    # TestBoardVocabValidator_AllowedSetMatchesPythonGate.
+    board = args.board or find_board_path(os.path.dirname(os.path.abspath(__file__)))
+    if board and os.path.isfile(board):
+        rows = legacy = 0
+        with open(board, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue  # malformed JSONL is a different gate's concern
+                if not isinstance(row, dict):
+                    continue
+                rows += 1
+                status = board_row_status(row)
+                if status in BOARD_ALLOWED_STATUSES:
+                    continue
+                rid = board_row_id(row)
+                if status in BOARD_LEGACY_CLOSED_STATUSES:
+                    legacy += 1
+                    bad("board-legacy-status", rid, f"status={status} (use 'complete')")
+                else:
+                    bad("board-vocab", rid, f"status={status}")
+        info.append({"class": "board-vocab", "subject": board,
+                     "detail": f"{rows} row(s) scanned, {legacy} legacy closed spelling(s)"})
+
+    counts = {c: 0 for c in CHECK_CLASSES}
+    for v in violations:
+        counts[v["class"]] = counts.get(v["class"], 0) + 1
+    checks = [{"class": c, "violations": counts.get(c, 0),
+               "summary": f"{c}: {counts.get(c, 0)} violations"} for c in CHECK_CLASSES]
+
     result = {
         "ok": not violations,
+        "checks": checks,
         "checked": {
             "namespaces": len(namespaces),
             "projects": len(projects),
