@@ -2779,3 +2779,17 @@ tasks:
   status: complete
   created_at: '2026-09-18T16:12:59.083598+00:00'
   completed_at: '2026-09-18T16:32:03.964889+00:00'
+- id: SCHED-GAP-163
+  title: Throttle repeat 'pre-existing board closure-evidence violations' HIGH events
+    per project (fingerprint + 7d re-mind, repeats demoted to MEDIUM)
+  criteria:
+  - 'Per-project fingerprint of the flagged closure-violation set is persisted in
+    the event details; unchanged set emits at most ONE HIGH per 7d re-mind window
+    (a repeat after the window is MEDIUM instead of HIGH), a CHANGED set (new/removed
+    violating row) emits HIGH immediately, and a fresh in-window violation still rejects
+    the tick. Unit tests cover: unchanged-within-gap suppressed, unchanged-after-gap
+    re-emitted as MEDIUM, changed-set immediate HIGH, new project immediate HIGH,
+    rejected-path unchanged.'
+  status: complete
+  created_at: '2026-09-18T16:58:32.182870+00:00'
+  completed_at: '2026-09-18T17:18:45.129598+00:00'
