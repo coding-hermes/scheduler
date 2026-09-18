@@ -53,6 +53,15 @@ type SlotPool struct {
 	// ForceEvaluate) in that window double-spawned the project. Guarded by
 	// mu, same critical-section discipline as running.
 	reserved map[string]bool
+
+	// nsPending holds, per namespace, the spawn attempts that have passed the
+	// namespace-cap gate but whose tick row is not yet `running` — the
+	// SCHED-GAP-103 window in which the project would otherwise look
+	// namespace-idle. The claim is dropped the moment the row starts running,
+	// so a running tick is never double-counted and the effective cap stays
+	// exact. Guarded by mu, same discipline as running/reserved.
+	// SCHED-GAP-144.
+	nsPending map[string]int
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
@@ -65,6 +74,7 @@ func NewSlotPool(maxConcurrent int, spawner *Spawner, lifecycle *LifecycleTracke
 		freedCh:   make(chan struct{}, maxConcurrent),
 		running:   make(map[string]int),
 		reserved:  make(map[string]bool),
+		nsPending: make(map[string]int),
 	}
 	return p
 }
@@ -323,6 +333,38 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		defer p.clearReserve(proj.Name)
 		defer p.Release(proj.Name)
 
+		// SCHED-GAP-144: namespace-cap admission at the DECLARED admission
+		// point (G7). The packer and the orphan re-nudge both gate on the
+		// namespace cap; this is the backstop that makes the cap authoritative
+		// for every other entry into the pool (API spawn endpoint, wave
+		// resume, queue replay/continuation). Measured defect it closes: the
+		// 2026-09-17 23:51 restart admitted 3 duckbrain-sync lanes against a
+		// cap of 1 together with all 8 foremen, taking every global slot.
+		// DEFER, not drop: the row stays queued and is retried — no cooldown
+		// is consumed and the lane records no failure for a busy fleet.
+		nsID := proj.NamespaceID
+		nsClaimed := false
+		releaseNsClaim := func() {
+			if nsClaimed {
+				p.releaseNamespaceSlot(nsID)
+				nsClaimed = false
+			}
+		}
+		defer releaseNsClaim()
+		if !namespaceCapGateDisabled() {
+			if nsCap := namespaceCapDB(db, nsID); nsCap > 0 {
+				nsStart := time.Now()
+				nsCtx, nsCancel := context.WithTimeout(context.Background(), defaultNamespaceSlotPatience)
+				ok := p.waitNamespaceSlot(nsCtx, nsID, db)
+				nsCancel()
+				if !ok {
+					p.logNamespaceDeferral(proj, tickID, nsCap, namespaceRunningDB(db, nsID), time.Since(nsStart))
+					return
+				}
+				nsClaimed = true
+			}
+		}
+
 		// Wait for a free slot. The patience is configurable
 		// (ADV-R08/G3); the default keeps the historical 5-minute
 		// window byte-identical.
@@ -370,6 +412,10 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			log.Printf("SPAWN: start %s: %v", proj.Name, err)
 			return
 		}
+		// SCHED-GAP-144: the row is `running` now, so the DB carries this
+		// tick's namespace occupancy — release the in-process claim to keep
+		// the cap exact (a held claim plus a running row would double-count).
+		releaseNsClaim()
 		// SCHED-GAP-107: flag the tick as a bump tick when the project has
 		// an active bump — the flag both marks it for yield analysis and
 		// makes its completion consume one bump tick.
