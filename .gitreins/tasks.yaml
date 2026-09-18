@@ -2815,3 +2815,21 @@ tasks:
   status: complete
   created_at: '2026-09-18T17:38:42.774856+00:00'
   completed_at: '2026-09-18T17:55:01.724001+00:00'
+- id: SCHED-GAP-144
+  title: Regression test for the boot-burst cap on EVERY spawn path + the pool-side
+    gate
+  criteria:
+  - 'fix(scheduler): enforce the namespace cap at SlotPool.spawn commit 5eaf1af landed;
+    test file internal/scheduler/schedgap144_namespace_cap_gate_test.go carries 5
+    test functions (TestGAP144_NamespaceCapBackstop_DefersBeyondCap, TestGAP144_UnlimitedNamespaceNotGated,
+    TestGAP144_EmergencyKillSwitch, TestGAP144_FailOpenOnUnknownNamespace, TestGAP144_GlobalSlotWaitStillApplies)
+    covering: cap-defers-beyond-cap with live 3-sync-vs-cap-1 replay, unlimited-not-gated,
+    emergency-kill-switch (SCHEDULER_NAMESPACE_CAP_GATE=off), fail-open-on-unknown-namespace,
+    global-slot-wait-still-applies. Gate implemented at SlotPool.spawn (slot_pool.go
+    namespaceCapGateDisabled/namespaceCapDB/waitNamespaceSlot). go test -run TestGAP144
+    -short -count=1 PASS; gofmt clean; go vet clean; go build clean; commit 5eaf1af
+    on origin/main; foreman-direct close pattern 1 (stale pending row, work already
+    on origin/main).'
+  status: complete
+  created_at: '2026-09-18T18:22:30.822577+00:00'
+  completed_at: '2026-09-18T18:22:43.185248+00:00'
