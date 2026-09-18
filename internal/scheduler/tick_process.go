@@ -428,6 +428,128 @@ func (l *Loop) cleanDanglingOnStartup() {
 	}
 }
 
+// queuedReapAgeMultiplier is how many tick-timeouts a 'queued' row may age
+// before startup treats it as a leftover of a dead process (SCHED-GAP-145).
+// A queued row is created by the evaluation/nudge path and dispatched by the
+// SAME process that created it (SlotPool.spawn transitions queued→running as
+// its first step), so nothing legitimate survives a full tick budget; 2x is
+// deliberately generous — a live-but-slow process keeps its own rows.
+const queuedReapAgeMultiplier = 2
+
+// staleQueuedRowsSQL selects 'queued' ticks older than the cutoff bound as its
+// only argument (an RFC3339 timestamp). julianday() parses RFC3339 with
+// varying offsets, so a raw string comparison would be wrong (same reasoning
+// as staleGatewayTicksSQL). COALESCE covers the nullable spawned_at: both
+// columns are stamped by every enqueue path and created_at is NOT NULL by
+// schema, so the comparison always has a usable clock and can never fail open
+// on a legacy row shape.
+const staleQueuedRowsSQL = `
+SELECT id, project_name FROM ticks
+WHERE status = 'queued'
+  AND julianday(COALESCE(spawned_at, created_at)) < julianday(?)`
+
+// reapStaleQueuedRows marks 'queued' ticks left over from a previous process
+// as terminal (SCHED-GAP-145). It is the queued-row twin of
+// cleanDanglingOnStartup: that one reaps 'running' rows whose owner is gone,
+// this one reaps rows that were enqueued and then never dispatched.
+//
+// Measured defect (2026-09-17): the fleet DB held 7 rows with status='queued',
+// session_id NULL and spawned_at from 2026-09-16T20:17 / 2026-09-17T01:10
+// (gitreins-poc, warpfs, off-by-one, 9router, coding-hermes-scheduler,
+// duckbrain, heading) — enqueued by a process that then exited without ever
+// starting them (restart, load-gate deferral, or a slot/namespace-patience
+// drop: every one of those paths returns from SlotPool.spawn leaving the row
+// queued with nobody owning it). Nothing reclaims them: the in-flight dedup
+// the evaluation loop and the manual spawn endpoint share
+// (`status IN ('queued','running')`, loop.go) refuses to re-spawn the
+// project, the orphan re-nudge scan excludes it (session_resume.go), the
+// namespace in-flight admission count includes it (session_resume.go), and
+// /api/v1/metrics reports it as `queued` — so the projects were unschedulable
+// indefinitely and the queue read as live work.
+//
+// Threshold: queuedReapAgeMultiplier x tick_timeout (the Loop field wired by
+// NewLoop/SetTickTimeout, falling back to the spawner's configured timeout).
+// Older than that and the originating process is provably gone, or the spawn
+// loop never ran — no config knob, by design.
+//
+// Like cleanDanglingOnStartup the reap is outcome-free (timeoutReapSQL): the
+// outcome CHECK constraint only allows ('committed','dry_run','failed',
+// 'timeout'), so stamping a 'queued_reaped'-style value would be rejected and
+// silently leave the row queued. completed_at IS stamped (GAP-045) so the row
+// is terminal for duration / failure-window math. projects.last_tick_completed
+// is deliberately NOT bumped (unlike the dead-pid reap): this row never ran a
+// tick, so faking a completion would delay the project's next spawn by a whole
+// cooldown. Returns the number of rows reaped.
+func (l *Loop) reapStaleQueuedRows() int {
+	ctx := context.Background()
+	tt := l.reapTickTimeout()
+	if tt <= 0 {
+		log.Printf("QUEUED: startup reap skipped — no usable tick timeout; queued rows left untouched")
+		return 0
+	}
+	cutoff := time.Now().Add(-queuedReapAgeMultiplier * tt)
+
+	// Rows are consumed and CLOSED before any UPDATE: SQLite allows a single
+	// writer, so an UPDATE issued while this SELECT still holds the pool's
+	// only connection blocks forever (same contract as staleGatewayTicks).
+	rows, err := l.db.QueryContext(ctx, staleQueuedRowsSQL, cutoff.Format(time.RFC3339))
+	if err != nil {
+		log.Printf("QUEUED: startup reap query failed: %v", err)
+		return 0
+	}
+	type queuedTick struct{ id, project string }
+	var stale []queuedTick
+	for rows.Next() {
+		var q queuedTick
+		if err := rows.Scan(&q.id, &q.project); err != nil {
+			continue
+		}
+		stale = append(stale, q)
+	}
+	rows.Close()
+
+	if len(stale) == 0 {
+		log.Printf("QUEUED: startup reap — no stale queued rows (threshold %v = %dx tick timeout %v)",
+			queuedReapAgeMultiplier*tt, queuedReapAgeMultiplier, tt)
+		return 0
+	}
+
+	var reaped int
+	for _, q := range stale {
+		if _, err := l.db.ExecContext(ctx,
+			timeoutReapSQL, time.Now().Format(time.RFC3339), q.id); err != nil {
+			log.Printf("QUEUED: reaping tick %s (project %s): %v", q.id, q.project, err)
+			continue
+		}
+		reaped++
+		// SCHED-GAP-114 (S12 §8.2 item 3): the shared wave step, exactly as
+		// cleanDanglingOnStartup runs it right after timeoutReapSQL. A
+		// never-dispatched row has no worker rows, so this is normally a
+		// no-op — it stays here so both reap paths share one contract.
+		l.reapWaveAbandoned(ctx, q.id)
+	}
+	if reaped > 0 {
+		log.Printf("QUEUED: reaped %d stale queued tick(s) never dispatched by the previous process (older than %v = %dx tick timeout %v)",
+			reaped, queuedReapAgeMultiplier*tt, queuedReapAgeMultiplier, tt)
+	}
+	return reaped
+}
+
+// reapTickTimeout resolves the tick-timeout the queued-row reaper derives its
+// age window from: the Loop field wired by NewLoop and SetTickTimeout, falling
+// back to the spawner's own configured timeout (NewSpawner's default when the
+// daemon never called SetTickTimeout). Zero means no usable window — the
+// caller skips the reap rather than reaping everything.
+func (l *Loop) reapTickTimeout() time.Duration {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	tt := l.tickTimeout
+	if tt <= 0 && l.spawner != nil {
+		tt = l.spawner.timeout
+	}
+	return tt
+}
+
 func (l *Loop) reapZombies() {
 	ctx := context.Background()
 	rows, err := l.db.QueryContext(ctx,

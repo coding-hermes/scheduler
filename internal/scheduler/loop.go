@@ -107,6 +107,15 @@ type Loop struct {
 	// tests may shorten it.
 	stopGrace time.Duration
 
+	// tickTimeout mirrors the configured per-tick session deadline
+	// (--tick-timeout), initialized from the spawner's own default in
+	// NewLoop and updated by SetTickTimeout. It exists so startup reaping
+	// can derive an age window without reaching into the spawner
+	// (SCHED-GAP-145: a queued row older than 2x this can only be a
+	// leftover of a dead process). A zero value falls back to
+	// spawner.timeout — see reapTickTimeout.
+	tickTimeout time.Duration
+
 	// SCHED-GAP-155 admission-decision counters. Per-PROCESS, monotonic,
 	// reset only by a restart (matching the spawn/gateway counters):
 	// admitCounts is the per-reason tally for the reason vocabulary and
@@ -189,6 +198,10 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// Loop's lifetime; the SCHED-GAP-077 drain (Wait/abortInFlightTicks/
 	// ReleaseAll in Stop) is unchanged.
 	l.slotPool = NewSlotPool(l.maxConcur, l.spawner, l.lifecycle)
+	// SCHED-GAP-145: mirror the spawner's configured tick deadline onto the
+	// Loop (single source — NewSpawner's default until SetTickTimeout runs)
+	// so the startup queued-row reaper can derive its 2x age window.
+	l.tickTimeout = l.spawner.timeout
 
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
@@ -290,12 +303,17 @@ func (l *Loop) simTickID(projName string, now time.Time) string {
 }
 
 // SetTickTimeout updates the real spawner's per-tick timeout. The slot pool
-// is created eagerly in NewLoop (CI-003) — no lazy init here.
+// is created eagerly in NewLoop (CI-003) — no lazy init here. SCHED-GAP-145:
+// the Loop's tickTimeout mirror is updated too (only for positive values, so a
+// 0 timeout can never collapse the startup queued-row reap window to zero).
 func (l *Loop) SetTickTimeout(timeout time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.spawner != nil {
 		l.spawner.timeout = timeout
+	}
+	if timeout > 0 {
+		l.tickTimeout = timeout
 	}
 }
 
@@ -392,6 +410,16 @@ func (l *Loop) Run() {
 		mode, l.weightBudget, l.maxConcur, runtime.NumGoroutine())
 
 	l.cleanDanglingOnStartup()
+
+	// SCHED-GAP-145: reap 'queued' rows the previous process enqueued and
+	// never dispatched. Runs immediately after the running-row reap and
+	// BEFORE the first evaluation, so neither the in-flight dedup (which
+	// refuses to re-spawn a project holding a queued row) nor the
+	// namespace-cap admission count carries a dead row into this process.
+	// A separate call rather than a step inside cleanDanglingOnStartup:
+	// that function returns early when it finds no dead rows, and its
+	// running-row contract stays byte-identical this way.
+	l.reapStaleQueuedRows()
 
 	// SCHED-GAP-091: if the daemon booted with a live gateway, any ticks
 	// orphaned before the restart (gateway drop, previous crash) are
