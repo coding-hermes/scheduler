@@ -408,3 +408,18 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// TestADMIT148_FreshnessGuard is the entry point named by the
+// SCHED-GAP-148 acceptance criterion; it is a thin wrapper that re-runs
+// the three real tests (status shape, built-binary stamp, ops script
+// exit codes) so the AC name resolves in the test list while the
+// worker's broader coverage stays load-bearing. Any future regression
+// in any of the three underlying assertions surfaces as a failure here
+// as well as in the inner test.
+func TestADMIT148_FreshnessGuard(t *testing.T) {
+	t.Run("StatusIncludesBuildIdentity", TestStatusIncludesBuildIdentity)
+	if !testing.Short() {
+		t.Run("BuiltDaemonReportsStampedBuildIdentity", TestBuiltDaemonReportsStampedBuildIdentity)
+	}
+	t.Run("FreshnessScript_ExitCodes", TestFreshnessScript_ExitCodes)
+}
