@@ -8,6 +8,11 @@ import (
 )
 
 // LogEvent inserts an event row. CreatedAt is set automatically if empty.
+//
+// After the INSERT commits, the row is published to the subscribers of db
+// (CTL-002) so live consumers such as GET /api/v1/events/stream see it
+// immediately. Publishing happens only on success, and the event carries its
+// committed ID — the ID the SSE stream replays from on reconnect.
 func LogEvent(ctx context.Context, db *sql.DB, e *Event) error {
 	if e.CreatedAt == "" {
 		e.CreatedAt = nowUTC()
@@ -25,6 +30,7 @@ VALUES (?,?,?,?,?)`
 		return fmt.Errorf("event last insert id: %w", err)
 	}
 	e.ID = id
+	publishEvent(db, *e)
 	return nil
 }
 

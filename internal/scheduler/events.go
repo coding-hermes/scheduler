@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
-	"time"
+
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // EventSeverity follows the alert escalation matrix from OBS-006.
@@ -29,8 +30,12 @@ func NewEventLogger(db *sql.DB) *EventLogger {
 	return &EventLogger{db: db}
 }
 
-// Emit writes an event row to the events table. Non-blocking — errors are
-// logged but not returned, so event logging never breaks the hot path.
+// Emit writes an event row through the database package's single write path
+// (database.LogEvent), which also publishes the committed row to the live
+// event subscribers (CTL-002) — so the scheduler loop's events reach
+// GET /api/v1/events/stream exactly like the API-, MCP- and sync-written ones.
+// Non-blocking — errors are logged but not returned, so event logging never
+// breaks the hot path.
 func (el *EventLogger) Emit(ctx context.Context, severity EventSeverity, component, message string, details map[string]any) {
 	detailsJSON := "{}"
 	if details != nil {
@@ -40,13 +45,15 @@ func (el *EventLogger) Emit(ctx context.Context, severity EventSeverity, compone
 		}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := el.db.ExecContext(ctx, `
-		INSERT INTO events (severity, component, message, details, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, string(severity), component, message, detailsJSON, now)
-
-	if err != nil {
+	// Same columns and the same RFC3339 UTC timestamp as the previous direct
+	// INSERT; LogEvent fills created_at in when it is empty.
+	ev := database.Event{
+		Severity:  database.EventSeverity(severity),
+		Component: component,
+		Message:   message,
+		Details:   detailsJSON,
+	}
+	if err := database.LogEvent(ctx, el.db, &ev); err != nil {
 		log.Printf("EVENT: failed to write event [%s] %s: %v", severity, message, err)
 	}
 }

@@ -104,6 +104,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/pause", s.pause)
 	mux.HandleFunc("/api/v1/resume", s.resume)
 	mux.HandleFunc("/api/v1/events", s.events)
+	// CTL-002: the live push counterpart of the poll-only event log above —
+	// one SSE connection instead of a client poll loop.
+	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
 	mux.HandleFunc("/api/v1/queue", s.queue)
 	mux.HandleFunc("/api/v1/openapi.json", s.openapi)
 	// SCHED-GAP-156: the single read-only fleet-metrics endpoint (one request

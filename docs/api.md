@@ -45,6 +45,7 @@ groups/templates routes are listed in the OpenAPI spec at
 | GET | `/api/v1/ticks` | [§7](#7-ticks) |
 | GET | `/api/v1/ticks/{id}` | [§7](#7-ticks) |
 | GET | `/api/v1/events` | [§8](#8-events) |
+| GET | `/api/v1/events/stream` | [§8](#8-events) |
 | GET | `/api/v1/queue` | [§9](#9-queue) |
 | GET | `/api/v1/metrics` | [§10](#10-fleet-metrics) |
 | POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
@@ -687,6 +688,51 @@ filters.
 
 ```bash
 curl -s "http://127.0.0.1:9090/api/v1/events?severity=HIGH&limit=20" | jq '.events[].message'
+```
+
+### GET /api/v1/events/stream
+
+**Purpose:** The live counterpart of the endpoint above — one long-lived
+Server-Sent Events connection that receives every event as it is committed,
+instead of a client poll loop. `internal/database.LogEvent` publishes to the
+stream after a successful INSERT, so an event written by any component (the
+scheduler loop, the API, the MCP server, the DuckBrain sync) appears on the
+stream as it lands.
+
+**Response 200:** `Content-Type: text/event-stream`, `Cache-Control: no-cache`.
+One frame per event:
+
+```
+id: 12345
+data: {"id":12345,"severity":"HIGH","component":"loop","message":"...","details":"{}","created_at":"2026-09-18T13:00:00Z"}
+
+```
+
+While the log is quiet a comment heartbeat (`: heartbeat`) is written every
+15 seconds so idle connections survive proxies and intermediate timeouts.
+
+**Reconnect:** the client echoes the last `id:` it saw in the `Last-Event-ID`
+request header. Every persisted event with a greater id is replayed before live
+events resume. A missing, empty or malformed `Last-Event-ID` (anything that is
+not a plain decimal integer) is treated as "no cursor" and replays the newest
+100 events — never an error, never an unbounded read. Each replay query is
+capped at 500 rows and a whole replay at 100 pages; if that bound is reached
+the stream emits a `: replay truncated` comment.
+
+**Slow clients:** each subscriber has a bounded (64-event) buffer. A client that
+falls that far behind drops its overflow rather than blocking event writers; the
+stream notices the id gap on its next live event and re-reads the missing range
+from the log before continuing, so a client that keeps reading still converges
+on a gap-free sequence. Subscriptions are released as soon as the request
+context is canceled.
+
+**Errors:** 405 on non-GET.
+
+```bash
+# Live tail; reconnect automatically resumes from where the client stopped.
+curl -N http://127.0.0.1:9090/api/v1/events/stream
+# Resume after event 12345.
+curl -N -H 'Last-Event-ID: 12345' http://127.0.0.1:9090/api/v1/events/stream
 ```
 
 ## 9. Queue

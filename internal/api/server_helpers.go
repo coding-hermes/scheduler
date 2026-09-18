@@ -787,6 +787,27 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/events/stream": {
+      "get": {
+        "summary": "Server-Sent Events stream of newly committed events (push, not poll)",
+        "description": "Holds the connection open and emits each event row as soon as it commits, framed as an id line plus a one-line JSON data payload. A comment heartbeat is sent every 15 seconds while the log is quiet, so idle connections survive proxies. Reconnect with the Last-Event-ID header (set automatically by EventSource) to replay every persisted event with a greater id before live events resume; an absent, empty or non-numeric Last-Event-ID replays the newest 100 events instead. A slow client whose bounded buffer overflows has the missing range repaired from the event log before the next live event is emitted.",
+        "parameters": [
+          {"name": "Last-Event-ID", "in": "header", "required": false, "schema": {"type": "string"}, "description": "ID of the last event the client received. Every event with a greater id is replayed before live events resume. Missing, empty or non-numeric values are treated as \"no cursor\"."}
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream: one frame per event (id line + JSON data line terminated by a blank line), plus a comment heartbeat every 15s while idle",
+            "content": {
+              "text/event-stream": {
+                "schema": {"type": "string", "description": "SSE frames: \"id: <event id>\" then \"data: <Event JSON>\", terminated by a blank line; \": heartbeat\" comments while idle"},
+                "example": "id: 42\ndata: {\"id\":42,\"severity\":\"HIGH\",\"component\":\"loop\",\"message\":\"evaluation started\",\"details\":\"{}\",\"created_at\":\"2026-09-18T13:00:00Z\"}"
+              }
+            }
+          },
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/queue": {
       "get": {
         "summary": "Ordered queue of eligible projects by urgency",
