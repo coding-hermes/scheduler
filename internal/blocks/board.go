@@ -7,7 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Board task-row schema (canonical 31-key foreman board shape — see
@@ -106,7 +107,14 @@ func taskID(pattern, templateName, project, date string, idx int) (id, prefix st
 // project. date is the YYYYMMDD UTC deploy date (taskID's {DATE} token).
 // foremanNote carries the deploy provenance line stored on every row.
 func BuildTaskRows(t Template, project, date, foremanNote string) []BoardTaskRow {
-	now := time.Now().UTC().Format(boardTimeFormat)
+	return BuildTaskRowsAt(clock.Real(), t, project, date, foremanNote)
+}
+
+// BuildTaskRowsAt is BuildTaskRows on an explicit clock (SCHED-GAP-169): the
+// rows' deployed_at stamp is read from clk, so a deploy issued inside a
+// simulated run carries the simulated instant.
+func BuildTaskRowsAt(clk clock.Clock, t Template, project, date, foremanNote string) []BoardTaskRow {
+	now := clk.Now().UTC().Format(boardTimeFormat)
 	rows := make([]BoardTaskRow, 0, len(t.Tasks))
 	for i, task := range t.Tasks {
 		pattern := task.IDPattern

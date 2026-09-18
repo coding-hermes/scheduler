@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -33,7 +34,7 @@ func TestVerify_TwoPhaseRevert_FinalTickReturnsTrueAndRestores(t *testing.T) {
 		insertBumpTickRow(t, db, "two-phase", id, 1)
 		oc := noProgressOutcome("two-phase")
 		oc.TickID = id
-		if bumpTickCompleted(db, "two-phase", "/tmp/work/two-phase", oc) {
+		if bumpTickCompleted(db, "two-phase", "/tmp/work/two-phase", oc, clock.Real()) {
 			t.Fatalf("interior tick %d: bumpTickCompleted = true, want false (no Phase A yet)", i)
 		}
 		s := readBumpState(t, db, "two-phase")
@@ -49,7 +50,7 @@ func TestVerify_TwoPhaseRevert_FinalTickReturnsTrueAndRestores(t *testing.T) {
 	final := TickOutcome{Project: "two-phase", Status: TickCompleted, Commits: 2}
 	final.TickID = "tp-final"
 	insertBumpTickRow(t, db, "two-phase", "tp-final", 1)
-	if !bumpTickCompleted(db, "two-phase", "/tmp/work/two-phase", final) {
+	if !bumpTickCompleted(db, "two-phase", "/tmp/work/two-phase", final, clock.Real()) {
 		t.Fatal("final bump tick: bumpTickCompleted = false, want true (Phase A performed)")
 	}
 	s := readBumpState(t, db, "two-phase")
@@ -114,7 +115,7 @@ func TestVerify_HardCap_UnflaggedTickForceReverts(t *testing.T) {
 	insertBumpTickRow(t, db, "cap-unflagged", "cu-fresh", 0)
 	fresh := noProgressOutcome("cap-unflagged")
 	fresh.TickID = "cu-fresh"
-	if bumpTickCompleted(db, "cap-unflagged", "/tmp/work/cap-unflagged", fresh) {
+	if bumpTickCompleted(db, "cap-unflagged", "/tmp/work/cap-unflagged", fresh, clock.Real()) {
 		t.Fatal("fresh unflagged tick: bumpTickCompleted = true, want false (no consumption)")
 	}
 	s := readBumpState(t, db, "cap-unflagged")
@@ -131,7 +132,7 @@ func TestVerify_HardCap_UnflaggedTickForceReverts(t *testing.T) {
 	insertBumpTickRow(t, db, "cap-unflagged", "cu-old", 0)
 	oc := noProgressOutcome("cap-unflagged")
 	oc.TickID = "cu-old"
-	if !bumpTickCompleted(db, "cap-unflagged", "/tmp/work/cap-unflagged", oc) {
+	if !bumpTickCompleted(db, "cap-unflagged", "/tmp/work/cap-unflagged", oc, clock.Real()) {
 		t.Fatal("expired unflagged tick: bumpTickCompleted = false, want true (hard-cap force-revert)")
 	}
 	s = readBumpState(t, db, "cap-unflagged")

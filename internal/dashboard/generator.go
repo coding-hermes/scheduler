@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -31,6 +32,10 @@ var htmxJS = mustReadStatic("static/htmx.min.js")
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
+	// clk is the generator's time seam (SCHED-GAP-169). The zero value reads
+	// as the wall clock, so rendering is unchanged until SetClock installs a
+	// simulator (which also re-anchors the uptime origin).
+	clk               clock.Seam
 	db                *sql.DB
 	tmpl              *template.Template // parsed once, reused
 	fleetTmpl         *template.Template // partial: project table body only
@@ -69,27 +74,29 @@ func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
 // time so hot-path Generate() never pays the parse cost. gatewayURL is optional;
 // when supplied, the health panel probes its /health endpoint.
 func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
-	tmpl := loadTemplates()
 	var gateway string
 	if len(gatewayURL) > 0 {
 		gateway = strings.TrimRight(gatewayURL[0], "/")
 	}
 	g := &Generator{
-		db:                db,
-		tmpl:              tmpl,
-		fleetTmpl:         tmpl.Lookup("fleet_table"),
-		projectTmpl:       tmpl.Lookup("project_detail"),
-		queueTmpl:         tmpl.Lookup("queue"),
-		tickHistoryTmpl:   tmpl.Lookup("tick_history"),
-		namespaceViewTmpl: tmpl.Lookup("namespace_view"),
-		healthTmpl:        tmpl.Lookup("health"),
-		gatewayURL:        gateway,
-		healthClient:      &http.Client{Timeout: 2 * time.Second},
-		started:           time.Now(),
-		ciCache:           make(map[string]ciCacheEntry),
-		ciTTL:             ciCacheDefaultTTL,
-		ciRunner:          runCIConclusion,
+		db:           db,
+		gatewayURL:   gateway,
+		healthClient: &http.Client{Timeout: 2 * time.Second},
+		started:      clock.Real().Now(),
+		ciCache:      make(map[string]ciCacheEntry),
+		ciTTL:        ciCacheDefaultTTL,
+		ciRunner:     runCIConclusion,
 	}
+	// The template func map renders live durations, so it must read the SAME
+	// clock seam SetClock installs into (SCHED-GAP-169). It is therefore built
+	// after g exists, from a pointer to g's own seam.
+	g.tmpl = loadTemplates(&g.clk)
+	g.fleetTmpl = g.tmpl.Lookup("fleet_table")
+	g.projectTmpl = g.tmpl.Lookup("project_detail")
+	g.queueTmpl = g.tmpl.Lookup("queue")
+	g.tickHistoryTmpl = g.tmpl.Lookup("tick_history")
+	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
+	g.healthTmpl = g.tmpl.Lookup("health")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -165,7 +172,7 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.LatestTick = latest
 		running = latest != nil && latest.Status == database.StatusRunning
 	}
-	data.NextTickIn = nextTickIn(running, lastCompleted, project.CooldownS)
+	data.NextTickIn = nextTickInAt(g.clock(), running, lastCompleted, project.CooldownS)
 	// Observability: avg tick duration, success rate, ETA over recent ticks.
 	var rt, rf int
 	rt, rf = g.recentTickHealth(ctx, name, 10)
@@ -198,7 +205,7 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	// "What each tick worked on": map tick id → commit subject line(s).
 	data.TickWork = map[string]string{}
 	for _, t := range data.RecentTicks {
-		data.TickWork[t.ID] = tickWork(project.Workdir, t.SpawnedAt, t.CompletedAt, t.Commits+1)
+		data.TickWork[t.ID] = tickWork(g.clock(), project.Workdir, t.SpawnedAt, t.CompletedAt, t.Commits+1)
 	}
 
 	return g.projectTmpl.Execute(w, data)
@@ -254,7 +261,7 @@ func (g *Generator) tickHistoryData(page int) (TickHistoryData, error) {
 	}
 	return TickHistoryData{
 		Title:        "Tick History",
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:  g.clock().Now().UTC().Format(time.RFC3339),
 		Ticks:        ticks,
 		Page:         page,
 		PageSize:     tickHistoryPageSize,
@@ -330,12 +337,12 @@ func (g *Generator) healthData() HealthData {
 	ctx := context.Background()
 	data := HealthData{
 		Title:          "System Health",
-		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:    g.clock().Now().UTC().Format(time.RFC3339),
 		DaemonStatus:   "running",
 		DatabaseStatus: "connected",
 		GatewayStatus:  "not configured",
 		GatewayURL:     g.gatewayURL,
-		Uptime:         time.Since(g.started).Round(time.Second).String(),
+		Uptime:         g.clock().Since(g.started).Round(time.Second).String(),
 		Goroutines:     runtime.NumGoroutine(),
 	}
 	if err := g.db.PingContext(ctx); err != nil {
@@ -464,7 +471,7 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 		}
 		if lastTick := lastTicks[r.name]; lastTick != "" {
 			if t, err := time.Parse(time.RFC3339, lastTick); err == nil {
-				e.Urgency = float64(r.priority) * (1 + time.Since(t).Hours())
+				e.Urgency = float64(r.priority) * (1 + g.clock().Since(t).Hours())
 			}
 		}
 		data.Entries = append(data.Entries, e)
@@ -607,3 +614,18 @@ hx-swap="innerHTML">
 {{template "ready_js"}}
 </body>
 </html>`
+
+// SetClock installs the clock this generator renders time through
+// (SCHED-GAP-169). nil keeps the wall clock. Installing a clock re-anchors the
+// uptime origin at that clock's instant, so a simulated run reports simulated
+// uptime instead of mixing a wall-clock start with a simulated now.
+func (g *Generator) SetClock(c clock.Clock) {
+	if c == nil {
+		return
+	}
+	g.clk.Set(c)
+	g.started = c.Now()
+}
+
+// clock returns the generator's clock, never nil.
+func (g *Generator) clock() clock.Clock { return g.clk.Get() }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ProjectTarget is one deploy destination, resolved by the API layer from
@@ -24,9 +26,12 @@ type DeployRequest struct {
 	Projects []ProjectTarget
 	// DryRun plans the deploy without writing to any board.
 	DryRun bool
-	// Now is the deploy timestamp; time.Now() when zero (tests inject a
-	// fixed time for deterministic ids).
+	// Now is the deploy timestamp; the Clock's instant when zero (tests
+	// inject a fixed time for deterministic ids).
 	Now time.Time
+	// Clock supplies the deploy timestamp when Now is zero (SCHED-GAP-169).
+	// nil means the wall clock.
+	Clock clock.Clock
 	// ForemanNote is an optional provenance suffix for deployed rows
 	// (the API passes group/template context).
 	ForemanNote string
@@ -84,7 +89,7 @@ func deployDate(now time.Time) string {
 func Deploy(req DeployRequest) DeployResult {
 	now := req.Now
 	if now.IsZero() {
-		now = time.Now()
+		now = req.clockOrReal().Now()
 	}
 	date := deployDate(now)
 	res := DeployResult{
@@ -118,7 +123,7 @@ func Deploy(req DeployRequest) DeployResult {
 			continue
 		}
 		o.Workdir = target.Workdir
-		rows := BuildTaskRows(req.Template, member, date, req.ForemanNote)
+		rows := BuildTaskRowsAt(req.clockOrReal(), req.Template, member, date, req.ForemanNote)
 		if req.DryRun {
 			plannedIDs := make([]string, 0, len(rows))
 			for _, r := range rows {
@@ -188,4 +193,12 @@ func DeployErrorDetail(res DeployResult) string {
 	sb.WriteString("}")
 	sb.WriteString("}")
 	return sb.String()
+}
+
+// clockOrReal returns the request's clock, never nil.
+func (r DeployRequest) clockOrReal() clock.Clock {
+	if r.Clock != nil {
+		return r.Clock
+	}
+	return clock.Real()
 }

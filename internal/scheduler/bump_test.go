@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -61,7 +62,7 @@ func readBumpState(t *testing.T, db *sql.DB, name string) bumpState {
 func bumpTick(t *testing.T, db *sql.DB, name, tickID string, outcome TickOutcome) {
 	t.Helper()
 	outcome.TickID = tickID
-	bumpTickCompleted(db, name, "/tmp/work/"+name, outcome)
+	bumpTickCompleted(db, name, "/tmp/work/"+name, outcome, clock.Real())
 	_ = adaptiveCooldown(db, name, "/tmp/work/"+name, outcome)
 }
 

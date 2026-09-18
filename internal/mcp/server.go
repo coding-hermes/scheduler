@@ -10,12 +10,17 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
 
 // Server is the MCP-over-HTTP server for Hermes integration.
 type Server struct {
+	// clk is the server's time seam (SCHED-GAP-169). NewServer seeds it from
+	// the loop's clock so MCP-written timestamps share the scheduler's
+	// timeline; the zero value reads as the wall clock.
+	clk  clock.Seam
 	db   *sql.DB
 	loop *scheduler.Loop
 	// blocksStore is the JSONL-backed deploy groups/templates store
@@ -27,8 +32,19 @@ type Server struct {
 
 // NewServer creates an MCP server.
 func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
-	return &Server{db: db, loop: loop}
+	s := &Server{db: db, loop: loop}
+	if loop != nil {
+		s.SetClock(loop.Clock())
+	}
+	return s
 }
+
+// SetClock installs the clock this server reads time through (SCHED-GAP-169).
+// nil keeps the current clock.
+func (s *Server) SetClock(c clock.Clock) { s.clk.Set(c) }
+
+// clock returns the server's clock, never nil.
+func (s *Server) clock() clock.Clock { return s.clk.Get() }
 
 // SetBlocksStore installs the JSONL-backed deploy groups/templates store
 // behind the groups_*/templates_*/groups_deploy MCP tools. Mirrors

@@ -118,7 +118,7 @@ func sg160NewFixture(t *testing.T, now time.Time, neverPriority, runPriority, ne
 		t.Fatalf("CreateProject %s: %v", sg160RunLane, err)
 	}
 
-	tickID := database.NextTickID(sg160RunLane)
+	tickID := database.NextTickID(context.Background(), sg160RunLane)
 	if err := database.CreateTick(ctx, db, &database.Tick{ID: tickID, ProjectName: sg160RunLane}); err != nil {
 		t.Fatalf("CreateTick %s: %v", sg160RunLane, err)
 	}

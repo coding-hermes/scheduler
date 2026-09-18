@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // TickStatus is the lifecycle state.
@@ -54,7 +56,12 @@ type TickOutcome struct {
 
 // LifecycleTracker manages the tick state machine and outcome persistence.
 type LifecycleTracker struct {
-	db *sql.DB
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk clockSeam
+	db  *sql.DB
 }
 
 // NewLifecycleTracker creates a lifecycle tracker.
@@ -67,7 +74,7 @@ func (lt *LifecycleTracker) Enqueue(project, tickID string) error {
 	_, err := lt.db.Exec(`
 		INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
 		VALUES (?, ?, ?, ?, ?)
-	`, tickID, project, TickQueued, time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+	`, tickID, project, TickQueued, lt.clock().Now().Format(time.RFC3339), lt.clock().Now().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("enqueue tick %s: %w", tickID, err)
 	}
@@ -165,11 +172,11 @@ type SessionStats struct {
 
 // CleanupStale clears running ticks older than the given duration.
 func (lt *LifecycleTracker) CleanupStale(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().Add(-maxAge)
+	cutoff := lt.clock().Now().Add(-maxAge)
 	res, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, completed_at = ?, error = ?
 		WHERE status = ? AND spawned_at < ?
-	`, TickTimeout, time.Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
+	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
@@ -194,3 +201,10 @@ func (lt *LifecycleTracker) RunningCount() int {
 	lt.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&n)
 	return n
 }
+
+// SetClock installs the clock this LifecycleTracker reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (lt *LifecycleTracker) SetClock(c clock.Clock) { lt.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (lt *LifecycleTracker) clock() clock.Clock { return lt.clk.Get() }

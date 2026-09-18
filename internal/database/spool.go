@@ -24,7 +24,7 @@ type SpoolEntry struct {
 // once DuckBrain is reachable (Bane 2026-08-01).
 func SpoolMemory(ctx context.Context, db *sql.DB, memKey, domain, content string) (int64, error) {
 	res, err := db.ExecContext(ctx, `INSERT INTO sync_spool (mem_key, domain, content, attempts, created_at)
-VALUES (?,?,?,0,?)`, memKey, domain, content, nowUTC())
+VALUES (?,?,?,0,?)`, memKey, domain, content, nowUTC(ctx))
 	if err != nil {
 		return 0, fmt.Errorf("spool memory %q: %w", memKey, err)
 	}

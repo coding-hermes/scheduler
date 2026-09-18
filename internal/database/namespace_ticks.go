@@ -10,7 +10,7 @@ import (
 // automatically if empty.
 func InsertNamespaceTick(ctx context.Context, db *sql.DB, nt *NamespaceTick) error {
 	if nt.CreatedAt == "" {
-		nt.CreatedAt = nowUTC()
+		nt.CreatedAt = nowUTC(ctx)
 	}
 	const q = `INSERT INTO namespace_ticks
 (tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 
 	// modernc.org/sqlite is the pure-Go driver (no CGO); registered under the
@@ -38,7 +39,7 @@ import (
 // (session_model_usage.input_tokens/output_tokens) — before ADV-R09 the exec
 // path recorded real USD but wrote 0/0 tokens, hiding the measured per-tick
 // usage the estimate should have been calibrated against.
-func sumSessionCostInWindow(stateDB string, start, end time.Time) (cost float64, tokensIn, tokensOut int, n int, err error) {
+func sumSessionCostInWindow(stateDB string, start, end time.Time, clk clock.Clock) (cost float64, tokensIn, tokensOut int, n int, err error) {
 	if stateDB == "" || start.IsZero() {
 		return 0, 0, 0, 0, fmt.Errorf("no state db / start time")
 	}
@@ -46,7 +47,7 @@ func sumSessionCostInWindow(stateDB string, start, end time.Time) (cost float64,
 		return 0, 0, 0, 0, fmt.Errorf("state db %s: %w", stateDB, serr)
 	}
 	if end.IsZero() {
-		end = time.Now()
+		end = clk.Now()
 	}
 
 	// session_model_usage.first_seen / last_seen are unix-epoch floats.
@@ -86,14 +87,14 @@ SELECT COALESCE(SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE esti
 // Returns (cost, tokensIn, tokensOut, isReal). Token totals cover the Hermes
 // telemetry rows only (the judge usage.jsonl rows carry tokens too but are
 // priced inline; folding them in would double-report usage across surfaces).
-func resolveRealTickCost(foremanHome, workdir, project string, start, end time.Time) (float64, int, int, bool) {
+func resolveRealTickCost(foremanHome, workdir, project string, start, end time.Time, clk clock.Clock) (float64, int, int, bool) {
 	total := 0.0
 	tin, tout := 0, 0
 	real := false
 
 	// 1) Foreman + worker cost + tokens from Hermes telemetry.
 	stateDB := filepath.Join(foremanHome, "state.db")
-	if sessionCost, sTin, sTout, n, err := sumSessionCostInWindow(stateDB, start.Add(-2*time.Minute), end); err == nil {
+	if sessionCost, sTin, sTout, n, err := sumSessionCostInWindow(stateDB, start.Add(-2*time.Minute), end, clk); err == nil {
 		total += sessionCost
 		tin += sTin
 		tout += sTout
@@ -315,7 +316,7 @@ func attributeTickWorkers(ctx context.Context, db *sql.DB, tickID string, tickSt
 	for _, a := range attrs {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE tick_workers SET cost_usd = ?, updated_at = ? WHERE tick_id = ? AND task_id = ?`,
-			a.Cost, nowRFC3339(), tickID, a.TaskID); err != nil {
+			a.Cost, nowRFC3339(clock.FromContext(ctx)), tickID, a.TaskID); err != nil {
 			return 0, fmt.Errorf("wave attribution %s: update worker %q: %w", tickID, a.TaskID, err)
 		}
 	}
@@ -343,9 +344,10 @@ func attributeTickWorkers(ctx context.Context, db *sql.DB, tickID string, tickSt
 }
 
 // nowRFC3339 is the shared UTC timestamp stamp used by the attribution
-// updates (same format as database.nowUTC / lifecycle.Complete).
-func nowRFC3339() string {
-	return time.Now().UTC().Format(time.RFC3339)
+// updates (same format as database.nowUTC / lifecycle.Complete). The clock is
+// injected (SCHED-GAP-169) so attribution stamps follow the run's clock.
+func nowRFC3339(clk clock.Clock) string {
+	return clk.Now().UTC().Format(time.RFC3339)
 }
 
 // workerProject derives the project name from a tick id for log lines

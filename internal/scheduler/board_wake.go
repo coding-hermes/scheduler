@@ -7,6 +7,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Board-driven wake (ADV-R07, Option C).
@@ -85,6 +87,11 @@ type boardWakeTarget struct {
 // NewBoardWakeWatcher, optionally tune with SetIntervals (tests), then
 // Start. Stop is idempotent and waits for both goroutines.
 type BoardWakeWatcher struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk       clockSeam
 	db        *sql.DB
 	events    *EventLogger
 	forceEval func()
@@ -170,7 +177,7 @@ func (w *BoardWakeWatcher) Start() {
 		return
 	}
 	w.stopCh = make(chan struct{})
-	w.lastBeat = time.Now()
+	w.lastBeat = w.clock().Now()
 	w.mu.Unlock()
 
 	// Baseline: record what exists now; changes are only wakes from
@@ -223,14 +230,14 @@ func (w *BoardWakeWatcher) Stop() {
 // changes, fire wakes whose debounce has elapsed, and beat the heartbeat.
 func (w *BoardWakeWatcher) run(stopCh <-chan struct{}) {
 	defer w.wg.Done()
-	ticker := time.NewTicker(w.poll)
+	ticker := w.clock().NewTicker(w.poll)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-stopCh:
 			return
 		case <-ticker.C:
-			w.pollOnce(time.Now())
+			w.pollOnce(w.clock().Now())
 		}
 	}
 }
@@ -335,14 +342,14 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 // never notice.
 func (w *BoardWakeWatcher) runWatchdog(stopCh <-chan struct{}) {
 	defer w.wg.Done()
-	ticker := time.NewTicker(w.heartbeat)
+	ticker := w.clock().NewTicker(w.heartbeat)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-stopCh:
 			return
 		case <-ticker.C:
-			w.checkWatchdog(time.Now())
+			w.checkWatchdog(w.clock().Now())
 		}
 	}
 }
@@ -392,5 +399,12 @@ func (w *BoardWakeWatcher) HeartbeatAge() time.Duration {
 	if w.lastBeat.IsZero() {
 		return 0
 	}
-	return time.Since(w.lastBeat)
+	return w.clock().Since(w.lastBeat)
 }
+
+// SetClock installs the clock this BoardWakeWatcher reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (w *BoardWakeWatcher) SetClock(c clock.Clock) { w.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (w *BoardWakeWatcher) clock() clock.Clock { return w.clk.Get() }

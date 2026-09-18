@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ErrGatewayKeyRejected is the terminal classification for gateway 401/403
@@ -81,6 +83,11 @@ func IsTransientGatewayErr(err error) bool {
 
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
 type GatewayClient struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk        clockSeam
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
@@ -338,3 +345,10 @@ func (g *GatewayClient) setAuth(req *http.Request, key string) {
 func (g *GatewayClient) ResetHttpClient() {
 	g.httpClient = &http.Client{Timeout: g.timeout}
 }
+
+// SetClock installs the clock this gateway client reads and waits on
+// (SCHED-GAP-169). nil keeps the wall clock.
+func (g *GatewayClient) SetClock(c clock.Clock) { g.clk.Set(c) }
+
+// clock returns the client's clock, never nil.
+func (g *GatewayClient) clock() clock.Clock { return g.clk.Get() }

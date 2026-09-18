@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync/atomic"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // reconnectInterval is the base sleep between reconnector ping cycles.
@@ -46,6 +48,10 @@ type gatewayReconnector struct {
 	connected *atomic.Bool  // shared with the caller (startup path)
 	interval  time.Duration // production: 60s; tests shrink
 	url       string        // for log messages
+	// clk is the wait seam (SCHED-GAP-169): the reconnect cadence and the
+	// drop-backoff waits run on it, so a simulated daemon does not sleep in
+	// real time. Nil keeps the wall clock.
+	clk clock.Clock
 }
 
 // runGatewayReconnector launches the background reconnector goroutine and
@@ -54,10 +60,11 @@ type gatewayReconnector struct {
 // gwConnected is an atomic.Bool shared between the startup wiring and the
 // reconnector goroutine: the startup path sets it to true on initial connect,
 // and the reconnector updates it on subsequent (re)connects or drops.
-func runGatewayReconnector(ctx context.Context, client gatewayPinger, onConnect func(), gwConnected *atomic.Bool, gatewayURL string) {
+func runGatewayReconnector(ctx context.Context, client gatewayPinger, onConnect func(), gwConnected *atomic.Bool, gatewayURL string, clk clock.Clock) {
 	rc := &gatewayReconnector{
 		client:    client,
 		onConnect: onConnect,
+		clk:       clk,
 		connected: gwConnected,
 		interval:  reconnectInterval,
 		url:       gatewayURL,
@@ -70,7 +77,7 @@ func (rc *gatewayReconnector) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(rc.interval):
+		case <-rc.clock().After(rc.interval):
 		}
 
 		if rc.connected.Load() {
@@ -112,7 +119,7 @@ func (rc *gatewayReconnector) reconnectWithBackoff(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
+		case <-rc.clock().After(wait):
 		}
 		if err := rc.client.Ping(ctx); err == nil {
 			rc.connected.Store(true)
@@ -127,4 +134,12 @@ func (rc *gatewayReconnector) reconnectWithBackoff(ctx context.Context) {
 	// switches to the fallback-start re-ping path.
 	rc.connected.Store(false)
 	log.Printf("WARN: gateway %s unreachable after %d reconnect attempts — will retry in %v", rc.url, reconnectMaxAttempts, rc.interval)
+}
+
+// clock returns the reconnector's clock, never nil.
+func (rc *gatewayReconnector) clock() clock.Clock {
+	if rc.clk != nil {
+		return rc.clk
+	}
+	return clock.Real()
 }

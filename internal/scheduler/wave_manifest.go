@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -245,7 +246,7 @@ func ingestWaveManifest(ctx context.Context, db *sql.DB, workdir, project, tickI
 		return 0, nil
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := clock.FromContext(ctx).Now().UTC().Format(time.RFC3339)
 	const q = `INSERT INTO tick_workers
 (tick_id, task_id, branch, worktree, commit_sha, judge, merge, state, cost_usd, tokens_in, tokens_out, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`

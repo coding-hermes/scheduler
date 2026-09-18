@@ -27,6 +27,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // admitLogBuf is a mutex-guarded capture of log output: evaluate() may log
@@ -198,9 +200,18 @@ func admitInsertNamespace(t *testing.T, db *sql.DB, id string, maxConcurrent int
 
 // admitInsertRunningTick seeds a DB tick row in 'running' — how a live tick
 // (or a restarted daemon's survivor) occupies a namespace.
+// admitInsertRunningTick seeds one tick row in status='running'.
+//
+// The row is stamped at the PINNED decision instant (fixedEvalNow), never the
+// wall clock: every loop in this file runs on that pinned clock, and the
+// stale-tick cleanup in the evaluate path (Loop -> lifecycle.CleanupStale,
+// SCHED-GAP-169 routed through the loop's clock) reaps running rows older than
+// 90 minutes RELATIVE TO THE LOOP'S CLOCK. A wall-clock stamp would be years
+// "old" on a 2031-pinned loop and the row would be reaped before evaluation —
+// a fixture that mixes two timelines, not a behavior under test.
 func admitInsertRunningTick(t *testing.T, db *sql.DB, tickID, project string) {
 	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := fixedEvalNow().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
 		VALUES (?, ?, 'running', ?, ?)`, tickID, project, now, now); err != nil {
 		t.Fatalf("insert running tick %s: %v", tickID, err)
@@ -233,7 +244,7 @@ func admitNewLoop(t *testing.T, db *sql.DB, now time.Time) *Loop {
 	t.Helper()
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 	l.SetSimulation(1.0)
-	l.SetClock(func() time.Time { return now })
+	l.SetClock(clock.NewFixed(now))
 	return l
 }
 

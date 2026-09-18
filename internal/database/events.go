@@ -15,7 +15,7 @@ import (
 // committed ID — the ID the SSE stream replays from on reconnect.
 func LogEvent(ctx context.Context, db *sql.DB, e *Event) error {
 	if e.CreatedAt == "" {
-		e.CreatedAt = nowUTC()
+		e.CreatedAt = nowUTC(ctx)
 	}
 	const q = `INSERT INTO events (severity, component, message, details, created_at)
 VALUES (?,?,?,?,?)`

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -37,6 +38,9 @@ var ErrDuckBrainKeyRejected = errors.New("duckbrain key rejected")
 // silently (Bane 2026-08-01: DuckBrain was stdio-only, :3000 dead,
 // every write was failing with no fallback).
 type DuckBrainSync struct {
+	// clk is this client's time seam (SCHED-GAP-169): every synced_at stamp
+	// and the sync-cadence ticker read it. The zero value is the wall clock.
+	clk        clock.Seam
 	db         *sql.DB
 	namespace  string
 	baseURL    string
@@ -135,7 +139,7 @@ func (d *DuckBrainSync) Health() HealthSnapshot {
 
 // Run starts the periodic sync loop. Blocks until ctx is cancelled.
 func (d *DuckBrainSync) Run(ctx context.Context) {
-	ticker := time.NewTicker(d.interval)
+	ticker := d.clock().NewTicker(d.interval)
 	defer ticker.Stop()
 
 	log.Printf("SYNC: DuckBrain sync started (namespace=%s, baseURL=%s, every %s)",
@@ -498,7 +502,7 @@ func (d *DuckBrainSync) syncFleetSummary(ctx context.Context) error {
 		WaveDepthTotal: waveDepth,
 		WaveCostTotal:  waveCost,
 		WaveWorkers:    waveWorkers,
-		SyncedAt:       time.Now().Format(time.RFC3339),
+		SyncedAt:       d.clock().Now().Format(time.RFC3339),
 	}
 
 	return d.postMemory(ctx, "/fleet/summary", "config", summary)
@@ -533,7 +537,7 @@ func (d *DuckBrainSync) syncProjectStatuses(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	syncedAt := time.Now().Format(time.RFC3339)
+	syncedAt := d.clock().Now().Format(time.RFC3339)
 	for rows.Next() {
 		var name, lastCompleted, lastStarted, model, provider string
 		var weight, priority, cooldownS int
@@ -595,7 +599,7 @@ func (d *DuckBrainSync) syncNamespaceSummary(ctx context.Context) error {
 		Count:         count,
 		TotalWeight:   totalWeight,
 		TotalReserved: totalReserved,
-		SyncedAt:      time.Now().Format(time.RFC3339),
+		SyncedAt:      d.clock().Now().Format(time.RFC3339),
 	}
 
 	return d.postMemory(ctx, "/fleet/namespaces", "config", summary)
@@ -621,7 +625,7 @@ func (d *DuckBrainSync) syncNamespaceStatuses(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	syncedAt := time.Now().Format(time.RFC3339)
+	syncedAt := d.clock().Now().Format(time.RFC3339)
 	for rows.Next() {
 		var id, desc string
 		var weight, reserved, hardCap int
@@ -904,14 +908,14 @@ func (d *DuckBrainSync) recordSuccess() {
 	d.reachable = true
 	d.consecutiveErr = 0
 	d.lastErr = ""
-	d.lastOKAt = time.Now().Format(time.RFC3339)
+	d.lastOKAt = d.clock().Now().Format(time.RFC3339)
 	d.alertedDown = false
 	if wasDown {
 		// Recovery event — queued (flushed end-of-cycle with any HIGH).
 		d.pendingEvents = append(d.pendingEvents, pendingSyncEvent{
 			severity: database.SeverityInfo,
 			message:  "DuckBrain reachable again — sync recovered",
-			details:  `{"recovered_at": "` + time.Now().Format(time.RFC3339) + `"}`,
+			details:  `{"recovered_at": "` + d.clock().Now().Format(time.RFC3339) + `"}`,
 		})
 	}
 	d.mu.Unlock()
@@ -951,3 +955,10 @@ func (d *DuckBrainSync) recordFailure(errText string) {
 		log.Printf("SYNC: DuckBrain unreachable: %s", errText)
 	}
 }
+
+// SetClock installs the clock this sync client reads and waits on
+// (SCHED-GAP-169). nil keeps the wall clock.
+func (d *DuckBrainSync) SetClock(c clock.Clock) { d.clk.Set(c) }
+
+// clock returns the client's clock, never nil.
+func (d *DuckBrainSync) clock() clock.Clock { return d.clk.Get() }

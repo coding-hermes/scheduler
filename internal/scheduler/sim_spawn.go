@@ -6,11 +6,18 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // SimSpawner replaces the real Spawner for dry-run/simulation mode.
 // It simulates foreman ticks that complete instantly with randomised outcomes.
 type SimSpawner struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk     clockSeam
 	db      *sql.DB
 	success float64
 	// idleRate is the fraction of COMPLETED ticks that produce zero commits
@@ -50,7 +57,7 @@ func (s *SimSpawner) SetIdleRate(rate float64) {
 // Spawn simulates launching a foreman. It creates a tick, marks it running,
 // then immediately completes it with a randomised outcome in a goroutine.
 func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, error) {
-	now := time.Now()
+	now := s.clock().Now()
 
 	_, err := s.db.Exec(`
 		INSERT INTO ticks (id, project_name, status, spawned_at, urgency, weight_used, created_at)
@@ -76,7 +83,7 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 	}
 
 	go func() {
-		time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+		s.clock().Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
 		outcome := spawned.Wait()
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -97,7 +104,7 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		// ticks (Bane 2026-09-06). PackedProject carries the project's
 		// configured workdir (sim fixture gives each project a dummy board).
 		if s.db != nil {
-			bumpTickCompleted(s.db, outcome.Project, project.Workdir, outcome)
+			bumpTickCompleted(s.db, outcome.Project, project.Workdir, outcome, s.clock())
 			if !adaptiveCooldown(s.db, outcome.Project, project.Workdir, outcome) {
 				autoSlowdown(s.db, outcome.Project, nil)
 			}
@@ -118,7 +125,7 @@ type SimSpawned struct {
 
 // Wait simulates the foreman running and returns a randomised outcome.
 func (s *SimSpawned) Wait() TickOutcome {
-	finished := time.Now()
+	finished := s.clock().Now()
 	duration := finished.Sub(s.started)
 
 	outcome := TickOutcome{
@@ -159,4 +166,20 @@ func (s *SimSpawned) Wait() TickOutcome {
 	}
 
 	return outcome
+}
+
+// SetClock installs the clock this SimSpawner reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (s *SimSpawner) SetClock(c clock.Clock) { s.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (s *SimSpawner) clock() clock.Clock { return s.clk.Get() }
+
+// clock returns the clock this simulated tick follows: its owning spawner's,
+// else the wall clock.
+func (s *SimSpawned) clock() clock.Clock {
+	if s.spawner != nil {
+		return s.spawner.clock()
+	}
+	return clock.Real()
 }

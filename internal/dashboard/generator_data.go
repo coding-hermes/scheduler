@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -245,7 +246,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	}
 	data := FleetData{
 		Title:       "Fleet Overview",
-		GeneratedAt: time.Now().Format(time.RFC3339),
+		GeneratedAt: g.clock().Now().Format(time.RFC3339),
 		BudgetTotal: budgetTotal,
 	}
 
@@ -290,8 +291,8 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// the window bounds must be UTC too — comparing local-offset strings
 	// lexicographically against UTC strings mis-counts ticks near the boundary
 	// by the server's UTC offset.
-	dayAgo := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
-	weekAgo := time.Now().UTC().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	dayAgo := g.clock().Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	weekAgo := g.clock().Now().UTC().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 
 	rows, err := g.db.QueryContext(ctx, projectQuery, dayAgo, weekAgo)
 	if err == nil {
@@ -313,7 +314,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			// Urgency: priority * (1 + hours since last tick)
 			if r.LastTick != "" {
 				if t, err := time.Parse(time.RFC3339, r.LastTick); err == nil {
-					r.Urgency = float64(r.Priority) * (1 + time.Since(t).Hours())
+					r.Urgency = float64(r.Priority) * (1 + g.clock().Since(t).Hours())
 				}
 			}
 			// Board progress (done/total) from the project's tasks.md, plus the
@@ -321,7 +322,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			if r.Workdir != "" {
 				r.BoardDone, r.BoardTotal = readBoardProgress(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
 			}
-			r.NextTickIn = nextTickIn(r.RunningNow == 1, r.LastTickCompleted, r.CooldownS)
+			r.NextTickIn = nextTickInAt(g.clock(), r.RunningNow == 1, r.LastTickCompleted, r.CooldownS)
 			data.CostTodayTotal += r.CostToday
 			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
@@ -571,7 +572,7 @@ func costSeriesFromSamples(samples []completedSample, n int) []float64 {
 // observabilityStats. The duration/cost averages count only the first 10
 // samples with a non-empty completed_at (matching the old per-project SQL
 // LIMIT 10 filter); samples with unparseable windows are skipped.
-func observabilityFromSamples(samples []completedSample, boardDone, boardTotal, recentTicks, recentFailures int) (avgSecs int, avgCost float64, successPct int, eta, completionAt string, projectedCost float64) {
+func observabilityFromSamples(clk clock.Clock, samples []completedSample, boardDone, boardTotal, recentTicks, recentFailures int) (avgSecs int, avgCost float64, successPct int, eta, completionAt string, projectedCost float64) {
 	// Average duration + cost over up-to-10 completed ticks.
 	var total time.Duration
 	var totalCost float64
@@ -614,7 +615,7 @@ func observabilityFromSamples(samples []completedSample, boardDone, boardTotal, 
 			// avgSecs is in seconds; convert to a Duration properly.
 			d := time.Duration(avgSecs) * time.Second * time.Duration(remaining)
 			eta = formatETA(d)
-			completionAt = time.Now().UTC().Add(d).Format(time.RFC3339)
+			completionAt = clk.Now().UTC().Add(d).Format(time.RFC3339)
 		}
 		if avgCost > 0 {
 			projectedCost = avgCost * float64(remaining)
@@ -628,14 +629,14 @@ func observabilityFromSamples(samples []completedSample, boardDone, boardTotal, 
 // work via git log. Only samples with a parseable duration are kept —
 // matching learnedETA's own history query semantics (completed_at != ”,
 // then duration-filtered).
-func tickSamplesFromCompleted(workdir string, samples []completedSample) []tickSample {
+func tickSamplesFromCompleted(clk clock.Clock, workdir string, samples []completedSample) []tickSample {
 	var out []tickSample
 	for _, s := range samples {
 		d := parseDuration(s.spawnedAt, s.completedAt)
 		if d <= 0 {
 			continue
 		}
-		out = append(out, tickSample{dur: d, cost: s.costUSD, work: tickWork(workdir, s.spawnedAt, s.completedAt, 4)})
+		out = append(out, tickSample{dur: d, cost: s.costUSD, work: tickWork(clk, workdir, s.spawnedAt, s.completedAt, 4)})
 	}
 	return out
 }
@@ -661,12 +662,12 @@ func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[str
 			if h, ok := healthByProject[r.Name]; ok {
 				r.RecentTicks, r.RecentFailures = h.total, h.failed
 			}
-			r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = observabilityFromSamples(samples, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+			r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = observabilityFromSamples(g.clock(), samples, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
 			// Learning ETA: predict remaining time + cost from per-task-type
 			// estimates learned from tick history + the fleet-wide prior.
 			if r.Workdir != "" {
 				steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
-				if learned, learnedAt, breakdown, projCost := learnedETAFromSamples(steps, tickSamplesFromCompleted(r.Workdir, samples), fleet); learned > 0 {
+				if learned, learnedAt, breakdown, projCost := learnedETAFromSamples(g.clock(), steps, tickSamplesFromCompleted(g.clock(), r.Workdir, samples), fleet); learned > 0 {
 					r.ETA = formatETA(learned)
 					r.CompletionAt = learnedAt
 					r.EtaBreakdown = breakdown
@@ -824,6 +825,13 @@ func isUpperLetter(c byte) bool {
 // status string. running=true means a tick is in flight now. Otherwise the
 // next tick is due cooldownS after the last tick completed.
 func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
+	return nextTickInAt(clock.Real(), running, lastTickCompleted, cooldownS)
+}
+
+// nextTickInAt is nextTickIn on an explicit clock (SCHED-GAP-169): the
+// remaining-cooldown projection is measured against clk, so a simulated run
+// reports simulated countdowns instead of wall-clock ones.
+func nextTickInAt(clk clock.Clock, running bool, lastTickCompleted string, cooldownS int) string {
 	if running {
 		return "running"
 	}
@@ -838,7 +846,7 @@ func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
 		return "—"
 	}
 	due := t.Add(time.Duration(cooldownS) * time.Second)
-	wait := time.Until(due)
+	wait := clk.Until(due)
 	if wait <= 0 {
 		return "due now"
 	}
@@ -1041,7 +1049,7 @@ func (g *Generator) observabilityStats(ctx context.Context, project string, boar
 			// avgSecs is in seconds; convert to a Duration properly.
 			d := time.Duration(avgSecs) * time.Second * time.Duration(remaining)
 			eta = formatETA(d)
-			completionAt = time.Now().UTC().Add(d).Format(time.RFC3339)
+			completionAt = g.clock().Now().UTC().Add(d).Format(time.RFC3339)
 		}
 		if avgCost > 0 {
 			projectedCost = avgCost * float64(remaining)
@@ -1129,14 +1137,14 @@ func (g *Generator) ciConclusion(workdir string) string {
 		return ""
 	}
 	g.ciMu.Lock()
-	if e, ok := g.ciCache[workdir]; ok && time.Since(e.fetchedAt) < g.ciTTLValue() {
+	if e, ok := g.ciCache[workdir]; ok && g.clock().Since(e.fetchedAt) < g.ciTTLValue() {
 		g.ciMu.Unlock()
 		return e.conclusion
 	}
 	g.ciMu.Unlock()
 	conclusion := g.ciRunnerFunc()(workdir)
 	g.ciMu.Lock()
-	g.ciCache[workdir] = ciCacheEntry{conclusion: conclusion, fetchedAt: time.Now()}
+	g.ciCache[workdir] = ciCacheEntry{conclusion: conclusion, fetchedAt: g.clock().Now()}
 	g.ciMu.Unlock()
 	return conclusion
 }
@@ -1152,7 +1160,7 @@ func (g *Generator) warmCIConclusions(workdirs []string) {
 		if wd == "" {
 			continue
 		}
-		if e, ok := g.ciCache[wd]; !ok || time.Since(e.fetchedAt) >= g.ciTTLValue() {
+		if e, ok := g.ciCache[wd]; !ok || g.clock().Since(e.fetchedAt) >= g.ciTTLValue() {
 			need = append(need, wd)
 		}
 	}
@@ -1171,7 +1179,7 @@ func (g *Generator) warmCIConclusions(workdirs []string) {
 			defer func() { <-sem }()
 			conclusion := runner(wd)
 			g.ciMu.Lock()
-			g.ciCache[wd] = ciCacheEntry{conclusion: conclusion, fetchedAt: time.Now()}
+			g.ciCache[wd] = ciCacheEntry{conclusion: conclusion, fetchedAt: g.clock().Now()}
 			g.ciMu.Unlock()
 		}(wd)
 	}
@@ -1325,7 +1333,7 @@ func readGitReins(workdir string, maxLatest int) GitReinsSummary {
 // completed for a project, by scanning the workdir git log. It's the
 // observability answer to "what did this tick actually work on?" Best-effort:
 // on any git error it returns "". commitCount caps how many messages we fetch.
-func tickWork(workdir, spawned, completed string, commitCount int) string {
+func tickWork(clk clock.Clock, workdir, spawned, completed string, commitCount int) string {
 	if workdir == "" || spawned == "" {
 		return ""
 	}
@@ -1338,13 +1346,13 @@ func tickWork(workdir, spawned, completed string, commitCount int) string {
 	if completed != "" {
 		until, err1 = time.Parse(time.RFC3339, completed)
 		if err1 != nil {
-			until = time.Now()
+			until = clk.Now()
 		}
 	} else {
-		until = time.Now()
+		until = clk.Now()
 	}
 	if until.Before(since) {
-		until = time.Now()
+		until = clk.Now()
 	}
 
 	// git log --pretty=%s (subject only) with `--since`/`--until` in ISO.

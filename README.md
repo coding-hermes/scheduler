@@ -337,6 +337,19 @@ authority model.
 
 Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
+### Test-time simulator (env-only)
+
+All clock reads and waits go through `internal/clock`; the implementation is selected by environment (there is no flag for it):
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `SCHEDULER_TIME_MODE` | `real` | `real` = wall clock; `sim` = test-time simulator (also requires `--simulate`) |
+| `SCHEDULER_TIME_SCALE` | `1.0` | simulator speed: a blocked wait of `d` costs `d/scale` of real time while the virtual clock advances the full `d` (10 / 100 / 1000) |
+| `SCHEDULER_TIME_START` | now | simulator start instant (RFC3339) |
+| `SCHEDULER_TIME_AUTOADVANCE` | `0` | `1` = skip straight to the next armed timer at zero real cost |
+
+`SCHEDULER_TIME_MODE=sim` refuses to boot unless `--simulate` is also set (a stray env var can never move the live fleet onto a fake clock), and every boot logs `TIME: clock <mode>`. See AGENTS.md → "Test-time simulator" for the test-facing API (`Advance`, `WaitForNextTimer`, `NewManualSimClock`).
+
 ---
 
 ## Hermes Plugin

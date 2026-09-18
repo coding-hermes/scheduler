@@ -230,7 +230,7 @@ func (w *turnWatch) abortErr(err error) error {
 // the AC 1 record; its Classification is finalized on every return path.
 func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, provider, key, sessionKey string, turnDeadline time.Duration) (*Response, *GatewayPOSTTrace, error) {
 	trace := &GatewayPOSTTrace{
-		Start:          time.Now(),
+		Start:          g.clock().Now(),
 		Deadline:       turnDeadline,
 		DeadlineMode:   "wall",
 		Model:          model,
@@ -239,7 +239,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 		Attempts:       1,
 	}
 	defer func() {
-		trace.Finish = time.Now()
+		trace.Finish = g.clock().Now()
 		trace.Elapsed = trace.Finish.Sub(trace.Start)
 		trace.ElapsedMS = trace.Elapsed.Milliseconds()
 		trace.DeadlineMS = trace.Deadline.Milliseconds()

@@ -365,7 +365,7 @@ func TestTickWorkers_CRUDRoundTrip(t *testing.T) {
 		t.Errorf("running workers nsB = %d, want 0", n)
 	}
 	// A completed tick stops counting.
-	if _, err := db.Exec(`UPDATE ticks SET status = 'completed', completed_at = ? WHERE id = ?`, nowUTC(), tk.ID); err != nil {
+	if _, err := db.Exec(`UPDATE ticks SET status = 'completed', completed_at = ? WHERE id = ?`, nowUTC(context.Background()), tk.ID); err != nil {
 		t.Fatalf("complete tick: %v", err)
 	}
 	n, err = CountRunningWorkersByNamespace(ctx, db, nsA.ID)

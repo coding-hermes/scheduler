@@ -295,7 +295,7 @@ func TestConformance_WireFormat_Ticks(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
 
-	tickID := database.NextTickID("alpha")
+	tickID := database.NextTickID(context.Background(), "alpha")
 	if err := database.CreateTick(context.Background(), a.db, &database.Tick{
 		ID:          tickID,
 		ProjectName: "alpha",
@@ -543,7 +543,7 @@ func TestConformance_DeleteProject_PurgeSuccess(t *testing.T) {
 		t.Fatalf("create status = %d, want 201: %v", status, resp)
 	}
 	// Historical tick for the doomed project.
-	tickID := database.NextTickID("purgevictim")
+	tickID := database.NextTickID(context.Background(), "purgevictim")
 	if err := database.CreateTick(context.Background(), a.db, &database.Tick{
 		ID:          tickID,
 		ProjectName: "purgevictim",

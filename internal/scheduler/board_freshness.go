@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Git-verified board freshness reader (ADV-R06, G11).
@@ -217,15 +219,28 @@ type RowVerdict struct {
 }
 
 // FreshnessOptions tunes ReadBoardFreshness. The zero value is usable:
-// FlipWindow defaults to DefaultFlipWindow and Now to time.Now(). Tests
+// FlipWindow defaults to DefaultFlipWindow and Now to the Clock's instant. Tests
 // inject both for determinism.
 type FreshnessOptions struct {
 	// FlipWindow is the bounded re-read interval (requirement 5). <= 0
 	// means DefaultFlipWindow.
 	FlipWindow time.Duration
 	// Now is the read clock for future-stamp detection and flip-window
-	// arithmetic. Zero means time.Now().
+	// arithmetic. Zero means the Clock's current instant.
 	Now time.Time
+	// Clock is the read clock used when Now is zero (SCHED-GAP-169). Nil
+	// means the wall clock. Tests that need one fixed instant keep setting
+	// Now; this field exists so a whole simulated run can drive the read
+	// clock through the same seam as everything else.
+	Clock clock.Clock
+}
+
+// clockOrReal returns the options' clock, never nil.
+func (o FreshnessOptions) clockOrReal() clock.Clock {
+	if o.Clock != nil {
+		return o.Clock
+	}
+	return clock.Real()
 }
 
 // FreshnessReport is the aggregate answer for one board read.
@@ -274,7 +289,7 @@ type FreshnessReport struct {
 	RereadAfter time.Time
 	// FlipWindow is the window in effect for this read.
 	FlipWindow time.Duration
-	// ReadAt is the read clock (options.Now or time.Now()).
+	// ReadAt is the read instant (options.Now, else the Clock's Now()).
 	ReadAt time.Time
 }
 
@@ -311,7 +326,7 @@ type freshnessEntry struct {
 func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) FreshnessReport {
 	now := opts.Now
 	if now.IsZero() {
-		now = time.Now()
+		now = opts.clockOrReal().Now()
 	}
 	window := opts.FlipWindow
 	if window <= 0 {

@@ -32,7 +32,7 @@ func CreateTickWorker(ctx context.Context, db *sql.DB, w *TickWorker) (int64, er
 		return 0, err
 	}
 	if w.CreatedAt == "" {
-		w.CreatedAt = nowUTC()
+		w.CreatedAt = nowUTC(ctx)
 	}
 	if w.UpdatedAt == "" {
 		w.UpdatedAt = w.CreatedAt

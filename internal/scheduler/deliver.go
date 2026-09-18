@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // sendWithRetry runs `hermes send` with the given args, retrying transient
@@ -17,7 +19,7 @@ import (
 // turns a lost delivery into a delivered one. Non-retryable config/usage errors
 // (bad --to, unknown platform) fail immediately. Returns the trimmed output of
 // the last attempt and whether the send eventually succeeded.
-func sendWithRetry(args ...string) ([]byte, bool) {
+func sendWithRetry(clk clock.Clock, args ...string) ([]byte, bool) {
 	const maxAttempts = 4
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
 
@@ -37,7 +39,7 @@ func sendWithRetry(args ...string) ([]byte, bool) {
 		if !retryable || attempt == maxAttempts-1 {
 			return out, false
 		}
-		time.Sleep(backoff[attempt])
+		clk.Sleep(backoff[attempt])
 	}
 	return lastOut, false
 }
@@ -66,6 +68,12 @@ func isRetryableSendError(err error, output string) bool {
 // spawn) — carried in the subject (top line) and the footer (bottom line) so
 // the thread shows how the run was launched (Bane 2026-08-27).
 func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffer) {
+	deliverOutputWith(clock.Real(), project, tickID, deliver, trigger, output)
+}
+
+// deliverOutputWith is deliverOutput on an explicit clock (SCHED-GAP-169): the
+// retry backoff waits on clk, so a simulated run does not sleep in real time.
+func deliverOutputWith(clk clock.Clock, project, tickID, deliver, trigger string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		log.Printf("DELIVER: %s tick=%s — no output", project, tickID)
 		return
@@ -94,7 +102,7 @@ func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffe
 	f.Close()
 
 	subject := fmt.Sprintf("🤖 %s [%s] · %s", project, tickID, trigger)
-	out, ok := sendWithRetry("--to", deliver, "--subject", subject, "--file", f.Name())
+	out, ok := sendWithRetry(clk, "--to", deliver, "--subject", subject, "--file", f.Name())
 	if !ok {
 		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
 		return
@@ -105,6 +113,11 @@ func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffe
 // deliverAlert sends a short alert message for timeouts/errors so they
 // are visible in the chat rather than silently swallowed.
 func deliverAlert(deliver, project, tickID, reason string) {
+	deliverAlertWith(clock.Real(), deliver, project, tickID, reason)
+}
+
+// deliverAlertWith is deliverAlert on an explicit clock (SCHED-GAP-169).
+func deliverAlertWith(clk clock.Clock, deliver, project, tickID, reason string) {
 	if deliver == "" {
 		log.Printf("ALERT: %s tick=%s — %s (no delivery target configured)", project, tickID, reason)
 		return
@@ -118,7 +131,7 @@ func deliverAlert(deliver, project, tickID, reason string) {
 	defer f.Close()
 	_, _ = f.WriteString(msg)
 	f.Close()
-	out, ok := sendWithRetry("--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
+	out, ok := sendWithRetry(clk, "--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
 	if !ok {
 		log.Printf("ALERT: send failed after retries (%s)", bytes.TrimSpace(out))
 		return

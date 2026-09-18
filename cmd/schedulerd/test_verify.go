@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // testVerify runs a self-contained end-to-end scheduling correctness test.
 // It creates a temp DB, registers a known fleet, runs N cycles, and checks invariants.
-func testVerify(cycles int) error {
+func testVerify(cycles int, clk clock.Clock) error {
 	tmpDir, err := os.MkdirTemp("", "scheduler-verify-*")
 	if err != nil {
 		return fmt.Errorf("temp dir: %w", err)
@@ -88,11 +89,11 @@ func testVerify(cycles int) error {
 
 	for i := 0; i < cycles; i++ {
 		loop.ForceEvaluate()
-		time.Sleep(time.Duration(projects[0].SleepS+1) * time.Second)
+		clk.Sleep(time.Duration(projects[0].SleepS+1) * time.Second)
 	}
 
 	// ── Wait for all ticks to settle ──
-	time.Sleep(5 * time.Second)
+	clk.Sleep(5 * time.Second)
 
 	// ── Verify invariants ──
 	checks := 0
@@ -285,7 +286,7 @@ func testVerify(cycles int) error {
 		if err != nil {
 			return fmt.Errorf("seed prepare: %w", err)
 		}
-		base := time.Now().Add(-48 * time.Hour)
+		base := clk.Now().Add(-48 * time.Hour)
 		i := 0
 		for _, m := range mixes {
 			for s := 0; s < m.mix.completed; s++ {
@@ -327,14 +328,14 @@ func testVerify(cycles int) error {
 	probe := func(path string) []time.Duration {
 		ds := make([]time.Duration, 0, nReq)
 		for i := 0; i < nReq; i++ {
-			t0 := time.Now()
+			t0 := clk.Now()
 			resp, err := http.Get(svr.URL + path)
 			if err != nil {
 				return nil
 			}
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			ds = append(ds, time.Since(t0))
+			ds = append(ds, clk.Since(t0))
 		}
 		return ds
 	}

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // DefaultZombieReapThreshold is the default age past which an api_server
@@ -48,7 +50,7 @@ func ReapZombieSessions(ctx context.Context, db *sql.DB, threshold time.Duration
 		return 0, nil
 	}
 
-	cutoff := time.Now().UTC().Add(-threshold).Format(time.RFC3339)
+	cutoff := clock.FromContext(ctx).Now().UTC().Add(-threshold).Format(time.RFC3339)
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

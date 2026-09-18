@@ -5,11 +5,14 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ADV-R04 / G6 clock-seam tests. evaluate() reads its decision instant
-// through Loop.nowFn (default time.Now); pinning the seam to a fixed
-// instant makes the whole selection deterministic — same DB, same fleet,
+// through the loop's clock seam (SCHED-GAP-169: clock.Clock, wall clock by
+// default); pinning the seam to a fixed instant makes the whole selection
+// deterministic — same DB, same fleet,
 // same exact answer on every run. No wall-clock bounds, no sleeps: the
 // assertions are exact set equalities at one constructed instant.
 //
@@ -90,8 +93,8 @@ func TestClockSeam_ExactSelection(t *testing.T) {
 	insertEligibilityProject(t, db, "seamD", 45, 5, 0, fixedNow.Add(-45*time.Second), 0, 0)
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
-	l.SetSimulation(1.0)                             // simulated spawns insert tick rows; the real spawner is never touched
-	l.SetClock(func() time.Time { return fixedNow }) // pin the decision instant
+	l.SetSimulation(1.0)                 // simulated spawns insert tick rows; the real spawner is never touched
+	l.SetClock(clock.NewFixed(fixedNow)) // pin the decision instant
 
 	l.evaluate()
 
@@ -114,7 +117,7 @@ func TestClockSeam_AllInCooldownSelectsNothing(t *testing.T) {
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 	l.SetSimulation(1.0)
-	l.SetClock(func() time.Time { return fixedNow })
+	l.SetClock(clock.NewFixed(fixedNow))
 
 	l.evaluate()
 
@@ -131,15 +134,21 @@ func TestClockSeam_AllInCooldownSelectsNothing(t *testing.T) {
 }
 
 // TestClockSeam_DefaultIsInstalled pins the construction contract: NewLoop
-// installs a non-nil seam (time.Now), so production behavior is identical
-// to the pre-seam direct read and evaluate() never needs a fallback.
+// installs a non-nil seam reading the WALL CLOCK, so production behavior is
+// identical to the pre-seam direct read and evaluate() never needs a fallback.
+// (SCHED-GAP-169 replaced the old func() time.Time seam with a clock.Clock;
+// the intent of this test is unchanged — the default must be the real clock.)
 func TestClockSeam_DefaultIsInstalled(t *testing.T) {
 	l := NewLoop(newTestDB(t), 30*time.Second, 24*time.Hour, 10, 100, 4)
-	l.mu.Lock()
-	seam := l.nowFn
-	l.mu.Unlock()
+	seam := l.clock()
 	if seam == nil {
-		t.Fatal("NewLoop left the clock seam nil — the default time.Now seam must be installed at construction")
+		t.Fatal("NewLoop left the clock seam nil — a default clock must be installed at construction")
+	}
+	if _, isReal := seam.(clock.RealClock); !isReal {
+		t.Fatalf("NewLoop installed %T as its default clock, want clock.RealClock", seam)
+	}
+	if d := time.Since(seam.Now()); d < -time.Second || d > time.Minute {
+		t.Fatalf("default clock Now() = %v, want the wall clock", seam.Now())
 	}
 }
 
@@ -149,11 +158,9 @@ func TestClockSeam_DefaultIsInstalled(t *testing.T) {
 func TestClockSeam_SetClockNilKeepsSeam(t *testing.T) {
 	fixedNow := fixedEvalNow()
 	l := NewLoop(newTestDB(t), 30*time.Second, 24*time.Hour, 10, 100, 4)
-	l.SetClock(func() time.Time { return fixedNow })
+	l.SetClock(clock.NewFixed(fixedNow))
 	l.SetClock(nil)
-	l.mu.Lock()
-	got := l.nowLocked()
-	l.mu.Unlock()
+	got := l.clock().Now()
 	if !got.Equal(fixedNow) {
 		t.Fatalf("after SetClock(nil) the seam returns %v, want the previously installed fixed instant %v", got, fixedNow)
 	}

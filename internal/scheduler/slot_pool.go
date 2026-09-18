@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -22,6 +23,11 @@ import (
 // on re-push = deadlock) and temporarily pulls tokens out of circulation
 // (over-admission). The refcount map makes Release(name) exact.
 type SlotPool struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk       clockSeam
 	sem       chan struct{} // buffered channel = counting semaphore
 	maxSlots  int
 	spawner   *Spawner
@@ -262,7 +268,7 @@ func (p *SlotPool) ReleaseAll() {
 // tick_id could never resolve via GET /ticks/{id} on a non-UTC host.
 // The generated id is returned so callers can correlate the row.
 func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *sql.DB) string {
-	tickID := database.NextTickID(proj.Name)
+	tickID := database.NextTickID(clock.WithClock(context.Background(), p.clock()), proj.Name)
 	p.spawn(proj, tickID, now, noDeliver, db, false)
 	return tickID
 }
@@ -353,12 +359,12 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		defer releaseNsClaim()
 		if !namespaceCapGateDisabled() {
 			if nsCap := namespaceCapDB(db, nsID); nsCap > 0 {
-				nsStart := time.Now()
+				nsStart := p.clock().Now()
 				nsCtx, nsCancel := context.WithTimeout(context.Background(), defaultNamespaceSlotPatience)
 				ok := p.waitNamespaceSlot(nsCtx, nsID, db)
 				nsCancel()
 				if !ok {
-					p.logNamespaceDeferral(proj, tickID, nsCap, namespaceRunningDB(db, nsID), time.Since(nsStart))
+					p.logNamespaceDeferral(proj, tickID, nsCap, namespaceRunningDB(db, nsID), p.clock().Since(nsStart))
 					return
 				}
 				nsClaimed = true
@@ -368,12 +374,12 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// Wait for a free slot. The patience is configurable
 		// (ADV-R08/G3); the default keeps the historical 5-minute
 		// window byte-identical.
-		waitStart := time.Now()
+		waitStart := p.clock().Now()
 		patience := p.Patience()
 		ctx, cancel := context.WithTimeout(context.Background(), patience)
 		defer cancel()
 		if !p.Acquire(ctx, proj.Name) {
-			waited := time.Since(waitStart)
+			waited := p.clock().Since(waitStart)
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			// ADV-R08/G3: the drop was previously invisible to the
 			// events API — whether it had ever fired was unknowable.
@@ -433,7 +439,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				TickID:   tickID,
 				Project:  proj.Name,
 				Started:  now,
-				Finished: time.Now(),
+				Finished: p.clock().Now(),
 				Status:   TickFailed,
 				Error:    err.Error(),
 			})
@@ -494,7 +500,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// Phase A revert, the adaptiveCooldown call below doubles as the
 		// Phase B re-evaluation against the restored baseline.
 		if db != nil {
-			bumpTickCompleted(db, outcome.Project, proj.Workdir, outcome)
+			bumpTickCompleted(db, outcome.Project, proj.Workdir, outcome, p.clock())
 			if !adaptiveCooldown(db, outcome.Project, proj.Workdir, outcome) {
 				autoSlowdown(db, outcome.Project, &st.Output)
 			}
@@ -530,7 +536,14 @@ func (p *SlotPool) Wait(ctx context.Context) error {
 			if p.Running() == 0 {
 				return nil
 			}
-			time.Sleep(100 * time.Millisecond)
+			p.clock().Sleep(100 * time.Millisecond)
 		}
 	}
 }
+
+// SetClock installs the clock this SlotPool reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (p *SlotPool) SetClock(c clock.Clock) { p.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (p *SlotPool) clock() clock.Clock { return p.clk.Get() }

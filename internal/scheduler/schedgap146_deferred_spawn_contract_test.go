@@ -95,6 +95,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // gap146State is the scheduling state a deferral must never touch.
@@ -460,7 +462,7 @@ func TestGAP146_DeferDoesNotDoubleCountAcrossEvaluations(t *testing.T) {
 	want := gap146ReadState(t, db, name)
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
-	l.SetClock(func() time.Time { return now }) // deterministic selection instant
+	l.SetClock(clock.NewFixed(now)) // deterministic selection instant
 	l.noDeliver = true
 	gw := newHeldResumeGateway(t)
 	gw.wire(l)

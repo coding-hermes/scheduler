@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -235,7 +236,7 @@ func TestTickDuration(t *testing.T) {
 }
 
 func TestSparklineFunc(t *testing.T) {
-	tmpl := loadTemplates()
+	tmpl := loadTemplates(nil)
 	// Access the registered func map. The template's FuncMap is private; the
 	// reliable check is that a template using {{sparkline .}} executes without
 	// "function not defined" — which happens at parse time, so simply
@@ -583,7 +584,7 @@ func TestBatchStatsParityWithPerProjectQueries(t *testing.T) {
 		}
 		// Observability parity (board 3 done / 7 total → non-trivial ETA).
 		wantAvg, wantAvgCost, wantPct, wantEta, wantAt, wantProj := g.observabilityStats(ctx, name, 3, 7, wantTotal, wantFailed)
-		gotAvg, gotAvgCost, gotPct, gotEta, gotAt, gotProj := observabilityFromSamples(samples[name], 3, 7, got.total, got.failed)
+		gotAvg, gotAvgCost, gotPct, gotEta, gotAt, gotProj := observabilityFromSamples(clock.Real(), samples[name], 3, 7, got.total, got.failed)
 		if gotAvg != wantAvg || gotAvgCost != wantAvgCost || gotPct != wantPct || gotEta != wantEta || gotProj != wantProj {
 			t.Errorf("%s: observability mismatch: batched=(%d,%v,%d,%q,%v) per-query=(%d,%v,%d,%q,%v)",
 				name, gotAvg, gotAvgCost, gotPct, gotEta, gotProj, wantAvg, wantAvgCost, wantPct, wantEta, wantProj)
@@ -604,7 +605,7 @@ func TestBatchStatsParityWithPerProjectQueries(t *testing.T) {
 		}
 		fleet := g.fleetLearned(ctx)
 		wantLEta, wantLAt, wantLBreak, wantLProj := g.learnedETA(ctx, name, workdirs[name], steps, fleet)
-		gotLEta, gotLAt, gotLBreak, gotLProj := learnedETAFromSamples(steps, tickSamplesFromCompleted(workdirs[name], samples[name]), fleet)
+		gotLEta, gotLAt, gotLBreak, gotLProj := learnedETAFromSamples(clock.Real(), steps, tickSamplesFromCompleted(clock.Real(), workdirs[name], samples[name]), fleet)
 		if wantLEta != gotLEta || wantLProj != gotLProj {
 			t.Errorf("%s: learnedETA mismatch: batched=(%v,%v) per-query=(%v,%v)",
 				name, gotLEta, gotLProj, wantLEta, wantLProj)

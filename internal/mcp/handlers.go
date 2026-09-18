@@ -118,7 +118,7 @@ func (s *Server) toolFleetSetCooldown(ctx context.Context, args map[string]inter
 		Component: "mcp",
 		Message:   fmt.Sprintf("toolFleetSetCooldown: %s → %ds", name, c),
 		Details:   fmt.Sprintf(`{"cooldown_s":%d,"tool":"toolFleetSetCooldown"}`, c),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CreatedAt: s.clock().Now().UTC().Format(time.RFC3339),
 	})
 	return jsonString(map[string]string{"status": "updated", "project": name, "cooldown_s": strconv.Itoa(c)}), nil
 }

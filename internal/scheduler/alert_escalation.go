@@ -7,11 +7,18 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // AlertEscalator checks scheduler health, project starvation, and failure
 // patterns after each evaluation cycle and emits events at escalating severity.
 type AlertEscalator struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk    clockSeam
 	db     *sql.DB
 	events *EventLogger
 	// autoDisable configures per-project failure-rate auto-disable
@@ -37,7 +44,7 @@ func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval tim
 		return nil
 	}
 
-	age := time.Since(lastEval)
+	age := ae.clock().Since(lastEval)
 	if age > 10*time.Minute {
 		ae.events.Emit(ctx, SeverityCritical, "escalation",
 			fmt.Sprintf("scheduler not evaluating — last eval %v ago", age.Round(time.Second)),
@@ -170,7 +177,7 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 	}
 
 	// Check each project for starvation.
-	now := time.Now()
+	now := ae.clock().Now()
 	for _, proj := range projects {
 		last, ok := lastCompleted[proj.name]
 		if !ok {
@@ -261,7 +268,7 @@ func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 			// window (same events-table pattern as CheckStarvation), so a
 			// stuck project emits once per crossing, not once per health pass.
 			if lastEmit, ok := ae.lastConsecutiveFailureEvent(ctx, name); ok {
-				if time.Since(lastEmit) < consecutiveFailureThrottleWindow {
+				if ae.clock().Since(lastEmit) < consecutiveFailureThrottleWindow {
 					continue
 				}
 			}
@@ -408,7 +415,7 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 
 		// Disable the project (GAP-044: stamp provenance — who/when/why —
 		// so disabled fleet state stays auditable).
-		nowStr := time.Now().UTC().Format(time.RFC3339)
+		nowStr := ae.clock().Now().UTC().Format(time.RFC3339)
 		reason := fmt.Sprintf("failure rate %.1f%% (%d/%d ticks, window %d, threshold %.2f)",
 			rate*100, failed, total, window, ae.autoDisable.failureRate)
 		_, err = ae.db.ExecContext(ctx,
@@ -518,3 +525,10 @@ func (ae *AlertEscalator) RunAll(ctx context.Context, lastEval time.Time) error 
 	}
 	return nil
 }
+
+// SetClock installs the clock this AlertEscalator reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (ae *AlertEscalator) SetClock(c clock.Clock) { ae.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (ae *AlertEscalator) clock() clock.Clock { return ae.clk.Get() }

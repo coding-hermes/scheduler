@@ -326,7 +326,7 @@ func (s *Server) listQueue(ctx context.Context) ([]queueItem, error) {
 	}
 	defer rows.Close()
 	calc := s.urgencyCalculator()
-	now := time.Now()
+	now := s.clock().Now()
 	var items []queueItem
 	for rows.Next() {
 		var it queueItem

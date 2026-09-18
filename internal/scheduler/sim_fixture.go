@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // SimFixture creates a clean set of test projects for simulation testing.
@@ -15,6 +17,11 @@ import (
 // priority decay/starvation, cooldown throttling, and disabled exclusion.
 type SimFixture struct {
 	db *sql.DB
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk clockSeam
 }
 
 // NewSimFixture creates a fixture on the given database.
@@ -71,7 +78,7 @@ func (sf *SimFixture) Setup(projects []SimProject) error {
 		return fmt.Errorf("clear ticks: %w", err)
 	}
 
-	now := time.Now().Format(time.RFC3339)
+	now := sf.clock().Now().Format(time.RFC3339)
 	for _, p := range projects {
 		workdir := "/tmp/sim"
 		// Per-project workdir with a dummy board: gives the adaptive engine a
@@ -111,6 +118,11 @@ func ensureSimBoard(project string) (string, error) {
 
 // SimRunner runs multi-tick simulations and collects statistics.
 type SimRunner struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk      clockSeam
 	loop     *Loop
 	fixture  *SimFixture
 	idleRate float64
@@ -150,7 +162,7 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		Enabled:   countEnabled(projects),
 	}
 
-	start := time.Now()
+	start := sr.clock().Now()
 	for tick := 1; tick <= tickCount; tick++ {
 		select {
 		case <-ctx.Done():
@@ -162,10 +174,10 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		report.Ticks = append(report.Ticks, tickReport)
 
 		// Advance simulated time so cooldowns expire between ticks.
-		time.Sleep(time.Duration(sr.fixture.TestProjects()[0].CooldownS) * time.Second)
+		sr.clock().Sleep(time.Duration(sr.fixture.TestProjects()[0].CooldownS) * time.Second)
 	}
 
-	report.Elapsed = time.Since(start)
+	report.Elapsed = sr.clock().Since(start)
 
 	// Collect aggregate stats.
 	for _, tr := range report.Ticks {
@@ -183,7 +195,7 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 func (sr *SimRunner) runOneTick(tickNum int) SimTickReport {
 	tr := SimTickReport{Tick: tickNum}
 
-	now := time.Now()
+	now := sr.clock().Now()
 	packed, err := sr.loop.packer.Pick(now, nil)
 	if err != nil {
 		tr.Error = err.Error()
@@ -207,7 +219,7 @@ func (sr *SimRunner) runOneTick(tickNum int) SimTickReport {
 	}
 
 	// Wait for instantaneous simulated completions.
-	time.Sleep(200 * time.Millisecond)
+	sr.clock().Sleep(200 * time.Millisecond)
 
 	// Count outcomes from this tick's batch.
 	rows, _ := sr.loop.db.Query(`
@@ -299,4 +311,27 @@ func countEnabled(projects []SimProject) int {
 		}
 	}
 	return n
+}
+
+// SetClock installs the clock this SimFixture reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (sf *SimFixture) SetClock(c clock.Clock) { sf.clk.Set(c) }
+
+// clock returns the component's clock, never nil.
+func (sf *SimFixture) clock() clock.Clock { return sf.clk.Get() }
+
+// SetClock installs the clock this runner reads and waits on (SCHED-GAP-169).
+// nil keeps the owning loop's clock (and, without one, the wall clock).
+func (sr *SimRunner) SetClock(c clock.Clock) { sr.clk.Set(c) }
+
+// clock returns the runner's clock: its own if installed, else the owning
+// loop's, else the wall clock.
+func (sr *SimRunner) clock() clock.Clock {
+	if sr.clk.Installed() {
+		return sr.clk.Get()
+	}
+	if sr.loop != nil {
+		return sr.loop.clock()
+	}
+	return clock.Real()
 }

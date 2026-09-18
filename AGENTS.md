@@ -92,6 +92,29 @@ internal/
   sync/             — DuckBrain sync: pushes fleet state to DuckBrain memory.
 ```
 
+## Test-time simulator (SCHED-GAP-169)
+
+Every clock read and wait in non-test code goes through `internal/clock.Clock` — the daemon's single time choke point. Injection is per component: each long-lived struct holds a `clock.Seam` (zero value = wall clock) and `Loop.SetClock` propagates one clock to every component it owns (spawner, slot pool, lifecycle tracker, sim spawner, gateway client, board watcher); free functions that already thread a `context.Context` take theirs from `clock.WithClock(ctx, c)` (the sql-backed DB helpers). There is deliberately NO package-level global clock, so two components — or two tests in one binary — can hold different clocks. `internal/clock/stdlib_guard_test.go` fails the build the moment a direct `time.Now()/time.Since()/time.Until()/time.Sleep()/time.After()/time.NewTicker()/time.AfterFunc()` reappears outside `internal/clock` (comment lines are allowed and reported).
+
+Three implementations:
+
+| Clock | Use |
+|-------|-----|
+| `clock.Real()` | production; stdlib delegation, identical to the calls it replaced (the default) |
+| `clock.NewFixed(t)` | the ADV-R04/G6 determinism seam: frozen decision instant, real waits |
+| `clock.NewSimClock(scale)` | the test-time simulator |
+
+| Env var | Values | Meaning |
+|---------|--------|---------|
+| `SCHEDULER_TIME_MODE` | `real` (default) \| `sim` | selects the implementation |
+| `SCHEDULER_TIME_SCALE` | positive float, default `1.0` | simulator speed: a blocked wait costs `d/scale` of REAL time while virtual now advances the full `d` (10x/100x/1000x) |
+| `SCHEDULER_TIME_START` | RFC3339 | simulator start instant (default: now) |
+| `SCHEDULER_TIME_AUTOADVANCE` | `0` (default) \| `1` | skip straight to the next armed timer at zero real cost |
+
+Sim mode is REFUSED at boot unless `--simulate` is also set (a stray env var must never put the live fleet on a fake clock) and every boot logs its clock: `TIME: clock real` or `TIME: clock sim (scale=1000 start=… auto=false driven=true)`. `clock.FromEnv` fails closed on any unparseable value.
+
+In tests, install a simulator with `l.SetClock(clock.NewSimClockAt(1000, time.Now()))` and drive it: `Advance`/`AdvanceTo` jump virtual time and fire every due timer in (deadline, registration-sequence) order, `WaitForNextTimer` is the check-in point (park until the next timer is due instead of sleeping for a fixed period), `RunUntilIdle` drains one-shot timers, and `clock.NewManualSimClock(t)` is a dormant clock that moves only when the test says so. `internal/scheduler/clock_simulator_e2e_test.go` runs a drain-window + 2h adaptive-cooldown-expiry scenario — a shape that previously required real hours — in ~0.2s.
+
 ## Endpoints
 
 | Route | Purpose |

@@ -72,7 +72,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	// SCHED-GAP-066: enrich each project with its budget spend/remaining and
 	// blocked state. Fail-open: if the spend query breaks, serve the plain
 	// project rows rather than erroring the whole endpoint.
-	spends, spendErr := scheduler.LoadBudgetSpends(ctx, s.db, time.Now())
+	spends, spendErr := scheduler.LoadBudgetSpends(ctx, s.db, s.clock().Now())
 	if spendErr != nil {
 		writeJSON(w, 200, map[string]interface{}{"projects": projects})
 		return

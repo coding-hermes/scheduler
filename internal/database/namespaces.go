@@ -16,7 +16,7 @@ var ErrNamespaceNotFound = errors.New("namespace not found")
 // set automatically if empty.
 func CreateNamespace(ctx context.Context, db *sql.DB, ns *Namespace) error {
 	if ns.CreatedAt == "" {
-		ns.CreatedAt = nowUTC()
+		ns.CreatedAt = nowUTC(ctx)
 	}
 	if ns.UpdatedAt == "" {
 		ns.UpdatedAt = ns.CreatedAt
@@ -116,7 +116,7 @@ FROM namespaces`
 // non-nil fields in patch are written; UpdatedAt is always refreshed.
 func UpdateNamespace(ctx context.Context, db *sql.DB, id string, patch NamespacePatch) error {
 	setClauses := []string{"updated_at = ?"}
-	args := []any{nowUTC()}
+	args := []any{nowUTC(ctx)}
 
 	if patch.Weight != nil {
 		setClauses = append(setClauses, "weight = ?")

@@ -21,6 +21,7 @@ import (
 
 	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -212,12 +213,31 @@ func main() {
 		return
 	}
 
+	// ── SCHED-GAP-169: the process clock ──
+	// ONE clock for the whole daemon. Every component below is wired to this
+	// value, so there is a single choke point for all clock reads and waits.
+	//
+	// SCHEDULER_TIME_MODE=sim swaps in the test-time simulator (virtual time at
+	// SCHEDULER_TIME_SCALE): virtual now advances the full duration while the
+	// real wait costs duration/scale, so a 2h tick timeout is reached in
+	// seconds of real time. It is REFUSED unless --simulate is also set — a
+	// stray environment variable must never put the live fleet on a fake clock.
+	clk, clkErr := clock.FromEnv()
+	if clkErr != nil {
+		log.Fatalf("FATAL: %v", clkErr)
+	}
+	if _, isSim := clk.(*clock.SimClock); isSim && !*simulate {
+		log.Fatalf("FATAL: %s=sim (%s) requires --simulate — refusing to run the real fleet on a simulated clock",
+			clock.EnvMode, clock.Describe(clk))
+	}
+	log.Printf("TIME: clock %s", clock.Describe(clk))
+
 	// ── Test-verify mode: run correctness checks and exit ──
 	// Runs BEFORE the main database is opened: testVerify creates its own
 	// temp DB, so requiring the production DB path here would break CI and
 	// any host without ~/.hermes/coding-hermes/ (DOGFOOD-002 follow-up).
 	if *testVerifyFlag > 0 {
-		if err := testVerify(*testVerifyFlag); err != nil {
+		if err := testVerify(*testVerifyFlag, clk); err != nil {
 			log.Fatalf("VERIFY FAILED: %v", err)
 		}
 		return
@@ -312,6 +332,11 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
+	// SCHED-GAP-169: install the process clock (wall clock by default) and
+	// propagate it to every component the loop owns — spawner, slot pool,
+	// lifecycle tracker, sim spawner. The API and MCP servers are constructed
+	// below, after this call, and inherit the same clock through loop.Clock().
+	loop.SetClock(clk)
 	// Apply the tick timeout to the real spawner so Wait()/scanner cleanup use it.
 	loop.SetTickTimeout(*tickTimeout)
 	// SCHED-GAP-117: apply the per-turn gateway deadline AFTER the tick
@@ -448,6 +473,7 @@ func main() {
 	// Wire gateway HTTP client with retry (FEAT-003).
 	if *gatewayURL != "" && *gatewayKey != "" {
 		gwClient := scheduler.NewGatewayClient(*gatewayURL, *gatewayKey, *tickTimeout)
+		gwClient.SetClock(clk)
 		// Retry gateway connection with backoff — gateway may not be ready
 		// when schedulerd starts (systemd ordering). Once connected, keep
 		// retrying in the background if it ever drops.
@@ -456,7 +482,7 @@ func main() {
 			if err := gwClient.Ping(context.Background()); err != nil {
 				wait := time.Duration(attempt+1) * 2 * time.Second
 				log.Printf("WARN: gateway %s not reachable (attempt %d/10, retry in %v): %v", *gatewayURL, attempt+1, wait, err)
-				time.Sleep(wait)
+				clk.Sleep(wait)
 			} else {
 				loop.SetGatewayClient(gwClient)
 				log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
@@ -489,7 +515,7 @@ func main() {
 		// and calls SetGatewayClient on success.
 		runGatewayReconnector(context.Background(), gwClient, func() {
 			loop.SetGatewayClient(gwClient)
-		}, &gwConnected, *gatewayURL)
+		}, &gwConnected, *gatewayURL, clk)
 	}
 
 	// Simulation count mode: generate N ticks and exit.
@@ -525,6 +551,7 @@ func main() {
 	// /api/v1/status (fallback state: reachable, spool depth). Its Run loop
 	// starts later in background (see below).
 	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
+	duckbrain.SetClock(clk)
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
@@ -593,6 +620,7 @@ func main() {
 	// both transports read/write one groups.jsonl + templates.jsonl.
 	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
+	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
 	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
@@ -738,6 +766,7 @@ func main() {
 	// clock cadence. A nil gateway/exec-less run keeps it armed — it
 	// only adds evaluation triggers.
 	boardWatcher := scheduler.NewBoardWakeWatcher(db, loop.ForceEvaluate)
+	boardWatcher.SetClock(clk)
 	boardWatcher.Start()
 
 	// Start DuckBrain sync in background.

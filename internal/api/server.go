@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
@@ -15,6 +16,10 @@ import (
 
 // Server is the HTTP API server for the fleet scheduler.
 type Server struct {
+	// clk is the server's time seam (SCHED-GAP-169). NewServer seeds it from
+	// the loop's clock so every timestamp surface shares one timeline; the
+	// zero value reads as the wall clock.
+	clk     clock.Seam
 	db      *sql.DB
 	loop    *scheduler.Loop
 	started time.Time
@@ -51,13 +56,35 @@ type Server struct {
 
 // NewServer creates an API server.
 func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
-	return &Server{
+	s := &Server{
 		db:            db,
 		loop:          loop,
-		started:       time.Now(),
 		failureWindow: 100, // default; override via SetFailureWindow
 	}
+	// Share the loop's clock (SCHED-GAP-169): uptime and every "age" surface
+	// then measure on the same timeline as scheduling. A nil loop (unit tests)
+	// keeps the wall clock.
+	if loop != nil {
+		s.SetClock(loop.Clock())
+	} else {
+		s.started = clock.Real().Now()
+	}
+	return s
 }
+
+// SetClock installs the clock this server reads time through (SCHED-GAP-169).
+// nil keeps the current clock. Installing a clock re-anchors the uptime origin
+// at that clock's instant, so a simulated run reports simulated uptime.
+func (s *Server) SetClock(c clock.Clock) {
+	if c == nil {
+		return
+	}
+	s.clk.Set(c)
+	s.started = c.Now()
+}
+
+// clock returns the server's clock, never nil.
+func (s *Server) clock() clock.Clock { return s.clk.Get() }
 
 // SetFailureWindow sets the number of recent ticks per project used for the
 // /api/v1/status per-project failure-rate breakdown (SCHED-GAP-018).
@@ -138,7 +165,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		evalAge = 0
 	} else {
 		lastEvalStr = lastEval.UTC().Format(time.RFC3339)
-		evalAge = time.Since(lastEval).Seconds()
+		evalAge = s.clock().Since(lastEval).Seconds()
 	}
 	httpCount, execCount := s.loop.SpawnMethodCounts()
 	writeJSON(w, 200, map[string]interface{}{
@@ -152,7 +179,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"version":                version.Current(),
 		"build_sha":              version.CurrentCommit(),
 		"build_time":             version.CurrentBuildDate(),
-		"uptime":                 time.Since(s.started).String(),
+		"uptime":                 s.clock().Since(s.started).String(),
 		"db":                     dbOK,
 		"active_ticks":           activeTicks,
 		"last_evaluation":        lastEvalStr,
@@ -368,7 +395,7 @@ func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
 	for _, w := range rows {
 		var age int64
 		if ts, err := time.Parse(time.RFC3339, w.StartedAt); err == nil {
-			age = int64(time.Since(ts).Seconds())
+			age = int64(s.clock().Since(ts).Seconds())
 			if age < 0 {
 				age = 0
 			}

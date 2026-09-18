@@ -107,7 +107,7 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	heartbeat := time.NewTicker(streamHeartbeatInterval)
+	heartbeat := s.clock().NewTicker(streamHeartbeatInterval)
 	defer heartbeat.Stop()
 
 	for {

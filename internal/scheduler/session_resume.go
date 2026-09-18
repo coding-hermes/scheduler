@@ -66,7 +66,7 @@ type orphanedTick struct {
 func (l *Loop) stampOrphaned(tickID, reason string) {
 	_, err := l.db.Exec(
 		`UPDATE ticks SET orphaned_at = ?, orphan_reason = ? WHERE id = ?`,
-		time.Now().Format(time.RFC3339), reason, tickID)
+		l.clock().Now().Format(time.RFC3339), reason, tickID)
 	if err != nil {
 		log.Printf("RESUME: stamp orphaned tick %s (%s): %v", tickID, reason, err)
 	}
@@ -230,7 +230,7 @@ func (l *Loop) resumeOrphans(trigger string) {
 		// is continuing, not starting cold.
 		packed.Prompt = buildContinuationPrompt(o.prompt, o.id, o.sessionID, o.reason)
 		packed.PromptMode = "append"
-		l.slotPool.SpawnEnqueued(packed, tickID, time.Now(), noDeliver, l.db)
+		l.slotPool.SpawnEnqueued(packed, tickID, l.clock().Now(), noDeliver, l.db)
 		resumed++
 		admitted[nsID]++
 		log.Printf("RESUME: nudged orphaned tick %s (project %s, reason=%s, nudge %d/%d) as %s",

@@ -81,7 +81,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := context.Background()
-	now := time.Now().UTC()
+	now := s.clock().Now().UTC()
 	// RFC3339 cutoff for the windowed blocks. Every predicate compares with
 	// julianday() — spawned_at/completed_at are RFC3339 TEXT and the fleet
 	// contains BOTH UTC ("...Z") and local-offset ("...-05:00") rows, so a raw
@@ -91,7 +91,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, 200, map[string]interface{}{
 		"generated_at":     now.Format(time.RFC3339),
-		"uptime_s":         int64(time.Since(s.started).Seconds()),
+		"uptime_s":         int64(s.clock().Since(s.started).Seconds()),
 		"sources":          metricsSources(),
 		"spawns":           s.metricsSpawns(ctx, cutoff),
 		"deferrals":        s.metricsDeferrals(),

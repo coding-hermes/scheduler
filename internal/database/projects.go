@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ErrProjectNotFound is returned when a project lookup or update targets a
@@ -16,15 +18,20 @@ var ErrProjectNotFound = errors.New("project not found")
 
 // nowUTC returns the current time as a UTC RFC3339 string — the canonical
 // timestamp format stored in all TEXT timestamp columns.
-func nowUTC() string {
-	return time.Now().UTC().Format(time.RFC3339)
+//
+// The clock comes from the context (SCHED-GAP-169): database helpers own no
+// component to hang a Clock on, and every one of them already threads a ctx, so
+// clock.WithClock(ctx, c) is the injection point. Without it the wall clock is
+// used, exactly as before the seam.
+func nowUTC(ctx context.Context) string {
+	return clock.FromContext(ctx).Now().UTC().Format(time.RFC3339)
 }
 
 // CreateProject inserts a new project row. CreatedAt and UpdatedAt are set
 // to the current UTC time if the caller left them zero-valued.
 func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 	if p.CreatedAt == "" {
-		p.CreatedAt = nowUTC()
+		p.CreatedAt = nowUTC(ctx)
 	}
 	if p.UpdatedAt == "" {
 		p.UpdatedAt = p.CreatedAt
@@ -451,7 +458,7 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 // three. Non-transition updates leave them untouched.
 func UpdateProject(ctx context.Context, db *sql.DB, name string, updates ProjectUpdates) error {
 	setClauses := []string{"updated_at = ?"}
-	args := []any{nowUTC()}
+	args := []any{nowUTC(ctx)}
 
 	// GAP-044: resolve the enabled transition before building clauses.
 	if updates.Enabled != nil {
@@ -461,7 +468,7 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		if err != nil {
 			return fmt.Errorf("read current enabled for %q: %w", name, err)
 		}
-		now := nowUTC()
+		now := nowUTC(ctx)
 		if curEnabled == 1 && !*updates.Enabled {
 			// disable transition — stamp provenance (caller overrides win)
 			if updates.DisabledAt == nil {
@@ -711,7 +718,7 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 // allows deleting already-disabled projects, so this path never sees an
 // enabled→disabled transition and must write provenance itself.
 func DeleteProject(ctx context.Context, db *sql.DB, name string) error {
-	now := nowUTC()
+	now := nowUTC(ctx)
 	_, err := db.ExecContext(ctx,
 		`UPDATE projects SET enabled = 0,
 		   disabled_at = COALESCE(disabled_at, ?),
@@ -792,7 +799,7 @@ const (
 // MinBumpCooldown, project enabled, no active bump); this function is
 // mechanical. Returns the updated project.
 func BumpProject(ctx context.Context, db *sql.DB, name string, ticks, cooldown int, reason string) (*Project, error) {
-	now := nowUTC()
+	now := nowUTC(ctx)
 	res, err := db.ExecContext(ctx, `
 UPDATE projects SET
 	bump_active = 1,
@@ -860,7 +867,7 @@ UPDATE projects SET
 	bump_started_at = '',
 	updated_at = ?
 WHERE name = ? AND COALESCE(bump_active, 0) = 1`,
-		nowUTC(), name)
+		nowUTC(ctx), name)
 	if err != nil {
 		return fmt.Errorf("clear bump %q: %w", name, err)
 	}

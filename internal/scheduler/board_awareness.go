@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Board-aware pending-task urgency boost (SCHED-GAP-019, 2026-08-09).
@@ -152,6 +154,11 @@ type pendingCacheEntry struct {
 // error). Markdown boards have no evidence fields by construction, so
 // their raw count passes through unchanged.
 type PendingTaskCounter struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk clockSeam
 	mu  sync.Mutex
 	ttl time.Duration
 	m   map[string]pendingCacheEntry // keyed by workdir
@@ -195,7 +202,7 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 		// Cache the 0 so we don't stat on every eval for projects without boards.
 		c.mu.Lock()
 		entry, ok := c.m[workdir]
-		if !ok || time.Since(entry.fetchedAt) > c.ttl {
+		if !ok || c.clock().Since(entry.fetchedAt) > c.ttl {
 			prev := 0
 			if ok {
 				prev = entry.count
@@ -203,7 +210,7 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 			c.m[workdir] = pendingCacheEntry{
 				count:     0,
 				mtime:     time.Time{},
-				fetchedAt: time.Now(),
+				fetchedAt: c.clock().Now(),
 			}
 			if prev != 0 {
 				log.Printf("PENDING-BOOST: <%s> boost cleared (pending=0)", workdir)
@@ -227,7 +234,7 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 	defer c.mu.Unlock()
 
 	entry, ok := c.m[workdir]
-	cacheFresh := ok && time.Since(entry.fetchedAt) <= c.ttl &&
+	cacheFresh := ok && c.clock().Since(entry.fetchedAt) <= c.ttl &&
 		entry.mtime.Equal(fi.ModTime()) && entry.regMtime.Equal(regMtime)
 
 	if cacheFresh {
@@ -248,7 +255,7 @@ func (c *PendingTaskCounter) CountPending(workdir string) int {
 		count:     count,
 		mtime:     fi.ModTime(),
 		regMtime:  regMtime,
-		fetchedAt: time.Now(),
+		fetchedAt: c.clock().Now(),
 	}
 
 	if count != prevCount {
@@ -396,3 +403,10 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 
 	return count
 }
+
+// SetClock installs the clock this PendingTaskCounter reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (c *PendingTaskCounter) SetClock(clk clock.Clock) { c.clk.Set(clk) }
+
+// clock returns the component's clock, never nil.
+func (c *PendingTaskCounter) clock() clock.Clock { return c.clk.Get() }

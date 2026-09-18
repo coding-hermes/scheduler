@@ -9,6 +9,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // TestSumSessionCostInWindow verifies the real-cost lookup matches sessions
@@ -48,7 +50,7 @@ func TestSumSessionCostInWindow(t *testing.T) {
 	start := time.Unix(int64(now-200), 0)
 	end := time.Unix(int64(now-40), 0)
 
-	cost, tin, tout, n, err := sumSessionCostInWindow(tmp, start, end)
+	cost, tin, tout, n, err := sumSessionCostInWindow(tmp, start, end, clock.Real())
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestSumSessionCostInWindow(t *testing.T) {
 // flat estimate rather than 0 or an error.
 func TestResolveRealTickCostFallback(t *testing.T) {
 	cost, tin, tout, isReal := resolveRealTickCost("/nonexistent/path", "/nonexistent/workdir", "proj",
-		time.Now().Add(-time.Hour), time.Now())
+		time.Now().Add(-time.Hour), time.Now(), clock.Real())
 	if isReal {
 		t.Errorf("expected fallback (isReal=false), got isReal=true cost=%v", cost)
 	}

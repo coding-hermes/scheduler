@@ -30,7 +30,7 @@ func (l *Loop) evaluate() {
 	}
 
 	// ADV-R04 (G6): the decision instant comes from the loop's clock seam
-	// (Loop.nowFn, default time.Now) — the only clock read in the evaluate
+	// (internal/clock; the wall clock by default) — the only clock read in the evaluate
 	// path. The single `now` value flows to every consumer below (budget
 	// gate, packers, zero-select note, sim tick IDs, slot-pool spawns,
 	// escalator); no second read of the seam happens inside evaluate().
@@ -216,6 +216,9 @@ func (l *Loop) evaluate() {
 		policy := l.autoDisablePolicy
 		l.mu.RUnlock()
 		escalator := NewAlertEscalator(l.db, l.events, policy)
+		// SCHED-GAP-169: the escalator reads/writes timestamps and throttle
+		// windows, so it follows the loop's clock like every other component.
+		escalator.SetClock(l.clock())
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}
@@ -405,7 +408,7 @@ func (l *Loop) cleanDanglingOnStartup() {
 		// and the tick silently stays 'running' forever. completed_at IS
 		// stamped (GAP-045) so reaped rows are terminal for duration math.
 		if _, err := l.db.ExecContext(ctx,
-			timeoutReapSQL, time.Now().Format(time.RFC3339), dt.id); err != nil {
+			timeoutReapSQL, l.clock().Now().Format(time.RFC3339), dt.id); err != nil {
 			log.Printf("DANGLING: reaping tick %s (pid=%d): %v", dt.id, dt.pid, err)
 			continue
 		}
@@ -487,7 +490,7 @@ func (l *Loop) reapStaleQueuedRows() int {
 		log.Printf("QUEUED: startup reap skipped — no usable tick timeout; queued rows left untouched")
 		return 0
 	}
-	cutoff := time.Now().Add(-queuedReapAgeMultiplier * tt)
+	cutoff := l.clock().Now().Add(-queuedReapAgeMultiplier * tt)
 
 	// Rows are consumed and CLOSED before any UPDATE: SQLite allows a single
 	// writer, so an UPDATE issued while this SELECT still holds the pool's
@@ -517,7 +520,7 @@ func (l *Loop) reapStaleQueuedRows() int {
 	var reaped int
 	for _, q := range stale {
 		if _, err := l.db.ExecContext(ctx,
-			timeoutReapSQL, time.Now().Format(time.RFC3339), q.id); err != nil {
+			timeoutReapSQL, l.clock().Now().Format(time.RFC3339), q.id); err != nil {
 			log.Printf("QUEUED: reaping tick %s (project %s): %v", q.id, q.project, err)
 			continue
 		}
@@ -587,7 +590,7 @@ func (l *Loop) reapZombies() {
 		// SQLite reject the UPDATE and the zombie is never reaped.
 		// completed_at IS stamped (GAP-045) — see timeoutReapSQL.
 		if _, err := l.db.ExecContext(ctx,
-			timeoutReapSQL, time.Now().Format(time.RFC3339), id); err != nil {
+			timeoutReapSQL, l.clock().Now().Format(time.RFC3339), id); err != nil {
 			log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
 			continue
 		}
@@ -609,7 +612,7 @@ func (l *Loop) reapZombies() {
 	var gwReaped int
 	for _, gt := range l.staleGatewayTicks(ctx) {
 		if _, err := l.db.ExecContext(ctx,
-			timeoutReapSQL, time.Now().Format(time.RFC3339), gt.id); err != nil {
+			timeoutReapSQL, l.clock().Now().Format(time.RFC3339), gt.id); err != nil {
 			log.Printf("ZOMBIE: reaping gateway tick %s: %v", gt.id, err)
 			continue
 		}

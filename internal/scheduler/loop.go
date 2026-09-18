@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -33,13 +34,7 @@ type Loop struct {
 	// minInterval is the configured --min-interval (ADV-R02). Immutable
 	// after NewLoop; it drives the eval-stall watchdog threshold
 	// (10x min-interval) via evalStallThreshold().
-	minInterval time.Duration
-	// nowFn is the loop's clock seam (ADV-R04 / G6): evaluate() reads
-	// the decision instant exclusively through this func so tests can
-	// pin it to a fixed time. Defaults to time.Now (set in NewLoop);
-	// SetClock overrides it, nil-guarded. Runtime behavior with the
-	// default is identical to the previous direct time.Now() read.
-	nowFn         func() time.Time
+	minInterval   time.Duration
 	gatewayClient *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
 	gatewayDead   bool           // true when last ping failed
 
@@ -101,6 +96,12 @@ type Loop struct {
 	// one second).
 	simSeq    atomic.Uint64
 	noDeliver bool // suppress Telegram delivery (verify mode, tests)
+
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk clockSeam
 
 	// stopGrace is how long Stop() waits for in-flight ticks to finish
 	// before aborting them (SCHED-GAP-077). Defaults to 15s in NewLoop;
@@ -174,7 +175,6 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		maxConcur:       maxConcur,
 		namespaceMode:   nsMode,
 		minInterval:     minI,
-		nowFn:           time.Now, // clock seam (ADV-R04); SetClock overrides
 		pauseCh:         make(chan struct{}, 1),
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
@@ -212,27 +212,42 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	return l
 }
 
-// SetClock overrides the loop's clock seam (ADV-R04 / G6). evaluate()
-// reads its decision instant through this func; the default is time.Now,
-// so production behavior is unchanged. Passing nil keeps the current seam.
-// Tests install a fixed clock here to make evaluate() deterministic.
-func (l *Loop) SetClock(now func() time.Time) {
-	if now == nil {
+// SetClock installs the loop's clock seam (ADV-R04 / G6, SCHED-GAP-169). Every
+// instant the loop reads and every wait it blocks on goes through this clock;
+// the default is the wall clock, so production behavior under RealClock is
+// identical to the direct time.Now()/time.Sleep() calls it replaced. Passing
+// nil keeps the current seam.
+//
+// The clock is also propagated to every component the loop owns (spawner, slot
+// pool, lifecycle tracker, sim spawner, alert escalator, gateway client, board
+// watcher when attached) so a test that installs one simulator drives the whole
+// tree rather than just evaluate()'s decision instant.
+func (l *Loop) SetClock(c clock.Clock) {
+	if c == nil {
 		return // nil keeps the default/current seam
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.nowFn = now
+	l.clk.Set(c)
+	l.spawner.SetClock(c)
+	if l.slotPool != nil {
+		l.slotPool.SetClock(c)
+	}
+	if l.lifecycle != nil {
+		l.lifecycle.SetClock(c)
+	}
+	if l.simSpawner != nil {
+		l.simSpawner.SetClock(c)
+	}
+	if l.gatewayClient != nil {
+		l.gatewayClient.SetClock(c)
+	}
 }
 
-// nowLocked returns the current instant through the clock seam. Callers
-// must hold l.mu (evaluate does).
-func (l *Loop) nowLocked() time.Time {
-	if l.nowFn == nil {
-		return time.Now()
-	}
-	return l.nowFn()
-}
+// clock returns the loop's clock, never nil (the zero value of the seam reads
+// as the wall clock, so a zero-value Loop still works).
+func (l *Loop) clock() clock.Clock { return l.clk.Get() }
+
+// nowLocked returns the current instant through the clock seam.
+func (l *Loop) nowLocked() time.Time { return l.clock().Now() }
 
 // SetNamespaceMode enables or disables multi-namespace scheduling.
 func (l *Loop) SetNamespaceMode(on bool) {
@@ -366,7 +381,7 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 		return fmt.Errorf("no enabled projects for simulation")
 	}
 
-	tick := time.NewTicker(500 * time.Millisecond)
+	tick := l.clock().NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 
 	generated := 0
@@ -388,7 +403,7 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 		}
 	}
 	log.Printf("SIM: all %d ticks generated — waiting for simulated completion", count)
-	time.Sleep(1 * time.Second)
+	l.clock().Sleep(1 * time.Second)
 	return nil
 }
 
@@ -427,10 +442,10 @@ func (l *Loop) Run() {
 	// instead of sitting until the next reconnect flip.
 	l.resumeOrphansAtStartup()
 
-	reaper := time.NewTicker(60 * time.Second)
+	reaper := l.clock().NewTicker(60 * time.Second)
 	defer reaper.Stop()
 
-	healthTicker := time.NewTicker(30 * time.Second)
+	healthTicker := l.clock().NewTicker(30 * time.Second)
 	defer healthTicker.Stop()
 
 	// SlotFreed() spawns one internal polling goroutine. Capture the channel
@@ -441,7 +456,7 @@ func (l *Loop) Run() {
 	// Only after 5s of quiet does evaluation fire — this batches rapid
 	// completions and prevents the feedback-loop flood (BUG-008).
 	var (
-		debounceTimer *time.Timer
+		debounceTimer *clock.Timer
 		debounceMu    sync.Mutex
 	)
 
@@ -492,7 +507,7 @@ func (l *Loop) Run() {
 			if debounceTimer != nil {
 				debounceTimer.Stop()
 			}
-			debounceTimer = time.AfterFunc(5*time.Second, func() {
+			debounceTimer = l.clock().AfterFunc(5*time.Second, func() {
 				select {
 				case l.evalCh <- struct{}{}:
 				default:
@@ -580,7 +595,7 @@ func (l *Loop) abortInFlightTicks() {
 	}
 
 	for _, t := range stuck {
-		finished := time.Now()
+		finished := l.clock().Now()
 		err := l.lifecycle.Complete(TickOutcome{
 			TickID:   t.id,
 			Project:  t.project,
@@ -645,7 +660,7 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		return "", ErrProjectRunning
 	}
 
-	tickID := database.NextTickID(project.Name)
+	tickID := database.NextTickID(clock.WithClock(context.Background(), l.clock()), project.Name)
 
 	proj := PackedProject{
 		Name:             project.Name,
@@ -688,7 +703,7 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	// Fire the spawn session (async — the row is already queued, so the
 	// returned id resolves regardless of slot availability). The slot pool
 	// exists from NewLoop (CI-003).
-	l.slotPool.SpawnEnqueued(proj, tickID, time.Now(), noDeliver, l.db)
+	l.slotPool.SpawnEnqueued(proj, tickID, l.clock().Now(), noDeliver, l.db)
 	return tickID, nil
 }
 
@@ -860,7 +875,7 @@ func (l *Loop) checkEvalStall(running int) {
 	if lastEval.IsZero() {
 		return // never evaluated — the initial eval fires at startup
 	}
-	age := time.Since(lastEval)
+	age := l.clock().Since(lastEval)
 	if age < l.evalStallThreshold() {
 		return // healthy: evaluating on cadence
 	}
@@ -880,7 +895,7 @@ func (l *Loop) checkEvalStall(running int) {
 		return // healthy: work in flight
 	}
 
-	now := time.Now()
+	now := l.clock().Now()
 	// onset: no recent forced eval — the stall episode is starting
 	// fresh, or the previous episode closed more than
 	// evalStallReEmitGap ago (fleet busy for hours, then idle again).

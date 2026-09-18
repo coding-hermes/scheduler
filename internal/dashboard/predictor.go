@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // TaskType buckets a board task (or a completed tick's work) into a coarse
@@ -180,7 +182,7 @@ func (g *Generator) fleetLearned(ctx context.Context) *fleetModel {
 			if d <= 0 {
 				return
 			}
-			typ := classifyTaskType(tickWork(wd[raw.proj], raw.sp, raw.co, 4))
+			typ := classifyTaskType(tickWork(g.clock(), wd[raw.proj], raw.sp, raw.co, 4))
 			mu.Lock()
 			ds := m.byType[typ]
 			if ds == nil {
@@ -380,19 +382,19 @@ func (g *Generator) learnedETA(ctx context.Context, project, workdir string, ste
 			var cost float64
 			if rows.Scan(&sp, &co, &cost) == nil {
 				if d := parseDuration(sp, co); d > 0 {
-					samples = append(samples, tickSample{dur: d, cost: cost, work: tickWork(workdir, sp, co, 4)})
+					samples = append(samples, tickSample{dur: d, cost: cost, work: tickWork(g.clock(), workdir, sp, co, 4)})
 				}
 			}
 		}
 		_ = rows.Close()
 	}
-	return learnedETAFromSamples(steps, samples, fleet)
+	return learnedETAFromSamples(g.clock(), steps, samples, fleet)
 }
 
 // learnedETAFromSamples is the estimation core shared by the per-project page
 // (learnedETA) and the fleet overview (which passes pre-fetched batched
 // samples). Pure computation + git work classification; no DB access.
-func learnedETAFromSamples(steps []BoardStep, samples []tickSample, fleet *fleetModel) (time.Duration, string, string, float64) {
+func learnedETAFromSamples(clk clock.Clock, steps []BoardStep, samples []tickSample, fleet *fleetModel) (time.Duration, string, string, float64) {
 	if len(steps) == 0 {
 		return 0, "", "", 0
 	}
@@ -426,6 +428,6 @@ func learnedETAFromSamples(steps []BoardStep, samples []tickSample, fleet *fleet
 	if total <= 0 {
 		return 0, "", "", 0
 	}
-	completionAt := time.Now().UTC().Add(total).Format(time.RFC3339)
+	completionAt := clk.Now().UTC().Add(total).Format(time.RFC3339)
 	return total, completionAt, etaBreakdown(byType, counts), totalCost
 }

@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Cost estimation constants for real ticks where session export is unavailable
@@ -73,6 +75,11 @@ func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
+	// clk is this component's time seam (SCHED-GAP-169). The zero value
+	// reads as the wall clock; NewLoop propagates its own clock here so a
+	// test that installs a simulator clock drives the whole component tree,
+	// not just evaluate().
+	clk           clockSeam
 	db            *sql.DB
 	maxConcurrent int
 	active        map[string]*exec.Cmd // tickID -> running process
@@ -201,13 +208,13 @@ func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, 
 	if err == nil {
 		// Legacy path carries no per-POST supervision, but AC 1 still wants
 		// the trace: record a minimal completed/wall entry for the attempt.
-		now := time.Now()
+		now := s.clock().Now()
 		mergePostTrace(tickTrace, &GatewayPOSTTrace{
 			TickID:         tickID,
 			Project:        project,
 			Model:          model,
 			Provider:       provider,
-			Start:          now.Add(-time.Since(now)),
+			Start:          now.Add(-s.clock().Since(now)),
 			Finish:         now,
 			DeadlineMode:   "wall",
 			Classification: "completed",
@@ -225,7 +232,7 @@ func (s *Spawner) logPOSTTrace(tickID string, trace *GatewayPOSTTrace) {
 	if trace == nil {
 		return
 	}
-	trace.Finish = time.Now()
+	trace.Finish = s.clock().Now()
 	trace.Elapsed = trace.Finish.Sub(trace.Start)
 	trace.ElapsedMS = trace.Elapsed.Milliseconds()
 	trace.DeadlineMS = trace.Deadline.Milliseconds()
@@ -643,7 +650,7 @@ func (s *Spawner) ActiveCount() int {
 func (s *Spawner) startHeartbeat(tickID string) chan<- struct{} {
 	stop := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(s.heartbeatInterval)
+		ticker := s.clock().NewTicker(s.heartbeatInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -660,7 +667,7 @@ func (s *Spawner) startHeartbeat(tickID string) chan<- struct{} {
 			default:
 			}
 			if _, err := s.db.Exec(`UPDATE ticks SET heartbeat_at = ? WHERE id = ?`,
-				time.Now().Format(time.RFC3339), tickID); err != nil {
+				s.clock().Now().Format(time.RFC3339), tickID); err != nil {
 				log.Printf("WARN: heartbeat refresh for tick %s: %v", tickID, err)
 			}
 		}
@@ -1083,7 +1090,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		// Try HTTP gateway spawn first (zero process overhead).
 		if s.gateway != nil {
-			reqStart := time.Now() // SCHED-GAP-029: capture before SendResponse for git window
+			reqStart := s.clock().Now() // SCHED-GAP-029: capture before SendResponse for git window
 
 			// SCHED-GAP-111 (S12 §4.3): the foreman session deadline.
 			// Previously this ctx always wrapped s.timeout; for a
@@ -1161,7 +1168,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// self-describing; the real gateway session id replaces it on
 			// success below.
 			if _, err := s.db.Exec(`UPDATE ticks SET session_id = ?, heartbeat_at = ? WHERE id = ?`,
-				tickID, time.Now().Format(time.RFC3339), tickID); err != nil {
+				tickID, s.clock().Now().Format(time.RFC3339), tickID); err != nil {
 				log.Printf("WARN: placeholder session_id/heartbeat for %s: %v", tickID, err)
 			}
 			// SCHED-GAP-060: stamp last_tick_started AT SPAWN so a running
@@ -1255,7 +1262,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						select {
 						case <-turnCtx.Done():
 							return r, err
-						case <-time.After(gatewayRetrySleep(err, attempt)):
+						case <-s.clock().After(gatewayRetrySleep(err, attempt)):
 						}
 						r, err = send(model, provider)
 						if err == nil {
@@ -1343,7 +1350,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
-				now := time.Now()
+				now := s.clock().Now()
 
 				// SCHED-GAP-079: a gateway 2xx is NOT automatically a
 				// completed tick. The gateway accepted the request, but a
@@ -1527,7 +1534,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if postTrace != nil && postTrace.SessionID != "" {
 					stallSessionID = postTrace.SessionID
 				}
-				stallCommits, stallFiles := countGitChanges(project.Workdir, reqStart, time.Now())
+				stallCommits, stallFiles := countGitChanges(project.Workdir, reqStart, s.clock().Now())
 				if s.events != nil {
 					s.events.Emit(context.Background(), SeverityHigh, "spawn",
 						"gateway turn stalled — tick failed before tick-timeout", map[string]any{
@@ -1557,7 +1564,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					Deliver:    project.Deliver,
 					spawner:    s,
 					completed:  false,
-					completeAt: time.Now(),
+					completeAt: s.clock().Now(),
 					gwFailErr:  stallErr,
 					model:      model,
 					provider:   provider,
@@ -1748,7 +1755,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		TickID:  tickID,
 		Project: project.Name,
 		PID:     cmd.Process.Pid,
-		Started: time.Now(),
+		Started: s.clock().Now(),
 		Deliver: project.Deliver,
 		cmd:     cmd,
 		stdout:  stdoutRead,
@@ -2062,7 +2069,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		if st.scanDone != nil {
 			select {
 			case <-st.scanDone:
-			case <-time.After(5 * time.Second):
+			case <-st.clock().After(5 * time.Second):
 			}
 		}
 		st.closePipes()
@@ -2073,7 +2080,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	// st.spawner.timeout here would SIGKILL a wave tick at the base
 	// --tick-timeout even though its session ctx was extended — the tick
 	// would die mid-merge with no terminal state.
-	timer := time.AfterFunc(st.tickTimeout, func() {
+	timer := st.clock().AfterFunc(st.tickTimeout, func() {
 		if st.cmd.Process != nil {
 			// Each scheduler-owned worker has its own process group. Killing the
 			// group prevents shells, Hermes workers, and test runners from
@@ -2084,7 +2091,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	defer timer.Stop()
 
 	err := st.cmd.Wait()
-	finished := time.Now()
+	finished := st.clock().Now()
 
 	outcome := TickOutcome{
 		TickID:    st.TickID,
@@ -2131,7 +2138,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		if st.cmd != nil && st.cmd.Dir != "" {
 			workdir = st.cmd.Dir
 		}
-		cost, tin, tout, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished)
+		cost, tin, tout, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished, st.clock())
 		outcome.CostUSD = cost
 		if !isReal {
 			// Still record the estimated token counts so aggregation works
@@ -2260,7 +2267,7 @@ func (st *SpawnedTick) boardClosureGate(windowStart, windowEnd time.Time) error 
 		log.Printf("WARN [board_closure]: pre-existing closure-evidence violations on %s (tick %s closed %d row(s) in-window): %s",
 			st.Project, st.TickID, len(rejected), strings.Join(names, ", "))
 
-		severity, message, reminder, suppress := st.boardClosureEmission(fingerprint, len(flagged), time.Now())
+		severity, message, reminder, suppress := st.boardClosureEmission(fingerprint, len(flagged), st.clock().Now())
 		if !suppress && st.spawner != nil && st.spawner.events != nil {
 			details := make([]map[string]any, 0, len(flagged))
 			for _, v := range flagged {
@@ -2462,4 +2469,20 @@ func splitCommand(cmd string) []string {
 		parts = append(parts, current)
 	}
 	return parts
+}
+
+// SetClock installs the clock this spawner reads and waits on (SCHED-GAP-169).
+// nil keeps the wall clock.
+func (s *Spawner) SetClock(c clock.Clock) { s.clk.Set(c) }
+
+// clock returns the spawner's clock, never nil.
+func (s *Spawner) clock() clock.Clock { return s.clk.Get() }
+
+// clock returns the clock this tick follows: its owning spawner's, else the
+// wall clock (a tick constructed without a spawner is never simulated).
+func (st *SpawnedTick) clock() clock.Clock {
+	if st.spawner != nil {
+		return st.spawner.clock()
+	}
+	return clock.Real()
 }

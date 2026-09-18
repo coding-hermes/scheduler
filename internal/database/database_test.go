@@ -38,7 +38,7 @@ func sampleProject(name string) *Project {
 
 func sampleTick(projectName string) *Tick {
 	return &Tick{
-		ID:          NextTickID(projectName),
+		ID:          NextTickID(context.Background(), projectName),
 		ProjectName: projectName,
 		Status:      StatusQueued,
 	}
@@ -801,7 +801,7 @@ func TestTick_CheckConstraintStatus(t *testing.T) {
 }
 
 func TestNextTickID_Format(t *testing.T) {
-	id := NextTickID("myproj")
+	id := NextTickID(context.Background(), "myproj")
 	// Format: myproj-YYYY-MM-DD-HH-mm-ss
 	parts := strings.Split(id, "-")
 	// Expect at least 7 parts: myproj, YYYY, MM, DD, HH, mm, ss.

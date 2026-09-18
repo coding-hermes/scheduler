@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ── ADV-R07 (Option C): board-driven wake + ordering boost ─────────────
@@ -206,7 +208,7 @@ func TestBoardWake_CooldownStillGates(t *testing.T) {
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 	l.SetSimulation(1.0)
-	l.SetClock(func() time.Time { return fixedNow })
+	l.SetClock(clock.NewFixed(fixedNow))
 
 	var evals int64
 	var mu sync.Mutex
@@ -493,7 +495,7 @@ func TestBoardWake_NoSpawnSkippedSolelyOnBoardState(t *testing.T) {
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 	l.SetSimulation(1.0)
-	l.SetClock(func() time.Time { return fixedNow })
+	l.SetClock(clock.NewFixed(fixedNow))
 	// Force the freshness seam to answer "verifiably idle, nothing to
 	// spawn" — the most aggressive board answer — via the counter the
 	// spawner/packers share.
@@ -576,7 +578,7 @@ func TestBoardWake_IntegrationRealLoop(t *testing.T) {
 
 	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
 	l.SetSimulation(1.0)
-	l.SetClock(func() time.Time { return fixedNow })
+	l.SetClock(clock.NewFixed(fixedNow))
 
 	w := NewBoardWakeWatcher(db, l.ForceEvaluate)
 	w.SetIntervals(50*time.Millisecond, 200*time.Millisecond, 150*time.Millisecond)

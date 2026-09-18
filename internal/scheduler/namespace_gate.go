@@ -162,7 +162,7 @@ func (p *SlotPool) waitNamespaceSlot(ctx context.Context, nsID string, db *sql.D
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(nsGatePollInterval):
+		case <-p.clock().After(nsGatePollInterval):
 		}
 	}
 }

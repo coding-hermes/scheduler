@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"strings"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // mustReadStatic panics if the embedded asset cannot be read at init time —
@@ -19,7 +21,16 @@ func mustReadStatic(path string) []byte {
 
 // loadTemplates parses every embedded template, applies the shared func map,
 // and registers each {{define "..."}} block by name. Returns the parsed set.
-func loadTemplates() *template.Template {
+func loadTemplates(seam *clock.Seam) *template.Template {
+	// seam is the generator's clock seam (SCHED-GAP-169): the live-duration
+	// helpers below measure against it, so a generated page under a simulator
+	// reports simulated elapsed time. A nil seam reads as the wall clock.
+	var clk clock.Clock
+	if seam != nil {
+		clk = seam.Get()
+	} else {
+		clk = clock.Real()
+	}
 	funcs := template.FuncMap{
 		"percent": func(used, total int) int {
 			if total == 0 {
@@ -51,7 +62,7 @@ func loadTemplates() *template.Template {
 			if err != nil {
 				return "—"
 			}
-			d := time.Since(s)
+			d := clk.Since(s)
 			if d < 0 {
 				d = 0
 			}
@@ -71,7 +82,7 @@ func loadTemplates() *template.Template {
 			if err != nil {
 				return 0
 			}
-			elapsed := time.Since(s).Seconds()
+			elapsed := clk.Since(s).Seconds()
 			if elapsed <= 0 {
 				return 0
 			}

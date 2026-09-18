@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ErrTickNotFound is returned when a tick lookup or transition targets an
@@ -17,7 +18,7 @@ var ErrTickNotFound = errors.New("tick not found")
 // is set automatically if empty.
 func CreateTick(ctx context.Context, db *sql.DB, t *Tick) error {
 	if t.CreatedAt == "" {
-		t.CreatedAt = nowUTC()
+		t.CreatedAt = nowUTC(ctx)
 	}
 	if t.Status == "" {
 		t.Status = StatusQueued
@@ -45,7 +46,7 @@ func UpdateTickStatus(ctx context.Context, db *sql.DB, id string, status TickSta
 	args := []any{string(status), nullableString(sessionID)}
 	if status == StatusRunning {
 		q += `, spawned_at = ?`
-		args = append(args, nowUTC())
+		args = append(args, nowUTC(ctx))
 	}
 	q += ` WHERE id = ?`
 	args = append(args, id)
@@ -78,7 +79,7 @@ func CompleteTick(ctx context.Context, db *sql.DB, id string, outcome TickOutcom
 	q := `UPDATE ticks
 SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?
 WHERE id = ?`
-	args := []any{string(status), string(outcome), nowUTC(), exitCode, nullableString(errMsg), id}
+	args := []any{string(status), string(outcome), nowUTC(ctx), exitCode, nullableString(errMsg), id}
 
 	res, err := db.ExecContext(ctx, q, args...)
 	if err != nil {
@@ -256,8 +257,11 @@ WHERE project_name = ? AND id NOT IN (
 // The timestamp is UTC. Two ticks created in the same second for the same
 // project will collide — callers are expected to serialize spawning per
 // project (enforced by the cooldown).
-func NextTickID(projectName string) string {
-	now := time.Now().UTC()
+// The clock comes from the context (SCHED-GAP-169), exactly like nowUTC, so
+// a simulated run generates tick ids on the simulated timeline instead of
+// stamping real wall-clock ids into a virtual world.
+func NextTickID(ctx context.Context, projectName string) string {
+	now := clock.FromContext(ctx).Now().UTC()
 	return fmt.Sprintf("%s-%04d-%02d-%02d-%02d-%02d-%02d",
 		projectName, now.Year(), now.Month(), now.Day(),
 		now.Hour(), now.Minute(), now.Second())

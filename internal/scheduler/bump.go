@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -76,7 +77,7 @@ func markBumpTick(db *sql.DB, project, tickID string) {
 //
 // Returns true when this call performed the Phase A revert (caller MUST
 // still run adaptiveCooldown — it is Phase B).
-func bumpTickCompleted(db *sql.DB, project, workdir string, outcome TickOutcome) bool {
+func bumpTickCompleted(db *sql.DB, project, workdir string, outcome TickOutcome, clk clock.Clock) bool {
 	if db == nil {
 		return false
 	}
@@ -108,7 +109,7 @@ FROM projects WHERE name = ?`, project).Scan(&active, &remaining, &startedAt)
 		// A non-bump tick completing against a bump-active project (e.g.
 		// a manual SpawnNow raced the bump activation): does not consume
 		// the countdown, but the hard cap still applies.
-		if !bumpExpired(startedAt, time.Now()) {
+		if !bumpExpired(startedAt, clk.Now()) {
 			return false
 		}
 		log.Printf("BUMP: %s 12h hard cap exceeded (started %s) — force-reverting with %d tick(s) remaining", project, startedAt, remaining)
@@ -116,7 +117,7 @@ FROM projects WHERE name = ?`, project).Scan(&active, &remaining, &startedAt)
 		return true
 	}
 
-	if bumpExpired(startedAt, time.Now()) {
+	if bumpExpired(startedAt, clk.Now()) {
 		log.Printf("BUMP: %s 12h hard cap exceeded (started %s) — force-reverting with %d tick(s) remaining", project, startedAt, remaining)
 		revertBump(db, project, outcome, "hard-cap")
 		return true
