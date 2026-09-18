@@ -2723,5 +2723,6 @@ tasks:
     in coding-hermes-board explaining the fingerprint rule + how to link/evidence
     a re-detected finding instead of refiling. Scope: the board-appender path (boardctl
     + internal/api if applicable). Do NOT touch scheduler admission or fleet cooldown.'
-  status: in_progress
+  status: complete
   created_at: '2026-09-18T12:02:41.926935+00:00'
+  completed_at: '2026-09-18T12:18:20.238768+00:00'
