@@ -389,6 +389,15 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/metrics": {
+      "get": {
+        "summary": "Fleet metrics — one read-only request answers spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks vs caps, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s and zero-output committed ticks",
+        "responses": {
+          "200": {"description": "Single JSON object: generated_at, uptime_s, sources, spawns, deferrals, nudges, ticks, tick_duration_ms, gateway, outcomes. Every block carries available=true|false; a block whose real source is absent reports {\"available\": false, \"reason\": \"...\"} instead of a fabricated number, and sources names the query/counter behind every block (SCHED-GAP-156)."},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/config": {
       "get": {
         "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",

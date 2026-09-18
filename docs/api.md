@@ -22,7 +22,9 @@ default (`--listen 127.0.0.1:9090`).
 | HTML dashboard | `/`, `/dashboard/partial`, `/projects/{name}`, `/queue`, `/ticks?page=N`, `/namespaces/{id}`, `/health` (not part of the JSON API) |
 | MCP (JSON-RPC) | `POST /mcp` (not part of the REST API) |
 
-Route index (all 19 `/api/v1/*` routes):
+Route index (every `/api/v1/*` route documented below; the JSONL deploy
+groups/templates routes are listed in the OpenAPI spec at
+`GET /api/v1/openapi.json`):
 
 | Method | Path | Section |
 |--------|------|---------|
@@ -44,9 +46,10 @@ Route index (all 19 `/api/v1/*` routes):
 | GET | `/api/v1/ticks/{id}` | [§7](#7-ticks) |
 | GET | `/api/v1/events` | [§8](#8-events) |
 | GET | `/api/v1/queue` | [§9](#9-queue) |
-| POST | `/api/v1/evaluate` | [§10](#10-fleet-wide-control) |
-| POST | `/api/v1/pause` | [§10](#10-fleet-wide-control) |
-| POST | `/api/v1/resume` | [§10](#10-fleet-wide-control) |
+| GET | `/api/v1/metrics` | [§10](#10-fleet-metrics) |
+| POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
+| POST | `/api/v1/pause` | [§11](#11-fleet-wide-control) |
+| POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
 
 ## 2. Wire format
 
@@ -730,7 +733,121 @@ expires.
 curl -s http://127.0.0.1:9090/api/v1/queue | jq '.queue[:3] | map(.project)'
 ```
 
-## 10. Fleet-wide control
+## 10. Fleet metrics
+
+### GET /api/v1/metrics
+
+**Purpose:** every fleet question that used to be answered with hand-written
+SQL against the daemon's SQLite DB, in ONE read-only JSON response
+(SCHED-GAP-156):
+
+| # | Question | Field paths |
+|---|----------|-------------|
+| 1 | spawns by namespace + outcome | `spawns.total`, `spawns.by_namespace`, `spawns.by_outcome` |
+| 2 | deferrals by admission reason | `deferrals.by_reason` (+ `deferrals.admitted_by_namespace`, `deferrals.passes`) |
+| 3 | orphan nudges by drop path | `nudges.by_path` |
+| 4 | active/queued ticks vs global + per-namespace caps | `ticks.active`, `ticks.queued`, `ticks.global_cap`, `ticks.by_namespace.<ns>.active/.queued/.cap` |
+| 5 | cooldown expired but unscheduled | `ticks.cooldown_expired_unscheduled` |
+| 6 | tick duration p50/p90/p99 | `tick_duration_ms.count`, `.window`, `.p50`, `.p90`, `.p99` |
+| 7 | gateway drain-503 count | `gateway.drain_503` |
+| 8 | zero-output `committed` ticks | `outcomes.zero_output_committed` |
+
+**Honesty rule (load-bearing):** every block carries `available` — `true` when
+the number came from a real query or counter, `false` when its real source is
+absent or a query failed. An unsourced block is reported as
+`{"available": false, "reason": "<what is missing>"}` and NEVER as a
+fabricated number, and the top-level `sources` map names the query/counter (or
+the gap) behind every block. A `0` is only ever emitted because a real query
+returned it; `tick_duration_ms` reports `p50`/`p90`/`p99` as JSON `null` (not
+`0`) when the window holds no completed tick. **Do not treat `0` as "unknown" —
+read `available` and `sources` first.**
+
+**Window:** the windowed blocks (`spawns`, `tick_duration_ms`, `gateway`,
+`outcomes`) look back **24h** (`tick_duration_ms.window` / `spawns.window` echo
+the label). `nudges` is all-time (persisted on `ticks.nudge_count`), and
+`deferrals` counts **since daemon boot** (in-memory counters, reset by a
+restart — that reset is why `by_reason` only exists while a scheduler Loop is
+attached). Every windowed predicate compares with SQLite `julianday()` because
+`ticks.spawned_at`/`completed_at` are RFC3339 text that the fleet writes in
+BOTH UTC (`...Z`) and local-offset (`...-05:00`) form — a raw string
+comparison would silently drop rows.
+
+**Percentile definition:** nearest-rank on the ascending sample of
+`completed_at - spawned_at` durations in milliseconds —
+`idx = ceil(pct/100 * n) - 1`, clamped to `[0, n-1]`, evaluated with integer
+arithmetic (`(pct*n + 99) / 100`).
+
+**Query params:** none. **Request body:** none. Read-only: no state is
+mutated, no migration runs, and the endpoint echoes no config secrets.
+
+**Response 200** (real capture, 2026-09-18, from a simulated fixture on a temp
+DB — a quiesced fleet, so `ticks.active` is 0; `sources` abbreviated here, the
+daemon returns the full text):
+
+```json
+{
+  "generated_at": "2026-09-18T10:07:46Z",
+  "uptime_s": 6,
+  "sources": {"spawns": "ticks table, rows with spawned_at inside the window ...",
+              "deferrals": "Loop.AdmissionCounters() — per-process SCHED-GAP-155 admission counters ...",
+              "nudges": "ticks table, SUM(nudge_count) grouped by orphan_reason ...",
+              "ticks": "ticks table: active = COUNT(status='running') ...",
+              "tick_duration_ms": "ticks table: ROUND((julianday(completed_at) - julianday(spawned_at)) * 86400000) ...",
+              "gateway": "ticks table: rows spawned inside the window whose error text matches the harness drain class ...",
+              "outcomes": "ticks table: rows spawned inside the window with outcome='committed' AND commits=0 ..."},
+  "spawns": {"available": true, "window": "24h", "total": 113,
+             "by_namespace": {"-": 113},
+             "by_outcome": {"committed": 0, "dry_run": 0, "failed": 0, "timeout": 0}},
+  "deferrals": {"available": true,
+                "by_reason": {"ok": 10, "cap": 2, "load_gate": 0, "cooldown": 0,
+                              "tasks_no_work": 0, "board_unowned": 0, "budget": 0,
+                              "tasks_deferred": 0},
+                "admitted_by_namespace": {"-": 10}, "passes": 1},
+  "nudges": {"available": true, "by_path": {}},
+  "ticks": {"available": true, "active": 0, "queued": 0, "global_cap": 10,
+            "by_namespace": {}, "cooldown_expired_unscheduled": 12},
+  "tick_duration_ms": {"count": 113, "window": "24h", "p50": 0, "p90": 1000, "p99": 1000},
+  "gateway": {"available": true, "drain_503": 0, "window": "24h"},
+  "outcomes": {"available": true, "zero_output_committed": 0, "window": "24h"}
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `generated_at` | string | RFC3339 UTC timestamp of this response |
+| `uptime_s` | int | Seconds since the daemon's API server was constructed |
+| `sources` | object | One entry per block naming the exact query/counter behind it (or the gap) |
+| `spawns.available` | bool | `false` + `reason` when the ticks query failed |
+| `spawns.total` | int | Tick rows spawned inside the window (any status, including not-yet-terminal ones) |
+| `spawns.by_namespace` | object | Rows per `projects.namespace_id`; key `"-"` = project row missing or namespace unset |
+| `spawns.by_outcome` | object | Always carries all four CHECK-constraint values; a `NULL` outcome (never terminal) is counted in `total` only |
+| `deferrals.by_reason` | object | Admission-decision counters per reason (`ok`, `cap`, `load_gate`, `cooldown`, `tasks_no_work`, `board_unowned`, `budget`, `tasks_deferred`); every reason is present, `0` = never seen this process |
+| `deferrals.admitted_by_namespace` | object | Admitted-tick totals per namespace (key `"-"` = namespace unset) |
+| `deferrals.passes` | int | Evaluation passes the admission emitter ran in |
+| `nudges.by_path` | object | Orphan re-nudges per drop path (`drain_timeout`, `startup_reap`, `zombie_reap`, `unknown`) — all-time |
+| `ticks.active` | int | Ticks with `status='running'` — the same number `/api/v1/status` serves as `active_ticks` |
+| `ticks.queued` | int | Ticks with `status='queued'` (enqueued, not yet spawned) |
+| `ticks.global_cap` | int | `max_concurrent` from the resolved-config snapshot — the same field `/api/v1/config` serves; `0` = no value in this process |
+| `ticks.by_namespace.<ns>.active` / `.queued` | int | Live running/queued ticks of that namespace |
+| `ticks.by_namespace.<ns>.cap` | int | `namespaces.max_concurrent`; **`0` = unlimited** (the global cap still applies) |
+| `ticks.cooldown_expired_unscheduled` | int | Enabled projects with no running AND no queued tick whose wall-clock cooldown has elapsed (bump-aware). Mirror of the packer's wall-clock gate; blackout windows, tasks-mode pacing and `cooldown_s=0` dynamic intervals are not modelled, so it can overcount slightly |
+| `tick_duration_ms.count` | int | Sample size (ticks completed inside the window with both timestamps) |
+| `tick_duration_ms.window` | string | Always `"24h"` |
+| `tick_duration_ms.p50` / `.p90` / `.p99` | int \| null | Nearest-rank duration percentiles in ms; `null` when `count == 0` |
+| `gateway.drain_503` | int | Ticks whose `error` text matches the drain class (`%503%` or `%draining%`) in the window. The in-memory `gateway_errors` counter on `/api/v1/status` counts ALL transient gateway failures and cannot classify drains, so it is deliberately not the source |
+| `outcomes.zero_output_committed` | int | Ticks with `outcome='committed'` AND `commits=0` in the window — a `committed` outcome with nothing committed |
+
+**Errors:** 405 `{"error":"GET only"}` on non-GET. A block whose query fails is
+reported in-band as `available:false` — the endpoint itself still answers 200,
+because a dead source is a metric to report, not a request error.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/metrics | jq '{active: .ticks.active, queued: .ticks.queued, caps: .ticks.by_namespace}'
+curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.deferrals.by_reason | to_entries | map(select(.value > 0))'
+curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.sources'   # what backs each number
+```
+
+## 11. Fleet-wide control
 
 All three take no body. They mutate the live loop — use with care (pausing
 stops the entire fleet; running ticks finish, new spawns stop).
@@ -766,7 +883,7 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/resume
 
 Verify the loop is back after resume: `curl -s http://127.0.0.1:9090/api/v1/health`.
 
-## 11. OpenAPI spec
+## 12. OpenAPI spec
 
 ### GET /api/v1/openapi.json
 

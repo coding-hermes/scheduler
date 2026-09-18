@@ -996,7 +996,7 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
-// documentedPaths mirrors the route table in docs/api.md (§4–§10, 26 paths).
+// documentedPaths mirrors the route table in docs/api.md (§4–§11, 27 paths).
 // The openapi.json spec must contain exactly this set — a client generator
 // needs every live route (GAP-057).
 var documentedPaths = []string{
@@ -1023,6 +1023,7 @@ var documentedPaths = []string{
 	"/api/v1/ticks/{id}",
 	"/api/v1/events",
 	"/api/v1/queue",
+	"/api/v1/metrics",
 	"/api/v1/evaluate",
 	"/api/v1/pause",
 	"/api/v1/resume",
@@ -1047,9 +1048,9 @@ func TestAPI_OpenAPI_Success(t *testing.T) {
 		t.Fatalf("openapi.json paths missing or not an object: %v", body["paths"])
 	}
 
-	// (b) path set == docs/api.md route table (24 paths, incl. the two
-	// namespace sub-routes that were missing before GAP-057 and the five
-	// JSONL groups/templates paths).
+	// (b) path set == docs/api.md route table (27 paths, incl. the two
+	// namespace sub-routes that were missing before GAP-057, the five
+	// JSONL groups/templates paths, and /api/v1/metrics from SCHED-GAP-156).
 	if len(paths) != len(documentedPaths) {
 		t.Errorf("openapi.json path count = %d, want %d (docs/api.md route table)", len(paths), len(documentedPaths))
 	}

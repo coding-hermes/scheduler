@@ -177,7 +177,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │              SCHEDULER (Go binary)            │
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
-│  /api/v1/  → REST API (19 routes)             │
+│  /api/v1/  → REST API (docs/api.md)           │
 │  /mcp      → MCP server (14 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
@@ -200,7 +200,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 | GET | `/ticks?page=N` | Paginated tick history |
 | GET | `/namespaces/{id}` | Namespace drill-down |
 | GET | `/health` | Dashboard health panel |
-| — | `/api/v1/*` | Full REST API — 19 routes (health/status/config, projects CRUD + pause/resume/spawn, namespaces + sub-routes, ticks, events, queue, pause/resume/evaluate): see [docs/api.md](docs/api.md) |
+| — | `/api/v1/*` | Full REST API — health/status/config, projects CRUD + pause/resume/spawn, namespaces + sub-routes, ticks, events, queue, fleet metrics, pause/resume/evaluate (full route index in [docs/api.md](docs/api.md)) |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
