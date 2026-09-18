@@ -2884,3 +2884,14 @@ tasks:
   status: complete
   created_at: '2026-09-18T19:10:39.278109+00:00'
   completed_at: '2026-09-18T19:28:01.415402+00:00'
+- id: CI-004
+  title: 'CI: race detector + --verify-board smoke step for blocks/scheduler (CI-004)'
+  criteria:
+  - Add a CI race-detector job covering internal/blocks and internal/scheduler
+  - Add a CI smoke step that runs schedulerd --verify-board over a clean fixture board
+    (no closure-evidence violations) so board-schema regressions fail CI
+  - Confirm the existing golangci-lint job already covers internal/blocks + adaptive_cooldown
+    files (whole-repo run is fine); if not, narrow the scope
+  status: complete
+  created_at: '2026-09-18T20:18:22.525774+00:00'
+  completed_at: '2026-09-18T20:51:03.602752+00:00'
