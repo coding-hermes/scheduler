@@ -14,7 +14,9 @@ Checks
   1. caps          — global --max-concurrent and per-namespace max_concurrent
   2. admission     — tasks ONLY where real work lives; satellites on timers
   3. cooldown law  — no enabled lane below the 6h floor without a documented tier
-  4. executors     — no enabled lane driving a retired dagger-era driver script
+  4. executors     — no enabled lane driving a retired driver script (the 5
+                     names in the RETIRED_DRIVERS tuple below; the Go enable
+                     path rejects the same 5 — internal/api/retired_drivers.go)
   5. workdirs      — every enabled lane's workdir exists
   6. targets       — every satellite's target project exists and is enabled
   7. store parity  — DB and fleet.toml agree on the operator's pins
@@ -55,8 +57,13 @@ SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer
 COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
 # Enabled lanes legitimately paced slower than the floor (namespace cadence tiers).
 COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
+# Retired dagger-era driver scripts (5). MUST stay identical — same names,
+# same count — to `retiredDriverScripts` in internal/api/retired_drivers.go,
+# which the enable path (createProject / updateProject) enforces. Pinned by
+# tests/test_check_fleet_invariants_retired_drivers.py.
 RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
-                   "sync-scheduler-tick.sh", "dogfood-scheduler-tick.sh")
+                   "sync-scheduler-tick.sh", "dogfood-scheduler-tick.sh",
+                   "dagger-role-tick.sh")
 
 # Board writer vocabulary (check 8). MUST stay in lockstep with
 # internal/scheduler/board_vocab.go (BoardAllowedStatuses /
@@ -131,7 +138,16 @@ def toml_value(block: str, field: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Run the invariants checks and return the process exit code (0 = clean).
+
+    *argv* is the argument vector seam: ``None`` reads ``sys.argv`` (the CLI
+    path used by CI and the runbook), while a test passes an explicit list
+    (``["--db", <tmp>, "--toml", <missing>, "--board", <missing>]``) so the gate
+    can be driven in-process against a fixture DB without a subprocess. The
+    function is import-safe on purpose — the file is still a script
+    (``ops/check-fleet-invariants.py``), loaded by path in the tests.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--toml", default=DEFAULT_TOML)
@@ -144,7 +160,7 @@ def main() -> int:
                          "skips the live-DB/TOML checks 1-7. This is the CI mode: "
                          "a runner has no ~/.hermes/coding-hermes/scheduler.db, so "
                          "the fleet checks cannot run there.")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     violations: list[dict] = []
     info: list[dict] = []

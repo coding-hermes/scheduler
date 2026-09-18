@@ -47,3 +47,7 @@ dagger.db
 # Untracked tick scratch (untracked noise every tick)
 tmp/
 .gitreins/logs/
+
+# Python bytecode / pytest caches (tests/ drives ops/check-fleet-invariants.py in-process)
+__pycache__/
+.pytest_cache/

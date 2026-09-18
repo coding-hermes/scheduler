@@ -111,6 +111,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name, repo_url, workdir are required")
 		return
 	}
+	// SCHED-GAP-150: a retired dagger-era driver must never be registered on a
+	// project row — reject before any DB write. The Python fleet gate
+	// (ops/check-fleet-invariants.py check #4) catches an already-enabled row;
+	// this is the same list enforced at the write.
+	if isRetiredCommand(p.Command) {
+		writeError(w, 400, retiredCommandError(p.Command))
+		return
+	}
 	// Fill S06 defaults for zero-valued fields so a minimal {name, repo_url,
 	// workdir} body satisfies the CHECK constraints. Enabled intentionally
 	// stays false — creating a project must not auto-enable it.
@@ -250,6 +258,19 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	// with a valid namespace + 900s cooldown because decay_rate was 0.
 	if updates.DecayRate != nil && *updates.DecayRate <= 0 {
 		writeError(w, 400, "decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)")
+		return
+	}
+	// SCHED-GAP-150: two ways a retired driver can reach an ENABLED project
+	// through PUT — (a) the update itself installs the command, (b) the update
+	// re-enables a row whose stored command already drives one (a disabled
+	// legacy lane). Both are refused here, before the DB write; the operator
+	// must clear the command (or pick a supported executor) first.
+	if updates.Command != nil && isRetiredCommand(*updates.Command) {
+		writeError(w, 400, retiredCommandError(*updates.Command))
+		return
+	}
+	if updates.Enabled != nil && *updates.Enabled && !wasEnabled && isRetiredCommand(cur.Command) {
+		writeError(w, 400, retiredCommandError(cur.Command))
 		return
 	}
 	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
