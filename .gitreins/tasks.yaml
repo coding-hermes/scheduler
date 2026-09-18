@@ -2908,3 +2908,16 @@ tasks:
   status: complete
   created_at: '2026-09-18T21:17:46.340928+00:00'
   completed_at: '2026-09-18T22:02:21.115505+00:00'
+- id: SCHED-GAP-150
+  title: 'Retired-driver guard: prove an enable/re-enable cannot re-arm pm/qa/sync/dogfood
+    .ts pipelines'
+  criteria:
+  - 'Add the missing 5th retired driver ''dagger-role-tick.sh'' to ops/check-fleet-invariants.py
+    RETIRED_DRIVERS; add a Go test in the createProject/updateProject enable path
+    proving a retired command is rejected or stripped; add a Python fixture test proving
+    the gate reports VIOLATION on a fleet with a retired command. All checks gated
+    to green: gitreins guard PASS; go test ./... PASS; golangci-lint 0 issues; gofmt
+    clean; the Python fixture gate exit 1 on retired, exit 0 on clean.'
+  status: complete
+  created_at: '2026-09-18T22:25:18.402551+00:00'
+  completed_at: '2026-09-18T22:52:26.579069+00:00'
