@@ -2793,3 +2793,25 @@ tasks:
   status: complete
   created_at: '2026-09-18T16:58:32.182870+00:00'
   completed_at: '2026-09-18T17:18:45.129598+00:00'
+- id: SCHED-GAP-149
+  title: 'Admission/config parity regression: fleet.toml re-pin covers max_concurrent
+    for namespaces'
+  criteria:
+  - "The existing fleet.toml-to-DB re-pin (SCHED-GAP-124/125/141) covers project admission_mode+board_ownership\
+    \ and namespace admission_mode+load_gate+default_prompt, but namespace max_concurrent\
+    \ is set ONLY at create time (internal/config/loader.go:789-817, defaultMaxConcurrent\
+    \ comes from the file at namespaceFromDef, never from an UpdateNamespace call).\
+    \ Drift is silent \u2014 an operator pins a new cap, a process restart doesn't\
+    \ pick it up. Pin namespace max_concurrent the same way admission_mode pins (line\
+    \ 501-513), and add regression tests in a new internal/config/schedgap149_test.go\
+    \ with three cases: T-149-D1 (max_concurrent pins over DB drift on ApplyFleetConfig),\
+    \ T-149-D2 (keyless entry preserves a DB-only max_concurrent), and T-149-D3 (negative\
+    \ max_concurrent normalizes to 0, matching the create-time guard). Add T-149-D4\
+    \ (load_gate re-pin \u2014 coverage for the existing 125 behavior we don't have\
+    \ a test for) and T-149-D5 (admission_mode namespace re-pin \u2014 same, for 124).\
+    \ Acceptance: each test fails when its corresponding pin block is neutered (RED-mutation\
+    \ proof) and the full short suite is green; the test file is added in this commit,\
+    \ not split."
+  status: complete
+  created_at: '2026-09-18T17:38:42.774856+00:00'
+  completed_at: '2026-09-18T17:55:01.724001+00:00'
