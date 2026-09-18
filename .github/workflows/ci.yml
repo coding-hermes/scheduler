@@ -19,6 +19,15 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Board vocabulary gate
+        # SCHED-GAP-164: every JSONL board row must carry a dispatchable status.
+        # Only status=="pending" rows are picked by the foreman, so a row minted
+        # as e.g. "todo" parks real work nobody dispatches. Read-only check;
+        # exits 1 on an off-vocabulary row. Skipped when the board is not in the
+        # checkout (e.g. a fork PR that omits .coding-hermes/).
+        if: hashFiles('.coding-hermes/board/tasks.jsonl') != ''
+        run: python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl
+
       - name: Build binaries
         run: make build
 
