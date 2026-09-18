@@ -528,7 +528,34 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 					log.Printf("Config: namespace %q has invalid load_gate %q — skipped (want \"off\")", nd.ID, nd.LoadGate)
 				}
 			}
-			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" {
+			// SCHED-GAP-149: max_concurrent pins from fleet.toml like the
+			// keys above. 0 is the "no key" input: NamespaceDef.MaxConcurrent
+			// is a plain int, so an absent key and an explicit
+			// `max_concurrent = 0` are indistinguishable here — and 0 means
+			// "unlimited" at create time anyway. A 0 entry therefore leaves
+			// the live DB cap alone, so a cap assigned through the API
+			// survives a restart with a keyless entry (the
+			// GatewayKey-conditional pattern at line 586).
+			//
+			// A negative value normalizes to 0 exactly as the create-time
+			// guard in namespaceFromDef does, so the same fleet.toml entry
+			// cannot land two different caps depending on whether the
+			// namespace already existed. Writing the raw negative would
+			// instead fail the column's CHECK(max_concurrent >= 0) and turn
+			// an operator typo into a boot error.
+			if nd.MaxConcurrent != 0 {
+				v := nd.MaxConcurrent
+				if v < 0 {
+					v = 0
+				}
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					MaxConcurrent: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q max_concurrent: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q max_concurrent=%d", nd.ID, v)
+			}
+			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
 			}
 			continue
