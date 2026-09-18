@@ -23,11 +23,21 @@ import (
 // resumeGateway is the test gateway wired into a loop's spawner: /health
 // and /v1/responses both flip on healthy; every accepted spawn is counted
 // and its request body captured.
+//
+// SCHED-GAP-143 extends it with the gateway's DRAIN state: the gateway is
+// reachable (/health stays 200) but refuses work on /v1/responses with the
+// real production refusal — HTTP 503, body {"error":"Gateway is draining"}.
+// That is the exact wire contract measured live: on 2026-09-17 all 45 failed
+// ticks in the day were this refusal (0 lane-caused failures). /health must
+// stay healthy in that state or evaluate()'s liveness ping would pause the
+// whole fleet and no refused tick row would ever be written — which is not
+// what happened on 09-17.
 type resumeGateway struct {
-	srv     *httptest.Server
-	healthy atomic.Bool
-	spawns  atomic.Int32
-	body    atomic.Pointer[string]
+	srv      *httptest.Server
+	healthy  atomic.Bool // gateway reachable at all (/health + /v1/responses)
+	draining atomic.Bool // SCHED-GAP-143: up but refusing work (503 drain)
+	spawns   atomic.Int32
+	body     atomic.Pointer[string]
 }
 
 func newResumeGateway(t *testing.T) *resumeGateway {
@@ -37,14 +47,22 @@ func newResumeGateway(t *testing.T) *resumeGateway {
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
+			// Body is irrelevant here; the status is the signal. A draining
+			// gateway still answers 200 (it is alive, it just refuses work).
 			if !g.healthy.Load() {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 		case "/v1/responses":
-			if !g.healthy.Load() {
+			if !g.healthy.Load() || g.draining.Load() {
+				// Real gateway drain response (wire contract copied from the
+				// live 503 on 2026-09-17): flat {"error": "<string>"} — NOT
+				// the nested {"error":{"type","message"}} envelope the
+				// SCHED-GAP-136 client test uses, and no Retry-After header.
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"Gateway is draining"}`))
 				return
 			}
 			b, _ := io.ReadAll(r.Body)
@@ -59,6 +77,11 @@ func newResumeGateway(t *testing.T) *resumeGateway {
 	t.Cleanup(g.srv.Close)
 	return g
 }
+
+// setGatewayDraining puts the gateway into the SCHED-GAP-143 drain state:
+// alive (/health 200) but every /v1/responses POST refused with the real
+// 503 "Gateway is draining" body. false restores normal service.
+func (g *resumeGateway) setGatewayDraining(v bool) { g.draining.Store(v) }
 
 // wire attaches the gateway to the loop's spawner (no exec fallback).
 func (g *resumeGateway) wire(l *Loop) {

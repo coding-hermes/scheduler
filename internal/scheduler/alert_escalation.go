@@ -440,6 +440,38 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 	return nil
 }
 
+// Canonical TRANSPORT-CLASS failure markers (SCHED-GAP-143), persisted in
+// ticks.failure_reason (migration v33). One error class had to be named
+// loudly enough to be checkable in SQL: on 2026-09-17 every one of the 45
+// failed ticks in the day was a `503 Gateway is draining` refusal from two
+// gateway restarts — zero lane-caused failures — and the same class had
+// already mass-disabled hermes-dagger + hermes-canopy overnight
+// (SCHED-GAP-134) because a refused tick was counted as a lane failure.
+//
+// FailureReasonGatewayDrain marks the gateway's drain refusal specifically;
+// FailureReasonGatewayTransport marks every other harness-side class
+// harnessFailure recognizes. An empty value is the safe default: the failure
+// is not transport-class (project-side), exactly like every legacy row.
+const (
+	FailureReasonGatewayDrain     = "gateway_drain"
+	FailureReasonGatewayTransport = "gateway_transport"
+)
+
+// failureReasonClass returns the canonical transport-class marker for a
+// failed tick's error text, or "" when the failure is NOT transport-class.
+// It is the single classifier behind ticks.failure_reason (lifecycle.Complete)
+// and the consecutive-failures rule in spawn.go, so a drained gateway and a
+// project-side crash can never be classified differently by two code paths.
+func failureReasonClass(errText string) string {
+	if !harnessFailure(errText) {
+		return ""
+	}
+	if strings.Contains(strings.ToLower(errText), "draining") {
+		return FailureReasonGatewayDrain
+	}
+	return FailureReasonGatewayTransport
+}
+
 // harnessFailure reports whether a failed tick's error came from the harness
 // (gateway / scheduler infrastructure) rather than from the project itself.
 // These ticks never reached the project, so they must not feed per-project

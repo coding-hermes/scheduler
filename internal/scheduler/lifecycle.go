@@ -93,15 +93,25 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if outcome.ExitCode >= 0 {
 		exitCode = outcome.ExitCode
 	}
+	// SCHED-GAP-143: stamp the TRANSPORT-CLASS marker for failed/timeout
+	// outcomes, so a tick the harness refused (drain 503, gateway down) is
+	// distinguishable in SQL from a project-side failure without re-parsing
+	// ticks.error. Empty = not transport-class, the safe default for every
+	// legacy row and for successful ticks. Same classifier the spawn path
+	// uses to decide whether a failure may touch consecutive_failures.
+	failureReason := ""
+	if outcome.Status == TickFailed || outcome.Status == TickTimeout {
+		failureReason = failureReasonClass(outcome.Error)
+	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
-			commits = ?, files_changed = ?
+			commits = ?, files_changed = ?, failure_reason = ?
 		WHERE id = ?
 	`, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
-		outcome.Commits, outcome.FilesChanged,
+		outcome.Commits, outcome.FilesChanged, failureReason,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)

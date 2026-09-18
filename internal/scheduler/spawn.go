@@ -375,6 +375,29 @@ func (s *Spawner) noteSpawnFailure(project string) {
 	}
 }
 
+// noteSpawnFailureClassed is noteSpawnFailure with the SCHED-GAP-143 rule
+// applied: a TRANSPORT-CLASS failure (the gateway refused or was unreachable
+// — harnessFailure/failureReasonClass) must leave consecutive_failures
+// untouched. Measured twice: on 2026-09-17 all 45 failed ticks in the day were
+// 503 "Gateway is draining" refusals from two gateway restarts, and the
+// counter bump is what previously let that class feed the per-project
+// auto-disable breaker (SCHED-GAP-134). The tick itself is still recorded as
+// failed with its transport-class marker — the drop is visible, it just never
+// counts against the lane. Keep the counter honest in the other direction:
+// every non-transport failure still increments (S-GAP-001 backoff).
+//
+// GAP-133 safety: the tasks-mode hot loop this could re-open is bounded by the
+// pacing floor (tasks_pacing.go: 60s + jitter after ANY terminal tick), and a
+// nil/unreachable gateway is caught earlier by evaluate()'s liveness ping,
+// which pauses spawns instead of failing them per project.
+func (s *Spawner) noteSpawnFailureClassed(project, errText string) {
+	if class := failureReasonClass(errText); class != "" {
+		log.Printf("SPAWN: %s transport-class failure (%s) — consecutive_failures left untouched", project, class)
+		return
+	}
+	s.noteSpawnFailure(project)
+}
+
 // recordCircuitFailure opens (or extends) the circuit for the pair that
 // just failed, via router_circuit.py record-failure (TASK-ROUTER-002). The
 // breaker cooldown (5m → double per consecutive failure → 1h cap) becomes
@@ -1576,7 +1599,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			}
 			if s.noExecFallback {
 				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
-				s.noteSpawnFailure(project.Name)
+				// SCHED-GAP-143: classify against the GATEWAY error itself,
+				// never the wrapper text below — the wrapper ("gateway
+				// unreachable and exec fallback disabled: ...") would make
+				// EVERY failure here look transport-class, including a
+				// project-side one whose detail happens to ride a 5xx body.
+				s.noteSpawnFailureClassed(project.Name, gwErr.Error())
 				// GAP-050: every gateway-failed spawn drop emits exactly ONE
 				// HIGH spawn event (component 'spawn', details carrying
 				// project, tick_id and the gateway error text) and advances

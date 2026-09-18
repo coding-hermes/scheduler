@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 32
+const latestMigration = 33
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -430,6 +430,13 @@ ALTER TABLE namespaces ADD COLUMN load_gate TEXT NOT NULL DEFAULT '' CHECK(load_
 		desc:    "board ownership (SCHED-GAP-141): per-project board_ownership ('' = auto | owner | shared) — the tasks-mode cooldown waiver fires only for a lane that OWNS the board it reads",
 		stmt: `
 ALTER TABLE projects ADD COLUMN board_ownership TEXT NOT NULL DEFAULT '' CHECK(board_ownership IN ('','owner','shared'));
+`,
+	},
+	{
+		version: 33,
+		desc:    "transport-class failure marker on ticks (SCHED-GAP-143): '' = not transport-class (project-side, and every legacy row) | gateway_drain | gateway_transport — a tick the harness refused (e.g. a 503 'Gateway is draining') never reached the project, so it must be classifiable in SQL instead of only by re-parsing ticks.error",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN failure_reason TEXT NOT NULL DEFAULT '';
 `,
 	},
 }
