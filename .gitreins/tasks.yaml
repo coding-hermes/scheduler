@@ -2895,3 +2895,16 @@ tasks:
   status: complete
   created_at: '2026-09-18T20:18:22.525774+00:00'
   completed_at: '2026-09-18T20:51:03.602752+00:00'
+- id: SCHED-GAP-169
+  title: Single time choke point + test-time simulator (Clock interface + SimClock
+    + replace 139 time.* call sites)
+  criteria:
+  - 'AC: (1) go test -short -p 1 ./... PASS, (2) internal/clock unit tests PASS, (3)
+    E2E rewire test under SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 completes
+    in <5s real time, (4) git grep time.Now|Since|Until|Sleep|NewTicker|After|AfterFunc
+    under internal/+cmd/ excluding tests and internal/clock/ returns zero, (5) go
+    vet + golangci-lint clean, (6) additive only, (7) bin/schedulerd rebuilds, (8)
+    commit on gap-169-clock-seam with Co-authored-by trailer.'
+  status: complete
+  created_at: '2026-09-18T21:17:46.340928+00:00'
+  completed_at: '2026-09-18T22:02:21.115505+00:00'
