@@ -29,7 +29,11 @@ Checks
                      both read status=="pending" only. Skipped silently when no
                      board file is found (test rigs, old-style workdirs).
 
-Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--board PATH] [--json]
+Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
+        python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
+
+``--board-only`` runs checks 8-9 and nothing else, so it needs neither the live
+DB nor fleet.toml — that is the mode CI uses (a runner has no ~/.hermes state).
 """
 from __future__ import annotations
 
@@ -135,6 +139,11 @@ def main() -> int:
                     help="JSONL board for check 8; default: walk up from this script "
                          "to .coding-hermes/board/tasks.jsonl (skipped when absent)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--board-only", action="store_true",
+                    help="run ONLY the environment-independent board checks (8/9); "
+                         "skips the live-DB/TOML checks 1-7. This is the CI mode: "
+                         "a runner has no ~/.hermes/coding-hermes/scheduler.db, so "
+                         "the fleet checks cannot run there.")
     args = ap.parse_args()
 
     violations: list[dict] = []
@@ -143,22 +152,32 @@ def main() -> int:
     def bad(cls: str, subject: str, detail: str) -> None:
         violations.append({"class": cls, "subject": subject, "detail": detail})
 
-    con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    namespaces = {r["id"]: dict(r) for r in con.execute("SELECT * FROM namespaces")}
-    projects = {r["name"]: dict(r) for r in con.execute("SELECT * FROM projects")}
-    have_ownership = "board_ownership" in [r[1] for r in con.execute("PRAGMA table_info(projects)")]
+    # The live-DB checks 1-7 need ~/.hermes/coding-hermes/scheduler.db and
+    # ~/.hermes/fleet.toml — neither exists on a CI runner. --board-only keeps the
+    # board checks runnable there: the DB is not opened and the fleet maps stay
+    # empty, which makes every fleet check a no-op (check 1 is guarded below).
+    con = None
+    namespaces: dict = {}
+    projects: dict = {}
+    have_ownership = False
+    if not args.board_only:
+        con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        namespaces = {r["id"]: dict(r) for r in con.execute("SELECT * FROM namespaces")}
+        projects = {r["name"]: dict(r) for r in con.execute("SELECT * FROM projects")}
+        have_ownership = "board_ownership" in [r[1] for r in con.execute("PRAGMA table_info(projects)")]
 
     # 1. caps -----------------------------------------------------------------
-    if namespaces.get(FOREMAN_NS, {}).get("max_concurrent") != FOREMAN_CAP_EXPECTED:
-        bad("caps", FOREMAN_NS, f"max_concurrent={namespaces.get(FOREMAN_NS, {}).get('max_concurrent')} "
-                                f"expected {FOREMAN_CAP_EXPECTED} (the foremen's guaranteed room)")
-    for ns in SATELLITE_NS:
-        row = namespaces.get(ns)
-        if row is None:
-            bad("caps", ns, "namespace missing")
-        elif row.get("max_concurrent") != 1:
-            bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected 1 (one global slot per satellite family)")
+    if con is not None:
+        if namespaces.get(FOREMAN_NS, {}).get("max_concurrent") != FOREMAN_CAP_EXPECTED:
+            bad("caps", FOREMAN_NS, f"max_concurrent={namespaces.get(FOREMAN_NS, {}).get('max_concurrent')} "
+                                    f"expected {FOREMAN_CAP_EXPECTED} (the foremen's guaranteed room)")
+        for ns in SATELLITE_NS:
+            row = namespaces.get(ns)
+            if row is None:
+                bad("caps", ns, "namespace missing")
+            elif row.get("max_concurrent") != 1:
+                bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected 1 (one global slot per satellite family)")
 
     # 2. admission ------------------------------------------------------------
     for ns, row in namespaces.items():
@@ -314,6 +333,7 @@ def main() -> int:
     result = {
         "ok": not violations,
         "checks": checks,
+        "board_only": bool(args.board_only),
         "checked": {
             "namespaces": len(namespaces),
             "projects": len(projects),
@@ -329,8 +349,12 @@ def main() -> int:
             print(f"VIOLATION {v['class']} {v['subject']}: {v['detail']}")
         for i in info:
             print(f"INFO {i['class']} {i['subject']}: {i['detail']}")
-        print(f"{'PASS' if result['ok'] else 'FAIL'} — {len(violations)} violation(s) across "
-              f"{result['checked']['namespaces']} namespaces / {result['checked']['enabled']} enabled lanes")
+        if args.board_only:
+            print(f"{'PASS' if result['ok'] else 'FAIL'} — {len(violations)} violation(s) "
+                  f"(board-only mode: fleet checks 1-7 not run — no local DB/TOML)")
+        else:
+            print(f"{'PASS' if result['ok'] else 'FAIL'} — {len(violations)} violation(s) across "
+                  f"{result['checked']['namespaces']} namespaces / {result['checked']['enabled']} enabled lanes")
     return 0 if result["ok"] else 1
 
 

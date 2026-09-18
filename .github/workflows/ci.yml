@@ -26,7 +26,7 @@ jobs:
         # exits 1 on an off-vocabulary row. Skipped when the board is not in the
         # checkout (e.g. a fork PR that omits .coding-hermes/).
         if: hashFiles('.coding-hermes/board/tasks.jsonl') != ''
-        run: python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl
+        run: python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
 
       - name: Build binaries
         run: make build
