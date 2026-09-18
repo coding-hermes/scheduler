@@ -26,6 +26,8 @@ import (
 // override, and both are settable through the API, fleet.toml, and the CLI.
 // Nothing here hardcodes a project or namespace name.
 //
+// Design rationale, options weighed and rejected: docs/adr/002-board-ownership-gates-tasks-waiver.md.
+//
 // SCHED-GAP-141: the tasks-mode waiver additionally requires BOARD
 // OWNERSHIP. Measured leak (2026-09-17, live): the "satellite" lanes
 // (-sync / -qa / -dogfood / -pm) run in workdirs whose board path is
@@ -50,8 +52,8 @@ import (
 // Config coverage (no name heuristics anywhere):
 //   - per-project admission_mode ("cooldown" | "tasks", already shipped)
 //     remains the sanctioned per-lane knob and still wins over the
-//     namespace default; pinning "cooldown" on ANY lane is honored
-//     verbatim.
+//     namespace default; pinning "cooldown" on ANY lane — namespace-wide
+//     or per lane — is honored verbatim.
 //   - per-project board_ownership (SCHED-GAP-141: "" = auto, "owner",
 //     "shared") is the explicit override for the two cases the filesystem
 //     walk cannot decide by itself: a lane whose board genuinely lives
@@ -60,6 +62,16 @@ import (
 //     ("shared"). Both are validated, API-settable, pinned from
 //     fleet.toml by the loader, and re-pinned on restart like cooldowns.
 //
+// Why realpath containment and NOT inode/hardlink checks (measured
+// 2026-09-17): the satellite workdir ships a REAL .coding-hermes/ dir
+// whose `board` entry is a SYMLINK to the primary's board dir. os.Stat
+// follows that link, so owner and satellite report the SAME (dev, inode)
+// and st_nlink stays 1 for both — inode identity cannot separate them and
+// a hardlink count (nlink > 1) is never true. Fully resolving the path
+// (filepath.EvalSymlinks on the board AND on the workdir) and requiring
+// containment is the only discriminator that actually holds, and it needs
+// no names, no suffixes and no project list.
+//
 // Known scope boundary: the post-tick adaptive-cooldown pass
 // (adaptive_cooldown.go) still keys its escalation branch off the MODE
 // (namespace/project), not off ownership — a tasks-namespace lane keeps its
@@ -67,24 +79,11 @@ import (
 // does not hand a time-based lane an escalating cooldown it never asked
 // for. Satellites on a 6h pin stay 6h; they simply no longer skip it.
 
-// Board ownership values (SCHED-GAP-141). Auto (the empty string) is the
-// default for every existing row and the only value that needs no operator
-// input; the explicit values exist so a fleet that does not match the
-// default filesystem shape is configurable rather than special-cased in
-// code.
-const (
-	// BoardOwnershipAuto derives ownership from the filesystem walk: the
-	// board a lane reads must resolve inside that lane's own workdir.
-	BoardOwnershipAuto = ""
-	// BoardOwnershipOwner asserts the lane owns the board it reads, even
-	// when the resolved board path lies outside the lane's workdir
-	// (unusual layouts: generated boards, shared board directories).
-	BoardOwnershipOwner = "owner"
-	// BoardOwnershipShared asserts the lane reads a board it does NOT own
-	// (paced by cooldown) even when the path check would pass — the
-	// explicit escape hatch for a copied or bind-mounted foreign board.
-	BoardOwnershipShared = "shared"
-)
+// The board-ownership values (SCHED-GAP-141) live in the database package
+// (database.BoardOwnershipAuto/Owner/Shared) so the DB write path, the
+// config loader and the scheduler all validate against one definition:
+// "" = auto (derived from the board walk), "owner" = assert ownership,
+// "shared" = assert a foreign board (always cooldown-paced).
 
 // admissionModeFor resolves the effective admission mode for a project:
 // the per-project override wins, otherwise the namespace default. An
@@ -122,17 +121,6 @@ func admissionModeForProject(db *sql.DB, project string) string {
 	default:
 		return database.AdmissionModeCooldown
 	}
-}
-
-// validBoardOwnership reports whether v is a settable board_ownership value
-// ("" = auto, "owner", "shared"). Shared by the DB write path, the config
-// loader and the CLI so all three agree on what is accepted.
-func validBoardOwnership(v string) bool {
-	switch v {
-	case BoardOwnershipAuto, BoardOwnershipOwner, BoardOwnershipShared:
-		return true
-	}
-	return false
 }
 
 // laneOwnsBoard reports whether the board a lane reads at workdir is the
@@ -178,9 +166,9 @@ func laneOwnsBoard(workdir string) bool {
 // never silently changes semantics.
 func boardOwnedByLane(workdir, ownership string) bool {
 	switch ownership {
-	case BoardOwnershipOwner:
+	case database.BoardOwnershipOwner:
 		return true
-	case BoardOwnershipShared:
+	case database.BoardOwnershipShared:
 		return false
 	}
 	return laneOwnsBoard(workdir)
@@ -207,27 +195,23 @@ func noteOwnershipRefusal(workdir string) {
 	}
 }
 
-// tasksAdmissionDue reports whether a tasks-mode project has admissible
-// work RIGHT NOW (auto ownership — the default for every existing row). It
-// uses the GAP-105/106 open-row scanner (shared with adaptive cooldown and
-// the pending boost) so the definition of "work" is identical across every
-// consumer: pending/open/in-progress vocabulary, malformed rows count open,
-// perpetual fixtures excluded.
+// tasksAdmissionDue reports whether a tasks-mode project has admissible work
+// RIGHT NOW, with the per-project board_ownership override applied
+// (SCHED-GAP-141; empty ownership = auto, the default for every existing
+// row). It uses the GAP-105/106 open-row scanner (shared with adaptive
+// cooldown and the pending boost) so the definition of "work" is identical
+// across every consumer: pending/open/in-progress vocabulary, malformed rows
+// count open, perpetual fixtures excluded.
+//
+// The waiver requires board OWNERSHIP: a lane that only reads another
+// project's board is a time-based lane, so it falls back to its cooldown
+// timer even while the board it reads is full of work.
 //
 // Fail-open: when the board cannot be read, the scanner reports ok=false
 // and we return false — the project falls back to its cooldown pin rather
 // than being admitted on an unreadable signal (mirror of the packers'
 // fail-open doctrine for the pending boost).
-func tasksAdmissionDue(workdir string) bool {
-	return tasksAdmissionDueWith(workdir, BoardOwnershipAuto)
-}
-
-// tasksAdmissionDueWith is tasksAdmissionDue with the per-project
-// board_ownership override applied (SCHED-GAP-141). The waiver requires
-// board OWNERSHIP: a lane that only reads another project's board is a
-// time-based lane, so it falls back to its cooldown timer even while the
-// board it reads is full of work.
-func tasksAdmissionDueWith(workdir, ownership string) bool {
+func tasksAdmissionDue(workdir, ownership string) bool {
 	if workdir == "" {
 		return false
 	}

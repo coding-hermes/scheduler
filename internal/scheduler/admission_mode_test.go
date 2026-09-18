@@ -335,3 +335,44 @@ func TestTasksMode_ForeignPerpetualOnlyBoardFollowsCooldown(t *testing.T) {
 		t.Fatalf("T-MODE-9b FAIL: owner over a perpetual-only board was admitted — never-done must not count as work")
 	}
 }
+
+// --- SCHED-GAP-141: the config-managed override for the derived rule ---
+
+// T-MODE-10: per-project board_ownership is the explicit, config-managed
+// exception in BOTH directions — "owner" admits a lane whose board path
+// resolves outside its workdir (unusual layout), "shared" paces a lane
+// whose board path is its own (a copied/bind-mounted foreign board the
+// filesystem check cannot see).
+func TestBoardOwnership_ExplicitOverrideWins(t *testing.T) {
+	ownerWd := t.TempDir()
+	writeModeBoard(t, ownerWd, `{"id":"REAL-20","status":"pending"}`)
+
+	foreignWd := t.TempDir()
+	linkModeBoard(t, foreignWd, ownerWd)
+
+	ownWd := t.TempDir()
+	writeModeBoard(t, ownWd, `{"id":"REAL-21","status":"pending"}`)
+
+	declaredOwner := modeProject("mode-declared-owner", "sync-lanes", foreignWd, "")
+	declaredOwner.BoardOwnership = database.BoardOwnershipOwner
+
+	declaredShared := modeProject("mode-declared-shared", "sync-lanes", ownWd, "")
+	declaredShared.BoardOwnership = database.BoardOwnershipShared
+
+	ns := tasksNs("sync-lanes")
+	ns.MaxConcurrent = 8
+
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{declaredOwner, declaredShared},
+		[]database.Namespace{ns},
+		map[string]time.Time{
+			"mode-declared-owner":  now.Add(-time.Hour),
+			"mode-declared-shared": now.Add(-time.Hour),
+		})
+	if !modeSelected(t, res, "mode-declared-owner") {
+		t.Fatalf("T-MODE-10a FAIL: board_ownership=owner did not restore the tasks-mode fast path")
+	}
+	if modeSelected(t, res, "mode-declared-shared") {
+		t.Fatalf("T-MODE-10b FAIL: board_ownership=shared lane was admitted inside its cooldown window")
+	}
+}

@@ -246,7 +246,7 @@ func (m *MultiPoolPacker) Pack(
 				// pending board work waives the last-tick spacing,
 				// but FailureBackoff still gates (SCHED-GAP-133).
 				mode := admissionModeFor(pu.Project.AdmissionMode, nsIDOf(pu.Project), nsModes)
-				if mode == database.AdmissionModeTasks && tasksAdmissionDue(pu.Project.Workdir) {
+				if mode == database.AdmissionModeTasks && tasksAdmissionDue(pu.Project.Workdir, pu.Project.BoardOwnership) {
 					// SCHED-GAP-133: only gate on FailureBackoff when the project
 					// has actually failed repeatedly.
 					if pu.Project.ConsecutiveFailures > 1 {

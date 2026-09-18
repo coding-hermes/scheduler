@@ -640,6 +640,15 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.AdmissionMode != "" {
 				updates.AdmissionMode = &pd.AdmissionMode
 			}
+			// SCHED-GAP-141: board_ownership pins the same way and for
+			// the same reason: an operator pin written ONLY to the live
+			// SQLite row is drift — the next restart re-pins from this
+			// file (SCHED-GAP-025/121 durability law). A keyless entry
+			// leaves an API-assigned value untouched, so a DB-only flip
+			// survives a restart too.
+			if pd.BoardOwnership != "" {
+				updates.BoardOwnership = &pd.BoardOwnership
+			}
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
 			}
@@ -718,6 +727,8 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		Deliver:          pd.Deliver,
 		Enabled:          enabled,
 		AdaptiveCooldown: adaptive,
+		AdmissionMode:    pd.AdmissionMode,
+		BoardOwnership:   pd.BoardOwnership,
 	}
 	// Normalize the adaptive policy for enabled projects so the stored row
 	// carries EFFECTIVE values: floor = the fleet cooldown, ceiling and

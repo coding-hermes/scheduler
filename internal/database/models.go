@@ -143,6 +143,15 @@ type Project struct {
 	// (non-perpetual pending board work admits immediately, cooldown
 	// pin applies when the board is drained). Validated at write time.
 	AdmissionMode string `json:"admission_mode"`
+
+	// SCHED-GAP-141: per-project board-ownership override of the derived
+	// rule. "" (default) = auto — the tasks-mode waiver fires only when
+	// the board a lane reads resolves inside the lane's own workdir.
+	// "owner" = this lane owns the board it reads even when the resolved
+	// path lies outside its workdir; "shared" = this lane reads a board
+	// it does NOT own (paced by cooldown) even when the path check would
+	// pass. Validated at write time.
+	BoardOwnership string `json:"board_ownership"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are

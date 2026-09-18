@@ -257,6 +257,11 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 			writeError(w, 404, "project not found")
 			return
 		}
+		// SCHED-GAP-141: invalid board_ownership surfaces as 400.
+		if strings.Contains(err.Error(), "invalid board_ownership") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		// SCHED-GAP-124: invalid admission_mode surfaces as 400.
 		if strings.Contains(err.Error(), "invalid admission_mode") {
 			writeError(w, 400, err.Error())

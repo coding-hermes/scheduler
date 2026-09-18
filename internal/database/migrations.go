@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 31
+const latestMigration = 32
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -423,6 +423,13 @@ ALTER TABLE projects ADD COLUMN admission_mode TEXT NOT NULL DEFAULT '' CHECK(ad
 		desc:    "load gate (SCHED-GAP-125): namespace load_gate ('' | off) — namespaces may opt out of the global --load-gate-threshold deferral (e.g. always-on infra)",
 		stmt: `
 ALTER TABLE namespaces ADD COLUMN load_gate TEXT NOT NULL DEFAULT '' CHECK(load_gate IN ('','off'));
+`,
+	},
+	{
+		version: 32,
+		desc:    "board ownership (SCHED-GAP-141): per-project board_ownership ('' = auto | owner | shared) — the tasks-mode cooldown waiver fires only for a lane that OWNS the board it reads",
+		stmt: `
+ALTER TABLE projects ADD COLUMN board_ownership TEXT NOT NULL DEFAULT '' CHECK(board_ownership IN ('','owner','shared'));
 `,
 	},
 }

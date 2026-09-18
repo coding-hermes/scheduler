@@ -2582,3 +2582,39 @@ tasks:
   status: complete
   created_at: '2026-09-17T07:44:32.759068+00:00'
   completed_at: '2026-09-17T07:44:33.226204+00:00'
+- id: SCHED-GAP-137c
+  title: throttle consecutive-failure HIGH event per-project (SCHED-GAP-137 clause
+    2)
+  criteria:
+  - "CheckConsecutiveFailures at internal/scheduler/alert_escalation.go:222 emits\
+    \ a HIGH 'more than 3 consecutive failures' event on EVERY health-check pass when\
+    \ consecutive > 3, with no per-project dedup. The health check fires every 30s,\
+    \ so a stuck project emits ~120 HIGH events/hour. Live evidence: 45 events in\
+    \ last hour across 5 stuck projects (2026-09-17 08:02Z). Mirror the existing CheckStarvation\
+    \ throttle pattern (lastStarvationEvent + 30-min window, alert_escalation.go:54-80\
+    \ + 154-158). Add lastConsecutiveFailureEvent(project) helper and a 30-min throttle\
+    \ inside the if-consecutive>3 branch. AC: (1) TestAlertEscalator_CheckConsecutiveFailures_Throttle\
+    \ PASS \u2014 two back-to-back fresh-escalator calls with 4 stuck failures emit\
+    \ exactly 1 HIGH, not 2. (2) TestAlertEscalator_CheckConsecutiveFailures still\
+    \ PASS (1 HIGH for 4 failures). (3) TestAlertEscalator_CheckConsecutiveFailures_BrokenStreak\
+    \ still PASS (0 HIGH for broken streak). (4) Full go test ./internal/scheduler/\
+    \ green. (5) golangci-lint run clean. (6) go vet clean. SCOPE: ONLY internal/scheduler/alert_escalation.go\
+    \ and internal/scheduler/alert_escalation_test.go. Do NOT touch CheckStarvation,\
+    \ CheckFailureRateAutoDisable, the EventLogger Emit interface, or any schema."
+  status: complete
+  created_at: '2026-09-17T08:04:38.890947+00:00'
+  completed_at: '2026-09-17T08:12:39.079483+00:00'
+- id: INT-CI-005
+  title: Fix TestSpawn_MemLimitUnderLimitSpawnRunsUnchanged intermittent child-stdout
+    loss in CI (6/20 repro on b436a48, recurring 175f001/1b2af52 runs)
+  criteria:
+  - 'Red: -count=200 ./internal/scheduler/ -run TestSpawn_MemLimitUnderLimitSpawnRunsUnchanged
+    fails at least once (or with -race); after fix, 0 failures in 200 reps with -race.
+    Test must keep its existing assertion (Do NOT weaken). Scope: ONLY internal/scheduler/spawn.go
+    and the test file. No other test files. AC: (1) go test -race -count=200 -run
+    TestSpawn_MemLimitUnderLimitSpawnRunsUnchanged ./internal/scheduler/ 0 fails.
+    (2) Full ./internal/scheduler/ go test ./... still green. (3) go vet clean. (4)
+    golangci-lint run clean. (5) Scope: only files inside internal/scheduler/ that
+    the diff actually needs.'
+  status: in_progress
+  created_at: '2026-09-17T08:30:18.030806+00:00'

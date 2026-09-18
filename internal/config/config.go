@@ -265,6 +265,13 @@ type ProjectDef struct {
 	// namespace default. Valid values: "cooldown" | "tasks". Pins only
 	// when explicitly set (GatewayKey-style conditional pin).
 	AdmissionMode string `toml:"admission_mode"`
+	// SCHED-GAP-141: per-project board-ownership override; "" = auto
+	// (the tasks-mode waiver requires the board walk to resolve inside
+	// this lane's own workdir), "owner" (this lane owns the board it
+	// reads even when the path check cannot see it) | "shared" (this
+	// lane reads a foreign board — always cooldown-paced). Pins only
+	// when explicitly set (GatewayKey-style conditional pin).
+	BoardOwnership string `toml:"board_ownership"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are

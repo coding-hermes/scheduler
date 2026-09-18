@@ -130,6 +130,7 @@ type scored struct {
 	namespaceChain      string // namespace model_chain (JSON array string) (Bane 2026-08-27)
 	admissionNsMode     string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
 	admissionMode       string // SCHED-GAP-124: project admission_mode override ('' = inherit)
+	boardOwnership      string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -142,7 +143,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures,
-		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, '')
+		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, '')
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
 		WHERE p.enabled = 1
@@ -168,7 +169,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures,
-			&s.admissionNsMode, &s.admissionMode); err != nil {
+			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -343,7 +344,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		// Non-perpetual pending board work waives last-tick spacing;
 		// backoff/blackout/skip above still applied.
 		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
-		if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.workdir) {
+		if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.workdir, s.boardOwnership) {
 			// SCHED-GAP-133: tasks-mode admission still respects FailureBackoff.
 			// Without this, a project that has been failing repeatedly (e.g.
 			// gateway draining) re-admits instantly on every eval — the
