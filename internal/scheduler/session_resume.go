@@ -169,6 +169,20 @@ func (l *Loop) resumeOrphans(trigger string) {
 		return
 	}
 
+	// SCHED-GAP-142: the nudge path spawns WITHOUT the packer, so it used to
+	// ignore the per-namespace concurrency cap entirely. Observed on the
+	// 2026-09-17 restart: three orphaned <project>-sync ticks were re-nudged
+	// in the same pass against duckbrain-sync's max_concurrent=1, and because
+	// they took global slots immediately no qa/pm/dogfood lane got one.
+	// Admission here must honour the same cap the packer enforces
+	// (packer_select.go:276). A candidate that does not fit is SKIPPED this
+	// pass — not enqueued, so no stranded 'queued' row and no nudge is
+	// consumed; the next trigger (or the packer) picks it up once a slot
+	// frees. The pool-side gate (G7 placement) stays the backstop for the
+	// non-packer spawn paths; this keeps the boot burst inside the caps.
+	admitted := make(map[string]int)
+	capacity := make(map[string]int)
+
 	// Project rows are re-fetched fresh (Workdir/chain config may have
 	// changed while the tick was orphaned) — GetProject, never a stale
 	// join snapshot.
@@ -179,6 +193,26 @@ func (l *Loop) resumeOrphans(trigger string) {
 			log.Printf("RESUME: orphaned tick %s: project %s gone: %v", o.id, o.project, err)
 			continue
 		}
+		nsID := ""
+		if proj.NamespaceID != nil {
+			nsID = *proj.NamespaceID
+		}
+		if nsID != "" {
+			cap, ok := capacity[nsID]
+			if !ok {
+				cap = l.namespaceCap(ctx, nsID)
+				capacity[nsID] = cap
+			}
+			if cap > 0 {
+				inflight := l.namespaceInflight(ctx, nsID)
+				if !nudgeAdmissionOpen(cap, inflight, admitted[nsID]) {
+					log.Printf("RESUME: deferring orphaned tick %s (project %s) — namespace %s at cap %d (%d in flight, %d admitted this pass)",
+						o.id, o.project, nsID, cap, inflight, admitted[nsID])
+					continue
+				}
+			}
+		}
+
 		count := l.bumpNudgeCount(o.id)
 		tickID := fmt.Sprintf("%s-nudge%d", o.id, count)
 		// Enqueue the nudge row BEFORE SpawnEnqueued — the pool's spawn
@@ -198,6 +232,7 @@ func (l *Loop) resumeOrphans(trigger string) {
 		packed.PromptMode = "append"
 		l.slotPool.SpawnEnqueued(packed, tickID, time.Now(), noDeliver, l.db)
 		resumed++
+		admitted[nsID]++
 		log.Printf("RESUME: nudged orphaned tick %s (project %s, reason=%s, nudge %d/%d) as %s",
 			o.id, o.project, o.reason, count, MaxNudgesPerTick, tickID)
 		l.EmitHighEvent("resume", fmt.Sprintf(
@@ -211,6 +246,49 @@ func (l *Loop) resumeOrphans(trigger string) {
 	if resumed > 0 {
 		log.Printf("RESUME: %d orphaned tick(s) re-nudged after gateway recovery (%s)", resumed, trigger)
 	}
+}
+
+// nudgeAdmissionOpen reports whether a namespace may admit ONE more nudge in
+// this pass: cap <= 0 means unlimited, otherwise in-flight + already-admitted
+// this pass must stay below the cap. SCHED-GAP-142 — the same arithmetic the
+// packer applies to its own selections.
+func nudgeAdmissionOpen(cap, inflight, admittedThisPass int) bool {
+	return cap <= 0 || inflight+admittedThisPass < cap
+}
+
+// namespaceCap returns a namespace's max_concurrent (0 = unlimited / unknown).
+// Used by the orphan-nudge admission check (SCHED-GAP-142); the packer reads
+// the same column from its namespace snapshot.
+func (l *Loop) namespaceCap(ctx context.Context, nsID string) int {
+	var cap int
+	err := l.db.QueryRowContext(ctx, `SELECT max_concurrent FROM namespaces WHERE id = ?`, nsID).Scan(&cap)
+	if err != nil {
+		// Fail OPEN on a read error: the nudge path is a recovery path, and a
+		// missing/renamed namespace must not silently freeze orphan recovery.
+		log.Printf("RESUME: namespace %s cap lookup failed (%v) — treating as unlimited", nsID, err)
+		return 0
+	}
+	if cap < 0 {
+		return 0
+	}
+	return cap
+}
+
+// namespaceInflight counts a namespace's ticks that hold or will hold a slot:
+// status 'running' (in flight now) plus 'queued' (enqueued and awaiting a slot,
+// including the nudges this pass already enqueued). Both must count, or a burst
+// of same-pass admissions could still exceed the cap.
+func (l *Loop) namespaceInflight(ctx context.Context, nsID string) int {
+	var n int
+	err := l.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM ticks t
+JOIN projects p ON p.name = t.project_name
+WHERE p.namespace_id = ? AND t.status IN ('queued','running')`, nsID).Scan(&n)
+	if err != nil {
+		log.Printf("RESUME: namespace %s inflight count failed: %v", nsID, err)
+		return 0
+	}
+	return n
 }
 
 // resumeNeedsHuman reports orphaned ticks that exceeded the nudge cap (or
