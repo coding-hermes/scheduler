@@ -36,6 +36,10 @@ deploy/*.log
 !.coding-hermes/tests/test-state.toml
 .gitreins/history/
 dagger.db
+dagger.db-wal
+dagger.db-shm
+*.db-wal
+*.db-shm
 /schedulerd
 
 .coding-hermes/board/board.db
