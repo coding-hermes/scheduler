@@ -2953,3 +2953,30 @@ tasks:
   status: complete
   created_at: '2026-09-18T23:01:54.517314+00:00'
   completed_at: '2026-09-18T23:29:30.362952+00:00'
+- id: SCHED-GAP-167
+  title: 'SCHED-GAP-167: --duckbrain-ns default docs/schema drift (5 surfaces, all
+    claim coding-hermes; live code + daemon = scheduler)'
+  criteria:
+  - 'cmd/schedulerd/show_config.go line 64: duckbrain.namespace schema default = scheduler
+    (was coding-hermes)'
+  - 'cmd/schedulerd/show_config_test.go line 158: printConfig call-site passes scheduler;
+    line 201 checks slice asserts namespace = scheduler'
+  - 'cmd/schedulerd/show_config_test.go: new TestDuckBrainNSDefaultMatchesFlag function
+    with subtests covering main.go flag declaration, printSchema --schema JSON, printConfig
+    --show-config TOML, printConfig TOML is argument-driven, README.md flags table,
+    AGENTS.md flags table, and docs/api.md /api/v1/config example; all subtests must
+    PASS in -short mode'
+  - 'README.md line 318 flags table row: -duckbrain-ns | scheduler | DuckBrain namespace
+    for sync'
+  - 'AGENTS.md line 58 flags table row: --duckbrain-ns | scheduler | DuckBrain namespace
+    for sync'
+  - 'docs/api.md line 178 /api/v1/config example JSON: duckbrain.namespace = scheduler
+    (was coding-hermes)'
+  - gofmt -l . prints nothing
+  - go build ./... exits 0
+  - go vet ./... exits 0 with zero warnings
+  - go test -short -p 1 -count=1 ./cmd/schedulerd/... passes (including the new TestDuckBrainNSDefaultMatchesFlag)
+  - gitreins tier-1 guard (secrets/build/lint/tests) PASSes on the committed tree
+  status: complete
+  created_at: '2026-09-19T00:23:09.787461+00:00'
+  completed_at: '2026-09-19T00:23:25.170612+00:00'
