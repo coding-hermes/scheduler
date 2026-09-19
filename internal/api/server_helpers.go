@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
 
@@ -59,6 +60,16 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 // ProjectFailureRate is the per-project failure-rate breakdown for a single
 // project over a window of recent ticks. It appears in /api/v1/status under
 // the "projects_failure_rates" key (SCHED-GAP-018).
+//
+// SCHED-GAP-173: the counters describe PROJECT-ATTRIBUTABLE ticks only. A
+// failed tick whose error the shared classifier (scheduler.HarnessFailure)
+// marks as harness/infrastructure class — gateway unreachable, drain
+// refusals, gateway auth failures, connection refused, exec fallback
+// disabled, graceful-shutdown aborts — never reached the project, so it is
+// excluded from BOTH counters, exactly as CheckFailureRateAutoDisable
+// excludes it. failure_rate is therefore the very ratio the enforcer compares
+// against its threshold: a lane whose whole window is gateway-drain noise
+// reads failure_rate 0 and auto_disable_armed=false instead of 0.91/true.
 type ProjectFailureRate struct {
 	Failed      int     `json:"failed"`
 	Total       int     `json:"total"`
@@ -68,22 +79,28 @@ type ProjectFailureRate struct {
 	// auto-disable condition (GAP-047): the feature is enabled
 	// (threshold > 0), the sample size reaches minTicks, and the failure
 	// rate is at or above the threshold. It mirrors the exact condition in
-	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable.
+	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable —
+	// including the harness-failure exclusion of the shared classifier
+	// (SCHED-GAP-173), so armed is what the enforcer would actually do.
 	AutoDisableArmed bool `json:"auto_disable_armed"`
 }
 
 // computeProjectFailureRates returns a per-project failure-rate breakdown
 // computed over the last `window` completed ticks per project. Only projects
 // with at least one tick in the window are included. "failed" counts both
-// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes).
-// "total" is the number of ticks in the window with a non-null completed_at
-// (running/queued ticks are excluded). failure_rate = failed/total, rounded
-// to 4 decimal places.
+// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes),
+// excluding failed ticks the shared harness classifier owns. "total" is the
+// number of ticks in the window with a non-null completed_at (running/queued
+// ticks are excluded) that are NOT harness-class failures. failure_rate =
+// failed/total, rounded to 4 decimal places; it is 0 when the window holds no
+// project-attributable tick at all (total 0 — 0/0 is NaN in Go and would
+// break the JSON encoder).
 //
 // `threshold` and `minTicks` drive the AutoDisableArmed flag (GAP-047) and
 // mirror the auto-disable policy in alert_escalation.go: armed when
 // threshold > 0 && total >= minTicks && rate >= threshold, where rate is the
-// unrounded failed/total ratio (matching CheckFailureRateAutoDisable exactly).
+// unrounded project-attributable failed/total ratio (matching
+// CheckFailureRateAutoDisable exactly).
 func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, threshold float64, minTicks int) map[string]ProjectFailureRate {
 	if window <= 0 {
 		window = 100
@@ -129,7 +146,7 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 
 	for _, name := range names {
 		rows, err := db.QueryContext(ctx,
-			`SELECT status FROM ticks
+			`SELECT status, COALESCE(error, '') FROM ticks
 			 WHERE project_name = ? AND completed_at IS NOT NULL
 			 ORDER BY spawned_at DESC LIMIT ?`,
 			name, window)
@@ -138,8 +155,18 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 		}
 		var failed, total int
 		for rows.Next() {
-			var status string
-			if err := rows.Scan(&status); err != nil {
+			var status, errText string
+			if err := rows.Scan(&status, &errText); err != nil {
+				continue
+			}
+			// SCHED-GAP-173: harness/infrastructure failures say nothing
+			// about the project — the tick never reached it. This is the
+			// exact predicate CheckFailureRateAutoDisable applies (failed
+			// status AND the shared classifier says harness), so a lane
+			// that is fine can never read as "about to be parked". The
+			// classifier is NOT re-declared here (SCHED-GAP-134 owns the
+			// markers): one source of truth, two surfaces.
+			if status == "failed" && scheduler.HarnessFailure(errText) {
 				continue
 			}
 			total++
@@ -148,10 +175,20 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 			}
 		}
 		rows.Close()
-		if total == 0 {
-			continue
+		// SCHED-GAP-173: total can now legitimately be 0 — a window whose
+		// every completed tick is harness-class (the heading case: gateway
+		// 503s only). The entry is still emitted rather than dropped: the
+		// project did have ticks in the window, and silently vanishing from
+		// the surface would hide a harness-blocked lane from operators
+		// (dropping it is indistinguishable from "no ticks at all"). rate
+		// is defined as 0 for an empty project-attributable sample — 0/0 is
+		// NaN in Go and would make the JSON encoder fail — and armed stays
+		// false, which is exactly the enforcer's verdict on such a window:
+		// nothing measurable about the project, nothing to park.
+		rate := 0.0
+		if total > 0 {
+			rate = float64(failed) / float64(total)
 		}
-		rate := float64(failed) / float64(total)
 		// GAP-047: armed uses the unrounded rate, exactly like
 		// CheckFailureRateAutoDisable (which compares the raw ratio against
 		// the threshold before any display rounding).

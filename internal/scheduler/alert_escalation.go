@@ -34,6 +34,19 @@ func NewAlertEscalator(db *sql.DB, events *EventLogger, autoDisable autoDisableP
 	return &AlertEscalator{db: db, events: events, autoDisable: autoDisable}
 }
 
+// NewAlertEscalatorWithPolicy builds an escalator whose auto-disable policy is
+// passed as loose values instead of the package-private autoDisablePolicy type
+// (SCHED-GAP-173). Behaviour is identical to NewAlertEscalator — the same
+// struct and the same policy semantics — and the enforcer logic itself is
+// untouched; this only makes the REAL enforcer constructible from outside this
+// package. The status-surface parity test (internal/api) uses it to run
+// CheckFailureRateAutoDisable over the very window that
+// computeProjectFailureRates reports, so "armed" can be compared against what
+// the enforcer would actually do rather than against a re-implemented oracle.
+func NewAlertEscalatorWithPolicy(db *sql.DB, events *EventLogger, failureRate float64, window, minTicks int) *AlertEscalator {
+	return NewAlertEscalator(db, events, autoDisablePolicy{failureRate: failureRate, window: window, minTicks: minTicks})
+}
+
 // CheckSchedulerHealth emits CRITICAL if the scheduler has not evaluated in
 // more than 10 minutes.
 func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval time.Time) error {
@@ -479,31 +492,9 @@ func failureReasonClass(errText string) string {
 	return FailureReasonGatewayTransport
 }
 
-// harnessFailure reports whether a failed tick's error came from the harness
-// (gateway / scheduler infrastructure) rather than from the project itself.
-// These ticks never reached the project, so they must not feed per-project
-// health accounting (SCHED-GAP-134). Keep this list tight: only outage classes
-// where every project on the box fails identically.
-func harnessFailure(errText string) bool {
-	if errText == "" {
-		return false
-	}
-	lower := strings.ToLower(errText)
-	for _, marker := range []string{
-		"gateway unreachable",
-		"gateway is draining",
-		"gateway_auth_error",
-		"invalid gateway api key",
-		"connection refused",
-		"exec fallback disabled",
-		"aborted by graceful shutdown",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
+// harnessFailure and its marker list live in failureclass.go — the shared
+// classifier both this package's auto-disable enforcer and the API status
+// surface call (SCHED-GAP-173). Never re-declare the markers here.
 
 // RunAll executes all escalation checks. Errors from individual checks
 // are logged but not propagated — one check failing does not block the others.
