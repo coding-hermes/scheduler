@@ -924,3 +924,4 @@
 {"id":1789760950,"timestamp":"2026-09-19T17:34:31Z","event_type":"task_created","task_id":"SCHED-GAP-182","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-182\",\"status\":\"pending\"}","tick_number":null}
 {"id":1789760951,"timestamp":"2026-09-19T17:34:31Z","event_type":"task_created","task_id":"SCHED-GAP-183","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-183\",\"status\":\"pending\"}","tick_number":null}
 {"id":1789760952,"timestamp":"2026-09-19T17:34:31Z","event_type":"task_created","task_id":"SCHED-GAP-184","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-184\",\"status\":\"pending\"}","tick_number":null}
+{"id":1789760953,"timestamp":"2026-09-19T18:04:32Z","event_type":"task_completed","task_id":"DOC-1","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}

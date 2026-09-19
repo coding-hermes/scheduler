@@ -3184,3 +3184,17 @@ tasks:
   status: complete
   created_at: '2026-09-19T16:30:15.977348+00:00'
   completed_at: '2026-09-19T17:09:35.092753+00:00'
+- id: DOC-1
+  title: Document DELETE /api/v1/namespaces/{id} in AGENTS.md and docs/api.md
+  criteria:
+  - 'AC1: AGENTS.md Endpoints table has a DELETE row for /api/v1/namespaces/{id} with
+    Purpose naming soft-delete/hard-delete semantics. AC2: docs/api.md route table
+    at L41-44 has a DELETE row for /api/v1/namespaces/{id}. AC3: docs/api.md has a
+    new ### DELETE /api/v1/namespaces/{id} subsection (after PUT, before /projects)
+    documenting confirm=true required, ?purge=true for hard-delete (DOGFOOD-009),
+    200/400/404/409 codes, plus one curl example each for soft-delete and hard-delete.
+    AC4: grep -c DELETE AGENTS.md >= 1 AND grep -c DELETE docs/api.md >= 1. AC5: gates
+    clean: gofmt -l . empty, go build ./... exit 0, go vet ./... exit 0.'
+  status: complete
+  created_at: '2026-09-19T17:49:43.056024+00:00'
+  completed_at: '2026-09-19T18:03:55.641286+00:00'
