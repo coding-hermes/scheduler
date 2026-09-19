@@ -179,3 +179,10 @@ not spawns). Bane ruling: daily 86400 now, 3d (259200) once the stuck
 orphan drains. Applied 3-layer: ELEVATED_PINS crier-dogfood 86400 (dated) +
 fleet.toml 86400/86400/691200 + live PUT readback verified; --verify
 PARITY OK (17 pins).
+
+## 2026-09-19 | coding-hermes-scheduler | 🟡 PROMISING-BUT-ROUGH
+Promise: a fresh user goes README "Getting Started (5 minutes)" from zero → running scheduler with imported cron jobs.
+Reality: build/boot/API/MCP/dashboard/test-suite all solid; first boot FATALs (missing ~/.hermes/coding-hermes), migrate FATALs raw without Hermes cron, repo_url required-but-undocumented, created projects arrive disabled.
+Top findings: SCHED-GAP-182 (P1 fresh-boot FATAL), SCHED-GAP-183 (P2 repo_url required + disabled-by-default), SCHED-GAP-184 (P2 migrate-dry raw FATAL).
+Time-to-first-success: ~12 min (would be ~5 with the gaps fixed). Bunker leg: RAN — las-bunker-03 agent 974b10ac, clone 25s, make build 84s, make test EXIT=0 102s, agent destroyed.
+Artifacts: docs/dogfood/2026-09-19-integration.md
