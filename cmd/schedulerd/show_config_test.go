@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrintSchema(t *testing.T) {
@@ -155,7 +158,7 @@ func TestPrintConfig(t *testing.T) {
 			"secret",
 			"/tmp/foreman",
 			true,
-			"coding-hermes",
+			"scheduler",
 			"http://localhost:3000",
 			0.5,
 			100, 50, 100,
@@ -198,7 +201,9 @@ func TestPrintConfig(t *testing.T) {
 		"foreman_home = \"/tmp/foreman\"",
 		"no_exec_fallback = true",
 		"[duckbrain]",
-		"namespace = \"coding-hermes\"",
+		// SCHED-GAP-167: the namespace default tracks the flag default
+		// (main.go --duckbrain-ns), NOT the retired "coding-hermes" value.
+		"namespace = \"scheduler\"",
 		"url = \"http://localhost:3000\"",
 		"# fleet config file: /tmp/fleet.toml",
 		"# active env var overrides:",
@@ -228,6 +233,198 @@ func TestPrintConfig(t *testing.T) {
 		!strings.Contains(out, "FEAT-005") {
 		t.Errorf("printConfig() header missing effective-values / FEAT-005-loaded wording\nGot:\n%s", out)
 	}
+}
+
+// SCHED-GAP-167 — the --duckbrain-ns default is restated on several surfaces,
+// and five of them had drifted to the retired "coding-hermes" value while the
+// flag declaration and the live daemon both report "scheduler" (Bane
+// 2026-08-27: DuckBrain sync consolidated under the scheduler namespace). The
+// flag declaration in main.go is the single source of truth; every other
+// surface is read independently and must agree with it. A surface that can no
+// longer be LOCATED fails too — a deleted row or a relocated example is drift,
+// not a pass.
+func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
+	// The live value, pinned so a deliberate rename of the flag default has to
+	// land together with every surface instead of sliding past this test.
+	const want = "scheduler"
+
+	flagDefault := duckbrainNSFlagDefaultFromSource(t, "main.go")
+
+	// One emitter for both printConfig subtests so they cannot drift apart.
+	emitConfig := func(t *testing.T, ns string) string {
+		t.Helper()
+		return captureStdout(func() {
+			printConfig(
+				"",
+				"/tmp/sched-gap-167.db",
+				"127.0.0.1:9090",
+				"",
+				30*time.Second,
+				24*time.Hour,
+				10, 100, 10,
+				false,
+				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
+				true,
+				ns, "http://localhost:3000",
+				0,
+				100, 50, 100,
+				0,
+			)
+		})
+	}
+
+	t.Run("main.go flag declaration", func(t *testing.T) {
+		if flagDefault != want {
+			t.Errorf("main.go flag.String(\"duckbrain-ns\", ...) default = %q, want %q", flagDefault, want)
+		}
+	})
+
+	t.Run("printSchema --schema JSON", func(t *testing.T) {
+		var schema struct {
+			Properties struct {
+				DuckBrain struct {
+					Properties struct {
+						Namespace struct {
+							Default string `json:"default"`
+						} `json:"namespace"`
+					} `json:"properties"`
+				} `json:"duckbrain"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal([]byte(captureStdout(printSchema)), &schema); err != nil {
+			t.Fatalf("printSchema() did not emit valid JSON: %v", err)
+		}
+		got := schema.Properties.DuckBrain.Properties.Namespace.Default
+		if got == "" {
+			t.Fatal("printSchema() no longer declares properties.duckbrain.properties.namespace.default — re-anchor this test")
+		}
+		if got != flagDefault {
+			t.Errorf("--schema default for duckbrain.namespace = %q, want %q (main.go --duckbrain-ns)", got, flagDefault)
+		}
+	})
+
+	t.Run("printConfig --show-config TOML", func(t *testing.T) {
+		got := tomlSectionValue(t, emitConfig(t, flagDefault), "duckbrain", "namespace")
+		if got != flagDefault {
+			t.Errorf("[duckbrain] namespace in --show-config = %q, want %q (main.go --duckbrain-ns)", got, flagDefault)
+		}
+	})
+
+	t.Run("printConfig TOML is argument-driven", func(t *testing.T) {
+		// Sentinel: proves the printed namespace is the ARGUMENT and not a
+		// literal baked into printConfig's format string — the exact shape of
+		// the drift this row closes (the TOML example claimed coding-hermes).
+		const sentinel = "sched-gap-167-sentinel"
+		got := tomlSectionValue(t, emitConfig(t, sentinel), "duckbrain", "namespace")
+		if got != sentinel {
+			t.Errorf("[duckbrain] namespace = %q, want the argument %q — printConfig must not hardcode it", got, sentinel)
+		}
+	})
+
+	t.Run("README.md flags table", func(t *testing.T) {
+		checkMarkdownFlagDefault(t, filepath.Join("..", "..", "README.md"), "duckbrain-ns", flagDefault)
+	})
+
+	t.Run("AGENTS.md flags table", func(t *testing.T) {
+		checkMarkdownFlagDefault(t, filepath.Join("..", "..", "AGENTS.md"), "duckbrain-ns", flagDefault)
+	})
+
+	t.Run("docs/api.md /api/v1/config example", func(t *testing.T) {
+		got := docsAPIExampleNamespace(t, filepath.Join("..", "..", "docs", "api.md"))
+		if got != flagDefault {
+			t.Errorf("docs/api.md /api/v1/config example duckbrain.namespace = %q, want %q (main.go --duckbrain-ns)", got, flagDefault)
+		}
+	})
+}
+
+// duckbrainNSFlagDefaultFromSource extracts the --duckbrain-ns default from the
+// flag declaration in main.go — per AGENTS.md the flag table there is the
+// canonical source of defaults. Reading the source keeps this test from
+// hardcoding the value it polices; a reformatted declaration fails loudly
+// instead of silently comparing nothing.
+func duckbrainNSFlagDefaultFromSource(t *testing.T, path string) string {
+	t.Helper()
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	m := regexp.MustCompile(`flag\.String\(\s*"duckbrain-ns"\s*,\s*"([^"]*)"`).FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("%s no longer declares flag.String(\"duckbrain-ns\", \"<default>\", ...) as a single literal; re-anchor TestDuckBrainNSDefaultMatchesFlag", path)
+	}
+	return string(m[1])
+}
+
+// checkMarkdownFlagDefault asserts the default column of a
+// `| \`--flag\` | \`value\` |` row. Both spellings are accepted: README.md uses
+// `-duckbrain-ns`, AGENTS.md uses `--duckbrain-ns`.
+func checkMarkdownFlagDefault(t *testing.T, path, flag, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	re := regexp.MustCompile("(?m)^\\|\\s*`--?" + regexp.QuoteMeta(flag) + "`\\s*\\|\\s*`([^`]+)`")
+	m := re.FindSubmatch(data)
+	if m == nil {
+		t.Fatalf("%s has no flags-table row for `%s`; the documented surface vanished — re-anchor this test", path, flag)
+	}
+	if got := string(m[1]); got != want {
+		t.Errorf("%s: `%s` default = %q, want %q (main.go --duckbrain-ns)", path, flag, got, want)
+	}
+}
+
+// tomlSectionValue returns the string value of key under [section] in the TOML
+// emitted by printConfig.
+func tomlSectionValue(t *testing.T, out, section, key string) string {
+	t.Helper()
+	in := false
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			in = line == "["+section+"]"
+			continue
+		}
+		if !in {
+			continue
+		}
+		if v, ok := strings.CutPrefix(line, key+" = "); ok {
+			return strings.Trim(strings.TrimSpace(v), "\"")
+		}
+	}
+	t.Fatalf("no %s.%s key in --show-config output:\n%s", section, key, out)
+	return ""
+}
+
+// docsAPIExampleNamespace parses the fenced ```json block of docs/api.md that
+// carries duckbrain.namespace (the /api/v1/config example) instead of grepping
+// the line, so re-indenting or moving the example cannot silently disarm the
+// check. Illustrative blocks with elisions ("...") do not parse and are skipped.
+func docsAPIExampleNamespace(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var found []string
+	for _, f := range regexp.MustCompile("(?s)```json\\n(.*?)```").FindAllStringSubmatch(string(data), -1) {
+		var doc map[string]interface{}
+		if err := json.Unmarshal([]byte(f[1]), &doc); err != nil {
+			continue
+		}
+		duck, ok := doc["duckbrain"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if ns, ok := duck["namespace"].(string); ok {
+			found = append(found, ns)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s: want exactly one parseable ```json example carrying duckbrain.namespace, found %d %v", path, len(found), found)
+	}
+	return found[0]
 }
 
 func captureStdout(f func()) string {

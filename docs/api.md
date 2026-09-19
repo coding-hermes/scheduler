@@ -175,7 +175,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
  "auto_disable_window":100,"auto_disable_min_ticks":50,"failure_window":100,
  "gateway":{"url":"http://127.0.0.1:8642","key":"WZJh****",
    "foreman_home":"/home/kara/.hermes/foreman","no_exec_fallback":true},
- "duckbrain":{"namespace":"coding-hermes","url":"http://localhost:3000"}}
+ "duckbrain":{"namespace":"scheduler","url":"http://localhost:3000"}}
 ```
 
 | Field | Type | Meaning |

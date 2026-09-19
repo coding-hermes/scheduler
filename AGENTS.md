@@ -55,7 +55,7 @@ All flags (defaults match `cmd/schedulerd/main.go` — the canonical source):
 | `--namespace-mode` | `false` | Enable multi-namespace scheduling |
 | `--tick-timeout` | `2h` | Maximum tick duration before timeout (2h) |
 | `--test-verify` | `0` | Run N-cycle correctness verification and exit |
-| `--duckbrain-ns` | `coding-hermes` | DuckBrain namespace for sync |
+| `--duckbrain-ns` | `scheduler` | DuckBrain namespace for sync |
 | `--duckbrain-url` | `http://localhost:3000` | DuckBrain HTTP server URL |
 | `--simulate` | `false` | Run in dry-run/simulation mode (no real spawning) |
 | `--sim-success` | `0.85` | Simulated success rate (0.0-1.0) |

@@ -61,7 +61,7 @@ func printSchema() {
     "duckbrain": {
       "type": "object",
       "properties": {
-        "namespace": { "type": "string", "default": "coding-hermes", "env": "SCHEDULER_DUCK_BRAIN_NS", "cli": "--duckbrain-ns" },
+        "namespace": { "type": "string", "default": "scheduler", "env": "SCHEDULER_DUCK_BRAIN_NS", "cli": "--duckbrain-ns" },
         "url":       { "type": "string", "default": "http://localhost:3000", "env": "SCHEDULER_DUCK_BRAIN_URL", "cli": "--duckbrain-url" }
       }
     },
