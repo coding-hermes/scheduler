@@ -111,6 +111,44 @@ curl http://127.0.0.1:9090/api/v1/status | jq '.active_projects'
 
 # Open the dashboard
 open http://127.0.0.1:9090/
+
+### 7. Create Your First Project
+
+A new project is added via `POST /api/v1/projects` and **all three** of `name`,
+`repo_url`, and `workdir` are required — a missing field returns 400 with the
+exact names. The example below shows each one with its source:
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":     "my-project",                                   # fleet-unique name
+    "repo_url": "github.com/your-org/my-project",               # what the foreman reads
+    "workdir":  "/home/your-name/my-project"                    # where the foreman runs
+  }'
+# 201 — defaults applied, created DISABLED:
+# {"name":"my-project","weight":10,"priority":5,"cooldown_s":900,
+#  "decay_rate":1,"enabled":false,"created_at":"...", ...}
+```
+
+**New projects arrive `enabled: false`** — creating never auto-enables. The
+queue will stay empty until you enable the project explicitly:
+
+```bash
+# Option A — set enabled=true via the canonical project update route
+curl -s -X PUT http://127.0.0.1:9090/api/v1/projects/my-project \
+  -H 'Content-Type: application/json' -d '{"enabled":true}'
+
+# Option B — use the convenience sub-route (same effect, single call)
+curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/resume
+```
+
+After either call, a `GET /api/v1/projects/my-project` will show
+`"enabled":true` and the scheduler will pick the project up on the next
+evaluation cycle. The full project body is documented under
+[POST /api/v1/projects](docs/api.md#post-apiv1projects); the migration tool
+(`make migrate`) is the faster path if you are importing existing cron jobs.
+
 ## Deployment
 
 ### Systemd
