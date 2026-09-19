@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -98,9 +99,15 @@ func TestLoadJobs(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, err := loadJobs("/nonexistent/path/jobs.json")
-		if err == nil {
-			t.Fatal("expected error for missing file")
+		// SCHED-GAP-184: a missing jobs.json is an empty import set —
+		// loadJobs reports the errJobsFileAbsent sentinel, not a raw
+		// file-not-found error.
+		jobs, err := loadJobs("/nonexistent/path/jobs.json")
+		if !errors.Is(err, errJobsFileAbsent) {
+			t.Fatalf("loadJobs() error = %v, want errJobsFileAbsent sentinel", err)
+		}
+		if jobs != nil {
+			t.Fatalf("expected nil jobs for missing file, got %+v", jobs)
 		}
 	})
 
@@ -122,6 +129,22 @@ func TestLoadJobs(t *testing.T) {
 			t.Fatalf("expected 0 jobs, got %d", len(jobs))
 		}
 	})
+}
+
+// TestLoadJobs_MissingFile_ReturnsSentinel makes the SCHED-GAP-184 contract
+// explicit by name: a non-existent jobs.json path returns (nil,
+// errJobsFileAbsent), matched via errors.Is.
+func TestLoadJobs_MissingFile_ReturnsSentinel(t *testing.T) {
+	jobs, err := loadJobs(filepath.Join(t.TempDir(), "does", "not", "exist", "jobs.json"))
+	if !errors.Is(err, errJobsFileAbsent) {
+		t.Fatalf("loadJobs() error = %v, want errJobsFileAbsent sentinel", err)
+	}
+	if jobs != nil {
+		t.Fatalf("expected nil jobs, got %+v", jobs)
+	}
+	if err.Error() != "jobs.json absent" {
+		t.Errorf("sentinel message = %q, want %q", err.Error(), "jobs.json absent")
+	}
 }
 
 func TestCronJobUnmarshal(t *testing.T) {

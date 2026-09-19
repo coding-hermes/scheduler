@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -35,6 +36,13 @@ type CronJob struct {
 
 var workdirRe = regexp.MustCompile(`[Ww]orkdir:\s*(\S+)`)
 
+// errJobsFileAbsent is returned by loadJobs when the jobs file does not
+// exist (SCHED-GAP-184): a fresh machine has no ~/.hermes/cron/jobs.json
+// yet, and that is an empty import set — not a fatal condition. The
+// migrate-dry / migrate call site checks it with errors.Is and proceeds
+// with zero jobs.
+var errJobsFileAbsent = errors.New("jobs.json absent")
+
 func main() {
 	jobsFile := flag.String("jobs", os.ExpandEnv("$HOME/.hermes/cron/jobs.json"), "Path to cron jobs.json")
 	dbFile := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
@@ -56,7 +64,12 @@ func main() {
 	}
 
 	jobs, err := loadJobs(*jobsFile)
-	if err != nil {
+	if errors.Is(err, errJobsFileAbsent) {
+		// SCHED-GAP-184: a fresh machine has no jobs.json yet — an empty
+		// import set, not a fatal error. Log and proceed with zero jobs.
+		log.Printf("jobs.json %s not found — no cron jobs to migrate\n", *jobsFile)
+		jobs = nil
+	} else if err != nil {
 		log.Fatalf("FATAL: load jobs: %v", err)
 	}
 	log.Printf("Loaded %d jobs from %s", len(jobs), *jobsFile)
@@ -145,6 +158,11 @@ func main() {
 func loadJobs(path string) ([]CronJob, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// SCHED-GAP-184: missing jobs.json on a fresh machine is an
+			// empty import set, not a fatal error.
+			return nil, errJobsFileAbsent
+		}
 		return nil, err
 	}
 	var wrapper struct {
