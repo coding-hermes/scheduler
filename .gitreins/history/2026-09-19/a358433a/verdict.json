@@ -1,0 +1,57 @@
+{
+  "task_id": "SCHED-GAP-173",
+  "task_title": "auto_disable_armed parity: status surface and enforcer share one failure classifier",
+  "task_criteria": [
+    "AC1: live parity probe \u2014 for a fixture project whose only failures are 'gateway unreachable', /api/v1/status.projects_failure_rates.X.auto_disable_armed is false and failure_rate is the harness-class-excluded rate. AC2: one shared classifier \u2014 grep -rn 'gateway unreachable' internal/ returns one marker list, in the shared classifier. AC3: regression test \u2014 go test -run 'TestSCHEDGAP173' -count=10 ./internal/api/ passes 10/10; a RED mutation (comment-out the classifier call) makes the test fail with a message naming the divergence. AC4: existing tests green \u2014 go test -short -p 1 -count=1 ./... exits 0, specifically internal/scheduler/alert_escalation_test.go (harnessFailure unit tests, ~lines 816-825), internal/scheduler/schedgap143_drain_class_test.go, internal/api/server_helpers_test.go. AC5: gates clean \u2014 gofmt -l . empty, go vet ./... clean, golangci-lint run 0 issues. AC6: no scope creep \u2014 enforcer behavior unchanged, harnessFailure marker list unchanged, armed math (rate/threshold/min_ticks) unchanged, no new metrics, no SCHED-GAP-170/158 rewires. AC7: gitreins tier-1 PASS + tier-2 PASS, both verdict ids captured."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/coding-hermes-scheduler/coding-herms-scheduler",
+  "branch": "main",
+  "commit": "5b44c24154d6ec11774b3fb7b73a306acfe96f72",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: Tier 1 Guards: PASS  (test mode: full)",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "Tier 1 Guards: PASS  (test mode: full)\n  \u2713 secrets \u2014 clean (gitleaks + builtin cross-check)\n  \u2713 go_build \u2014 ok\n  \u2713 go_lint \u2014 ok\n  \u2713 go_tests\n  guard log: /home/kara/coding-hermes-scheduler/coding-herms-scheduler/.gitreins/logs/guard-20260919T031046.471291Z.log\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/coding-hermes-scheduler/coding-herms-scheduler/.gitreins/logs/guard-20260919T031046.471291Z.log"
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: SCHED-GAP-173\n\nStage tier1: PASS\n    \u2713 guard: Tier 1 Guards: PASS  (test mode: full)\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-19T03:10:46.543116",
+  "evidence": {
+    "collected_at": "2026-09-19T03:10:46.555333+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 37213,
+        "truncated": false,
+        "source": "git show 5b44c24154d6"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1836,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "SCHED-GAP-173"
+  }
+}

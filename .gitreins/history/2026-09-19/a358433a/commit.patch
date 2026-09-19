@@ -1,0 +1,807 @@
+commit 5b44c24154d6ec11774b3fb7b73a306acfe96f72
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Sep 18 21:50:15 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Sep 18 21:50:15 2026 -0500
+
+    fix(scheduler): SCHED-GAP-173 — status surface and enforcer share one failure classifier (harnessFailure)
+    
+    /api/v1/status's projects_failure_rates counted every failed/timeout row, while
+    the auto-disable enforcer (CheckFailureRateAutoDisable) excludes harness-class
+    failures via harnessFailure. A lane whose failures were all gateway noise
+    therefore read failure_rate=0.91 / auto_disable_armed=true while the enforcer's
+    own verdict on the same window was ~0.02 — live evidence 2026-09-19: heading,
+    98 of its last 100 ticks "gateway unreachable ... HTTP 503". The enforcer was
+    right; the read-only surface was lying, and PM/QA automation plus SCHED-GAP-170's
+    per-lane-decay read inherited the lie.
+    
+    One authority, two surfaces:
+    
+    - internal/scheduler/failureclass.go (new): the marker list moves here as the
+      exported HarnessFailure — the SINGLE source of truth the enforcer and the API
+      surface both call. harnessFailure stays as an in-package forwarder to it, so
+      failureReasonClass and the SCHED-GAP-134/143 tests keep working unchanged;
+      the marker list itself is not duplicated and was not edited.
+    - internal/api/server_helpers.go: computeProjectFailureRates now selects
+      ticks.error alongside status and skips a row when
+      status == "failed" && scheduler.HarnessFailure(err) — literally
+      CheckFailureRateAutoDisable's predicate, including its failed-only gate (a
+      TIMEOUT carrying gateway text still counts, because it counts for the
+      enforcer). Excluded rows leave BOTH counters, so the surface's
+      failure_rate is the ratio the enforcer compares against its threshold. A
+      window that is entirely harness-class no longer drops out of the map
+      (total 0, rate 0, armed false) — 0/0 would be NaN and break the JSON
+      encoder, and silently vanishing from the surface would hide a
+      harness-blocked lane — and armed stays false, which is the enforcer's
+      verdict on that window.
+    - internal/scheduler/alert_escalation.go: enforcer behavior, arithmetic and
+      armed math untouched. Adds NewAlertEscalatorWithPolicy so the parity test
+      can run the REAL enforcer (autoDisablePolicy is package-private).
+    - internal/api/schedgap173_status_enforcer_parity_test.go: real
+      GET /api/v1/status (httptest, temp DB) compared against the real
+      CheckFailureRateAutoDisable on the same DB and the same policy numbers, with
+      the enforcer's own counts (parsed out of disabled_reason) cross-checked
+      against the surface's. Fixture: harness-only, mostly-noise-with-one-real-fault
+      (1/40 = 0.025), project-faulted (5/10 = 0.5 → armed, the breaker must still
+      fire), all-harness (total 0), clean, and timeout-with-harness-text. A second
+      test pins the single-authority rule structurally: the marker list may exist
+      in exactly one non-test file (failureclass.go), server_helpers.go must call
+      scheduler.HarnessFailure and must not declare its own.
+    
+    RED mutation (classifier call disabled in computeProjectFailureRates, fixed file
+    restored after — sha256 e5a7ae1b… both before and after):
+    
+        --- FAIL: TestSCHEDGAP173_StatusEndpointArmedMatchesEnforcer (0.04s)
+            schedgap173_status_enforcer_parity_test.go:320: SCHED-GAP-173 RATE DIVERGENCE on harnessnoise: status surface reports failed=98 total=100 rate=0.98, want failed=0 total=2 rate=0 — harness-class failures must be excluded from BOTH counters, exactly as CheckFailureRateAutoDisable excludes them
+            schedgap173_status_enforcer_parity_test.go:324: SCHED-GAP-173 ARMED DIVERGENCE on harnessnoise: auto_disable_armed=true, want false (counting every failed/timeout row would report true) with failed=98 total=100 rate=0.98 under threshold=0.50 min_ticks=5
+            schedgap173_status_enforcer_parity_test.go:333: SCHED-GAP-173 PARITY DIVERGENCE on harnessnoise: status surface auto_disable_armed=true (failed=98 total=100 rate=0.98) but the enforcer left the project ENABLED on the same window — the status surface must report what CheckFailureRateAutoDisable would actually do
+            schedgap173_status_enforcer_parity_test.go:357: SCHED-GAP-173 COUNT DIVERGENCE on realbad: enforcer wrote 5/10 ticks (disabled_reason) but the status surface reports failed=95 total=100
+        FAIL github.com/coding-hermes/scheduler/internal/api
+    
+    AFTER the fix:
+    
+        --- PASS: TestSCHEDGAP173_StatusEndpointArmedMatchesEnforcer (0.04s)
+        --- PASS: TestSCHEDGAP173_ClassifierIsSingleAuthority (0.01s)
+        ok  github.com/coding-hermes/scheduler/internal/api (x10: 0.447s)
+    
+      Enforcer run on the fixture parked exactly the two project-faulted lanes:
+        AUTO-DISABLE: disabled realbad — failure_rate=0.5000 (5/10, window=100, threshold=0.50)
+        AUTO-DISABLE: disabled timeoutnoise — failure_rate=1.0000 (10/10, window=100, threshold=0.50)
+      …and left harnessnoise/mostlynoise/allharness/cleanlane enabled — the same
+      four lanes the surface now reports armed=false.
+    
+    Gates:
+      gofmt -l .                                     -> clean (no output)
+      go build ./...                                 -> exit 0
+      go vet ./...                                   -> exit 0
+      golangci-lint run                              -> 0 issues
+      go test -run TestSCHEDGAP173 -count=10 ./internal/api/  -> ok, 10/10
+      go test -short -p 1 -count=1 ./...             -> exit 0, 12/12 packages, 1m38.6s
+        (TestHarnessFailureClassification, TestAutoDisable_IgnoresHarnessFailures,
+         TestAutoDisable_StillCountsProjectFailures, TestSCHEDGAP143_* x4,
+         TestComputeProjectFailureRates_* x4, TestAPI_Status_* all PASS)
+    
+    Scope: the four files above. CheckFailureRateAutoDisable, its marker list, the
+    armed math (rate/threshold/min_ticks) and SCHED-GAP-170/158 are untouched; no
+    new metrics and no changed JSON keys.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ .../api/schedgap173_status_enforcer_parity_test.go | 471 +++++++++++++++++++++
+ internal/api/server_helpers.go                     |  61 ++-
+ internal/scheduler/alert_escalation.go             |  41 +-
+ internal/scheduler/failureclass.go                 |  52 +++
+ 4 files changed, 588 insertions(+), 37 deletions(-)
+
+diff --git a/internal/api/schedgap173_status_enforcer_parity_test.go b/internal/api/schedgap173_status_enforcer_parity_test.go
+new file mode 100644
+index 0000000..e26ad59
+--- /dev/null
++++ b/internal/api/schedgap173_status_enforcer_parity_test.go
+@@ -0,0 +1,471 @@
++package api
++
++// SCHED-GAP-173 — the /api/v1/status auto_disable_armed surface must report
++// what the AUTO-DISABLE ENFORCER would actually do.
++//
++// The enforcer (internal/scheduler CheckFailureRateAutoDisable) excludes
++// harness-class failures — a tick refused by a draining gateway never reached
++// the project, so it says nothing about the project's health — while the
++// status surface used to count every failed/timeout row. Measured on the live
++// fleet 2026-09-19: heading read failure_rate=0.91 / auto_disable_armed=true
++// while 98 of its last 100 ticks were "gateway unreachable ... HTTP 503"
++// refusals, i.e. the enforcer's own verdict on that window was ~0.02. A
++// perfectly healthy lane was permanently advertised as "about to be parked",
++// and PM/QA automation + the SCHED-GAP-170 per-lane-decay read inherited the
++// lie.
++//
++// These tests pin the parity three ways:
++//  1. the real HTTP surface (GET /api/v1/status) against the REAL enforcer
++//     run on the same DB and the same policy numbers (the load-bearing one);
++//  2. the exact counts/rate/armed for a fixture mixing harness-class and
++//     project-attributable failures (including the pre-fix values, so the
++//     assertions fail loudly if naive counting comes back);
++//  3. a structural guard that the marker list exists in exactly one place
++//     (internal/scheduler/failureclass.go) and that the surface calls it
++//     instead of re-declaring a private classifier.
++
++import (
++	"context"
++	"database/sql"
++	"encoding/json"
++	"fmt"
++	"io/fs"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"regexp"
++	"runtime"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/coding-hermes/scheduler/internal/database"
++	"github.com/coding-hermes/scheduler/internal/scheduler"
++)
++
++const (
++	// gap173HarnessErr is the live gateway-drain refusal text recorded on the
++	// fleet host (2026-09-19) — 98 of heading's last 100 ticks carried it.
++	gap173HarnessErr = `gateway unreachable and exec fallback disabled: gateway POST: HTTP 503: invalid_request_error: Gateway is draining existing work; retry shortly.`
++
++	// gap173ProjectErr is a project-attributable failure: the tick reached the
++	// project and the project's work failed. It must always count.
++	gap173ProjectErr = `exit status 2: judge rejected the criteria evidence`
++)
++
++// The auto-disable policy every assertion in this file uses. The same numbers
++// feed the surface (ResolvedConfig) and the enforcer (NewAlertEscalatorWithPolicy)
++// — exactly as the daemon wires them from one resolved config.
++const (
++	gap173Threshold = 0.5
++	gap173Window    = 100
++	gap173MinTicks  = 5
++)
++
++// gap173Expect is what the status surface must report for a fixture project
++// after the fix, plus the pre-fix ("naive") armed verdict for the same data —
++// the lie this task removes. naiveArmed doubles as the RED witness: if the
++// harness-class rows start counting again, armed flips back to naiveArmed and
++// the assertions below name the divergence.
++type gap173Expect struct {
++	failed     int
++	total      int
++	rate       float64
++	armed      bool
++	naiveArmed bool
++}
++
++// gap173Projects is the fixture roster. Row shapes are built by gap173FixtureDB.
++var gap173Projects = map[string]gap173Expect{
++	// The heading shape: 98 harness-class failures + 2 real completions.
++	// Pre-fix 98/100 = 0.98 → armed; post-fix 0/2 = 0.0 → not armed.
++	"harnessnoise": {failed: 0, total: 2, rate: 0, armed: false, naiveArmed: true},
++	// Mostly noise with one real fault: 1/40 = 0.025 — the "~0.02" enforcer
++	// verdict this task measured, far below the 0.5 threshold.
++	"mostlynoise": {failed: 1, total: 40, rate: 0.025, armed: false, naiveArmed: true},
++	// The breaker must still fire on project-side faults: 5/10 = 0.5 >= 0.5.
++	"realbad": {failed: 5, total: 10, rate: 0.5, armed: true, naiveArmed: true},
++	// A window that is entirely harness-class: the entry stays (total 0,
++	// rate 0, not armed) instead of vanishing — a harness-blocked lane must
++	// remain visible, and "absent" would also be indistinguishable from a
++	// lane with no ticks at all.
++	"allharness": {failed: 0, total: 0, rate: 0, armed: false, naiveArmed: true},
++	// A clean lane, unchanged by the fix.
++	"cleanlane": {failed: 0, total: 20, rate: 0, armed: false, naiveArmed: false},
++	// The enforcer's predicate is status == "failed" AND harness-class, so a
++	// TIMEOUT carrying harness text is still counted. The surface must mirror
++	// that exactly — a sloppier "skip any harness-class row" implementation
++	// would report armed=false while the enforcer parked the lane.
++	"timeoutnoise": {failed: 10, total: 10, rate: 1, armed: true, naiveArmed: true},
++}
++
++// gap173InsertTick inserts one completed tick row, with or without an error
++// string (the existing package helpers do not carry ticks.error).
++func gap173InsertTick(t *testing.T, db *sql.DB, id, project, status, errText string, completedAt time.Time) {
++	t.Helper()
++	ts := completedAt.Format(time.RFC3339)
++	var err error
++	if errText == "" {
++		_, err = db.Exec(
++			`INSERT INTO ticks (id, project_name, status, completed_at, spawned_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
++			id, project, status, ts, ts, ts)
++	} else {
++		_, err = db.Exec(
++			`INSERT INTO ticks (id, project_name, status, error, completed_at, spawned_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
++			id, project, status, errText, ts, ts, ts)
++	}
++	if err != nil {
++		t.Fatalf("insert tick %s: %v", id, err)
++	}
++}
++
++// gap173FixtureDB creates an in-memory DB holding every project in
++// gap173Projects with the exact row mix described there.
++func gap173FixtureDB(t *testing.T) *sql.DB {
++	t.Helper()
++	db, err := database.InitDB(":memory:")
++	if err != nil {
++		t.Fatalf("InitDB: %v", err)
++	}
++	now := time.Now()
++
++	// seq keeps spawned_at strictly increasing so the windowed
++	// ORDER BY spawned_at DESC LIMIT picks exactly the rows inserted here.
++	seq := 0
++	insert := func(project, status, errText string) {
++		seq++
++		gap173InsertTick(t, db, fmt.Sprintf("%s-%03d", project, seq), project, status, errText,
++			now.Add(-time.Duration(seq)*time.Second))
++	}
++
++	rows := []struct {
++		project string
++		status  string
++		errText string
++		count   int
++	}{
++		{"harnessnoise", "failed", gap173HarnessErr, 98},
++		{"harnessnoise", "completed", "", 2},
++
++		{"mostlynoise", "failed", gap173HarnessErr, 60},
++		{"mostlynoise", "completed", "", 39},
++		{"mostlynoise", "failed", gap173ProjectErr, 1},
++
++		{"realbad", "failed", gap173HarnessErr, 90},
++		{"realbad", "failed", gap173ProjectErr, 5},
++		{"realbad", "completed", "", 5},
++
++		{"allharness", "failed", gap173HarnessErr, 100},
++
++		{"cleanlane", "completed", "", 20},
++
++		{"timeoutnoise", "timeout", gap173HarnessErr, 10},
++	}
++	created := map[string]bool{}
++	for _, r := range rows {
++		if created[r.project] {
++			continue
++		}
++		created[r.project] = true
++		mustCreateHelperTestProject(t, db, r.project)
++	}
++	for _, r := range rows {
++		for i := 0; i < r.count; i++ {
++			insert(r.project, r.status, r.errText)
++		}
++	}
++	return db
++}
++
++// gap173EnforcerRun runs the REAL enforcer over db and returns, per project,
++// whether it DISABLED the project (enabled=1 → 0) during the run.
++func gap173EnforcerRun(t *testing.T, db *sql.DB, failureRate float64, window, minTicks int) map[string]bool {
++	t.Helper()
++	esc := scheduler.NewAlertEscalatorWithPolicy(db, scheduler.NewEventLogger(db), failureRate, window, minTicks)
++	if err := esc.CheckFailureRateAutoDisable(context.Background()); err != nil {
++		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
++	}
++	rows, err := db.Query(`SELECT name, enabled FROM projects`)
++	if err != nil {
++		t.Fatalf("query projects: %v", err)
++	}
++	defer rows.Close()
++	out := map[string]bool{}
++	for rows.Next() {
++		var name string
++		var enabled int
++		if err := rows.Scan(&name, &enabled); err != nil {
++			t.Fatalf("scan project: %v", err)
++		}
++		out[name] = enabled == 0
++	}
++	if err := rows.Err(); err != nil {
++		t.Fatalf("iterate projects: %v", err)
++	}
++	return out
++}
++
++// gap173Validate checks the enforcer actually saw the whole fixture — a
++// silently empty projects table would make every parity assertion vacuous.
++func gap173AssertFixturePresent(t *testing.T, disabled map[string]bool) {
++	t.Helper()
++	for name := range gap173Projects {
++		if _, ok := disabled[name]; !ok {
++			t.Fatalf("fixture project %q missing from the projects table — the parity assertions would be vacuous", name)
++		}
++	}
++}
++
++var gap173ReasonRe = regexp.MustCompile(`failure rate ([0-9.]+)% \((\d+)/(\d+) ticks, window (\d+), threshold ([0-9.]+)\)`)
++
++// gap173DisabledReasonCounts parses the counts the ENFORCER itself wrote into
++// projects.disabled_reason when it parked a lane — an enforcer-side number
++// independent of the surface's own arithmetic.
++func gap173DisabledReasonCounts(t *testing.T, db *sql.DB, name string) (failed, total int) {
++	t.Helper()
++	var reason string
++	if err := db.QueryRow(`SELECT COALESCE(disabled_reason, '') FROM projects WHERE name = ?`, name).Scan(&reason); err != nil {
++		t.Fatalf("read disabled_reason for %s: %v", name, err)
++	}
++	m := gap173ReasonRe.FindStringSubmatch(reason)
++	if m == nil {
++		t.Fatalf("enforcer disabled %s but its disabled_reason does not carry counts: %q", name, reason)
++	}
++	failed, err := strconv.Atoi(m[2])
++	if err != nil {
++		t.Fatalf("parse disabled_reason failed-count for %s (%q): %v", name, reason, err)
++	}
++	total, err = strconv.Atoi(m[3])
++	if err != nil {
++		t.Fatalf("parse disabled_reason total-count for %s (%q): %v", name, reason, err)
++	}
++	return failed, total
++}
++
++// TestSCHEDGAP173_StatusEndpointArmedMatchesEnforcer is the canonical parity
++// test: the real GET /api/v1/status payload is compared against the real
++// CheckFailureRateAutoDisable verdict on the same DB and the same policy, and
++// the enforcer's own written counts are compared against the surface's.
++func TestSCHEDGAP173_StatusEndpointArmedMatchesEnforcer(t *testing.T) {
++	db := gap173FixtureDB(t)
++	defer db.Close()
++
++	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
++	loop.SetNoExecFallback(true)
++	srv := NewServer(db, loop)
++	srv.SetFailureWindow(gap173Window)
++	srv.SetResolvedConfig(ResolvedConfig{
++		AutoDisableFailureRate: gap173Threshold,
++		AutoDisableWindow:      gap173Window,
++		AutoDisableMinTicks:    gap173MinTicks,
++		FailureWindow:          gap173Window,
++	})
++	ts := httptest.NewServer(srv.Handler())
++	defer ts.Close()
++
++	resp, err := http.Get(ts.URL + "/api/v1/status")
++	if err != nil {
++		t.Fatalf("GET /api/v1/status: %v", err)
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		t.Fatalf("GET /api/v1/status = %d, want 200", resp.StatusCode)
++	}
++	var body map[string]interface{}
++	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
++		t.Fatalf("decode /api/v1/status: %v", err)
++	}
++	raw, ok := body["projects_failure_rates"].(map[string]interface{})
++	if !ok {
++		t.Fatalf("projects_failure_rates missing or wrong type: %T", body["projects_failure_rates"])
++	}
++
++	// The independent verdict: run the enforcer itself on the same window.
++	disabled := gap173EnforcerRun(t, db, gap173Threshold, gap173Window, gap173MinTicks)
++	gap173AssertFixturePresent(t, disabled)
++
++	type surfaceCounts struct {
++		failed, total int
++		rate          float64
++		armed         bool
++	}
++	surface := map[string]surfaceCounts{}
++	for name, entry := range raw {
++		m, ok := entry.(map[string]interface{})
++		if !ok {
++			t.Errorf("projects_failure_rates[%s] is %T, want object", name, entry)
++			continue
++		}
++		f, okF := m["failed"].(float64)
++		tot, okT := m["total"].(float64)
++		r, okR := m["failure_rate"].(float64)
++		armed, okA := m["auto_disable_armed"].(bool)
++		if !okF || !okT || !okR || !okA {
++			t.Errorf("projects_failure_rates[%s] has unexpected JSON shape: %v", name, m)
++			continue
++		}
++		surface[name] = surfaceCounts{failed: int(f), total: int(tot), rate: r, armed: armed}
++	}
++
++	for name, want := range gap173Projects {
++		got, ok := surface[name]
++		if !ok {
++			t.Errorf("SCHED-GAP-173 DIVERGENCE: %s is missing from /api/v1/status projects_failure_rates, but the enforcer still evaluates it (verdict: disabled=%v)",
++				name, disabled[name])
++			continue
++		}
++		if got.failed != want.failed || got.total != want.total || got.rate != want.rate {
++			t.Errorf("SCHED-GAP-173 RATE DIVERGENCE on %s: status surface reports failed=%d total=%d rate=%v, want failed=%d total=%d rate=%v — harness-class failures must be excluded from BOTH counters, exactly as CheckFailureRateAutoDisable excludes them",
++				name, got.failed, got.total, got.rate, want.failed, want.total, want.rate)
++		}
++		if got.armed != want.armed {
++			t.Errorf("SCHED-GAP-173 ARMED DIVERGENCE on %s: auto_disable_armed=%v, want %v (counting every failed/timeout row would report %v) with failed=%d total=%d rate=%v under threshold=%.2f min_ticks=%d",
++				name, got.armed, want.armed, want.naiveArmed, got.failed, got.total, got.rate, gap173Threshold, gap173MinTicks)
++		}
++		// The load-bearing invariant: armed == what the enforcer would do.
++		if got.armed != disabled[name] {
++			enforcerVerdict := "left the project ENABLED"
++			if disabled[name] {
++				enforcerVerdict = "DISABLED the project"
++			}
++			t.Errorf("SCHED-GAP-173 PARITY DIVERGENCE on %s: status surface auto_disable_armed=%v (failed=%d total=%d rate=%v) but the enforcer %s on the same window — the status surface must report what CheckFailureRateAutoDisable would actually do",
++				name, got.armed, got.failed, got.total, got.rate, enforcerVerdict)
++		}
++	}
++
++	// For every lane the enforcer actually parked, its OWN counts (written
++	// into disabled_reason) must equal the surface's.
++	parked := 0
++	for name, wasDisabled := range disabled {
++		if !wasDisabled {
++			continue
++		}
++		parked++
++		want, known := gap173Projects[name]
++		if !known {
++			t.Errorf("enforcer disabled an unexpected project %q (not in the fixture roster)", name)
++			continue
++		}
++		if !want.armed {
++			t.Errorf("enforcer disabled %s but the fixture expects armed=false — the enforcer counted rows the surface excluded (or vice versa)", name)
++		}
++		failed, total := gap173DisabledReasonCounts(t, db, name)
++		got := surface[name]
++		if failed != got.failed || total != got.total {
++			t.Errorf("SCHED-GAP-173 COUNT DIVERGENCE on %s: enforcer wrote %d/%d ticks (disabled_reason) but the status surface reports failed=%d total=%d",
++				name, failed, total, got.failed, got.total)
++		}
++	}
++	if parked == 0 {
++		t.Fatalf("enforcer disabled nothing — the fixture is not exercising the breaker (policy threshold=%.2f min_ticks=%d)", gap173Threshold, gap173MinTicks)
++	}
++}
++
++// TestSCHEDGAP173_ClassifierIsSingleAuthority fails the moment the harness
++// marker list is duplicated into a second surface (the exact regression this
++// task removes) or the status surface stops calling the exported classifier.
++// Mirrors the house pattern of TestADVR10_NoSecondHardcodedWeeklyCeiling.
++func TestSCHEDGAP173_ClassifierIsSingleAuthority(t *testing.T) {
++	_, thisFile, _, _ := runtime.Caller(0)
++	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile))) // .../internal/api/x_test.go -> repo root
++
++	markers := []string{
++		"gateway unreachable",
++		"gateway is draining",
++		"gateway_auth_error",
++		"invalid gateway api key",
++		"connection refused",
++		"exec fallback disabled",
++		"aborted by graceful shutdown",
++	}
++	shared := filepath.Join("internal", "scheduler", "failureclass.go")
++
++	// (a) The shared file must carry the complete marker set.
++	sharedPath := filepath.Join(repoRoot, shared)
++	sharedSrc, err := os.ReadFile(sharedPath)
++	if err != nil {
++		t.Fatalf("read %s: %v", shared, err)
++	}
++	for _, m := range markers {
++		if !strings.Contains(string(sharedSrc), `"`+m+`",`) {
++			t.Errorf("%s does not declare marker %q — the shared classifier list is incomplete", shared, m)
++		}
++	}
++
++	// (b) The status surface must CALL it, not re-declare one, and the old
++	//     private copy must be gone from alert_escalation.go.
++	surfacePath := filepath.Join(repoRoot, "internal", "api", "server_helpers.go")
++	surfaceSrc, err := os.ReadFile(surfacePath)
++	if err != nil {
++		t.Fatalf("read internal/api/server_helpers.go: %v", err)
++	}
++	if !strings.Contains(string(surfaceSrc), "scheduler.HarnessFailure(") {
++		t.Error("internal/api/server_helpers.go does not call scheduler.HarnessFailure — the status surface must classify with the shared classifier")
++	}
++	if strings.Contains(string(surfaceSrc), "func harnessFailure(") {
++		t.Error("internal/api/server_helpers.go declares its own harnessFailure — the classifier must have exactly one implementation")
++	}
++	for _, m := range markers {
++		if strings.Contains(string(surfaceSrc), `"`+m+`",`) {
++			t.Errorf("internal/api/server_helpers.go declares harness marker %q — the marker list belongs to internal/scheduler/failureclass.go alone", m)
++		}
++	}
++	escPath := filepath.Join(repoRoot, "internal", "scheduler", "alert_escalation.go")
++	escSrc, err := os.ReadFile(escPath)
++	if err != nil {
++		t.Fatalf("read internal/scheduler/alert_escalation.go: %v", err)
++	}
++	for _, m := range markers {
++		if strings.Contains(string(escSrc), `"`+m+`",`) {
++			t.Errorf("internal/scheduler/alert_escalation.go still declares harness marker %q — the list moved to failureclass.go", m)
++		}
++	}
++
++	// (c) No third marker list anywhere under internal/ or cmd/.
++	var offenders []string
++	for _, dir := range []string{"internal", "cmd"} {
++		root := filepath.Join(repoRoot, dir)
++		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
++			if err != nil {
++				return err
++			}
++			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
++				return nil
++			}
++			b, readErr := os.ReadFile(path)
++			if readErr != nil {
++				return readErr
++			}
++			hits := 0
++			for _, m := range markers {
++				if strings.Contains(string(b), `"`+m+`",`) {
++					hits++
++				}
++			}
++			if hits >= 2 {
++				rel, _ := filepath.Rel(repoRoot, path)
++				if rel != shared {
++					offenders = append(offenders, fmt.Sprintf("%s (%d markers)", rel, hits))
++				}
++			}
++			return nil
++		})
++		if err != nil {
++			t.Fatalf("walk %s: %v", root, err)
++		}
++	}
++	if len(offenders) > 0 {
++		t.Errorf("duplicate harness-failure marker list(s) found: %s — the only authority is %s (SCHED-GAP-173)",
++			strings.Join(offenders, ", "), shared)
++	}
++
++	// (d) The exported classifier behaves as both surfaces require.
++	if !scheduler.HarnessFailure(gap173HarnessErr) {
++		t.Errorf("scheduler.HarnessFailure(%q) = false, want true", gap173HarnessErr)
++	}
++	if scheduler.HarnessFailure(gap173ProjectErr) {
++		t.Errorf("scheduler.HarnessFailure(%q) = true, want false (project-attributable failures must count)", gap173ProjectErr)
++	}
++}
+diff --git a/internal/api/server_helpers.go b/internal/api/server_helpers.go
+index da125e9..1a97828 100644
+--- a/internal/api/server_helpers.go
++++ b/internal/api/server_helpers.go
+@@ -10,6 +10,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/coding-hermes/scheduler/internal/database"
++	"github.com/coding-hermes/scheduler/internal/scheduler"
+ 	"github.com/coding-hermes/scheduler/internal/version"
+ )
+ 
+@@ -59,6 +60,16 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
+ // ProjectFailureRate is the per-project failure-rate breakdown for a single
+ // project over a window of recent ticks. It appears in /api/v1/status under
+ // the "projects_failure_rates" key (SCHED-GAP-018).
++//
++// SCHED-GAP-173: the counters describe PROJECT-ATTRIBUTABLE ticks only. A
++// failed tick whose error the shared classifier (scheduler.HarnessFailure)
++// marks as harness/infrastructure class — gateway unreachable, drain
++// refusals, gateway auth failures, connection refused, exec fallback
++// disabled, graceful-shutdown aborts — never reached the project, so it is
++// excluded from BOTH counters, exactly as CheckFailureRateAutoDisable
++// excludes it. failure_rate is therefore the very ratio the enforcer compares
++// against its threshold: a lane whose whole window is gateway-drain noise
++// reads failure_rate 0 and auto_disable_armed=false instead of 0.91/true.
+ type ProjectFailureRate struct {
+ 	Failed      int     `json:"failed"`
+ 	Total       int     `json:"total"`
+@@ -68,22 +79,28 @@ type ProjectFailureRate struct {
+ 	// auto-disable condition (GAP-047): the feature is enabled
+ 	// (threshold > 0), the sample size reaches minTicks, and the failure
+ 	// rate is at or above the threshold. It mirrors the exact condition in
+-	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable.
++	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable —
++	// including the harness-failure exclusion of the shared classifier
++	// (SCHED-GAP-173), so armed is what the enforcer would actually do.
+ 	AutoDisableArmed bool `json:"auto_disable_armed"`
+ }
+ 
+ // computeProjectFailureRates returns a per-project failure-rate breakdown
+ // computed over the last `window` completed ticks per project. Only projects
+ // with at least one tick in the window are included. "failed" counts both
+-// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes).
+-// "total" is the number of ticks in the window with a non-null completed_at
+-// (running/queued ticks are excluded). failure_rate = failed/total, rounded
+-// to 4 decimal places.
++// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes),
++// excluding failed ticks the shared harness classifier owns. "total" is the
++// number of ticks in the window with a non-null completed_at (running/queued
++// ticks are excluded) that are NOT harness-class failures. failure_rate =
++// failed/total, rounded to 4 decimal places; it is 0 when the window holds no
++// project-attributable tick at all (total 0 — 0/0 is NaN in Go and would
++// break the JSON encoder).
+ //
+ // `threshold` and `minTicks` drive the AutoDisableArmed flag (GAP-047) and
+ // mirror the auto-disable policy in alert_escalation.go: armed when
+ // threshold > 0 && total >= minTicks && rate >= threshold, where rate is the
+-// unrounded failed/total ratio (matching CheckFailureRateAutoDisable exactly).
++// unrounded project-attributable failed/total ratio (matching
++// CheckFailureRateAutoDisable exactly).
+ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, threshold float64, minTicks int) map[string]ProjectFailureRate {
+ 	if window <= 0 {
+ 		window = 100
+@@ -129,7 +146,7 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
+ 
+ 	for _, name := range names {
+ 		rows, err := db.QueryContext(ctx,
+-			`SELECT status FROM ticks
++			`SELECT status, COALESCE(error, '') FROM ticks
+ 			 WHERE project_name = ? AND completed_at IS NOT NULL
+ 			 ORDER BY spawned_at DESC LIMIT ?`,
+ 			name, window)
+@@ -138,8 +155,18 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
+ 		}
+ 		var failed, total int
+ 		for rows.Next() {
+-			var status string
+-			if err := rows.Scan(&status); err != nil {
++			var status, errText string
++			if err := rows.Scan(&status, &errText); err != nil {
++				continue
++			}
++			// SCHED-GAP-173: harness/infrastructure failures say nothing
++			// about the project — the tick never reached it. This is the
++			// exact predicate CheckFailureRateAutoDisable applies (failed
++			// status AND the shared classifier says harness), so a lane
++			// that is fine can never read as "about to be parked". The
++			// classifier is NOT re-declared here (SCHED-GAP-134 owns the
++			// markers): one source of truth, two surfaces.
++			if status == "failed" && scheduler.HarnessFailure(errText) {
+ 				continue
+ 			}
+ 			total++
+@@ -148,10 +175,20 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
+ 			}
+ 		}
+ 		rows.Close()
+-		if total == 0 {
+-			continue
++		// SCHED-GAP-173: total can now legitimately be 0 — a window whose
++		// every completed tick is harness-class (the heading case: gateway
++		// 503s only). The entry is still emitted rather than dropped: the
++		// project did have ticks in the window, and silently vanishing from
++		// the surface would hide a harness-blocked lane from operators
++		// (dropping it is indistinguishable from "no ticks at all"). rate
++		// is defined as 0 for an empty project-attributable sample — 0/0 is
++		// NaN in Go and would make the JSON encoder fail — and armed stays
++		// false, which is exactly the enforcer's verdict on such a window:
++		// nothing measurable about the project, nothing to park.
++		rate := 0.0
++		if total > 0 {
++			rate = float64(failed) / float64(total)
+ 		}
+-		rate := float64(failed) / float64(total)
+ 		// GAP-047: armed uses the unrounded rate, exactly like
+ 		// CheckFailureRateAutoDisable (which compares the raw ratio against
+ 		// the threshold before any display rounding).
+diff --git a/internal/scheduler/alert_escalation.go b/internal/scheduler/alert_escalation.go
+index cc4c671..6ce6660 100644
+--- a/internal/scheduler/alert_escalation.go
++++ b/internal/scheduler/alert_escalation.go
+@@ -34,6 +34,19 @@ func NewAlertEscalator(db *sql.DB, events *EventLogger, autoDisable autoDisableP
+ 	return &AlertEscalator{db: db, events: events, autoDisable: autoDisable}
+ }
+ 
++// NewAlertEscalatorWithPolicy builds an escalator whose auto-disable policy is
++// passed as loose values instead of the package-private autoDisablePolicy type
++// (SCHED-GAP-173). Behaviour is identical to NewAlertEscalator — the same
++// struct and the same policy semantics — and the enforcer logic itself is
++// untouched; this only makes the REAL enforcer constructible from outside this
++// package. The status-surface parity test (internal/api) uses it to run
++// CheckFailureRateAutoDisable over the very window that
++// computeProjectFailureRates reports, so "armed" can be compared against what
++// the enforcer would actually do rather than against a re-implemented oracle.
++func NewAlertEscalatorWithPolicy(db *sql.DB, events *EventLogger, failureRate float64, window, minTicks int) *AlertEscalator {
++	return NewAlertEscalator(db, events, autoDisablePolicy{failureRate: failureRate, window: window, minTicks: minTicks})
++}
++
+ // CheckSchedulerHealth emits CRITICAL if the scheduler has not evaluated in
+ // more than 10 minutes.
+ func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval time.Time) error {
+@@ -479,31 +492,9 @@ func failureReasonClass(errText string) string {
+ 	return FailureReasonGatewayTransport
+ }
+ 
+-// harnessFailure reports whether a failed tick's error came from the harness
+-// (gateway / scheduler infrastructure) rather than from the project itself.
+-// These ticks never reached the project, so they must not feed per-project
+-// health accounting (SCHED-GAP-134). Keep this list tight: only outage classes
+-// where every project on the box fails identically.
+-func harnessFailure(errText string) bool {
+-	if errText == "" {
+-		return false
+-	}
+-	lower := strings.ToLower(errText)
+-	for _, marker := range []string{
+-		"gateway unreachable",
+-		"gateway is draining",
+-		"gateway_auth_error",
+-		"invalid gateway api key",
+-		"connection refused",
+-		"exec fallback disabled",
+-		"aborted by graceful shutdown",
+-	} {
+-		if strings.Contains(lower, marker) {
+-			return true
+-		}
+-	}
+-	return false
+-}
++// harnessFailure and its marker list live in failureclass.go — the shared
++// classifier both this package's auto-disable enforcer and the API status
++// surface call (SCHED-GAP-173). Never re-declare the markers here.
+ 
+ // RunAll executes all escalation checks. Errors from individual checks
+ // are logged but not propagated — one check failing does not block the others.
+diff --git a/internal/scheduler/failureclass.go b/internal/scheduler/failureclass.go
+new file mode 100644
+index 0000000..0445d3b
+--- /dev/null
++++ b/internal/scheduler/failureclass.go
+@@ -0,0 +1,52 @@
++package scheduler
++
++import "strings"
++
++// HarnessFailure reports whether a failed tick's error came from the harness
++// (gateway / scheduler infrastructure) rather than from the project itself.
++// These ticks never reached the project, so they must not feed per-project
++// health accounting (SCHED-GAP-134). Keep this list tight: only outage classes
++// where every project on the box fails identically.
++//
++// It is the SINGLE authority for that classification (SCHED-GAP-173). Two
++// surfaces classify the same ticks with it and must never disagree:
++//
++//   - the enforcer — CheckFailureRateAutoDisable (alert_escalation.go), which
++//     decides whether a lane actually gets parked, and
++//   - the read-only status surface — computeProjectFailureRates
++//     (internal/api/server_helpers.go), which reports auto_disable_armed.
++//
++// Before the list was shared, the status surface counted every failed/timeout
++// row, so a lane whose failures were all gateway noise read
++// auto_disable_armed=true with failure_rate=0.91 while the enforcer's verdict
++// on the same window was ~0.02: a healthy lane permanently advertised as
++// "about to be parked". Add new markers HERE only — a second marker list in
++// any other surface is a parity regression, pinned by
++// TestSCHEDGAP173_ClassifierIsSingleAuthority (internal/api).
++func HarnessFailure(errText string) bool {
++	if errText == "" {
++		return false
++	}
++	lower := strings.ToLower(errText)
++	for _, marker := range []string{
++		"gateway unreachable",
++		"gateway is draining",
++		"gateway_auth_error",
++		"invalid gateway api key",
++		"connection refused",
++		"exec fallback disabled",
++		"aborted by graceful shutdown",
++	} {
++		if strings.Contains(lower, marker) {
++			return true
++		}
++	}
++	return false
++}
++
++// harnessFailure is the package-private spelling of HarnessFailure kept for
++// the existing in-package callers and tests (failureReasonClass, the
++// SCHED-GAP-134 classifier test, schedgap143_drain_class_test.go). It is a
++// forwarder, not a second classifier: HarnessFailure owns the marker list
++// (SCHED-GAP-173).
++func harnessFailure(errText string) bool { return HarnessFailure(errText) }

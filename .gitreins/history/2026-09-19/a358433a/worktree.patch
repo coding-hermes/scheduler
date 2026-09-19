@@ -1,0 +1,30 @@
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index 1dda4ed..57bdb45 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -3036,3 +3036,25 @@ tasks:
+   status: complete
+   created_at: '2026-09-19T02:00:32.076342+00:00'
+   completed_at: '2026-09-19T02:11:07.385250+00:00'
++- id: SCHED-GAP-173
++  title: 'auto_disable_armed parity: status surface and enforcer share one failure
++    classifier'
++  criteria:
++  - "AC1: live parity probe \u2014 for a fixture project whose only failures are 'gateway\
++    \ unreachable', /api/v1/status.projects_failure_rates.X.auto_disable_armed is\
++    \ false and failure_rate is the harness-class-excluded rate. AC2: one shared classifier\
++    \ \u2014 grep -rn 'gateway unreachable' internal/ returns one marker list, in\
++    \ the shared classifier. AC3: regression test \u2014 go test -run 'TestSCHEDGAP173'\
++    \ -count=10 ./internal/api/ passes 10/10; a RED mutation (comment-out the classifier\
++    \ call) makes the test fail with a message naming the divergence. AC4: existing\
++    \ tests green \u2014 go test -short -p 1 -count=1 ./... exits 0, specifically\
++    \ internal/scheduler/alert_escalation_test.go (harnessFailure unit tests, ~lines\
++    \ 816-825), internal/scheduler/schedgap143_drain_class_test.go, internal/api/server_helpers_test.go.\
++    \ AC5: gates clean \u2014 gofmt -l . empty, go vet ./... clean, golangci-lint\
++    \ run 0 issues. AC6: no scope creep \u2014 enforcer behavior unchanged, harnessFailure\
++    \ marker list unchanged, armed math (rate/threshold/min_ticks) unchanged, no new\
++    \ metrics, no SCHED-GAP-170/158 rewires. AC7: gitreins tier-1 PASS + tier-2 PASS,\
++    \ both verdict ids captured."
++  status: complete
++  created_at: '2026-09-19T02:42:04.250616+00:00'
++  completed_at: '2026-09-19T03:10:45.990785+00:00'
