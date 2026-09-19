@@ -5,22 +5,94 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"strings"
+	"sync"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
-// ── S12 §6.2 item 3 (SCHED-GAP-113): namespace wave_workers_cap ──────────
+// ── SCHED-GAP-170 — load-scaled WAVE_BUDGET (Bane 2026-09-19) ────────────
 //
-// DECISION 3 enforces the cap in TWO layers because no single layer can
-// enforce it alone (§6.3): the COMPOSITION layer advises at the point where
-// the wave decision is actually made (the foreman prompt — wave composition
-// happens inside the tick, by the foreman), and the ADMISSION layer sheds at
-// the tick boundary, where the scheduler has authority. Both layers leave
-// slot accounting untouched: a wave tick occupies exactly ONE slot, ONE
-// entry in SlotPool.running, ONE in RunningSet() (W1/W3), and namespace
-// max_concurrent keeps counting TICKS (W2). Worker processes never enter
-// running/reserved/RunningSet()/active_ticks.
+//	"We tell the foreman for each load average point below 12 we can launch
+//	 1 worker min 1 upto 12. the other thing is it needs to read the board
+//	 and understand what work is not unblocked"
+//
+// The load-aware budget formula, applied AFTER the namespace cap and live
+// depth (never above them):
+//
+//	headroom = load_gate_threshold(12) − current_1m_loadavg
+//	loadCap  = min(wave_workers_cap, headroom)   // 1 worker per spare load point
+//	if loadCap < 1 → loadCap = 1                  // owner: "min 1"
+//	budget    = min(loadCap, wave_workers_cap − live_depth)
+//
+// So on an idle box (load 0, threshold 12) a capped-12 namespace admits the
+// full 12; at load 8 the budget is 4; at load ≥12 the load gate itself
+// defers the whole spawn (SCHED-GAP-125), so the "min 1" floor only binds
+// when telemetry is missing or load sits in [threshold−1, threshold).
+// A missing loadavg reading leaves the budget at the depth arithmetic alone
+// (fail open, same doctrine as the gate). When the load gate is DISABLED
+// (threshold 0) the load dimension is skipped entirely — the budget is the
+// pre-170 depth arithmetic, byte-identical behavior.
+//
+// The board half of the quote is composition-layer doctrine, not arithmetic:
+// the foreman must only wave MUTUALLY INDEPENDENT rows (no depends_on edges,
+// disjoint file sets) — enforced by the foreman skill + namespace prompt,
+// and the WAVE_BUDGET line carries an explicit "independent rows only"
+// reminder so the two halves of the ruling travel together.
+
+var (
+	waveLoadMu       sync.RWMutex
+	waveLoadCeiling  = float64(0) // 0 = no load scaling (pre-170 behavior)
+	waveLoadFloorOne = true       // "min 1" — a serial tick is always allowed
+)
+
+// SetWaveLoadCeiling installs the load-aware budget ceiling (the same
+// threshold as the load gate, 12 here). 0 disables load scaling.
+func SetWaveLoadCeiling(threshold float64) {
+	waveLoadMu.Lock()
+	defer waveLoadMu.Unlock()
+	waveLoadCeiling = threshold
+}
+
+// waveLoadCeilingValue returns the active ceiling (0 = disabled).
+func waveLoadCeilingValue() float64 {
+	waveLoadMu.RLock()
+	defer waveLoadMu.RUnlock()
+	return waveLoadCeiling
+}
+
+// waveLoadCap applies the owner's 1-worker-per-spare-load-point rule on top
+// of the namespace cap. Returns (cap, scaled) where scaled reports whether
+// the load dimension participated (telemetry present + ceiling > 0).
+func waveLoadCap(wcap int) (int, bool) {
+	ceiling := waveLoadCeilingValue()
+	if ceiling <= 0 {
+		return wcap, false
+	}
+	l1, ok := currentLoad1m()
+	if !ok {
+		return wcap, false // no telemetry → fail open, depth math only
+	}
+	headroom := ceiling - l1
+	if headroom >= float64(wcap) {
+		return wcap, true // idle box: full cap
+	}
+	if headroom < 1 {
+		if waveLoadFloorOne {
+			return 1, true // "min 1" — serial-tick floor never blocks a wave
+		}
+		return 0, true
+	}
+	n := int(math.Floor(headroom))
+	if n < 1 {
+		n = 1
+	}
+	if n > wcap {
+		n = wcap
+	}
+	return n, true
+}
 
 // waveBudgetLine renders the single line the composition layer appends to
 // the foreman prompt. The EXACT injected line is:
@@ -37,9 +109,18 @@ import (
 // default-off per spec §15). The line always lands on its own line at the
 // end of the prompt, after the dynamic workdir/worker-model footer, so a
 // prompt_mode="replace" project prompt cannot lose it.
+//
+// SCHED-GAP-170: when the load-aware ceiling is armed, n is additionally
+// min'd with 1-per-spare-load-point (floor 1). The line text is unchanged —
+// the foreman needs no new vocabulary.
 func waveBudgetLine(n int) string {
 	return fmt.Sprintf("WAVE_BUDGET: %d — max concurrent wave workers this tick (0 = serial tick, do not compose a wave).", n)
 }
+
+// waveBudgetReminder is appended when a load-scaled budget binds BELOW the
+// namespace cap, so the foreman knows the number is load-derived, not a cap
+// change (and that independent-rows-only still governs composition).
+const waveBudgetReminder = "Load-aware budget: 1 worker per spare load point (ceiling 12); compose from MUTUALLY INDEPENDENT board rows only (no depends_on edges, disjoint files)."
 
 // namespaceWaveWorkersCap loads wave_workers_cap for one namespace. Single
 // PK lookup per spawn — the same perf class as SCHED-GAP-111's waveNamespace
@@ -81,6 +162,12 @@ func (s *Spawner) namespaceWaveWorkersCap(ctx context.Context, namespaceID strin
 //     re-read live depth to un-shed itself, because a wave completing
 //     between pack and spawn must not open a second-wave race.
 //
+// SCHED-GAP-170: after the depth arithmetic, the load-aware ceiling (when
+// armed, telemetry present) min's n with 1-per-spare-load-point, floored at
+// 1 (owner: "min 1 upto 12"). Load BELOW the floor never serializes a tick —
+// that is the load GATE's job (SCHED-GAP-125 defers the whole spawn at
+// load ≥ threshold).
+//
 // A serial tick (n=0 due to the cap or the shed) logs one WAVE-SHED line so
 // the forced serial tick is observable.
 func (s *Spawner) waveBudget(project PackedProject) (n int, inject bool) {
@@ -101,6 +188,12 @@ func (s *Spawner) waveBudget(project PackedProject) (n int, inject bool) {
 	n = wcap - depth
 	if n < 0 {
 		n = 0 // clamp: never a negative budget
+	}
+	// SCHED-GAP-170: load-scaled budget (1 worker per spare load point).
+	if scaled, participated := waveLoadCap(wcap); participated && scaled < n {
+		n = scaled
+		log.Printf("WAVE-LOAD: %s namespace=%s load-scaling bound budget to %d (cap=%d depth=%d)",
+			project.Name, project.NamespaceID, n, wcap, depth)
 	}
 	if n == 0 {
 		log.Printf("WAVE-SHED: %s namespace=%s cap=%d live_depth=%d — cap forces a serial tick",

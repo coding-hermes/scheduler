@@ -358,6 +358,11 @@ func main() {
 	// carries the env override; TOML [scheduler] load_gate_threshold applies
 	// below only when the flag was never set (same precedence as budget).
 	scheduler.SetLoadGateThreshold(*loadGateThreshold)
+	// SCHED-GAP-170: load-scaled WAVE_BUDGET shares the load gate's threshold —
+	// "for each load average point below 12 we can launch 1 worker, min 1, up to 12"
+	// (Bane 2026-09-19). One knob, one number: when the gate is armed at N, waves
+	// scale to N−load workers (floor 1); gate disabled → no load scaling at all.
+	scheduler.SetWaveLoadCeiling(*loadGateThreshold)
 	// ADV-R11: arm the per-spawn RLIMIT_AS cap (0 = off, the default — no
 	// prlimit call at all). The flag var carries the env override; TOML
 	// [scheduler] spawn_mem_limit_mb applies below only when the flag sat
