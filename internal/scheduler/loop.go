@@ -237,9 +237,15 @@ func (l *Loop) SetClock(c clock.Clock) {
 	if l.simSpawner != nil {
 		l.simSpawner.SetClock(c)
 	}
-	if l.gatewayClient != nil {
-		l.gatewayClient.SetClock(c)
+	if gwClient := l.gatewayClientOrNil(); gwClient != nil {
+		gwClient.SetClock(c)
 	}
+	// SCHED-GAP-170: the gateway-health gate measures its 30s TTL window on the
+	// same seam — propagated unconditionally, because the gate's cache is
+	// process-wide and its clock is not a property of the client. A test that
+	// installs a clock can therefore drive the cache deterministically instead
+	// of sleeping through a real 30s.
+	SetGatewayHealthGateClock(c)
 }
 
 // clock returns the loop's clock, never nil (the zero value of the seam reads
@@ -256,9 +262,38 @@ func (l *Loop) SetNamespaceMode(on bool) {
 	l.namespaceMode = on
 }
 
-// SetGatewayClient wires the HTTP gateway client into the spawner (FEAT-003).
+// SetGatewayClient wires the HTTP gateway client into the spawner (FEAT-003)
+// and — SCHED-GAP-170 — into the Loop itself and the gateway-health gate.
+//
+// The Loop field is not decoration: the pre-existing liveness block in
+// evaluate() guarded on `l.gatewayClient`, which NOTHING assigned, so the guard
+// was permanently false and the fleet spawned straight into a dead gateway
+// (793 of 859 failures in the 7 days to 2026-09-18). Registering the client
+// here is what makes the gateway dependency observable from the loop at all.
+//
+// Registering with gatewayHealth (the process-wide cache) is what gives
+// Loop.SpawnNow and the evaluation pass the same 30s verdict: the client is the
+// probe target, so it must be installed by whoever installs the spawner's — a
+// second wiring path would let the gate probe one endpoint while the spawns go
+// to another.
 func (l *Loop) SetGatewayClient(client *GatewayClient) {
 	l.spawner.SetGatewayClient(client)
+	// Written under the loop lock: the reconnector installs the client from a
+	// background goroutine (GAP-048) while evaluate() and the API spawn handler
+	// read it, so this is the loop's first real writer for the field.
+	l.mu.Lock()
+	l.gatewayClient = client
+	l.mu.Unlock()
+	SetGatewayHealthGateClient(client)
+}
+
+// gatewayClientOrNil returns the loop's gateway client (nil when HTTP spawning
+// is not wired). Read under l.mu: the reconnector may replace the client at any
+// time, so an unguarded read would race with SetGatewayClient.
+func (l *Loop) gatewayClientOrNil() *GatewayClient {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.gatewayClient
 }
 
 // SetBlackoutWindows updates the blackout slowdown windows on both packers.
@@ -712,6 +747,26 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	if LoadGateShouldDefer(l.db, proj.NamespaceID) {
 		l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, tickID)
 		return tickID, nil
+	}
+
+	// SCHED-GAP-170: the gateway-health gate, consulted at the SAME declared
+	// admission point and with the SAME cached 30s verdict the evaluation pass
+	// uses. The API contract is untouched (the returned tickID is a real stored
+	// row and the row keeps status='queued'), and the deferral is REPORTED as a
+	// `gateway_defer` event carrying that id — so a caller can tell "deferred
+	// because the gateway is unreachable" from "spawned" without polling the
+	// tick for a failure. Without this the row sat queued until the spawn
+	// failed, and the failure was booked as the LANE's fault.
+	//
+	// No latch is written here on purpose: gatewayDead is the fleet-wide
+	// transition state and only the evaluation pass (noteGatewayDeadOnce) owns
+	// it — an API-triggered deferral must not flip fleet-wide scheduling state
+	// from a request goroutine.
+	if l.gatewayClientOrNil() != nil && !simulate {
+		if deferSpawn, reason, probeErr := GatewayHealthGateShouldDefer(); deferSpawn {
+			l.emitGatewayDeferred(proj.Name, proj.NamespaceID, tickID, reason, probeErr)
+			return tickID, nil
+		}
 	}
 
 	// Fire the spawn session (async — the row is already queued, so the

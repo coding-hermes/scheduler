@@ -156,33 +156,28 @@ func (l *Loop) evaluate() {
 	l.mu.Unlock()
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
-	// Gateway liveness check: ping before spawning. If gateway is dead,
-	// release all slots and skip this cycle. Retry next eval.
-	// DOGFOOD-007: simulation mode must not depend on a live gateway —
-	// simulated spawns never touch the real spawner.
-	if l.gatewayClient != nil && !l.simulate {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := l.gatewayClient.Ping(ctx)
-		cancel()
-		if err != nil {
-			if !l.gatewayDead {
-				log.Printf("GATEWAY DEAD — pausing spawns, will retry in 30s: %v", err)
-				l.gatewayDead = true
-				l.slotPool.ReleaseAll()
-			}
-			return
-		}
-		if l.gatewayDead {
-			log.Printf("GATEWAY reconnected — resuming spawns")
-			l.gatewayDead = false
-			// SCHED-GAP-091: gateway health returned — scan for ticks
-			// orphaned by the drop and re-nudge them with continuation
-			// prompts (the orphan-scan job rides this existing flip; no
-			// new cron, scheduler-owned timing per fleet doctrine).
-			l.resumeOrphans("reconnect")
-			l.resumeNeedsHuman("reconnect")
-		}
-	}
+	// SCHED-GAP-170: gateway health is a PER-PROJECT admission decision now,
+	// taken at the spawn loop below (after the dedup skip and the load-gate
+	// check) against a cached 30s verdict — never a probe per packed project.
+	//
+	// The liveness block that used to sit here read `l.gatewayClient`, a field
+	// NOTHING in the package assigns (`Loop.SetGatewayClient` forwarded the
+	// client to the spawner only), so its guard was permanently false and the
+	// fleet packed and spawned straight into a dead gateway: live scheduler.db,
+	// 7 days to 2026-09-18, 793 of 859 failures were
+	// "gateway unreachable and exec fallback disabled" (763 gateway-drain 503s,
+	// 18 connection-refused, 12 probe/POST deadlines) — every one booked as a
+	// lane fault. Its two real effects are preserved, moved to where the
+	// verdict now lives:
+	//   - the DEAD transition (gatewayDead latch + SlotPool.ReleaseAll) rides
+	//     the first deferral of an outage episode — noteGatewayDeadOnce;
+	//   - the RECONNECT transition (gatewayDead clear + SCHED-GAP-091 orphan
+	//     re-nudge) rides the first project the gate admits again —
+	//     noteGatewayReconnectedOnce — so it still runs BEFORE this pass's
+	//     spawns, exactly as before.
+	// gatewayDeferred counts this pass's deferrals: a pass that deferred
+	// anything is an outage pass and (as before) does not run the escalator.
+	gatewayDeferred := 0
 
 	// Fire each project into the slot pool. The pool's semaphore limits
 	// concurrency — projects acquire a slot, spawn via gateway in their
@@ -227,11 +222,37 @@ func (l *Loop) evaluate() {
 			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
 			continue
 		}
+		// SCHED-GAP-170: the gateway-health gate — the same defer-not-drop
+		// contract as the load gate above, for the gateway dependency. A spawn
+		// into an unreachable gateway is a spawn that WILL fail (793 of the
+		// fleet's 859 failures in the 7 days to 2026-09-18), so it is not made:
+		// the project keeps its selection, and `continue` costs no row, no
+		// reservation, no slot, no cooldown, no failure and no nudge. The
+		// verdict is cached for gatewayHealthTTL, so this consults one clock
+		// read per project and at most ONE probe per pass (not per project).
+		//
+		// Guarded like the pre-existing liveness block: only a loop that owns a
+		// gateway client can probe, and simulation never touches the gateway
+		// (DOGFOOD-007). Fail-open on an absent client is the gate's own
+		// contract (gateway_health_gate.go).
+		if l.gatewayClientOrNil() != nil && !l.simulate {
+			if deferSpawn, reason, probeErr := GatewayHealthGateShouldDefer(); deferSpawn {
+				l.noteGatewayDeadOnce(reason)
+				l.emitGatewayDeferred(proj.Name, proj.NamespaceID, "", reason, probeErr)
+				gatewayDeferred++
+				continue
+			}
+			l.noteGatewayReconnectedOnce()
+		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)
 	}
 
-	// Alert escalation runs while pool processes ticks.
-	if len(packed) > 0 {
+	// Alert escalation runs while pool processes ticks. SCHED-GAP-170: a pass
+	// that deferred every packed project to an unreachable gateway spawned
+	// nothing, so it must not run the escalator either — the pre-existing
+	// liveness block returned before this code for that reason, and an outage
+	// must never feed the failure-rate / auto-disable machinery.
+	if len(packed) > 0 && gatewayDeferred == 0 {
 		l.mu.RLock()
 		policy := l.autoDisablePolicy
 		l.mu.RUnlock()
@@ -289,6 +310,55 @@ func (l *Loop) emitLoadGateDeferred(project, nsID, tickID string) {
 	}
 	l.events.Emit(context.Background(), SeverityInfo, "load_gate",
 		"load gate deferred "+project, details)
+}
+
+// emitGatewayDeferred records a gateway-health deferral (SCHED-GAP-170): the
+// grep-stable GATEWAY-DEFER line plus one INFO `loop` event per deferral with a
+// stable `event_type=gateway_defer` marker, so a deferred spawn is queryable
+// after the fact instead of being inferable only from the absence of a tick row.
+//
+// The event is what makes the gate auditable in both directions:
+//
+//   - `event_type=gateway_defer` is the machine marker (queryable;
+//     `json_extract(details,'$.event_type')`);
+//   - `reason` carries the CACHED PROBE ERROR VERBATIM (the ticket's "do not
+//     swallow the real error"): "connection refused", "context deadline
+//     exceeded", "gateway health: HTTP 503 …" — the operator sees the actual
+//     failure, not a generic "unreachable";
+//   - `project` + `namespace` attribute the deferral (a namespace opt-out or a
+//     single lane can then be ruled in/out), and `deferred=true` mirrors the
+//     load-gate payload so both deferral kinds can be counted by one query.
+//
+// tickID is "" when the deferral precedes any row (the evaluation path, where
+// nothing was enqueued). Loop.SpawnNow passes the stored row's id — the row
+// stays `queued` there because the API contract requires the returned id to
+// resolve, so the id is how a caller tells "deferred" from "spawned".
+func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeErr error) {
+	if reason == "" && probeErr != nil {
+		reason = probeErr.Error()
+	}
+	if tickID == "" {
+		log.Printf("GATEWAY-DEFER: deferring %s — %s (no row enqueued; re-picked when the gateway answers)",
+			project, reason)
+	} else {
+		log.Printf("GATEWAY-DEFER: deferring %s (tick %s) — %s (row stays queued, not started)",
+			project, tickID, reason)
+	}
+	if l.events == nil {
+		return
+	}
+	details := map[string]any{
+		"project":    project,
+		"namespace":  nsID,
+		"event_type": "gateway_defer",
+		"reason":     reason,
+		"deferred":   true,
+	}
+	if tickID != "" {
+		details["tick_id"] = tickID
+	}
+	l.events.Emit(context.Background(), SeverityInfo, "loop",
+		"gateway deferral for "+project, details)
 }
 
 func (l *Loop) evalContext(ctx context.Context) ([]string, map[string]time.Time) {
