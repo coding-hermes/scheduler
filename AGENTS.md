@@ -130,6 +130,7 @@ In tests, install a simulator with `l.SetClock(clock.NewSimClockAt(1000, time.No
 | `/api/v1/status` | Fleet status summary (JSON) |
 | `/api/v1/projects` | List/manage projects |
 | `/api/v1/namespaces` | List namespaces |
+| `/api/v1/namespaces/{id}` | Namespace detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true` soft-deletes: enabled=false, member projects unassigned, row retained; `?confirm=true&purge=true` hard-deletes the row permanently, SCHED-GAP-097) |
 | `/api/v1/ticks` | List ticks |
 | `/api/v1/events` | List event log (GET) |
 | `/api/v1/evaluate` | Trigger re-evaluation |

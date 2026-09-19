@@ -39,7 +39,7 @@ groups/templates routes are listed in the OpenAPI spec at
 | POST | `/api/v1/projects/{name}/bump` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/unbump` | [§5](#5-projects) |
 | GET, POST | `/api/v1/namespaces` | [§6](#6-namespaces) |
-| GET, PUT | `/api/v1/namespaces/{id}` | [§6](#6-namespaces) |
+| GET, PUT, DELETE | `/api/v1/namespaces/{id}` | [§6](#6-namespaces) |
 | GET | `/api/v1/namespaces/{id}/projects` | [§6](#6-namespaces) |
 | POST | `/api/v1/namespaces/{id}/move` | [§6](#6-namespaces) |
 | GET | `/api/v1/ticks` | [§7](#7-ticks) |
@@ -581,6 +581,44 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/namespaces \
 ```bash
 curl -s -X PUT http://127.0.0.1:9090/api/v1/namespaces/data-cleanup \
   -H 'Content-Type: application/json' -d '{"hard_cap":20,"enabled":true}'
+```
+
+### DELETE /api/v1/namespaces/{id}
+
+**Purpose:** Remove a namespace. `?confirm=true` soft-deletes
+(`enabled=false`, member projects unassigned — `namespace_id` → NULL — row
+retained so historical namespace_ticks stay referentially valid);
+`?confirm=true&purge=true` hard-deletes the row permanently
+(SCHED-GAP-097 — member projects are unassigned and historical
+namespace_ticks keep their namespace_id).
+
+**Query params:**
+
+| Param | Required | Meaning |
+|-------|----------|---------|
+| `confirm` | **yes** | Must be `true` — guards against stray DELETEs (purge has its own confirm; `purge=true` alone is refused) |
+| `purge` | no | `true` = hard-delete the row |
+
+**Response 200:** `{"status":"deleted","namespace":"<id>"}` or
+`{"status":"purged","namespace":"<id>"}`.
+
+**Errors:**
+
+| Case | Status | Body |
+|------|--------|------|
+| Missing `confirm=true` (bare DELETE or `?purge=true` alone) | 400 | `{"error":"confirm=true query param required — this soft-deletes the namespace (enabled=false); add purge=true to permanently remove the row"}` |
+| Unknown namespace | 404 | `{"error":"namespace not found"}` |
+| Namespace has **enabled** member project(s) | 409 | `{"error":"namespace has enabled project(s) assigned — pause or move them first: <comma-separated names>"}` |
+| Wrong method | 405 | `{"error":"GET, PUT, or DELETE only"}` |
+
+```bash
+# Soft-delete: enabled=false, member projects unassigned, row retained
+curl -s -X DELETE "http://127.0.0.1:9090/api/v1/namespaces/data-cleanup?confirm=true"
+# {"namespace":"data-cleanup","status":"deleted"}
+
+# Hard-delete: permanent row removal (pause or move enabled members first)
+curl -s -X DELETE "http://127.0.0.1:9090/api/v1/namespaces/data-cleanup?confirm=true&purge=true"
+# {"namespace":"data-cleanup","status":"purged"}
 ```
 
 ### GET /api/v1/namespaces/{id}/projects
