@@ -3128,3 +3128,20 @@ tasks:
   status: complete
   created_at: '2026-09-19T06:01:35.840422+00:00'
   completed_at: '2026-09-19T06:14:51.275138+00:00'
+- id: SCHED-GAP-176
+  title: 'SCHED-GAP-176: stop emitting ticks.urgency and ticks.weight_used in the
+    REST payload and remove from docs/api.md (surface honesty)'
+  criteria:
+  - "Criterion 1: GET /api/v1/ticks JSON has no 'urgency' or 'weight_used' field on\
+    \ any tick. Criterion 2: GET /api/v1/ticks/<id> JSON has no 'urgency' or 'weight_used'\
+    \ field. Criterion 3: internal/sync/duckbrain.go tickLifecycle struct no longer\
+    \ has Urgency field. Criterion 4: docs/api.md no longer lists urgency or weight_used\
+    \ in the /api/v1/ticks field table. Criterion 5: database.Tick struct still exists;\
+    \ SQL schema column unchanged; no migration. Criterion 6: gofmt -l . empty; go\
+    \ build OK; go vet OK; golangci-lint 0 issues; full 'go test -short -p 1 -count=1\
+    \ ./...' passes. Criterion 7: RED mutation proven \u2014 reverting the json tag\
+    \ in models.go makes the new test FAIL with the expected payload diff. Criterion\
+    \ 8: the implementation commit 8b2424f exists and was pushed."
+  status: complete
+  created_at: '2026-09-19T07:01:44.779396+00:00'
+  completed_at: '2026-09-19T07:09:28.531866+00:00'
