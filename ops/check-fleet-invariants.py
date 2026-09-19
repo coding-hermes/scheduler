@@ -74,7 +74,7 @@ RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
 BOARD_ALLOWED_STATUSES = ("pending", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
 
-CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs",
+CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "targets", "parity", "board-vocab", "board-legacy-status")
 
 
@@ -231,6 +231,37 @@ def main(argv: list[str] | None = None) -> int:
         wd = p.get("workdir") or ""
         if not wd or not os.path.isdir(wd):
             bad("workdirs", name, f"workdir missing: {wd!r}")
+
+    # 5b. adaptive arming (Bane 2026-09-19: "we should not have adaptive cool down
+    # for the satellite lanes"). Adaptive cooldown exists to slow a lane that stops
+    # making progress; satellites are already paced by their family floor and their
+    # namespace cap, so arming one only delays a lane whose job is to report — and an
+    # armed satellite makes its family's cadence unreadable. Disarm, don't debate.
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
+        if m and p.get("adaptive_cooldown"):
+            bad("adaptive", name, "satellite lane is adaptive-armed — satellites must never arm adaptive cooldown")
+
+    # 5c. boards --------------------------------------------------------------
+    # A lane must be able to read its work. A satellite reads its PRIMARY's board, so a
+    # missing board link means the lane runs blind (measured 2026-09-19: 11 -pm lanes had
+    # none while their targets did). Repo-less lanes (a sync lane targeting a DuckBrain
+    # data source with no project row) are the documented exception — reported as INFO,
+    # never a violation.
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        wd = p.get("workdir") or ""
+        if not wd or not os.path.isdir(wd):
+            continue
+        b = os.path.join(wd, ".coding-hermes", "board")
+        if os.path.exists(b) or os.path.islink(b):
+            continue
+        m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
+        if m and m.group(1) in projects:
+            bad("boards", name, f"board does not resolve in {wd!r} while its target {m.group(1)!r} exists")
 
     # 6. satellite targets ----------------------------------------------------
     # A sync lane may legitimately target a DuckBrain data source rather than a
