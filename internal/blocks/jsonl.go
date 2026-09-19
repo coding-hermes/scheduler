@@ -44,6 +44,7 @@ func loadJSONL[T any](path string, key func(*T) string) ([]T, error) {
 	if len(data) == 0 {
 		return out, nil
 	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 
 	// A file not ending in '\n' has a torn final fragment — a crash or
 	// external write interrupted it. Drop the fragment and warn (never fail).
