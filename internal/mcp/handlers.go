@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -224,6 +225,21 @@ func friendlyCreateError(name string, err error) error {
 	}
 }
 
+// tickRow is the fleet_ticks wire shape. Field names/tags are the S06
+// snake_case contract shared with /api/v1/ticks; nullable columns render as
+// "" / 0 here exactly the way the REST surface's COALESCE does.
+type tickRow struct {
+	ID           string `json:"id"`
+	ProjectName  string `json:"project_name"`
+	Status       string `json:"status"`
+	Outcome      string `json:"outcome"`
+	SpawnedAt    string `json:"spawned_at"`
+	CompletedAt  string `json:"completed_at"`
+	ExitCode     int    `json:"exit_code"`
+	Commits      int    `json:"commits"`
+	FilesChanged int    `json:"files_changed"`
+}
+
 func (s *Server) toolFleetTicks(ctx context.Context, args map[string]interface{}) (string, error) {
 	project := getStringArg(args, "project")
 	limit := getIntArg(args, "limit")
@@ -244,22 +260,47 @@ func (s *Server) toolFleetTicks(ctx context.Context, args map[string]interface{}
 		return "", err
 	}
 	defer rows.Close()
-	type tickRow struct {
-		ID           string `json:"id"`
-		ProjectName  string `json:"project_name"`
-		Status       string `json:"status"`
-		Outcome      string `json:"outcome"`
-		SpawnedAt    string `json:"spawned_at"`
-		CompletedAt  string `json:"completed_at"`
-		ExitCode     int    `json:"exit_code"`
-		Commits      int    `json:"commits"`
-		FilesChanged int    `json:"files_changed"`
-	}
 	var ticks []tickRow
 	for rows.Next() {
-		var t tickRow
-		rows.Scan(&t.ID, &t.ProjectName, &t.Status, &t.Outcome, &t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged)
+		var (
+			t            tickRow
+			outcome      sql.NullString
+			spawnedAt    sql.NullString
+			completedAt  sql.NullString
+			exitCode     sql.NullInt64
+			commits      sql.NullInt64
+			filesChanged sql.NullInt64
+		)
+		// Nullable columns scan into sql.Null* — an in-flight tick has NULL
+		// outcome/completed_at/exit_code, and a scan error here used to be
+		// discarded (SCHED-GAP-175): the row was still appended, so every
+		// column from the first NULL onward silently rendered as "", 0.
+		if err := rows.Scan(&t.ID, &t.ProjectName, &t.Status,
+			&outcome, &spawnedAt, &completedAt, &exitCode, &commits, &filesChanged); err != nil {
+			return "", fmt.Errorf("scan tick row: %w", err)
+		}
+		if outcome.Valid {
+			t.Outcome = outcome.String
+		}
+		if spawnedAt.Valid {
+			t.SpawnedAt = spawnedAt.String
+		}
+		if completedAt.Valid {
+			t.CompletedAt = completedAt.String
+		}
+		if exitCode.Valid {
+			t.ExitCode = int(exitCode.Int64)
+		}
+		if commits.Valid {
+			t.Commits = int(commits.Int64)
+		}
+		if filesChanged.Valid {
+			t.FilesChanged = int(filesChanged.Int64)
+		}
 		ticks = append(ticks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
 	}
 	return jsonString(map[string]interface{}{"ticks": ticks, "count": len(ticks)}), nil
 }

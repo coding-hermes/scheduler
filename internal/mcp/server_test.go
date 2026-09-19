@@ -799,6 +799,118 @@ func TestMCP_FleetTicks_SnakeCaseWire(t *testing.T) {
 	}
 }
 
+// fetchFleetTicks calls the fleet_ticks MCP tool and returns its JSON text.
+func fetchFleetTicks(t *testing.T, m *mcpTestServer, args map[string]interface{}) string {
+	t.Helper()
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_ticks",
+			"arguments": args,
+		},
+	})
+	if resp.Error != nil {
+		t.Fatalf("fleet_ticks error: %+v", resp.Error)
+	}
+	return extractText(t, resp.Result)
+}
+
+// TestMCP_FleetTicks_NullableColumnsRendersInFlight is the SCHED-GAP-175
+// regression guard: an in-flight tick (status='running', outcome and
+// completed_at NULL) must render its REAL spawned_at. The pre-fix code scanned
+// the NULL outcome into a plain string, discarded the resulting rows.Scan
+// error, and appended a row whose nullable fields were all zero values —
+// spawned_at came back as "" while /api/v1/ticks returned the real value.
+func TestMCP_FleetTicks_NullableColumnsRendersInFlight(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	// outcome / completed_at / exit_code stay NULL (commits and files_changed
+	// carry their schema DEFAULT 0) — the exact shape of a running tick.
+	if _, err := m.db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES ('in-flight-tick-1', 'alpha', 'running', '2026-09-19T10:00:00Z', '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	text := fetchFleetTicks(t, m, map[string]interface{}{})
+	for _, want := range []string{
+		`"id":"in-flight-tick-1"`,
+		`"status":"running"`,
+		`"spawned_at":"2026-09-19T10:00:00Z"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("in-flight tick missing %s; got: %s", want, text)
+		}
+	}
+}
+
+// TestMCP_FleetTicks_CompletedTickKeepsNullableFields pins the other half of the
+// contract: a fully-populated completed tick renders every nullable column with
+// its real value (no "" / 0 degradation on the happy path).
+func TestMCP_FleetTicks_CompletedTickKeepsNullableFields(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, created_at)
+		VALUES ('completed-tick-1', 'alpha', 'completed', 'committed',
+			'2026-09-19T10:00:00Z', '2026-09-19T10:30:00Z', 0, 3, 5, '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	text := fetchFleetTicks(t, m, map[string]interface{}{})
+	for _, want := range []string{
+		`"id":"completed-tick-1"`,
+		`"status":"completed"`,
+		`"outcome":"committed"`,
+		`"spawned_at":"2026-09-19T10:00:00Z"`,
+		`"completed_at":"2026-09-19T10:30:00Z"`,
+		`"exit_code":0`,
+		`"commits":3`,
+		`"files_changed":5`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("completed tick missing %s; got: %s", want, text)
+		}
+	}
+}
+
+// TestMCP_FleetTicks_MixedBatchPartialCompletion proves a batch holding an
+// in-flight row next to a completed one is not lost or degraded by the NULL
+// columns of the running row: both rows come back, the running row carries its
+// real spawned_at, and the completed row keeps outcome + commits.
+func TestMCP_FleetTicks_MixedBatchPartialCompletion(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	if _, err := m.db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES ('mixed-running-1', 'alpha', 'running', '2026-09-19T11:00:00Z', '2026-09-19T11:00:00Z')`); err != nil {
+		t.Fatalf("insert running tick: %v", err)
+	}
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, commits, created_at)
+		VALUES ('mixed-completed-1', 'alpha', 'completed', 'committed',
+			'2026-09-19T10:00:00Z', '2026-09-19T10:30:00Z', 2, '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert completed tick: %v", err)
+	}
+
+	text := fetchFleetTicks(t, m, map[string]interface{}{"limit": 10})
+	for _, want := range []string{
+		`"count":2`,
+		`"id":"mixed-running-1"`,
+		`"id":"mixed-completed-1"`,
+		`"spawned_at":"2026-09-19T11:00:00Z"`,
+		`"outcome":"committed"`,
+		`"commits":2`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("mixed batch missing %s; got: %s", want, text)
+		}
+	}
+}
+
 func TestMCP_FleetEvaluate(t *testing.T) {
 	m := newMCPTestServer(t)
 	_, resp := m.call(t, map[string]interface{}{
