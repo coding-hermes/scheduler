@@ -51,8 +51,12 @@ func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]int
 		return "", err
 	}
 	// Get last 5 ticks.
-	rows, _ := s.db.QueryContext(ctx, `SELECT id, status, outcome, spawned_at, completed_at, commits, files_changed 
+	rows, err := s.db.QueryContext(ctx, `SELECT id, status, outcome, spawned_at, completed_at, commits, files_changed 
 		FROM ticks WHERE project_name=? ORDER BY spawned_at DESC LIMIT 5`, name)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
 	type tickSummary struct {
 		ID           string `json:"id"`
 		Status       string `json:"status"`
@@ -63,13 +67,43 @@ func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]int
 		FilesChanged int    `json:"files_changed"`
 	}
 	var ticks []tickSummary
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var ts tickSummary
-			rows.Scan(&ts.ID, &ts.Status, &ts.Outcome, &ts.SpawnedAt, &ts.CompletedAt, &ts.Commits, &ts.FilesChanged)
-			ticks = append(ticks, ts)
+	for rows.Next() {
+		var (
+			ts           tickSummary
+			outcome      sql.NullString
+			spawnedAt    sql.NullString
+			completedAt  sql.NullString
+			commits      sql.NullInt64
+			filesChanged sql.NullInt64
+		)
+		// Nullable columns scan into sql.Null* — an in-flight tick has NULL
+		// outcome/completed_at/commits/files_changed, and a scan error here used
+		// to be discarded (SCHED-GAP-175b): the row was still appended, so every
+		// column from the first NULL onward silently rendered as "", 0 while
+		// REST GET /api/v1/ticks carried the real timestamp.
+		if err := rows.Scan(&ts.ID, &ts.Status,
+			&outcome, &spawnedAt, &completedAt, &commits, &filesChanged); err != nil {
+			return "", fmt.Errorf("scan recent tick row: %w", err)
 		}
+		if outcome.Valid {
+			ts.Outcome = outcome.String
+		}
+		if spawnedAt.Valid {
+			ts.SpawnedAt = spawnedAt.String
+		}
+		if completedAt.Valid {
+			ts.CompletedAt = completedAt.String
+		}
+		if commits.Valid {
+			ts.Commits = int(commits.Int64)
+		}
+		if filesChanged.Valid {
+			ts.FilesChanged = int(filesChanged.Int64)
+		}
+		ticks = append(ticks, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
 	}
 	return jsonString(map[string]interface{}{"project": p, "recent_ticks": ticks}), nil
 }

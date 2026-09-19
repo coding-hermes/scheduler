@@ -318,6 +318,204 @@ func TestMCP_FleetProjectDetail_MissingName(t *testing.T) {
 	}
 }
 
+// detailTickWire mirrors the tickSummary struct fleet_project_detail emits in
+// recent_ticks (handlers.go), so tests assert the wire contract structurally
+// instead of only by substring.
+type detailTickWire struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Outcome      string `json:"outcome"`
+	SpawnedAt    string `json:"spawned_at"`
+	CompletedAt  string `json:"completed_at"`
+	Commits      int    `json:"commits"`
+	FilesChanged int    `json:"files_changed"`
+}
+
+type detailProjectWire struct {
+	RecentTicks []detailTickWire `json:"recent_ticks"`
+}
+
+// fetchFleetProjectDetail calls the fleet_project_detail MCP tool and returns
+// its JSON text.
+func fetchFleetProjectDetail(t *testing.T, m *mcpTestServer, name string) string {
+	t.Helper()
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_project_detail",
+			"arguments": map[string]interface{}{"name": name},
+		},
+	})
+	if resp.Error != nil {
+		t.Fatalf("fleet_project_detail error: %+v", resp.Error)
+	}
+	return extractText(t, resp.Result)
+}
+
+// tickByID returns the recent_ticks entry with the given id, failing when the
+// row is absent (an absent row is a different defect than a degraded one).
+func tickByID(t *testing.T, ticks []detailTickWire, id string) detailTickWire {
+	t.Helper()
+	for _, tk := range ticks {
+		if tk.ID == id {
+			return tk
+		}
+	}
+	t.Fatalf("recent_ticks missing tick %q; got: %+v", id, ticks)
+	return detailTickWire{}
+}
+
+// TestMCP_FleetProjectDetail_NullableColumnsRendersInFlight is the
+// SCHED-GAP-175b regression guard: an in-flight tick (status='running',
+// outcome/completed_at/commits/files_changed NULL) must render its REAL
+// spawned_at. The pre-fix code scanned the NULL outcome into a plain string,
+// discarded the resulting rows.Scan error, and appended a row whose nullable
+// fields were all zero values — spawned_at came back as "" over MCP while
+// REST GET /api/v1/ticks returned the real timestamp.
+func TestMCP_FleetProjectDetail_NullableColumnsRendersInFlight(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	// The exact shape of a running tick: outcome / completed_at / commits /
+	// files_changed all NULL, spawned_at carrying the real start instant.
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, commits, files_changed, created_at)
+		VALUES ('detail-in-flight-1', 'alpha', 'running', NULL,
+			'2026-09-19T10:00:00Z', NULL, NULL, NULL, '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	text := fetchFleetProjectDetail(t, m, "alpha")
+	for _, want := range []string{
+		`"id":"detail-in-flight-1"`,
+		`"status":"running"`,
+		`"spawned_at":"2026-09-19T10:00:00Z"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("in-flight tick missing %s; got: %s", want, text)
+		}
+	}
+
+	// Structural restatement of the same invariant: the running row's
+	// spawned_at must be the real value, not the zero-value fallback.
+	var parsed detailProjectWire
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("unmarshal detail payload: %v (%s)", err, text)
+	}
+	got := tickByID(t, parsed.RecentTicks, "detail-in-flight-1")
+	if got.SpawnedAt != "2026-09-19T10:00:00Z" {
+		t.Errorf("in-flight tick spawned_at = %q, want %q (NULL columns must not degrade it)",
+			got.SpawnedAt, "2026-09-19T10:00:00Z")
+	}
+	for _, col := range []string{got.Outcome, got.CompletedAt} {
+		if col != "" {
+			t.Errorf("in-flight NULL text column = %q, want \"\"", col)
+		}
+	}
+	if got.Commits != 0 || got.FilesChanged != 0 {
+		t.Errorf("in-flight NULL counters = %d/%d, want 0/0", got.Commits, got.FilesChanged)
+	}
+}
+
+// TestMCP_FleetProjectDetail_CompletedTickKeepsNullableFields pins the other
+// half of the contract: a fully-populated completed tick renders every nullable
+// column with its real value (no "" / 0 degradation on the happy path).
+func TestMCP_FleetProjectDetail_CompletedTickKeepsNullableFields(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, created_at)
+		VALUES ('detail-completed-1', 'alpha', 'completed', 'committed',
+			'2026-09-19T10:00:00Z', '2026-09-19T10:30:00Z', 0, 3, 5, '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	text := fetchFleetProjectDetail(t, m, "alpha")
+	for _, want := range []string{
+		`"id":"detail-completed-1"`,
+		`"status":"completed"`,
+		`"outcome":"committed"`,
+		`"spawned_at":"2026-09-19T10:00:00Z"`,
+		`"completed_at":"2026-09-19T10:30:00Z"`,
+		`"commits":3`,
+		`"files_changed":5`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("completed tick missing %s; got: %s", want, text)
+		}
+	}
+
+	var parsed detailProjectWire
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("unmarshal detail payload: %v (%s)", err, text)
+	}
+	got := tickByID(t, parsed.RecentTicks, "detail-completed-1")
+	if got.Outcome != "committed" || got.CompletedAt != "2026-09-19T10:30:00Z" {
+		t.Errorf("completed tick degraded: outcome=%q completed_at=%q", got.Outcome, got.CompletedAt)
+	}
+	if got.Commits != 3 || got.FilesChanged != 5 {
+		t.Errorf("completed tick counters = %d/%d, want 3/5", got.Commits, got.FilesChanged)
+	}
+}
+
+// TestMCP_FleetProjectDetail_MixedBatchPartialCompletion proves a batch holding
+// an in-flight row next to a completed one is not lost or degraded by the NULL
+// columns of the running row: both rows come back, the running row carries its
+// real spawned_at, and the completed row keeps outcome + commits.
+func TestMCP_FleetProjectDetail_MixedBatchPartialCompletion(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, commits, files_changed, created_at)
+		VALUES ('detail-mixed-running-1', 'alpha', 'running', NULL,
+			'2026-09-19T11:00:00Z', NULL, NULL, NULL, '2026-09-19T11:00:00Z')`); err != nil {
+		t.Fatalf("insert running tick: %v", err)
+	}
+	if _, err := m.db.Exec(`INSERT INTO ticks
+		(id, project_name, status, outcome, spawned_at, completed_at, commits, files_changed, created_at)
+		VALUES ('detail-mixed-completed-1', 'alpha', 'completed', 'committed',
+			'2026-09-19T10:00:00Z', '2026-09-19T10:30:00Z', 2, 1, '2026-09-19T10:00:00Z')`); err != nil {
+		t.Fatalf("insert completed tick: %v", err)
+	}
+
+	text := fetchFleetProjectDetail(t, m, "alpha")
+	for _, want := range []string{
+		`"id":"detail-mixed-running-1"`,
+		`"id":"detail-mixed-completed-1"`,
+		`"spawned_at":"2026-09-19T11:00:00Z"`,
+		`"outcome":"committed"`,
+		`"commits":2`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("mixed batch missing %s; got: %s", want, text)
+		}
+	}
+
+	var parsed detailProjectWire
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("unmarshal detail payload: %v (%s)", err, text)
+	}
+	if len(parsed.RecentTicks) != 2 {
+		t.Fatalf("recent_ticks len = %d, want 2; got: %+v", len(parsed.RecentTicks), parsed.RecentTicks)
+	}
+	running := tickByID(t, parsed.RecentTicks, "detail-mixed-running-1")
+	if running.SpawnedAt == "" {
+		t.Errorf("running tick spawned_at is EMPTY (pre-fix zero-value fallback); row: %+v", running)
+	}
+	if running.SpawnedAt != "2026-09-19T11:00:00Z" {
+		t.Errorf("running tick spawned_at = %q, want %q", running.SpawnedAt, "2026-09-19T11:00:00Z")
+	}
+	completed := tickByID(t, parsed.RecentTicks, "detail-mixed-completed-1")
+	if completed.Outcome != "committed" || completed.Commits != 2 {
+		t.Errorf("completed tick degraded by sibling NULL row: outcome=%q commits=%d",
+			completed.Outcome, completed.Commits)
+	}
+}
+
 func TestMCP_FleetSetWeight(t *testing.T) {
 	m := newMCPTestServer(t)
 	mustCreateMCPProject(t, m.db, "alpha")
