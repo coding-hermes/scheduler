@@ -290,7 +290,9 @@ func TestConformance_WireFormat_Status(t *testing.T) {
 }
 
 // TestConformance_WireFormat_Ticks asserts tick records serialize snake_case
-// (project_name, session_id, spawned_at, weight_used, cost_usd).
+// (project_name, session_id, spawned_at, cost_usd). weight_used is deliberately
+// NOT in the expected key set: SCHED-GAP-176 dropped urgency/weight_used from
+// the payload (structurally always zero — RecordTickMetrics is dead code).
 func TestConformance_WireFormat_Ticks(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
@@ -314,12 +316,12 @@ func TestConformance_WireFormat_Ticks(t *testing.T) {
 		t.Fatalf("got %d ticks, want 1", len(ticks))
 	}
 	tk := ticks[0].(map[string]interface{})
-	for _, key := range []string{"id", "project_name", "session_id", "status", "spawned_at", "completed_at", "exit_code", "tokens_in", "tokens_out", "cost_usd", "weight_used", "created_at"} {
+	for _, key := range []string{"id", "project_name", "session_id", "status", "spawned_at", "completed_at", "exit_code", "tokens_in", "tokens_out", "cost_usd", "created_at"} {
 		if _, ok := tk[key]; !ok {
 			t.Errorf("ticks[0] missing snake_case key %q: %v", key, tk)
 		}
 	}
-	for _, key := range []string{"ID", "ProjectName", "SessionID", "SpawnedAt", "WeightUsed", "CostUSD"} {
+	for _, key := range []string{"ID", "ProjectName", "SessionID", "SpawnedAt", "CostUSD"} {
 		if _, ok := tk[key]; ok {
 			t.Errorf("ticks[0] has legacy PascalCase key %q — wire format must be snake_case", key)
 		}

@@ -179,9 +179,12 @@ func TestAPI_TickByID_WaveFields(t *testing.T) {
 		t.Errorf("tick_workers[0] wrong: %v", w0)
 	}
 	// Every pre-v27 Tick field must still ride along in the wave envelope.
+	// SCHED-GAP-176 removed urgency/weight_used: both are structurally
+	// always zero (their only writer, database.RecordTickMetrics, is dead
+	// code), so the payload no longer emits them at all.
 	for _, key := range []string{"id", "project_name", "session_id", "status", "spawned_at",
 		"completed_at", "exit_code", "commits", "files_changed", "tokens_in", "tokens_out",
-		"cost_usd", "urgency", "weight_used", "error", "created_at"} {
+		"cost_usd", "error", "created_at"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("wave tick envelope missing pre-v27 key %q: %v", key, body)
 		}

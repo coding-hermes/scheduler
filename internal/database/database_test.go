@@ -625,8 +625,19 @@ func TestRecordTickMetrics(t *testing.T) {
 	if got.CostUSD != 0.42 {
 		t.Errorf("cost=%f, want 0.42", got.CostUSD)
 	}
-	if got.Urgency != 7.5 {
-		t.Errorf("urgency=%f, want 7.5", got.Urgency)
+	// SCHED-GAP-176: GetTick no longer reads urgency/weight_used (the REST
+	// payload dropped both, so the read was pure overhead), but the schema
+	// columns and RecordTickMetrics must keep accepting writes — the columns
+	// are read back through SQL.
+	var urgency float64
+	var weightUsed int
+	if err := db.QueryRowContext(ctx,
+		`SELECT urgency, weight_used FROM ticks WHERE id = ?`, tk.ID).
+		Scan(&urgency, &weightUsed); err != nil {
+		t.Fatalf("read back urgency/weight_used: %v", err)
+	}
+	if urgency != 7.5 || weightUsed != 10 {
+		t.Errorf("urgency=%f weight_used=%d, want 7.5/10 (schema column still accepts writes)", urgency, weightUsed)
 	}
 }
 

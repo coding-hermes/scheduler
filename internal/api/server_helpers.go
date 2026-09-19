@@ -217,8 +217,6 @@ func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.T
 		       COALESCE(tokens_in,0) as tokens_in,
 		       COALESCE(tokens_out,0) as tokens_out,
 		       COALESCE(cost_usd,0.0) as cost_usd,
-		       COALESCE(urgency,0.0) as urgency,
-		       COALESCE(weight_used,0) as weight_used,
 		       COALESCE(error,'') as error,
 		       created_at
 		FROM ticks WHERE project_name = ? ORDER BY spawned_at DESC LIMIT 1
@@ -226,7 +224,7 @@ func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.T
 	var t database.Tick
 	err := row.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed, &t.Error, &t.CreatedAt)
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -245,8 +243,6 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 		       COALESCE(tokens_in,0) as tokens_in,
 		       COALESCE(tokens_out,0) as tokens_out,
 		       COALESCE(cost_usd,0.0) as cost_usd,
-		       COALESCE(urgency,0.0) as urgency,
-		       COALESCE(weight_used,0.0) as weight_used,
 		       COALESCE(error,'') as error,
 		       created_at,
 		       COALESCE(worker_count,0) as worker_count,
@@ -256,7 +252,7 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 	var t database.Tick
 	err := row.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed, &t.Error, &t.CreatedAt,
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt,
 		&t.WorkerCount, &t.WaveRecovery)
 	if err != nil {
 		return nil, err
@@ -265,7 +261,7 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 }
 
 func listTicks(ctx context.Context, db *sql.DB, project, status string, limit int) ([]database.Tick, error) {
-	q := "SELECT id, project_name, COALESCE(session_id,'') as session_id, status, COALESCE(outcome,'') as outcome, COALESCE(spawned_at,'') as spawned_at, COALESCE(completed_at,'') as completed_at, COALESCE(exit_code,0) as exit_code, COALESCE(commits,0) as commits, COALESCE(files_changed,0) as files_changed, COALESCE(tokens_in,0) as tokens_in, COALESCE(tokens_out,0) as tokens_out, COALESCE(cost_usd,0.0) as cost_usd, COALESCE(urgency,0.0) as urgency, COALESCE(weight_used,0) as weight_used, COALESCE(error,'') as error, created_at FROM ticks WHERE 1=1"
+	q := "SELECT id, project_name, COALESCE(session_id,'') as session_id, status, COALESCE(outcome,'') as outcome, COALESCE(spawned_at,'') as spawned_at, COALESCE(completed_at,'') as completed_at, COALESCE(exit_code,0) as exit_code, COALESCE(commits,0) as commits, COALESCE(files_changed,0) as files_changed, COALESCE(tokens_in,0) as tokens_in, COALESCE(tokens_out,0) as tokens_out, COALESCE(cost_usd,0.0) as cost_usd, COALESCE(error,'') as error, created_at FROM ticks WHERE 1=1"
 	var args []interface{}
 	if project != "" {
 		q += " AND project_name = ?"
@@ -289,7 +285,7 @@ func listTicks(ctx context.Context, db *sql.DB, project, status string, limit in
 		var t database.Tick
 		if err := rows.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Urgency, &t.WeightUsed, &t.Error, &t.CreatedAt); err != nil {
+			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		ticks = append(ticks, t)

@@ -719,7 +719,6 @@ type tickLifecycle struct {
 	Commits      int     `json:"commits"`
 	FilesChanged int     `json:"files_changed"`
 	CostUSD      float64 `json:"cost_usd"`
-	Urgency      float64 `json:"urgency"`
 	Error        string  `json:"error"`
 }
 
@@ -738,7 +737,6 @@ func (d *DuckBrainSync) syncTickLifecycle(ctx context.Context) error {
 			COALESCE(commits, 0),
 			COALESCE(files_changed, 0),
 			COALESCE(cost_usd, 0.0),
-			COALESCE(urgency, 0.0),
 			COALESCE(error, '')
 		FROM ticks
 		ORDER BY created_at DESC, id DESC
@@ -752,7 +750,7 @@ func (d *DuckBrainSync) syncTickLifecycle(ctx context.Context) error {
 		var t tickLifecycle
 		if err := rows.Scan(&t.ID, &t.ProjectName, &t.Status,
 			&t.Outcome, &t.SpawnedAt, &t.CompletedAt, &t.ExitCode,
-			&t.Commits, &t.FilesChanged, &t.CostUSD, &t.Urgency, &t.Error); err != nil {
+			&t.Commits, &t.FilesChanged, &t.CostUSD, &t.Error); err != nil {
 			log.Printf("SYNC: scan tick row: %v", err)
 			continue
 		}

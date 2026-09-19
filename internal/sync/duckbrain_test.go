@@ -665,6 +665,7 @@ func TestSyncTicks_PostsTicks(t *testing.T) {
 	}
 
 	received := map[string]tickLifecycle{}
+	rawFields := map[string]map[string]any{}
 	domains := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var env postMemoryBody
@@ -675,7 +676,12 @@ func TestSyncTicks_PostsTicks(t *testing.T) {
 		if err := json.Unmarshal([]byte(env.Content), &tl); err != nil {
 			t.Errorf("unmarshal content: %v", err)
 		}
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(env.Content), &fields); err != nil {
+			t.Errorf("unmarshal content fields: %v", err)
+		}
 		received[env.Key] = tl
+		rawFields[env.Key] = fields
 		domains[env.Key] = env.Domain
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -706,8 +712,17 @@ func TestSyncTicks_PostsTicks(t *testing.T) {
 	if gotOK.ProjectName != "p1" || gotOK.Status != "completed" || gotOK.Outcome != "committed" ||
 		gotOK.SpawnedAt != "2026-07-31T10:00:00Z" || gotOK.CompletedAt != "2026-07-31T10:35:00Z" ||
 		gotOK.ExitCode != 0 || gotOK.Commits != 3 || gotOK.FilesChanged != 12 ||
-		gotOK.CostUSD != 0.42 || gotOK.Urgency != 7.5 || gotOK.Error != "" {
+		gotOK.CostUSD != 0.42 || gotOK.Error != "" {
 		t.Errorf("completed tick payload = %+v", gotOK)
+	}
+	// SCHED-GAP-176: the sync payload carries no urgency/weight_used either —
+	// both columns are structurally always zero (database.RecordTickMetrics is
+	// the only writer and is dead code), so the row still holds 7.5 while the
+	// marshaled payload must not carry the field at all.
+	for _, forbidden := range []string{"urgency", "weight_used"} {
+		if _, ok := rawFields[keyOK][forbidden]; ok {
+			t.Errorf("sync tick payload still emits %q: %v", forbidden, rawFields[keyOK])
+		}
 	}
 
 	gotFail, ok := received[keyFail]
@@ -717,7 +732,7 @@ func TestSyncTicks_PostsTicks(t *testing.T) {
 	// NULL columns must arrive as zero values via COALESCE.
 	if gotFail.Status != "failed" || gotFail.Outcome != "" || gotFail.SpawnedAt != "" ||
 		gotFail.CompletedAt != "" || gotFail.ExitCode != 0 || gotFail.Commits != 0 ||
-		gotFail.FilesChanged != 0 || gotFail.CostUSD != 0.0 || gotFail.Urgency != 0.0 ||
+		gotFail.FilesChanged != 0 || gotFail.CostUSD != 0.0 ||
 		gotFail.Error != "" {
 		t.Errorf("failed tick payload (NULL COALESCE) = %+v", gotFail)
 	}

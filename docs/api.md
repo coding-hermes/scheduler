@@ -616,8 +616,6 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `commits`, `files_changed` | int | Work metrics |
 | `tokens_in`, `tokens_out` | int | Token usage |
 | `cost_usd` | float | Dollar cost |
-| `urgency` | float | Urgency score at spawn time |
-| `weight_used` | int | Budget consumed |
 | `error` | string | Error text on failure |
 | `created_at` | string | RFC3339 |
 

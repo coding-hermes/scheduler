@@ -290,10 +290,15 @@ type Tick struct {
 	TokensOut    int64       `json:"tokens_out"`
 	CostUSD      float64     `json:"cost_usd"`
 	CostSource   string      `json:"cost_source"` // ADV-R09/G8: measured | gateway | estimated | simulated | "" (legacy)
-	Urgency      float64     `json:"urgency"`     // urgency score at spawn time
-	WeightUsed   int         `json:"weight_used"`
-	Error        string      `json:"error"`
-	CreatedAt    string      `json:"created_at"`
+	// SCHED-GAP-176 (surface honesty): both columns are structurally always
+	// zero — RecordTickMetrics (internal/database/ticks.go) is their only
+	// writer and is dead code, so the REST payload emitted 0 for every one of
+	// the 72k+ ticks rows. The columns stay in the schema and the struct
+	// fields stay for the dead writer + tests, but nothing serializes them.
+	Urgency    float64 `json:"-"`
+	WeightUsed int     `json:"-"`
+	Error      string  `json:"error"`
+	CreatedAt  string  `json:"created_at"`
 	// SCHED-GAP-091: session resume-after-restart. OrphanedAt is stamped
 	// the moment a previously-running tick's owner (gateway/daemon)
 	// is known to be gone; OrphanReason records which drop path fired.
