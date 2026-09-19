@@ -3175,3 +3175,12 @@ tasks:
   status: complete
   created_at: '2026-09-19T07:54:43.142342+00:00'
   completed_at: '2026-09-19T08:19:42.053561+00:00'
+- id: SCHED-GAP-178
+  title: Satellite coverage + family-floor invariant (ops/check-fleet-invariants.py
+    + test + policy script mirror)
+  criteria:
+  - the checker FAILS on a seeded fixture with one missing qa lane and one satellite
+    whose floor is 21600, and PASSES on the live fleet
+  status: complete
+  created_at: '2026-09-19T16:30:15.977348+00:00'
+  completed_at: '2026-09-19T17:09:35.092753+00:00'
