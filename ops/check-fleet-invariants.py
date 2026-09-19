@@ -30,17 +30,31 @@ Checks
                      nobody — the foreman prompt and the pending-boost counter
                      both read status=="pending" only. Skipped silently when no
                      board file is found (test rigs, old-style workdirs).
+  9. board content dup — two rows with DIFFERENT ids whose non-volatile
+                     content is identical (sha256 over the row minus the
+                     volatile bookkeeping fields the PM cycle overwrites:
+                     timestamps, notes, dispatch counters). The same finding
+                     filed twice inflates the pending-boost count and keeps
+                     the board undrained, so the check fires when a
+                     fingerprint group carries >= 2 rows AND at least one of
+                     them is still open (pending/in_progress). Groups where
+                     every row is closed are exempt — historical boards
+                     legitimately carry similar closure notes. Reported one
+                     line per offending GROUP, all row ids listed. Skipped
+                     silently when no board file is found, same as check 8.
 
 Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
         python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
 
-``--board-only`` runs checks 8-9 and nothing else, so it needs neither the live
+``--board-only`` runs the environment-independent board checks (8-10) and
+nothing else, so it needs neither the live
 DB nor fleet.toml — that is the mode CI uses (a runner has no ~/.hermes state).
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -87,9 +101,27 @@ RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
 BOARD_ALLOWED_STATUSES = ("pending", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
 
+# Board content duplicate detection (check 9, class "board-content-dup").
+# A row's fingerprint is taken over EVERY field except the ones below —
+# the volatile bookkeeping fields the PM/foreman cycle overwrites on every
+# dispatch, so two re-filed copies of one finding differ only there:
+#   id            — by definition distinct between two different rows
+#   created_at / updated_at / dispatched_at / completed_at — timestamps
+#   review_notes / foreman_note / worker_summary — audit prose
+#   attempts / events_count — dispatch counters
+VOLATILE_FINGERPRINT_FIELDS = (
+    "id", "created_at", "updated_at", "dispatched_at", "completed_at",
+    "review_notes", "foreman_note", "worker_summary", "attempts", "events_count",
+)
+# Statuses where a content-duplicate still matters: a duplicated finding that
+# is still open inflates the pending-boost counter (board_awareness.go) and
+# keeps the board undrained. Closed rows are exempt.
+CONTENT_DUP_OPEN_STATUSES = ("pending", "in_progress")
+CONTENT_DUP_CLASS = "board-content-dup"
+
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
-                 "board-vocab", "board-legacy-status")
+                 "board-vocab", "board-legacy-status", "board-content-dup")
 
 
 def find_board_path(start: str) -> str | None:
@@ -126,6 +158,20 @@ def board_row_status(row: dict) -> str:
     if raw is None:
         return ""
     return str(raw).lower().strip()
+
+
+def compute_content_fingerprint(row: dict) -> str:
+    """Stable content fingerprint of a board row: sha256 over the row minus
+    the volatile bookkeeping fields (:data:`VOLATILE_FINGERPRINT_FIELDS`),
+    serialized with sorted keys and compact separators so the digest depends
+    only on the CONTENT, never on dict order or formatting.
+
+    Two rows with the same fingerprint carry byte-identical findings once the
+    volatile fields the PM cycle overwrites are ignored.
+    """
+    content = {k: v for k, v in row.items() if k not in VOLATILE_FINGERPRINT_FIELDS}
+    serialized = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
 def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
@@ -395,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         if tv is not None and int(tv) != int(row.get("max_concurrent") or 0):
             bad("parity", ns, f"max_concurrent: db={row.get('max_concurrent')} toml={tv}")
 
-    # 8. board vocabulary -----------------------------------------------------
+    # 8. board vocabulary + 9. board content duplicates ------------------------
     # Writer-side gate (SCHED-GAP-164). The daemon's READERS accept a wide open
     # vocabulary for forward compatibility (internal/scheduler/board_freshness.go
     # openStatuses), but only status=="pending" is dispatchable: the foreman
@@ -407,9 +453,17 @@ def main(argv: list[str] | None = None) -> int:
     # Same rule as Go's scheduler.ValidateBoardVocab (internal/scheduler/
     # board_vocab.go); the expected sets are pinned equal by
     # TestBoardVocabValidator_AllowedSetMatchesPythonGate.
+    #
+    # Check 9 (SCHED-GAP-172) rides the same file pass: it groups rows by their
+    # compute_content_fingerprint() and flags any group with >= 2 rows where at
+    # least one row is still open (pending/in_progress). Reported ONE line per
+    # offending GROUP with every row id listed (a pair file becomes a triple
+    # after one more copy-paste — per-group keeps one finding per real
+    # duplicate, not an O(n²) wall of pairs).
     board = args.board or find_board_path(os.path.dirname(os.path.abspath(__file__)))
     if board and os.path.isfile(board):
         rows = legacy = 0
+        by_fingerprint: dict[str, list[tuple[str, str]]] = {}
         with open(board, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.strip()
@@ -423,16 +477,27 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 rows += 1
                 status = board_row_status(row)
-                if status in BOARD_ALLOWED_STATUSES:
-                    continue
                 rid = board_row_id(row)
-                if status in BOARD_LEGACY_CLOSED_STATUSES:
+                if status in BOARD_ALLOWED_STATUSES:
+                    pass
+                elif status in BOARD_LEGACY_CLOSED_STATUSES:
                     legacy += 1
                     bad("board-legacy-status", rid, f"status={status} (use 'complete')")
                 else:
                     bad("board-vocab", rid, f"status={status}")
+                # 9. board content dup — fingerprint every parseable dict row,
+                # closed or open; the exemption happens at flag time.
+                by_fingerprint.setdefault(compute_content_fingerprint(row), []).append(
+                    (rid, status))
         info.append({"class": "board-vocab", "subject": board,
                      "detail": f"{rows} row(s) scanned, {legacy} legacy closed spelling(s)"})
+        for fp, members in by_fingerprint.items():
+            if len(members) < 2:
+                continue
+            if not any(st in CONTENT_DUP_OPEN_STATUSES for _, st in members):
+                continue  # all-closed groups are exempt (historical closure notes)
+            bad(CONTENT_DUP_CLASS, f"[{','.join(rid for rid, _ in members)}]",
+                f"identical content (fingerprint {fp})")
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:
