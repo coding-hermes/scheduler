@@ -619,7 +619,15 @@ func main() {
 	// MCP serves the SAME JSONL block stores as the REST API (CTL-001):
 	// both transports read/write one groups.jsonl + templates.jsonl.
 	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
-	dashGen := dashboard.NewGenerator(db, *gatewayURL)
+	// SCHED-GAP-174: /queue and /api/v1/queue must answer with ONE urgency.
+	// The dashboard ranks with the same calculator the API server builds from
+	// the resolved interval range (SetResolvedConfig →
+	// newUrgencyCalculatorFromConfig over the min-interval/max-interval/
+	// num-levels values snapshotted above) — one formula, one source, so the
+	// two surfaces cannot disagree. These are the same resolved values that
+	// became cfg.MinInterval/cfg.MaxInterval/cfg.NumLevels; duration strings
+	// round-trip exactly through ParseDuration, so both derivations are equal.
+	dashGen := dashboard.NewGenerator(db, scheduler.NewUrgencyCalculator(*minInterval, *maxInterval, *numLevels), *gatewayURL)
 	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)

@@ -2,13 +2,16 @@ package dashboard_test
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // TestGenerateQueue_NoZgotmplZ is the GAP-055 regression test. html/template's
@@ -21,18 +24,24 @@ import (
 // parseable hex background per urgency bar.
 func TestGenerateQueue_NoZgotmplZ(t *testing.T) {
 	db := newTestDB(t)
-	now := time.Now().UTC()
-	// Urgency = priority * (1 + hours since last tick). Priority 10 with tick
-	// ages 1h/10h/100h covers all three color branches: green (<50),
-	// yellow (<200), red (>=200).
-	for _, name := range []string{"alpha", "beta", "gamma"} {
+	// Urgency now comes from the engine calculator (SCHED-GAP-174):
+	// urgency = priority * (1 + elapsed/interval)^decay, with priority 10
+	// mapping to the 30s interval and decay 1.0. Elapsed times of 1m/5m/10m
+	// since the last completion give 30/110/210 — the green (<50),
+	// yellow (<200), and red (>=200) color branches.
+	instant := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for _, aged := range []time.Duration{time.Minute, 5 * time.Minute, 10 * time.Minute} {
+		name := fmt.Sprintf("project-%d", int(aged.Minutes()))
 		mustCreateProject(t, db, name, 10, 10)
+		if _, err := db.Exec(`UPDATE projects SET created_at = ?, last_tick_completed = ? WHERE name = ?`,
+			instant.Add(-7*24*time.Hour).Format(time.RFC3339), instant.Add(-aged).Format(time.RFC3339), name); err != nil {
+			t.Fatalf("stamp %s: %v", name, err)
+		}
 	}
-	mustCreateTick(t, db, "alpha-tick", "alpha", now.Add(-time.Hour))
-	mustCreateTick(t, db, "beta-tick", "beta", now.Add(-10*time.Hour))
-	mustCreateTick(t, db, "gamma-tick", "gamma", now.Add(-100*time.Hour))
 
-	g := dashboard.NewGenerator(db)
+	calc := scheduler.NewUrgencyCalculator(30*time.Second, 24*time.Hour, 10)
+	g := dashboard.NewGenerator(db, calc)
+	g.SetClock(clock.NewFixed(instant))
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
 		t.Fatalf("GenerateQueue: %v", err)
@@ -78,7 +87,7 @@ func TestGenerate_NoZgotmplZ_NamespaceUtilBars(t *testing.T) {
 		t.Fatalf("CreateNamespace ok-ns: %v", err)
 	}
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
 		t.Fatalf("Generate: %v", err)

@@ -16,7 +16,7 @@ import (
 // only the project table body (no <html>, <head>, or page chrome).
 func TestGenerateFleetTable_RendersTBody(t *testing.T) {
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := gen.GenerateFleetTable(&buf); err != nil {
@@ -47,7 +47,7 @@ func TestGenerateFleetTable_WithProjects(t *testing.T) {
 	mustCreateProject(t, db, "alpha", 30, 5)
 	mustCreateProject(t, db, "beta", 20, 3)
 
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := gen.GenerateFleetTable(&buf); err != nil {
 		t.Fatalf("GenerateFleetTable: %v", err)
@@ -88,7 +88,7 @@ func TestGenerateProjectDetail_ValidName(t *testing.T) {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := gen.GenerateProjectDetail(&buf, "alpha"); err != nil {
 		t.Fatalf("GenerateProjectDetail: %v", err)
@@ -152,7 +152,7 @@ func TestGenerateProjectDetail_WithTicks(t *testing.T) {
 		}
 	}
 
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := gen.GenerateProjectDetail(&buf, "alpha"); err != nil {
 		t.Fatalf("GenerateProjectDetail: %v", err)
@@ -171,7 +171,7 @@ func TestGenerateProjectDetail_WithTicks(t *testing.T) {
 // doesn't exist returns an error wrapping ErrProjectNotFound.
 func TestGenerateProjectDetail_NotFound(t *testing.T) {
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	err := gen.GenerateProjectDetail(&buf, "nonexistent")
@@ -187,7 +187,7 @@ func TestGenerateProjectDetail_NotFound(t *testing.T) {
 // TestGenerateProjectDetail_EmptyName returns an error without touching the DB.
 func TestGenerateProjectDetail_EmptyName(t *testing.T) {
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := gen.GenerateProjectDetail(&buf, ""); err == nil {
@@ -199,7 +199,7 @@ func TestGenerateProjectDetail_EmptyName(t *testing.T) {
 // non-empty JS content. Used by the /static/htmx.min.js route.
 func TestHTMXJS_Embedded(t *testing.T) {
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 
 	js := gen.HTMXJS()
 	if len(js) == 0 {
@@ -234,7 +234,7 @@ func TestGenerateTickHistory_PaginatesGlobalTicks(t *testing.T) {
 		}
 	}
 
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 	var page1, page2 strings.Builder
 	if err := gen.GenerateTickHistory(&page1, 1); err != nil {
 		t.Fatalf("GenerateTickHistory page 1: %v", err)
@@ -277,7 +277,7 @@ func TestGenerateNamespaceView_ShowsProjectsAndUtilization(t *testing.T) {
 		t.Fatalf("InsertNamespaceTick: %v", err)
 	}
 
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := gen.GenerateNamespaceView(&buf, namespaceID); err != nil {
 		t.Fatalf("GenerateNamespaceView: %v", err)
@@ -292,7 +292,7 @@ func TestGenerateNamespaceView_ShowsProjectsAndUtilization(t *testing.T) {
 
 func TestGenerateNamespaceView_NotFound(t *testing.T) {
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db)
+	gen := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	err := gen.GenerateNamespaceView(&buf, "missing")
@@ -312,7 +312,7 @@ func TestGenerateHealth_ProbesGatewayAndAutoRefreshes(t *testing.T) {
 	defer gateway.Close()
 
 	db := newTestDB(t)
-	gen := dashboard.NewGenerator(db, gateway.URL)
+	gen := dashboard.NewGenerator(db, nil, gateway.URL)
 	var buf strings.Builder
 	if err := gen.GenerateHealth(&buf); err != nil {
 		t.Fatalf("GenerateHealth: %v", err)

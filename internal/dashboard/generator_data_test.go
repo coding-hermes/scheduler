@@ -467,7 +467,7 @@ func TestWarmCIConclusionsBoundedConcurrency(t *testing.T) {
 // the default TTL, and the real gh runner so the cache survives across
 // renders (the DASH-PERF-001 contract).
 func TestNewGeneratorInitializesCICache(t *testing.T) {
-	g := NewGenerator(nil)
+	g := NewGenerator(nil, nil)
 	if g.ciCache == nil {
 		t.Fatal("NewGenerator must initialize the CI conclusion cache")
 	}

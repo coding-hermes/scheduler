@@ -18,6 +18,7 @@ import (
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 //go:embed static/htmx.min.js
@@ -35,8 +36,17 @@ type Generator struct {
 	// clk is the generator's time seam (SCHED-GAP-169). The zero value reads
 	// as the wall clock, so rendering is unchanged until SetClock installs a
 	// simulator (which also re-anchors the uptime origin).
-	clk               clock.Seam
-	db                *sql.DB
+	clk clock.Seam
+	db  *sql.DB
+	// urgencyCalc (SCHED-GAP-174) is the SAME engine calculator the API's
+	// /api/v1/queue ranks with (built by the API from the resolved interval
+	// range: api.SetResolvedConfig → newUrgencyCalculatorFromConfig). It is
+	// supplied by the constructor from the one resolved config the daemon
+	// already has, so /queue and /api/v1/queue answer one question with one
+	// formula from one source. Nil = the API's documented fallback (a Server
+	// built without resolved config scores priority-only in listQueue); the
+	// dashboard mirrors that fallback so the two surfaces still agree.
+	urgencyCalc       *scheduler.UrgencyCalculator
 	tmpl              *template.Template // parsed once, reused
 	fleetTmpl         *template.Template // partial: project table body only
 	projectTmpl       *template.Template // full page: /projects/{name}
@@ -71,15 +81,22 @@ func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
-// time so hot-path Generate() never pays the parse cost. gatewayURL is optional;
-// when supplied, the health panel probes its /health endpoint.
-func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
+// time so hot-path Generate() never pays the parse cost. urgencyCalc is the
+// scheduler engine's urgency calculator (SCHED-GAP-174) — the caller supplies
+// the SAME instance/derivation the API server uses, so /queue and
+// /api/v1/queue cannot disagree; it is a required argument precisely because
+// omitting it would silently reintroduce a second urgency formula. Nil is
+// still accepted (and mirrors the API's priority-only fallback) for callers
+// with no resolved config, e.g. template-rendering tests. gatewayURL is
+// optional; when supplied, the health panel probes its /health endpoint.
+func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayURL ...string) *Generator {
 	var gateway string
 	if len(gatewayURL) > 0 {
 		gateway = strings.TrimRight(gatewayURL[0], "/")
 	}
 	g := &Generator{
 		db:           db,
+		urgencyCalc:  urgencyCalc,
 		gatewayURL:   gateway,
 		healthClient: &http.Client{Timeout: 2 * time.Second},
 		started:      clock.Real().Now(),
@@ -404,87 +421,80 @@ func (g *Generator) healthData() HealthData {
 // GenerateQueue renders the evaluation queue page — all enabled projects
 // sorted by urgency (descending) with their weight, priority, and cooldown.
 func (g *Generator) GenerateQueue(w io.Writer) error {
-	ctx := context.Background()
+	data, err := g.queueEntries(context.Background())
+	if err != nil {
+		return err
+	}
+	return g.queueTmpl.Execute(w, data)
+}
+
+// queueEntries builds the /queue ordering: every enabled project with its
+// urgency score, sorted descending.
+//
+// SCHED-GAP-174: urgency comes from the SAME scheduler.UrgencyCalculator the
+// API's /api/v1/queue ranks with (g.urgencyCalc, supplied by NewGenerator from
+// the resolved interval range) — one formula, one source. The private ad-hoc
+// score this function used to apply (a fixed multiplier on priority, then a
+// linear ramp from the last tick's spawned_at) is gone: it ignored decay_rate,
+// measured elapsed time from spawned_at rather than last_tick_completed, and
+// disagreed with the API on both value and order for the majority of the fleet.
+//
+// The projection, filter, row cap and sort are deliberately the same as
+// listQueue (internal/api/server_helpers.go) so the two surfaces rank one
+// fleet identically; when no calculator is configured the score is
+// priority-only, mirroring listQueue's documented fallback.
+func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 	data := QueueData{Title: "Evaluation Queue"}
 
-	rows, err := g.db.QueryContext(ctx, `
-		SELECT p.name, p.weight, p.priority, p.cooldown_s, p.enabled
-		FROM projects p
-		WHERE p.enabled = 1
-		ORDER BY p.name
-	`)
+	rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,'') FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
 	if err != nil {
-		return fmt.Errorf("query queue: %w", err)
+		return data, fmt.Errorf("query queue: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
-	// Collect all projects first (close rows before nested queries to avoid
-	// SQLite lock contention with modernc.org/sqlite).
-	type raw struct {
-		name      string
-		weight    int
-		priority  int
-		cooldownS int
-		enabled   bool
-	}
-	var raws []raw
+	calc := g.urgencyCalc
+	now := g.clock().Now()
 	for rows.Next() {
-		var r raw
-		if err := rows.Scan(&r.name, &r.weight, &r.priority, &r.cooldownS, &r.enabled); err != nil {
-			continue
+		var e QueueEntry
+		var decayRate float64
+		var createdAtStr, lastStr string
+		if err := rows.Scan(&e.Name, &e.Weight, &e.Priority, &e.CooldownS, &e.Enabled, &decayRate, &createdAtStr, &lastStr); err != nil {
+			return data, fmt.Errorf("scan queue row: %w", err)
 		}
-		raws = append(raws, r)
-	}
-	_ = rows.Close()
-
-	latestTickRows, err := g.db.QueryContext(ctx, `
-		SELECT project_name, COALESCE(MAX(spawned_at), '')
-		FROM ticks
-		WHERE project_name IN (SELECT name FROM projects WHERE enabled = 1)
-		GROUP BY project_name
-	`)
-	if err != nil {
-		return fmt.Errorf("query latest queue ticks: %w", err)
-	}
-	lastTicks := make(map[string]string, len(raws))
-	for latestTickRows.Next() {
-		var projectName, spawnedAt string
-		if err := latestTickRows.Scan(&projectName, &spawnedAt); err != nil {
-			_ = latestTickRows.Close()
-			return fmt.Errorf("scan latest queue tick: %w", err)
-		}
-		lastTicks[projectName] = spawnedAt
-	}
-	if err := latestTickRows.Err(); err != nil {
-		_ = latestTickRows.Close()
-		return fmt.Errorf("iterate latest queue ticks: %w", err)
-	}
-	_ = latestTickRows.Close()
-
-	for _, r := range raws {
-		e := QueueEntry{
-			Name:      r.name,
-			Weight:    r.weight,
-			Priority:  r.priority,
-			CooldownS: r.cooldownS,
-			Enabled:   r.enabled,
-			Urgency:   float64(r.priority) * 10.0, // base urgency from priority alone
-		}
-		if lastTick := lastTicks[r.name]; lastTick != "" {
-			if t, err := time.Parse(time.RFC3339, lastTick); err == nil {
-				e.Urgency = float64(r.priority) * (1 + g.clock().Since(t).Hours())
+		if calc != nil {
+			// Mirror the engine's input handling exactly, as listQueue does
+			// (internal/api/server_helpers.go): created_at parses as RFC3339;
+			// an empty/unparseable last_tick_completed leaves lastCompleted
+			// nil so urgency falls back to created_at.
+			createdAt, _ := time.Parse(time.RFC3339, createdAtStr)
+			var lastCompleted *time.Time
+			if lastStr != "" {
+				if t, err := time.Parse(time.RFC3339, lastStr); err == nil {
+					lastCompleted = &t
+				}
 			}
+			e.Urgency = calc.ComputeUrgency(float64(e.Priority), decayRate, now, lastCompleted, createdAt)
+		} else {
+			// No calculator configured: priority-only base, same fallback the
+			// API applies (keeps the surfaces in agreement, never a second
+			// formula).
+			e.Urgency = float64(e.Priority)
 		}
 		data.Entries = append(data.Entries, e)
-		data.TotalWeight += r.weight
+		data.TotalWeight += e.Weight
+	}
+	if err := rows.Err(); err != nil {
+		return data, fmt.Errorf("iterate queue rows: %w", err)
 	}
 
-	// Sort by urgency descending.
-	sort.Slice(data.Entries, func(i, j int) bool {
+	// Sort by urgency descending — stable, matching listQueue, so equal scores
+	// keep the priority-ordered query sequence on both surfaces.
+	sort.SliceStable(data.Entries, func(i, j int) bool {
 		return data.Entries[i].Urgency > data.Entries[j].Urgency
 	})
 
 	data.Count = len(data.Entries)
-	return g.queueTmpl.Execute(w, data)
+	return data, nil
 }
 
 const pageTemplate = `{{template "head" .}}

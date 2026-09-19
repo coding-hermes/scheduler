@@ -12,8 +12,10 @@ import (
 
 	"modernc.org/sqlite"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 func newTestDB(t *testing.T) *sql.DB {
@@ -117,7 +119,7 @@ func mustCreateTick(t *testing.T, db *sql.DB, id, projectName string, spawnedAt 
 // no rows, avoiding the int→bool Scan bug documented below.
 func TestGenerate_EmptyDatabase(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
@@ -140,7 +142,7 @@ func TestGenerate_EmptyDatabase(t *testing.T) {
 // TestGenerate_BudgetZero verifies percent(0, total) returns 0 and doesn't divide by zero.
 func TestGenerate_BudgetZero(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
@@ -157,7 +159,7 @@ func TestGenerate_BudgetZero(t *testing.T) {
 // TestGenerate_GeneratedAtIsRFC3339 verifies the timestamp format.
 func TestGenerate_GeneratedAtIsRFC3339(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
@@ -208,7 +210,7 @@ func TestGenerate_WithProjects(t *testing.T) {
 	mustCreateProject(t, db, "beta", 20, 3)
 	mustCreateProject(t, db, "gamma", 10, 1)
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -250,7 +252,7 @@ func TestGenerate_WithProjects(t *testing.T) {
 // to 100), but it's covered indirectly: percent(used, total) where total=0 returns 0.
 func TestGenerate_PercentFunction_ZeroTotal(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -267,7 +269,7 @@ func TestGenerate_PercentFunction_ZeroTotal(t *testing.T) {
 // empty-state message appear when no namespaces are configured.
 func TestGenerate_NamespaceEmptyState(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
@@ -319,7 +321,7 @@ func TestGenerate_WithNamespaces(t *testing.T) {
 		t.Fatalf("InsertNamespaceTick beta: %v", err)
 	}
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.Generate(&buf); err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -361,7 +363,7 @@ func TestGenerate_WithNamespaces(t *testing.T) {
 // TestGenerateQueue_EmptyDatabase renders the queue page with no projects.
 func TestGenerateQueue_EmptyDatabase(t *testing.T) {
 	db := newTestDB(t)
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
@@ -383,7 +385,7 @@ func TestGenerateQueue_WithProjects(t *testing.T) {
 	mustCreateProject(t, db, "beta", 20, 3)
 	mustCreateProject(t, db, "gamma", 10, 8) // lower weight, higher priority
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
 		t.Fatalf("GenerateQueue: %v", err)
@@ -422,36 +424,49 @@ func TestGenerateQueue_WithProjects(t *testing.T) {
 	}
 }
 
-func TestGenerateQueue_UsesLatestTickForEveryProject(t *testing.T) {
+// TestGenerateQueue_UrgencyFromEngineNotTickTable (SCHED-GAP-174) pins the new
+// contract: /queue ranks with the scheduler engine's UrgencyCalculator over the
+// project's last_tick_completed / created_at / decay_rate — the ticks table is
+// NOT a queue input any more. The fixture makes the two readings disagree: the
+// ticks table claims beta completed a tick 200h ago (which the retired formula
+// scored as the highest) while beta's last_tick_completed says 10 minutes ago,
+// so the engine ranks alpha first. Under the retired formula this order was
+// beta, alpha.
+func TestGenerateQueue_UrgencyFromEngineNotTickTable(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProject(t, db, "alpha", 30, 5)
-	mustCreateProject(t, db, "beta", 20, 4)
-	mustCreateProject(t, db, "gamma", 10, 3)
+	mustCreateProject(t, db, "beta", 20, 5) // same priority: only elapsed time separates them
 
-	now := time.Now().UTC()
-	mustCreateTick(t, db, "alpha-old", "alpha", now.Add(-100*time.Hour))
-	mustCreateTick(t, db, "alpha-latest", "alpha", now.Add(-time.Hour))
-	mustCreateTick(t, db, "beta-old", "beta", now.Add(-200*time.Hour))
-	mustCreateTick(t, db, "beta-latest", "beta", now.Add(-2*time.Hour))
+	instant := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for name, lastCompleted := range map[string]time.Time{
+		"alpha": instant.Add(-time.Hour),
+		"beta":  instant.Add(-10 * time.Minute),
+	} {
+		if _, err := db.Exec(`UPDATE projects SET created_at = ?, last_tick_completed = ? WHERE name = ?`,
+			instant.Add(-7*24*time.Hour).Format(time.RFC3339), lastCompleted.Format(time.RFC3339), name); err != nil {
+			t.Fatalf("stamp %s: %v", name, err)
+		}
+	}
+	// Misleading tick history: the queue must ignore it (beta looks oldest).
+	mustCreateTick(t, db, "alpha-tick", "alpha", instant.Add(-time.Hour))
+	mustCreateTick(t, db, "beta-tick", "beta", instant.Add(-200*time.Hour))
 
-	g := dashboard.NewGenerator(db)
+	calc := scheduler.NewUrgencyCalculator(30*time.Second, 24*time.Hour, 10)
+	g := dashboard.NewGenerator(db, calc)
+	g.SetClock(clock.NewFixed(instant))
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
 		t.Fatalf("GenerateQueue: %v", err)
 	}
 	out := buf.String()
 
-	// Latest-tick urgency is alpha≈10 and beta≈12, while gamma has no tick and
-	// keeps its base urgency of 30. Selecting an older tick, or failing to map a
-	// project from the batch result, changes this order.
-	gammaIdx := strings.Index(out, `href="/projects/gamma"`)
-	betaIdx := strings.Index(out, `href="/projects/beta"`)
 	alphaIdx := strings.Index(out, `href="/projects/alpha"`)
-	if gammaIdx < 0 || betaIdx < 0 || alphaIdx < 0 {
+	betaIdx := strings.Index(out, `href="/projects/beta"`)
+	if alphaIdx < 0 || betaIdx < 0 {
 		t.Fatalf("one or more projects missing from queue: %s", snippet(out, "Evaluation Queue"))
 	}
-	if gammaIdx >= betaIdx || betaIdx >= alphaIdx {
-		t.Errorf("expected latest-tick order gamma, beta, alpha; indexes were %d, %d, %d", gammaIdx, betaIdx, alphaIdx)
+	if alphaIdx >= betaIdx {
+		t.Errorf("expected alpha (completed 1h ago) before beta (completed 10m ago) — indexes %d, %d; the ticks table must not drive queue urgency", alphaIdx, betaIdx)
 	}
 }
 
@@ -462,13 +477,17 @@ func TestGenerateQueue_QueryCountIsConstant(t *testing.T) {
 	}
 	queryCount.Store(0)
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
 		t.Fatalf("GenerateQueue: %v", err)
 	}
-	if got := queryCount.Load(); got != 2 {
-		t.Errorf("GenerateQueue executed %d queries for 39 projects, want 2", got)
+	// SCHED-GAP-174: one query. The retired formula needed a second query (the
+	// per-project latest ticks aggregate) to build its score; the engine
+	// calculator ranks from the projects row itself, so the queue reads the
+	// fleet in a single pass.
+	if got := queryCount.Load(); got != 1 {
+		t.Errorf("GenerateQueue executed %d queries for 39 projects, want 1", got)
 	}
 }
 
@@ -485,7 +504,7 @@ func TestGenerateFleetTable_QueryCountIsConstant(t *testing.T) {
 			mustCreateProject(t, db, fmt.Sprintf("project-%02d", i), 1, 1)
 		}
 		queryCount.Store(0)
-		g := dashboard.NewGenerator(db)
+		g := dashboard.NewGenerator(db, nil)
 		var buf strings.Builder
 		if err := g.GenerateFleetTable(&buf); err != nil {
 			t.Fatalf("GenerateFleetTable (%d projects): %v", n, err)
@@ -507,7 +526,7 @@ func TestGenerateQueue_NavLinks(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProject(t, db, "test", 10, 5)
 
-	g := dashboard.NewGenerator(db)
+	g := dashboard.NewGenerator(db, nil)
 	var buf strings.Builder
 	if err := g.GenerateQueue(&buf); err != nil {
 		t.Fatalf("GenerateQueue: %v", err)
