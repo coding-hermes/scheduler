@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
@@ -15,6 +17,17 @@ import (
 //
 // Pass ":memory:" for an ephemeral in-process database (used by tests).
 func InitDB(dbPath string) (*sql.DB, error) {
+	// SCHED-GAP-182: ensure the parent directory exists so a fresh-boot install
+	// does not FATAL on PRAGMA journal_mode=WAL with "unable to open database
+	// file (14)" when ~/.hermes/coding-hermes/ has never been created.
+	if dbPath != ":memory:" {
+		if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
+				return nil, fmt.Errorf("mkdir db dir %q: %w", dir, err)
+			}
+		}
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", dbPath, err)
