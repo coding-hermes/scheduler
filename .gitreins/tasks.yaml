@@ -3265,3 +3265,23 @@ tasks:
   status: complete
   created_at: '2026-09-19T19:49:40.650390+00:00'
   completed_at: '2026-09-19T20:28:44.504891+00:00'
+- id: SCHED-GAP-185
+  title: Load-scaled WAVE_BUDGET (Bane 2026-09-19 directive)
+  criteria:
+  - 'Bane 2026-09-19: ''for each load average point below 12 we can launch 1 worker
+    min 1 upto 12''. Accept: (1) cmd/schedulerd/main.go installs scheduler.SetWaveLoadCeiling
+    from the existing --load-gate-threshold flag (one knob, one number); (2) internal/scheduler/wave_budget.go
+    exposes a waveLoadCap(wcap) helper that returns min(wcap, max(1, floor(ceiling
+    - load1m))) when the ceiling is armed (>0) and telemetry is present, returns (wcap,
+    false) on missing telemetry (fail open) and when the gate is disabled (pre-170
+    byte-identical behavior); (3) Spawner.waveBudget min''s its n with the load-scaled
+    cap AFTER the depth arithmetic and logs WAVE-LOAD: when the load dimension binds
+    BELOW the namespace cap; (4) at least 5 new test cases in internal/scheduler/wave_load_budget_test.go
+    cover idle=full-cap, 1-per-spare-point math (load 8/11/11.5/13 -> cap 4/1/1/1),
+    no-telemetry fail-open, gate-disabled skip, and the WAVE_BUDGET line text stability;
+    (5) go build ./... and go test -short -p 1 -count=1 ./... green; golangci-lint
+    0 issues. Tier-1 guard (secrets/build/lint/tests) must PASS before commit; tier-2
+    judge must confirm the directive is met.'
+  status: complete
+  created_at: '2026-09-19T20:59:17.022470+00:00'
+  completed_at: '2026-09-19T21:05:42.654454+00:00'
