@@ -70,12 +70,28 @@ func (sf *SimFixture) TestProjects() []SimProject {
 // dummy .coding-hermes/board/tasks.jsonl, so the adaptive-cooldown board-row
 // signal (countBoardRows / board_rows_seen) works in dry-runs.
 func (sf *SimFixture) Setup(projects []SimProject) error {
-	if _, err := sf.db.Exec(`DELETE FROM projects`); err != nil {
+	// DOGFOOD-021: wipe CHILD rows before the parent row, inside ONE
+	// transaction. ticks.project_name carries a FOREIGN KEY to projects(name)
+	// and InitDB enforces PRAGMA foreign_keys=ON, so deleting projects first
+	// fails with "FOREIGN KEY constraint failed (787)" whenever the target DB
+	// already holds tick history (--sim-setup against an existing DB file),
+	// FATALing the boot. SCHED-GAP-019's `rm -f <rundir>/*.db` workaround is no
+	// longer required. Reordering alone would still leave a window in which a
+	// concurrent writer inserts a child row between the two DELETEs, so both
+	// statements run in a single transaction.
+	tx, err := sf.db.Begin()
+	if err != nil {
+		return fmt.Errorf("clear sim state: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+	if _, err := tx.Exec(`DELETE FROM ticks`); err != nil {
+		return fmt.Errorf("clear ticks: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM projects`); err != nil {
 		return fmt.Errorf("clear projects: %w", err)
 	}
-	// Also clear old ticks.
-	if _, err := sf.db.Exec(`DELETE FROM ticks`); err != nil {
-		return fmt.Errorf("clear ticks: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("clear sim state: commit: %w", err)
 	}
 
 	now := sf.clock().Now().Format(time.RFC3339)

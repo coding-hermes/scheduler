@@ -63,3 +63,79 @@ func TestSimSetupDebug(t *testing.T) {
 		t.Error("expected at least 1 packed project")
 	}
 }
+
+// TestSimSetup_TolerantOfPreExistingTicks is the DOGFOOD-021 regression test:
+// SimFixture.Setup must tolerate a database that already holds tick history
+// referencing a project row — the `--sim-setup` invocation against an existing
+// DB file.
+//
+// ticks.project_name carries a FOREIGN KEY to projects(name) and InitDB turns
+// PRAGMA foreign_keys=ON, so wiping the parent table before its children made
+// Setup return "clear projects: constraint failed: FOREIGN KEY constraint
+// failed (787)" and FATAL the boot. The workaround was deleting the DB file
+// first (SCHED-GAP-019: `rm -f <rundir>/*.db <rundir>/*.db-*`); this test pins
+// that the workaround is no longer needed.
+func TestSimSetup_TolerantOfPreExistingTicks(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	// Premise of the regression: with FK enforcement off, the pre-fix ordering
+	// is harmless and this test could not fail. Assert the premise so the test
+	// goes loud instead of vacuous if the pragma ever stops being applied.
+	var fkEnabled int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fkEnabled); err != nil {
+		t.Fatalf("query foreign_keys: %v", err)
+	}
+	if fkEnabled != 1 {
+		t.Fatalf("foreign_keys = %d, want 1 (this test's premise)", fkEnabled)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Pre-existing parent row plus a child row referencing it: the shape a
+	// prior run's tick history leaves behind.
+	if _, err := db.Exec(`
+		INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, enabled, created_at, updated_at)
+		VALUES ('sim-preexisting', 'local:/sim', '/tmp/sim', 10, 5, 60, 1.0, 1, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert pre-existing project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO ticks (id, project_name, status, spawned_at, completed_at, created_at)
+		VALUES ('sim-tick-preexisting-1', 'sim-preexisting', 'failed', ?, ?, ?)
+	`, now, now, now); err != nil {
+		t.Fatalf("insert pre-existing tick: %v", err)
+	}
+
+	fixture := NewSimFixture(db)
+	if err := fixture.Setup(fixture.TestProjects()); err != nil {
+		t.Fatalf("Setup with pre-existing tick rows: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM projects WHERE enabled=1`).Scan(&count); err != nil {
+		t.Fatalf("count enabled projects: %v", err)
+	}
+	if count < 12 {
+		t.Errorf("enabled projects = %d, want >= 12", count)
+	}
+
+	// The stale parent and its child rows are both gone — Setup is a clean
+	// wipe, not a partial one.
+	var stale int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM projects WHERE name='sim-preexisting'`).Scan(&stale); err != nil {
+		t.Fatalf("count pre-existing project: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("pre-existing project rows = %d, want 0", stale)
+	}
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&remaining); err != nil {
+		t.Fatalf("count ticks: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("ticks rows = %d, want 0 (child rows wiped)", remaining)
+	}
+}
