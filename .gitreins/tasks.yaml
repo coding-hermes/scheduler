@@ -3071,3 +3071,44 @@ tasks:
   status: complete
   created_at: '2026-09-19T03:33:40.025287+00:00'
   completed_at: '2026-09-19T04:10:41.897353+00:00'
+- id: SCHED-GAP-174
+  title: 'Queue surface parity: dashboard /queue uses ad-hoc urgency formula instead
+    of scheduler.UrgencyCalculator'
+  criteria:
+  - "Two live queue surfaces agree per-project on urgency value AND project order\
+    \ at one instant.\n\nPASS criteria (all four must be verifiable):\n1. internal/dashboard/generator.go\
+    \ no longer computes urgency via the private formula at ~lines 470-483 (priority*10\
+    \ then priority*(1+hours since spawn)). Instead the dashboard calls the SAME scheduler.UrgencyCalculator\
+    \ the API uses (newUrgencyCalculatorFromConfig in internal/api/server_config.go\
+    \ builds it from the resolved config).\n2. Generator receives the calculator via\
+    \ its constructor (no global state, no package-level singleton). Wire plumbing:\
+    \ the daemon boot path that constructs the dashboard generator must thread the\
+    \ same calculator instance (or the same resolved config used to build it) from\
+    \ the scheduler engine to the dashboard. Update internal/dashboard/generator.go's\
+    \ New* (or equivalent constructor) to accept the dependency.\n3. Regression test\
+    \ TestQueueSurface_HTMLUrgencyEqualsAPIUrgency (or similarly named) on the fixture\
+    \ fleet asserts: per-project dashboard urgency (as it would render in /queue)\
+    \ equals /api/v1/queue urgency within float64 rounding, AND the project order\
+    \ in the /queue HTML matches the /api/v1/queue array order. The test must spin\
+    \ up the dashboard on a temp DB with the fixture projects and call the generator\
+    \ directly (not via HTTP) so it asserts the wiring is correct.\n4. The build passes\
+    \ (go build ./...), go vet clean, gofmt -l empty, golangci-lint 0 issues, full\
+    \ go test -short -p 1 ./... green.\n\nAC4 (mechanism, not symbol): the wire-up\
+    \ is provable from the constructor signature alone (a caller cannot build a dashboard\
+    \ without supplying a calculator or config) AND the regression test passes against\
+    \ the SAME fixture the API path uses.\n\nREJECT conditions (re-dispatch with these\
+    \ folded in):\n- The implementation introduces a new private urgency formula instead\
+    \ of reusing ComputeUrgency.\n- The calculator is built inside the generator (package-level\
+    \ singleton, function-level cache) instead of being passed in.\n- The regression\
+    \ test only checks the response byte-shape and not the per-project urgency value.\n\
+    - The implementation touches unrelated files or grows the scope beyond internal/dashboard/\
+    \ and the constructor wiring in cmd/schedulerd/main.go (or wherever the dashboard\
+    \ is constructed).\n\nDiscovery aids (live code you can read):\n- internal/dashboard/generator.go:470-483\
+    \ \u2014 current ad-hoc formula\n- internal/api/server_config.go:89-110 \u2014\
+    \ the API builds its calculator via newUrgencyCalculatorFromConfig\n- internal/scheduler/urgency.go:18,62\
+    \ \u2014 NewUrgencyCalculator + ComputeUrgency(priority, decayRate, now, lastCompleted,\
+    \ createdAt) signature\n- cmd/schedulerd/main.go \u2014 search for how the dashboard\
+    \ generator is constructed; thread the same config there"
+  status: complete
+  created_at: '2026-09-19T04:35:54.027101+00:00'
+  completed_at: '2026-09-19T05:05:59.906794+00:00'
