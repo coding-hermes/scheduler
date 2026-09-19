@@ -3112,3 +3112,19 @@ tasks:
   status: complete
   created_at: '2026-09-19T04:35:54.027101+00:00'
   completed_at: '2026-09-19T05:05:59.906794+00:00'
+- id: DOGFOOD-021
+  title: SimFixture.Setup wipes child rows first (FK-safe)
+  criteria:
+  - "1. The function SimFixture.Setup in internal/scheduler/sim_fixture.go does NOT\
+    \ contain the string sequence \"DELETE FROM projects\" immediately followed by\
+    \ a separate \"DELETE FROM ticks\" \u2014 the two DELETEs are no longer independent\
+    \ Exec calls (they are reordered, wrapped in a Tx, or both).\n2. The file internal/scheduler/sim_fixture_test.go\
+    \ defines a test function named TestSimSetup_TolerantOfPreExistingTicks (exact\
+    \ name match).\n3. go test -count=1 -run TestSimSetup ./internal/scheduler/ PASSES\
+    \ (both TestSimSetupDebug and the new test).\n4. go test -short -p 1 -count=1\
+    \ ./... PASSES (the full short suite stays green).\n5. gofmt -l . prints nothing.\n\
+    6. golangci-lint run exits 0 (or prints no new issues vs origin/main).\n7. go\
+    \ build ./... exits 0."
+  status: complete
+  created_at: '2026-09-19T06:01:35.840422+00:00'
+  completed_at: '2026-09-19T06:14:51.275138+00:00'
