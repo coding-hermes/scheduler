@@ -3198,3 +3198,29 @@ tasks:
   status: complete
   created_at: '2026-09-19T17:49:43.056024+00:00'
   completed_at: '2026-09-19T18:03:55.641286+00:00'
+- id: SCHED-GAP-182
+  title: InitDB creates parent dir for fresh boot
+  criteria:
+  - "InitDB(dbPath) creates the parent directory of dbPath with mode 0750 when it\
+    \ does not exist; --test-verify still passes; fresh-clone install leg of a clean\
+    \ machine boots without FATAL on PRAGMA journal_mode=WAL. Two new tests in internal/database/schema_freshdir_test.go:\
+    \ TestInitDB_CreatesParentDir (path under t.TempDir() with non-existent nested\
+    \ parent \u2014 InitDB returns nil error, parent dir created, file exists) and\
+    \ TestInitDB_ParentDirAlreadyExists (parent dir already present \u2014 no error,\
+    \ idempotent). gofmt -l . = 0, go vet ./... = 0, go test -short -p 1 -count=1\
+    \ ./internal/database/... passes including the 2 new tests."
+  status: complete
+  created_at: '2026-09-19T18:26:53.068646+00:00'
+  completed_at: '2026-09-19T18:31:08.690729+00:00'
+- id: SCHED-GAP-184
+  title: cmd/migrate loadJobs tolerates missing jobs.json
+  criteria:
+  - 'loadJobs returns (nil, errJobsFileAbsent) where errJobsFileAbsent is a sentinel
+    (errors.Is check) when the file is missing; the migrate-dry / migrate call site
+    logs a one-line info note and proceeds with zero jobs. Existing TestLoadJobs/missing_file
+    subtest flipped: loadJobs of a non-existent path returns nil jobs and the sentinel.
+    gofmt -l . = 0, go vet ./... = 0, go test -short -p 1 -count=1 ./cmd/migrate/...
+    passes including the updated subtest.'
+  status: complete
+  created_at: '2026-09-19T18:31:13.543905+00:00'
+  completed_at: '2026-09-19T18:35:05.840878+00:00'
