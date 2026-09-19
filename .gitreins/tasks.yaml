@@ -2980,3 +2980,35 @@ tasks:
   status: complete
   created_at: '2026-09-19T00:23:09.787461+00:00'
   completed_at: '2026-09-19T00:23:25.170612+00:00'
+- id: SCHED-GAP-175
+  title: MCP fleet_ticks swallows rows.Scan error on NULL outcome/spawned_at/completed_at,
+    returning empty strings for every in-flight tick
+  criteria:
+  - "1) toolFleetTicks (internal/mcp/handlers.go:227) checks rows.Scan error per row\
+    \ and never returns an error to the caller, so a NULL outcome column aborts the\
+    \ scan at that destination and every destination column for that row falls back\
+    \ to the zero value (empty string for spawned_at/completed_at/outcome, 0 for exit_code/commits/files_changed).\
+    \ The REST surface (internal/api/server_helpers.go listTicks/getTick) uses COALESCE\
+    \ on every nullable column and returns the real values. 2) The fix uses sql.NullString/NullInt64\
+    \ for the nullable columns and checks the rows.Scan error per row. The on-the-wire\
+    \ JSON shape stays identical: NullString.Valid and len>0 render the string; otherwise\
+    \ the field is still present as an empty string. 3) New test TestMCP_FleetTicks_NullableColumnsRendersInFlight:\
+    \ insert a tick row with status='running', outcome=NULL, completed_at=NULL, exit_code=NULL,\
+    \ commits=NULL, files_changed=NULL, spawned_at='2026-09-19T10:00:00Z'; call fleet_ticks;\
+    \ assert the response carries spawned_at='2026-09-19T10:00:00Z', status='running',\
+    \ id=<tick id>. 4) New test TestMCP_FleetTicks_CompletedTickKeepsNullableFields:\
+    \ insert a tick row with status='completed', outcome='committed', completed_at='2026-09-19T10:30:00Z',\
+    \ exit_code=0, commits=3, files_changed=5, spawned_at='2026-09-19T10:00:00Z';\
+    \ call fleet_ticks; assert the response carries the real values. 5) New test TestMCP_FleetTicks_MixedBatchPartialCompletion:\
+    \ insert one running tick (NULL outcome/completed_at) and one completed tick;\
+    \ call fleet_ticks; assert both rows render with the right values and no row is\
+    \ dropped due to scan error. 6) gofmt -l . clean, go vet ./internal/mcp/... clean,\
+    \ go build ./... clean, go test -short -p 1 -count=1 ./internal/mcp/... all PASS\
+    \ (including the existing TestMCP_FleetTicks and TestMCP_FleetTicks_SnakeCaseWire).\
+    \ 7) RED mutation: the new test TestMCP_FleetTicks_NullableColumnsRendersInFlight\
+    \ must FAIL on the pre-fix code (assertion fires on missing spawned_at) and PASS\
+    \ on the post-fix code. 8) No change to internal/api/* or any other surface \u2014\
+    \ only internal/mcp/handlers.go and internal/mcp/server_test.go change."
+  status: complete
+  created_at: '2026-09-19T01:21:30.478139+00:00'
+  completed_at: '2026-09-19T01:21:36.036302+00:00'
