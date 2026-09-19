@@ -118,7 +118,8 @@ curl -s http://127.0.0.1:9090/api/v1/health
 
 **Purpose:** Fleet overview — budget, active projects/ticks, recent outcome
 counts, and a per-project failure-rate breakdown (SCHED-GAP-018) with
-auto-disable arming (GAP-047).
+auto-disable arming (GAP-047). Also carries the gateway-health admission gate's
+armed state (`gateway_health_gate`, SCHED-GAP-170).
 
 **Query params:** none. **Request body:** none.
 
@@ -131,7 +132,10 @@ auto-disable arming (GAP-047).
  "duckbrain":{"base_url":"http://localhost:3000","consecutive_failures":0,
    "interval":"5m0s","last_error":"","last_ok_at":"...","reachable":true,
    "spooled_pending":0},
- "failure_window":100,"last_evaluation":"2026-08-18T06:52:15Z",
+ "failure_window":100,
+ "gateway_health_gate":{"armed":true,"deferrals_total":0,"healthy":true,
+   "last_error":"","probed_at":"2026-09-19T07:58:12Z","ttl_s":30},
+ "last_evaluation":"2026-08-18T06:52:15Z",
  "projects_failure_rates":{"9router":{"failed":1,"total":100,
    "failure_rate":0.01,"auto_disable_armed":false}, ...},
  "recent_outcomes":{"completed":401,"failed":6,"timeout":1},
@@ -149,6 +153,7 @@ auto-disable arming (GAP-047).
 | `last_evaluation` | string | RFC3339 of last evaluation |
 | `auto_disable` | object | `{enabled, threshold, window, min_ticks}` — the auto-disable policy snapshot; `enabled` is false when `--auto-disable-failure-rate` is 0 |
 | `zero_select_consecutive` / `zero_select_eligible` / `zero_select_last_at` | int / int / string | Zero-select diagnostics (present when the loop is attached): consecutive evals that selected nothing despite eligible projects, eligible count at the last one, and its timestamp |
+| `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown) |
 | `duckbrain` | object | DuckBrain sync health `{base_url, consecutive_failures, interval, last_error, last_ok_at, reachable, spooled_pending}` (present when sync health reporting is configured) |
 
 **Errors:** 405 on non-GET.

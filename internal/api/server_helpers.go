@@ -333,6 +333,36 @@ func getLastEvalTime(ctx context.Context, db *sql.DB) string {
 	return t
 }
 
+// gatewayHealthGateStatusBlock renders the SCHED-GAP-170 gateway-health
+// admission gate for /api/v1/status. The gate is PACKAGE state (the gateway is
+// one fleet-wide dependency, so its verdict is one fleet-wide verdict), which
+// is why this needs no Server or loop — the block answers on every daemon,
+// including one whose loop has no gateway client.
+//
+// It is the surface that did not exist while the FIX-STUCK liveness guard was
+// silently inert: `armed` is exactly the condition that was false for months
+// (see scheduler.GatewayHealthGateStatus), so a fleet spawning UNGATED is
+// visible from the API instead of only from a source read.
+//
+// Style follows its neighbours: probed_at is RFC3339 UTC with the zero time
+// rendered as "" (the health handler's convention — never "0001-01-01"), and
+// ttl_s is seconds so the block stays JSON-stable if the TTL ever changes.
+func gatewayHealthGateStatusBlock() map[string]interface{} {
+	armed, healthy, probedAt, lastErr, ttl, deferrals := scheduler.GatewayHealthGateStatus()
+	probed := ""
+	if !probedAt.IsZero() {
+		probed = probedAt.UTC().Format(time.RFC3339)
+	}
+	return map[string]interface{}{
+		"armed":           armed,
+		"healthy":         healthy,
+		"probed_at":       probed,
+		"last_error":      lastErr,
+		"ttl_s":           int(ttl.Seconds()),
+		"deferrals_total": deferrals,
+	}
+}
+
 // queueItem is a single entry in the scheduler queue.
 type queueItem struct {
 	Project   string  `json:"project"`
@@ -418,7 +448,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Fleet overview",
         "responses": {
-          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart)"}
+          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart), gateway_health_gate (the gateway-health admission gate's armed state and cached verdict, SCHED-GAP-170)"}
         }
       }
     },

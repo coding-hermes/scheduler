@@ -237,6 +237,68 @@ func TestSCHEDGAP080_StatusExposesGatewayErrors(t *testing.T) {
 	}
 }
 
+// TestSCHEDGAP170_StatusExposesGatewayHealthGate (2026-09-19): /api/v1/status
+// carries the gateway-health admission gate's ARMED state and cached verdict.
+//
+// The field exists because the defect it reports on was invisible: the pre-spawn
+// gateway liveness guard read a field nothing assigned, so it never ran — and no
+// surface could tell an operator that the fleet was spawning into a dead
+// gateway UNGATED (793 of 859 failures in the 7 days to 2026-09-18, each booked
+// as a lane fault). `armed` is that condition, readable from the API.
+//
+// The block is deliberately NOT behind the loop guard, so it answers on every
+// daemon — including one whose loop never received a gateway client, which is
+// exactly the shape that was silently ungated.
+func TestSCHEDGAP170_StatusExposesGatewayHealthGate(t *testing.T) {
+	a := newAPITestServer(t)
+	// Fresh process state: nothing installed on the gate.
+	scheduler.SetGatewayHealthGateClient(nil)
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	raw, ok := body["gateway_health_gate"]
+	if !ok {
+		t.Fatalf("gateway_health_gate missing from /api/v1/status: %v", body)
+	}
+	block, ok := raw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("gateway_health_gate = %T, want an object", raw)
+	}
+	for _, key := range []string{"armed", "healthy", "probed_at", "last_error", "ttl_s", "deferrals_total"} {
+		if _, ok := block[key]; !ok {
+			t.Errorf("gateway_health_gate.%s missing: %v", key, block)
+		}
+	}
+	if armed, _ := block["armed"].(bool); armed {
+		t.Errorf("gateway_health_gate.armed = true with no client installed — the surface must report the "+
+			"UNGATED state, not assume it: %v", block)
+	}
+	if got, _ := block["ttl_s"].(float64); int(got) != 30 {
+		t.Errorf("gateway_health_gate.ttl_s = %v, want 30 (the gate's own window)", block["ttl_s"])
+	}
+	// Zero time renders as "" (the health handler's convention), never
+	// "0001-01-01T00:00:00Z".
+	if got, _ := block["probed_at"].(string); got != "" {
+		t.Errorf("gateway_health_gate.probed_at = %q with a cold cache, want \"\"", got)
+	}
+
+	// Arming the gate flips the surface: this is the field an operator (or a
+	// script) watches to know the gate is live rather than merely present.
+	client := scheduler.NewGatewayClient("http://127.0.0.1:1", "sk-test-not-used", time.Second)
+	defer scheduler.SetGatewayHealthGateClient(nil)
+	scheduler.SetGatewayHealthGateClient(client)
+	status, body = a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status after arming = %d, want 200", status)
+	}
+	armedBlock, _ := body["gateway_health_gate"].(map[string]interface{})
+	if armed, _ := armedBlock["armed"].(bool); !armed {
+		t.Errorf("gateway_health_gate.armed = false after a client was installed: %v", armedBlock)
+	}
+}
+
 // TestAPI_Status_ProjectsFailureRates (SCHED-GAP-018) verifies the
 // projects_failure_rates field is present in /api/v1/status with the correct
 // shape and per-project failure-rate math.

@@ -315,6 +315,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
 	}
+	// SCHED-GAP-170 (observability): the gateway-health admission gate's armed
+	// state and cached verdict. Deliberately OUTSIDE the loop guard above: the
+	// gate is package state, and the question this block answers — "is the gate
+	// even armed?" — must be answerable on a daemon whose loop never got a
+	// gateway client, which is exactly the shape that was silently ungated
+	// before.
+	status["gateway_health_gate"] = gatewayHealthGateStatusBlock()
 	writeJSON(w, 200, status)
 }
 

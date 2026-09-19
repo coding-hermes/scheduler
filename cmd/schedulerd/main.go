@@ -517,6 +517,14 @@ func main() {
 			loop.SetGatewayClient(gwClient)
 		}, &gwConnected, *gatewayURL, clk)
 	}
+	// SCHED-GAP-170: the gateway-health admission gate's boot line. The install
+	// path logs its own line, so this call exists for the shape where NO client
+	// was ever installed — an empty --gateway-url/--gateway-key, or a gateway
+	// that stayed unreachable through startup's retries. Those are exactly the
+	// hosts where the gate is unarmed and every spawn goes straight to the
+	// gateway, so the first seconds of scheduler.log must SAY so instead of
+	// staying silent. No-op once a boot line has been logged (never two lines).
+	scheduler.LogGatewayHealthGateBootState()
 
 	// Simulation count mode: generate N ticks and exit.
 	if *simCount > 0 {

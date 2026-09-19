@@ -209,6 +209,14 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
 	// through the same logger.
 	l.slotPool.SetEventLogger(l.events)
+	// SCHED-GAP-170 (observability): the gateway-health gate reports its
+	// ONE-per-episode transitions (unhealthy / recovered) through the same
+	// logger, so a fleet-wide gateway outage is visible in the events table
+	// instead of being inferable only from the absence of tick rows. The gate
+	// is PACKAGE state (one gateway = one verdict for the whole fleet), so this
+	// is the logger every consult path — the evaluation pass and SpawnNow —
+	// shares.
+	SetGatewayHealthGateEvents(l.events)
 	return l
 }
 
