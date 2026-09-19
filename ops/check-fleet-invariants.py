@@ -57,6 +57,19 @@ SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer
 COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
 # Enabled lanes legitimately paced slower than the floor (namespace cadence tiers).
 COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
+# Satellite family cadence (SCHED-GAP-178, Bane 2026-09-19). MUST stay equal
+# to SATELLITE_FAMILY_PINS in ~/.hermes/scripts/fleet-cooldown-policy.py (the
+# policy writer); the family-floor check below fails any enabled satellite
+# whose cooldown_s / cooldown_floor_s drifts off its family's pin.
+SATELLITE_FAMILY_PINS = {"qa": 43200, "pm": 86400, "sync": 43200, "dogfood": 259200}
+# Coding-hermes foreman PRIMARIES are the projects in the `coding-hermes`
+# namespace whose name does NOT carry a satellite suffix (-qa / -pm / -sync /
+# -dogfood). Satellites live in their own family namespaces; the auditor and
+# other meta lanes in the coding-hermes namespace are reported as INFO
+# (or simply not named a coverage violation) because they legitimately have
+# no satellite set of their own — the `qa-audit` auditor, the
+# `coding-hermes-scheduler` self-tick, `coding-hermes-supervisor`, etc.
+CODING_HERMES_PRIMARY_NS = "coding-hermes"
 # Retired dagger-era driver scripts (5). MUST stay identical — same names,
 # same count — to `retiredDriverScripts` in internal/api/retired_drivers.go,
 # which the enable path (createProject / updateProject) enforces. Pinned by
@@ -75,7 +88,8 @@ BOARD_ALLOWED_STATUSES = ("pending", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
 
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
-                 "targets", "parity", "board-vocab", "board-legacy-status")
+                 "coverage", "family-floor", "targets", "parity",
+                 "board-vocab", "board-legacy-status")
 
 
 def find_board_path(start: str) -> str | None:
@@ -262,6 +276,55 @@ def main(argv: list[str] | None = None) -> int:
         m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
         if m and m.group(1) in projects:
             bad("boards", name, f"board does not resolve in {wd!r} while its target {m.group(1)!r} exists")
+
+    # 5d. coverage ------------------------------------------------------------
+    # Every coding-hermes PRIMARY needs an enabled qa/pm/sync/dogfood satellite.
+    # Discrimination (SCHED-GAP-178, Bane 2026-09-19): the project must live in
+    # the `coding-hermes` namespace (the projects row carries a `namespace_id`
+    # column populated from the namespaces table) AND its name must NOT match
+    # the satellite suffix. Internal/meta lanes in the same namespace that
+    # legitimately have no satellite set of their own (e.g. qa-audit, the
+    # scheduler self-tick, the supervisor) are reported as INFO — they are
+    # children, not primaries, of the foreman family.
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        if re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name):
+            continue
+        ns = p.get("namespace_id") or ""
+        if ns != CODING_HERMES_PRIMARY_NS:
+            continue
+        for suffix in ("qa", "pm", "sync", "dogfood"):
+            child = projects.get(f"{name}-{suffix}")
+            if not child or not child.get("enabled"):
+                bad("coverage", f"{name}-{suffix}",
+                    f"missing or disabled — every coding-hermes primary needs an enabled {suffix} lane "
+                    f"(primary {name!r} lives in the {ns!r} namespace)")
+
+    # 5e. family-floor --------------------------------------------------------
+    # Every enabled satellite sits on its family's cadence pin (qa 43200, pm
+    # 86400, sync 43200, dogfood 259200). Both cooldown_s AND cooldown_floor_s
+    # must equal the family value — a satellite reads the primary's board
+    # through a symlink and is therefore permanently 'has work', which the
+    # REDUCE rule in fleet-cooldown-policy.py would otherwise pull to the 6h
+    # floor on every run. The pair is checked together because either field
+    # alone is enough to make cadence unreadable.
+    for name, p in projects.items():
+        if not p.get("enabled"):
+            continue
+        m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
+        if not m:
+            continue
+        suffix = m.group(2)
+        expected = SATELLITE_FAMILY_PINS.get(suffix)
+        if expected is None:
+            continue
+        cd = int(p.get("cooldown_s") or 0)
+        fl = int(p.get("cooldown_floor_s") or 0)
+        if cd != expected or fl != expected:
+            bad("family-floor", name,
+                f"cooldown_s={cd} / cooldown_floor_s={fl} — satellite family expects {expected} for {suffix} "
+                f"(see SATELLITE_FAMILY_PINS, also mirrored in fleet-cooldown-policy.py)")
 
     # 6. satellite targets ----------------------------------------------------
     # A sync lane may legitimately target a DuckBrain data source rather than a
