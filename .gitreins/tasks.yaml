@@ -3012,3 +3012,27 @@ tasks:
   status: complete
   created_at: '2026-09-19T01:21:30.478139+00:00'
   completed_at: '2026-09-19T01:21:36.036302+00:00'
+- id: SCHED-GAP-175b
+  title: toolFleetProjectDetail nullable-column scan error
+  criteria:
+  - "Apply the same nullable-column scan fix that SCHED-GAP-175 (cb1a77c) applied\
+    \ to toolFleetTicks to toolFleetProjectDetail at internal/mcp/handlers.go:44-75.\
+    \ Specifically: (1) capture the QueryContext error (currently discarded on line\
+    \ 54); (2) scan outcome, spawned_at, completed_at, commits, files_changed into\
+    \ sql.NullString/sql.NullInt64 locals and copy Valid values into the tickSummary\
+    \ struct, leaving struct fields at zero value for NULLs; (3) surface rows.Scan\
+    \ error instead of discarding it; (4) check rows.Err() after the loop. Wire shape\
+    \ unchanged (same tickSummary struct, same JSON keys). Add three regression tests\
+    \ in internal/mcp/server_test.go mirroring the SCHED-GAP-175 nullable tests: TestMCP_FleetProjectDetail_NullableColumnsRendersInFlight,\
+    \ TestMCP_FleetProjectDetail_CompletedTickKeepsNullableFields, TestMCP_FleetProjectDetail_MixedBatchPartialCompletion.\
+    \ Existing TestMCP_FleetProjectDetail and TestMCP_FleetProjectDetail_MissingName\
+    \ must still pass. AC: gofmt -l . = 0; go build ./... = 0; go vet ./... = 0; golangci-lint\
+    \ run = 0; go test -short -p 1 -count=1 -run TestMCP_FleetProjectDetail ./internal/mcp/\
+    \ passes all 5 tests; go test -short -p 1 -count=1 ./... green; RED-mutation:\
+    \ temporarily breaking the rows.Scan error-check makes the new in-flight test\
+    \ FAIL with a message naming the invariant; restore and re-run green. Commit subject:\
+    \ 'fix(mcp): SCHED-GAP-175b \u2014 ...' (no [ci skip]). Co-author trailer from\
+    \ $CODING_HERMES_CO_AUTHOR if set."
+  status: complete
+  created_at: '2026-09-19T02:00:32.076342+00:00'
+  completed_at: '2026-09-19T02:11:07.385250+00:00'
