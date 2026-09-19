@@ -3241,3 +3241,27 @@ tasks:
   status: complete
   created_at: '2026-09-19T19:07:20.544183+00:00'
   completed_at: '2026-09-19T19:24:09.722342+00:00'
+- id: SCHED-GAP-172
+  title: Board-content-dup detector in ops/check-fleet-invariants.py + tests
+  criteria:
+  - "Acceptance criteria for the board-content-dup check:\n\n1. ops/check-fleet-invariants.py\
+    \ adds a new check class 'board-content-dup' to CHECK_CLASSES and a function that\
+    \ computes a stable content fingerprint (sha256 over normalized JSON of the row\
+    \ minus volatile fields).\n\n2. When two or more rows on the same board share\
+    \ a content fingerprint AND at least one of them is 'pending' or 'in_progress',\
+    \ the script exits 1 with 'VIOLATION board-content-dup <id1>,<id2>: <fingerprint-prefix>'\
+    \ lines (one line per group).\n\n3. When only closed rows (status in {complete,\
+    \ duplicate, failed}) share a fingerprint, the check does NOT fire (closed rows\
+    \ are exempt).\n\n4. The new check runs under --board-only so CI calls it.\n\n\
+    5. tests/test_check_fleet_invariants_board_dup_content.py carries at least 4 test\
+    \ functions covering: fail-on-pending-dup, pass-on-clean, closed-rows-exempt,\
+    \ volatile-field-diffs-still-dup. pytest runs them green.\n\n6. The live board\
+    \ (.coding-hermes/board/tasks.jsonl at HEAD) still passes the new check \u2014\
+    \ 'python3 ops/check-fleet-invariants.py --board-only' exits 0 after the change.\n\
+    \n7. 'python3 -c \"import ast; ast.parse(open(\"ops/check-fleet-invariants.py\"\
+    ).read())\"' succeeds (no syntax errors).\n\nVolatile-field set (used by the fingerprint):\
+    \ {id, updated_at, review_notes, foreman_note, worker_summary, dispatched_at,\
+    \ completed_at, attempts, created_at}."
+  status: complete
+  created_at: '2026-09-19T19:49:40.650390+00:00'
+  completed_at: '2026-09-19T20:28:44.504891+00:00'
