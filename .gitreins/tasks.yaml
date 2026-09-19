@@ -3145,3 +3145,33 @@ tasks:
   status: complete
   created_at: '2026-09-19T07:01:44.779396+00:00'
   completed_at: '2026-09-19T07:09:28.531866+00:00'
+- id: SCHED-GAP-122
+  title: 'SCHED-GAP-122: extend .gitignore to cover dagger.db-wal/dagger.db-shm +
+    generic *.db-wal/*.db-shm'
+  criteria:
+  - 'Add `dagger.db-wal`, `dagger.db-shm`, `*.db-wal`, `*.db-shm` lines to .gitignore
+    (currently only `dagger.db` is ignored, so SQLite WAL sidecars created on every
+    dagger open show as untracked noise in every tick). Acceptance: `git check-ignore
+    dagger.db-wal dagger.db-shm scheduler.db-wal` all return ignored; `git status`
+    shows zero untracked sidecars; guard 4/4.'
+  status: complete
+  created_at: '2026-09-19T07:34:04.656863+00:00'
+  completed_at: '2026-09-19T07:34:26.479666+00:00'
+- id: REG-001-JSONL-BATTERY
+  title: JSONL corruption/edge-case regression battery (REG-001)
+  criteria:
+  - "Add a new test file internal/blocks/jsonl_corruption_test.go (or extend store_test.go)\
+    \ covering: (1) BOM-prefixed first line skipped cleanly, (2) whitespace-only lines\
+    \ (tabs, spaces) skipped without warning/error, (3) writeJSONL into a read-only\
+    \ parent directory fails cleanly without leaving tmp files, (4) writeJSONL + reload\
+    \ round-trip preserves order and content for a 5-record fixture, (5) seeded pseudo-fuzz:\
+    \ 50 iterations mutating a 5-record fixture (truncate at 25/50/75/100%, flip char,\
+    \ drop char, glue two lines) \u2014 reader never panics, returns either all valid\
+    \ records (last-wins dedupe) or no records on total-corruption, no orphaned .tmp-\
+    \ files in the dir. All tests must use t.TempDir and self-clean. Run: go test\
+    \ -count=1 ./internal/blocks/ -run TestJSONL must pass with all named subtests\
+    \ green; go test -short -p 1 ./... must stay green. Build: go build ./... must\
+    \ pass. Lint: golangci-lint run must pass with zero new findings."
+  status: complete
+  created_at: '2026-09-19T07:54:43.142342+00:00'
+  completed_at: '2026-09-19T08:19:42.053561+00:00'
