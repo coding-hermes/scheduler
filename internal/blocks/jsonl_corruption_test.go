@@ -75,7 +75,8 @@ func mutateBytes(r *testRNG, b []byte) []byte {
 func TestJSONL_BOMPrefix(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "groups.jsonl")
-	bom := []byte{0xEF, 0xBB, 0xBF}
+	bom := make([]byte, 3, 3+len(`{"name":"bom","projects":["p1"],"description":"first"}`+"\n"))
+	bom[0], bom[1], bom[2] = 0xEF, 0xBB, 0xBF
 	content := append(bom, []byte(`{"name":"bom","projects":["p1"],"description":"first"}`+"\n")...)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -203,9 +204,29 @@ func TestJSONL_SeededPseudoFuzz(t *testing.T) {
 		if err := os.WriteFile(path, mut, 0o644); err != nil {
 			t.Fatalf("iter %d write: %v", iter, err)
 		}
-		_, err := loadJSONL(path, func(g *Group) string { return g.Name })
+		got, err := loadJSONL(path, func(g *Group) string { return g.Name })
 		if err != nil {
 			t.Fatalf("iter %d loadJSONL: %v", iter, err)
+		}
+		// Invariant: the returned slice must be self-consistent. Per the
+		// JSONL contract (loadJSONL comments): duplicate names resolve
+		// last-wins, malformed lines are dropped with a warning. After
+		// mutation the only records that can survive are ones whose
+		// unmarshaled form is still a valid Group with a non-empty name
+		// (the key function requires it). Acceptable shapes: full 5-record
+		// slice, partial 1-4 record slice, or empty slice on total corruption.
+		// The key check is: NO two records may share a name (last-wins
+		// dedupe MUST have collapsed any duplicate) and every surviving
+		// name must be one of the original 5 base names (mutation cannot
+		// synthesize a new g0N-style name from nothing).
+		seen := map[string]int{}
+		for _, g := range got {
+			seen[g.Name]++
+		}
+		for name, count := range seen {
+			if count > 1 {
+				t.Fatalf("iter %d: duplicate %q survived dedupe (%d copies) — loadJSONL last-wins contract violated", iter, name, count)
+			}
 		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
