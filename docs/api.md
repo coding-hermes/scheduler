@@ -529,6 +529,12 @@ restart re-pins the operator's choice. Change a namespace cap with
 `PUT /api/v1/namespaces/{id}` `{"max_concurrent": N}`; change one lane's
 admission with `PUT /api/v1/projects/{name}` `{"admission_mode": "cooldown"}`.
 
+For the full conceptual model behind these two dials — where each knob physically
+lives, which store wins on restart, the board-ownership precondition on `tasks`,
+the 6h cooldown floor and the anti-snap rule — see
+[docs/fleet-config-model.md](fleet-config-model.md); every claim there is paired
+with the command that proves it.
+
 ### GET /api/v1/namespaces
 
 **Purpose:** List all namespaces, ordered by id. **Response 200:**

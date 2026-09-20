@@ -527,6 +527,12 @@ binary — see [docs/troubleshooting-scheduling-errors.md](docs/troubleshooting-
 one entry per symptom, each with the exact command that confirms it and the real output it must
 produce. For the drain-restart procedure itself, see [docs/runbook-drain-restart.md](docs/runbook-drain-restart.md).
 
+For **what controls how often a lane runs** — the three concurrency dials and where each physically
+lives, the two admission modes and the board-ownership precondition, the 6h cooldown floor and the
+anti-snap rule, which store owns what, and the two gates that verify the result — see
+[docs/fleet-config-model.md](docs/fleet-config-model.md): every claim on that page is paired with
+the command that proves it.
+
 ---
 
 ## REST API
