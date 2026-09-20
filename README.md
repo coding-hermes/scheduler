@@ -439,6 +439,10 @@ authority model.
 
 Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
+#### DuckBrain sync auth (`DUCKBRAIN_API_KEY`)
+
+When `DUCKBRAIN_API_KEY` is set, every sync request carries it as the `X-API-Key` header — the daemon validates the key once at startup with a side-effect-free probe, and a rejected key (HTTP 401/403) fails fast with a distinct HIGH `DuckBrain API key REJECTED` event instead of spooling every failed write. A 429 from the DuckBrain daemon is treated as backpressure rather than an error: the current burst stops, the remaining writes spool, and they replay on the next `-duckbrain-interval` tick. With the env var unset or empty the daemon stays in pre-auth compatibility mode — no probe is made and no `X-API-Key` header is sent (deliberate, not a bug).
+
 ### Model chains, per-namespace caps, and foreman prompts (fleet.toml)
 
 Every spawn resolves its model/provider by walking an ordered fallback chain
