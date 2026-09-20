@@ -104,6 +104,46 @@ func TestPrintSchema(t *testing.T) {
 		}
 	}
 
+	// SCHED-GAP-168: the load gate threshold and model rates file must
+	// exist in the schema with accurate types/defaults and their env/cli
+	// mappings — these are the keys an operator needs exactly when spawns
+	// are being load-deferred, so a schema drop-out re-breaks the
+	// introspection surface this row closes.
+	lgt, ok := schedProps["load_gate_threshold"].(map[string]interface{})
+	if !ok {
+		t.Error("scheduler section missing load_gate_threshold property")
+	} else {
+		if lgt["type"] != "number" {
+			t.Errorf("load_gate_threshold type = %v, want number", lgt["type"])
+		}
+		if lgt["default"] != float64(0) {
+			t.Errorf("load_gate_threshold default = %v, want 0 (off; main.go flag default)", lgt["default"])
+		}
+		if lgt["env"] != "SCHEDULER_LOAD_GATE_THRESHOLD" {
+			t.Errorf("load_gate_threshold env = %v, want SCHEDULER_LOAD_GATE_THRESHOLD", lgt["env"])
+		}
+		if lgt["cli"] != "--load-gate-threshold" {
+			t.Errorf("load_gate_threshold cli = %v, want --load-gate-threshold", lgt["cli"])
+		}
+	}
+	mrf, ok := schedProps["model_rates_file"].(map[string]interface{})
+	if !ok {
+		t.Error("scheduler section missing model_rates_file property")
+	} else {
+		if mrf["type"] != "string" {
+			t.Errorf("model_rates_file type = %v, want string", mrf["type"])
+		}
+		if mrf["default"] != "" {
+			t.Errorf("model_rates_file default = %v, want \"\" (builtin rates only)", mrf["default"])
+		}
+		if mrf["env"] != "SCHEDULER_MODEL_RATES_FILE" {
+			t.Errorf("model_rates_file env = %v, want SCHEDULER_MODEL_RATES_FILE", mrf["env"])
+		}
+		if mrf["cli"] != "--model-rates-file" {
+			t.Errorf("model_rates_file cli = %v, want --model-rates-file", mrf["cli"])
+		}
+	}
+
 	gwProps := props["gateway"].(map[string]interface{})["properties"].(map[string]interface{})
 	noExec, ok := gwProps["no_exec_fallback"].(map[string]interface{})
 	if !ok {
@@ -163,6 +203,8 @@ func TestPrintConfig(t *testing.T) {
 			0.5,
 			100, 50, 100,
 			512,
+			12.0,
+			"/tmp/rates.json",
 		)
 	})
 
@@ -188,6 +230,11 @@ func TestPrintConfig(t *testing.T) {
 		// ADV-R11: the per-spawn memory cap must surface in --show-config
 		// output (the value passed at the call site).
 		"spawn_mem_limit_mb = 512",
+		// SCHED-GAP-168: the load gate and model rates file must surface in
+		// --show-config output (the RESOLVED values passed at the call site —
+		// the same variables that feed /api/v1/config in main.go).
+		"load_gate_threshold = 12",
+		"model_rates_file = \"/tmp/rates.json\"",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
 		// effective value (was previously invisible to --show-config).
@@ -235,6 +282,116 @@ func TestPrintConfig(t *testing.T) {
 	}
 }
 
+// SCHED-GAP-168 — the load gate threshold and model rates file are published
+// by /api/v1/config (main.go feeds the resolved *loadGateThreshold and
+// *modelRatesFile into the config payload), so the two introspection surfaces
+// operators use instead — --show-config and --schema — must carry BOTH keys
+// too. The two checks below are written as independent failures so a
+// drop-out on exactly one surface names that surface; the pair mirrors the
+// defect shape this row closes (daemon published it, both CLI surfaces
+// omitted it).
+func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
+	t.Run("printSchema --schema JSON", func(t *testing.T) {
+		var schema struct {
+			Properties struct {
+				Scheduler struct {
+					Properties struct {
+						LoadGateThreshold *struct {
+							Type    string `json:"type"`
+							Default any    `json:"default"`
+							Env     string `json:"env"`
+							CLI     string `json:"cli"`
+						} `json:"load_gate_threshold"`
+						ModelRatesFile *struct {
+							Type    string `json:"type"`
+							Default any    `json:"default"`
+							Env     string `json:"env"`
+							CLI     string `json:"cli"`
+						} `json:"model_rates_file"`
+					} `json:"properties"`
+				} `json:"scheduler"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal([]byte(captureStdout(printSchema)), &schema); err != nil {
+			t.Fatalf("printSchema() did not emit valid JSON: %v", err)
+		}
+		if schema.Properties.Scheduler.Properties.LoadGateThreshold == nil {
+			t.Fatal("--schema is missing properties.scheduler.properties.load_gate_threshold — the load-gate drop-out this row closed has regressed")
+		}
+		if schema.Properties.Scheduler.Properties.ModelRatesFile == nil {
+			t.Fatal("--schema is missing properties.scheduler.properties.model_rates_file — the model-rates drop-out this row closed has regressed")
+		}
+		if schema.Properties.Scheduler.Properties.LoadGateThreshold.Env != "SCHEDULER_LOAD_GATE_THRESHOLD" {
+			t.Errorf("load_gate_threshold env = %q, want SCHEDULER_LOAD_GATE_THRESHOLD", schema.Properties.Scheduler.Properties.LoadGateThreshold.Env)
+		}
+		if schema.Properties.Scheduler.Properties.ModelRatesFile.Env != "SCHEDULER_MODEL_RATES_FILE" {
+			t.Errorf("model_rates_file env = %q, want SCHEDULER_MODEL_RATES_FILE", schema.Properties.Scheduler.Properties.ModelRatesFile.Env)
+		}
+	})
+
+	t.Run("printConfig --show-config TOML", func(t *testing.T) {
+		out := captureStdout(func() {
+			printConfig(
+				"",
+				"/tmp/sched-gap-168.db",
+				"127.0.0.1:9090",
+				"",
+				30*time.Second,
+				24*time.Hour,
+				10, 100, 10,
+				false,
+				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
+				true,
+				"scheduler", "http://localhost:3000",
+				0,
+				100, 50, 100,
+				0,
+				12.0,
+				"/tmp/rates.json",
+			)
+		})
+		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "12" {
+			t.Errorf("[scheduler] load_gate_threshold in --show-config = %q, want \"12\" (the argument)", got)
+		}
+		if got := tomlSectionValue(t, out, "scheduler", "model_rates_file"); got != "/tmp/rates.json" {
+			t.Errorf("[scheduler] model_rates_file in --show-config = %q, want \"/tmp/rates.json\" (the argument)", got)
+		}
+	})
+
+	t.Run("printConfig TOML is argument-driven for both keys", func(t *testing.T) {
+		// Sentinels: prove the printed values are the ARGUMENTS and not
+		// literals baked into printConfig's format string.
+		out := captureStdout(func() {
+			printConfig(
+				"",
+				"/tmp/sched-gap-168.db",
+				"127.0.0.1:9090",
+				"",
+				30*time.Second,
+				24*time.Hour,
+				10, 100, 10,
+				false,
+				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
+				true,
+				"scheduler", "http://localhost:3000",
+				0,
+				100, 50, 100,
+				0,
+				7.5,
+				"/tmp/sentinel-rates.json",
+			)
+		})
+		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "7.5" {
+			t.Errorf("[scheduler] load_gate_threshold = %q, want the argument 7.5 — printConfig must not hardcode it", got)
+		}
+		if got := tomlSectionValue(t, out, "scheduler", "model_rates_file"); got != "/tmp/sentinel-rates.json" {
+			t.Errorf("[scheduler] model_rates_file = %q, want the argument — printConfig must not hardcode it", got)
+		}
+	})
+}
+
 // SCHED-GAP-167 — the --duckbrain-ns default is restated on several surfaces,
 // and five of them had drifted to the retired "coding-hermes" value while the
 // flag declaration and the live daemon both report "scheduler" (Bane
@@ -270,6 +427,8 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 				0,
 				100, 50, 100,
 				0,
+				0,
+				"",
 			)
 		})
 	}
@@ -431,12 +590,23 @@ func captureStdout(f func()) string {
 	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	// Drain CONCURRENTLY. Reading only after f() returns deadlocks as soon as
+	// the captured output exceeds the pipe capacity (F_GETPIPE_SZ = 8192 on
+	// this host): the writer blocks mid-Write, f() never returns, and the
+	// reader never starts. --schema crossed that line at 8301 bytes
+	// (SCHED-GAP-168); the old shape had ~580 bytes of headroom left.
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		done <- buf.String()
+	}()
 	f()
 	w.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
+	out := <-done
+	r.Close()
 	os.Stdout = old
-	return buf.String()
+	return out
 }
 
 func captureLogOutput(f func()) string {
