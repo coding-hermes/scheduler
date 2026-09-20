@@ -2834,32 +2834,11 @@ tasks:
   created_at: '2026-09-18T18:22:30.822577+00:00'
   completed_at: '2026-09-18T18:22:43.185248+00:00'
 - id: SCHED-GAP-165
-  title: Declare FEAT-005 root TOML wiring landed (align --schema description, AGENTS.md,
-    and printConfig header with the 4 LoadRootConfig call sites already in main.go)
+  title: resolve SCHED-GAP-165
   criteria:
-  - "- cmd/schedulerd/show_config.go description (line 21) no longer contains \"NOT\
-    \ yet loaded by the daemon\" and now declares the root TOML layer loaded\n- cmd/schedulerd/show_config.go\
-    \ printSchema docstring (lines 11-15) and printConfig docstring (lines 110-113)\
-    \ no longer claim FEAT-005 is pending\n- cmd/schedulerd/show_config.go printConfig\
-    \ header comment (line 128) reflects the three-layer model TOML < env < CLI\n\
-    - cmd/schedulerd/show_config_test.go lines 24-35: removed the assertion that the\
-    \ description must contain \"NOT yet loaded by the daemon\"; added the inverse\
-    \ assertion that the description declares FEAT-005 loaded (e.g. contains \"FEAT-005\"\
-    \ and a load-declaring phrase)\n- AGENTS.md line 90: replaced \"(exists but NOT\
-    \ wired into daemon boot until FEAT-005)\" with a wired/landed wording that preserves\
-    \ the resolution chain\n- AGENTS.md line 146: replaced \"are NOT loaded from a\
-    \ root schedulerd.toml yet \u2014 root TOML wiring arrives in FEAT-005 (DOGFOOD-012)\"\
-    \ with a loaded/landed wording (preserving the DOGFOOD-012 pointer)\n- go build\
-    \ ./... exits 0\n- go vet ./... exits 0\n- go test -short -p 1 -count=1 ./cmd/schedulerd/\
-    \ exits 0 (TestPrintSchema and TestPrintConfig both pass)\n- go test -short -p\
-    \ 1 -count=1 ./... exits 0 across the whole repo\n- gofmt -l . prints nothing\n\
-    - golangci-lint run reports no new findings\n- LoadRootConfig call sites in cmd/schedulerd/main.go\
-    \ remain >= 4 (TOML layer stays wired)\n- git log shows exactly one commit with\
-    \ the [SCHED-GAP-165] tag in subject or body\n- exactly the 3 files (cmd/schedulerd/show_config.go,\
-    \ cmd/schedulerd/show_config_test.go, AGENTS.md) appear in the commit (git show\
-    \ --stat)"
+  - AC per board row SCHED-GAP-165
   status: in_progress
-  created_at: '2026-09-18T18:39:30.771160+00:00'
+  created_at: '2026-09-20T21:52:27.659218+00:00'
 - id: SCHED-GAP-164
   title: 'Board status vocabulary drift: add a validator gate, normalize legacy ''done''/''completed''
     rows, and prevent re-emission'
@@ -3615,8 +3594,9 @@ tasks:
     panel reading the persisted value, not runtime.MemStats alone).'
   - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...) and gofmt/vet
     clean.'
-  status: in_progress
+  status: complete
   created_at: '2026-09-20T19:53:40.476606+00:00'
+  completed_at: '2026-09-20T21:03:34.677312+00:00'
 - id: SCHED-GAP-158
   title: 'Outcome-honesty metrics: zero-output committed ticks, stalls, escalations,
     lane churn'
@@ -3672,5 +3652,26 @@ tasks:
     pushed over an unnamed CHANGELOG.'
   - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...), gofmt
     and go vet clean.'
-  status: in_progress
+  status: complete
   created_at: '2026-09-20T19:54:05.472265+00:00'
+  completed_at: '2026-09-20T20:56:21.966744+00:00'
+- id: SCHED-GAP-098
+  title: resolve SCHED-GAP-098
+  criteria:
+  - AC per board row SCHED-GAP-098
+  status: complete
+  created_at: '2026-09-20T21:52:25.829604+00:00'
+  completed_at: '2026-09-20T22:47:28.569689+00:00'
+- id: SCHED-GAP-157
+  title: resolve SCHED-GAP-157
+  criteria:
+  - AC per board row SCHED-GAP-157
+  status: in_progress
+  created_at: '2026-09-20T21:52:26.437347+00:00'
+- id: SCHED-GAP-094
+  title: resolve SCHED-GAP-094
+  criteria:
+  - AC per board row SCHED-GAP-094
+  status: complete
+  created_at: '2026-09-20T21:52:27.052549+00:00'
+  completed_at: '2026-09-20T22:46:10.541718+00:00'
