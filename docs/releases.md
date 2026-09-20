@@ -90,8 +90,9 @@ the 8 binaries plus `SHA256SUMS`.
 
 ## 2. Preconditions before tagging
 
-Every item here is something nothing in CI will check for you. Check them in
-order; each one has a command.
+Most of this list is enforced for you now; check each item in order. Where a
+gate runs in CI it says so — the rest are still deliberate operator steps,
+each with a command.
 
 1. **Working tree clean** — `git status --porcelain` prints nothing.
 
@@ -131,9 +132,10 @@ order; each one has a command.
    The tag push also re-runs `CI Pipeline` (see §1), so a red commit gets caught
    twice: once by CI, once by you looking like the release broke it.
 
-5. **The CHANGELOG names the version being tagged.** Run the prep target and
-   `git diff CHANGELOG.md`; the newest release heading must be the version in the
-   tag you are about to push:
+5. **The CHANGELOG names the version being tagged.** `make release-prep`
+   produces this shape and release.yaml's **Version authority** step now
+   enforces it at tag time (`scripts/check-version-authority.sh
+   "${GITHUB_REF#refs/tags/}"`, above the build — see the rule below):
 
    ```sh
    make release-prep VERSION=v1.4.0
@@ -150,19 +152,48 @@ order; each one has a command.
 
 ### The version-authority rule (read this before tagging)
 
-**Nothing in CI will catch a tag pushed over a tree whose CHANGELOG still says
-`[Unreleased]`.** Verified 2026-09-20 — there is no `git describe` assertion and
-no CHANGELOG assertion anywhere in `.github/workflows`:
+**A tag pushed over a tree whose CHANGELOG still says `[Unreleased]` now fails
+in CI.** The gate landed with RELEASE-006 (2026-09-20): `release.yaml` runs
+`scripts/check-version-authority.sh "${GITHUB_REF#refs/tags/}"` immediately
+before the build — so a tag the CHANGELOG does not name fails fast and cheap,
+never after a minutes-long multi-platform build:
 
 ```sh
-grep -rn 'CHANGELOG\|git describe' .github/    # expected: no matches
+scripts/check-version-authority.sh v1.4.0        # what the workflow step runs
+# REASON=CHANGELOG_DOES_NOT_NAME_VERSION         # an unnamed tag, refused (exit 2)
 ```
 
-The release workflow's only version authority is the **binary** version smoke
-(§1 step 5): it proves the binary reports the tag, not that the CHANGELOG
-describes it. So a tag can be published with a CHANGELOG that has not been
-rolled over, and every automated gate stays green. `make release-prep` is the
-only thing that closes that gap, and it is a deliberate operator step.
+The assertion itself is `release-prep.sh`'s `--check` mode — one
+implementation of the rule, two callers — run by the wrapper against a
+throwaway fixture copy of the CHANGELOG, so the operator-checkout
+preconditions (`DIRTY_TREE`, `HEAD` == `origin/main`, tag-free) that a CI
+checkout cannot satisfy are eliminated by construction rather than skipped.
+
+The gate has deliberate limits, and they are worth naming:
+
+- **It does not run on the out-of-band publish path.** §5's v1.3.0 precedent
+  stands: a Release created through the API/CLI emits no `push` event, so
+  *no* workflow — this gate included — runs. The gate closes the
+  tag-pushed-over-an-unnamed-CHANGELOG hole, not the out-of-band one.
+- **The binary version smoke (§1 step 5) stays.** The new step validates the
+  TREE (the CHANGELOG describes the tag); the smoke validates the ARTIFACT
+  (the binary reports the tag). They check different halves of version
+  authority, and neither subsumes the other.
+- **Ordinary pushes carry no version**, so CI (`ci.yaml`, on every push to
+  main and every PR) asserts the weaker structural invariant instead —
+  exactly one `[Unreleased]` heading and the newest release heading parsing
+  as `## [X.Y.Z]` — through the same script's `--structure-only` mode:
+  `scripts/check-version-authority.sh --structure-only`.
+  `make release-prep` remains the operator step that produces the shape the
+  gates demand.
+
+Historical scope (before this gate landed): verified 2026-09-20, the grep
+below genuinely returned no matches — the gap was real, and RELEASE-006 is
+what closed it.
+
+```sh
+grep -rn 'CHANGELOG\|git describe' .github/    # before RELEASE-006: no matches; now: the two gate steps
+```
 
 ### Preconditions `release-prep` enforces for you
 

@@ -17,6 +17,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: CHANGELOG hygiene (RELEASE-006)
+        # An ordinary push carries no version, so this asserts the weaker
+        # STRUCTURAL invariant that must hold on EVERY commit: exactly one
+        # '[Unreleased]' heading and the newest release heading parses as
+        # '## [X.Y.Z]'. The tag-specific assertion — the CHANGELOG must name
+        # the tag — is release.yaml's "Version authority" step (this
+        # workflow also fires on v* tags, so a tag push is checked twice).
+        # Same script; the version rule itself stays in
+        # scripts/release-prep.sh --check. Fixture battery:
+        # tests/test_check_version_authority.py, run in CI by the invariant
+        # step (bash scripts/check-invariants.sh -> pytest tests/ -q).
+        run: scripts/check-version-authority.sh --structure-only
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}

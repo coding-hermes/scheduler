@@ -18,6 +18,18 @@ jobs:
         with:
           go-version: '1.26'
 
+      - name: Version authority (CHANGELOG names the tag) — RELEASE-006
+        # Fails fast and cheap, BEFORE the ~minutes-long multi-platform
+        # build: a tag pushed over a tree whose CHANGELOG still says
+        # [Unreleased] must fail the release here. The binary version smoke
+        # below validates the ARTIFACT; this validates the TREE. The rule
+        # itself is release-prep.sh's --check assertion (one implementation,
+        # two callers); the wrapper runs it against a fixture copy so the
+        # operator-checkout preconditions (clean tree, HEAD == origin/main,
+        # tag-free) that a CI checkout cannot satisfy are eliminated by
+        # construction.
+        run: scripts/check-version-authority.sh "${GITHUB_REF#refs/tags/}"
+
       - name: Build all platforms
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
