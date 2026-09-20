@@ -439,6 +439,90 @@ authority model.
 
 Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
+### Model chains, per-namespace caps, and foreman prompts (fleet.toml)
+
+Every spawn resolves its model/provider by walking an ordered fallback chain
+left-to-right — the first non-empty model and the first non-empty provider,
+resolved independently, win (`internal/scheduler/spawn.go`, `resolveChain`).
+The chain has three tiers:
+
+1. **Project tier** — either the project's `model` + `fallback_model` /
+   `provider` + `fallback_provider` fields (legacy shape), or, when set, the
+   project's `model_chain` (a JSON array of `"model@provider"` hops, which
+   REPLACES those fields as the project tier — `spawn.go`, `spawnChain`).
+2. **Namespace tier** — the namespace's `model_chain` hops, appended AFTER the
+   project chain and BEFORE the global defaults (`spawn.go`, `spawnChain`).
+3. **Global tier** — the spawner env defaults (`SCHEDULER_FOREMAN_MODEL` /
+   `_PROVIDER` and their `_FALLBACK_*` counterparts). Skipped entirely when
+   the project sets `no_global_fallback = true`.
+
+```toml
+[[projects]]
+model = "deepseek-v4-flash"          # tier 1 (legacy shape) — primary
+fallback_model = "deepseek-v4-pro"   # tier 1 fallback
+# OR, as a full chain replacing the fields above (SCHED-GAP-075):
+#model_chain = ["deepseek-v4-flash@deepseek-foreman", "deepseek-v4-pro@deepseek-foreman"]
+
+[[namespaces]]
+# tier 2: hops appended after the project chain, before the global defaults
+#model_chain = ["kimi-k3@kimi-for-coding", "deepseek-v4-flash@deepseek-foreman"]
+```
+
+**Durability:** the scheduler seeds `model_chain` (project and namespace)
+into SQLite when the row is CREATED from fleet.toml; it does NOT re-pin the
+chain on an existing row at boot (`internal/config/loader.go` — `ApplyFleetConfig`
+pins `model`/`provider`/`cooldown_s`/`enabled` on every restart, but `model_chain`
+flows only through the create path). Change a chain on a live namespace via
+`PUT /api/v1/namespaces/{id}` (`{"model_chain": "[...]"}`), on a live project via
+`PUT /api/v1/projects/{name}` (`{"model_chain": "[...]"}` — `""` clears it).
+Invalid JSON or an empty array contributes nothing to the chain (`spawn.go`,
+`parseModelChain`).
+
+### Foreman prompts: `default_prompt`, `prompt`, `prompt_mode`
+
+The tick prompt is assembled per spawn (`spawn.go`, `buildForemanPrompt`):
+
+- **Base** = the namespace `default_prompt`; empty/absent → the built-in
+  foreman prompt.
+- **Project `prompt`** is then appended (`prompt_mode = "append"`, the
+  default) or replaces the base entirely (`prompt_mode = "replace"`).
+- The scheduler always adds dynamic context around it — a
+  `[Scheduler tick: <id>]` prefix and a footer with the workdir and worker
+  model/provider (`spawn.go`, `buildForemanPrompt`) — no configured prompt
+  can lose them.
+
+```toml
+[[namespaces]]
+#default_prompt = "You are the foreman for this namespace."   # base for every project here
+
+[[projects]]
+#prompt = "Extra standing instructions for this project."     # appended by default
+#prompt_mode = "append"   # "append" (default) | "replace"
+```
+
+`prompt` and `prompt_mode` are data, not pins: `ApplyFleetConfig` re-writes
+them on every boot when the key is present in fleet.toml, and a keyless entry
+leaves an API-assigned value untouched (`internal/config/loader.go`,
+GatewayKey-style conditional pin). The same is true of namespace
+`default_prompt`.
+
+### Per-namespace concurrency: `max_concurrent`
+
+A namespace may cap how many of its projects run ticks at once —
+`0`/absent = unlimited (the global `--max-concurrent` still applies);
+a positive value is the namespace's live cap, enforced by the packer
+(`internal/scheduler/packer_select.go`, `nsCapMap`):
+
+```toml
+[[namespaces]]
+#max_concurrent = 1   # serialize the lane: max one running tick in this namespace
+```
+
+Durability asymmetry (SCHED-GAP-149): a POSITIVE value re-pins from
+fleet.toml on every boot; `0`/absent leaves the live DB cap untouched, so a
+cap set via `PUT /api/v1/namespaces/{id}` survives a restart with a keyless
+entry. A negative value in fleet.toml normalizes to 0 (never a boot error).
+
 ### Test-time simulator (env-only)
 
 All clock reads and waits go through `internal/clock`; the implementation is selected by environment (there is no flag for it):
