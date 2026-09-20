@@ -54,6 +54,7 @@ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl -
 | `board-vocab` | every board row carries a dispatchable status (`pending`/`in_progress`/`complete`/`duplicate`) | pre-existing `tests/test_check_fleet_invariants_board_vocab.py` | covered (pre-existing) |
 | `board-legacy-status` | legacy closed spellings (`done`/`completed`/`closed`) get their own violation so the PM cycle sweeps them | `tests/test_check_fleet_invariants_board_legacy_status.py` | covered (both arms) |
 | `board-content-dup` | two open rows with identical non-volatile content fire as one per-group violation; all-closed groups exempt; volatile-field-only diffs still collide | pre-existing `tests/test_check_fleet_invariants_board_dup_content.py` | covered (pre-existing) |
+| `sync-orientation` | every enabled `*-sync` lane's workdir carries a non-empty `README.md` naming its target DuckBrain namespace (a `namespace` line carrying the lane's base as a whole hyphen-delimited word, or a >=2-token hyphen run of it) AND a findable consumption contract (the companion `<base>-sync-data` skill under the skills root, or an in-README pointer: `/sync/` marker, `/api/` route, skill name). One violation per lane with every unmet fact in the detail; a workdir ABSENT is check 5's fact (no double-report); disabled lanes exempt; the skill axis SKIPS SILENTLY when the skills root is absent (`--skills-root`, the CI shape) while the README facts still assert | `tests/test_check_fleet_invariants_sync_orientation.py` | covered (seeded / conforming / exempt / skip arms + per-fact independence) |
 
 The row's PASSING-FLEET requirement lives in
 `test_passing_fleet_full_checker_exits_zero` (a full conforming fleet exits 0
@@ -74,6 +75,13 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
 * **Board checks** — silently skipped when no board file is given/found (the
   checker's documented behavior for test rigs); the battery always passes an
   explicit board, so this skip cannot hide anything in CI.
+* **`sync-orientation` skill axis** — silently skipped when the skills root
+  (`--skills-root`) does not exist, because a CI runner carries no
+  `~/.hermes/skills`. The README facts (non-empty file, namespace named) are
+  workdir-local and STILL assert, so the class is never vacuous in CI; only the
+  companion-skill half of the contract goes unchecked there. A lane whose
+  workdir is absent is check 5's finding — the class stays silent so one fact
+  never produces two lines.
 
 ### Adding an invariant
 

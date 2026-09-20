@@ -53,6 +53,13 @@ NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
 def _board_dir(root: Path, name: str) -> Path:
     wd = root / name
     (wd / ".coding-hermes" / "board").mkdir(parents=True, exist_ok=True)
+    if name.endswith("-sync"):
+        # check 10 (sync-orientation): a seeded `*-sync` lane must carry the
+        # orientation facts, or the fixture — not the class under test — fires.
+        base = name[:-len("-sync")]
+        (wd / "README.md").write_text(
+            f"# {name} — lane workdir\n\nTarget namespace: `{base}`.\n"
+            f"Contract: skill `{base}-sync-data`.\n", encoding="utf-8")
     return wd
 
 
