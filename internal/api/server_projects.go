@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -475,10 +477,37 @@ func cascadeResumeSatellites(ctx context.Context, db *sql.DB, name string) error
 // non-zero exit (stderr retained in the error) or exec helper failure — is
 // returned to the caller, which logs it and proceeds: the response is never
 // poisoned and the policy script's own --verify run is the backstop.
+// policyScriptPath resolves the ops policy script from the RUNNING user's home
+// rather than a hardcoded /home/kara. A hardcoded absolute path made pause/
+// resume fail on every fleet host that is not kara (the script lives at
+// $HOME/.hermes/scripts/…), which silently defeated SCHED-GAP-137b's whole
+// purpose: the fleet.toml regen appeared to run while doing nothing, leaving
+// the durable toml pin out of parity with the DB.
+//
+// Resolution order:
+//  1. SCHEDULER_POLICY_SCRIPT — explicit override (tests, unusual layouts)
+//  2. $HERMES_HOME/scripts/fleet-cooldown-policy.py
+//  3. $HOME/.hermes/scripts/fleet-cooldown-policy.py
+//  4. /home/kara/.hermes/scripts/fleet-cooldown-policy.py — legacy fallback,
+//     kept last so single-host behaviour is unchanged.
+func policyScriptPath() string {
+	const rel = "scripts/fleet-cooldown-policy.py"
+	if p := os.Getenv("SCHEDULER_POLICY_SCRIPT"); p != "" {
+		return p
+	}
+	if hh := os.Getenv("HERMES_HOME"); hh != "" {
+		return filepath.Join(hh, rel)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".hermes", rel)
+	}
+	return "/home/kara/.hermes/" + rel
+}
+
 var regenFleetTomlExec = func() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "python3", "/home/kara/.hermes/scripts/fleet-cooldown-policy.py", "--apply")
+	cmd := exec.CommandContext(ctx, "python3", policyScriptPath(), "--apply")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
