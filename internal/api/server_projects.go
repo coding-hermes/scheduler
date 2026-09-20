@@ -304,6 +304,12 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	// a previously-enabled project.
 	if wasEnabled && updates.Enabled != nil && !*updates.Enabled {
 		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
+		// SCHED-GAP-180: the PUT surface is a second entry point to the
+		// same pause operation — cascade to satellite lanes identically
+		// (logged, never poisons the response).
+		if err := cascadePauseToSatellites(ctx, s.db, name, "PUT /projects/{name}"); err != nil {
+			log.Printf("SCHED-GAP-180: PUT disable %s: satellite cascade: %v", name, err)
+		}
 	}
 	writeJSON(w, 200, p)
 }
@@ -325,6 +331,15 @@ func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name strin
 	if p, err := database.GetProject(ctx, s.db, name); err == nil {
 		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
 	}
+	// SCHED-GAP-180: the pause cascades to satellite lanes (<name>-qa/-pm/
+	// -sync/-dogfood). A paused primary whose board still carries pending
+	// rows would otherwise leave its satellites admitting ticks through the
+	// shared board (heading stayed enabled 7 weeks this way). Cascade
+	// failures are logged, never poison the response — the primary's pause
+	// has already landed, and the invariant check is the backstop.
+	if err := cascadePauseToSatellites(ctx, s.db, name, by); err != nil {
+		log.Printf("SCHED-GAP-180: pause %s: satellite cascade: %v", name, err)
+	}
 	// SCHED-GAP-137b: keep fleet.toml in parity with the DB. The loader
 	// (internal/config/loader.go ApplyFleetConfig) re-pins enabled from
 	// fleet.toml at every startup, so a pause that lives only in the DB is
@@ -340,9 +355,17 @@ func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name string) {
-	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(true)}); err != nil {
+	ctx := context.Background()
+	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(true)}); err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	// SCHED-GAP-180: mirror the pause cascade — restore only the satellites
+	// THIS resume owns (cascade provenance naming this target). A satellite
+	// disabled for its own reason keeps its provenance and stays disabled.
+	// Failures are logged, never poison the response (mirror of pause).
+	if err := cascadeResumeSatellites(ctx, s.db, name); err != nil {
+		log.Printf("SCHED-GAP-180: resume %s: satellite cascade: %v", name, err)
 	}
 	// SCHED-GAP-137b: mirror pause — regenerate fleet.toml so the durable
 	// pin matches the re-enabled DB row before the next daemon restart.
@@ -350,6 +373,95 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 		log.Printf("SCHED-GAP-137b: resume %s: fleet.toml regen failed: %v", name, err)
 	}
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
+}
+
+// satelliteLaneSuffixes are the satellite lane name suffixes the pause/resume
+// cascade recognizes (SCHED-GAP-180). Name suffix is the sanctioned detection
+// for this row; board-ownership/symlink detection is SCHED-GAP-141's concern
+// and is deliberately NOT walked here.
+var satelliteLaneSuffixes = []string{"-qa", "-pm", "-sync", "-dogfood"}
+
+// cascadeMarker is the disabled_by value stamped on satellites disabled by
+// the pause/resume cascade (distinct from "api-pause" / "api" / "api-delete"
+// / "auto-disable" so resume can restore exactly the rows the cascade owns).
+const cascadeMarker = "api-pause-cascade"
+
+// cascadeReasonPrefix is the disabled_reason prefix stamped on cascade-paused
+// satellites; the full reason is "<prefix><primary> (via <provenance>)".
+const cascadeReasonPrefix = "paused by target "
+
+// cascadePauseToSatellites disables the satellite lanes of the named primary
+// that are CURRENTLY enabled. Each newly disabled satellite is stamped
+// disabled_by=cascadeMarker and disabled_reason="<cascadeReasonPrefix><primary>
+// (via <provenance>)" so the matching resume can identify exactly the rows it
+// owns. Satellites that do not exist are skipped; satellites already disabled
+// keep their own provenance untouched. An error is returned only when the DB
+// update itself fails; the caller logs it and proceeds (the primary's pause
+// has already landed).
+func cascadePauseToSatellites(ctx context.Context, db *sql.DB, name, provenance string) error {
+	reason := cascadeReasonPrefix + name + " (via " + provenance + ")"
+	for _, suffix := range satelliteLaneSuffixes {
+		sat := name + suffix
+		p, err := database.GetProject(ctx, db, sat)
+		if err != nil {
+			if errors.Is(err, database.ErrProjectNotFound) {
+				continue
+			}
+			return fmt.Errorf("lookup satellite %q: %w", sat, err)
+		}
+		if !p.Enabled {
+			continue
+		}
+		by := cascadeMarker
+		if err := database.UpdateProject(ctx, db, sat, database.ProjectUpdates{
+			Enabled:        database.BoolPtr(false),
+			DisabledBy:     &by,
+			DisabledReason: &reason,
+		}); err != nil {
+			return fmt.Errorf("cascade-pause satellite %q: %w", sat, err)
+		}
+		// GAP-044 parity: log the event from the row's actually-stamped
+		// values (the DB layer owns disabled_at), mirroring the primary.
+		if sp, err := database.GetProject(ctx, db, sat); err == nil {
+			logDisableEvent(ctx, db, sat, sp.DisabledBy, sp.DisabledReason, sp.DisabledAt)
+		}
+	}
+	return nil
+}
+
+// cascadeResumeSatellites re-enables the satellite lanes of the named primary
+// that the cascade itself disabled for THIS target: disabled_by=cascadeMarker
+// AND disabled_reason prefix "<cascadeReasonPrefix><name> ". A satellite
+// paused for its own reason (disabled_by "api", "api-pause", "auto-disable",
+// "api-delete", or a cascade naming a DIFFERENT target) is never touched.
+// Missing satellites are skipped. An error is returned only when the DB
+// update itself fails; the caller logs it and proceeds.
+func cascadeResumeSatellites(ctx context.Context, db *sql.DB, name string) error {
+	prefix := cascadeReasonPrefix + name + " "
+	for _, suffix := range satelliteLaneSuffixes {
+		sat := name + suffix
+		p, err := database.GetProject(ctx, db, sat)
+		if err != nil {
+			if errors.Is(err, database.ErrProjectNotFound) {
+				continue
+			}
+			return fmt.Errorf("lookup satellite %q: %w", sat, err)
+		}
+		if p.Enabled || p.DisabledBy != cascadeMarker || !strings.HasPrefix(p.DisabledReason, prefix) {
+			continue
+		}
+		if err := database.UpdateProject(ctx, db, sat, database.ProjectUpdates{Enabled: database.BoolPtr(true)}); err != nil {
+			return fmt.Errorf("cascade-resume satellite %q: %w", sat, err)
+		}
+		details, _ := json.Marshal(map[string]string{"project": sat, "target": name})
+		_ = database.LogEvent(ctx, db, &database.Event{
+			Severity:  database.SeverityInfo,
+			Component: "api",
+			Message:   fmt.Sprintf("project enabled: %s (cascade resume of %s)", sat, name),
+			Details:   string(details),
+		})
+	}
+	return nil
 }
 
 // regenFleetTomlViaPolicy regenerates ~/.hermes/fleet.toml from live DB state
