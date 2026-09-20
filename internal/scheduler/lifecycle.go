@@ -172,19 +172,45 @@ type SessionStats struct {
 
 // CleanupStale clears running ticks older than the given duration.
 func (lt *LifecycleTracker) CleanupStale(maxAge time.Duration) (int, error) {
+	_, n, err := lt.CleanupStaleProjects(maxAge)
+	return n, err
+}
+
+// CleanupStaleProjects is CleanupStale with SCHED-GAP-186 reporting: it also
+// returns the DISTINCT project names whose running rows were flipped terminal,
+// so the caller can reconcile the SlotPool claims those rows owned (the UPDATE
+// itself never touches the in-process slot pool). The status/completed_at/
+// error UPDATE is byte-identical to the original CleanupStale.
+func (lt *LifecycleTracker) CleanupStaleProjects(maxAge time.Duration) ([]string, int, error) {
 	cutoff := lt.clock().Now().Add(-maxAge)
+	rows, err := lt.db.Query(`
+		SELECT DISTINCT project_name FROM ticks
+		WHERE status = ? AND spawned_at < ?
+	`, TickRunning, cutoff.Format(time.RFC3339))
+	if err != nil {
+		return nil, 0, err
+	}
+	var projects []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		projects = append(projects, name)
+	}
+	rows.Close()
 	res, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, completed_at = ?, error = ?
 		WHERE status = ? AND spawned_at < ?
 	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
 		log.Printf("CLEANUP: %d stale running ticks timed out", n)
 	}
-	return int(n), nil
+	return projects, int(n), nil
 }
 
 func stringOrNil(s string) interface{} {

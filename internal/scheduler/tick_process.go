@@ -46,10 +46,17 @@ func (l *Loop) evaluate() {
 		"budget":       l.weightBudget,
 	})
 
-	// Cleanup stale ticks.
-	cleaned, _ := l.lifecycle.CleanupStale(90 * time.Minute)
-	if cleaned > 0 {
+	// Cleanup stale ticks. SCHED-GAP-186: CleanupStaleProjects reports WHICH
+	// projects it flipped terminal so the SlotPool claims can be reconciled —
+	// without this, a project whose stale row was reaped here kept its
+	// in-process running/reserved claim and the DEDUP view below skipped it
+	// forever (hermes-dagger, 2026-09-19). This is also the per-eval
+	// self-heal backstop for any wedge a missed reaper leaves behind.
+	if staleProjects, cleaned, _ := l.lifecycle.CleanupStaleProjects(90 * time.Minute); cleaned > 0 {
 		log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
+		if l.slotPool != nil {
+			l.slotPool.releaseReaped(staleProjects)
+		}
 	}
 
 	// Pick projects.
@@ -536,6 +543,7 @@ func (l *Loop) cleanDanglingOnStartup() {
 	}
 
 	var cleaned int
+	reapedProjects := make([]string, 0, len(dead))
 	for _, dt := range dead {
 		// outcome stays unset — the CHECK constraint only allows
 		// ('committed','dry_run','failed','timeout'); 'zombie_reaped'
@@ -550,6 +558,7 @@ func (l *Loop) cleanDanglingOnStartup() {
 			continue
 		}
 		cleaned++
+		reapedProjects = append(reapedProjects, dt.project)
 		// SCHED-GAP-091: reap succeeded — the pid/heartbeat died while the
 		// daemon was absent (crash / restart), so this is a drop. Stamp it
 		// so the resume scan re-nudges the tick.
@@ -560,6 +569,11 @@ func (l *Loop) cleanDanglingOnStartup() {
 	}
 	if cleaned > 0 {
 		log.Printf("DANGLING: cleaned %d dead running tick(s) from previous process (dead pid or stale gateway heartbeat)", cleaned)
+		// SCHED-GAP-186: on a clean boot the fresh SlotPool starts empty, so
+		// this reconcile is normally a no-op — but a same-process restart
+		// path reusing this Loop (and any future caller that re-enters with
+		// a warm pool) must not keep claims for rows just flipped terminal.
+		l.slotPool.releaseReaped(reapedProjects)
 	}
 	// SCHED-GAP-091: stamp the reaped rows as orphans so the resume scan
 	// (startup, when the gateway is back) re-nudges them.
@@ -692,8 +706,11 @@ func (l *Loop) reapTickTimeout() time.Duration {
 
 func (l *Loop) reapZombies() {
 	ctx := context.Background()
+	// SCHED-GAP-186: project_name rides along so a successful reap can
+	// reconcile the SlotPool claim for that project (the DB row going
+	// terminal here does not, by itself, free the in-process slot).
 	rows, err := l.db.QueryContext(ctx,
-		`SELECT id, pid FROM ticks WHERE status='running' AND pid > 0`)
+		`SELECT id, pid, project_name FROM ticks WHERE status='running' AND pid > 0`)
 	if err != nil {
 		log.Printf("ZOMBIE: reaper query failed: %v", err)
 		return
@@ -702,15 +719,19 @@ func (l *Loop) reapZombies() {
 	// Collect dead tick IDs first and close rows BEFORE issuing UPDATEs —
 	// SQLite allows a single writer, and an UPDATE issued while this SELECT
 	// still holds the pool's only connection blocks forever (pool deadlock).
-	var dead []string
+	type zombieTick struct {
+		id      string
+		project string
+	}
+	var dead []zombieTick
 	for rows.Next() {
-		var id string
+		var id, project string
 		var pid int
-		if err := rows.Scan(&id, &pid); err != nil {
+		if err := rows.Scan(&id, &pid, &project); err != nil {
 			continue
 		}
 		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
-			dead = append(dead, id)
+			dead = append(dead, zombieTick{id: id, project: project})
 		}
 	}
 	rows.Close()
@@ -721,7 +742,9 @@ func (l *Loop) reapZombies() {
 	reapedOrphans := make(map[string]string)
 
 	var reaped int
-	for _, id := range dead {
+	reapedProjects := make([]string, 0)
+	for _, zt := range dead {
+		id := zt.id
 		// outcome stays unset — see the CHECK-constraint comment in
 		// cleanDanglingOnStartup above; setting outcome here makes
 		// SQLite reject the UPDATE and the zombie is never reaped.
@@ -732,6 +755,7 @@ func (l *Loop) reapZombies() {
 			continue
 		}
 		reaped++
+		reapedProjects = append(reapedProjects, zt.project)
 		reapedOrphans[id] = OrphanReasonZombieReap
 		// SCHED-GAP-114 (S12 §8.2 item 3): same shared wave step as the
 		// startup path — reaped wave tick → its worker rows go 'abandoned'.
@@ -754,6 +778,7 @@ func (l *Loop) reapZombies() {
 			continue
 		}
 		gwReaped++
+		reapedProjects = append(reapedProjects, gt.project)
 		reapedOrphans[gt.id] = OrphanReasonZombieReap
 		// SCHED-GAP-114: gateway-drop wave ticks abandon their workers too.
 		l.reapWaveAbandoned(ctx, gt.id)
@@ -767,4 +792,12 @@ func (l *Loop) reapZombies() {
 	for id, reason := range reapedOrphans {
 		l.stampOrphaned(id, reason)
 	}
+	// SCHED-GAP-186: the DB rows are terminal, so any SlotPool claim the
+	// spawn goroutine still holds for these projects (its session hung in
+	// Wait() while the pid/heartbeat died — the 2026-09-19 hermes-dagger
+	// wedge) must be dropped, or RunningSet() keeps reporting the project
+	// as "already running" and the evaluation DEDUP skips it until a
+	// daemon restart. releaseReaped is a no-op for claims already freed by
+	// the goroutine's own deferred Release.
+	l.slotPool.releaseReaped(reapedProjects)
 }

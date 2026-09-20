@@ -232,6 +232,40 @@ func (p *SlotPool) Release(name string) {
 	}
 }
 
+// releaseReaped drains the in-process claims (slot refcount and the
+// SCHED-GAP-103 reservation) for projects whose tick rows a reaper has just
+// flipped terminal. SCHED-GAP-186 (2026-09-19, hermes-dagger): the zombie
+// reapers and CleanupStale UPDATE ticks.status='timeout' directly, without
+// passing through the spawn goroutine that owns the claims, so a tick whose
+// session died left running[name]/reserved[name] set forever — RunningSet()
+// kept reporting the project as "already running" and the evaluation loop's
+// DEDUP skipped it until the next daemon restart. Release alone is not
+// enough: the reservation is part of the dedup view (RunningSet = running ∪
+// reserved), so both are cleared here. Safe against a still-live owner: a
+// later Release from the goroutine finds the refcount at zero and no-ops,
+// exactly like a Release for a name that holds no slot.
+func (p *SlotPool) releaseReaped(names []string) {
+	for _, name := range names {
+		p.mu.Lock()
+		_, hadReservation := p.reserved[name]
+		delete(p.reserved, name)
+		heldSlot := p.running[name] > 0
+		p.mu.Unlock()
+		if heldSlot {
+			// Release decrements the refcount, drains the matching
+			// semaphore token and signals SlotFreed.
+			p.Release(name)
+		} else if hadReservation {
+			// No token to drain, but wake the eval debounce so the
+			// freshly un-wedged project is reconsidered promptly.
+			select {
+			case p.freedCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
 // ReleaseAll drains all currently-held slots and signals SlotFreed
 // for each one released. Safe to call when no slots are held.
 func (p *SlotPool) ReleaseAll() {
