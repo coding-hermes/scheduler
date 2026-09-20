@@ -57,6 +57,7 @@ All flags (defaults match `cmd/schedulerd/main.go` — the canonical source):
 | `--test-verify` | `0` | Run N-cycle correctness verification and exit |
 | `--duckbrain-ns` | `scheduler` | DuckBrain namespace for sync |
 | `--duckbrain-url` | `http://localhost:3000` | DuckBrain HTTP server URL |
+| `--duckbrain-interval` | `5m0s` | DuckBrain sync interval (spool replay cadence) |
 | `--simulate` | `false` | Run in dry-run/simulation mode (no real spawning) |
 | `--sim-success` | `0.85` | Simulated success rate (0.0-1.0) |
 | `--sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop) |
@@ -75,6 +76,8 @@ All flags (defaults match `cmd/schedulerd/main.go` — the canonical source):
 | `--auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off (SCHED-GAP-018) |
 | `--auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed (SCHED-GAP-018) |
 | `--auto-disable-min-ticks` | `50` | Minimum ticks in window before auto-disable can fire (SCHED-GAP-018) |
+
+DuckBrain sync auth: when `DUCKBRAIN_API_KEY` is set, every sync request carries it as the `X-API-Key` header (`internal/sync/duckbrain.go`), and the daemon validates the key once at startup with a side-effect-free probe — a rejected key (HTTP 401/403) fails fast with a distinct HIGH `DuckBrain API key REJECTED` event and gates sync cycles off instead of spooling every failed write. A 429 is treated as backpressure, not an error: the current burst stops, remaining writes spool and replay on the next `--duckbrain-interval` tick. With the env var unset or empty the daemon stays in pre-auth compatibility mode — no probe and no header (deliberate, not a bug).
 
 ## Architecture
 
