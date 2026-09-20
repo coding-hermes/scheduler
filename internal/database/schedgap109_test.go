@@ -222,6 +222,17 @@ VALUES ('no-such-tick', 'TASK-1', 'wt/TASK-1')`); err == nil {
 // with defaults, list by tick (empty and populated), update (fields +
 // updated_at moves), SetTickWorkerCount, and CountRunningWorkersByNamespace
 // across namespaces.
+// schedgap109NextSecond rounds t UP to the next whole second. The
+// tick_workers.updated_at column is written by SQLite's datetime('now'), which
+// has SECOND resolution, so two writes inside one second compare equal. The
+// pre-seam shape of TestTickWorkers_CRUDRoundTrip slept 1100ms here to step
+// into the next second; rounding the PREVIOUS timestamp up instead lets the
+// test assert "the new stamp is strictly after the old one" with no sleep at
+// all, because the rounded boundary is always strictly in the future.
+func schedgap109NextSecond(t time.Time) string {
+	return t.UTC().Truncate(time.Second).Add(time.Second).Format(time.RFC3339)
+}
+
 func TestTickWorkers_CRUDRoundTrip(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -296,9 +307,25 @@ func TestTickWorkers_CRUDRoundTrip(t *testing.T) {
 		t.Errorf("full row round-trip: %+v", rows[1])
 	}
 
-	// Update: verdicts + attribution numbers + updated_at moves.
-	origUpdated := rows[1].UpdatedAt
-	time.Sleep(1100 * time.Millisecond) // updated_at uses datetime('now') = second resolution
+	// Update: verdicts + attribution numbers + updated_at moves. The stamp is
+	// datetime('now') = second resolution, so pin the OLD stamp to the next
+	// whole second using the test's own clock: the UPDATE then lands on a
+	// strictly later wall-clock second, and the move assertion below keeps its
+	// full discriminating power with no sleep (was: time.Sleep(1100ms)).
+	pinnedOld := schedgap109NextSecond(time.Now())
+	if _, err := db.ExecContext(ctx, `UPDATE tick_workers SET updated_at = ? WHERE id = ?`,
+		pinnedOld, rows[1].ID); err != nil {
+		t.Fatalf("pin updated_at for the move assertion: %v", err)
+	}
+	before, err := ListTickWorkersByTick(ctx, db, tk.ID)
+	if err != nil {
+		t.Fatalf("ListTickWorkersByTick (post-pin): %v", err)
+	}
+	origUpdated := before[1].UpdatedAt
+	if origUpdated != pinnedOld {
+		t.Fatalf("premise: pinned updated_at = %q, want %q — the move assertion needs a second-aligned baseline", origUpdated, pinnedOld)
+	}
+	rows[1] = before[1]
 	rows[1].Judge = TickWorkerJudgeFail
 	rows[1].Merge = TickWorkerMergePreserved
 	rows[1].State = TickWorkerStateDone

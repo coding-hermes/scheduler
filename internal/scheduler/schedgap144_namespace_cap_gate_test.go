@@ -21,34 +21,49 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // blockingGateway answers /health immediately and holds every spawn response
 // until release() is called — so concurrent ticks stay visibly concurrent.
+//
+// sim is the loop's clock seam (SCHED-GAP-197). The pre-seam tests asserted
+// "the deferred spawn did not slip in" with a fixed wall-clock sleep
+// (700ms / 500ms); the only engine that can actually let one slip in is
+// SlotPool.waitNamespaceSlot's nsGatePollInterval poll, so the tests below
+// drive that wait on a DORMANT simulator clock instead: each poll is an
+// explicit Advance, and the number of polls the deferral survived is stated
+// in the test rather than implied by a duration.
 type blockingGateway struct {
 	srv    *httptest.Server
-	hold   chan struct{}
+	hold   chan struct{} // closed by release(): broadcast, every parked handler proceeds
+	pass   chan struct{} // unbuffered: one token = exactly one parked handler proceeds
 	starts chan string
+	sim    *clock.SimClock
 }
 
 func newBlockingGateway(t *testing.T) *blockingGateway {
 	t.Helper()
-	g := &blockingGateway{hold: make(chan struct{}), starts: make(chan string, 64)}
+	sim := clock.NewManualSimClock(time.Date(2026, 9, 20, 14, 0, 0, 0, time.UTC))
+	t.Cleanup(sim.Close)
+	g := &blockingGateway{hold: make(chan struct{}), pass: make(chan struct{}), starts: make(chan string, 64), sim: sim}
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
 			w.WriteHeader(http.StatusOK)
 		case "/v1/responses":
+			// Record arrival WITHOUT ever blocking the recorder: a spawn
+			// goroutine parked in waitNamespaceSlot has not reached here yet,
+			// so a blocking send would make the very deferral under test
+			// unobservable (and stall the tick).
 			select {
 			case g.starts <- r.URL.Query().Get("project"):
-				select {
-				case <-g.hold:
-				case <-time.After(120 * time.Second):
-				}
 			default:
 			}
 			select {
-			case <-g.hold:
+			case <-g.hold: // broadcast: everything parked may finish
+			case <-g.pass: // single token: exactly ONE parked handler finishes
 			case <-time.After(120 * time.Second):
 			}
 			schedGap080CompletedResponse(w)
@@ -71,7 +86,88 @@ func (g *blockingGateway) release() {
 	}
 }
 
+// releaseOneRequest hands a single completion token to exactly one parked
+// handler: the next spawned tick finishes, the ones behind it stay parked. The
+// caller must observe the corresponding forward progress (the start counter
+// moving / a tick draining) before releasing the next one — that is what makes
+// "freed slots admit exactly the waiters, one per release" a measured claim
+// rather than a wall-clock window.
+func (g *blockingGateway) releaseOneRequest() {
+	select {
+	case g.pass <- struct{}{}:
+	case <-g.hold: // already broadcasting (cleanup/release) — nothing to do
+	case <-time.After(60 * time.Second):
+		panic("blockingGateway.releaseOneRequest: no parked handler accepted the token")
+	}
+}
+
+// waitTickCount polls the tick-status census until it reaches want, or fails.
+// It replaces fixed "sleep and hope the work finished" pads: the wait is a
+// bounded real-clock poll because the work being awaited is genuinely
+// concurrent bookkeeping (a spawn goroutine, an HTTP handler), not the clock.
+func waitTickCount(t *testing.T, db *sql.DB, status string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var got int
+	for time.Now().Before(deadline) {
+		got = countTicksInStatus(t, db, status)
+		if got == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d tick(s) in status %q (last read: %d)", want, status, got)
+}
+
+// waitTickCountAtLeast polls until at least `want` tick rows are in `status`.
+// Deliberately a lower bound, so a CAP BREACH surfaces as the test's own exact
+// census assertion ("running = 3, want strictly 1") instead of a generic wait
+// timeout — the diagnostic quality the pre-seam shape had.
+func waitTickCountAtLeast(t *testing.T, db *sql.DB, status string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if countTicksInStatus(t, db, status) >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for at least %d tick(s) in status %q (last read: %d)",
+				want, status, countTicksInStatus(t, db, status))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitAdmitted polls until at least one tick is RUNNING — the precondition for
+// the deferral assertions (the first tick holds the namespace's only slot). A
+// breach is left for the caller's exact count assertion to report.
+func waitAdmitted(t *testing.T, db *sql.DB) {
+	t.Helper()
+	waitTickCountAtLeast(t, db, "running", 1)
+}
+
+// waitQueueDrained steps the gate's poll interval on the seam until no tick is
+// left queued. Each advance wakes the parked waiters, which re-check the
+// namespace; with the gateway already released, every admitted tick completes
+// and frees the slot for the next poll. Bounded in REAL time (the loop is
+// driving, so a failure is a stalled test, not a slow runner).
+func waitQueueDrained(t *testing.T, db *sql.DB, sim *clock.SimClock) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if countTicksInStatus(t, db, "queued") == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out driving the seam: queued = %d after 30s of poll intervals", countTicksInStatus(t, db, "queued"))
+		}
+		sim.Advance(nsGatePollInterval)
+		time.Sleep(2 * time.Millisecond) // let the woken waiter reach the DB
+	}
+}
+
 func (g *blockingGateway) wire(l *Loop) {
+	l.SetClock(g.sim)
 	l.SetGatewayClient(NewGatewayClient(g.srv.URL, "sk-test", 5*time.Second))
 	l.spawner.SetNoExecFallback(true)
 }
@@ -139,17 +235,26 @@ func TestGAP144_NamespaceCapBackstop_DefersBeyondCap(t *testing.T) {
 			p+"-2026-09-18-00-00-00", time.Now(), true, db)
 	}
 
-	// One must start; the namespace has one slot. (Poll for "at least one" and
-	// then assert the exact count, so a breach reads as "running = 3, want 1
-	// — the cap was breached" instead of a generic wait timeout.)
-	waitUntil(t, 20*time.Second, "a tick to start", func() bool {
-		return countTicksInStatus(t, db, "running") >= 1
-	})
-	// Give the deferred two well past the 250ms gate poll to prove they do NOT
-	// slip in while the first is still running.
-	time.Sleep(700 * time.Millisecond)
+	// One must start; the namespace has one slot. Wait for AT LEAST one so a
+	// breach is reported by the exact census assertion below rather than as a
+	// wait timeout.
+	waitAdmitted(t, db)
+	// The deferred two must not slip in. The only engine that could admit them
+	// is waitNamespaceSlot's nsGatePollInterval poll, so step that wait
+	// explicitly: FOUR poll intervals of virtual time (nsGatePollInterval each
+	// — the const, never a hardcoded 250ms) with the namespace still full, then
+	// assert the census. The pre-seam shape slept 700ms of real time, which is
+	// 2.8 polls and therefore a weaker claim than the four below. Each advance
+	// is gated on the DB still showing exactly one runner, so a breach that
+	// happened at any poll is caught at that poll.
+	for i := 0; i < 4; i++ {
+		if got := countTicksInStatus(t, db, "running"); got != 1 {
+			t.Fatalf("running = %d after %d gate poll(s), want exactly 1 (namespace cap 1) — the cap was breached", got, i)
+		}
+		gw.sim.Advance(nsGatePollInterval)
+	}
 	if got := countTicksInStatus(t, db, "running"); got != 1 {
-		t.Fatalf("running = %d, want exactly 1 (namespace cap 1) — the cap was breached", got)
+		t.Fatalf("running = %d, want exactly 1 (namespace cap 1) — the cap was breached after %d gate polls", got, 4)
 	}
 	if got := countTicksInStatus(t, db, "queued"); got != 2 {
 		t.Fatalf("queued = %d, want 2 (defer-not-drop: the rest wait, never fail)", got)
@@ -163,9 +268,7 @@ func TestGAP144_NamespaceCapBackstop_DefersBeyondCap(t *testing.T) {
 
 	// Releasing the running tick lets a waiter through: defer, not drop.
 	gw.release()
-	waitUntil(t, 30*time.Second, "all three ticks to drain through one slot", func() bool {
-		return countTicksInStatus(t, db, "queued") == 0
-	})
+	waitQueueDrained(t, db, gw.sim)
 	if got := countTicksInStatus(t, db, "failed"); got != 0 {
 		t.Fatalf("failed = %d, want 0 after draining", got)
 	}
@@ -188,9 +291,7 @@ func TestGAP144_UnlimitedNamespaceNotGated(t *testing.T) {
 	for _, p := range []string{"a-sync", "b-sync", "c-sync"} {
 		l.slotPool.SpawnEnqueued(PackedProject{Name: p, NamespaceID: "open-lanes"}, p+"-t1", time.Now(), true, db)
 	}
-	waitUntil(t, 20*time.Second, "all three running (unlimited)", func() bool {
-		return countTicksInStatus(t, db, "running") == 3
-	})
+	waitTickCount(t, db, "running", 3) // unlimited: all three admitted at once
 	gw.release()
 }
 
@@ -212,9 +313,7 @@ func TestGAP144_EmergencyKillSwitch(t *testing.T) {
 	for _, p := range []string{"a-sync", "b-sync", "c-sync"} {
 		l.slotPool.SpawnEnqueued(PackedProject{Name: p, NamespaceID: "sync-lanes"}, p+"-t1", time.Now(), true, db)
 	}
-	waitUntil(t, 20*time.Second, "gate disabled → all three run", func() bool {
-		return countTicksInStatus(t, db, "running") == 3
-	})
+	waitTickCount(t, db, "running", 3) // gate disabled → all three run
 	gw.release()
 }
 
@@ -256,9 +355,7 @@ func TestGAP144_FailOpenOnUnknownNamespace(t *testing.T) {
 	l.slotPool.SpawnEnqueued(PackedProject{Name: "busy-sync", NamespaceID: "busy-lanes"}, "busy-sync-t1", time.Now(), true, db)
 	l.slotPool.SpawnEnqueued(PackedProject{Name: "naked"}, "naked-t1", time.Now(), true, db)
 
-	waitUntil(t, 20*time.Second, "both the capped lane and the namespace-less lane to run", func() bool {
-		return countTicksInStatus(t, db, "running") == 2
-	})
+	waitTickCount(t, db, "running", 2) // capped lane + namespace-less lane
 	gw.release()
 }
 
@@ -281,12 +378,21 @@ func TestGAP144_GlobalSlotWaitStillApplies(t *testing.T) {
 	l.slotPool.SpawnEnqueued(PackedProject{Name: "p-a", NamespaceID: "ns-a"}, "p-a-t1", time.Now(), true, db)
 	l.slotPool.SpawnEnqueued(PackedProject{Name: "p-b", NamespaceID: "ns-b"}, "p-b-t1", time.Now(), true, db)
 
-	waitUntil(t, 20*time.Second, "one tick running under a global cap of 1", func() bool {
-		return countTicksInStatus(t, db, "running") == 1
-	})
-	time.Sleep(500 * time.Millisecond)
+	// Both namespaces are capped at 5, so the NAMESPACE gate admits both
+	// attempts; the single GLOBAL slot is what must hold p-b back. That wait
+	// is Acquire(sem), a channel — not the clock — so the polls below are the
+	// explicit "still held" check the pre-seam 500ms sleep only sampled once
+	// (and 500ms is 2 gate polls, so the old window could not even prove it
+	// survived a poll cycle with the global slot still taken).
+	waitAdmitted(t, db)
+	for i := 0; i < 4; i++ {
+		if got := countTicksInStatus(t, db, "running"); got != 1 {
+			t.Fatalf("running = %d after %d gate poll(s), want 1 (global cap) — the namespace gate must not bypass the global cap", got, i)
+		}
+		gw.sim.Advance(nsGatePollInterval)
+	}
 	if got := countTicksInStatus(t, db, "running"); got != 1 {
-		t.Fatalf("running = %d, want 1 (global cap) — the namespace gate must not bypass the global cap", got)
+		t.Fatalf("running = %d, want 1 (global cap) — the namespace gate must not bypass the global cap after %d gate polls", got, 4)
 	}
 	gw.release()
 }
