@@ -3602,3 +3602,75 @@ tasks:
   status: complete
   created_at: '2026-09-20T18:49:32.378892+00:00'
   completed_at: '2026-09-20T19:29:16.883191+00:00'
+- id: ADV-R13
+  title: Load/memory telemetry, measurement-only (G4)
+  criteria:
+  - 'AC1: /proc/loadavg (1/5/15-min) and /proc/meminfo samples are persisted per evaluation
+    cycle with an RFC3339 timestamp and are queryable from the DB after a run.'
+  - 'AC2: a test proves samples are recorded (non-empty, timestamped) across consecutive
+    evaluation cycles, and that the sampler is injectable for determinism.'
+  - "AC3: grep of non-test sources proves NO admission-path consumer reads the sample\
+    \ \u2014 admission/spawn/packer code is unchanged and the telemetry is measurement-only."
+  - 'AC4: the dashboard renders the latest load/memory sample (a visible column or
+    panel reading the persisted value, not runtime.MemStats alone).'
+  - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...) and gofmt/vet
+    clean.'
+  status: in_progress
+  created_at: '2026-09-20T19:53:40.476606+00:00'
+- id: SCHED-GAP-158
+  title: 'Outcome-honesty metrics: zero-output committed ticks, stalls, escalations,
+    lane churn'
+  criteria:
+  - 'AC1: /api/v1/metrics gains a block answering outcome honesty: zero-output ''committed''
+    ticks (already present as outcomes.zero_output_committed) PLUS stalls bucketed
+    by duration, escalation events per day by severity/class, and lane churn (projects
+    enabled/disabled/paused per day with provenance).'
+  - 'AC2: every new block follows the endpoint''s existing honesty rule: an absent
+    source reports {"available": false, "reason": ...} and never a fabricated zero;
+    a real 0 is only emitted after a real query.'
+  - 'AC3: metricsSources() names the exact query/counter behind every new block, and
+    a test asserts each new key appears there.'
+  - 'AC4: tests cover each new block with seeded fixture rows AND the unavailable
+    arm; the openapi spec entry for /api/v1/metrics still matches.'
+  - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...), gofmt
+    and go vet clean.'
+  status: complete
+  created_at: '2026-09-20T19:54:04.872081+00:00'
+  completed_at: '2026-09-20T20:40:34.416265+00:00'
+- id: SCHED-GAP-166
+  title: 'Documented surface parity: AGENTS.md endpoint table is missing groups/templates/metrics/events-stream'
+  criteria:
+  - 'AC1: after the change, AGENTS.md''s endpoint table names every live route served
+    by the daemon (derived from the in-repo route registry, not from the live daemon
+    binary): the 16 /api/v1/* paths plus the HTML pages, with no stale row.'
+  - 'AC2: a guard test fails when AGENTS.md''s endpoint table drifts from the in-repo
+    route set (same class as the existing README/MCP registry parity guard), and passes
+    on the corrected tree.'
+  - 'AC3: the guard is verified in BOTH directions by a self-check (a deliberately
+    removed route row makes it fail; restored makes it pass).'
+  - 'AC4: no production Go behavior changes (docs + test only).'
+  - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...), gofmt
+    and go vet clean.'
+  status: complete
+  created_at: '2026-09-20T19:54:05.172651+00:00'
+  completed_at: '2026-09-20T20:33:26.261839+00:00'
+- id: RELEASE-006
+  title: 'Version-authority gate: CI must fail a tag pushed over an unnamed CHANGELOG'
+  criteria:
+  - 'AC1: scripts/check-version-authority.sh exists, is executable, documents its
+    exit codes, and takes a version argument; it asserts the CHANGELOG names that
+    version as a release heading and that the [Unreleased] section is still present
+    exactly once.'
+  - 'AC2: a fixture battery exercises the script against fixture directories: a conforming
+    fixture exits 0 and a seeded-violation fixture exits non-zero with a named reason.
+    The battery runs without a database, without network, and without ~/.hermes state.'
+  - 'AC3: the check is wired into the release workflow as a step that runs BEFORE
+    the build, so a tag pushed over a tree whose CHANGELOG still says [Unreleased]
+    fails the release.'
+  - 'AC4: the check is also wired into the push-triggered CI workflow''s CHANGELOG-hygiene
+    arm, and docs/releases.md no longer claims that nothing in CI will catch a tag
+    pushed over an unnamed CHANGELOG.'
+  - 'AC5: full short test suite green (go test -short -count=1 -p 1 ./...), gofmt
+    and go vet clean.'
+  status: in_progress
+  created_at: '2026-09-20T19:54:05.472265+00:00'
