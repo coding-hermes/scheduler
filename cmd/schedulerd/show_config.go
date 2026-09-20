@@ -77,7 +77,7 @@ func printSchema() {
           "workdir": { "type": "string" },
           "weight": { "type": "integer", "default": 10 },
           "priority": { "type": "integer", "default": 5 },
-          "cooldown_s": { "type": "integer", "default": 7200 },
+          "cooldown_s": { "type": "integer", "default": 7200, "description": "Seconds between ticks. Config/fleet.toml-seeded projects default to 7200 (2h baseline); projects created via POST /api/v1/projects instead default to 900 (SCHED-GAP-195 — intentional split by producer)." },
           "decay_rate": { "type": "number", "default": 1.0 },
           "model": { "type": "string", "default": %q },
           "provider": { "type": "string", "default": %q },

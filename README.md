@@ -131,6 +131,13 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
 #  "decay_rate":1,"enabled":false,"created_at":"...", ...}
 ```
 
+**Cooldown default split (SCHED-GAP-195):** this API create path defaults
+`cooldown_s` to **900** (15 min — an interactive create is meant to be
+observed soon). A project seeded from `fleet.toml`/config instead gets the
+**7200** (2 h) baseline resolved by `internal/config/loader.go`. The two
+defaults are intentional and producer-specific — know which producer you
+used before assuming a cooldown.
+
 **New projects arrive `enabled: false`** — creating never auto-enables. The
 queue will stay empty until you enable the project explicitly:
 
@@ -472,7 +479,13 @@ fallback_model = "deepseek-v4-pro"   # tier 1 fallback
 into SQLite when the row is CREATED from fleet.toml; it does NOT re-pin the
 chain on an existing row at boot (`internal/config/loader.go` — `ApplyFleetConfig`
 pins `model`/`provider`/`cooldown_s`/`enabled` on every restart, but `model_chain`
-flows only through the create path). Change a chain on a live namespace via
+flows only through the create path). A fleet.toml project with no explicit
+`cooldown_s` gets the config-seeded default **7200** (2 h baseline,
+`defaultProjectCooldown` in `loader.go`) — NOT the API-create default of
+**900** that `POST /api/v1/projects` stamps on interactive creates
+(SCHED-GAP-195); the split is intentional: config-seeded projects are fleet
+policy and run cold, API-created projects are operator actions observed soon.
+Change a chain on a live namespace via
 `PUT /api/v1/namespaces/{id}` (`{"model_chain": "[...]"}`), on a live project via
 `PUT /api/v1/projects/{name}` (`{"model_chain": "[...]"}` — `""` clears it).
 Invalid JSON or an empty array contributes nothing to the chain (`spawn.go`,
@@ -628,7 +641,9 @@ Full REST API at `http://127.0.0.1:9090/api/v1/`.
 bodies accept snake_case AND the legacy PascalCase Go field names
 (`Name`, `RepoURL`, `CooldownS`, `Enabled`, …) so pre-conformance fleet
 automation keeps working. On create, omitted `weight`/`priority`/
-`cooldown_s`/`decay_rate` default to `10`/`5`/`900`/`1.0`; new projects are
+`cooldown_s`/`decay_rate` default to `10`/`5`/`900`/`1.0`
+(`fleet.toml`-seeded projects instead default `cooldown_s` to `7200` —
+SCHED-GAP-195); new projects are
 created disabled — resume them explicitly.
 
 **Per-project budgets (SCHED-GAP-066):** `fleet.toml` entries may set
