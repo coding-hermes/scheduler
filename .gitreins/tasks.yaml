@@ -3390,3 +3390,66 @@ tasks:
   status: complete
   created_at: '2026-09-20T04:57:36.073388+00:00'
   completed_at: '2026-09-20T05:05:01.942689+00:00'
+- id: CTL-003
+  title: 'MCP/API parity guard: every /api/v1 path covered by an MCP tool or explicit
+    skip-list'
+  criteria:
+  - 'TestMCPAPIParity in internal/mcp/mcp_api_parity_test.go passes with all subtests
+    green: every openapi operation covered by a live MCP tool via apiToolCoverage
+    or a justified skip-list entry; no weakening of decoy/hygiene/stale-entry self-checks;
+    go build ./... and go vet clean'
+  status: complete
+  created_at: '2026-09-20T07:00:55.986861+00:00'
+  completed_at: '2026-09-20T07:28:57.439705+00:00'
+- id: FND-002
+  title: 'FND-002: bounded poll for the drain-window cooldown assertion'
+  criteria:
+  - '1. internal/scheduler/schedgap143_drain_class_test.go: the post-recovery-tick
+    cooldown read polls the projects row every 20ms up to a 2s deadline for cooldown_s==900
+    AND no_progress_ticks==0, failing with the last-observed values on expiry; 2.
+    the drain-tick refusal assertion (~lines 440-441, cooldown_s 7200/streak 10) stays
+    a synchronous direct read; 3. exactly one new test TestFND002_DrainCooldownReadIsBounded
+    in the same package asserts the load-bearing property after the poll; 4. no production
+    code change; 5. no time.Sleep longer than 20ms per step, no t.Skip; 6. gofmt -l
+    empty; go build ./... and go vet ./internal/scheduler/ clean; 7. go test -run
+    ''TestSCHEDGAP143_DrainWindowDoesNotParkEscalatedCooldown|TestFND002_DrainCooldownReadIsBounded''
+    -count=5 green; 8. go test -short -p 1 -count=1 ./... has no new failures'
+  status: in_progress
+  created_at: '2026-09-20T09:49:27.970222+00:00'
+- id: SCHED-GAP-168
+  title: 'SCHED-GAP-168: --show-config and --schema must expose load_gate_threshold
+    and model_rates_file'
+  criteria:
+  - 1. cmd/schedulerd/show_config.go printConfig TOML [scheduler] block renders load_gate_threshold
+    and model_rates_file from resolved ARGUMENTS (never a hardcoded literal); 2. the
+    --schema property map carries both keys with accurate types/defaults and their
+    env names SCHEDULER_LOAD_GATE_THRESHOLD and SCHEDULER_MODEL_RATES_FILE; 3. every
+    printConfig call site updated in the same commit (main.go ~line 205, show_config_test.go
+    ~144/~253-257) so the package compiles; 4. values wired from the already-resolved
+    main.go variables that feed /api/v1/config, not re-read from flags; 5. ./bin/schedulerd
+    --show-config --load-gate-threshold 12 --model-rates-file /tmp/rates.json output
+    contains both keys with the resolved values and ./bin/schedulerd --schema contains
+    both properties; 6. the doc-assert test FAILS when either key is removed from
+    either surface (regression guard) and passes when restored; 7. gofmt -l cmd/schedulerd/
+    empty, go build ./... exit 0, go vet ./cmd/schedulerd/ clean, go test ./cmd/schedulerd/
+    -count=1 PASS, go test -short -p 1 -count=1 ./... no new failures
+  status: in_progress
+  created_at: '2026-09-20T09:49:33.031861+00:00'
+- id: SCHED-GAP-188
+  title: 'SCHED-GAP-188: README MCP/REST surface must match the live registry, guarded
+    by a parity test'
+  criteria:
+  - '1. README.md ASCII diagram tool count and the prose ''14 fleet_* tools'' both
+    equal the live MCP tools/list count; 2. the README MCP Tools table lists EVERY
+    live tool name (set equality both directions: no documented tool missing from
+    the registry, no registry tool missing from the table); 3. the missing groups/templates/deploy/events
+    REST routes appear in the README endpoint table OR that table points at openapi.json/docs/api.md
+    consistently; 4. a new docs parity test in internal/mcp FAILS when a documented
+    tool row is deleted or the stated count is changed, and PASSES when restored;
+    5. the existing TestMCPAPIParity guard is not weakened and remains green; 6. live
+    counts derived by measurement (curl read-only tools/list and openapi.json) or
+    from the in-process registry, never copied from prose; 7. gofmt -l internal/mcp/
+    empty, go build ./... exit 0, go vet ./internal/mcp/ clean, go test -short -p
+    1 -count=1 ./... no new failures'
+  status: in_progress
+  created_at: '2026-09-20T09:49:37.963881+00:00'
