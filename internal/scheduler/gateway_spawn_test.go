@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Regression tests for GAP-001 (2026-08-04): a Hermes gateway update stopped
@@ -201,10 +203,15 @@ func TestSpawn_GatewayAuthFailureLoud(t *testing.T) {
 // counter (S-GAP-001), never rewrite last_tick_started.
 
 // TestSpawn_GatewayLastTickStarted — a completed gateway spawn must stamp
-// projects.last_tick_started with ≈ the SPAWN time, not the completion time.
-// The fake gateway delays its response by 2s so the completion moment is
-// measurably later than spawn: the old code (stamp after SendResponse)
-// lands ~2s after start and fails the ±1s window.
+// projects.last_tick_started with exactly the SPAWN instant, never the
+// completion instant (SCHED-GAP-060). The wall-clock delay + ±1s window this
+// test used before (2s handler sleep, CI-005 class) is replaced with the
+// clock seam: the spawner runs on a DORMANT sim clock, so the spawn instant
+// and the completion instant are two values the test chooses — completion is
+// deterministically 2 virtual minutes after spawn (the artificial sleep is
+// gone) and the equality assertion is exact. The dormant clock cannot stall
+// the gateway path: every time read in Spawn/Wait goes through the seam, and
+// no seam wait (Sleep/After/timer) is armed on the completed-gateway route.
 func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "gap060-completed"
@@ -214,8 +221,23 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 		t.Fatalf("seed consecutive_failures: %v", err)
 	}
 
+	// spawnInstant and completionInstant are the two virtual instants the
+	// seam hands out; completion is deliberately far in the virtual future —
+	// under the old bug (stamp after SendResponse) the DB would hold
+	// completionInstant and the exact-equality assertion below fails.
+	spawnInstant := time.Date(2026, 9, 20, 6, 0, 0, 0, time.UTC)
+	completionInstant := spawnInstant.Add(2 * time.Minute)
+	simClock := clock.NewManualSimClock(spawnInstant)
+
+	// The handler moves the seam to the completion instant as it responds:
+	// by the time SendResponse returns, the spawn instant (already handed to
+	// reqStart BEFORE the POST) and the completion instant are two distinct,
+	// deterministically chosen instants — the property this test needs, with
+	// no wall-clock delay and no failure path (a POST that timed out would
+	// arm the SCHED-GAP-064 retry wait, which is a seam wait this dormant
+	// clock never fires).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		simClock.AdvanceTo(completionInstant)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{
@@ -232,10 +254,10 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 	defer srv.Close()
 
 	spawner := NewSpawner(db, 4)
+	spawner.SetClock(simClock)
 	spawner.SetGatewayClient(NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second))
 	spawner.SetNoExecFallback(true)
 
-	start := time.Now()
 	tick, err := spawner.Spawn(PackedProject{Name: projectName, Workdir: t.TempDir()},
 		"gap060-completed-2026-08-21-06-00-00")
 	if err != nil {
@@ -244,25 +266,31 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 	if tick == nil {
 		t.Fatal("Spawn returned nil tick on gateway success")
 	}
-	tick.Wait()
-	after := time.Now()
+	outcome := tick.Wait()
 
+	// Witness the separation: the tick STARTED at the spawn instant and
+	// FINISHED at the completion instant, so a stamp carrying the completion
+	// instant is distinguishable from one carrying the spawn instant — that
+	// is the discriminating power the old ±1s window approximated.
+	if !outcome.Started.Equal(spawnInstant) {
+		t.Errorf("tick Started = %v, want the spawn instant %v", outcome.Started, spawnInstant)
+	}
+	if !outcome.Finished.Equal(completionInstant) {
+		t.Errorf("tick Finished = %v, want the completion instant %v (2 virtual minutes after spawn)",
+			outcome.Finished, completionInstant)
+	}
+	if outcome.Status != TickCompleted {
+		t.Errorf("Wait() status = %s, want %s", outcome.Status, TickCompleted)
+	}
+
+	// THE PROPERTY (SCHED-GAP-060): the stamp is the SPAWN instant, exactly.
 	var stamped string
 	if err := db.QueryRow(`SELECT last_tick_started FROM projects WHERE name = ?`, projectName).Scan(&stamped); err != nil {
 		t.Fatalf("query last_tick_started: %v", err)
 	}
-	got, err := time.Parse(time.RFC3339, stamped)
-	if err != nil {
-		t.Fatalf("last_tick_started %q is not RFC3339: %v", stamped, err)
-	}
-	// The stamp must be ≈ reqStart (before the 2s handler delay) — within
-	// ±1s of start. The OLD code wrote the completion moment (~start+2s).
-	if got.Before(start.Add(-time.Second)) || got.After(start.Add(time.Second)) {
-		t.Errorf("last_tick_started = %s (parsed %v), want ≈ spawn time within ±1s of start=%v (completion would be ~2s later)",
-			stamped, got, start)
-	}
-	if !got.Before(after) {
-		t.Errorf("last_tick_started %v must be strictly before completion %v", got, after)
+	if stamped != spawnInstant.Format(time.RFC3339) {
+		t.Errorf("last_tick_started = %s, want exactly the spawn instant %s — the stamp must be the SPAWN instant, never the completion instant %s (SCHED-GAP-060)",
+			stamped, spawnInstant.Format(time.RFC3339), completionInstant.Format(time.RFC3339))
 	}
 
 	// The successful completion still resets the backoff counter (S-GAP-001).
@@ -277,9 +305,12 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 
 // TestSpawn_GatewayRunningLastTickStarted pins the SCHED-GAP-060 PASS
 // criterion: a project with a RUNNING gateway tick reports last_tick_started
-// ≈ its spawn time while the session is still in flight — and the spawn path
-// never touches last_tick_completed (that column belongs to
+// == its spawn instant while the session is still in flight — and the spawn
+// path never touches last_tick_completed (that column belongs to
 // lifecycle.Complete) nor resets consecutive_failures at spawn time.
+// The pre-seam shape of this test (a 10s entry deadline plus a ±5s wall-clock
+// window against the real clock) was a fourth instance of the CI-005 ambient
+// class; the dormant sim clock makes both observations exact.
 func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "gap060-running"
@@ -293,11 +324,11 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 		t.Fatalf("seed prior state: %v", err)
 	}
 
-	entered := make(chan struct{}, 1)
+	entered := make(chan struct{})
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		entered <- struct{}{}
-		<-release // hold the session open — the tick is still RUNNING
+		close(entered) // request reached the handler; the session is now in flight
+		<-release      // hold the session open — the tick is still RUNNING
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{
@@ -313,11 +344,17 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// The seam hands out spawnInstant to every clock read while the session
+	// is held open; only the test's AdvanceTo moves it to completionInstant.
+	spawnInstant := time.Date(2026, 9, 20, 6, 32, 0, 0, time.UTC)
+	completionInstant := spawnInstant.Add(3 * time.Minute)
+	simClock := clock.NewManualSimClock(spawnInstant)
+
 	spawner := NewSpawner(db, 4)
+	spawner.SetClock(simClock)
 	spawner.SetGatewayClient(NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second))
 	spawner.SetNoExecFallback(true)
 
-	start := time.Now()
 	type spawnResult struct {
 		tick *SpawnedTick
 		err  error
@@ -329,25 +366,18 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 		done <- spawnResult{tick, err}
 	}()
 
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("gateway handler never entered")
-	}
+	<-entered // handler is parked before its response — the session is in flight
 
 	// The session is in flight — last_tick_started must ALREADY be stamped
-	// with the spawn time (SCHED-GAP-060 PASS criterion).
+	// with exactly the spawn instant (SCHED-GAP-060 PASS criterion). The
+	// pre-seam ±5s wall window is now an exact equality at a chosen instant.
 	var stamped string
 	if err := db.QueryRow(`SELECT last_tick_started FROM projects WHERE name = ?`, projectName).Scan(&stamped); err != nil {
 		t.Fatalf("query last_tick_started: %v", err)
 	}
-	got, err := time.Parse(time.RFC3339, stamped)
-	if err != nil {
-		t.Fatalf("last_tick_started %q is not RFC3339: %v", stamped, err)
-	}
-	if got.Before(start.Add(-5*time.Second)) || got.After(start.Add(5*time.Second)) {
-		t.Errorf("running tick last_tick_started = %s (parsed %v), want ≈ spawn time within ±5s of start=%v",
-			stamped, got, start)
+	if stamped != spawnInstant.Format(time.RFC3339) {
+		t.Errorf("running tick last_tick_started = %s, want exactly the spawn instant %s while the session is in flight (SCHED-GAP-060)",
+			stamped, spawnInstant.Format(time.RFC3339))
 	}
 
 	// Spawn time must NOT reset the backoff counter (a failed spawn must
@@ -360,7 +390,8 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 		t.Errorf("consecutive_failures = %d while running, want 2 (no reset at spawn time)", failures)
 	}
 
-	// Let the session complete.
+	// Let the session complete at the completion instant.
+	simClock.AdvanceTo(completionInstant)
 	close(release)
 	res := <-done
 	if res.err != nil {

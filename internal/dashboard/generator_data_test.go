@@ -432,35 +432,83 @@ func TestWarmCIConclusions(t *testing.T) {
 }
 
 // TestWarmCIConclusionsBoundedConcurrency verifies the cold-cache warm pass
-// never exceeds ciMaxConcurrent gh subprocesses in flight.
+// never exceeds ciMaxConcurrent gh subprocesses in flight. The pre-seam shape
+// of this test raced 24 real goroutines against a 20ms sleep and trusted the
+// sampler to catch the peak — under runner co-load the observed maximum was
+// a property of host scheduling, not of the bound (CI-005 class). The
+// deterministic shape: each runner goroutine signals warm() on its gate and
+// parks there, so the test — not the scheduler — decides the in-flight set.
+// Holding 8 parked runners proves the bound is enforced; the 9th dispatch
+// while all 8 are parked proves dispatch BLOCKS at the bound; releasing one
+// runner proves the 9th is admitted only after a slot frees. No wall-clock
+// window, no sleep, no racy sampler.
 func TestWarmCIConclusionsBoundedConcurrency(t *testing.T) {
-	var inFlight, maxInFlight int32
+	const total = 24 // same workload size as before: bound < total
+	started := make(chan string, total)
+	// One gate per RUN (the closure runs once per workdir, so the index must
+	// span the workload, not the bound): only the first ciMaxConcurrent runs
+	// ever reach a gate, because dispatch blocks at the bound.
+	gates := make([]chan struct{}, total)
+	for i := range gates {
+		gates[i] = make(chan struct{})
+	}
+	releaseAll := make(chan struct{})
+	var runnerIdx atomic.Int32
 	g := &Generator{
 		ciCache: make(map[string]ciCacheEntry),
 		ciTTL:   60 * time.Second,
 		ciRunner: func(workdir string) string {
-			cur := atomic.AddInt32(&inFlight, 1)
-			for {
-				prev := atomic.LoadInt32(&maxInFlight)
-				if cur <= prev || atomic.CompareAndSwapInt32(&maxInFlight, prev, cur) {
-					break
-				}
+			i := int(runnerIdx.Add(1)) - 1 // my gate index (workload order is deterministic)
+			started <- workdir
+			// Park on MY gate until the test opens it — or until the final
+			// drain. The in-flight set is therefore exactly the set of gates
+			// the test has opened, never a host-scheduling outcome.
+			select {
+			case <-releaseAll:
+			case <-gates[i]:
 			}
-			time.Sleep(20 * time.Millisecond)
-			atomic.AddInt32(&inFlight, -1)
 			return "success"
 		},
 	}
-	workdirs := make([]string, 0, 24)
-	for i := 0; i < 24; i++ {
+	workdirs := make([]string, 0, total)
+	for i := 0; i < total; i++ {
 		workdirs = append(workdirs, fmt.Sprintf("/repo/%02d", i))
 	}
-	g.warmCIConclusions(workdirs)
-	if m := atomic.LoadInt32(&maxInFlight); m > ciMaxConcurrent {
-		t.Errorf("max in-flight %d exceeds bound %d", m, ciMaxConcurrent)
-	} else if m < 2 {
-		t.Errorf("expected concurrent fetches, max in-flight was %d", m)
+
+	// warm runs on its own goroutine: the main test goroutine coordinates
+	// the gates through the runner closures.
+	warmDone := make(chan struct{})
+	go func() {
+		g.warmCIConclusions(workdirs)
+		close(warmDone)
+	}()
+
+	// Exactly ciMaxConcurrent runners start; the bound parks the rest.
+	for i := 0; i < ciMaxConcurrent; i++ {
+		if got := <-started; got == "" {
+			t.Fatalf("runner %d started with empty workdir", i)
+		}
 	}
+	select {
+	case got := <-started:
+		t.Fatalf("runner for %s started beyond the ciMaxConcurrent=%d bound", got, ciMaxConcurrent)
+	default:
+	}
+
+	// Release the runners one at a time: each freed slot admits exactly one
+	// parked runner before the next release is processed. This proves the
+	// bound is a semaphore, not a lucky scheduling outcome.
+	for i := 0; i < ciMaxConcurrent; i++ {
+		gates[i] <- struct{}{} // runner i returns; a slot frees
+		next := <-started      // exactly one new runner is admitted
+		_ = next
+	}
+
+	// Drain: open everything; the remaining runners finish and warm returns.
+	// A hang here is caught by the test framework's own timeout rather than
+	// a wall-clock assertion added by this test.
+	close(releaseAll)
+	<-warmDone
 }
 
 // TestNewGeneratorInitializesCICache verifies NewGenerator wires the cache,
