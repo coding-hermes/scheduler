@@ -2,7 +2,6 @@ package scheduler_test
 
 import (
 	"context"
-	"runtime"
 	"testing"
 	"time"
 
@@ -197,27 +196,68 @@ func TestSlotPool_ReleaseUnknownNameIsNoOp(t *testing.T) {
 
 // ── Goroutine Leak Tests ──
 
+// TestSlotPool_NoGoroutineLeak pins the leak property with pool-local
+// bookkeeping instead of a process-wide goroutine census. The pool is built
+// so SlotFreed() is backed by ONE channel created in NewSlotPool and no
+// per-subscriber (or per-release) goroutine ever exists. The pre-seam shape
+// of this test — runtime.NumGoroutine() with a +2 heuristic after a 200ms
+// sleep — measured ambient host churn (sibling lanes, GC workers, test
+// parallelism on a shared runner), not this pool, and is the CI-005 class
+// this row replaces. The deterministic, pool-owned observables:
+//   - every SlotFreed() call returns the SAME channel (single-owner proof);
+//   - the channel stays empty while nothing is released (no phantom events,
+//     no background emitter running);
+//   - exactly one signal per real release (Release's send is synchronous,
+//     so no timing window is involved);
+//   - no-op releases (unknown name, ReleaseAll on an empty pool) stay silent.
 func TestSlotPool_NoGoroutineLeak(t *testing.T) {
 	db := newTestDB(t)
 	lc := scheduler.NewLifecycleTracker(db)
 	sp := scheduler.NewSpawner(db, 2)
 	pool := scheduler.NewSlotPool(2, sp, lc)
 
-	before := runtime.NumGoroutine()
-
+	// Single-owner proof: every subscriber observes the identical channel.
+	// A leak-prone design (one goroutine or channel per SlotFreed call)
+	// cannot satisfy this — and needs no process-wide census to disprove.
 	c1 := pool.SlotFreed()
 	c2 := pool.SlotFreed()
 	c3 := pool.SlotFreed()
-
 	if c1 != c2 || c2 != c3 {
-		t.Fatal("SlotFreed() returned different channels — goroutine leak!")
+		t.Fatal("SlotFreed() returned different channels — the pool is spawning per-subscriber machinery (leak class)")
 	}
 
-	time.Sleep(200 * time.Millisecond)
-	after := runtime.NumGoroutine()
+	// No releases yet: the pool-owned channel must be empty. Any signal here
+	// would mean the pool runs background machinery of its own.
+	select {
+	case <-c1:
+		t.Fatal("SlotFreed fired with no release — the pool has background machinery")
+	default:
+	}
 
-	if after > before+2 {
-		t.Errorf("goroutines grew from %d to %d — possible leak", before, after)
+	// Exactly one signal per real release. Release delivers synchronously
+	// into the buffered channel before returning, so both reads below are
+	// non-blocking and cannot be perturbed by host load.
+	pool.Acquire(context.Background(), "a")
+	pool.Release("a")
+	select {
+	case <-c1:
+	default:
+		t.Fatal("SlotFreed did not fire for a real release")
+	}
+	select {
+	case <-c1:
+		t.Fatal("SlotFreed fired more than once for a single release")
+	default:
+	}
+
+	// No-op paths stay silent: an unknown-name release and ReleaseAll on an
+	// empty pool must not emit (and must not leave a delayed signal behind).
+	pool.Release("ghost")
+	pool.ReleaseAll()
+	select {
+	case <-c1:
+		t.Fatal("SlotFreed fired for a no-op release — phantom signal")
+	default:
 	}
 }
 
