@@ -235,6 +235,19 @@ type HealthData struct {
 	TotalTicks       int
 	Goroutines       int
 	MemoryMB         float64
+	// HostSample* (ADV-R13): the latest PERSISTED host load/memory sample
+	// (host_samples table) — not the daemon's own runtime.MemStats above,
+	// which only ever measured this process. HostSampleAvailable=false
+	// means no sample has been recorded yet; the template renders an
+	// honest "unavailable" instead of a fabricated 0.00.
+	HostSampleAvailable bool
+	HostLoad1           float64
+	HostLoad5           float64
+	HostLoad15          float64
+	HostMemTotalMB      float64
+	HostMemAvailMB      float64
+	HostSampleAt        string
+	HostSampleSource    string
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {

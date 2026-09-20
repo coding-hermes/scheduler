@@ -37,6 +37,19 @@ func (l *Loop) evaluate() {
 	now := l.nowLocked()
 	l.lastEval = now
 
+	// ADV-R13: persist exactly ONE host load/memory sample per evaluation
+	// pass, immediately at entry — after the paused-loop gate (a paused
+	// loop runs no evaluation pass, so it records nothing) and BEFORE all
+	// selection logic, so every early-return below (packer error,
+	// zero-select) still leaves its measurement. Placement is deliberate:
+	// this is measurement only — recordHostSample must never gate, delay
+	// or alter any admission/spawn/packing decision, and a sampler or
+	// persist failure is swallowed into the log there, making evaluation
+	// behavior byte-identical with and without a working sampler. It is
+	// once per PASS, not per project or per spawned tick — off every hot
+	// path.
+	l.recordHostSample(now)
+
 	if goroCount := runtime.NumGoroutine(); goroCount > 100 {
 		log.Printf("WARN: goroutine count = %d (threshold: 100)", goroCount)
 	}
