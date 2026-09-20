@@ -3378,3 +3378,15 @@ tasks:
   status: complete
   created_at: '2026-09-20T03:33:33.870857+00:00'
   completed_at: '2026-09-20T04:05:51.273940+00:00'
+- id: FND-001
+  title: 'FND-001: deterministic async-release poll in TestSpawn_GatewayStalledTurnFailsBeforeTickTimeout'
+  criteria:
+  - '1. Internal slotPool.Running() assertion at schedgap117_turn_timeout_test.go:150-152
+    must poll for async release with bounded wait (2s) instead of synchronous read;
+    2. Same shape as INT-CI-013 fix (load-sensitive ceiling raise); 3. Pattern: tick/poll
+    every 20ms up to 2s, fail with last-observed n if deadline; 4. All existing FND-001
+    test code below line 153 stays; 5. No new test added; 6. Test passes -count=3
+    under load; 7. gofmt/vet/build clean; 8. Full short suite green'
+  status: complete
+  created_at: '2026-09-20T04:57:36.073388+00:00'
+  completed_at: '2026-09-20T05:05:01.942689+00:00'

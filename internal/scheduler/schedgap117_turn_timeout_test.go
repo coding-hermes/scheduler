@@ -147,8 +147,27 @@ func TestSpawn_GatewayStalledTurnFailsBeforeTickTimeout(t *testing.T) {
 	if fsElapsed := time.Since(fsStart); fsElapsed >= 5*time.Second {
 		t.Errorf("slot-pool tick took %v to fail — stall not detected before the tick deadline", fsElapsed)
 	}
-	if n := loop.slotPool.Running(); n != 0 {
-		t.Errorf("slot pool Running() = %d after stalled tick, want 0", n)
+	// Slot release is async: the DB row reaches its terminal state before
+	// SlotPool.Running() drains. Poll up to 2s — the slot is freed by the
+	// same goroutine that closed the tick row, so a 2s window covers the
+	// observed 5/5 un-raced + 5/5 raced release lag. FND-001 (load-only
+	// flake surface; 15eec5c CI-004 race-detector run): synchronous read
+	// races the release on extreme host load (~loadavg 30).
+	const releaseWait = 2 * time.Second
+	releaseDeadline := time.Now().Add(releaseWait)
+	var n int
+	for {
+		n = loop.slotPool.Running()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(releaseDeadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n != 0 {
+		t.Errorf("slot pool Running() = %d after stalled tick + %v bounded wait, want 0 (async release did not land)", n, releaseWait)
 	}
 }
 
