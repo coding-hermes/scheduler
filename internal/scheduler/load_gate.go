@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"log"
 	"sync"
-
-	"golang.org/x/sys/unix"
 )
 
 // SCHED-GAP-125 — load-average admission gate (Bane 2026-09-16):
@@ -52,21 +50,12 @@ func loadGateThreshold() float64 {
 
 // currentLoad1m returns the 1-minute load average; ok=false when the
 // platform provides no reading (gate fails open on missing telemetry).
-// Var (not func) so tests can inject a deterministic sampler.
-var currentLoad1m = func() (float64, bool) {
-	var si unix.Sysinfo_t
-	if err := unix.Sysinfo(&si); err != nil {
-		return 0, false
-	}
-	// Linux: fixed-point, SI_LOAD_SHIFT=16 (same math /proc/loadavg uses).
-	l1 := float64(si.Loads[0]) / (1 << unix.SI_LOAD_SHIFT)
-	if l1 <= 0 {
-		// 0 on a genuinely idle box reads 0 too — but 0 never trips the
-		// gate either way, so treat as no-signal without ambiguity.
-		return 0, l1 > 0
-	}
-	return l1, true
-}
+// The sampler is PLATFORM-SPLIT (SCHED-GAP-201): the real reading is
+// Linux-only (unix.Sysinfo + SI_LOAD_SHIFT) and lives in
+// load_gate_linux.go (//go:build linux); non-Linux builds get the
+// always-missing stub in load_gate_other.go (//go:build !linux) —
+// see that file for the gate-inactive consequence. Var (not func) so
+// tests can inject a deterministic sampler on every platform.
 
 // loadGateActive reports whether the gate is enabled AND the current load
 // average is at or above the threshold (i.e. new spawns should defer).

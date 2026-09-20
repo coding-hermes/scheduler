@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -1715,7 +1714,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		s.recordCircuitFailure(provider, model, "exec stderr pipe error")
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// SCHED-GAP-201: Setpgid (own process group per scheduler-owned worker)
+	// is a Linux-only SysProcAttr field — the platform split lives in
+	// spawn_helpers.go (linux) / spawn_helpers_other.go (!linux), which
+	// returns nil on non-Linux (child stays in the daemon's group).
+	cmd.SysProcAttr = processGroupAttr()
 
 	if err := cmd.Start(); err != nil {
 		s.noteSpawnFailure(project.Name)
@@ -2084,8 +2087,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		if st.cmd.Process != nil {
 			// Each scheduler-owned worker has its own process group. Killing the
 			// group prevents shells, Hermes workers, and test runners from
-			// surviving after the tick is marked timed out.
-			_ = syscall.Kill(-st.cmd.Process.Pid, syscall.SIGKILL)
+			// surviving after the tick is marked timed out. SCHED-GAP-201: the
+			// negative-pid kill(2) is Linux-only — spawn_helpers.go /
+			// spawn_helpers_other.go split it (non-Linux: best-effort single
+			// Process.Kill, descendants out of scope).
+			killProcessGroup(st.cmd.Process.Pid)
 		}
 	})
 	defer timer.Stop()
