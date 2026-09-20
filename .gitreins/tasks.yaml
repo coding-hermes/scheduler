@@ -3511,3 +3511,13 @@ tasks:
   status: complete
   created_at: '2026-09-20T13:10:14.087793+00:00'
   completed_at: '2026-09-20T14:01:33.148096+00:00'
+- id: SCHED-GAP-200
+  title: 'foreman-tick.sh: provision DAGGER_API_TOKEN (DAGGER-133 class)'
+  criteria:
+  - foreman-tick.sh generates per-run DAGGER_API_TOKEN, exports it, passes it to both
+    dagger serve and dagger run, and health probe uses Bearer auth; bash -n clean;
+    tick logs show 'dagger up on :<port>' followed by read_board/decide nodes without
+    'execution server not available'
+  status: complete
+  created_at: '2026-09-20T14:17:06.776319+00:00'
+  completed_at: '2026-09-20T14:43:02.738131+00:00'
