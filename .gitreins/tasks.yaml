@@ -3329,3 +3329,24 @@ tasks:
   status: complete
   created_at: '2026-09-20T01:20:11.890550+00:00'
   completed_at: '2026-09-20T01:21:05.350768+00:00'
+- id: INT-CI-013
+  title: 'TestMigrateV27_WaveColumnsAndTickWorkers: raise smoke-guard ceiling 2s->5s
+    (CI-005 class flake)'
+  criteria:
+  - 'internal/database/schedgap109_test.go line 84: ceiling literal 2*time.Second
+    changed to 5*time.Second (grep -n time.Second internal/database/schedgap109_test.go
+    shows the 5s literal at line 84 after edit)'
+  - 'internal/database/schedgap109_test.go line 85: error message string contains
+    want < 5s (grep -n "want < 5s" internal/database/schedgap109_test.go returns line
+    85 after edit)'
+  - gofmt -l internal/database/schedgap109_test.go exits 0
+  - go build ./... exits 0
+  - go vet ./internal/database/ exits 0
+  - go test -short -count=1 -run TestMigrateV27_WaveColumnsAndTickWorkers -p 1 ./internal/database/
+    passes
+  - git show --stat <impl-sha> lists only internal/database/schedgap109_test.go (no
+    other Go or test files changed by the implementation commit)
+  - gitreins guard tier-1 PASS
+  status: complete
+  created_at: '2026-09-20T02:59:28.533655+00:00'
+  completed_at: '2026-09-20T03:17:20.359332+00:00'
