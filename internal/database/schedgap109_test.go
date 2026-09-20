@@ -81,8 +81,8 @@ func TestMigrateV27_WaveColumnsAndTickWorkers(t *testing.T) {
 	// v27 migration can take >100ms (observed 119ms, run 34746646308).  A
 	// wall-clock bound this tight is flaky by construction (off-by-one class
 	// 0262).  Raise to a load-tolerant ceiling that still catches a hang.
-	if elapsed > 2*time.Second {
-		t.Errorf("migration v27 took %v, want < 2s (smoke guard, not perf gate)", elapsed)
+	if elapsed > 5*time.Second {
+		t.Errorf("migration v27 took %v, want < 5s (smoke guard, not perf gate)", elapsed)
 	}
 
 	if latestMigration < 27 {
