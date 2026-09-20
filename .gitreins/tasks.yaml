@@ -3563,3 +3563,14 @@ tasks:
   status: complete
   created_at: '2026-09-20T16:46:24.219198+00:00'
   completed_at: '2026-09-20T17:47:53.594947+00:00'
+- id: SCHED-GAP-201
+  title: Make the scheduler cross-compile for windows and darwin (build-tag the linux-only
+    syscall surface)
+  criteria:
+  - All six go-multiarch targets (linux/darwin/windows x amd64/arm64) compile with
+    CGO_ENABLED=0 GOOS=<os> GOARCH=<arch> go build ./cmd/schedulerd/ and ./cmd/migrate/;
+    linux behavior byte-identical; non-linux degradation explicit and documented;
+    CI multiarch job green
+  status: complete
+  created_at: '2026-09-20T18:03:57.173795+00:00'
+  completed_at: '2026-09-20T18:26:19.625311+00:00'
