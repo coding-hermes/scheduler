@@ -130,6 +130,14 @@ type Loop struct {
 	admitPasses   int
 	admitCounts   map[string]int
 	admitNSAdmits map[string]int
+
+	// nudgeSource carries the SCHED-GAP-157 non-packer entry point
+	// ("startup" | "manual" | "board_wake") from the caller that enqueues a
+	// tick to the slot pool's spawn goroutine, which stamps it onto the tick
+	// row and clears it. Swapped atomically; the pool reads-and-clears it
+	// once per spawn so concurrent spawns cannot observe a previous
+	// caller's value (see schedgap157.go).
+	nudgeSource atomic.Value // string
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -209,6 +217,14 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
 	// through the same logger.
 	l.slotPool.SetEventLogger(l.events)
+	// SCHED-GAP-157: the pool consumes the Loop's pending nudge-source
+	// stamp at the admit → start boundary (SlotPool.spawn goroutine).
+	l.slotPool.SetLoop(l)
+	// SCHED-GAP-157: install the board-wake nudge-source hook — the next
+	// BoardWakeWatcher this process constructs stamps board_wake on THIS
+	// loop when one of its wakes fires (the daemon builds the watcher after
+	// the loop). Same process-wide pattern as the gateway-health gate.
+	boardWakeNudgeSource.Store(func() { l.SetNudgeSource(NudgeSourceBoardWake) })
 	// SCHED-GAP-170 (observability): the gateway-health gate reports its
 	// ONE-per-episode transitions (unhealthy / recovered) through the same
 	// logger, so a fleet-wide gateway outage is visible in the events table
@@ -780,6 +796,12 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	// Fire the spawn session (async — the row is already queued, so the
 	// returned id resolves regardless of slot availability). The slot pool
 	// exists from NewLoop (CI-003).
+	// SCHED-GAP-157: this is the operator entry point — stamp the manual
+	// nudge source so the tick row records how it came to exist. A
+	// load-gate / gateway deferral below returns before SpawnEnqueued, and
+	// nothing clears the stamp except a spawn, so a deferred manual spawn
+	// stamps nothing (an honest empty).
+	l.SetNudgeSource(NudgeSourceManual)
 	l.slotPool.SpawnEnqueued(proj, tickID, l.clock().Now(), noDeliver, l.db)
 	return tickID, nil
 }
@@ -1508,6 +1530,16 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 		line += fmt.Sprintf(" cooldown_remaining_s=%.1f", d.CooldownRemainingS)
 	}
 	admitWriteLine(line)
+
+	// SCHED-GAP-157: the pass-over decision is persisted, not just logged —
+	// "why was this lane skipped in window Y" becomes one SQL query over the
+	// deferrals table (the row shape is justified in schedgap157.go: a
+	// pass-over has no tick row, and a pseudo-row in ticks would corrupt the
+	// packer's cooldown clock). Detail mirrors the line's pass header so the
+	// row is self-contained. Best-effort: persistence failure is logged and
+	// the decision is unchanged.
+	detail := fmt.Sprintf("pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s", passID, eligible, admitted, deferred, ns)
+	l.recordDeferral(d.Project, reason, int64(passID), detail)
 
 	if !admissionReasonIsKnown(reason) {
 		return // emitted for diagnosis; not folded into the counters

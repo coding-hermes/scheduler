@@ -321,6 +321,12 @@ type Tick struct {
 	// on the tick row itself.
 	WorkerCount  int `json:"worker_count"`  // worker sessions the foreman dispatched inside this tick (0 = serial tick; sessions = 1 + worker_count)
 	WaveRecovery int `json:"wave_recovery"` // 1 = this tick ran the wave-recovery phase first (S12 §8.2)
+	// SCHED-GAP-157 lifecycle persistence. All three read as honest
+	// empties for legacy rows (the columns are NOT NULL DEFAULT 0/''),
+	// never a fabricated value: "" = not recorded for this row.
+	SlotWaitMs  int64  `json:"slot_wait_ms"` // ms between admission/queueing and the slot being acquired
+	AdmitReason string `json:"admit_reason"` // the admission decision that let the tick in (SCHED-GAP-155 vocabulary)
+	NudgeSource string `json:"nudge_source"` // why this tick row exists outside the packer: startup | manual | board_wake
 }
 
 // EventSeverity enumerates the severity tiers for event log entries.

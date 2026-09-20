@@ -250,6 +250,11 @@ func (l *Loop) resumeOrphans(trigger string) {
 		// is continuing, not starting cold.
 		packed.Prompt = buildContinuationPrompt(o.prompt, o.id, o.sessionID, o.reason)
 		packed.PromptMode = "append"
+		// SCHED-GAP-157: the orphan-resume entry point stamps the startup
+		// nudge source, so the re-queued row records that it exists
+		// because of the boot/reconnect resume scan — and its admit_reason
+		// names the resume decision.
+		l.SetNudgeSource(NudgeSourceStartup)
 		l.slotPool.SpawnEnqueued(packed, tickID, l.clock().Now(), noDeliver, l.db)
 		resumed++
 		admitted[nsID]++

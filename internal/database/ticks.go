@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 )
@@ -37,6 +38,108 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 		return fmt.Errorf("create tick %q: %w", t.ID, err)
 	}
 	return nil
+}
+
+// RecordTickAdmission persists the SCHED-GAP-157 admission-lifecycle stamp on
+// an existing tick row: how long the tick waited for a slot (slotWait, already
+// measured by the caller through internal/clock) and the admission decision
+// that let it in (admitReason, one of the scheduler's SCHED-GAP-155 vocabulary
+// strings). nudgeSource ("startup" | "manual" | "board_wake") is stored only
+// when non-empty, so a packer tick never overwrites the nudge-source stamp its
+// own enqueue path wrote.
+//
+// Best-effort by contract: the stamp is observability, never a gate — an
+// unknown id or a write error is returned and logged by the caller, and can
+// never change the tick's scheduling outcome.
+func RecordTickAdmission(ctx context.Context, db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string) error {
+	q := `UPDATE ticks SET slot_wait_ms = ?, admit_reason = ?`
+	args := []any{slotWait.Milliseconds(), admitReason}
+	if nudgeSource != "" {
+		q += `, nudge_source = ?`
+		args = append(args, nudgeSource)
+	}
+	q += ` WHERE id = ?`
+	args = append(args, id)
+
+	res, err := db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("record tick admission %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for tick %q: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrTickNotFound, id)
+	}
+	return nil
+}
+
+// Deferral is one recorded SCHED-GAP-157 pass-over: a candidate project that
+// an evaluation pass decided NOT to admit, with the reason from the
+// SCHED-GAP-155 vocabulary. "why was this lane skipped in window Y" is one
+// query over this table instead of log-line order across a rotated file.
+type Deferral struct {
+	ID          int64  `json:"id"` // AUTOINCREMENT PK
+	ProjectName string `json:"project_name"`
+	Reason      string `json:"reason"`
+	PassID      int64  `json:"pass_id"`
+	Detail      string `json:"detail"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// RecordDeferral writes one pass-over record. Best-effort: observability, not
+// admission state — callers log a failure and move on. created_at comes from
+// the context clock (SCHED-GAP-169) when one is installed.
+func RecordDeferral(ctx context.Context, db *sql.DB, projectName, reason string, passID int64, detail string) error {
+	if projectName == "" {
+		return errors.New("RecordDeferral: projectName must not be empty")
+	}
+	if reason == "" {
+		return errors.New("RecordDeferral: reason must not be empty")
+	}
+	_, err := db.ExecContext(ctx, `
+INSERT INTO deferrals (project_name, reason, pass_id, detail, created_at)
+VALUES (?, ?, ?, ?, ?)
+`, projectName, reason, passID, detail, nowUTC(ctx))
+	if err != nil {
+		return fmt.Errorf("record deferral for %q: %w", projectName, err)
+	}
+	return nil
+}
+
+// ListDeferrals returns deferral records newest first, optionally filtered by
+// project (empty = all), with offset pagination; limit 0 = unbounded.
+func ListDeferrals(ctx context.Context, db *sql.DB, projectName string, limit, offset int) ([]Deferral, error) {
+	q := `SELECT id, project_name, reason, pass_id, detail, created_at FROM deferrals`
+	args := []any{}
+	if projectName != "" {
+		q += ` WHERE project_name = ?`
+		args = append(args, projectName)
+	}
+	q += ` ORDER BY id DESC`
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	if offset > 0 {
+		q += ` OFFSET ?`
+		args = append(args, offset)
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list deferrals: %w", err)
+	}
+	defer rows.Close()
+	var out []Deferral
+	for rows.Next() {
+		var d Deferral
+		if err := rows.Scan(&d.ID, &d.ProjectName, &d.Reason, &d.PassID, &d.Detail, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan deferral row: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // UpdateTickStatus transitions a tick to the given status and records the
@@ -117,7 +220,7 @@ WHERE id = ?`
 
 // GetTick loads a single tick by id.
 func GetTick(ctx context.Context, db *sql.DB, id string) (*Tick, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
 FROM ticks WHERE id = ?`
 	var t Tick
 	var status, outcome string
@@ -126,7 +229,8 @@ FROM ticks WHERE id = ?`
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 		&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
-		&t.Bump, &t.WorkerCount, &t.WaveRecovery)
+		&t.Bump, &t.WorkerCount, &t.WaveRecovery,
+		&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrTickNotFound, id)
 	}
@@ -143,7 +247,7 @@ FROM ticks WHERE id = ?`
 // limit caps the result count; pass 0 for an unbounded query (the caller
 // should usually bound it).
 func ListTicks(ctx context.Context, db *sql.DB, projectName string, limit int) ([]Tick, error) {
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
 FROM ticks`
 	args := []any{}
 	if projectName != "" {
@@ -171,7 +275,8 @@ FROM ticks`
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
-			&t.Bump, &t.WorkerCount, &t.WaveRecovery); err != nil {
+			&t.Bump, &t.WorkerCount, &t.WaveRecovery,
+			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource); err != nil {
 			return nil, fmt.Errorf("scan tick row: %w", err)
 		}
 		t.Status = TickStatus(status)
@@ -187,7 +292,7 @@ FROM ticks`
 // ListAllTicks returns ticks across all projects, newest first, with offset
 // pagination. limit caps the result count; pass 0 for an unbounded query.
 func ListAllTicks(ctx context.Context, db *sql.DB, limit, offset int) ([]Tick, error) {
-	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0)
+	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
 FROM ticks ORDER BY created_at DESC, id DESC`
 
 	q := baseQuery
@@ -218,7 +323,8 @@ FROM ticks ORDER BY created_at DESC, id DESC`
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
-			&t.Bump, &t.WorkerCount, &t.WaveRecovery); err != nil {
+			&t.Bump, &t.WorkerCount, &t.WaveRecovery,
+			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource); err != nil {
 			return nil, fmt.Errorf("scan all tick row: %w", err)
 		}
 		t.Status = TickStatus(status)

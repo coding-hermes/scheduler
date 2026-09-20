@@ -68,6 +68,12 @@ type SlotPool struct {
 	// exact. Guarded by mu, same discipline as running/reserved.
 	// SCHED-GAP-144.
 	nsPending map[string]int
+
+	// owner is the Loop that owns this pool (SCHED-GAP-157): the spawn
+	// goroutine consumes the Loop's pending nudge-source stamp through it.
+	// Nil for a standalone pool (tests) — no stamp, no panic. Written once
+	// by SetLoop before any spawn; read under mu.
+	owner *Loop
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
@@ -129,6 +135,23 @@ func (p *SlotPool) SetEventLogger(el *EventLogger) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.events = el
+}
+
+// loopOrNil returns the owning Loop's SCHED-GAP-157 nudge-source stamp holder
+// (nil when the pool was built standalone — tests — in which case there is no
+// stamp to consume).
+func (p *SlotPool) loopOrNil() *Loop {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.owner
+}
+
+// SetLoop wires the owning Loop (SCHED-GAP-157) so the spawn goroutine can
+// consume the caller's pending nudge-source stamp. Called once from NewLoop.
+func (p *SlotPool) SetLoop(l *Loop) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.owner = l
 }
 
 // Available returns the number of free slots.
@@ -368,6 +391,16 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		defer p.clearReserve(proj.Name)
 		defer p.Release(proj.Name)
 
+		// SCHED-GAP-157: consume the caller's pending nudge-source stamp
+		// (Loop.SetNudgeSource) FIRST — "startup" | "manual" | "board_wake",
+		// "" for a packer tick — so the value applies to exactly this spawn
+		// and can never leak into a later one. A standalone pool (tests)
+		// has no owning loop — nothing to consume.
+		var nudgeSource string
+		if loop := p.loopOrNil(); loop != nil {
+			nudgeSource = loop.clearNudgeSource()
+		}
+
 		// SCHED-GAP-144: namespace-cap admission at the DECLARED admission
 		// point (G7). The packer and the orphan re-nudge both gate on the
 		// namespace cap; this is the backstop that makes the cap authoritative
@@ -435,6 +468,24 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		}
 
 		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+
+		// SCHED-GAP-157: the slot wait and the admission decision are
+		// stamped onto the tick row the moment the slot is acquired —
+		// the admit → start boundary. slot_wait_ms is the measured wait
+		// (0 = never waited); admit_reason is "ok" for every spawn that
+		// reached the pool, and "resume:<orphan_reason>" for a
+		// continuation re-spawn (the orphan-resume decision that let the
+		// tick back in); nudge_source is the caller's non-packer entry
+		// point stamp ("" for packer ticks). Best-effort observability —
+		// a failed stamp is logged by the writer and never blocks the
+		// spawn. A nil db (standalone-pool tests) records nothing.
+		if db != nil {
+			admitReason := AdmissionReasonOK
+			if nudgeSource != "" {
+				admitReason = "resume:" + nudgeSource
+			}
+			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource)
+		}
 
 		// Enqueue and start.
 		if !enqueued {
