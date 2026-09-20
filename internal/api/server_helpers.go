@@ -454,9 +454,9 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/metrics": {
       "get": {
-        "summary": "Fleet metrics — one read-only request answers spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks vs caps, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s and zero-output committed ticks",
+        "summary": "Fleet metrics — one read-only request answers spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks vs caps, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s, zero-output committed ticks, stalled ticks bucketed by duration, escalation events per day by severity/class and lane churn (projects disabled per day with disabled_by provenance)",
         "responses": {
-          "200": {"description": "Single JSON object: generated_at, uptime_s, sources, spawns, deferrals, nudges, ticks, tick_duration_ms, gateway, outcomes. Every block carries available=true|false; a block whose real source is absent reports {\"available\": false, \"reason\": \"...\"} instead of a fabricated number, and sources names the query/counter behind every block (SCHED-GAP-156)."},
+          "200": {"description": "Single JSON object: generated_at, uptime_s, sources, spawns, deferrals, nudges, ticks, tick_duration_ms, gateway, outcomes, stalls, escalations, lane_churn. Every block carries available=true|false; a block whose real source is absent reports {\"available\": false, \"reason\": \"...\"} instead of a fabricated number, and sources names the query/counter behind every block (SCHED-GAP-156; stalls/escalations/lane_churn added by SCHED-GAP-158)."},
           "405": {"description": "Non-GET method"}
         }
       }

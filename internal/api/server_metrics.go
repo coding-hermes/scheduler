@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -34,12 +35,19 @@ import (
 // populated.
 
 // metricsWindow is the lookback for every WINDOWED metrics block (spawns,
-// tick durations, gateway drains, zero-output outcomes). It is echoed to the
-// wire as metricsWindowLabel so a dashboard never has to guess the window.
+// tick durations, gateway drains, zero-output outcomes, stalls, escalations,
+// lane churn). It is echoed to the wire as metricsWindowLabel so a dashboard
+// never has to guess the window.
 const metricsWindow = 24 * time.Hour
 
 // metricsWindowLabel is the wire string for metricsWindow ("24h").
 const metricsWindowLabel = "24h"
+
+// metricsStallFloorMinutes is the duration a completed tick must exceed to
+// count as stalled (SCHED-GAP-158 §2: "exceeds 30 minutes"). Exported into
+// the sources register so the bucket edges are auditable from the wire's
+// sibling map.
+const metricsStallFloorMinutes = 30
 
 // Percentile numerators (percent) used by the tick-duration block.
 const (
@@ -100,6 +108,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		"tick_duration_ms": s.metricsTickDurations(ctx, cutoff),
 		"gateway":          s.metricsGateway(ctx, cutoff),
 		"outcomes":         s.metricsOutcomes(ctx, cutoff),
+		// SCHED-GAP-158 outcome-honesty blocks: stalls, escalations, churn.
+		"stalls":      s.metricsStalls(ctx, cutoff),
+		"escalations": s.metricsEscalations(ctx, cutoff),
+		"lane_churn":  s.metricsLaneChurn(ctx, cutoff),
 	})
 }
 
@@ -144,6 +156,32 @@ func metricsSources() map[string]string {
 			"source this number and is deliberately not used.",
 		"outcomes": "ticks table: rows spawned inside the window with outcome='committed' AND commits=0 — a tick " +
 			"that recorded a commit outcome while landing no commit at all. Window: " + metricsWindowLabel + ".",
+		"stalls": "ticks table: rows completed inside the window (julianday(completed_at) >= julianday(cutoff)) " +
+			"whose duration ROUND((julianday(completed_at) - julianday(spawned_at)) * 86400.0) minutes EXCEEDS " +
+			fmt.Sprintf("%d", metricsStallFloorMinutes) + " (completed_at >= spawned_at required, so a duration is " +
+			"never negative). A tick with a NULL or empty completed_at is NOT counted as stalled — an uncompleted " +
+			"tick has no measured duration and inventing one would violate this endpoint's honesty rule. Buckets " +
+			"(by_minutes): 30-60 = >30m up to and including 1h; 60-120 = >1h up to and including 2h; 120+ = >2h " +
+			"(open-ended). total = the sum of the buckets; the whole window is " + metricsWindowLabel + ".",
+		"escalations": "DEFINITION (deliberate, stated so the number is auditable): an escalation is ONE events " +
+			"row with severity IN ('CRITICAL','HIGH') — the alert-severity tiers the scheduler's alert paths emit " +
+			"(alert_escalation.go's OBS-006 matrix, EVAL-ZERO-SELECT, eval-stall, spawn-failure and auto-disable " +
+			"events; MEDIUM carries the demoted non-alert tier since SCHED-GAP-061 and is therefore excluded). " +
+			"events table: rows with created_at inside the window, grouped by (UTC day, severity) in by_day, by " +
+			"severity in by_severity (window totals) and by the events.component the emitter set in by_class; " +
+			"total = the row count. Day keys are date(created_at) — the true UTC day of the instant, so mixed " +
+			"\"Z\" / local-offset rows bucket correctly. Window: " + metricsWindowLabel + ".",
+		"lane_churn": "projects.disabled_at / disabled_by (the GAP-044 disable-provenance columns) for rows " +
+			"disabled inside the window, grouped by (UTC day, disabled_by) in disabled_by_day. Day keys are " +
+			"date(disabled_at) — the true UTC day of the instant. The disabled_by vocabulary is exactly " +
+			"what the disable paths stamp: api-pause | api | api-delete | auto-disable | api-pause-cascade | " +
+			"legacy (the migration backfill value; its disabled_at may predate GAP-044, in which case the row " +
+			"cannot appear inside any window). enabled_per_day counts one events row per UTC day whose message is " +
+			"'project enabled: <name> (cascade resume of <primary>)' — ONLY the SCHED-GAP-180 cascade-resume path " +
+			"writes such an event, so a plain API/MCP resume (which clears the provenance silently, no event) is " +
+			"NOT counted; that undercount is a known limitation of the persisted record, stated here rather than " +
+			"papered over. enabled_current = SELECT COUNT(*) FROM projects WHERE enabled=1 — a real query result, " +
+			"not a churn event. Window: " + metricsWindowLabel + ".",
 	}
 }
 
@@ -470,5 +508,200 @@ WHERE julianday(spawned_at) >= julianday(?)
 		"available":             true,
 		"zero_output_committed": zeroOutput,
 		"window":                metricsWindowLabel,
+	}
+}
+
+// metricsStalls (SCHED-GAP-158) buckets the ticks completed inside the window
+// by how long they ran. A tick is stalled when its duration
+// (julianday(completed_at) - julianday(spawned_at), never negative) EXCEEDS
+// metricsStallFloorMinutes minutes; buckets are (30,60], (60,120] and
+// (120,∞) minutes, reported in by_minutes as "30-60", "60-120" and "120+".
+// total is the sum of the buckets — 0 only after the query actually counted
+// zero stalled ticks. Rows whose completed_at is NULL/empty are excluded (no
+// measured duration -> never counted as stalled), and spawned_at
+// NULL/empty rows are excluded the same way (no measurable start).
+func (s *Server) metricsStalls(ctx context.Context, cutoff string) map[string]interface{} {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT CAST(ROUND((julianday(completed_at) - julianday(spawned_at)) * 86400.0 / 60.0) AS INTEGER) AS minutes
+FROM ticks
+WHERE completed_at IS NOT NULL AND completed_at <> ''
+  AND spawned_at IS NOT NULL AND spawned_at <> ''
+  AND julianday(completed_at) >= julianday(?)
+  AND julianday(completed_at) >= julianday(spawned_at)`, cutoff)
+	if err != nil {
+		return metricsUnavailable("stalls", "query failed: "+err.Error())
+	}
+	defer rows.Close()
+
+	byMinutes := map[string]int{"30-60": 0, "60-120": 0, "120+": 0}
+	for rows.Next() {
+		var minutes int
+		if err := rows.Scan(&minutes); err != nil {
+			return metricsUnavailable("stalls", "scan failed: "+err.Error())
+		}
+		switch {
+		case minutes > 120:
+			byMinutes["120+"]++
+		case minutes > 60:
+			byMinutes["60-120"]++
+		case minutes > metricsStallFloorMinutes:
+			byMinutes["30-60"]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return metricsUnavailable("stalls", "query failed: "+err.Error())
+	}
+
+	total := 0
+	for _, n := range byMinutes {
+		total += n
+	}
+	return map[string]interface{}{
+		"available":  true,
+		"window":     metricsWindowLabel,
+		"threshold":  metricsStallFloorMinutes,
+		"by_minutes": byMinutes,
+		"total":      total,
+	}
+}
+
+// metricsEscalations (SCHED-GAP-158) counts escalation events: events rows
+// with severity CRITICAL or HIGH inside the window. That pair is the
+// alert-severity tier the scheduler's alert paths emit (OBS-006 matrix in
+// alert_escalation.go); the definition is stated in metricsSources so the
+// number stays auditable. Grouped per UTC day by severity (by_day) and by
+// the emitting component (by_class), with window totals per severity
+// (by_severity) and total. Maps marshal as {} never null.
+func (s *Server) metricsEscalations(ctx context.Context, cutoff string) map[string]interface{} {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT date(created_at) AS day, severity, COALESCE(NULLIF(component, ''), 'unknown') AS class, COUNT(*)
+FROM events
+WHERE severity IN ('CRITICAL', 'HIGH')
+  AND julianday(created_at) >= julianday(?)
+GROUP BY day, severity, class`, cutoff)
+	if err != nil {
+		return metricsUnavailable("escalations", "query failed: "+err.Error())
+	}
+	defer rows.Close()
+
+	byDay := map[string]map[string]int{}
+	bySeverity := map[string]int{"CRITICAL": 0, "HIGH": 0}
+	byClass := map[string]int{}
+	total := 0
+	for rows.Next() {
+		var day, severity, class string
+		var n int
+		if err := rows.Scan(&day, &severity, &class, &n); err != nil {
+			return metricsUnavailable("escalations", "scan failed: "+err.Error())
+		}
+		if byDay[day] == nil {
+			byDay[day] = map[string]int{}
+		}
+		byDay[day][severity] += n
+		bySeverity[severity] += n
+		byClass[class] += n
+		total += n
+	}
+	if err := rows.Err(); err != nil {
+		return metricsUnavailable("escalations", "query failed: "+err.Error())
+	}
+
+	return map[string]interface{}{
+		"available":   true,
+		"window":      metricsWindowLabel,
+		"total":       total,
+		"by_severity": bySeverity,
+		"by_day":      byDay,
+		"by_class":    byClass,
+	}
+}
+
+// metricsLaneChurn (SCHED-GAP-158) reports lane churn: projects disabled per
+// UTC day grouped by the disabled_by provenance (GAP-044 columns), plus the
+// cascade-resume enable events per day and the current enabled count. The
+// enable-per-day count is intentionally narrow — only the cascade-resume
+// path persists an enable event — and metricsSources documents that
+// limitation instead of hiding it.
+func (s *Server) metricsLaneChurn(ctx context.Context, cutoff string) map[string]interface{} {
+	// Disabled rows inside the window, keyed by (UTC day, provenance). The
+	// GROUP BY mirrors the aggregation the wire reports.
+	rows, err := s.db.QueryContext(ctx, `
+SELECT date(disabled_at) AS day, COALESCE(NULLIF(disabled_by, ''), 'unknown') AS by, COUNT(*)
+FROM projects
+WHERE disabled_at IS NOT NULL AND disabled_at <> ''
+  AND julianday(disabled_at) >= julianday(?)
+GROUP BY day, by`, cutoff)
+	if err != nil {
+		return metricsUnavailable("lane_churn", "disabled query failed: "+err.Error())
+	}
+	byDay := map[string]map[string]int{}
+	byProvenance := map[string]int{}
+	total := 0
+	for rows.Next() {
+		var day, by string
+		var n int
+		if err := rows.Scan(&day, &by, &n); err != nil {
+			rows.Close()
+			return metricsUnavailable("lane_churn", "disabled scan failed: "+err.Error())
+		}
+		if byDay[day] == nil {
+			byDay[day] = map[string]int{}
+		}
+		byDay[day][by] += n
+		byProvenance[by] += n
+		total += n
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return metricsUnavailable("lane_churn", "disabled query failed: "+err.Error())
+	}
+	rows.Close()
+
+	// Resume provenance: the ONLY persisted enable event is the cascade
+	// resume's "project enabled: <sat> (cascade resume of <primary>)" row
+	// (component "api"). Plain API/MCP resumes clear the provenance without
+	// an event — that record gap is stated in metricsSources, not invented
+	// around.
+	enabledPerDay := map[string]int{}
+	erows, err := s.db.QueryContext(ctx, `
+SELECT date(created_at) AS day, COUNT(*)
+FROM events
+WHERE component = 'api'
+  AND message LIKE 'project enabled: % (cascade resume of %)'
+  AND julianday(created_at) >= julianday(?)
+GROUP BY day`, cutoff)
+	if err != nil {
+		return metricsUnavailable("lane_churn", "enable query failed: "+err.Error())
+	}
+	for erows.Next() {
+		var day string
+		var n int
+		if err := erows.Scan(&day, &n); err != nil {
+			erows.Close()
+			return metricsUnavailable("lane_churn", "enable scan failed: "+err.Error())
+		}
+		enabledPerDay[day] = n
+	}
+	if err := erows.Err(); err != nil {
+		erows.Close()
+		return metricsUnavailable("lane_churn", "enable query failed: "+err.Error())
+	}
+	erows.Close()
+
+	// A real query result, not a churn event: how many lanes are live now.
+	var enabledCurrent int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM projects WHERE enabled = 1`).Scan(&enabledCurrent); err != nil {
+		return metricsUnavailable("lane_churn", "enabled query failed: "+err.Error())
+	}
+
+	return map[string]interface{}{
+		"available":       true,
+		"window":          metricsWindowLabel,
+		"disabled_by_day": byDay,
+		"by_provenance":   byProvenance,
+		"disabled_total":  total,
+		"enabled_per_day": enabledPerDay,
+		"enabled_current": enabledCurrent,
 	}
 }
