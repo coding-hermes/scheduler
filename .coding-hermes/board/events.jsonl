@@ -1012,3 +1012,4 @@
 {"id": 1789915599706355212, "event_type": "task_updated", "task_id": "DOC-2", "actor": "foreman", "detail": "{\"status\":\"in_progress\"}", "timestamp": "2026-09-20T16:46:41.463549+00:00"}
 {"id": "EVT-PM-20260920-001", "ts": "2026-09-20T16:45:00+00:00", "type": "pm_cycle", "actor": "stand-in-pm", "task_id": "RELEASE-005", "detail": "G7 fold: duplicate of SCHED-GAP-162 closed (superseded_by=SCHED-GAP-162), keep-oldest canonical"}
 {"id": "EVT-PM-20260920-002", "ts": "2026-09-20T16:45:00+00:00", "type": "pm_cycle", "actor": "stand-in-pm", "task_id": "SCHED-GAP-162", "detail": "canonical for deploy-staleness after RELEASE-005 fold; priority context P1"}
+{"id": "EVT-PM-20260920-003", "ts": "2026-09-20T16:55:00+00:00", "type": "pm_cycle", "actor": "stand-in-pm", "task_id": "SCHED-GAP-196", "detail": "PM close: premise resolved by prior work (api.md since 19b8ed7b 09-12; README unbump via 05f83f32 09-20 05:08 SCHED-GAP-188). Row filed 07:10 was stale on arrival."}
