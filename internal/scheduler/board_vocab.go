@@ -16,8 +16,8 @@ import (
 // CountPending) counts only those. The scheduler's READERS deliberately accept a
 // wider open vocabulary (openStatuses in board_freshness.go, boardOpenRows in
 // adaptive_cooldown.go) for forward compatibility, so a row minted with one of
-// those wider spellings ("todo", "open", "in_progress", ...) is visible to the
-// fleet and scheduled by nobody — visible work that no lane will ever pick up.
+// those wider spellings ("todo", "open", ...) is visible to the fleet and
+// scheduled by nobody — visible work that no lane will ever pick up.
 //
 // This file is the writer-side half of that contract: it names the vocabulary
 // writers must use and reports, read-only, every row outside it. The daemon's
@@ -28,7 +28,16 @@ import (
 // Python regression gate (ops/check-fleet-invariants.py, BOARD_ALLOWED_STATUSES,
 // check 8 "board-vocab"); the two MUST stay in lockstep, which
 // TestBoardVocabValidator_AllowedSetMatchesPythonGate pins.
-var BoardAllowedStatuses = []string{"pending", "complete", "duplicate"}
+//
+// "in_progress" is the live-lane claim: it is what the foreman wave writes when
+// it dispatches a row (RELEASE-007), so it is a legitimate writer status and
+// must not fail the gate. The scheduler's READERS already treat it as open —
+// openStatuses in internal/scheduler/board_freshness.go and boardOpenRows in
+// internal/scheduler/adaptive_cooldown.go both include it. The gate's remaining
+// purpose is to catch PARKED spellings ("todo", "open", "rework", "new",
+// "claimed", "ready", ...) and missing/empty statuses: those stay off-vocabulary
+// and keep failing the gate.
+var BoardAllowedStatuses = []string{"pending", "in_progress", "complete", "duplicate"}
 
 // BoardLegacyClosedStatuses are the closed-state spellings the board carried
 // before the vocabulary was closed (4 rows still carried them on 2026-09-18).
