@@ -71,6 +71,41 @@ jobs:
       - name: Test (full)
         run: go test -count=1 ./...
 
+  multiarch:
+    # SCHED-GAP-159: org standard multi-arch build (coding-hermes/.github#1),
+    # adopted from the boardctl pilot (boardctl/.github/workflows/multiarch.yml).
+    # Adds: verify(amd64) + native arm64 tests (ubuntu-24.04-arm) + 6
+    # cross-build targets (linux/darwin/windows x amd64/arm64) with
+    # arch-verified artifacts, per-platform SHA256SUMS, and on v* tags a
+    # release with build-provenance attestation. Pure Go (modernc.org/sqlite,
+    # CGO_ENABLED=0) so the cross-compile is exact. The existing build job's
+    # single-platform `make build` is kept above: bin/ is gitignored and
+    # ./bin/schedulerd must exist for the board closure-evidence gate.
+    #
+    # version-var: this repo stamps internal/version.Version (Makefile
+    # LDFLAGS + release.yaml agree); the reusable workflow's default
+    # `main.version` is the exact silent no-op the version.go header documents
+    # as the replaced fatal bug, so it MUST be overridden.
+    #
+    # permissions superset (from the reusable workflow's job declarations —
+    # a job-level permissions block REPLACES the default, never merges):
+    #   release job:      contents: write, id-token: write, attestations: write
+    #   docker job:       contents: read, packages: write  (docker-image=false,
+    #                     but the permission must be granted or a job-level
+    #                     block lacking it is the documented startup_failure)
+    uses: coding-hermes/.github/.github/workflows/go-multiarch.yml@main
+    with:
+      binary: schedulerd
+      main: ./cmd/schedulerd
+      go-version: "1.26"
+      version-var: github.com/coding-hermes/scheduler/internal/version.Version
+      run-arm64-tests: true
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      packages: write
+
   lint:
     runs-on: ubuntu-latest
     steps:
