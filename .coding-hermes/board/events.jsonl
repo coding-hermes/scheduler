@@ -973,3 +973,7 @@
 {"event_type":"task_created","task_id":"RELEASE-004","created_at":null,"detail":"{\"id\":\"RELEASE-004\",\"status\":\"pending\"}","id":1789872174767,"timestamp":"2026-09-20T09:50:39.639183+00:00","actor":"foreman"}
 {"event_type":"task_created","task_id":"RELEASE-005","created_at":null,"detail":"{\"id\":\"RELEASE-005\",\"status\":\"pending\"}","id":1789872174768,"timestamp":"2026-09-20T09:50:39.670288+00:00","actor":"foreman"}
 {"event_type":"task_created","task_id":"RELEASE-006","created_at":null,"detail":"{\"id\":\"RELEASE-006\",\"status\":\"pending\"}","id":1789872174769,"timestamp":"2026-09-20T09:50:39.702619+00:00","actor":"foreman"}
+{"event_type":"task_updated","task_id":"FND-002","created_at":null,"detail":"{\"status\":\"pending\"}","id":1789872174770,"timestamp":"2026-09-20T10:03:12.615492+00:00","actor":"foreman"}
+{"event_type":"task_updated","task_id":"SCHED-GAP-168","created_at":null,"detail":"{\"status\":\"pending\"}","id":1789872174771,"timestamp":"2026-09-20T10:03:38.406685+00:00","actor":"foreman"}
+{"event_type":"task_updated","task_id":"SCHED-GAP-188","created_at":null,"detail":"{\"status\":\"pending\"}","id":1789872174772,"timestamp":"2026-09-20T10:03:38.435151+00:00","actor":"foreman"}
+{"event_type":"task_created","task_id":"RELEASE-007","created_at":null,"detail":"{\"id\":\"RELEASE-007\",\"status\":\"pending\"}","id":1789872174773,"timestamp":"2026-09-20T10:03:55.586697+00:00","actor":"foreman"}
