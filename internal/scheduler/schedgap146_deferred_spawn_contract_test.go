@@ -66,8 +66,11 @@ package scheduler
 //     against the same live pool with the namespace genuinely at its cap
 //     (waitNamespaceSlot on a short context must return false and leave no
 //     claim). The re-admission contract is exercised the way production reaches
-//     it: the parked attempt starts the tick the moment the sibling releases
-//     the slot.
+//     it: the parked attempt starts the tick as soon as the sibling releases
+//     the slot AND the namespace-gate poll interval is stepped (SCHED-GAP-197 —
+//     test 2 runs the loop on a dormant simulator, so both the "still deferred
+//     after N poll cycles" and the "re-admitted once the cap clears" claims are
+//     driven by explicit Advances instead of a 1200ms real sleep).
 //   - consecutive_failures may go DOWN after re-admission — a successful spawn
 //     resets it to 0 by design — so Test 2 asserts "never increased" for the
 //     post-re-admission read; the strict-equality assertion runs across the
@@ -366,6 +369,14 @@ func TestGAP146_NamespaceCapDeferPreservesAllState(t *testing.T) {
 	gw := newHeldResumeGateway(t)
 	gw.wire(l)
 
+	// SCHED-GAP-197: this test's only wall-clock pad was "wait past the 250ms
+	// namespace-gate poll, then assert the deferral held". Run the loop on a
+	// DORMANT simulator so that poll is an explicit Advance below instead of
+	// real elapsed time — the deferral is then pinned by a count of poll cycles
+	// the gate survived, not by how fast the runner happened to be.
+	sim := clock.NewManualSimClock(time.Date(2026, 9, 20, 15, 0, 0, 0, time.UTC))
+	t.Cleanup(sim.Close)
+	l.SetClock(sim)
 	// gap146-a enters the pool and becomes the namespace's single running tick.
 	l.slotPool.SpawnEnqueued(PackedProject{Name: a, NamespaceID: ns}, a+"-t1", time.Now(), true, db)
 	waitUntil(t, 20*time.Second, "gap146-a to hold the namespace's only slot", func() bool {
@@ -376,9 +387,18 @@ func TestGAP146_NamespaceCapDeferPreservesAllState(t *testing.T) {
 	// the namespace gate.
 	l.slotPool.SpawnEnqueued(PackedProject{Name: b, NamespaceID: ns}, b+"-t1", time.Now(), true, db)
 
-	// Well past the 250ms gate poll interval: a spawn that slipped through would
-	// have started by now, so a still-queued row is evidence of the deferral.
-	time.Sleep(1200 * time.Millisecond)
+	// Drive the gate's poll interval on the seam instead of sleeping 1200ms of
+	// real time. A spawn that could slip through would do so on a poll tick, so
+	// FOUR poll intervals of virtual time with the namespace still full is the
+	// same claim the sleep was making — stated exactly, and no longer dependent
+	// on the runner being fast enough to let a spawned tick finish inside
+	// 1200ms (the pre-seam shape's failure mode under load).
+	for i := 0; i < 4; i++ {
+		if got := namespaceRunningDB(db, ns); got != 1 {
+			t.Fatalf("premise: namespace running ticks = %d, want 1 before poll %d — gap146-a must still hold the namespace's only slot", got, i+1)
+		}
+		l.clock().(*clock.SimClock).Advance(nsGatePollInterval)
+	}
 
 	if got := gap146TickStatus(t, db, b+"-t1"); got != "queued" {
 		t.Fatalf("gap146-b tick status = %q, want \"queued\" — a namespace-capped spawn DEFERS: the row waits, it is not started, and it is not failed", got)
@@ -434,9 +454,19 @@ func TestGAP146_NamespaceCapDeferPreservesAllState(t *testing.T) {
 	// The cap clears (the sibling finishes) → the deferred attempt must be
 	// RE-ADMITTED and run to completion. Defer, never drop.
 	gw.releaseAll()
-	waitUntil(t, 30*time.Second, "the deferred lane to be re-admitted and both ticks to settle", func() bool {
-		return gap146InFlightTicks(t, db) == 0
-	})
+	// Now drive the parked gap146-b: it is sitting on the gate poll, so it
+	// re-checks the namespace only when the interval is stepped. Loop until both
+	// ticks are terminal, stepping between checks — the same "defer, never drop"
+	// claim, with the poll count decided by the test rather than by 30s of wall
+	// clock.
+	deadline := time.Now().Add(30 * time.Second)
+	for gap146InFlightTicks(t, db) != 0 && time.Now().Before(deadline) {
+		sim.Advance(nsGatePollInterval)
+		time.Sleep(2 * time.Millisecond) // let the woken waiter run
+	}
+	if got := gap146InFlightTicks(t, db); got != 0 {
+		t.Fatalf("timed out driving the seam: %d tick(s) still queued/running after 30s of poll intervals — the deferred lane was never re-admitted", got)
+	}
 
 	if got := gap146TickStatus(t, db, b+"-t1"); got != "completed" {
 		t.Errorf("gap146-b tick status after the cap cleared = %q, want \"completed\" — a deferred project must run (a gate that defers but never re-admits is a silent stall)", got)

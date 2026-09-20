@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 func TestCountPending_JSONL(t *testing.T) {
@@ -83,16 +85,41 @@ func TestCountPending_MtimeReread(t *testing.T) {
 	}
 	got = c.CountPending(dir)
 	if got != 1 {
-		t.Errorf("second CountPending (cached) = %d, want 1", got)
+		t.Fatalf("second CountPending (cached) = %d, want 1", got)
 	}
-	// Sleep so mtime granularity changes
-	time.Sleep(1100 * time.Millisecond)
+	// The cache claim, measured rather than inferred: a second read of an
+	// unchanged board must not reach the freshness reader at all. (Counting the
+	// reader is the only way to see this — a re-read of the same one-line board
+	// also returns 1, so the count assertion above cannot tell the two apart.)
+	reads := new(int)
+	c.freshnessRead = func(workdir, boardPath string) FreshnessReport {
+		*reads++
+		return FreshnessReport{}
+	}
+	got = c.CountPending(dir)
+	if got != 1 {
+		t.Fatalf("second CountPending (cached) = %d, want 1", got)
+	}
+	if *reads != 0 {
+		t.Fatalf("the cached read consulted the board %d time(s), want 0 — the second call must be served from cache", *reads)
+	}
+	// Move the SEAM past the cache TTL instead of sleeping for it. The cache
+	// key is (fetchedAt within TTL, board mtime, registry mtime); the mtime is
+	// what actually changes below, so this is the control case — stepping the
+	// clock must NOT be what makes the new count visible (the next assertion
+	// proves the third read is served by an mtime change, not by TTL expiry).
+	sim := clock.NewManualSimClock(time.Date(2026, 9, 20, 7, 0, 0, 0, time.UTC))
+	c.SetClock(sim)
+	sim.Advance(1100 * time.Millisecond) // was time.Sleep(1100ms): mtime granularity
 	if err := os.WriteFile(path, []byte(`{"status":"pending"}`+"\n"+`{"status":"pending"}`+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile 2: %v", err)
 	}
 	got = c.CountPending(dir)
 	if got != 2 {
 		t.Errorf("third CountPending (mtime changed) = %d, want 2", got)
+	}
+	if *reads != 1 {
+		t.Errorf("board consultations after the mtime change = %d, want 1 (the board must be re-read, not served from cache)", *reads)
 	}
 }
 
@@ -107,21 +134,41 @@ func TestCountPending_TTLExpiry(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	c := NewPendingTaskCounter(100 * time.Millisecond)
+	// Drive the TTL through the seam: the counter's `fetchedAt` comparison
+	// runs on the injected clock, so expiry is deterministic rather than a
+	// race against real elapsed time on a loaded runner.
+	sim := clock.NewManualSimClock(time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC))
+	c.SetClock(sim)
 	got := c.CountPending(dir)
 	if got != 1 {
 		t.Fatalf("first CountPending = %d, want 1", got)
+	}
+	// PREMISE for the TTL assertion: the 100ms TTL has NOT expired, so this
+	// read was served from cache — proven by driving the freshness reader
+	// (touched only on the re-read path), not inferred from a count that a
+	// re-read would also produce.
+	reads := new(int)
+	c.freshnessRead = func(workdir, boardPath string) FreshnessReport {
+		*reads++
+		return FreshnessReport{}
 	}
 	got = c.CountPending(dir)
 	if got != 1 {
 		t.Errorf("cached CountPending = %d, want 1", got)
 	}
-	time.Sleep(150 * time.Millisecond)
+	if *reads != 0 {
+		t.Fatalf("premise: the cached read consulted the board %d time(s), want 0 (the second call must be cached)", *reads)
+	}
+	sim.Advance(150 * time.Millisecond) // was time.Sleep(150ms): past the 100ms TTL
 	if err := os.WriteFile(path, []byte(`{"status":"pending"}`+"\n"+`{"status":"pending"}`+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile 2: %v", err)
 	}
 	got = c.CountPending(dir)
 	if got != 2 {
 		t.Errorf("post-TTL CountPending = %d, want 2", got)
+	}
+	if *reads != 1 {
+		t.Errorf("board consultations after the TTL elapsed = %d, want 1 — an expired TTL must force a re-read", *reads)
 	}
 }
 

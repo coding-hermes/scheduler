@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,15 @@ func makeTempGitRepo(t *testing.T) string {
 	return dir
 }
 
-func gitCommitAt(t *testing.T, dir, filename, content string) {
+// gitCommitAt commits filename into dir with an EXPLICIT committer/author date,
+// so the repo's commit ordinals are chosen by the test instead of by the wall
+// clock. Pre-seam these tests slept 1.1s between commits to step the real clock
+// into the next second (git stores whole-second ordinals); pinning the date
+// removes the sleep entirely and makes the window boundaries exact — git's
+// --since/--until are inclusive at whole seconds, verified against a scratch
+// repo: a commit at 12:00:05 is IN a window starting 12:00:05 and OUT of one
+// starting 12:00:06.
+func gitCommitAt(t *testing.T, dir, filename, content string, when time.Time) {
 	t.Helper()
 	path := filepath.Join(dir, filename)
 	if err := writeFile(path, content); err != nil {
@@ -145,6 +154,9 @@ func gitCommitAt(t *testing.T, dir, filename, content string) {
 	run := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_DATE="+when.UTC().Format(time.RFC3339),
+			"GIT_COMMITTER_DATE="+when.UTC().Format(time.RFC3339))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
@@ -152,6 +164,24 @@ func gitCommitAt(t *testing.T, dir, filename, content string) {
 	}
 	run("add", filename)
 	run("commit", "-m", "add "+filename)
+}
+
+// gitCommitDate returns a commit's committer date by its (1-based, newest-first)
+// position, and fails loudly when the position does not exist — the premise
+// every window assertion below rests on.
+func gitCommitDate(t *testing.T, dir string, skip int) time.Time {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "log", fmt.Sprintf("--skip=%d", skip), "-1", "--format=%cI")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log --skip=%d: %v", skip, err)
+	}
+	raw := strings.TrimSpace(string(out))
+	d, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("commit date %q is not RFC3339: %v", raw, err)
+	}
+	return d
 }
 
 func writeFile(path, content string) error {
@@ -164,15 +194,29 @@ func TestSCHEDGAP029_GitCommitCount_RealRepo(t *testing.T) {
 	}
 	dir := makeTempGitRepo(t)
 
-	// Commit 3 files, sleeping briefly between to ensure distinct timestamps.
-	gitCommitAt(t, dir, "a.txt", "alpha")
-	time.Sleep(1100 * time.Millisecond)
-	startWindow := time.Now()
-	gitCommitAt(t, dir, "b.txt", "beta")
-	time.Sleep(1100 * time.Millisecond)
-	gitCommitAt(t, dir, "c.txt", "gamma")
-	time.Sleep(200 * time.Millisecond)
-	endWindow := time.Now().Add(1 * time.Second)
+	// Three commits at PINNED instants — no sleep anywhere. a/b/c are one
+	// second apart so each window boundary below can be placed strictly
+	// between two of them, which is exactly the discrimination the old
+	// "commit, sleep 1.1s, commit" choreography was approximating.
+	base := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	gitCommitAt(t, dir, "a.txt", "alpha", base)
+	gitCommitAt(t, dir, "b.txt", "beta", base.Add(1*time.Second))
+	gitCommitAt(t, dir, "c.txt", "gamma", base.Add(2*time.Second))
+
+	// Premise, read back from git itself: the ordinals are the ones the test
+	// asked for. Without this a silent date-pin failure would turn the
+	// window assertions below into a tautology.
+	gotA, gotB, gotC := gitCommitDate(t, dir, 2), gitCommitDate(t, dir, 1), gitCommitDate(t, dir, 0)
+	if !gotA.Equal(base) || !gotB.Equal(base.Add(time.Second)) || !gotC.Equal(base.Add(2*time.Second)) {
+		t.Fatalf("premise: pinned commit dates = (%s, %s, %s), want (%s, %s, %s) — git ignored the date pin",
+			gotA, gotB, gotC, base, base.Add(time.Second), base.Add(2*time.Second))
+	}
+
+	// The window opens STRICTLY after a.txt (base+1s, where b.txt sits — git's
+	// --since is inclusive, so the boundary itself is in-window) and closes at
+	// c.txt inclusive. a.txt is therefore excluded and b.txt + c.txt counted.
+	startWindow := base.Add(1 * time.Second)
+	endWindow := base.Add(2 * time.Second)
 
 	commits, files := countGitChanges(dir, startWindow, endWindow)
 	if commits != 2 {
@@ -180,6 +224,13 @@ func TestSCHEDGAP029_GitCommitCount_RealRepo(t *testing.T) {
 	}
 	if files != 2 {
 		t.Errorf("files in window = %d, want 2 (b.txt + c.txt)", files)
+	}
+	// The other side of the boundary: opening one second later must drop b.txt
+	// too. This is what makes the count above a measurement rather than an
+	// accident of git's inclusivity.
+	commitsLater, _ := countGitChanges(dir, base.Add(2*time.Second), base.Add(2*time.Second))
+	if commitsLater != 1 {
+		t.Errorf("commits in the c.txt-only window = %d, want 1 — the window boundary must exclude a.txt AND b.txt", commitsLater)
 	}
 }
 
@@ -189,12 +240,16 @@ func TestSCHEDGAP029_GitCommitCount_ZeroCommitsOutsideWindow(t *testing.T) {
 	}
 	dir := makeTempGitRepo(t)
 
-	gitCommitAt(t, dir, "a.txt", "alpha")
-	time.Sleep(200 * time.Millisecond)
+	base := time.Date(2026, 9, 20, 12, 30, 0, 0, time.UTC)
+	gitCommitAt(t, dir, "a.txt", "alpha", base)
 
-	// Window AFTER all commits.
-	start := time.Now().Add(1 * time.Second)
+	// Window strictly AFTER the commit — the pinned date removes the sleep the
+	// pre-seam test used to push the real clock past the commit.
+	start := base.Add(time.Second)
 	end := start.Add(10 * time.Second)
+	if got := gitCommitDate(t, dir, 0); !got.Before(start) {
+		t.Fatalf("premise: commit date %s is not before the window start %s — the window would have something to exclude", got, start)
+	}
 
 	commits, files := countGitChanges(dir, start, end)
 	if commits != 0 {
@@ -231,17 +286,24 @@ func TestSCHEDGAP029_FullFlow_PersistsMetrics(t *testing.T) {
 	hasGit := false
 	if _, err := exec.LookPath("git"); err == nil {
 		gdir := makeTempGitRepo(t)
-		gitCommitAt(t, gdir, "real.go", "package main")
-		time.Sleep(200 * time.Millisecond)
-		startWin := time.Now()
-		gitCommitAt(t, gdir, "feature.go", "package feature")
-		time.Sleep(200 * time.Millisecond)
-		endWin := time.Now().Add(1 * time.Second)
+		// real.go and feature.go at PINNED instants (was: two 200ms sleeps
+		// around a wall-clock window). The window opens strictly after
+		// real.go and includes feature.go.
+		gbase := time.Date(2026, 9, 20, 13, 0, 0, 0, time.UTC)
+		gitCommitAt(t, gdir, "real.go", "package main", gbase)
+		startWin := gbase.Add(time.Second)
+		gitCommitAt(t, gdir, "feature.go", "package feature", startWin)
+		endWin := startWin.Add(time.Second)
 
-		// Verify the repo itself counts correctly.
+		// Verify the repo itself counts correctly. This test's own fixture is
+		// asserted to hold ONE commit in the window; the earlier shape logged
+		// the pre-check and carried on, so a fixture that landed zero commits
+		// would still hand hasGit=true and 1/1 below to the persistence
+		// assertions — a green test measuring nothing.
 		c, f := countGitChanges(gdir, startWin, endWin)
 		if c != 1 || f != 1 {
-			t.Logf("pre-check: commits=%d files=%d (repo created at %s)", c, f, gdir)
+			t.Fatalf("fixture premise: commits=%d files=%d in the window, want 1/1 (window %s..%s)",
+				c, f, startWin.Format(time.RFC3339), endWin.Format(time.RFC3339))
 		}
 		hasGit = true
 	}
