@@ -3350,3 +3350,31 @@ tasks:
   status: complete
   created_at: '2026-09-20T02:59:28.533655+00:00'
   completed_at: '2026-09-20T03:17:20.359332+00:00'
+- id: SCHED-GAP-180
+  title: Pause/restore cascade to satellite lanes
+  criteria:
+  - '1. SCHED-GAP-180 fix landed: pauseProject + resumeProject (internal/api/server_projects.go:311-353)
+    cascade to the project''s satellite lanes (-qa / -pm / -sync / -dogfood) and stamp
+    a new "paused_by_target" provenance value on the disabled_* columns; the resume
+    path re-enables only the lanes it parked.
+
+    2. New regression test in internal/api/schedgap180_cascade_test.go (or similar):
+    creates a primary + 4 satellites, pauses the primary, asserts all 4 satellites
+    are enabled=0 with disabled_by including "paused_by_target" naming the primary;
+    then resumes and asserts exactly the 4 re-enabled. Test must pass on -count=5.
+
+    3. Satellite detection uses the name-suffix rule (-qa/-pm/-sync/-dogfood); do
+    NOT introduce workdir/symlink walks in this row (the ownership/board-resolution
+    logic is a separate concern tracked by SCHED-GAP-141). One detection method, one
+    cascade, one test.
+
+    4. Acceptance: a paused primary (e.g. heading) would now automatically disable
+    heading-qa/-pm/-sync/-dogfood. The invariant check #X in ops/check-fleet-invariants.py
+    that already catches this case must now pass on a paused target.
+
+    5. gitreins tier-1 PASS (secrets/go_build/go_lint/go_tests), red-mutation proof
+    in commit body (1 flip of cascade-out, restored, all 4 satellite assertions fail
+    pre-fix), gofmt empty, go test -short -p 1 ./... green.'
+  status: complete
+  created_at: '2026-09-20T03:33:33.870857+00:00'
+  completed_at: '2026-09-20T04:05:51.273940+00:00'
