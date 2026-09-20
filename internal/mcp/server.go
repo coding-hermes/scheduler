@@ -28,6 +28,11 @@ type Server struct {
 	// via SetBlocksStore; when nil the blocks tools answer a clear
 	// configuration error instead of panicking.
 	blocksStore *blocks.Store
+	// started is when this server was built. It is the origin for the
+	// metrics_get uptime_s field (the daemon constructs the MCP server at
+	// boot, so this is daemon uptime). Seeded in NewServer from the same
+	// clock the rest of the server reads time through.
+	started time.Time
 }
 
 // NewServer creates an MCP server.
@@ -36,6 +41,7 @@ func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
 	if loop != nil {
 		s.SetClock(loop.Clock())
 	}
+	s.started = s.clock().Now()
 	return s
 }
 
@@ -381,6 +387,183 @@ var tools = []ToolDefinition{
 			},
 		},
 	},
+	// ── CTL-003: parity with the remaining /api/v1 control + read routes ──
+	// One tool per uncovered openapi operation (namespaces CRUD/projects/move,
+	// project delete/spawn/bump/unbump, tick detail, config, queue, metrics).
+	// The parity guard (mcp_api_parity_test.go) fails the build if a route
+	// ships without a tool here.
+	{
+		Name:        "namespaces_list",
+		Description: "List all namespaces (enabled and disabled) — the allocation pools projects are assigned to",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "namespaces_get",
+		Description: "Get one namespace by id (weight, caps, admission_mode, load_gate, wave config)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Namespace id"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "namespaces_create",
+		Description: "Create a namespace. Field names match the REST body; id and a positive weight are required.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":             map[string]interface{}{"type": "string", "description": "Namespace id (unique slug, e.g. \"coding-hermes\")"},
+				"weight":         map[string]interface{}{"type": "integer", "description": "Relative weight for proportional allocation (1..100, required)"},
+				"reserved":       map[string]interface{}{"type": "integer", "description": "Guaranteed floor budget units (>= 0)"},
+				"hard_cap":       map[string]interface{}{"type": "integer", "description": "Maximum budget; 0 = no cap"},
+				"max_concurrent": map[string]interface{}{"type": "integer", "description": "Max ticks running at once in this namespace; 0 = unlimited (global cap still applies)"},
+				"enabled":        map[string]interface{}{"type": "boolean", "description": "Disabled namespaces get zero allocation"},
+				"description":    map[string]interface{}{"type": "string", "description": "Human-readable label"},
+				"default_prompt": map[string]interface{}{"type": "string", "description": "Foreman prompt default for this namespace's projects"},
+				"model_chain":    map[string]interface{}{"type": "string", "description": "Ordered model@provider hops (JSON array string)"},
+				"wave_enabled":   map[string]interface{}{"type": "boolean", "description": "Allow concurrent wave scheduling in this namespace"},
+				"admission_mode": map[string]interface{}{"type": "string", "description": "\"cooldown\" (default) or \"tasks\""},
+				"load_gate":      map[string]interface{}{"type": "string", "description": "\"off\" opts this namespace out of the load gate; empty = gate applies"},
+			},
+			"required": []string{"id", "weight"},
+		},
+	},
+	{
+		Name:        "namespaces_update",
+		Description: "Partially update a namespace (only the fields you pass are written). Patch fields are top-level (same shape as the REST PUT body) or nested under \"patch\".",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":             map[string]interface{}{"type": "string", "description": "Namespace id"},
+				"weight":         map[string]interface{}{"type": "integer", "description": "New weight"},
+				"reserved":       map[string]interface{}{"type": "integer", "description": "New reserved floor"},
+				"hard_cap":       map[string]interface{}{"type": "integer", "description": "New hard cap (0 = no cap)"},
+				"max_concurrent": map[string]interface{}{"type": "integer", "description": "New max concurrent ticks (0 = unlimited)"},
+				"enabled":        map[string]interface{}{"type": "boolean", "description": "Enable/disable the namespace"},
+				"description":    map[string]interface{}{"type": "string", "description": "New description"},
+				"default_prompt": map[string]interface{}{"type": "string", "description": "New namespace foreman prompt default"},
+				"model_chain":    map[string]interface{}{"type": "string", "description": "New model chain (JSON array string)"},
+				"wave_enabled":   map[string]interface{}{"type": "boolean", "description": "Wave switch"},
+				"admission_mode": map[string]interface{}{"type": "string", "description": "\"cooldown\" or \"tasks\""},
+				"load_gate":      map[string]interface{}{"type": "string", "description": "\"off\" or \"\""},
+				"patch":          map[string]interface{}{"type": "object", "description": "Optional nested patch object carrying the same fields"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "namespaces_delete",
+		Description: "Delete a namespace. confirm=true soft-deletes it (enabled=false, members unassigned, row retained); confirm=true&purge=true hard-deletes the row. Refused while the namespace still has ENABLED member projects.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":      map[string]interface{}{"type": "string", "description": "Namespace id"},
+				"confirm": map[string]interface{}{"type": "boolean", "description": "Required: acknowledges the soft delete"},
+				"purge":   map[string]interface{}{"type": "boolean", "description": "Also hard-delete the row permanently (requires confirm=true)"},
+			},
+			"required": []string{"id", "confirm"},
+		},
+	},
+	{
+		Name:        "namespaces_projects",
+		Description: "List the projects assigned to a namespace (enabled and disabled alike)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Namespace id"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "namespaces_move",
+		Description: "Assign a project to a namespace (sets the project's namespace_id). Returns the updated project.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":      map[string]interface{}{"type": "string", "description": "Target namespace id"},
+				"project": map[string]interface{}{"type": "string", "description": "Project name to move"},
+			},
+			"required": []string{"id", "project"},
+		},
+	},
+	{
+		Name:        "project_delete",
+		Description: "Delete a project. confirm=true soft-deletes it (enabled=false, row retained, disable provenance + event logged); confirm=true&purge=true hard-deletes the row. Refused while the project is ENABLED — pause it first.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":    map[string]interface{}{"type": "string", "description": "Project name"},
+				"confirm": map[string]interface{}{"type": "boolean", "description": "Required: acknowledges the soft delete"},
+				"purge":   map[string]interface{}{"type": "boolean", "description": "Also hard-delete the row permanently (requires confirm=true)"},
+			},
+			"required": []string{"name", "confirm"},
+		},
+	},
+	{
+		Name:        "project_spawn",
+		Description: "Spawn a tick for a project immediately (bypasses cooldown). Returns the real stored tick_id, resolvable via tick_get. Refused with the scheduler's error when the project already has a tick in flight.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Project name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "project_bump",
+		Description: "Temporarily accelerate a project (bump): run at a small cooldown for up to 8 ticks, then auto-revert. reason is REQUIRED; ticks default 5 (1..8); cooldown defaults 7200s and must be >= 7200s. Refused while the project is disabled or already bumped.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":     map[string]interface{}{"type": "string", "description": "Project name"},
+				"ticks":    map[string]interface{}{"type": "integer", "description": "Ticks to run at the bump cooldown, 1..8 (default 5)"},
+				"cooldown": map[string]interface{}{"type": "integer", "description": "Bump cooldown seconds, >= 7200 (default 7200)"},
+				"reason":   map[string]interface{}{"type": "string", "description": "Why the speed-up is needed (required — bumps are auditable)"},
+			},
+			"required": []string{"name", "reason"},
+		},
+	},
+	{
+		Name:        "project_unbump",
+		Description: "Manually abort an active bump, restoring the exact pre-bump cooldown state (Phase A only). Errors when the project does not exist or has no active bump.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Project name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "tick_get",
+		Description: "Get one tick by id, including tick_workers when the tick dispatched a worker wave (serial ticks return the tick alone)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Tick id (as returned by fleet_ticks or project_spawn)"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "config_get",
+		Description: "Resolved runtime config, HONEST SUBSET of GET /api/v1/config: db_path, weight_budget, paused, gateway_response_timeout, version. The main.go-resolved snapshot fields (listen, min_interval, max_interval, num_levels, max_concurrent, tick_timeout, auto_disable_*, gateway.*, duckbrain) are NOT reachable from MCP and are listed in \"omitted\" — read them from the REST endpoint.",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "queue_get",
+		Description: "The scheduling queue: enabled projects ordered by urgency, descending (same query as GET /api/v1/queue). urgency is the api handler's priority-only fallback — the MCP server holds no resolved-config interval range, so the payload states that in urgency_source.",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "metrics_get",
+		Description: "Fleet metrics in one read-only call (mirror of GET /api/v1/metrics): spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks by namespace, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s, zero-output committed ticks. Every block carries available=true|false — an absent source reports available=false with a reason instead of a zero. ticks.global_cap is not derivable over MCP and is listed in \"unavailable\".",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
 }
 
 // handleMCP routes MCP protocol requests.
@@ -508,6 +691,36 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolGroupsDeploy(ctx, args)
 	case "events_list":
 		return s.toolEventsList(ctx, args)
+	case "namespaces_list":
+		return s.toolNamespacesList(ctx)
+	case "namespaces_get":
+		return s.toolNamespacesGet(ctx, args)
+	case "namespaces_create":
+		return s.toolNamespacesCreate(ctx, args)
+	case "namespaces_update":
+		return s.toolNamespacesUpdate(ctx, args)
+	case "namespaces_delete":
+		return s.toolNamespacesDelete(ctx, args)
+	case "namespaces_projects":
+		return s.toolNamespacesProjects(ctx, args)
+	case "namespaces_move":
+		return s.toolNamespacesMove(ctx, args)
+	case "project_delete":
+		return s.toolProjectDelete(ctx, args)
+	case "project_spawn":
+		return s.toolProjectSpawn(ctx, args)
+	case "project_bump":
+		return s.toolProjectBump(ctx, args)
+	case "project_unbump":
+		return s.toolProjectUnbump(ctx, args)
+	case "tick_get":
+		return s.toolTickGet(ctx, args)
+	case "config_get":
+		return s.toolConfigGet(ctx)
+	case "queue_get":
+		return s.toolQueueGet(ctx)
+	case "metrics_get":
+		return s.toolMetricsGet(ctx)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

@@ -76,6 +76,24 @@ var apiToolCoverage = map[string][]string{
 	"GET /api/v1/templates/{name}":        {"templates_get"},
 	"PUT /api/v1/templates/{name}":        {"templates_update"},
 	"DELETE /api/v1/templates/{name}":     {"templates_delete"},
+	// CTL-003: the namespace/pool control surface, project lifecycle
+	// (delete/spawn/bump/unbump), tick detail, and the read-only
+	// config/queue/metrics introspection routes.
+	"GET /api/v1/namespaces":               {"namespaces_list"},
+	"POST /api/v1/namespaces":              {"namespaces_create"},
+	"GET /api/v1/namespaces/{id}":          {"namespaces_get"},
+	"PUT /api/v1/namespaces/{id}":          {"namespaces_update"},
+	"DELETE /api/v1/namespaces/{id}":       {"namespaces_delete"},
+	"GET /api/v1/namespaces/{id}/projects": {"namespaces_projects"},
+	"POST /api/v1/namespaces/{id}/move":    {"namespaces_move"},
+	"DELETE /api/v1/projects/{name}":       {"project_delete"},
+	"POST /api/v1/projects/{name}/spawn":   {"project_spawn"},
+	"POST /api/v1/projects/{name}/bump":    {"project_bump"},
+	"POST /api/v1/projects/{name}/unbump":  {"project_unbump"},
+	"GET /api/v1/ticks/{id}":               {"tick_get"},
+	"GET /api/v1/config":                   {"config_get"},
+	"GET /api/v1/queue":                    {"queue_get"},
+	"GET /api/v1/metrics":                  {"metrics_get"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.
@@ -89,6 +107,8 @@ var paritySkipList = map[string]string{
 	"/api/v1/health":       "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
 	"/api/v1/openapi.json": "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
 	"/mcp":                 "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
+	"/api/v1/events/stream": "SSE push stream (CTL-002) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
+		"events_list already covers the same data with the incremental since-cursor for polling clients",
 }
 
 // allowedSkipKey reports whether a skip-list key is a dashboard/human/infra
@@ -97,7 +117,12 @@ var paritySkipList = map[string]string{
 func allowedSkipKey(key string) bool {
 	switch key {
 	case "/", "/health", "/queue", "/ticks", "/mcp",
-		"/api/v1/health", "/api/v1/openapi.json":
+		"/api/v1/health", "/api/v1/openapi.json",
+		// CTL-003: the ONE /api/v1 route exempted by the brief — an SSE
+		// push stream, which is a transport shape MCP (request/response
+		// tools) cannot express. Listed explicitly rather than by prefix so
+		// this exemption can never widen to sibling routes.
+		"/api/v1/events/stream":
 		return true
 	}
 	for _, prefix := range []string{"/projects/", "/namespaces/", "/dashboard/"} {

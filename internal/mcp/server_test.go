@@ -1339,14 +1339,20 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		"groups_list", "groups_get", "groups_create", "groups_update", "groups_delete",
 		"templates_list", "templates_get", "templates_create", "templates_update", "templates_delete",
 		"groups_deploy", "events_list",
+		// CTL-003: the parity tools for the remaining /api/v1 routes.
+		"namespaces_list", "namespaces_get", "namespaces_create", "namespaces_update",
+		"namespaces_delete", "namespaces_projects", "namespaces_move",
+		"project_delete", "project_spawn", "project_bump", "project_unbump",
+		"tick_get", "config_get", "queue_get", "metrics_get",
 	}
 	for _, w := range want {
 		if !names[w] {
 			t.Errorf("expected tool %q in registry, missing", w)
 		}
 	}
-	if len(toolsList) != 26 {
-		t.Errorf("tool count = %d, want 26 (14 fleet_* + 12 blocks/events)", len(toolsList))
+	// 14 fleet_* + 12 blocks/events + 15 CTL-003 parity tools.
+	if len(toolsList) != 41 {
+		t.Errorf("tool count = %d, want 41 (14 fleet_* + 12 blocks/events + 15 CTL-003)", len(toolsList))
 	}
 }
 
