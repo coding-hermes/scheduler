@@ -168,6 +168,58 @@ var tools = []ToolDefinition{
 		},
 	},
 	{
+		Name:        "fleet_set_model",
+		Description: "Set a project's model/provider pair as ONE coherent unit — a model without its provider is a misroute, so both are required together.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":     map[string]interface{}{"type": "string", "description": "Project name"},
+				"model":    map[string]interface{}{"type": "string", "description": "Model id (e.g. glm-5.3-flash)"},
+				"provider": map[string]interface{}{"type": "string", "description": "Provider serving the model (e.g. zai-glm-default)"},
+			},
+			"required": []string{"name", "model", "provider"},
+		},
+	},
+	{
+		Name:        "fleet_set_budget",
+		Description: "Set a project's USD spend caps. Only the fields you pass are written (the others stay unchanged); <= 0 means unlimited for that window.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":   map[string]interface{}{"type": "string", "description": "Project name"},
+				"daily":  map[string]interface{}{"type": "number", "description": "Per-UTC-day spend cap (USD); <= 0 = unlimited"},
+				"weekly": map[string]interface{}{"type": "number", "description": "Per-UTC-week spend cap (USD, Monday 00:00 UTC reset); <= 0 = unlimited"},
+				"final":  map[string]interface{}{"type": "number", "description": "One-time lifetime spend cap (USD); <= 0 = unlimited"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "fleet_set_prompt",
+		Description: "Set the project's extra foreman prompt. An empty prompt clears back to the namespace default; prompt_mode is \"append\" (default) or \"replace\".",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":        map[string]interface{}{"type": "string", "description": "Project name"},
+				"prompt":      map[string]interface{}{"type": "string", "description": "Extra foreman prompt text (empty clears back to the namespace default)"},
+				"prompt_mode": map[string]interface{}{"type": "string", "description": "\"append\" (default) appends to the namespace default_prompt; \"replace\" replaces it entirely"},
+			},
+			"required": []string{"name", "prompt"},
+		},
+	},
+	{
+		Name:        "fleet_set_enabled",
+		Description: "Enable or disable (pause) a project. Disabling stamps disabled_at/by/reason provenance; re-enabling clears it (same GAP-044 semantics as the REST PUT).",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":    map[string]interface{}{"type": "string", "description": "Project name"},
+				"enabled": map[string]interface{}{"type": "boolean", "description": "true = schedule the project, false = pause it"},
+			},
+			"required": []string{"name", "enabled"},
+		},
+	},
+	{
 		Name:        "fleet_pause",
 		Description: "Pause a project (disable scheduling).",
 		InputSchema: map[string]interface{}{
@@ -191,15 +243,26 @@ var tools = []ToolDefinition{
 	},
 	{
 		Name:        "fleet_add",
-		Description: "Add a new project to the fleet. Accepts repo or repo_url (alias) for the git URL.",
+		Description: "Add a new project to the fleet. Accepts repo or repo_url (alias) for the git URL. The optional routing/config fields mirror POST /api/v1/projects; unset fields take the REST create defaults.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":     map[string]interface{}{"type": "string", "description": "Project name"},
-				"repo":     map[string]interface{}{"type": "string", "description": "Git repo URL"},
-				"repo_url": map[string]interface{}{"type": "string", "description": "Alias for repo (REST-style name)"},
-				"workdir":  map[string]interface{}{"type": "string", "description": "Local working directory"},
-				"weight":   map[string]interface{}{"type": "integer", "description": "Initial weight (default 10)"},
+				"name":              map[string]interface{}{"type": "string", "description": "Project name"},
+				"repo":              map[string]interface{}{"type": "string", "description": "Git repo URL"},
+				"repo_url":          map[string]interface{}{"type": "string", "description": "Alias for repo (REST-style name)"},
+				"workdir":           map[string]interface{}{"type": "string", "description": "Local working directory"},
+				"weight":            map[string]interface{}{"type": "integer", "description": "Initial weight (default 10)"},
+				"priority":          map[string]interface{}{"type": "integer", "description": "Initial priority 1-10 (default 5)"},
+				"cooldown_s":        map[string]interface{}{"type": "integer", "description": "Initial cooldown seconds (default 900)"},
+				"model":             map[string]interface{}{"type": "string", "description": "Model id for the spawn chain"},
+				"provider":          map[string]interface{}{"type": "string", "description": "Provider serving the model"},
+				"namespace_id":      map[string]interface{}{"type": "string", "description": "Namespace to assign the project to (FK; must exist)"},
+				"deliver":           map[string]interface{}{"type": "string", "description": "Delivery target platform:chat_id:thread_id (e.g. telegram:-100...:12)"},
+				"daily_budget_usd":  map[string]interface{}{"type": "number", "description": "Per-UTC-day spend cap (USD); <= 0 = unlimited"},
+				"weekly_budget_usd": map[string]interface{}{"type": "number", "description": "Per-UTC-week spend cap (USD); <= 0 = unlimited"},
+				"final_budget_usd":  map[string]interface{}{"type": "number", "description": "One-time lifetime spend cap (USD); <= 0 = unlimited"},
+				"prompt":            map[string]interface{}{"type": "string", "description": "Extra foreman prompt text"},
+				"prompt_mode":       map[string]interface{}{"type": "string", "description": "\"append\" (default) or \"replace\""},
 			},
 			"required": []string{"name", "repo", "workdir"},
 		},
@@ -653,6 +716,14 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFleetSetCooldown(ctx, args)
 	case "fleet_set_decay":
 		return s.toolFleetSetDecay(ctx, args)
+	case "fleet_set_model":
+		return s.toolFleetSetModel(ctx, args)
+	case "fleet_set_budget":
+		return s.toolFleetSetBudget(ctx, args)
+	case "fleet_set_prompt":
+		return s.toolFleetSetPrompt(ctx, args)
+	case "fleet_set_enabled":
+		return s.toolFleetSetEnabled(ctx, args)
 	case "fleet_pause":
 		return s.toolFleetPause(ctx, args)
 	case "fleet_resume":
