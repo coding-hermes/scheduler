@@ -178,6 +178,33 @@ func gap143Cooldown(t *testing.T, db *sql.DB, name string) (cooldownS, streak in
 	return cooldownS, streak
 }
 
+// gap143PollCooldown re-reads the adaptive-cooldown row every 20ms until it
+// matches (wantCooldownS, wantStreak) or the 2s deadline expires, returning
+// the LAST OBSERVED values either way.
+//
+// The adaptive-cooldown persist lands AFTER the ticks row reaches its
+// terminal state (the same completion path writes both), so a synchronous
+// read races the persist and can observe the pre-recovery value on a loaded
+// host — FND-002 (load-only flake surface; 15eec5c CI-004 race-detector
+// run), the same class as FND-001's async slot release. Bounded: a real
+// regression never passes — the caller still fails, naming the last-observed
+// numbers instead of "timeout".
+func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wantStreak int) (lastCooldownS, lastStreak int) {
+	t.Helper()
+	const wait = 2 * time.Second
+	deadline := time.Now().Add(wait)
+	for {
+		lastCooldownS, lastStreak = gap143Cooldown(t, db, name)
+		if lastCooldownS == wantCooldownS && lastStreak == wantStreak {
+			return lastCooldownS, lastStreak
+		}
+		if time.Now().After(deadline) {
+			return lastCooldownS, lastStreak
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // gap143InsertFailedTick records a terminal failed tick row directly. Used to
 // fill an auto-disable window without paying the gateway retry backoff
 // (1 + gatewayRetryMaxAttempts POSTs, ≈3.5s) per row.
@@ -451,11 +478,71 @@ func TestSCHEDGAP143_DrainWindowDoesNotParkEscalatedCooldown(t *testing.T) {
 	if _, _, reason := gap143TickRow(t, db, okTick); reason != "" {
 		t.Errorf("recovery tick %s failure_reason = %q, want empty (a successful tick is not transport-class)", okTick, reason)
 	}
-	cd, streak := gap143Cooldown(t, db, project)
+	// The adaptive-cooldown persist is async relative to the ticks row's
+	// terminal state — poll until it lands instead of racing it (FND-002,
+	// load-only flake). Bounded: on deadline expiry the LAST observed values
+	// are asserted, so a real regression still names the bad number.
+	cd, streak := gap143PollCooldown(t, db, project, 900, 0)
 	if cd != 900 {
-		t.Errorf("cooldown_s = %d after the recovery tick, want 900 (floor) — the drain window must not park the lane at the ceiling %d", cd, 7200)
+		t.Errorf("cooldown_s = %d after the recovery tick (last observed), want 900 (floor) — the drain window must not park the lane at the ceiling %d", cd, 7200)
 	}
 	if streak != 0 {
-		t.Errorf("no_progress_ticks = %d after the recovery tick, want 0 (streak reset)", streak)
+		t.Errorf("no_progress_ticks = %d after the recovery tick (last observed), want 0 (streak reset)", streak)
+	}
+}
+
+// TestFND002_DrainCooldownReadIsBounded pins the load-bearing property of the
+// FND-002 conversion directly: after a drain-then-recover sequence, the
+// bounded poll observes the adaptive cooldown restored to the floor (900) and
+// the no-progress streak reset (0). Same fixture shape as the acceptance test
+// above (parked lane at ceiling 7200 / streak 10, drain refusal, recovery
+// tick), but asserts ONLY on the poll outcome.
+func TestFND002_DrainCooldownReadIsBounded(t *testing.T) {
+	db := newTestDB(t)
+	const project = "gap143-fnd002-bounded"
+
+	wd := t.TempDir()
+	boardDir := filepath.Join(wd, ".coding-hermes", "board")
+	if err := os.MkdirAll(boardDir, 0o755); err != nil {
+		t.Fatalf("mkdir board dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(boardDir, "tasks.jsonl"),
+		[]byte("{\"id\":\"GAP143-ROW-1\",\"status\":\"pending\",\"title\":\"open work\"}\n"), 0o644); err != nil {
+		t.Fatalf("write board: %v", err)
+	}
+
+	mustCreateProjectINFRA012(t, db, project)
+	if _, err := db.Exec(
+		`UPDATE projects SET workdir = ?, adaptive_cooldown = 1, cooldown_floor_s = 900,
+		     cooldown_ceiling_s = 7200, no_progress_threshold = 10, no_progress_ticks = 10,
+		     cooldown_s = 7200, board_open_seen = 2, board_rows_seen = 2, admission_mode = 'cooldown'
+		 WHERE name = ?`, wd, project); err != nil {
+		t.Fatalf("arm adaptive cooldown for %s: %v", project, err)
+	}
+	gap143SetLastCompleted(t, db, project, 3*time.Hour)
+
+	gw := newResumeGateway(t)
+	l := gap143DrainLoop(t, db, gw)
+
+	// Drain window refusal (synchronous, must not move the parked values)…
+	gw.setGatewayDraining(true)
+	drainTick := gap143RunEvalTick(t, l, db, project, 1)
+	if status, _, reason := gap143TickRow(t, db, drainTick); status != string(TickFailed) || reason != FailureReasonGatewayDrain {
+		t.Fatalf("drain tick %s = (%s, %s), want (failed, %s)", drainTick, status, reason, FailureReasonGatewayDrain)
+	}
+	if cd, streak := gap143Cooldown(t, db, project); cd != 7200 || streak != 10 {
+		t.Fatalf("after the drain tick cooldown_s = %d / streak = %d, want 7200 / 10", cd, streak)
+	}
+
+	// …then recovery: the bounded poll must observe floor 900 / streak 0.
+	gw.setGatewayDraining(false)
+	gap143SetLastCompleted(t, db, project, 3*time.Hour)
+	okTick := gap143RunEvalTick(t, l, db, project, 2)
+	if status, _, _ := gap143TickRow(t, db, okTick); status != string(TickCompleted) {
+		t.Fatalf("recovery tick %s status = %s, want completed", okTick, status)
+	}
+	cd, streak := gap143PollCooldown(t, db, project, 900, 0)
+	if cd != 900 || streak != 0 {
+		t.Errorf("after the recovery tick the bounded poll observed cooldown_s = %d / no_progress_ticks = %d, want 900 / 0", cd, streak)
 	}
 }
