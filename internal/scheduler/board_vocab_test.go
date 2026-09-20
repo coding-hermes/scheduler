@@ -51,6 +51,26 @@ func TestBoardVocabValidator_FlagsOffVocabulary(t *testing.T) {
 	}
 }
 
+// TestBoardVocabValidator_InProgressIsAllowed is the positive pin for
+// RELEASE-007: "in_progress" is the live-lane claim the foreman wave writes at
+// dispatch, so a board of ONLY in_progress rows must produce NO finding. If
+// this fails, the wave's dispatch marker is being reported as a writer bug
+// again (the 2026-09-20 CI red on 9e5b712).
+func TestBoardVocabValidator_InProgressIsAllowed(t *testing.T) {
+	path := writeVocabBoard(t,
+		`{"id": "TRBL-026", "status": "in_progress", "title": "live lane holds this"}`,
+		`{"id": "RELEASE-007", "status": "in_progress"}`,
+	)
+
+	got, err := ValidateBoardVocab(path)
+	if err != nil {
+		t.Fatalf("ValidateBoardVocab: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("in_progress rows must not be flagged, got %d findings: %v", len(got), got)
+	}
+}
+
 // TestBoardVocabValidator_VocabularyCoverage pins the rest of the status matrix:
 // every allowed spelling passes, every other spelling is reported once, the
 // legacy closed spellings are reported with the same shape (the Python gate
@@ -62,10 +82,12 @@ func TestBoardVocabValidator_VocabularyCoverage(t *testing.T) {
 		`{"id": "OK-2", "status": "complete"}`,
 		`{"id": "OK-3", "status": "duplicate"}`,
 		`{"id": "OK-4", "status": "  PENDING "}`,
+		`{"id": "OK-5", "status": "in_progress"}`,
+		`{"id": "OK-6", "status": " IN_PROGRESS "}`,
 		`{"id": "LEG-1", "status": "done"}`,
 		`{"id": "LEG-2", "status": "completed"}`,
 		`{"id": "LEG-3", "status": "closed"}`,
-		`{"id": "OFF-1", "status": "in_progress"}`,
+		`{"id": "OFF-1", "status": "todo"}`,
 		`{"id": "OFF-2", "status": "rework"}`,
 		`{"id": "OFF-3", "status": "TODo"}`,
 		`{"id": "OFF-4"}`,
@@ -84,7 +106,7 @@ func TestBoardVocabValidator_VocabularyCoverage(t *testing.T) {
 		"LEG-1: status=done",
 		"LEG-2: status=completed",
 		"LEG-3: status=closed",
-		"OFF-1: status=in_progress",
+		"OFF-1: status=todo",
 		"OFF-2: status=rework",
 		"OFF-3: status=todo",
 		"OFF-4: status=",

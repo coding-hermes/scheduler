@@ -97,8 +97,12 @@ RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
 # BoardLegacyClosedStatuses) — pinned by
 # TestBoardVocabValidator_AllowedSetMatchesPythonGate. Only "pending" is
 # dispatchable by the foreman prompt; "complete"/"duplicate" are the terminal
-# states the PM cycle writes.
-BOARD_ALLOWED_STATUSES = ("pending", "complete", "duplicate")
+# states the PM cycle writes. "in_progress" is the live-lane claim the foreman
+# wave writes at dispatch (RELEASE-007) — a legitimate writer status, already
+# treated as open by the readers (board_freshness.go openStatuses,
+# adaptive_cooldown.go boardOpenRows). The gate's remaining purpose is to catch
+# PARKED spellings ("todo", "open", "rework", ...) and missing/empty statuses.
+BOARD_ALLOWED_STATUSES = ("pending", "in_progress", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
 
 # Board content duplicate detection (check 9, class "board-content-dup").
@@ -447,9 +451,11 @@ def main(argv: list[str] | None = None) -> int:
     # openStatuses), but only status=="pending" is dispatchable: the foreman
     # prompt picks pending rows and the pending-boost counter
     # (board_awareness.go) counts only those. So a row minted as "todo" /
-    # "open" / "in_progress" is visible work that no lane will ever pick up.
-    # Read-only — rows are never rewritten here. A missing board skips the check
-    # silently, so the script stays runnable in test rigs and old-style workdirs.
+    # "open" / "rework" is visible work that no lane will ever pick up.
+    # "in_progress" is different: it is the live-lane claim the foreman wave
+    # writes at dispatch (RELEASE-007), so it is allowed. Read-only — rows are
+    # never rewritten here. A missing board skips the check silently, so the
+    # script stays runnable in test rigs and old-style workdirs.
     # Same rule as Go's scheduler.ValidateBoardVocab (internal/scheduler/
     # board_vocab.go); the expected sets are pinned equal by
     # TestBoardVocabValidator_AllowedSetMatchesPythonGate.
