@@ -8,6 +8,8 @@
 <div class="card"><div class="label">Total Ticks</div><div class="value">{{.TotalTicks}}</div></div>
 <div class="card"><div class="label">Goroutines</div><div class="value">{{.Goroutines}}</div></div>
 <div class="card"><div class="label">Memory</div><div class="value" style="font-size:1.1rem">{{printf "%.1f" .MemoryMB}} MB</div></div>
+<div class="card"><div class="label">Host Load (1/5/15m)</div>{{if .HostSampleAvailable}}<div class="value" style="font-size:1.1rem">{{printf "%.2f" .HostLoad1}} / {{printf "%.2f" .HostLoad5}} / {{printf "%.2f" .HostLoad15}}</div><div class="sub">source={{.HostSampleSource}} · {{.HostSampleAt}}</div>{{else}}<div class="value status-warn" style="font-size:1.1rem">unavailable</div><div class="sub">no sample recorded yet</div>{{end}}</div>
+<div class="card"><div class="label">Host Memory Available</div>{{if .HostSampleAvailable}}<div class="value" style="font-size:1.1rem">{{printf "%.0f" .HostMemAvailMB}} / {{printf "%.0f" .HostMemTotalMB}} MB</div><div class="sub">latest persisted host sample</div>{{else}}<div class="value status-warn" style="font-size:1.1rem">unavailable</div><div class="sub">no sample recorded yet</div>{{end}}</div>
 </div>{{end}}
 {{define "health"}}{{template "head" .}}
 {{template "sidebar" "health"}}

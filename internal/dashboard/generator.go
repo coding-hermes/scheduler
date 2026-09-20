@@ -372,6 +372,22 @@ func (g *Generator) healthData() HealthData {
 	runtime.ReadMemStats(&memory)
 	data.MemoryMB = float64(memory.Alloc) / (1024 * 1024)
 
+	// ADV-R13: surface the latest PERSISTED host load/memory sample (the
+	// host_samples telemetry written by the scheduler's evaluation cycle) —
+	// distinct from MemoryMB above, which is this daemon process's own
+	// runtime.MemStats. sql.ErrNoRows is the normal fresh-database state:
+	// render it honestly as "unavailable", never as a 0.00 reading.
+	if sample, err := database.LatestHostSample(ctx, g.db); err == nil {
+		data.HostSampleAvailable = true
+		data.HostLoad1 = sample.Load1
+		data.HostLoad5 = sample.Load5
+		data.HostLoad15 = sample.Load15
+		data.HostMemTotalMB = float64(sample.MemTotalBytes) / (1024 * 1024)
+		data.HostMemAvailMB = float64(sample.MemAvailableBytes) / (1024 * 1024)
+		data.HostSampleAt = sample.SampledAt
+		data.HostSampleSource = sample.Source
+	}
+
 	if g.gatewayURL != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.gatewayURL+"/health", nil)
 		if err != nil {

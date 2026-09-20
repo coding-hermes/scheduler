@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 33
+const latestMigration = 34
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -437,6 +437,22 @@ ALTER TABLE projects ADD COLUMN board_ownership TEXT NOT NULL DEFAULT '' CHECK(b
 		desc:    "transport-class failure marker on ticks (SCHED-GAP-143): '' = not transport-class (project-side, and every legacy row) | gateway_drain | gateway_transport — a tick the harness refused (e.g. a 503 'Gateway is draining') never reached the project, so it must be classifiable in SQL instead of only by re-parsing ticks.error",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN failure_reason TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 34,
+		desc:    "host load/memory telemetry (ADV-R13): one host_samples row per evaluation cycle — load1/load5/load15 and MemTotal/MemAvailable in bytes, source 'proc' — MEASUREMENT ONLY: no admission-path consumer reads these rows, any future load threshold must be derived from this recorded history instead of fabricated on zero measurements",
+		stmt: `
+CREATE TABLE IF NOT EXISTS host_samples (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    sampled_at         TEXT NOT NULL,
+    load1              REAL NOT NULL,
+    load5              REAL NOT NULL,
+    load15             REAL NOT NULL,
+    mem_total_bytes    INTEGER NOT NULL,
+    mem_available_bytes INTEGER NOT NULL,
+    source             TEXT NOT NULL DEFAULT ''
+);
 `,
 	},
 }
