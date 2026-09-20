@@ -63,6 +63,7 @@ All flags (defaults match `cmd/schedulerd/main.go` — the canonical source):
 | `--gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
 | `--gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
 | `--no-exec-fallback` | `true` | Disable exec.Command fallback when gateway fails (default true for safety) |
+| `--version` | `false` | Print version/build info and exit; version resolves ldflags tag → vcs buildinfo (dev-<shorthash>) → dev; same identity serves /api/v1/health, openapi info.version, MCP serverInfo.version |
 | `--foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
 | `--sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
 | `--sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
