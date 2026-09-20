@@ -3285,3 +3285,34 @@ tasks:
   status: complete
   created_at: '2026-09-19T20:59:17.022470+00:00'
   completed_at: '2026-09-19T21:05:42.654454+00:00'
+- id: SCHED-GAP-186
+  title: "SlotPool wedge: timeout tick leaves project in RunningSet \u2014 DEDUP blocks\
+    \ re-admission until daemon restart"
+  criteria:
+  - '1. A unit test in internal/scheduler/ named schedgap186_* (TestXxx form, the
+    literal name sched-gap-186-prefixed or any reasonable name) demonstrates the wedge:
+    a real SlotPool.Spawn call leaves the project name in p.running; a zombie-reaper-equivalent
+    UPDATE that sets ticks.status=''timeout'' for that tick id does NOT call SlotPool.Release;
+    a subsequent evaluate-call''s DEDUP guard (RunningSet()[projectName]) still returns
+    true and refuses to spawn the project; after the fix, the same flow returns false
+    from RunningSet[] and the project is re-admissible. 2. The fix lands as: (a) every
+    code path that writes ticks.status=''timeout'' for a tick id calls SlotPool.Release(projectName)
+    on a best-effort basis (Release is a no-op when running[name]==0 so the call is
+    always safe), AND/OR (b) evaluate/ForceEvaluate reconciles the SlotPool against
+    ticks.status=''running'' rows (query: SELECT project_name FROM ticks WHERE status=''running''
+    AND spawned_at < now-threshold; for each, call SlotPool.Release(project_name)).
+    At least ONE of (a)/(b) is implemented; both is fine. 3. The test calls the real
+    reaper/reconcile code path and exercises both BEFORE-fix failure shape and AFTER-fix
+    success shape (a separate _RED_MUTATION-style subtest that mutates the fix out
+    and proves the test is load-bearing is ideal; gitreins tier-2 will demand this
+    proof). 4. gofmt -l . empty; go vet ./... 0 warnings; go build ./... exit 0; go
+    test -short -p 1 -count=1 ./internal/scheduler/ -run ''SCHED.?GAP.?186|SlotPool.*Wedge|TestReaper.*Release|RunningSet''
+    all PASS. 5. golangci-lint run 0 issues. 6. Full short suite (go test -short -p
+    1 -count=1 ./...) green; any pre-existing tracked flakies (TestMigrateV27_WaveColumnsAndTickWorkers
+    under load: INT-CI-013) are not regressions and may stay if the row''s files-to-modify
+    list did not include the failing test file. 7. The fix touches internal/scheduler/{tick_process.go,
+    slot_pool.go} (and optionally lifecycle.go) plus one new internal/scheduler/schedgap186_*test*.go.
+    No other files modified. NO push. NO gitreins task complete on the worker side.'
+  status: complete
+  created_at: '2026-09-19T23:48:43.618179+00:00'
+  completed_at: '2026-09-20T01:03:16.954342+00:00'
