@@ -521,6 +521,12 @@ See [docs/fleet.md](docs/fleet.md) for current fleet status — regenerated from
 
 Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the scheduler per-project.
 
+When the fleet behaves oddly — drain 503s counted as lane failures, nothing spawning under a
+healthy status, a stale `queued` row, a board that never drains, a restart that loaded an old
+binary — see [docs/troubleshooting-scheduling-errors.md](docs/troubleshooting-scheduling-errors.md):
+one entry per symptom, each with the exact command that confirms it and the real output it must
+produce. For the drain-restart procedure itself, see [docs/runbook-drain-restart.md](docs/runbook-drain-restart.md).
+
 ---
 
 ## REST API
