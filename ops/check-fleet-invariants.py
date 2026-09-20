@@ -11,7 +11,15 @@ drifts back. This is the regression gate for that class of change. Run it after
 every scheduler deploy and from the daily report.
 
 Checks
-  1. caps          — global --max-concurrent and per-namespace max_concurrent
+  1. caps          — per-namespace max_concurrent (foreman 8, satellites 1).
+                     The GLOBAL --max-concurrent has no DB column; it is
+                     parity-checked instead: pass the daemon's actual
+                     ``--global-cap N`` on a deploy and the checker fails when
+                     ``[scheduler] max_concurrent`` in fleet.toml pins a
+                     different value (loader.go feeds that key into the same
+                     config the flag overrides, so a stale pin is drift).
+                     Without ``--global-cap`` the comparison is skipped — the
+                     checker cannot see the daemon's argv.
   2. admission     — tasks ONLY where real work lives; satellites on timers
   3. cooldown law  — no enabled lane below the 6h floor without a documented tier
   4. executors     — no enabled lane driving a retired driver script (the 5
@@ -64,7 +72,11 @@ import sys
 DEFAULT_DB = os.path.expanduser("~/.hermes/coding-hermes/scheduler.db")
 DEFAULT_TOML = os.path.expanduser("~/.hermes/fleet.toml")
 
-GLOBAL_CAP_EXPECTED = 10          # daemon --max-concurrent (user unit)
+# The GLOBAL --max-concurrent lives in the daemon's argv (and optionally in
+# fleet.toml's [scheduler] max_concurrent, which loader.go folds into the same
+# resolved config the flag overrides). It has NO scheduler.db column, so there
+# is nothing in the DB to assert a constant against — it is checked as
+# flag↔TOML parity via the ``--global-cap`` argument instead (see check 7b).
 FOREMAN_NS = "coding-hermes"
 FOREMAN_CAP_EXPECTED = 8
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
@@ -197,6 +209,36 @@ def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
     return {k: "\n".join(v) for k, v in out.items()}
 
 
+def parse_toml_table(text: str, header: str) -> str:
+    """Extract the body of a single-bracket ``[header]`` table from flat TOML.
+
+    :func:`parse_toml_blocks` only matches ``[[header]]`` array-of-table
+    entries (the ``[[projects]]`` / ``[[namespaces]]`` shape); the root
+    ``[scheduler]`` table is a single-bracket table and is invisible to it.
+    Returns the table's lines joined by newlines, or ``""`` when absent.
+    A nested ``[header.sub]`` table does NOT terminate the scan (its lines
+    belong to the parent in TOML semantics) — only a new top-level ``[``
+    header does.
+    """
+    out: list[str] = []
+    in_table = False
+    for line in text.splitlines():
+        if line.startswith("["):
+            is_ours = line.strip() == f"[{header}]"
+            is_child = line.startswith(f"[{header}.")
+            if in_table and not is_child:
+                break  # a sibling top-level table ends the section
+            in_table = is_ours or in_table
+            if is_ours:
+                continue
+            if in_table:
+                out.append(line)  # a [header.sub] line stays in the body
+            continue
+        if in_table:
+            out.append(line)
+    return "\n".join(out)
+
+
 def toml_value(block: str, field: str) -> str | None:
     m = re.search(rf'^\s*{re.escape(field)}\s*=\s*"?([^"\n]+)"?', block, re.M)
     return m.group(1).strip() if m else None
@@ -219,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="JSONL board for check 8; default: walk up from this script "
                          "to .coding-hermes/board/tasks.jsonl (skipped when absent)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--global-cap", type=int, default=None,
+                    help="the daemon's actual global --max-concurrent value; "
+                         "parity-checked against fleet.toml [scheduler] "
+                         "max_concurrent (skipped when omitted — the checker "
+                         "cannot see the daemon's argv on its own)")
     ap.add_argument("--board-only", action="store_true",
                     help="run ONLY the environment-independent board checks (8/9); "
                          "skips the live-DB/TOML checks 1-7. This is the CI mode: "
@@ -440,10 +487,26 @@ def main(argv: list[str] | None = None) -> int:
             continue
         tv = toml_value(block, "admission_mode")
         if tv is not None and (row.get("admission_mode") or "") != tv:
-            bad("parity", ns, f"admission_mode: db={row.get('admission_mode')!r} toml={tv!r}")
+            bad("parity", ns, f"admission_mode: db={row.get('admission_mode')} toml={tv}")
         tv = toml_value(block, "max_concurrent")
         if tv is not None and int(tv) != int(row.get("max_concurrent") or 0):
             bad("parity", ns, f"max_concurrent: db={row.get('max_concurrent')} toml={tv}")
+
+    # 7b. global-cap parity -----------------------------------------------------
+    # The global --max-concurrent has no DB column, so unlike the per-store
+    # checks above this is ARGV↔TOML parity: the operator passes the daemon's
+    # actual flag value (--global-cap N) and the checker fails when fleet.toml
+    # [scheduler] max_concurrent pins a different number. That TOML key feeds
+    # the daemon's resolved config (internal/config/loader.go:176) and is
+    # overridden only when the flag is explicitly set, so a stale pin drifts
+    # into every restart that omits the flag. Without --global-cap this check
+    # is skipped — a checker cannot assert a value it cannot see.
+    if args.global_cap is not None:
+        tv = toml_value(parse_toml_table(toml, "scheduler"), "max_concurrent")
+        if tv is not None and int(tv) != int(args.global_cap):
+            bad("parity", "[scheduler]",
+                f"global max_concurrent: daemon={args.global_cap} toml={tv} — a stale "
+                f"[scheduler] max_concurrent pin overrides every restart that omits the flag")
 
     # 8. board vocabulary + 9. board content duplicates ------------------------
     # Writer-side gate (SCHED-GAP-164). The daemon's READERS accept a wide open

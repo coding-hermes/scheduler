@@ -19,14 +19,27 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Board vocabulary gate
-        # SCHED-GAP-164: every JSONL board row must carry a dispatchable status.
-        # Only status=="pending" rows are picked by the foreman, so a row minted
-        # as e.g. "todo" parks real work nobody dispatches. Read-only check;
-        # exits 1 on an off-vocabulary row. Skipped when the board is not in the
-        # checkout (e.g. a fork PR that omits .coding-hermes/).
-        if: hashFiles('.coding-hermes/board/tasks.jsonl') != ''
-        run: python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Invariant fixture battery (SCHED-GAP-147)
+        # The live-config invariant checker as a regression gate: the
+        # board-only check PLUS the full pytest fixture battery (one fixture
+        # per violation class, seeded-violation AND conforming arms).
+        # scripts/check-invariants.sh exits non-zero if any part fails.
+        # Environment-independent by construction — the battery seeds its own
+        # temp DBs/TOMLs/boards, because a GitHub runner has no
+        # ~/.hermes/coding-hermes/scheduler.db to check against. This step
+        # replaces the earlier board-only-only invocation: board vocabulary
+        # alone let the fleet SHAPE (caps, admission modes, cooldown law,
+        # retired drivers, store parity) drift back green.
+        # No hashFiles guard: unlike the board-only check, the battery is
+        # meaningful even when .coding-hermes/ is absent (fork PRs) — the
+        # board part passes vacuously and the fixtures still gate.
+        run: |
+          python3 -m pip install --quiet pytest
+          bash scripts/check-invariants.sh
 
       - name: Build binaries
         run: make build
