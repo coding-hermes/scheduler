@@ -95,6 +95,13 @@ type BoardWakeWatcher struct {
 	db        *sql.DB
 	events    *EventLogger
 	forceEval func()
+	// onWake (SCHED-GAP-157) is invoked once per FIRED wake, before
+	// forceEval: it stamps the board_wake nudge source on the owning loop
+	// so the ticks this wake's evaluation admits record how they came to
+	// exist. Wired from the package-level boardWakeNudgeSource hook (set by
+	// NewLoop) because the production wiring site for the watcher itself
+	// lives in cmd/schedulerd. Nil-safe (never set = nothing to stamp).
+	onWake func()
 
 	// Intervals — set before Start (the `go` statement publishes them;
 	// never mutated afterwards).
@@ -133,7 +140,22 @@ func NewBoardWakeWatcher(db *sql.DB, forceEvaluate func()) *BoardWakeWatcher {
 		pendingWake: make(map[string]time.Time),
 	}
 	w.listBoards = w.listBoardsFromDB
+	// SCHED-GAP-157: consume the package-level nudge-source hook installed
+	// by NewLoop — one fired wake stamps board_wake on the owning loop
+	// before its forced evaluation runs.
+	if fn, ok := boardWakeNudgeSource.Load().(func()); ok {
+		w.onWake = fn
+	}
 	return w
+}
+
+// SetWakeListener wires the SCHED-GAP-157 nudge-source stamp applied once per
+// FIRED wake. Production wiring comes from the package-level
+// boardWakeNudgeSource hook (installed by NewLoop, same process-wide pattern
+// as the gateway-health gate's client/events wiring); this setter remains for
+// tests that need to override it per-watcher. Must be set before Start.
+func (w *BoardWakeWatcher) SetWakeListener(onWake func()) {
+	w.onWake = onWake
 }
 
 // SetIntervals overrides the poll/debounce/heartbeat cadences. Must be
@@ -331,6 +353,11 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 		})
 	log.Printf("BOARD-WAKE: %s wake — forced re-evaluation (work_to_spawn=%t, rows=%d, can_verify=%t)",
 		t.project, rep.WorkToSpawn, rep.TotalRows, rep.CanVerify)
+	// SCHED-GAP-157: stamp the board_wake nudge source BEFORE forcing the
+	// evaluation, so every tick this wake's pass admits records board_wake.
+	if w.onWake != nil {
+		w.onWake()
+	}
 	if w.forceEval != nil {
 		w.forceEval()
 	}

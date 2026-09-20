@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 34
+const latestMigration = 35
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -453,6 +453,27 @@ CREATE TABLE IF NOT EXISTS host_samples (
     mem_available_bytes INTEGER NOT NULL,
     source             TEXT NOT NULL DEFAULT ''
 );
+`,
+	},
+	{
+		version: 35,
+		desc:    "tick lifecycle persistence (SCHED-GAP-157): slot_wait_ms + admit_reason + nudge_source on ticks, and a deferrals table recording WHY a candidate was passed over — the two acceptance questions (\"how long did this lane wait for a slot\" / \"why was it skipped\") become single SQL queries instead of log-line order across a rotated file",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN slot_wait_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN admit_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN nudge_source TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS deferrals (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    pass_id      INTEGER NOT NULL DEFAULT 0,
+    detail       TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deferrals_project_created ON deferrals(project_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_deferrals_created ON deferrals(created_at);
 `,
 	},
 }
