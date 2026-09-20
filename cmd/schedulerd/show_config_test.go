@@ -265,20 +265,27 @@ func TestPrintConfig(t *testing.T) {
 		}
 	}
 
-	// Header honesty (DOGFOOD-012, SCHED-GAP-165): must not claim "CLI flags
-	// only", must state the effective-value source, and must now declare the
-	// FEAT-005 root TOML layer LOADED (resolution CLI > env > TOML) instead of
-	// deferring it to a future feature.
+	// Header honesty (DOGFOOD-012, SCHED-GAP-165): the header must not claim
+	// "CLI flags only" (env overrides exist) and must not claim "effective
+	// values" — the FEAT-005 root TOML layer resolves LATER in boot, after
+	// this command's early exit, so TOML-applied values are NOT shown here.
+	// The header must disclose that gap explicitly. Measured at 5225bbae: a
+	// /tmp TOML probe (weight_budget/max_concurrent/auto_disable_failure_rate/
+	// slot_patience set) printed defaults for all four, proving the surface
+	// cannot show the TOML layer — the wording must admit it, not overclaim.
 	if strings.Contains(out, "CLI flags only") {
 		t.Errorf("printConfig() header still claims 'CLI flags only'\nGot:\n%s", out)
 	}
 	if strings.Contains(out, "root TOML loading comes in FEAT-005") {
 		t.Errorf("printConfig() header still defers the root TOML layer to FEAT-005\nGot:\n%s", out)
 	}
-	if !strings.Contains(out, "effective values") ||
+	if strings.Contains(out, "effective values") {
+		t.Errorf("printConfig() header must not claim 'effective values' — the TOML layer is not reflected in this output\nGot:\n%s", out)
+	}
+	if !strings.Contains(out, "FEAT-005") ||
 		!strings.Contains(out, "TOML [scheduler]") ||
-		!strings.Contains(out, "FEAT-005") {
-		t.Errorf("printConfig() header missing effective-values / FEAT-005-loaded wording\nGot:\n%s", out)
+		!strings.Contains(out, "NOT reflected") {
+		t.Errorf("printConfig() header must disclose FEAT-005 TOML [scheduler] resolves later in boot and is NOT reflected in this output\nGot:\n%s", out)
 	}
 }
 

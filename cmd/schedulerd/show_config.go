@@ -110,11 +110,16 @@ func printSchema() {
 `, config.DefaultModel, config.DefaultProvider)
 }
 
-// printConfig renders the effective configuration (already resolved in
+// printConfig renders the CLI/env configuration layers (already resolved in
 // main.go before this is called) as TOML. FEAT-005 has landed: the root
-// schedulerd.toml layer IS applied at boot via the default-guard pattern,
-// so the resolution chain is TOML [scheduler] < SCHEDULER_* env overrides
-// < CLI flags; --schema documents that same live layer.
+// schedulerd.toml layer IS applied at boot via the default-guard pattern
+// (TOML [scheduler] < SCHEDULER_* env overrides < CLI flags), but the TOML
+// layer resolves LATER in main.go — after this command's early exit — so the
+// printed values reflect the CLI and env layers ONLY. A /tmp TOML probe with
+// distinctive [scheduler] keys (SCHED-GAP-165, measured at 5225bbae) printed
+// defaults for every one of them, proving the surface cannot show the TOML
+// layer; the header says so instead of overclaiming. --schema documents the
+// live layer including the default-guard TOML semantics.
 func printConfig(
 	configFile, dbPath, listen, logFile string,
 	minInterval, maxInterval time.Duration,
@@ -130,8 +135,8 @@ func printConfig(
 	loadGateThreshold float64,
 	modelRatesFile string,
 ) {
-	fmt.Printf(`# schedulerd resolved configuration (effective values: TOML [scheduler] + SCHEDULER_* env overrides + CLI flags; precedence CLI > env > TOML)
-# source: TOML [scheduler] (FEAT-005, applied via default-guard) + SCHEDULER_* env overrides + CLI flags (CLI > env > TOML)
+	fmt.Printf(`# schedulerd resolved configuration (CLI flags + SCHEDULER_* env overrides; the root TOML [scheduler] layer resolves later in boot and is NOT reflected here)
+# source: CLI flags + SCHEDULER_* env overrides (CLI > env). TOML [scheduler] (FEAT-005, applied via default-guard in main.go) resolves after this print and is not shown
 
 [daemon]
 db_path = %q
