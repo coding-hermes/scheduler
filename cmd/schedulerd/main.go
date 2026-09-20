@@ -209,7 +209,8 @@ func main() {
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
-			*spawnMemLimitMB)
+			*spawnMemLimitMB,
+			*loadGateThreshold, *modelRatesFile)
 		return
 	}
 
