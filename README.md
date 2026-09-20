@@ -216,7 +216,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (14 tools)            │
+│  /mcp      → MCP server (41 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -238,12 +238,35 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 | GET | `/ticks?page=N` | Paginated tick history |
 | GET | `/namespaces/{id}` | Namespace drill-down |
 | GET | `/health` | Dashboard health panel |
-| — | `/api/v1/*` | Full REST API — health/status/config, projects CRUD + pause/resume/spawn, namespaces + sub-routes, ticks, events, queue, fleet metrics, pause/resume/evaluate (full route index in [docs/api.md](docs/api.md)) |
+| — | `/api/v1/*` | Full REST API — health/status/config, projects CRUD + pause/resume/spawn/bump/unbump, namespaces + sub-routes, ticks, events, queue, fleet metrics, pause/resume/evaluate, deploy groups/templates (full route index in [docs/api.md](docs/api.md); groups/templates request bodies in `GET /api/v1/openapi.json`) |
+| GET | `/api/v1/events` | Event log (severity/limit/since filters; SSE push stream at `/api/v1/events/stream`) |
+| GET | `/api/v1/groups` | List deploy groups (JSONL-backed) |
+| POST | `/api/v1/groups` | Create a deploy group |
+| GET | `/api/v1/groups/{name}` | Get one deploy group |
+| PUT | `/api/v1/groups/{name}` | Partial-update a deploy group (name immutable) |
+| DELETE | `/api/v1/groups/{name}` | Delete a deploy group (JSONL row removed) |
+| POST | `/api/v1/groups/{name}/deploy` | Deploy a template to a group — appends the template's task rows to each member project's board; `dry_run=true` plans without writing |
+| GET | `/api/v1/templates` | List deploy templates (JSONL-backed) |
+| POST | `/api/v1/templates` | Create a deploy template |
+| GET | `/api/v1/templates/{name}` | Get one deploy template |
+| PUT | `/api/v1/templates/{name}` | Partial-update a deploy template (name immutable) |
+| DELETE | `/api/v1/templates/{name}` | Delete a deploy template (JSONL row removed) |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
 
 ## MCP Tools
+
+All 41 tools served by `POST /mcp` (`tools/list` is the live source — the
+[docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
+table drifts from the registry). Verify the running daemon's surface (a
+daemon built from this tree reports 41; an older deployed build reports
+fewer):
+
+```sh
+curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
+```
 
 | Tool | Description |
 |------|-------------|
@@ -261,6 +284,33 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 | `fleet_evaluate` | Force evaluation cycle |
 | `fleet_pause_scheduler` | Pause the scheduler |
 | `fleet_resume_scheduler` | Resume the scheduler |
+| `groups_list` | List deploy groups (JSONL-backed) |
+| `groups_get` | Get one deploy group by name |
+| `groups_create` | Create a deploy group (named project list) |
+| `groups_update` | Partially update a group (projects and/or description) |
+| `groups_delete` | Delete a deploy group |
+| `templates_list` | List deploy templates (JSONL-backed) |
+| `templates_get` | Get one deploy template by name |
+| `templates_create` | Create a deploy template (named task definitions) |
+| `templates_update` | Partially update a template (description and/or tasks) |
+| `templates_delete` | Delete a deploy template |
+| `groups_deploy` | Deploy a template's task rows to every member project of a group (`dry_run` plans without writing) |
+| `events_list` | Read the event log (`since` returns only events with id > since) |
+| `namespaces_list` | List all namespaces (allocation pools) |
+| `namespaces_get` | Get one namespace by id (weight, caps, admission_mode, load_gate) |
+| `namespaces_create` | Create a namespace (id + positive weight required) |
+| `namespaces_update` | Partially update a namespace (only passed fields are written) |
+| `namespaces_delete` | Delete a namespace (`confirm=true` soft / `confirm=true&purge=true` hard) |
+| `namespaces_projects` | List projects assigned to a namespace |
+| `namespaces_move` | Assign a project to a namespace |
+| `project_delete` | Delete a project (`confirm`/`purge` semantics as the REST route; refused while enabled) |
+| `project_spawn` | Spawn a tick for a project immediately (bypasses cooldown) |
+| `project_bump` | Temporarily accelerate a project (reason required, 1-8 ticks) |
+| `project_unbump` | Abort an active bump, restoring pre-bump cooldown |
+| `tick_get` | Get one tick by id (includes worker waves when present) |
+| `config_get` | Resolved runtime config (honest subset: db_path, weight_budget, paused, version) |
+| `queue_get` | Scheduling queue: enabled projects by urgency, descending |
+| `metrics_get` | Fleet metrics in one read-only call (each block states `available=true\|false`) |
 
 ---
 
@@ -522,7 +572,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 14 `fleet_*` tools listed in [MCP Tools](#mcp-tools):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 41 tools listed in [MCP Tools](#mcp-tools) — the 14 `fleet_*` tools plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get` introspection reads:
 
 ```json
 // Example: List all projects via MCP
