@@ -296,7 +296,7 @@ func TestREG002_DisabledProjectNeverEscalates(t *testing.T) {
 		// in adaptive_cooldown.go does not. Excluding the definition is what
 		// makes this a call-site inventory rather than a name count.
 		sites := reg002CountMatches(t, regexp.MustCompile(`adaptiveCooldown\((db|s\.db),`))
-		var files []string
+		files := make([]string, 0, len(sites))
 		for f := range sites {
 			files = append(files, f)
 		}
