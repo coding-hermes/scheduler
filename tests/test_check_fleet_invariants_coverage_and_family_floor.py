@@ -47,9 +47,19 @@ def _make_workdir_with_board(root: Path, name: str) -> Path:
     The 5c ``boards`` check (added 2026-09-19) reports a satellite whose
     workdir has no board link as a violation — a fixture that wants to focus
     on coverage / family-floor must therefore plant an empty board dir.
+
+    A ``*-sync`` lane additionally needs the check-10 orientation facts (a
+    README naming its namespace + a findable consumption contract), so this
+    helper plants them: the fixture must stay clean by construction, otherwise
+    the sync-orientation class — not the class under test — turns it red.
     """
     wd = root / name
     (wd / ".coding-hermes" / "board").mkdir(parents=True, exist_ok=True)
+    if name.endswith("-sync"):
+        base = name[:-len("-sync")]
+        (wd / "README.md").write_text(
+            f"# {name} — lane workdir\n\nTarget namespace: `{base}`.\n"
+            f"Contract: skill `{base}-sync-data`.\n", encoding="utf-8")
     return wd
 
 

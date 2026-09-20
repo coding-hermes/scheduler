@@ -50,13 +50,57 @@ Checks
                      legitimately carry similar closure notes. Reported one
                      line per offending GROUP, all row ids listed. Skipped
                      silently when no board file is found, same as check 8.
+ 10. sync-orientation — every ENABLED ``*-sync`` lane is ORIENTED: someone who
+                     lands in its workdir (a gap-push or dogfood picker, the
+                     next tick's agent) must be able to read what the lane is,
+                     which DuckBrain namespace it targets and how to consume
+                     it, WITHOUT reading scheduler internals. Three facts, all
+                     read from the workdir:
+                       (a) ``README.md`` exists there and is non-empty (a
+                           zero-byte stub does not orient);
+                       (b) the README NAMES its target namespace — a line that
+                           mentions ``namespace`` AND carries the lane's base as
+                           a whole HYPHEN-delimited word (``trouble-sync`` →
+                           ``trouble``). A >=2-token hyphen run of the base is
+                           also accepted, because the live convention shortens
+                           long lane bases (``h3-sdk-go-foreman-sync`` declares
+                           ``sdk-go``); a single token lifted out of a
+                           multi-token base does NOT count, and neither does a
+                           bare mention of the word "namespace";
+                       (c) the consumption contract is findable — either a
+                           companion ``<lane-base>-sync-data/SKILL.md`` under
+                           the skills root (default ``~/.hermes/skills``,
+                           overridable with ``--skills-root``; searched
+                           recursively, the skills live in category subdirs),
+                           or an explicit in-README pointer to where it lives:
+                           a ``/sync/``-prefixed marker key, an ``/api/`` route,
+                           or the companion skill's name.
+                     Mutation-found classes: a README-less lane whose
+                     consumption contract exists is still un-orientable, and a
+                     pointer without the namespace statement does not say what
+                     the lane targets — (b) and (c) are independent.
+                     One violation per lane (every unmet fact in the detail,
+                     "; "-joined) and a lane whose workdir is MISSING is
+                     SKIPPED: check 5 already names that fact, and one fact
+                     never earns two lines. Disabled lanes are exempt, exactly
+                     like check 5. The class SKIPS SILENTLY when the skills
+                     root does not exist (a CI runner, a test rig) — the gate
+                     must never require the live fleet to pass in CI. Runs in
+                     the live-DB mode with the project rows; ``--board-only``
+                     never reads them, so it is a no-op there. Measured
+                     2026-09-19: 48 of 51 ``*-sync`` workdirs carried no README
+                     and nothing in the fleet checked for one.
+                       VIOLATION sync-orientation trouble-sync: no README.md in
+                       '~/.hermes/sync-workdirs/trouble-sync' — a picker/dogfood
+                       agent cannot orient this -sync shell
 
 Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
         python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
 
-``--board-only`` runs the environment-independent board checks (8-10) and
-nothing else, so it needs neither the live
-DB nor fleet.toml — that is the mode CI uses (a runner has no ~/.hermes state).
+``--board-only`` runs the environment-independent board checks (8-9) and
+nothing else, so it needs neither the live DB nor fleet.toml — that is the mode
+CI uses (a runner has no ~/.hermes state). The fleet checks (1-7 and 10) read
+the project rows and are no-ops there.
 """
 from __future__ import annotations
 
@@ -135,9 +179,26 @@ VOLATILE_FINGERPRINT_FIELDS = (
 CONTENT_DUP_OPEN_STATUSES = ("pending", "in_progress")
 CONTENT_DUP_CLASS = "board-content-dup"
 
+# Sync-lane orientation (check 10, class "sync-orientation"). A `*-sync` lane's
+# workdir is a SHELL, not a repo: it holds the lane's scratch space, and the
+# only place a gap-push/dogfood picker (or the next tick's agent) can learn what
+# the lane is, which DuckBrain namespace it targets and how to consume it is the
+# workdir's README plus the companion `<base>-sync-data` skill. Measured
+# 2026-09-19: 48 of 51 `*-sync` workdirs carried no README and NOTHING in the
+# fleet checked for one — the cited `duckbrain-sync` instance was repaired by
+# hand, so the class stayed open. This gate is the repo-side half of
+# SCHED-GAP-094; provisioning the files is the sync-workdirs lane's job.
+SYNC_ORIENTATION_CLASS = "sync-orientation"
+DEFAULT_SKILLS_ROOT = os.path.expanduser("~/.hermes/skills")
+# The in-README consumption pointer: a marker key, an HTTP route, or the
+# companion data skill's own name. Any one of the three tells a consumer where
+# the lane's consumption contract lives, which is what (c) asks for.
+SYNC_CONTRACT_POINTER_RE = re.compile(r"/sync/|/api/|[a-z0-9][a-z0-9._-]*-sync-data", re.I)
+
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
-                 "board-vocab", "board-legacy-status", "board-content-dup")
+                 "board-vocab", "board-legacy-status", "board-content-dup",
+                 "sync-orientation")
 
 
 def find_board_path(start: str) -> str | None:
@@ -188,6 +249,57 @@ def compute_content_fingerprint(row: dict) -> str:
     content = {k: v for k, v in row.items() if k not in VOLATILE_FINGERPRINT_FIELDS}
     serialized = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+def index_sync_data_skills(skills_root: str) -> set[str]:
+    """Names of every ``*-sync-data`` skill present under *skills_root*.
+
+    Recursive: the skills live in category subdirectories (``data/`` and
+    friends), so a one-level scan would miss every companion skill and turn
+    the orientation gate into an unconditional failure. A skill counts only
+    when it carries a ``SKILL.md`` — an empty directory is not a contract.
+    """
+    names: set[str] = set()
+    for dirpath, dirnames, _ in os.walk(skills_root):
+        for d in dirnames:
+            if d.endswith("-sync-data") and os.path.isfile(os.path.join(dirpath, d, "SKILL.md")):
+                names.add(d)
+    return names
+
+
+def sync_readme_declares_namespace(text: str, base: str) -> bool:
+    """Does *text* (a sync lane's README) NAME its target DuckBrain namespace?
+
+    The rule is deliberately mechanical: a LINE that mentions ``namespace``
+    (case-insensitive) AND carries one of two ACCEPTED FORMS of the lane's base
+    — the base itself (``trouble-sync`` → ``trouble``), or a contiguous hyphen
+    run of at least TWO of its tokens (``h3-sdk-go-foreman-sync`` → ``sdk-go``).
+    Everything is matched on token boundaries, so a bare mention of the word
+    "namespace" does NOT pass, and neither does a single token lifted out of a
+    multi-token base (``h3-sdk-go-foreman-sync`` is not oriented by the word
+    ``go``).
+
+    The two-token form is not a convenience: the live convention shortens long
+    lane bases, because the DuckBrain namespace is not the scheduler project
+    name (``h3-sdk-go-foreman-sync`` documents its namespace as ``sdk-go``).
+    A match must be a whole HYPHEN-delimited word: the base appearing inside a
+    longer hyphenated token (``other-fixture-orientation-target-x``) or a longer
+    alphanumeric run (``fixture-orientation-targets``) is not a declaration.
+    """
+    tokens = [t for t in base.split("-") if t]
+    runs = ["-".join(tokens[i:j])
+            for i in range(len(tokens))
+            for j in range(i + 2, len(tokens) + 1)]
+    candidates = [base] + runs
+    if not candidates:
+        return False
+    for line in text.splitlines():
+        if "namespace" not in line.lower():
+            continue
+        for cand in candidates:
+            if re.search(rf"(?<![a-z0-9-]){re.escape(cand)}(?![a-z0-9-])", line, re.I):
+                return True
+    return False
 
 
 def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
@@ -271,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
                          "skips the live-DB/TOML checks 1-7. This is the CI mode: "
                          "a runner has no ~/.hermes/coding-hermes/scheduler.db, so "
                          "the fleet checks cannot run there.")
+    ap.add_argument("--skills-root", default=DEFAULT_SKILLS_ROOT,
+                    help="skills root searched for a sync lane's companion "
+                         "<base>-sync-data skill (check 10). Default ~/.hermes/skills; "
+                         "when the root does not exist the check skips silently, so a "
+                         "runner/test rig never has to carry live fleet state.")
     args = ap.parse_args(argv)
 
     violations: list[dict] = []
@@ -507,6 +624,60 @@ def main(argv: list[str] | None = None) -> int:
             bad("parity", "[scheduler]",
                 f"global max_concurrent: daemon={args.global_cap} toml={tv} — a stale "
                 f"[scheduler] max_concurrent pin overrides every restart that omits the flag")
+
+    # 10. sync orientation ------------------------------------------------------
+    # A `*-sync` lane's workdir is a SHELL, not a repo. Anyone who lands in it —
+    # a gap-push/dogfood picker, the next tick's agent — must be able to read
+    # what the lane is, which DuckBrain namespace it targets and how to consume
+    # it WITHOUT reading scheduler internals. Three facts, read from the workdir:
+    #   (a) README.md exists and is non-empty;
+    #   (b) the README NAMES its namespace (a `namespace` line carrying the
+    #       lane's base as a whole hyphen-delimited word, or a >=2-token hyphen
+    #       run of it);
+    #   (c) the consumption contract is findable — the companion
+    #       `<base>-sync-data` skill under the skills root, OR an explicit
+    #       in-README pointer (/sync/ marker, /api/ route, skill name).
+    # (b) tests meaning and (c) tests discoverability; they are independent, so
+    # one repaired does not describe the other. One violation per LANE, every
+    # unmet fact collected into the detail. A lane whose workdir is MISSING is
+    # skipped outright — check 5 already names that fact and one fact never
+    # earns two lines. Disabled lanes are exempt, exactly like check 5.
+    #
+    # CI SAFETY: nothing here may require live fleet state. When the skills root
+    # is absent (a GitHub runner, a test rig) the class SKIPS SILENTLY, the same
+    # documented behaviour checks 8/9 have for a missing board — the pytest
+    # battery is what CI runs, and it must stay green on a bare checkout.
+    # Read-only: no workdir is written and no project row is touched.
+    if con is not None:
+        skills = (index_sync_data_skills(args.skills_root)
+                  if os.path.isdir(args.skills_root) else None)
+        for name, p in projects.items():
+            if not p.get("enabled") or not name.endswith("-sync"):
+                continue
+            wd = p.get("workdir") or ""
+            if not wd or not os.path.isdir(wd):
+                continue  # check 5 owns the missing-workdir fact
+            base = name[:-len("-sync")]
+            missing: list[str] = []
+            readme = os.path.join(wd, "README.md")
+            text = ""
+            if not os.path.isfile(readme) or os.path.getsize(readme) == 0:
+                missing.append(f"no README.md in {wd!r} — a picker/dogfood agent cannot "
+                               f"orient this -sync shell")
+            else:
+                text = open(readme, encoding="utf-8", errors="replace").read()
+                if not sync_readme_declares_namespace(text, base):
+                    missing.append(f"README.md names no target namespace — state the DuckBrain "
+                                   f"namespace this lane syncs (a line mentioning `namespace` "
+                                   f"and carrying {base!r} as a whole token)")
+            has_skill = skills is None or f"{base}-sync-data" in skills
+            has_pointer = bool(text) and bool(SYNC_CONTRACT_POINTER_RE.search(text))
+            if skills is not None and not has_skill and not has_pointer:
+                missing.append(f"no consumption contract findable — expected a "
+                               f"{base}-sync-data skill under {args.skills_root!r} or a README "
+                               f"pointer to one (/sync/ marker, /api/ route, or the skill name)")
+            if missing:
+                bad(SYNC_ORIENTATION_CLASS, name, "; ".join(missing))
 
     # 8. board vocabulary + 9. board content duplicates ------------------------
     # Writer-side gate (SCHED-GAP-164). The daemon's READERS accept a wide open

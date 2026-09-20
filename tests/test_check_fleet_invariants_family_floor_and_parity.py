@@ -63,6 +63,36 @@ def _board_dir(root: Path, name: str) -> Path:
     return wd
 
 
+def _orient_sync_lane(wd: Path) -> None:
+    """Give a `*-sync` workdir the orientation check 10 requires.
+
+    A fixture fleet is "clean by construction", so a seeded sync lane must carry
+    both orientation facts: a README naming its namespace, and a findable
+    consumption contract (the companion data skill under the temp skills root the
+    tests pass via --skills-root). Without this the fixture — not the gate —
+    produces a sync-orientation violation.
+    """
+    base = wd.name[:-len("-sync")]
+    (wd / "README.md").write_text(
+        f"# {wd.name} — lane workdir\n\nTarget namespace: `{base}`.\n"
+        f"Contract: skill `{base}-sync-data`.\n", encoding="utf-8")
+
+
+def _sync_data_skill(base: str) -> str:
+    """The companion data-skill directory name for a sync lane's *base*."""
+    return f"{base}-sync-data"
+
+
+def _make_skills_root(path: Path, lanes: list[str]) -> Path:
+    """Create a temp skills root carrying the companion `<base>-sync-data` skill
+    (with a SKILL.md) for every `*-sync` lane named in *lanes*."""
+    for lane in lanes:
+        d = path / "data" / _sync_data_skill(lane[:-len("-sync")])
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(f"---\nname: {d.name}\n---\n", encoding="utf-8")
+    return path
+
+
 def _make_db(path: Path, projects: list[dict], *,
              ownership_column: bool = True) -> Path:
     con = sqlite3.connect(path)
@@ -83,6 +113,8 @@ def _make_db(path: Path, projects: list[dict], *,
         marks = ",".join("?" * (10 + (1 if ownership_column else 0)))
         wd = path.parent / p["name"]
         (wd / ".coding-hermes" / "board").mkdir(parents=True, exist_ok=True)
+        if p["name"].endswith("-sync"):
+            _orient_sync_lane(wd)  # check 10: a seeded sync lane must be oriented
         row = [p["name"], p.get("enabled", 1), p.get("cooldown_s", 43200),
                p.get("cooldown_floor_s", 43200), p.get("cooldown_ceiling_s"),
                p.get("adaptive_cooldown", 0), p.get("command", SUPPORTED_COMMAND),
