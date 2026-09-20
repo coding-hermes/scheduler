@@ -183,6 +183,182 @@ func (s *Server) toolFleetSetDecay(ctx context.Context, args map[string]interfac
 	return jsonString(map[string]string{"status": "updated", "project": name, "decay": fmt.Sprintf("%.2f", d)}), nil
 }
 
+// projectNotFoundErr normalizes a DB-layer not-found into the clean error
+// every MCP write tool returns. database.UpdateProject's GAP-044 enabled
+// pre-read surfaces a raw "sql: no rows in result set" for an unknown
+// project, so the handler checks existence first and, as a backstop, maps
+// the DB sentinel too — a tool must never leak driver text or report
+// success for a project that does not exist.
+func projectNotFoundErr(name string) error {
+	return fmt.Errorf("project not found: %s", name)
+}
+
+// ensureProjectExists returns a clean not-found error when name does not
+// resolve to a project row.
+func (s *Server) ensureProjectExists(ctx context.Context, name string) error {
+	if _, err := database.GetProject(ctx, s.db, name); err != nil {
+		if errors.Is(err, database.ErrProjectNotFound) || strings.Contains(err.Error(), "not found") {
+			return projectNotFoundErr(name)
+		}
+		return err
+	}
+	return nil
+}
+
+// mcpDisableProvenance is the disabled_by value stamped on every project
+// disabled through the MCP write surface, so an operator reading the row can
+// tell which entry point paused it (REST PUT stamps "api", the REST pause
+// route "api-pause", a delete "api-delete").
+const mcpDisableProvenance = "mcp"
+
+func (s *Server) toolFleetSetModel(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	model := getStringArg(args, "model")
+	provider := getStringArg(args, "provider")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	// Bane doctrine: a model without its provider is a misroute (the spawn
+	// chain would fall back to a chain route the operator never chose), so
+	// the pair is written as ONE coherent unit and neither half may be empty.
+	// Clearing a project lane back to the global chain is an explicit
+	// operation, not an accidental empty-string write.
+	if model == "" || provider == "" {
+		return "", fmt.Errorf("model and provider are required together (a model without its provider is a misroute): got model=%q provider=%q", model, provider)
+	}
+	if err := s.ensureProjectExists(ctx, name); err != nil {
+		return "", err
+	}
+	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{
+		Model:    &model,
+		Provider: &provider,
+	}); err != nil {
+		return "", err
+	}
+	return jsonString(map[string]string{
+		"status":   "updated",
+		"project":  name,
+		"model":    model,
+		"provider": provider,
+	}), nil
+}
+
+// toolFleetSetBudget sets the project's USD spend caps (SCHED-GAP-066). Only
+// the windows present in args are written — a caller setting the daily cap
+// must not silently clear the weekly/final ones. At least one window is
+// required so a no-op call cannot report success.
+func (s *Server) toolFleetSetBudget(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	var updates database.ProjectUpdates
+	echo := map[string]string{"status": "updated", "project": name}
+	if _, ok := args["daily"]; ok {
+		v := getFloatArg(args, "daily")
+		updates.DailyBudgetUSD = &v
+		echo["daily"] = strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	if _, ok := args["weekly"]; ok {
+		v := getFloatArg(args, "weekly")
+		updates.WeeklyBudgetUSD = &v
+		echo["weekly"] = strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	if _, ok := args["final"]; ok {
+		v := getFloatArg(args, "final")
+		updates.FinalBudgetUSD = &v
+		echo["final"] = strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	if updates.DailyBudgetUSD == nil && updates.WeeklyBudgetUSD == nil && updates.FinalBudgetUSD == nil {
+		return "", fmt.Errorf("at least one budget window is required (daily, weekly, or final)")
+	}
+	if err := s.ensureProjectExists(ctx, name); err != nil {
+		return "", err
+	}
+	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
+		return "", err
+	}
+	return jsonString(echo), nil
+}
+
+// toolFleetSetPrompt sets the project's extra foreman prompt and mode. The
+// REST semantic is mirrored exactly: prompt_mode is "append" (default) or
+// "replace" when supplied, and an empty prompt CLEARS the project prompt so
+// the namespace default applies again.
+func (s *Server) toolFleetSetPrompt(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	prompt, ok := args["prompt"]
+	if !ok {
+		return "", fmt.Errorf("prompt is required (pass an empty string to clear back to the namespace default)")
+	}
+	promptStr, _ := prompt.(string)
+	updates := database.ProjectUpdates{Prompt: &promptStr}
+	mode := ""
+	if _, ok := args["prompt_mode"]; ok {
+		mode = getStringArg(args, "prompt_mode")
+		switch mode {
+		case "append", "replace":
+			updates.PromptMode = &mode
+		default:
+			return "", fmt.Errorf("prompt_mode must be \"append\" or \"replace\", got %q", mode)
+		}
+	}
+	if err := s.ensureProjectExists(ctx, name); err != nil {
+		return "", err
+	}
+	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
+		return "", err
+	}
+	out := map[string]string{"status": "updated", "project": name, "prompt": promptStr}
+	if mode != "" {
+		out["prompt_mode"] = mode
+	}
+	return jsonString(out), nil
+}
+
+// toolFleetSetEnabled enables/disables a project through the same
+// database.UpdateProject transition the REST PUT uses, so GAP-044 disable
+// provenance (disabled_at/by/reason stamped on true→false, cleared on
+// false→true) is reused rather than hand-rolled here.
+func (s *Server) toolFleetSetEnabled(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	raw, ok := args["enabled"]
+	if !ok {
+		return "", fmt.Errorf("enabled is required (true to schedule, false to pause)")
+	}
+	enabled, ok := raw.(bool)
+	if !ok {
+		return "", fmt.Errorf("enabled must be a boolean, got %T", raw)
+	}
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if err := s.ensureProjectExists(ctx, name); err != nil {
+		return "", err
+	}
+	// Disable provenance mirrors the REST PUT path: the DB layer stamps its
+	// "api"-scoped defaults, and MCP names itself as the actor so an operator
+	// reading the row can tell which surface paused the project.
+	updates := database.ProjectUpdates{Enabled: &enabled}
+	if !enabled {
+		by := mcpDisableProvenance
+		reason := "disabled via MCP fleet_set_enabled"
+		updates.DisabledBy = &by
+		updates.DisabledReason = &reason
+	}
+	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
+		return "", err
+	}
+	status := "paused"
+	if enabled {
+		status = "enabled"
+	}
+	return jsonString(map[string]string{"status": status, "project": name, "enabled": strconv.FormatBool(enabled)}), nil
+}
+
 func (s *Server) toolFleetPause(ctx context.Context, args map[string]interface{}) (string, error) {
 	name := getStringArg(args, "name")
 	if name == "" {
@@ -230,14 +406,58 @@ func (s *Server) toolFleetAdd(ctx context.Context, args map[string]interface{}) 
 	if weight < 1 || weight > 100 {
 		return "", fmt.Errorf("weight must be 1-100, got %d", weight)
 	}
+	// SCHED-GAP-098: the optional fields below are the ones POST
+	// /api/v1/projects already accepts and database.CreateProject already
+	// INSERTs — every advertised input is plumbed, none is silently
+	// dropped. Priority/cooldown keep the REST create defaults (5/900).
+	priority := getIntArg(args, "priority")
+	if _, ok := args["priority"]; !ok {
+		priority = 5
+	}
+	if priority < 1 || priority > 10 {
+		return "", fmt.Errorf("priority must be 1-10, got %d", priority)
+	}
+	cooldown := getIntArg(args, "cooldown_s")
+	if _, ok := args["cooldown_s"]; !ok {
+		cooldown = 900
+	}
+	var namespaceID *string
+	if ns := getStringArg(args, "namespace_id"); ns != "" {
+		namespaceID = &ns
+	}
+	promptMode := getStringArg(args, "prompt_mode")
+	if _, ok := args["prompt_mode"]; !ok {
+		promptMode = "append"
+	}
+	if promptMode != "" && promptMode != "append" && promptMode != "replace" {
+		return "", fmt.Errorf("prompt_mode must be \"append\" or \"replace\", got %q", promptMode)
+	}
 	p := &database.Project{
-		Name:      name,
-		RepoURL:   repo,
-		Workdir:   workdir,
-		Weight:    weight,
-		Priority:  5,
-		CooldownS: 900,
-		DecayRate: 1.0,
+		Name:        name,
+		RepoURL:     repo,
+		Workdir:     workdir,
+		Weight:      weight,
+		Priority:    priority,
+		CooldownS:   cooldown,
+		DecayRate:   1.0,
+		Model:       getStringArg(args, "model"),
+		Provider:    getStringArg(args, "provider"),
+		NamespaceID: namespaceID,
+		Deliver:     getStringArg(args, "deliver"),
+		Prompt:      getStringArg(args, "prompt"),
+		PromptMode:  promptMode,
+	}
+	// Budgets are 0 (unlimited) unless explicitly supplied — getFloatArg
+	// defaults to 1.0, so an absent key must NOT be bound through it or a
+	// caller who never mentioned a budget would get a silent $1 cap.
+	if _, ok := args["daily_budget_usd"]; ok {
+		p.DailyBudgetUSD = getFloatArg(args, "daily_budget_usd")
+	}
+	if _, ok := args["weekly_budget_usd"]; ok {
+		p.WeeklyBudgetUSD = getFloatArg(args, "weekly_budget_usd")
+	}
+	if _, ok := args["final_budget_usd"]; ok {
+		p.FinalBudgetUSD = getFloatArg(args, "final_budget_usd")
 	}
 	if err := database.CreateProject(ctx, s.db, p); err != nil {
 		return "", friendlyCreateError(name, err)

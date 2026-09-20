@@ -223,7 +223,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (41 tools)            │
+│  /mcp      → MCP server (45 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -264,10 +264,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 41 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 45 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (a
-daemon built from this tree reports 41; an older deployed build reports
+daemon built from this tree reports 45; an older deployed build reports
 fewer):
 
 ```sh
@@ -284,6 +284,10 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `fleet_set_priority` | Change project priority (1-10) |
 | `fleet_set_cooldown` | Set cooldown duration |
 | `fleet_set_decay` | Tune decay rate |
+| `fleet_set_model` | Set a project's model/provider pair (one coherent unit — both required) |
+| `fleet_set_budget` | Set daily/weekly/final USD spend caps (only supplied windows are written) |
+| `fleet_set_prompt` | Set the project prompt + mode (empty prompt clears to the namespace default) |
+| `fleet_set_enabled` | Enable/disable a project (disable stamps GAP-044 provenance) |
 | `fleet_pause` | Pause a project |
 | `fleet_resume` | Resume a project |
 | `fleet_add` | Add a new project |
@@ -701,7 +705,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 41 tools listed in [MCP Tools](#mcp-tools) — the 14 `fleet_*` tools plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get` introspection reads:
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 45 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get` introspection reads:
 
 ```json
 // Example: List all projects via MCP

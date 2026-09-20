@@ -1350,9 +1350,9 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 			t.Errorf("expected tool %q in registry, missing", w)
 		}
 	}
-	// 14 fleet_* + 12 blocks/events + 15 CTL-003 parity tools.
-	if len(toolsList) != 41 {
-		t.Errorf("tool count = %d, want 41 (14 fleet_* + 12 blocks/events + 15 CTL-003)", len(toolsList))
+	// 18 fleet_* + 12 blocks/events + 15 CTL-003 parity tools.
+	if len(toolsList) != 45 {
+		t.Errorf("tool count = %d, want 45 (18 fleet_* + 12 blocks/events + 15 CTL-003)", len(toolsList))
 	}
 }
 
@@ -1661,5 +1661,472 @@ func TestMCP_BlocksToolsRequireStore(t *testing.T) {
 	_, e = callTool(t, m, 2, "events_list", map[string]interface{}{})
 	if e != nil {
 		t.Errorf("events_list must not need the blocks store: %+v", e)
+	}
+}
+
+// --- SCHED-GAP-098: MCP write-tool coverage (model/provider, budgets,
+// prompt/prompt_mode, enable/disable) ---
+
+// TestMCP_FleetSetModel is the happy path: the model/provider pair is
+// written as one unit and the STORED row is asserted (a green call with an
+// unwritten column would otherwise pass unnoticed).
+func TestMCP_FleetSetModel(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	text, toolErr := callTool(t, m, 1, "fleet_set_model", map[string]interface{}{
+		"name": "alpha", "model": "glm-5.3-flash", "provider": "zai-glm-default",
+	})
+	if toolErr != nil {
+		t.Fatalf("fleet_set_model: %+v", toolErr)
+	}
+	if !strings.Contains(text, `"status":"updated"`) {
+		t.Errorf("response = %s, want updated status", text)
+	}
+	got, err := database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Model != "glm-5.3-flash" {
+		t.Errorf("Model = %q, want glm-5.3-flash", got.Model)
+	}
+	if got.Provider != "zai-glm-default" {
+		t.Errorf("Provider = %q, want zai-glm-default", got.Provider)
+	}
+}
+
+// TestMCP_FleetSetModel_TableDriven covers the guard rails: a model without
+// its provider (and vice versa) is a misroute and must be refused with a
+// clean error and NO write; an unknown project must error, never report
+// success.
+func TestMCP_FleetSetModel_TableDriven(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      map[string]interface{}
+		wantInMsg string
+		existing  bool
+	}{
+		{
+			name:      "model without provider",
+			args:      map[string]interface{}{"name": "alpha", "model": "glm-5.3-flash"},
+			wantInMsg: "misroute",
+			existing:  true,
+		},
+		{
+			name:      "provider without model",
+			args:      map[string]interface{}{"name": "alpha", "provider": "zai-glm-default"},
+			wantInMsg: "misroute",
+			existing:  true,
+		},
+		{
+			name:      "empty provider string",
+			args:      map[string]interface{}{"name": "alpha", "model": "glm-5.3-flash", "provider": "  "},
+			wantInMsg: "misroute",
+			existing:  true,
+		},
+		{
+			name:      "missing name",
+			args:      map[string]interface{}{"model": "glm-5.3-flash", "provider": "zai-glm-default"},
+			wantInMsg: "name is required",
+			existing:  true,
+		},
+		{
+			name:      "unknown project",
+			args:      map[string]interface{}{"name": "ghost", "model": "glm-5.3-flash", "provider": "zai-glm-default"},
+			wantInMsg: "not found",
+			existing:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMCPTestServer(t)
+			mustCreateMCPProject(t, m.db, "alpha")
+			_, e := callTool(t, m, 1, "fleet_set_model", tc.args)
+			if e == nil {
+				t.Fatalf("expected a clean error, got success")
+			}
+			if !strings.Contains(e.Message, tc.wantInMsg) {
+				t.Errorf("error = %q, want it to contain %q", e.Message, tc.wantInMsg)
+			}
+			if strings.Contains(e.Message, `"status"`) {
+				t.Errorf("error message carries a success string: %q", e.Message)
+			}
+			// The pair must be unchanged: alpha keeps its seeded test/test.
+			if tc.existing {
+				got, err := database.GetProject(context.Background(), m.db, "alpha")
+				if err != nil {
+					t.Fatalf("GetProject: %v", err)
+				}
+				if got.Model != "test" || got.Provider != "test" {
+					t.Errorf("row mutated by a rejected call: model=%q provider=%q", got.Model, got.Provider)
+				}
+			}
+		})
+	}
+}
+
+// TestMCP_FleetSetBudget_OnlySuppliedFields proves the partial-write
+// semantic: setting ONLY the daily cap must leave weekly/final untouched,
+// and the stored values must be real (asserted off the row, not the echo).
+func TestMCP_FleetSetBudget_OnlySuppliedFields(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	// Seed all three windows so a clobber would be visible.
+	text, toolErr := callTool(t, m, 1, "fleet_set_budget", map[string]interface{}{
+		"name": "alpha", "daily": 5.5, "weekly": 40.0, "final": 250.0,
+	})
+	if toolErr != nil {
+		t.Fatalf("seed budgets: %+v", toolErr)
+	}
+	if !strings.Contains(text, `"status":"updated"`) {
+		t.Errorf("seed response = %s, want updated", text)
+	}
+	got, err := database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.DailyBudgetUSD != 5.5 || got.WeeklyBudgetUSD != 40.0 || got.FinalBudgetUSD != 250.0 {
+		t.Fatalf("seeded budgets = %v/%v/%v, want 5.5/40/250", got.DailyBudgetUSD, got.WeeklyBudgetUSD, got.FinalBudgetUSD)
+	}
+
+	// Now set ONLY daily — weekly and final must be byte-identical.
+	if _, err := callTool(t, m, 2, "fleet_set_budget", map[string]interface{}{
+		"name": "alpha", "daily": 12.25,
+	}); err != nil {
+		t.Fatalf("fleet_set_budget daily-only: %+v", err)
+	}
+	got, err = database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject after daily-only: %v", err)
+	}
+	if got.DailyBudgetUSD != 12.25 {
+		t.Errorf("DailyBudgetUSD = %v, want 12.25", got.DailyBudgetUSD)
+	}
+	if got.WeeklyBudgetUSD != 40.0 {
+		t.Errorf("WeeklyBudgetUSD = %v, want the untouched 40", got.WeeklyBudgetUSD)
+	}
+	if got.FinalBudgetUSD != 250.0 {
+		t.Errorf("FinalBudgetUSD = %v, want the untouched 250", got.FinalBudgetUSD)
+	}
+}
+
+// TestMCP_FleetSetBudget_TableDriven covers the required-arg guard: no
+// budget window at all (or no name, or an unknown project) is a clean error,
+// never a success string.
+func TestMCP_FleetSetBudget_TableDriven(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      map[string]interface{}
+		wantInMsg string
+	}{
+		{"no window supplied", map[string]interface{}{"name": "alpha"}, "at least one budget window"},
+		{"missing name", map[string]interface{}{"daily": 3.0}, "name is required"},
+		{"unknown project", map[string]interface{}{"name": "ghost", "daily": 3.0}, "not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMCPTestServer(t)
+			mustCreateMCPProject(t, m.db, "alpha")
+			_, e := callTool(t, m, 1, "fleet_set_budget", tc.args)
+			if e == nil {
+				t.Fatalf("expected a clean error, got success")
+			}
+			if !strings.Contains(e.Message, tc.wantInMsg) {
+				t.Errorf("error = %q, want it to contain %q", e.Message, tc.wantInMsg)
+			}
+		})
+	}
+}
+
+// TestMCP_FleetSetPrompt mirrors the REST semantic: prompt_mode is
+// append|replace when supplied, and an empty prompt CLEARS the project
+// prompt back to the namespace default.
+func TestMCP_FleetSetPrompt(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	// Set with an explicit mode.
+	text, toolErr := callTool(t, m, 1, "fleet_set_prompt", map[string]interface{}{
+		"name": "alpha", "prompt": "prefer small commits", "prompt_mode": "replace",
+	})
+	if toolErr != nil {
+		t.Fatalf("fleet_set_prompt: %+v", toolErr)
+	}
+	if !strings.Contains(text, `"prompt_mode":"replace"`) {
+		t.Errorf("response = %s, want the echoed prompt_mode", text)
+	}
+	got, err := database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Prompt != "prefer small commits" || got.PromptMode != "replace" {
+		t.Errorf("prompt/mode = %q/%q, want %q/replace", got.Prompt, got.PromptMode, "prefer small commits")
+	}
+
+	// Empty prompt clears it (documented REST semantic).
+	if _, err := callTool(t, m, 2, "fleet_set_prompt", map[string]interface{}{
+		"name": "alpha", "prompt": "",
+	}); err != nil {
+		t.Fatalf("clear prompt: %+v", err)
+	}
+	got, err = database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject after clear: %v", err)
+	}
+	if got.Prompt != "" {
+		t.Errorf("Prompt = %q, want cleared", got.Prompt)
+	}
+}
+
+func TestMCP_FleetSetPrompt_TableDriven(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      map[string]interface{}
+		wantInMsg string
+	}{
+		{"missing prompt key", map[string]interface{}{"name": "alpha"}, "prompt is required"},
+		{"missing name", map[string]interface{}{"prompt": "x"}, "name is required"},
+		{"bad prompt_mode", map[string]interface{}{"name": "alpha", "prompt": "x", "prompt_mode": "prepend"}, "prompt_mode must be"},
+		{"unknown project", map[string]interface{}{"name": "ghost", "prompt": "x"}, "not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMCPTestServer(t)
+			mustCreateMCPProject(t, m.db, "alpha")
+			_, e := callTool(t, m, 1, "fleet_set_prompt", tc.args)
+			if e == nil {
+				t.Fatalf("expected a clean error, got success")
+			}
+			if !strings.Contains(e.Message, tc.wantInMsg) {
+				t.Errorf("error = %q, want it to contain %q", e.Message, tc.wantInMsg)
+			}
+		})
+	}
+}
+
+// TestMCP_FleetSetEnabled_Provenance is the GAP-044 test: a disable stamps
+// disabled_at/by/reason through the shared DB transition, and a re-enable
+// clears all three. Hand-rolled SQL that skipped the transition would fail
+// here.
+func TestMCP_FleetSetEnabled_Provenance(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+	ctx := context.Background()
+
+	// Disable.
+	text, toolErr := callTool(t, m, 1, "fleet_set_enabled", map[string]interface{}{
+		"name": "alpha", "enabled": false,
+	})
+	if toolErr != nil {
+		t.Fatalf("fleet_set_enabled false: %+v", toolErr)
+	}
+	if !strings.Contains(text, `"status":"paused"`) {
+		t.Errorf("response = %s, want paused status", text)
+	}
+	got, err := database.GetProject(ctx, m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Enabled {
+		t.Error("project still enabled after fleet_set_enabled false")
+	}
+	if got.DisabledAt == "" || got.DisabledBy == "" || got.DisabledReason == "" {
+		t.Errorf("disable provenance not stamped: at=%q by=%q reason=%q", got.DisabledAt, got.DisabledBy, got.DisabledReason)
+	}
+	if got.DisabledBy != "mcp" {
+		t.Errorf("DisabledBy = %q, want mcp (the MCP write surface)", got.DisabledBy)
+	}
+
+	// Re-enable clears all three (false→true transition).
+	if _, err := callTool(t, m, 2, "fleet_set_enabled", map[string]interface{}{
+		"name": "alpha", "enabled": true,
+	}); err != nil {
+		t.Fatalf("fleet_set_enabled true: %+v", err)
+	}
+	got, err = database.GetProject(ctx, m.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject after enable: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("project still disabled after fleet_set_enabled true")
+	}
+	if got.DisabledAt != "" || got.DisabledBy != "" || got.DisabledReason != "" {
+		t.Errorf("resume left provenance behind: at=%q by=%q reason=%q", got.DisabledAt, got.DisabledBy, got.DisabledReason)
+	}
+}
+
+func TestMCP_FleetSetEnabled_TableDriven(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      map[string]interface{}
+		wantInMsg string
+	}{
+		{"missing enabled key", map[string]interface{}{"name": "alpha"}, "enabled is required"},
+		{"non-boolean enabled", map[string]interface{}{"name": "alpha", "enabled": "yes"}, "must be a boolean"},
+		{"missing name", map[string]interface{}{"enabled": false}, "name is required"},
+		{"unknown project", map[string]interface{}{"name": "ghost", "enabled": false}, "not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMCPTestServer(t)
+			mustCreateMCPProject(t, m.db, "alpha")
+			_, e := callTool(t, m, 1, "fleet_set_enabled", tc.args)
+			if e == nil {
+				t.Fatalf("expected a clean error, got success")
+			}
+			if !strings.Contains(e.Message, tc.wantInMsg) {
+				t.Errorf("error = %q, want it to contain %q", e.Message, tc.wantInMsg)
+			}
+		})
+	}
+}
+
+// TestMCP_FleetAdd_OptionalRESTFields proves the widened fleet_add schema is
+// actually plumbed: every advertised optional input must land on the created
+// row (an input the handler silently ignored would make this fail).
+func TestMCP_FleetAdd_OptionalRESTFields(t *testing.T) {
+	m := newMCPTestServer(t)
+	ctx := context.Background()
+
+	if err := database.CreateNamespace(ctx, m.db, &database.Namespace{
+		ID: "test-ns", Weight: 10, Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	if _, err := callTool(t, m, 1, "fleet_add", map[string]interface{}{
+		"name":              "richproj",
+		"repo":              "https://example.com/richproj",
+		"workdir":           "/tmp/richproj",
+		"weight":            20,
+		"priority":          9,
+		"cooldown_s":        43200,
+		"model":             "glm-5.3-flash",
+		"provider":          "zai-glm-default",
+		"namespace_id":      "test-ns",
+		"deliver":           "telegram:-1003310984808:12",
+		"daily_budget_usd":  3.5,
+		"weekly_budget_usd": 25.0,
+		"final_budget_usd":  100.0,
+		"prompt":            "be terse",
+		"prompt_mode":       "replace",
+	}); err != nil {
+		t.Fatalf("fleet_add rich args: %+v", err)
+	}
+
+	got, err := database.GetProject(ctx, m.db, "richproj")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	for _, tc := range []struct {
+		field string
+		got   interface{}
+		want  interface{}
+	}{
+		{"weight", got.Weight, 20},
+		{"priority", got.Priority, 9},
+		{"cooldown_s", got.CooldownS, 43200},
+		{"model", got.Model, "glm-5.3-flash"},
+		{"provider", got.Provider, "zai-glm-default"},
+		{"deliver", got.Deliver, "telegram:-1003310984808:12"},
+		{"daily_budget_usd", got.DailyBudgetUSD, 3.5},
+		{"weekly_budget_usd", got.WeeklyBudgetUSD, 25.0},
+		{"final_budget_usd", got.FinalBudgetUSD, 100.0},
+		{"prompt", got.Prompt, "be terse"},
+		{"prompt_mode", got.PromptMode, "replace"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.field, tc.got, tc.want)
+		}
+	}
+	if got.NamespaceID == nil || *got.NamespaceID != "test-ns" {
+		t.Errorf("NamespaceID = %v, want test-ns", got.NamespaceID)
+	}
+
+	// A minimal call must still get the create defaults — and NO silent $1
+	// budget caps, which is what binding absent keys through getFloatArg
+	// (default 1.0) would produce.
+	if _, err := callTool(t, m, 2, "fleet_add", map[string]interface{}{
+		"name": "minproj", "repo": "https://example.com/minproj", "workdir": "/tmp/minproj",
+	}); err != nil {
+		t.Fatalf("fleet_add minimal: %+v", err)
+	}
+	min, err := database.GetProject(ctx, m.db, "minproj")
+	if err != nil {
+		t.Fatalf("GetProject minproj: %v", err)
+	}
+	if min.Priority != 5 || min.CooldownS != 900 {
+		t.Errorf("defaults = priority %d / cooldown %d, want 5/900", min.Priority, min.CooldownS)
+	}
+	if min.DailyBudgetUSD != 0 || min.WeeklyBudgetUSD != 0 || min.FinalBudgetUSD != 0 {
+		t.Errorf("absent budgets became caps: %v/%v/%v, want 0/0/0 (unlimited)",
+			min.DailyBudgetUSD, min.WeeklyBudgetUSD, min.FinalBudgetUSD)
+	}
+}
+
+// TestMCP_NewWriteToolsRegistered proves the four new tools are actually
+// served by tools/list and dispatch — a handler reachable by no dispatch
+// case would be dead code (the RED proof for this task).
+func TestMCP_NewWriteToolsRegistered(t *testing.T) {
+	m := newMCPTestServer(t)
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result not an object: %T", resp.Result)
+	}
+	raw, ok := result["tools"].([]interface{})
+	if !ok {
+		t.Fatalf("tools not an array: %T", result["tools"])
+	}
+	schemas := map[string]map[string]interface{}{}
+	for _, tool := range raw {
+		td, ok := tool.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := td["name"].(string)
+		schema, _ := td["inputSchema"].(map[string]interface{})
+		schemas[name] = schema
+	}
+	for _, want := range []struct {
+		tool     string
+		required []string
+		optional []string
+	}{
+		{"fleet_set_model", []string{"name", "model", "provider"}, nil},
+		{"fleet_set_budget", []string{"name"}, []string{"daily", "weekly", "final"}},
+		{"fleet_set_prompt", []string{"name", "prompt"}, []string{"prompt_mode"}},
+		{"fleet_set_enabled", []string{"name", "enabled"}, nil},
+	} {
+		schema, ok := schemas[want.tool]
+		if !ok {
+			t.Errorf("tool %q is not served by tools/list", want.tool)
+			continue
+		}
+		props, _ := schema["properties"].(map[string]interface{})
+		has := func(k string) bool { _, ok := props[k]; return ok }
+		for _, k := range want.required {
+			if !has(k) {
+				t.Errorf("%s: schema is missing property %q", want.tool, k)
+			}
+		}
+		for _, k := range want.optional {
+			if !has(k) {
+				t.Errorf("%s: schema is missing optional property %q", want.tool, k)
+			}
+		}
+	}
+
+	// fleet_add must advertise the optional REST fields it now plumbs.
+	addProps, _ := schemas["fleet_add"]["properties"].(map[string]interface{})
+	for _, k := range []string{
+		"priority", "cooldown_s", "model", "provider", "namespace_id", "deliver",
+		"daily_budget_usd", "weekly_budget_usd", "final_budget_usd", "prompt", "prompt_mode",
+	} {
+		if _, ok := addProps[k]; !ok {
+			t.Errorf("fleet_add schema is missing optional property %q", k)
+		}
 	}
 }
