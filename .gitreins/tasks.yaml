@@ -3676,3 +3676,39 @@ tasks:
   status: complete
   created_at: '2026-09-20T21:52:27.052549+00:00'
   completed_at: '2026-09-20T22:46:10.541718+00:00'
+- id: SCHED-GAP-202
+  title: 'tick commit-anatomy unmeasurable: writer sits below adaptive-cooldown opt-in
+    gate'
+  criteria:
+  - commit-anatomy stamped for adaptive==0 and adaptive==1; measurement failure stamps
+    -1 sentinel; no admission change; full short suite green
+  status: complete
+  created_at: '2026-09-21T01:06:17.564194+00:00'
+  completed_at: '2026-09-21T01:15:24.972838+00:00'
+- id: ADV-R14
+  title: Wave-cap rollout + advisory-forever ratification docs (G9 residue)
+  criteria:
+  - 'AC1: grep -rn ''wave_workers_cap'' docs/ AGENTS.md README.md returns >=3 matches
+    across operator-facing surfaces; AC2: a new section in docs/scheduling-strategies.md
+    or new docs/wave-config.md covers wave_enabled/wave_tick_timeout/wave_workers_cap
+    with TOML example wave_workers_cap=3 and ''advisory at the composition layer;
+    enforcement at tick-boundary shed'' semantic; AC3: AGENTS.md gains a ''Wave workers
+    cap is advisory forever'' entry under Key Design Decisions citing Option C sub-ruling
+    + wave_budget.go:108; AC4: new docs/s12-wave-rollout.md exists with a table covering
+    S12 steps 1-5 where steps 3-5 each have an Owner column (unassigned+needs-Bane
+    is acceptable as auditable deferral); AC5: 3-worker wave=1 slot decision explicitly
+    deferred with trigger (90-day data window AND a live wave_workers_cap>0 namespace),
+    citing SCHED-GAP-114/115; AC6: no code change, git diff --stat shows only docs/
+    + AGENTS.md files; AC7: single commit (or two if new file warrants), subject ''docs:
+    ...'' or ''docs(s12-rollout): ...'', NO [ci skip] token; AC8: git show --stat
+    HEAD shows only files in the brief''s files-to-modify list'
+  status: complete
+  created_at: '2026-09-21T02:48:25.995515+00:00'
+  completed_at: '2026-09-21T03:13:57.095684+00:00'
+- id: SCHED-GAP-157-T1
+  title: Acceptance tests for tick-lifecycle columns (slot_wait_ms/admit_reason/nudge_source/deferrals)
+  criteria:
+  - tests exist in internal/scheduler/schedgap157_test.go and pass; do NOT change
+    admission behaviour
+  status: in_progress
+  created_at: '2026-09-21T03:06:59.673932+00:00'
