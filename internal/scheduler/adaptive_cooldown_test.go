@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -680,4 +681,159 @@ func TestAdaptiveCooldown_OptInIsolation(t *testing.T) {
 	if legacyStreak != 0 {
 		t.Errorf("legacy no_progress_ticks = %d, want 0 (streak tracking is armed-project-only)", legacyStreak)
 	}
+}
+
+// =============================================================================
+// SCHED-GAP-202: commit-anatomy observability is UNCONDITIONAL. A project with
+// adaptive_cooldown = 0 (the fleet default) must still get its tick row
+// stamped with the code/board commit split; a failed measurement must leave
+// the explicit unmeasured marker (-1/-1), never the silent schema default 0.
+// =============================================================================
+
+// gap202Outcome builds a tick outcome whose Started instant comes from a
+// fixed clock (determinism seam — no sleeping in tests) claiming n commits
+// against the given tick row.
+func gap202Outcome(t *testing.T, project, tickID string, n int) TickOutcome {
+	t.Helper()
+	now := clock.NewFixed(time.Now()).Now()
+	return TickOutcome{
+		Project: project,
+		Status:  TickCompleted,
+		Commits: n,
+		TickID:  tickID,
+		Started: now.Add(-2 * time.Minute),
+	}
+}
+
+// gap202InsertTick inserts a tick row (schema defaults: code_commits=0,
+// board_commits=0) so observability stamps have somewhere to land.
+func gap202InsertTick(t *testing.T, db *sql.DB, tickID, project string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, created_at)
+		VALUES (?, ?, 'running', datetime('now'))`, tickID, project); err != nil {
+		t.Fatalf("insert tick %s: %v", tickID, err)
+	}
+}
+
+// gap202ReadSignals reads the persisted code/board split for one tick row.
+func gap202ReadSignals(t *testing.T, db *sql.DB, tickID string) (code, board int) {
+	t.Helper()
+	if err := db.QueryRow(`SELECT code_commits, board_commits FROM ticks WHERE id = ?`, tickID).
+		Scan(&code, &board); err != nil {
+		t.Fatalf("read tick signals for %s: %v", tickID, err)
+	}
+	return code, board
+}
+
+// TestSCHEDGAP202_CommitSignalsPersistWithAdaptiveOff proves a tick that
+// claims N commits (all real code commits in git history since started) gets
+// its tick row stamped while the project's adaptive_cooldown = 0 — the fleet
+// default — and while adaptive_cooldown = 1. Both asserted.
+func TestSCHEDGAP202_CommitSignalsPersistWithAdaptiveOff(t *testing.T) {
+	for _, adaptive := range []int{0, 1} {
+		name := fmt.Sprintf("adaptive=%d", adaptive)
+		t.Run(name, func(t *testing.T) {
+			db := slowdownTestDB(t)
+			workdir := t.TempDir()
+			initTickRepo(t, workdir)
+			const proj = "gap202-off"
+			// Two real code commits since the tick started.
+			if err := os.WriteFile(filepath.Join(workdir, "a.go"), []byte("package a\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitCommitFiles(t, workdir, []string{"a.go"}, "feat: one")
+			if err := os.WriteFile(filepath.Join(workdir, "b.go"), []byte("package b\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitCommitFiles(t, workdir, []string{"b.go"}, "feat: two")
+
+			if adaptive == 1 {
+				insertAdaptiveProject(t, db, proj, struct {
+					cooldownS, floorS, ceilingS, threshold, streak, rowsSeen int
+				}{cooldownS: 600, floorS: 600, ceilingS: 4800, threshold: 3, streak: 0, rowsSeen: 0})
+			} else {
+				insertSlowdownProject(t, db, proj, 600)
+			}
+			gap202InsertTick(t, db, "TICK-GAP202-1", proj)
+
+			outcome := gap202Outcome(t, proj, "TICK-GAP202-1", 2)
+			handled := adaptiveCooldown(db, proj, workdir, outcome)
+
+			code, board := gap202ReadSignals(t, db, "TICK-GAP202-1")
+			if code != 2 || board != 0 {
+				t.Errorf("persisted split = (%d, %d), want (2, 0) with adaptive_cooldown=%d — observability must be unconditional", code, board, adaptive)
+			}
+			// The opt-out semantics themselves must be untouched.
+			if adaptive == 0 && handled {
+				t.Error("adaptiveCooldown returned true with adaptive_cooldown=0 (must fall through to legacy)")
+			}
+			if adaptive == 1 && !handled {
+				t.Error("adaptiveCooldown returned false with adaptive_cooldown=1")
+			}
+			// With the feature off, project policy state stays untouched.
+			if adaptive == 0 {
+				if cd := getSlowdownCooldown(t, db, proj); cd != 600 {
+					t.Errorf("cooldown = %d, want 600 (feature-off policy untouched)", cd)
+				}
+			}
+		})
+	}
+}
+
+// TestSCHEDGAP202_MeasurementFailureRecordsUnmeasuredMarker proves a failed
+// measurement (the total < claimed branch in classifyGitCommits, and the
+// no-repo case) records code_commits=-1 / board_commits=-1 on the tick row
+// rather than leaving the schema default 0 — an unmeasured tick is never
+// indistinguishable from a zero-commit tick.
+func TestSCHEDGAP202_MeasurementFailureRecordsUnmeasuredMarker(t *testing.T) {
+	t.Run("git under-reports claimed commits (total < claimed)", func(t *testing.T) {
+		db := slowdownTestDB(t)
+		workdir := t.TempDir()
+		initTickRepo(t, workdir) // baseline only — zero commits since started
+		const proj = "gap202-under"
+		insertSlowdownProject(t, db, proj, 600)
+		gap202InsertTick(t, db, "TICK-GAP202-2", proj)
+
+		outcome := gap202Outcome(t, proj, "TICK-GAP202-2", 2) // claims 2, git shows 0
+		adaptiveCooldown(db, proj, workdir, outcome)
+
+		code, board := gap202ReadSignals(t, db, "TICK-GAP202-2")
+		if code != -1 || board != -1 {
+			t.Errorf("persisted split = (%d, %d), want (-1, -1) — unmeasured marker, not the DEFAULT 0", code, board)
+		}
+	})
+
+	t.Run("no git repo at all", func(t *testing.T) {
+		db := slowdownTestDB(t)
+		const proj = "gap202-norepo"
+		insertSlowdownProject(t, db, proj, 600)
+		gap202InsertTick(t, db, "TICK-GAP202-3", proj)
+
+		outcome := gap202Outcome(t, proj, "TICK-GAP202-3", 1)
+		adaptiveCooldown(db, proj, t.TempDir(), outcome)
+
+		code, board := gap202ReadSignals(t, db, "TICK-GAP202-3")
+		if code != -1 || board != -1 {
+			t.Errorf("persisted split = (%d, %d), want (-1, -1) — unmeasured marker, not the DEFAULT 0", code, board)
+		}
+	})
+
+	t.Run("armed project — legacy fallback inside the adaptive path intact", func(t *testing.T) {
+		// The measured=false fallback (all commits count as progress) must
+		// survive inside the adaptive path itself.
+		db := slowdownTestDB(t)
+		const proj = "gap202-armed-fallback"
+		insertAdaptiveProject(t, db, proj, struct {
+			cooldownS, floorS, ceilingS, threshold, streak, rowsSeen int
+		}{cooldownS: 600, floorS: 600, ceilingS: 4800, threshold: 1, streak: 0, rowsSeen: 0})
+
+		outcome := gap202Outcome(t, proj, "", 3) // no repo → unmeasured
+		if !adaptiveCooldown(db, proj, t.TempDir(), outcome) {
+			t.Fatal("adaptiveCooldown returned false for an armed project")
+		}
+		_, _, _, _, streak, _ := readAdaptiveState(t, db, proj)
+		if streak != 0 {
+			t.Errorf("unmeasurable commits were treated as no-progress: streak=%d, want 0 (legacy fallback)", streak)
+		}
+	})
 }

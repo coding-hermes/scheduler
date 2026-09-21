@@ -90,6 +90,16 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		return false
 	}
 
+	// SCHED-GAP-202: commit-anatomy observability is UNCONDITIONAL. The
+	// classification + tick-row stamp below runs exactly once per completed
+	// tick, BEFORE any early return — including the adaptive == 0 opt-out and
+	// the projects-row error return — so a project with adaptive cooldown off
+	// (the fleet default) still gets its code/board commit split recorded.
+	// measured is false when the measurement failed (git unavailable or
+	// under-reporting); the tick row then carries the explicit unmeasured
+	// marker (-1/-1) instead of silently looking like a zero-commit tick.
+	codeCommits, boardCommits, measured := persistGitCommitSignals(db, outcome, workdir)
+
 	var (
 		adaptive  int
 		floorS    int
@@ -108,7 +118,7 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		return false // project gone or unreadable — let legacy autoSlowdown no-op too
 	}
 	if adaptive == 0 {
-		return false // opt-in feature — default unchanged
+		return false // opt-in feature — default unchanged (observability already stamped above)
 	}
 
 	// SCHED-GAP-124: tasks-mode projects keep their admission governed by
@@ -117,10 +127,9 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// The speed-up reset below still runs — it restores the floor pin
 	// after progress, which is exactly the "auto kicks back in" baseline.
 	if mode := admissionModeForProject(db, project); mode == database.AdmissionModeTasks {
-		// Still persist the commit-anatomy observability columns so tick
-		// reporting stays complete for every mode.
-		codeCommits, _ := persistGitCommitSignals(db, outcome, workdir)
-		_ = codeCommits
+		// The commit-anatomy split was already classified and persisted
+		// above (SCHED-GAP-202) — tick reporting stays complete for every
+		// mode without a duplicate classification.
 		if openNow, openOK := boardOpenRows(workdir); openOK && openNow == 0 {
 			// Board drained (never-done-only counts as drained): snap the
 			// cooldown back to the floor pin so the cron gate resumes at
@@ -183,12 +192,11 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 		}
 	}
 
-	// Commit "real work" signal (SCHED-GAP-104): classify the tick's commits
-	// by path. Bookkeeping-only commits (every path under .coding-hermes/)
-	// never count as progress; only code commits do. Falls open to legacy
-	// behavior (all commits are progress) whenever git measurement fails.
-	codeCommits, boardCommits := persistGitCommitSignals(db, outcome, workdir)
-	if codeCommits < 0 {
+	// Commit "real work" signal (SCHED-GAP-104): reuse the split classified
+	// and persisted at the top of this function (SCHED-GAP-202 hoist — do
+	// not classify twice). Falls open to legacy behavior (all commits are
+	// progress) whenever git measurement failed.
+	if !measured {
 		codeCommits = outcome.Commits // legacy fallback: count them all
 		boardCommits = 0
 	}
@@ -443,13 +451,17 @@ func classifyGitCommits(workdir string, since time.Time, claimed int) (code, boa
 }
 
 // persistGitCommitSignals classifies the outcome's commits (classifyGitCommits)
-// and, on a successful measurement, stamps the split onto the tick row for
-// fleet-wide observability. Returns (code, board); code < 0 means the
-// measurement failed and the caller must fall back to legacy behavior.
-func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (code, board int) {
-	code, board, ok := classifyGitCommits(workdir, outcome.Started, outcome.Commits)
-	if !ok {
-		return -1, 0
+// and stamps the split onto the tick row for fleet-wide observability.
+// SCHED-GAP-202: the stamp is UNCONDITIONAL — on a failed measurement the
+// tick row carries the explicit unmeasured marker (code_commits = -1,
+// board_commits = -1) instead of being left at the schema default 0, so an
+// unmeasured tick is never indistinguishable from a zero-commit tick.
+// Returns (code, board, measured); measured=false means the caller must fall
+// back to legacy behavior (all commits count as progress).
+func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (code, board int, measured bool) {
+	code, board, measured = classifyGitCommits(workdir, outcome.Started, outcome.Commits)
+	if !measured {
+		code, board = -1, -1 // explicit unmeasured marker — a legal sentinel (columns are NOT NULL DEFAULT 0)
 	}
 	if outcome.TickID != "" {
 		if _, err := db.Exec(`UPDATE ticks SET code_commits = ?, board_commits = ? WHERE id = ?`,
@@ -459,5 +471,5 @@ func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (c
 				outcome.Project, outcome.TickID, err)
 		}
 	}
-	return code, board
+	return code, board, measured
 }
