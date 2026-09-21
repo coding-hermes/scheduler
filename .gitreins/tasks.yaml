@@ -3804,3 +3804,21 @@ tasks:
   status: complete
   created_at: '2026-09-21T07:22:23.906735+00:00'
   completed_at: '2026-09-21T07:27:29.205975+00:00'
+- id: GAP-060
+  title: 'Load-hygiene: bound this repo''s test-suite host load (audit parallel-spawn
+    / per-assertion subprocess / expensive per-test builder; fix the worst offender;
+    keep full-suite coverage; NO skip-gates, NO fleet-scheduling changes)'
+  criteria:
+  - Tests audited for >8 concurrent test-spawned subprocesses, subprocess-per-assertion,
+    and expensive per-test builder; each pattern reported with a per-pattern count
+    from a real measurement
+  - The single worst offender identified and fixed with coverage preserved
+  - Before/after measurement reported as peak concurrent own-repo processes and peak
+    RSS
+  - Full suite green via go test -short -p 1 ./... with no test-count loss
+  - No skip gates, no timing caches, no fleet scheduling changes
+  - Commit lands in the inner checkout /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+    only (outer dir is symlinks)
+  status: complete
+  created_at: '2026-09-21T12:19:20.043350+00:00'
+  completed_at: '2026-09-21T13:39:37.543624+00:00'
