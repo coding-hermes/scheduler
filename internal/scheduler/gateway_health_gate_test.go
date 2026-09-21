@@ -1060,3 +1060,125 @@ func TestGatewayHealthGate_StatusMatchesCachedVerdict(t *testing.T) {
 		t.Errorf("last_error = %q after recovery, want \"\" — a stale failure text would misreport a healthy gateway", lastErr)
 	}
 }
+
+// TestNoteTransientGatewayDeferral_IncrementsCounterAndEmits is the SCHED-GAP-203-A
+// acceptance test: a transient gateway blip recorded through
+// NoteTransientGatewayDeferral must land in the SAME deferrals_total an operator
+// reads on /api/v1/status, and must emit the per-lane deferral event carrying the
+// project and the real gateway error text.
+//
+// Why the counter assertion is the load-bearing one. The measured defect
+// (SCHED-GAP-203) is deferrals_total=0 over 32h while 9 ticks were booked as LANE
+// failures for gateway blips, so "the method ran" is worth nothing on its own: a
+// call that bumped a private field, or that the status surface did not read, would
+// reproduce the exact blindness the row exists to remove. The counter is therefore
+// read back through the PUBLIC surface (gap170Deferrals → GatewayHealthGateStatus)
+// and asserted as a DELTA (the process-wide total is monotonic by contract, so an
+// absolute value would be a function of test order).
+//
+// The event half is asserted because it is the only durable per-lane record after
+// the fact: the payload's project/reason are what let an operator answer "which
+// lane, and what did the gateway actually say" without the tick ever existing.
+func TestNoteTransientGatewayDeferral_IncrementsCounterAndEmits(t *testing.T) {
+	gap170BootState(t) // fresh process-shaped gate state; restores it on cleanup
+	gap170ResetGate(t) // client uninstalled + real clock restored on cleanup
+	db := newTestDB(t)
+	SetGatewayHealthGateEvents(NewEventLogger(db))
+
+	const (
+		project = "test-project"
+		reason  = "sse stream ended without a terminal event"
+	)
+
+	// premise: no client is installed, so nothing else in the gate can move the
+	// counter or write an event during this test.
+	if armed, _, _, _, _, _ := GatewayHealthGateStatus(); armed {
+		t.Fatalf("premise: the gate is armed with no client installed — the deferral counted below would not be this method's")
+	}
+
+	before := gap170Deferrals()
+	gatewayHealth.NoteTransientGatewayDeferral(project, reason)
+
+	if got, want := gap170Deferrals()-before, uint64(1); got != want {
+		t.Fatalf("deferrals_total delta = %d, want %d — a transient gateway blip must increment the SAME counter the "+
+			"pre-spawn gate increments, or /api/v1/status keeps reporting deferrals_total=0 while lanes fail on the gateway "+
+			"(the measured SCHED-GAP-203 shape)", got, want)
+	}
+
+	// The event is selected by its machine marker, never by message text or
+	// component, so it stays queryable on its own after the fact. (The file's
+	// gap170EpisodeEvents helper is deliberately NOT reused: it filters
+	// component='gateway_health', the EPISODE-transition component, while a
+	// mid-spawn deferral is reported under the gate's own component — reusing it
+	// would make this test pass vacuously at zero events.)
+	fetchTransientDeferrals := func() []gap170Event {
+		t.Helper()
+		rows, err := db.Query(`SELECT component, severity, message, details FROM events
+			WHERE json_extract(details, '$.event_type') = 'gateway_health_transient_defer' ORDER BY id`)
+		if err != nil {
+			t.Fatalf("query transient deferral events: %v", err)
+		}
+		defer rows.Close()
+		var out []gap170Event
+		for rows.Next() {
+			var e gap170Event
+			var raw string
+			if err := rows.Scan(&e.Component, &e.Severity, &e.Message, &raw); err != nil {
+				t.Fatalf("scan transient deferral event: %v", err)
+			}
+			if err := json.Unmarshal([]byte(raw), &e.Details); err != nil {
+				t.Fatalf("decode transient deferral details %q: %v", raw, err)
+			}
+			out = append(out, e)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate transient deferral events: %v", err)
+		}
+		return out
+	}
+
+	evs := fetchTransientDeferrals()
+	if len(evs) != 1 {
+		t.Fatalf("transient deferral events after 1 call = %d, want 1 — the deferral must be visible to the fleet, "+
+			"not only counted", len(evs))
+	}
+	if evs[0].Component != "gateway_health_gate" {
+		t.Errorf("event component = %q, want %q", evs[0].Component, "gateway_health_gate")
+	}
+	if evs[0].Severity != "INFO" {
+		t.Errorf("event severity = %q, want INFO — a transient blip is normal operation the fleet absorbs, "+
+			"not an outage transition (those are the gate's MEDIUM/INFO episode events)", evs[0].Severity)
+	}
+	if evs[0].Message != "transient gateway deferral" {
+		t.Errorf("event message = %q, want %q", evs[0].Message, "transient gateway deferral")
+	}
+	if got, _ := evs[0].Details["project"].(string); got != project {
+		t.Errorf("event project = %q, want %q (the lane the blip is charged to)", got, project)
+	}
+	if got, _ := evs[0].Details["reason"].(string); got != reason {
+		t.Errorf("event reason = %q, want %q VERBATIM — the real gateway error must be preserved, not swallowed",
+			got, reason)
+	}
+
+	// A second call is a second deferral: the event is per-CALL (a mid-spawn blip
+	// is charged to one specific lane), and the counter is not latched. A gate that
+	// emitted once and then went quiet would hide the 5th blip of an hour.
+	const secondProject = "test-project-2"
+	gatewayHealth.NoteTransientGatewayDeferral(secondProject, "dial tcp 127.0.0.1:8642: connect: connection refused")
+	if got, want := gap170Deferrals()-before, uint64(2); got != want {
+		t.Errorf("deferrals_total delta after a second call = %d, want %d", got, want)
+	}
+	if got := len(fetchTransientDeferrals()); got != 2 {
+		t.Errorf("transient deferral events after a second call = %d, want 2 — per-call, one lane per row", got)
+	}
+
+	// The documented nil-receiver guard: spawn.go's caller may hold a nil gate in
+	// a test or a partially wired daemon, and that must be a no-op, not a panic
+	// (the gate's whole doctrine is that an absent signal never stops the fleet).
+	var nilGate *gatewayHealthGateState
+	before = gap170Deferrals()
+	nilGate.NoteTransientGatewayDeferral(project, reason)
+	if got := gap170Deferrals() - before; got != 0 {
+		t.Errorf("deferrals_total delta from a nil receiver = %d, want 0", got)
+	}
+}

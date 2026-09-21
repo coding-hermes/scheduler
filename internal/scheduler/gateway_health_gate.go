@@ -460,6 +460,69 @@ func gatewayHealthNoteDeferral() {
 	g.mu.Unlock()
 }
 
+// NoteTransientGatewayDeferral records a transient gateway blip as a deferral
+// rather than a lane failure (SCHED-GAP-203-A; the spawn-side caller is
+// SCHED-GAP-203-B, which invokes this from spawn.go when
+// errors.Is(gwErr, ErrGatewayTransient) is true).
+//
+// THE DEFECT THIS HALF OF THE FIX SERVES (SCHED-GAP-203, measured on the live
+// daemon 2026-09-20): /api/v1/status reported the gateway-health gate
+// armed=true healthy=true deferrals_total=0 over 32h while 9 of the 458 ticks
+// spawned in that window completed TickFailed with "gateway unreachable and
+// exec fallback disabled" — 4 of them a mid-run "gateway transient error: sse
+// stream ended without a terminal event" (i.e. AFTER a successful spawn), the
+// rest a failed connect. The gate (SCHED-GAP-170) guards only the PRE-SPAWN
+// admission point, so a blip that lands inside a spawn never reaches it and is
+// booked as the lane's own fault: a pick, a slot and a cooldown burned, and the
+// project's failure rate polluted (those rates feed --auto-disable-failure-rate).
+//
+// The COUNTER plumbing mirrors gatewayHealthNoteDeferral EXACTLY — the same
+// process-wide monotonic total (atomic, so the status surface reads it without
+// the gate lock) plus the same current-episode tally — because deferrals_total
+// and the recovery event's "after N deferrals" must count BOTH kinds of
+// deferral in one number: the operator question is "how much work did the
+// gateway stop", not "which half of the code deferred it".
+//
+// The EVENT is per-CALL, not per-episode, and that is deliberate: an outage
+// transition is one fleet-wide fact reported once (gatewayHealthEmit), whereas a
+// mid-spawn blip is charged to a SPECIFIC lane and its project/reason are what
+// make the deferral auditable per tick. The payload carries the machine marker
+// `event_type` (gateway_health_transient_defer) for the same reason the episode
+// events do — so the deferrals are queryable after the fact with
+// json_extract(details,'$.event_type') instead of by matching message text.
+//
+// A 401/403 is NEVER transient by construction (gateway_client.go classifies
+// it as ErrGatewayKeyRejected), so a key regression still fails the tick loudly
+// under GAP-035 and can never be laundered into a deferral by this method.
+func (g *gatewayHealthGateState) NoteTransientGatewayDeferral(project, reason string) {
+	if g == nil {
+		return
+	}
+	// Same order and lock shape as gatewayHealthNoteDeferral: the atomic total
+	// first (the hot-path counter the status surface reads lock-free), then the
+	// episode tally under the gate lock.
+	g.deferrals.Add(1)
+	g.mu.Lock()
+	if g.episodeActive {
+		g.episodeDeferrals++
+	}
+	ev := g.events
+	g.mu.Unlock()
+	if ev == nil {
+		return // unwired logger: log-only, exactly like the episode transitions
+	}
+	// Emitted OUTSIDE the lock (an event write must never hold up an admission
+	// decision) and ignoring the write result, mirroring gatewayHealthEmit —
+	// EventLogger.Emit already logs its own failure and never returns one.
+	ev.Emit(context.Background(), SeverityInfo, "gateway_health_gate",
+		"transient gateway deferral",
+		map[string]any{
+			"event_type": "gateway_health_transient_defer",
+			"project":    project,
+			"reason":     reason,
+		})
+}
+
 // gatewayHealthEmit reports an episode transition through the installed logger
 // and is a NO-OP for the zero transition (see gatewayHealthStore) and for an
 // unwired logger (the gate then only logs). The event is a single fleet-level
