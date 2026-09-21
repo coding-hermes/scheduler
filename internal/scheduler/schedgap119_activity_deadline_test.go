@@ -128,6 +128,15 @@ func TestSgap119_ActiveTurnExceedsWallDeadlineStillCompletes(t *testing.T) {
 // POST that goes silent (one event, then nothing) trips the idle deadline
 // at the configured value and fails the tick with the GAP-117 stalled
 // text, well before the tick deadline.
+//
+// INT-CI-157: the abort is proven by the persisted gateway_trace record
+// (classification=aborted-by-turn-deadline, idle_fired=true,
+// elapsed_ms≈deadline), NOT by a wall-clock sample — CI run
+// 35565727270 showed the deadline firing at 401.8ms of its 400ms budget
+// under -race on a loaded runner while the test still failed on the
+// slot-release assertion below. The terminal-row wait doubles as the
+// real-time guard: waitForTickTerminal returns !ok past the 5s cap, and
+// the trace elapsed_ms is the exact deadline evidence.
 func TestSgap119_IdleHangAbortsAtDeadline(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "sgap119-idle-hang"
@@ -158,14 +167,15 @@ func TestSgap119_IdleHangAbortsAtDeadline(t *testing.T) {
 	loop.SetTickTimeout(30 * time.Second)
 	loop.SetGatewayResponseTimeout(400 * time.Millisecond)
 
+	// The 5s cap is the CI safety net (INT-CI-157): waitForTickTerminal
+	// returns ok=false once it expires, so a pathological tick cannot hang
+	// the test. The AC evidence is the trace's elapsed_ms, asserted below.
 	fsStart := time.Now()
 	tickID := loop.slotPool.Spawn(PackedProject{Name: projectName, Workdir: t.TempDir()}, time.Now(), true, db)
 	status, ok := waitForTickTerminal(t, db, tickID, 5*time.Second)
 	if !ok {
-		t.Fatalf("tick %s never reached a terminal state — the idle deadline did not abort the silent POST", tickID)
-	}
-	if fsElapsed := time.Since(fsStart); fsElapsed >= 5*time.Second {
-		t.Fatalf("slot-pool tick took %v — idle deadline far slower than the configured 400ms", fsElapsed)
+		t.Fatalf("tick %s never reached a terminal state within %v of real time (spawn→abort took %v; the idle deadline did not abort the silent POST) — INT-CI-157 safety net",
+			tickID, 5*time.Second, time.Since(fsStart))
 	}
 	if status != "failed" {
 		t.Fatalf("ticks.status = %q, want failed (stalled classification)", status)
@@ -195,6 +205,22 @@ func TestSgap119_IdleHangAbortsAtDeadline(t *testing.T) {
 	}
 	if rowSession != "sess-sgap119-idle" {
 		t.Errorf("ticks.session_id = %q, want sess-sgap119-idle — the stalled row must keep the real gateway session", rowSession)
+	}
+	// INT-CI-157: the ticks row goes terminal at lifecycle.Complete, but the
+	// slot releases only when the slot-pool goroutine RETURNS — after the
+	// post-completion bookkeeping (bump accounting, adaptive-cooldown writes).
+	// Under -race on a loaded CI runner that window outlasted a single
+	// immediate Running() sample (run 35565727270 failed exactly here with
+	// "slot pool Running() = 1"). Poll like waitForTickTerminal instead:
+	// the release lands within one 20ms poll in practice; the 15s cap is a
+	// CI safety net, not the AC.
+	runningDeadline := time.Now().Add(15 * time.Second)
+	for loop.slotPool.Running() != 0 {
+		if time.Now().After(runningDeadline) {
+			t.Fatalf("slot pool still holds %d slot(s) %v after the stalled tick reached terminal — slot not released (INT-CI-157)",
+				loop.slotPool.Running(), time.Since(fsStart))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if n := loop.slotPool.Running(); n != 0 {
 		t.Errorf("slot pool Running() = %d after stalled tick, want 0 (slot released)", n)
