@@ -19,6 +19,36 @@ const (
 	TickCompleted TickStatus = "completed"
 	TickFailed    TickStatus = "failed"
 	TickTimeout   TickStatus = "timeout"
+	// TickDeferred is the terminal status for a tick the harness DEFERRED
+	// instead of failing (SCHED-GAP-203). It exists because the gateway-health
+	// gate (SCHED-GAP-170) guards only the PRE-SPAWN admission point: a blip
+	// that lands INSIDE a spawn — a refused connect, or an SSE stream that
+	// ended without a terminal event mid-run — was booked as the lane's own
+	// fault, burning a pick, a slot and a cooldown and polluting the project's
+	// failure rate (which feeds --auto-disable-failure-rate). LIVE EVIDENCE
+	// (scheduler.db, boot 2026-09-19T10:46 → 2026-09-20): 9 of 458 ticks
+	// failed this way, every one of them with the error text
+	// "gateway unreachable and exec fallback disabled: gateway transient
+	// error: …", while /api/v1/status reported the gate armed, healthy and
+	// deferrals_total=0.
+	//
+	// A DEFERRED tick is NOT a failure and NOT a success: it is work the
+	// harness declined to charge the lane for. Consequences that are
+	// deliberate, not accidental:
+	//
+	//   - lifecycle.Complete leaves failure_reason EMPTY (that column's
+	//     transport-class stamp is only for failed/timeout rows) — the status
+	//     itself now names the class, so a second marker would be redundant.
+	//   - consecutive_failures is NOT reset and NOT incremented. Failed and
+	//     timeout ticks also leave it alone (GAP-133's backoff gate reads it);
+	//     only a completed tick clears it.
+	//   - The gate's deferrals counter is incremented by the spawn path
+	//     (Spawner.transientGatewayDeferral), so the deferral is visible on
+	//     the same deferrals_total an operator already reads.
+	//
+	// Auth rejections are NEVER deferred: a 401/403 is ErrGatewayKeyRejected,
+	// terminal by GAP-035, and keeps failing loudly.
+	TickDeferred TickStatus = "deferred"
 )
 
 // Outcome converts the tick status to the outcome column value.
@@ -30,6 +60,12 @@ func (s TickStatus) Outcome() string {
 		return "failed"
 	case TickTimeout:
 		return "timeout"
+	case TickDeferred:
+		// The outcome column must carry the deferral too: an audit reads BOTH
+		// columns (status for the lifecycle state, outcome for the terminal
+		// verdict), and a deferred row whose outcome fell through to the
+		// "dry_run" default would look like a simulated tick.
+		return "deferred"
 	default:
 		return "dry_run"
 	}
@@ -106,6 +142,13 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	// ticks.error. Empty = not transport-class, the safe default for every
 	// legacy row and for successful ticks. Same classifier the spawn path
 	// uses to decide whether a failure may touch consecutive_failures.
+	//
+	// SCHED-GAP-203: TickDeferred is deliberately NOT in this set. A deferred
+	// row already carries its classification in the STATUS column ("deferred"
+	// is itself the statement that the harness declined to charge the lane),
+	// so a transport marker here would be a second, weaker copy of the same
+	// fact — and the marker vocabulary exists for rows whose status cannot
+	// express it.
 	failureReason := ""
 	if outcome.Status == TickFailed || outcome.Status == TickTimeout {
 		failureReason = failureReasonClass(outcome.Error)
@@ -142,6 +185,11 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	// successful last_tick_completed). Failed and timeout outcomes
 	// intentionally leave the counter alone — GAP-133's FailureBackoff gate
 	// reads it to hold admission during consecutive failures.
+	//
+	// SCHED-GAP-203: a DEFERRED outcome leaves it alone too — it neither
+	// clears the counter (the project has not demonstrated a good tick) nor
+	// increments it (the spawn path never calls noteSpawnFailure for a
+	// deferral: a gateway blip is not the lane's failure).
 	if outcome.Status == TickCompleted {
 		if _, err := lt.db.Exec(`
 			UPDATE projects SET consecutive_failures = 0 WHERE name = ?

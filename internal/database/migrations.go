@@ -9,13 +9,25 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 36
+const latestMigration = 37
 
 // migration describes a single forward-only schema change.
 type migration struct {
 	version int
 	desc    string
 	stmt    string
+	// ownTx marks a migration that must manage its OWN transaction and PRAGMA
+	// state, so Migrate runs `stmt` directly instead of wrapping it in a
+	// transaction. Only ONE shape needs this today: a table REBUILD that must
+	// run with `PRAGMA foreign_keys=OFF` while dropping a PARENT table
+	// (v37 widening the ticks status/outcome vocabularies). SQLite makes
+	// `PRAGMA foreign_keys` a no-op inside a transaction ("may only be enabled
+	// or disabled when there is no pending BEGIN or SAVEPOINT"), and a DROP
+	// TABLE with enforcement ON fires the child's ON DELETE CASCADE — which
+	// would silently DELETE every tick_workers attribution row. So the
+	// statement does its own toggling and carries its own BEGIN/COMMIT, and
+	// the runner re-asserts enforcement afterwards whatever happens.
+	ownTx bool
 }
 
 // migrations is the ordered list of schema migrations. Each entry must be
@@ -58,8 +70,8 @@ CREATE TABLE IF NOT EXISTS ticks (
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout')),
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -481,6 +493,94 @@ CREATE INDEX IF NOT EXISTS idx_deferrals_created ON deferrals(created_at);
 		desc:    "cost_source backfill: stamp 'legacy' on rows that pre-date metering (SCHED-GAP-127)",
 		stmt:    `UPDATE ticks SET cost_source = 'legacy' WHERE cost_source = '';`,
 	},
+	{
+		version: 37,
+		desc:    "deferred tick status (SCHED-GAP-203): widen the ticks status/outcome vocabularies with 'deferred' — a transient gateway blip (refused connect, SSE stream ended without a terminal event) is a DEFERRAL the harness absorbed, not a lane failure, and the status column is where that verdict must be stored",
+		// WHY A REBUILD AND NOT AN ALTER: SQLite cannot modify a CHECK
+		// constraint in place. The vocabulary lives in the column's CHECK, so
+		// the only way to admit one new value is to re-create the table and
+		// copy every row — the documented rebuild procedure.
+		//
+		// WHY ownTx: the rebuild DROPs the `ticks` PARENT table, and its child
+		// (`tick_workers.tick_id REFERENCES ticks(id) ON DELETE CASCADE`) would
+		// lose its 95 live attribution rows to the cascade if enforcement were
+		// ON. `PRAGMA foreign_keys=OFF` cannot be set inside the runner's
+		// transaction, so this statement owns its transaction: pragma off
+		// (autocommit), BEGIN … COMMIT around the rebuild, pragma on. The
+		// BEGIN/COMMIT half is what makes a crash MID-REBUILD recoverable —
+		// rolled back, the migration is simply re-run at the next boot; without
+		// it a half-applied rebuild would fail on "table ticks_203b already
+		// exists" and wedge the daemon's boot. `DROP TABLE IF EXISTS` covers the
+		// one window the pragma toggling cannot (a leftover from an aborted
+		// process) and keeps a re-run idempotent.
+		//
+		// COLUMN LIST: verbatim from the v1 CREATE plus every column added by
+		// migrations 22-36, with the same types, NULL/NOT NULL and defaults —
+		// the copy is positional-safe only because both sides list every column
+		// by name in the same order.
+		ownTx: true,
+		stmt: `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+DROP TABLE IF EXISTS ticks_203b;
+CREATE TABLE ticks_203b (
+    id            TEXT PRIMARY KEY,
+    project_name  TEXT NOT NULL REFERENCES projects(name),
+    session_id    TEXT,
+    pid           INTEGER DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred')),
+    spawned_at    TEXT,
+    completed_at  TEXT,
+    exit_code     INTEGER,
+    commits       INTEGER DEFAULT 0,
+    files_changed INTEGER DEFAULT 0,
+    tokens_in     INTEGER DEFAULT 0,
+    tokens_out    INTEGER DEFAULT 0,
+    cost_usd      REAL DEFAULT 0.0,
+    urgency       REAL DEFAULT 0.0,
+    weight_used   INTEGER DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    heartbeat_at  TEXT,
+    orphaned_at   TEXT,
+    orphan_reason TEXT,
+    nudge_count   INTEGER NOT NULL DEFAULT 0,
+    code_commits  INTEGER NOT NULL DEFAULT 0,
+    board_commits INTEGER NOT NULL DEFAULT 0,
+    bump          INTEGER NOT NULL DEFAULT 0,
+    worker_count  INTEGER NOT NULL DEFAULT 0,
+    wave_recovery INTEGER NOT NULL DEFAULT 0,
+    gateway_trace TEXT NOT NULL DEFAULT '',
+    cost_source   TEXT NOT NULL DEFAULT '',
+    failure_reason TEXT NOT NULL DEFAULT '',
+    slot_wait_ms  INTEGER NOT NULL DEFAULT 0,
+    admit_reason  TEXT NOT NULL DEFAULT '',
+    nudge_source  TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO ticks_203b (
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source
+)
+SELECT
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source
+FROM ticks;
+DROP TABLE ticks;
+ALTER TABLE ticks_203b RENAME TO ticks;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned ON ticks(project_name, spawned_at);
+CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+COMMIT;
+PRAGMA foreign_keys=ON;
+`,
+	},
 }
 
 // Migrate applies all pending migrations to db. Already-applied migrations
@@ -503,6 +603,35 @@ CREATE TABLE IF NOT EXISTS migrations (
 			return err
 		}
 		if applied {
+			continue
+		}
+
+		if m.ownTx {
+			// A table-rebuild migration owns its transaction: it must toggle
+			// `PRAGMA foreign_keys` (a no-op inside a transaction), so the
+			// runner cannot wrap it. Enforcement is re-asserted here no matter
+			// how the statement ends — a failure path must never leave the
+			// daemon's single connection unenforced (migration 37's DROP TABLE
+			// would then cascade-delete tick_workers rows on a later retry).
+			//
+			// The rebuild and the version INSERT are therefore NOT one atomic
+			// unit: a crash between them re-runs the migration on the next boot.
+			// That is why such a migration must be idempotent by construction
+			// (v37's DROP TABLE IF EXISTS + full re-copy).
+			merr := func() error {
+				defer func() { _, _ = db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+				_, err := db.ExecContext(ctx, m.stmt)
+				return err
+			}()
+			if merr != nil {
+				return fmt.Errorf("migration %d (%s): %w", m.version, m.desc, merr)
+			}
+			if _, err := db.ExecContext(ctx,
+				`INSERT INTO migrations (version, desc) VALUES (?, ?)`,
+				m.version, m.desc,
+			); err != nil {
+				return fmt.Errorf("record migration %d: %w", m.version, err)
+			}
 			continue
 		}
 

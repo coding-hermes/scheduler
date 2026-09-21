@@ -19,12 +19,21 @@ import (
 // return (loop.go) blinding the GAP-042 watchdog against the very wedge it
 // exists to catch. These tests pin both halves:
 //
-//  1. a spawn whose gateway dials are ALL refused (retry-exhaust) must land
-//     status='failed' and give the slot back — through the real SlotPool,
+//  1. a spawn whose gateway dials are ALL refused (retry-exhaust) must reach a
+//     TERMINAL status and give the slot back — through the real SlotPool,
 //     with the production daemon shape (2h tick deadline + 30m per-turn
 //     knob, i.e. the supervised stream path);
 //  2. a fleet whose "running" rows are stale pid=0 phantoms must not
 //     silence checkEvalStall.
+//
+// SCHED-GAP-203 UPDATE (this row's sibling): the terminal status this shape
+// now lands is "deferred", not "failed". The refused-dial burst above IS the
+// evidence 203 measured (5 of its 9 ticks), and the whole point of that row is
+// that such a blip is a gateway-side deferral rather than a lane failure — so
+// the expectation below moved with the behaviour. What this test exists to
+// protect is unchanged and still asserted: the row is TERMINAL (never left
+// "running"), the slot is released, and the retry ladder demonstrably ran. It is
+// NOT a licence to relax: "queued" or "running" still fails the test.
 
 // schedGap135ClosedGatewayURL stands up a real HTTP server, captures its
 // URL, then closes the listener so every dial to it is an instant
@@ -40,8 +49,9 @@ func schedGap135ClosedGatewayURL(t *testing.T) string {
 // TestSCHEDGAP135_RetryExhaustMarksFailedAndReleasesSlot — the live wedge:
 // 4 projects spawn against a gateway whose listener is closed; each exhausts
 // the 3 GATEWAY RETRY attempts on transport-refused dials. Every tick row
-// must end status='failed' (never left 'running'), and the 5-slot pool must
-// drain back to 0 running.
+// must end in a TERMINAL status (never left 'running') — "deferred" for this
+// transport blip since SCHED-GAP-203, see the file header — and the 5-slot
+// pool must drain back to 0 running.
 func TestSCHEDGAP135_RetryExhaustMarksFailedAndReleasesSlot(t *testing.T) {
 	db := newTestDB(t)
 	buf := schedGap080CaptureLog(t)
@@ -76,8 +86,16 @@ func TestSCHEDGAP135_RetryExhaustMarksFailedAndReleasesSlot(t *testing.T) {
 	}
 
 	for i := range ticks {
-		if got := tickStatusOf(t, db, ticks[i]); got != "failed" {
-			t.Errorf("tick %s (%s) status=%q, want %q — a retry-exhausted transport failure must never be left running", ticks[i], names[i], got, "failed")
+		got := tickStatusOf(t, db, ticks[i])
+		// The load-bearing property is TERMINALITY. It is asserted first so a
+		// future vocabulary change cannot make this test pass on a row that
+		// was left queued/running (the 2026-09-17 phantom wedge).
+		if got == "running" || got == "queued" {
+			t.Errorf("tick %s (%s) status=%q — a retry-exhausted transport failure must never be left running", ticks[i], names[i], got)
+			continue
+		}
+		if got != "deferred" {
+			t.Errorf("tick %s (%s) status=%q, want %q — a retry-exhausted transport blip is a gateway deferral (SCHED-GAP-203), not a lane failure", ticks[i], names[i], got, "deferred")
 		}
 	}
 	if got := NewLifecycleTracker(db).RunningCount(); got != 0 {

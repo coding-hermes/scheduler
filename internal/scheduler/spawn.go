@@ -407,6 +407,99 @@ func (s *Spawner) noteSpawnFailureClassed(project, errText string) {
 	s.noteSpawnFailure(project)
 }
 
+// noteTransientGatewayDeferral records a transient gateway blip against the
+// process-wide gateway-health gate (SCHED-GAP-203).
+//
+// WHY THE GATE, AND WHY A METHOD. The deferrals_total counter the gate owns
+// (gateway_health_gate.go) is the number an operator already reads on
+// /api/v1/status to answer "how much work did the gateway stop". Before this
+// row, that counter only moved on the PRE-SPAWN admission path (SCHED-GAP-170)
+// — deferrals_total=0 over 32h while 9 ticks failed on gateway blips, because
+// a blip landing INSIDE a spawn never reached the gate. Routing the mid-spawn
+// case through the gate's counter is what makes the two deferral kinds one
+// number instead of two half-truths (see NoteTransientGatewayDeferral's
+// contract).
+//
+// The gate itself is PACKAGE state (gatewayHealth) — the gateway is one
+// fleet-wide dependency, so the verdict and the counters live with the load
+// gate's package-level threshold rather than on a Loop/Spawner field. That is
+// also why there is no Spawner field and no constructor parameter to wire: a
+// per-Spawner copy would be a second source of truth for a fleet-wide number.
+// This method is the single named seam spawn.go calls, mirroring
+// noteSpawnFailureClassed, so the deferral bookkeeping has exactly one owner.
+func (s *Spawner) noteTransientGatewayDeferral(project, reason string) {
+	gatewayHealth.NoteTransientGatewayDeferral(project, reason)
+}
+
+// transientGatewayDeferral books a transient gateway blip as a DEFERRAL
+// instead of a lane failure (SCHED-GAP-203), returning the non-completed tick
+// whose Wait() yields TickDeferred.
+//
+// CALLED FROM exactly one place: Spawn()'s no-exec-fallback drop, when
+// gatewayTransientBlip(gwErr) holds. That is the only site where a transient
+// gateway error still exists as an error AND is the terminal outcome of the
+// spawn — the two live shapes the row measured both ended here:
+//
+//	"gateway unreachable and exec fallback disabled: gateway transient error:
+//	 sse stream ended without a terminal event"   (mid-run SSE drop)
+//	"gateway unreachable and exec fallback disabled: gateway POST: Post
+//	 \"http://127.0.0.1:8642/v1/responses\": dial tcp …: connect: connection
+//	 refused"                                    (failed connect)
+//
+// (The refused connect is NOT wrapped in ErrGatewayTransient — it is a
+// *url.Error classified transient only by IsTransientGatewayErr. A predicate on
+// the sentinel alone would have "fixed" 4 of the 9 measured ticks and left 5
+// failing; see gatewayTransientBlip.)
+//
+// WHAT THIS DELIBERATELY DOES NOT DO:
+//
+//   - It does not call noteSpawnFailureClassed / noteSpawnFailure: a deferral
+//     must not touch consecutive_failures (a gateway blip is not a lane fault,
+//     and that counter feeds the GAP-133 backoff gate).
+//   - It does not call recordGatewayDrop (GAP-050): that counter's contract is
+//     "consecutive DROPS of tick work", and its >=2 alert exists to catch a
+//     fleet-wide sync death. A blip that is now booked as a deferral is not a
+//     drop, and counting it would re-introduce the same false alarm the
+//     SCHED-GAP-134/143 work removed.
+//   - It does not swallow auth rejections: ErrGatewayKeyRejected is checked
+//     BEFORE this path at the call site and stays terminal (GAP-035).
+//
+// Git work is pre-counted exactly like the SCHED-GAP-119 stall path: an SSE
+// stream that died mid-run may have aborted a turn that already committed, and
+// a deferred row that reported commits=0 for real commits would repeat the
+// zero-accounted silent loss that row fixed.
+func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string, gwErr error, reqStart time.Time,
+	model, provider string, rate routerRate) *SpawnedTick {
+	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+	log.Printf("DEFERRED: %s tick=%s gateway transient blip — deferring (NOT a lane failure): %v",
+		project.Name, tickID, gwErr)
+	s.noteTransientGatewayDeferral(project.Name, gwErr.Error())
+	return &SpawnedTick{
+		TickID:     tickID,
+		Project:    project.Name,
+		SessionID:  tickID, // placeholder — a blip with no terminal event persisted no session
+		Started:    reqStart,
+		Deliver:    project.Deliver,
+		spawner:    s,
+		completed:  false,
+		completeAt: s.clock().Now(),
+		gwDeferred: true,
+		// The gateway's own error text is carried through to ticks.error: the
+		// deferral must be auditable, not silent (the row's acceptance asks
+		// for "the gateway reason recorded").
+		gwDeferReason: gwErr.Error(),
+		model:         model,
+		provider:      provider,
+		rate:          rate,
+		workdir:       project.Workdir,
+		reqStart:      reqStart,
+		Trigger:       "prompt",
+		gwFailCounted: true,
+		gwFailCommits: commits,
+		gwFailFiles:   files,
+	}
+}
+
 // recordCircuitFailure opens (or extends) the circuit for the pair that
 // just failed, via router_circuit.py record-failure (TASK-ROUTER-002). The
 // breaker cooldown (5m → double per consecutive failure → 1h cap) becomes
@@ -1607,6 +1700,39 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				return nil, s.gatewayKeyRejected(project.Name, tickID, gwErr)
 			}
 			if s.noExecFallback {
+				// SCHED-GAP-203: a TRANSIENT gateway blip is a DEFERRAL, not a
+				// lane failure. Everything classified ErrGatewayTransient —
+				// including the two shapes measured on the live daemon
+				// (a refused dial, and an SSE stream that ended without a
+				// terminal event) — used to fall through to the drop below:
+				// the tick was booked status=failed with the wrapper text
+				// "gateway unreachable and exec fallback disabled: …", which
+				// burns a pick, a slot and a cooldown, pollutes the project's
+				// failure rate (--auto-disable-failure-rate), and moved
+				// deferrals_total not at all while the gate reported itself
+				// armed and healthy. The blip is now counted where the gate
+				// counts deferrals and the tick lands TickDeferred.
+				//
+				// Placement is load-bearing, in this order:
+				//   1. the ErrGatewayKeyRejected check ABOVE — an auth
+				//      rejection is terminal (GAP-035) and must keep failing;
+				//   2. this branch INSIDE the noExecFallback block — with exec
+				//      fallback ENABLED a blip is still rescued by a local
+				//      process (pre-203 behaviour, byte-identical), because
+				//      deferring there would silently drop a tick the box
+				//      could have run;
+				//   3. before noteSpawnFailureClassed/recordGatewayDrop below,
+				//      which must not see a deferral at all.
+				//
+				// The predicate is gatewayTransientBlip, NOT
+				// errors.Is(gwErr, ErrGatewayTransient): the dial-refused
+				// shape (5 of the row's 9 measured ticks) is a *url.Error and
+				// is NOT wrapped in ErrGatewayTransient, while our own
+				// deadline expiries and HTTP 5xx refusals ARE in the retryable
+				// set but are not blips. See its doc for the full split.
+				if gatewayTransientBlip(gwErr) {
+					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
+				}
 				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
 				// SCHED-GAP-143: classify against the GATEWAY error itself,
 				// never the wrapper text below — the wrapper ("gateway
@@ -1924,10 +2050,30 @@ type SpawnedTick struct {
 	// gwFailCounted/gwFailCommits/gwFailFiles (SCHED-GAP-119): git work
 	// pre-counted at the failure site for ticks that failed AFTER doing
 	// real work (e.g. a turn-deadline abort mid-commit). Wait()'s
-	// gwFailErr branch persists them instead of zeros.
+	// gwFailErr branch persists them instead of zeros. SCHED-GAP-203
+	// reuses the same two counters for a DEFERRED tick (a mid-stream SSE
+	// drop can abort a turn that already committed) — the field names are
+	// historical; the payload is "work measured without gateway usage".
 	gwFailCounted bool
 	gwFailCommits int
 	gwFailFiles   int
+
+	// gwDeferred/gwDeferReason (SCHED-GAP-203) mark a tick the spawn path
+	// DEFERRED instead of failing: the gateway call failed with a transient
+	// transport BLIP (gatewayTransientBlip: a refused connect, a body
+	// read/unmarshal failure, or an SSE stream that ended without a terminal
+	// event mid-run) and exec fallback is disabled, so there is nothing to run
+	// and nothing to charge the lane for. Wait() yields TickDeferred carrying
+	// gwDeferReason, so slot_pool's existing lifecycle.Complete path persists
+	// status=deferred / outcome=deferred with the real gateway text in
+	// ticks.error — never status=failed.
+	//
+	// Set by Spawner.transientGatewayDeferral ONLY. Never set together with
+	// gwFailErr (that path is the project-/harness-failure classification),
+	// and never set for ErrGatewayKeyRejected: an auth rejection is terminal
+	// (GAP-035) and keeps failing loudly.
+	gwDeferred    bool
+	gwDeferReason string
 
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
@@ -1967,12 +2113,62 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		st.spawner.mu.Unlock()
 	}()
 
+	// SCHED-GAP-203: a DEFERRED tick (spawn path hit ErrGatewayTransient with
+	// exec fallback disabled) yields TickDeferred so slot_pool's EXISTING
+	// lifecycle.Complete path persists status=deferred / outcome=deferred with
+	// the gateway's own error text in ticks.error. Checked FIRST: a deferral is
+	// the terminal statement about this tick, and the failure branches below
+	// must never re-classify it as a lane fault. Deferred rows deliberately
+	// leave consecutive_failures alone (Complete's reset fires on TickCompleted
+	// only) and are NOT considered by the orphan-resume scan, which selects
+	// status IN ('failed','timeout') rows — a blip the harness absorbed is not
+	// a lost session to continue.
+	if st.gwDeferred {
+		dur := st.completeAt.Sub(st.Started)
+		log.Printf("TICK: %s %s → %s (%v): %s",
+			st.Project, st.TickID, TickDeferred, dur.Round(time.Second), st.gwDeferReason)
+		return TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickDeferred,
+			// -1 → Complete writes exit_code NULL: no process ever ran, so
+			// there is no exit status to report (same convention as the other
+			// non-completed outcomes, which set -1 at their failure sites).
+			ExitCode: -1,
+			// The gateway's error text IS recorded (the row's acceptance asks
+			// for the reason to be auditable) — but failure_reason stays ""
+			// because the class is already named by the status itself.
+			Error:    st.gwDeferReason,
+			Duration: dur,
+			// A deferred tick's usage is empty by construction (no terminal
+			// event arrived), so its cost is ~0 rather than a fabricated
+			// estimate — but the source is still stamped gateway-sourced.
+			CostSource: CostSourceGateway,
+			// SCHED-GAP-119 payload, pre-counted at the deferral site: an SSE
+			// drop can abort a turn that already committed.
+			Commits:      st.gwFailCommits,
+			FilesChanged: st.gwFailFiles,
+		}
+	}
+
 	// SCHED-GAP-079: gateway ticks whose response failed the completion
 	// gate (explicit failure status, or empty-output-AND-empty-session)
 	// carry gwFailErr. Yield TickFailed so the EXISTING lifecycle.Complete
 	// path in slot_pool persists status=failed / outcome=failed /
 	// error=<gateway text> — never completed/committed. The deferred
 	// cleanup (heartbeat stop, active-map delete) still runs via defer.
+	//
+	// SCHED-GAP-203: this branch is deliberately NOT a deferral path. Its
+	// error text comes from the gateway's RESPONSE gate (explicit failure
+	// status, empty output AND empty session, a stalled turn) — never from a
+	// transport classification, which cannot reach here because a non-nil
+	// gwErr skips the response handling above entirely. Deferring on this text
+	// would mean text-matching "gateway …" and would swallow real failures
+	// (the row's own warning: do not turn the gate into a blanket retry that
+	// hides repeated genuine spawn failures).
 	if st.gwFailErr != "" {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
@@ -2019,6 +2215,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		// event) and do NOT fail the tick. Runs AFTER countGitChanges so the
 		// git metrics are still recorded on rejection; the gwFailErr early
 		// return above keeps SCHED-GAP-079 semantics unchanged.
+		//
+		// SCHED-GAP-203: the err here is a BOARD-CLOSURE verdict (a row closed
+		// without evidence) — never a gateway transport error — so this stays
+		// TickFailed. Branching it on ErrGatewayTransient would be dead code
+		// that reads as if the closure gate could be deferred; the gwDeferred
+		// branch at the top of Wait() is the deferral path, and it returns
+		// before this gate can run.
 		if err := st.boardClosureGate(st.reqStart, st.completeAt); err != nil {
 			log.Printf("TICK: %s %s → %s (%v): %s",
 				st.Project, st.TickID, TickFailed,
