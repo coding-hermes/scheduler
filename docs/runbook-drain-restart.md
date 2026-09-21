@@ -313,7 +313,8 @@ timeout
 ```
 
 The in-flight statuses are **`queued` and `running`** (the column is constrained:
-`CHECK(status IN ('queued','running','completed','failed','timeout'))`). Gate the drain on the endpoint
+`CHECK(status IN ('queued','running','completed','failed','timeout','deferred'))` — `deferred` is a
+terminal gateway-side deferral, SCHED-GAP-203, never in flight). Gate the drain on the endpoint
 first, because that is what the daemon itself uses:
 
 ```sh

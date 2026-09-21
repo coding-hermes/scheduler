@@ -510,6 +510,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// Spawn.
 		st, err := p.spawner.Spawn(proj, tickID)
 		if err != nil {
+			// This branch is the PROJECT-SIDE / terminal-error completion
+			// path (auth rejection, max-concurrency, a nil gateway with exec
+			// fallback disabled, …). It is deliberately NOT a deferral path:
+			// SCHED-GAP-203's transient gateway blips never reach it, because
+			// Spawn returns a *SpawnedTick* (not an error) for them and the
+			// tick's Wait() yields TickDeferred — see
+			// Spawner.transientGatewayDeferral. `deferred` status rows are
+			// therefore always written via the outcome path below, the same
+			// one a completed tick uses.
 			log.Printf("SPAWN: %s failed: %v", proj.Name, err)
 			// Finished MUST be set: lifecycle.Complete persists it as
 			// completed_at, and the packer's cooldown/backoff/starvation logic
@@ -541,6 +550,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// problem costs at most one WARN event and can never change the
 		// tick's status, outcome, cost, or anything after this point — the
 		// outcome was already persisted above.
+		//
+		// SCHED-GAP-203: TickDeferred is NOT added here. A deferred tick never
+		// spawned a foreman session, so there is no manifest to ingest —
+		// widening this set would send the ingester hunting a file the tick
+		// never wrote. (The slot itself is released by the deferred
+		// p.Release at the top of this goroutine, exactly like a completed or
+		// failed tick: the release is not status-gated.)
 		if db != nil && proj.Workdir != "" &&
 			(outcome.Status == TickCompleted || outcome.Status == TickTimeout) {
 			n, err := ingestWaveManifest(context.Background(), db, proj.Workdir, outcome.Project, outcome.TickID)

@@ -658,8 +658,8 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `id` | string | `<project>-<YYYY>-<MM>-<DD>-<HH>-<MM>-<SS>` |
 | `project_name` | string | Project the tick ran against |
 | `session_id` | string | Spawned process/gateway session id |
-| `status` | string | `queued` \| `running` \| `completed` \| `failed` \| `timeout` |
-| `outcome` | string | Terminal outcome: `committed` \| `dry_run` \| `failed` \| `timeout`; `""` while running/queued |
+| `status` | string | `queued` \| `running` \| `completed` \| `failed` \| `timeout` \| `deferred` (`deferred` = terminal gateway-side deferral: a transient gateway blip, SCHED-GAP-203 — not a lane failure) |
+| `outcome` | string | Terminal outcome: `committed` \| `dry_run` \| `failed` \| `timeout` \| `deferred`; `""` while running/queued |
 | `spawned_at`, `completed_at` | string | RFC3339; `completed_at` `""` while not terminal |
 | `exit_code` | int | Process exit code |
 | `commits`, `files_changed` | int | Work metrics |

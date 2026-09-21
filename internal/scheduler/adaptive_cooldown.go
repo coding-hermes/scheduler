@@ -100,6 +100,25 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// marker (-1/-1) instead of silently looking like a zero-commit tick.
 	codeCommits, boardCommits, measured := persistGitCommitSignals(db, outcome, workdir)
 
+	// SCHED-GAP-203: a DEFERRED tick is a harness-side gateway blip, not a
+	// project-side no-progress tick, so it must not extend the no-progress
+	// streak or ratchet cooldown_s. Timeouts DO reach the escalation below
+	// ("a tick that burned its slot and produced nothing is exactly the
+	// waste adaptive exists to stop") — but a deferred tick never ran a
+	// foreman turn at all, so charging the project for it would let one
+	// gateway flap park a healthy lane: the same class of defect SCHED-GAP-134
+	// (auto-disable on drain noise) and SCHED-GAP-143 (transport-class
+	// failures never touch consecutive_failures) already closed elsewhere.
+	// Returning true means "accounted for" — the caller then skips the legacy
+	// autoSlowdown verdict logic too, which is correct here because a deferred
+	// tick has no output to parse.
+	// The commit-anatomy stamp ABOVE still ran (SCHED-GAP-202 observability is
+	// unconditional): a mid-stream SSE drop can abort a turn that already
+	// committed, and those commits stay recorded on the row.
+	if outcome.Status == TickDeferred {
+		return true
+	}
+
 	var (
 		adaptive  int
 		floorS    int

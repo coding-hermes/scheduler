@@ -81,6 +81,53 @@ func IsTransientGatewayErr(err error) bool {
 	return errors.Is(err, ErrGatewayTransient)
 }
 
+// gatewayTransientBlip reports whether a TERMINAL gateway error — one that has
+// already exhausted the SCHED-GAP-080 bounded same-pair retry — is a transient
+// BLIP the harness should DEFER (SCHED-GAP-203) rather than charge to the lane.
+//
+// This is deliberately NOT the same predicate as IsTransientGatewayErr, and the
+// difference is the whole point of the row. "Worth retrying" and "never the
+// lane's fault" are different questions, and two sub-classes of the retryable
+// set answer the second one NO:
+//
+//   - context.DeadlineExceeded / context.Canceled: our OWN deadline expired
+//     (the tick ctx, or a cancelled drain). The tick consumed the wall time it
+//     was given — that is TickTimeout semantics with its own, already-shipped
+//     contract ("no timeout backoff"), not a gateway blip. Deferring it would
+//     silently convert a runaway tick into an invisible one.
+//
+//   - *GatewayStatusError (HTTP 5xx, the drain 503 included): a gateway
+//     REFUSAL that already has its own failure class (SCHED-GAP-143's
+//     ticks.failure_reason gateway_drain / gateway_transport, SCHED-GAP-136's
+//     Retry-After pacing, and the auto-disable exclusion both surfaces share).
+//     Those rows stay failures WITH a marker — the design that SCHED-GAP-134/143
+//     landed deliberately — so the deferral path must not swallow them.
+//
+// What IS a blip, and what the live evidence (SCHED-GAP-203) actually measured:
+//
+//   - ErrGatewayTransient: the response body could not be read, could not be
+//     unmarshalled, or an SSE stream ended without a terminal event — the
+//     mid-run drop shape.
+//   - *url.Error: the dial/handshake never completed. NOTE this shape is NOT
+//     wrapped in ErrGatewayTransient (gateway_client.go returns
+//     fmt.Errorf("gateway POST: %w", err) around the *url.Error), which is why
+//     a predicate built on errors.Is(err, ErrGatewayTransient) alone would fix
+//     only half the measured sample — the refused connect
+//     (`gateway POST: Post "http://127.0.0.1:8642/v1/responses": dial tcp …:
+//     connect: connection refused`, 5 of the 9 ticks) would keep failing.
+func gatewayTransientBlip(err error) bool {
+	if !IsTransientGatewayErr(err) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	// Everything left is a blip EXCEPT *GatewayStatusError (HTTP 5xx / drain),
+	// which keeps its own failure class — see the doc above.
+	var gse *GatewayStatusError
+	return !errors.As(err, &gse)
+}
+
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
 type GatewayClient struct {
 	// clk is this component's time seam (SCHED-GAP-169). The zero value

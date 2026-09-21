@@ -36,6 +36,21 @@ func HarnessFailure(errText string) bool {
 		"connection refused",
 		"exec fallback disabled",
 		"aborted by graceful shutdown",
+		// SCHED-GAP-203: the transport-class transient errors. The spawn path
+		// classifies these as ErrGatewayTransient (gateway_client.go) and the
+		// deferral path (Spawner.transientGatewayDeferral) keeps them OUT of
+		// consecutive_failures — but the classifier must agree on the TEXT,
+		// because it owns the decision for every surface that only sees a
+		// stored error string: the auto-disable enforcer, the read-only
+		// status surface, and (pre-203) the unwrapped gwErr that
+		// noteSpawnFailureClassed receives. Measured consequence of the gap:
+		// the mid-stream shape "gateway transient error: sse stream ended
+		// without a terminal event" matched NO marker, so a blip the harness
+		// absorbed still counted as the lane's failure — the exact pollution
+		// SCHED-GAP-203 measures. Both spellings are listed: the %w-wrapped
+		// ErrGatewayTransient text and the SSE reader's own terminal phrase.
+		"gateway transient error",
+		"sse stream ended without a terminal event",
 	} {
 		if strings.Contains(lower, marker) {
 			return true
