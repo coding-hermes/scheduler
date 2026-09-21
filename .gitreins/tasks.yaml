@@ -3763,3 +3763,18 @@ tasks:
   status: complete
   created_at: '2026-09-21T04:36:33.910494+00:00'
   completed_at: '2026-09-21T04:41:53.050391+00:00'
+- id: sched-gap-127
+  title: 'SCHED-GAP-127: Finish cost provenance (legacy backfill, lane-true pricing, metered-USD gate)'
+  criteria:
+  - "AC1: add v30+ migration to internal/database/migrations.go whose stmt is the literal SQL: UPDATE ticks SET cost_source = 'legacy' WHERE cost_source = ''; (one UPDATE, no other columns). Migration is recorded in the migrations table on next daemon start; a second start does not re-run it."
+  - "AC2: laneMarginalUSD(model, provider) function in the cost package, returns 0 for the sub-included lane set (with documented comments listing each sub lane and why) and the sticker for PAYG lanes. The function is the single source of truth for lane marginal cost."
+  - "AC3: resolveRealTickCost order is: (a) try real telemetry first (unchanged), (b) if no real telemetry, sub-included lane -> 0 + cost_source=estimated_subincluded, PAYG lane -> sticker + cost_source=estimated. A test covers each branch."
+  - "AC4: internal/scheduler/budget.go reads the metered figure when metered_budget_enabled is true (env SCHEDULER_METERED_BUDGET_ENABLED=1 or TOML [scheduler] metered_budget_enabled = true); when false, it reads the existing ticks.cost_usd. Default false. Wired via the standard default-guard pattern (CLI > env > TOML)."
+  - "AC5: new test file internal/scheduler/schedgap127_cost_test.go covers the migration, the lane split, the cost flow, and the budget gate. go test -short -p 1 ./... + go build + go vet + gofmt -l . are all clean on the final tree."
+  - "AC6: the branch is pushed to origin main; git rev-list --count origin/main..HEAD returns 0; git log -1 --format=%B | grep -c Co-authored-by is 1 or more."
+  - "Pitfall guard: do NOT touch internal/scheduler/schedgap119_activity_deadline_test.go (INT-CI-157 is a separate row, the CI Pipeline race flake)."
+  - "Pitfall guard: do NOT install new go.mod dependencies. Stdlib + existing modules only."
+  - "Pitfall guard: do NOT use pkill -f or pgrep -f in any shell snippet. The fleet reaper matches busy-wait idioms and can SIGKILL the worker itself."
+  - "Pitfall guard: lane set membership is policy, not measurement. Each sub-included lane entry must carry a one-line comment naming the source (subscription, plan, OAuth, sub-reseller, etc.)."
+  status: in_progress
+  created_at: '2026-09-21T04:50:00+00:00'

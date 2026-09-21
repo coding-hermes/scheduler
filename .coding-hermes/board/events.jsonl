@@ -1047,3 +1047,4 @@
 {"id": 1789915599706355244, "timestamp": "2026-09-21T04:28:53Z", "event_type": "task_created", "task_id": "SCHED-GAP-203-A", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-203-A\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 1789915599706355245, "timestamp": "2026-09-21T04:43:20Z", "event_type": "task_completed", "task_id": "SCHED-GAP-203-A", "actor": "foreman", "detail": "{\"status\":\"complete\"}", "tick_number": null}
 {"id": 1789915599706355246, "timestamp": "2026-09-21T04:43:30Z", "event_type": "task_created", "task_id": "SCHED-GAP-203-B", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-203-B\",\"status\":\"pending\"}", "tick_number": null}
+{"id":1789915599706355247,"timestamp":"2026-09-20 23:52:20.417130","event_type":"task_created","task_id":"INT-CI-157","actor":"foreman","detail":"{\"source\": \"foreman: CI Pipeline RED on HEAD, race flake in TestSgap119_IdleHangAbortsAtDeadline\", \"tick\": 635}","tick_number":635}
