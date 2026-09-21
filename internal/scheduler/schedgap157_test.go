@@ -339,7 +339,7 @@ func TestSCHEDGAP157_SlotPoolStampsMeasuredSlotWait(t *testing.T) {
 		measured, _, _ = schedGap157Stamps(t, db, tickID)
 		measuredTick = tickID
 		t.Logf("SCHED-GAP-157 slot-wait attempt %d: tick %s waited %d ms (clock advanced %d ms while it was parked)",
-			attempt, tickID, measured, int64((advanceBefore + advanceAfter).Milliseconds()))
+			attempt, tickID, measured, (advanceBefore + advanceAfter).Milliseconds())
 		if measured > 0 {
 			break
 		}
@@ -357,7 +357,7 @@ func TestSCHEDGAP157_SlotPoolStampsMeasuredSlotWait(t *testing.T) {
 	if measured <= 0 {
 		t.Fatalf("tick %s recorded slot_wait_ms = %d after 3 parked spawns — a tick that waited for the pool's only free slot must record a NON-ZERO wait on the injected clock; 0 here means the pool does not measure its slot wait", measuredTick, measured)
 	}
-	if maxWait := int64((advanceBefore + advanceAfter).Milliseconds()); measured > maxWait {
+	if maxWait := (advanceBefore + advanceAfter).Milliseconds(); measured > maxWait {
 		t.Errorf("tick %s recorded slot_wait_ms = %d, exceeding the %d ms the injected clock advanced while it was parked — the measured wait must come from the loop's clock seam", measuredTick, measured, maxWait)
 	}
 
@@ -483,7 +483,7 @@ func TestSCHEDGAP157_DeferralRoundTripAndValidation(t *testing.T) {
 			t.Errorf("row %d created_at = %q, want the context clock instant %q", i, got.CreatedAt, at.Format(time.RFC3339))
 		}
 	}
-	if !(all[0].ID > all[1].ID && all[1].ID > all[2].ID) {
+	if all[0].ID <= all[1].ID || all[1].ID <= all[2].ID {
 		t.Errorf("ids are not descending (%d,%d,%d) — ListDeferrals must be newest-first", all[0].ID, all[1].ID, all[2].ID)
 	}
 
