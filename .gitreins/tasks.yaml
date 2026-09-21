@@ -3713,32 +3713,6 @@ tasks:
   status: complete
   created_at: '2026-09-21T03:06:59.673932+00:00'
   completed_at: '2026-09-21T03:26:02.236516+00:00'
-- id: SCHED-GAP-203
-  title: Classify transient gateway errors as deferrals, not lane failures
-  criteria:
-  - internal/scheduler/spawn.go route transient gateway errors (errors.Is(gwErr, scheduler.ErrGatewayTransient)
-    returns true) into the gateway_health_gate deferral path so they increment deferrals_total
-    instead of completing TickFailed
-  - internal/scheduler/gateway_health_gate.go exposes a NoteTransientGatewayDeferral(project,
-    errorText) method that records a deferral and increments deferrals_total
-  - TestGatewaySpawn_TransientErrorIsDeferralNotFailure drives a transient connect
-    failure and a mid-stream SSE drop (errors.Is ErrGatewayTransient) through Spawn();
-    asserts status is not TickFailed, deferrals_total increments, ticks.error carries
-    the gateway reason
-  - TestGatewaySpawn_NonTransientErrorStillFails drives an ErrGatewayKeyRejected through
-    Spawn(); asserts TickFailed is preserved (the deferral path must NOT swallow auth
-    failures)
-  - 'Live verification: build a fresh binary, start --simulate against a temp DB,
-    simulate a transient gateway blip during one spawn, then read /api/v1/status and
-    confirm the blip landed in deferrals_total and the tick is NOT in ticks.status=''failed'''
-  - go test -short -count=1 -p 1 -run 'TestGateway.*Transient|TestGateway.*Deferral'
-    ./internal/scheduler/ passes
-  - go test -short -count=1 -p 1 ./internal/scheduler/ passes (no regression on existing
-    gateway tests)
-  - gofmt -l ./internal/scheduler/ returns no files
-  - golangci-lint run ./internal/scheduler/ exits 0
-  status: in_progress
-  created_at: '2026-09-21T04:10:21.262359+00:00'
 - id: SCHED-GAP-203-A
   title: Add NoteTransientGatewayDeferral to gateway health gate (sub-row A)
   criteria:
