@@ -3822,3 +3822,12 @@ tasks:
   status: complete
   created_at: '2026-09-21T12:19:20.043350+00:00'
   completed_at: '2026-09-21T13:39:37.543624+00:00'
+- id: SCHED-GAP-204-A
+  title: Add DB-free /api/v1/live liveness route and re-point watchdog
+  criteria:
+  - Five named acceptance criteria in the board row reasoning; a panic-stub-DB test
+    proves DB-free by construction; the watchdog probe URL switches with /api/v1/health
+    kept as the fallback
+  status: complete
+  created_at: '2026-09-21T14:12:10.841799+00:00'
+  completed_at: '2026-09-21T22:19:44.407204+00:00'
