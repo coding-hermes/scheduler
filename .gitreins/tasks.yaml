@@ -3799,3 +3799,22 @@ tasks:
   status: complete
   created_at: '2026-09-21T04:50:00+00:00'
   completed_at: '2026-09-21T05:29:07.186164+00:00'
+- id: sched-gap-119-idlehang
+  title: 'INT-CI-157: TestSgap119_IdleHangAbortsAtDeadline is environment-sensitive
+    under -race on CI (the 400ms idle-deadline margin trips after 336s of CI runner
+    load on HEAD, and 5s of real wall time is not a tight enough bound). Convert the
+    test to use the clock.NewSimClockAt(1000, ...) seam (same pattern as clock_simulator_e2e_test.go)
+    so the 400ms idle deadline is timing-independent: l.SetClock(sim) and sim.Advance
+    past the deadline. Keep the SSE handler on real wall time (httptest is real network).
+    The 5s upper-bound assertion becomes a real-time guard, not a timing constraint
+    on the idle deadline itself. Local race run currently passes in ~1.8s on this
+    host; the CI failure is environmental. AC: (1) go test -short -count=1 -race -run
+    TestSgap119_IdleHangAbortsAtDeadline -timeout 60s passes on a fresh attempt under
+    the local race detector; (2) the test does NOT use time.Sleep to time the idle
+    deadline (only for SSE handler side coordination); (3) full go test -short -p
+    1 -count=1 ./... stays green; (4) gofmt/vet/lint clean; (5) no production code
+    change.'
+  criteria: []
+  status: complete
+  created_at: '2026-09-21T06:26:55.608269+00:00'
+  completed_at: '2026-09-21T06:54:39.272048+00:00'
