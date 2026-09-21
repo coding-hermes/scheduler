@@ -51,17 +51,19 @@ const (
 //	            ADV-R09; previously these rows wrote 0/0 tokens).
 //	gateway   — gateway-path tick; the gateway response's own usage block
 //	            (input/output tokens + router-priced cost).
-//	estimated — no telemetry was available; the recalibrated estTokens*
-//	            constants above stand in. THE ONLY ESTIMATE TIER.
-//	simulated — dry-run sim ticks (sim_spawn.go).
-//	""        — legacy rows written before cost_source existed. Spend
-//	            surfaces classify them by the same heuristics (see
-//	            api.CostSourceOf) rather than rewriting history.
+//	estimated             — no telemetry was available; the recalibrated
+//	                        estTokens* constants above stand in on a PAYG lane.
+//	estimated_subincluded — no telemetry was available and the resolved lane
+//	                        is prepaid/subscription-backed: $0 marginal spend.
+//	simulated             — dry-run sim ticks (sim_spawn.go).
+//	legacy                — migration v36 marker for rows written before
+//	                        cost_source existed.
 const (
-	CostSourceMeasured  = "measured"
-	CostSourceGateway   = "gateway"
-	CostSourceEstimated = "estimated"
-	CostSourceSimulated = "simulated"
+	CostSourceMeasured             = "measured"
+	CostSourceGateway              = "gateway"
+	CostSourceEstimated            = "estimated"
+	CostSourceEstimatedSubincluded = "estimated_subincluded"
+	CostSourceSimulated            = "simulated"
 )
 
 // estimateTickCost returns estimated token counts and cost for a real tick.
@@ -2133,39 +2135,24 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		}
 	}
 
-	// Cost: prefer REAL per-tick cost from the foreman's Hermes state.db
-	// (session_model_usage.estimated/actual_cost_usd overlapping this tick's
-	// window). Falls back to the flat estimate when telemetry is unavailable.
-	// Populated on completed AND timed-out ticks: a timeout runs the full
-	// window (killed at the cap), so it consumes a full tick's tokens and has a
-	// real cost. Failed ticks that exit early consumed fewer and stay near 0.
+	// Cost provenance order (SCHED-GAP-127): real telemetry wins. Only when
+	// telemetry is absent does the resolved lane decide marginal cost — prepaid
+	// lanes record a real $0 as estimated_subincluded; PAYG lanes keep the
+	// public sticker estimate. The sticker remains separately derivable from
+	// token totals and the active price map (price_as_of / price_source).
 	if outcome.Status == TickCompleted || outcome.Status == TickTimeout {
 		workdir := ""
 		if st.cmd != nil && st.cmd.Dir != "" {
 			workdir = st.cmd.Dir
 		}
-		cost, tin, tout, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished, st.clock())
-		outcome.CostUSD = cost
-		if !isReal {
-			// Still record the estimated token counts so aggregation works
-			// even when telemetry is missing. SCHED-GAP-078: price the
-			// estimate with the router's PUBLIC rate for the pair that ran
-			// (then the static maps) instead of the flat constants.
-			tin, tout, _ := estimateTickCost()
-			outcome.TokensIn = tin
-			outcome.TokensOut = tout
-			outcome.CostUSD = computeCostUSD(st.provider, st.model, st.rate, tin, tout)
-			outcome.CostSource = CostSourceEstimated
-		} else {
-			// ADV-R09/G8: measured rows now record the REAL token totals
-			// from the same telemetry rows the USD came from — previously
-			// these rows wrote 0/0 tokens, so the measured per-tick usage
-			// (avg ~888K in / ~6.5K out across 19.5K completed ticks) was
-			// invisible and the 8000/2000 estimate was never corrected.
-			outcome.TokensIn = tin
-			outcome.TokensOut = tout
-			outcome.CostSource = CostSourceMeasured
-		}
+		resolved := resolveTickCost(st.spawner.foremanHome, workdir, st.Project,
+			st.provider, st.model, st.rate, st.Started, finished, st.clock())
+		outcome.CostUSD = resolved.costUSD
+		outcome.TokensIn = resolved.tokensIn
+		outcome.TokensOut = resolved.tokensOut
+		outcome.CostSource = resolved.source
+		log.Printf("COST: project=%s tick=%s marginal_usd=%.6f sticker_usd=%.6f source=%s provider=%s model=%s",
+			st.Project, st.TickID, resolved.costUSD, resolved.stickerUSD, resolved.source, st.provider, st.model)
 		// Measure real git work the foreman produced this tick (exec path only —
 		// gateway spawns have no process/repo baseline). Best-effort: a non-git
 		// or unreadable workdir leaves commits/files at 0.

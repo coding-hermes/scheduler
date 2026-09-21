@@ -176,6 +176,17 @@ func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut i
 			return rr.usd1m * float64(tokensIn+tokensOut) / 1e6
 		}
 	}
+	return stickerCostUSD(provider, model, tokensIn, tokensOut)
+}
+
+// stickerCostUSD returns the public listed-price figure without applying lane
+// subscription policy. SCHED-GAP-127 deliberately keeps the sticker DERIVED
+// from persisted token totals plus the price map instead of adding another
+// ticks column: this avoids a second migration/write path that could drift from
+// the price_as_of and price_source metadata already carried by /api/v1/status.
+// ticks.cost_usd remains the metered/marginal truth used by budget gates, while
+// this helper is the one listed-price calculation used by laneMarginalUSD.
+func stickerCostUSD(provider, model string, tokensIn, tokensOut int) float64 {
 	priceMapMu.RLock()
 	defer priceMapMu.RUnlock()
 	if provider != "" {

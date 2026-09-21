@@ -106,6 +106,12 @@ type SchedulerConfig struct {
 	// TOML < env SCHEDULER_SPAWN_MEM_LIMIT_MB < flag --spawn-mem-limit-mb.
 	SpawnMemLimitMB int64 `toml:"spawn_mem_limit_mb"`
 
+	// MeteredBudgetEnabled (SCHED-GAP-127) switches USD-cap enforcement from
+	// per-tick cost_usd to the fleet-wide Hermes state.db cash ledger. Default
+	// false preserves historical behavior; enable explicitly with TOML
+	// scheduler.metered_budget_enabled or SCHEDULER_METERED_BUDGET_ENABLED.
+	MeteredBudgetEnabled bool `toml:"metered_budget_enabled"`
+
 	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
 	// threshold over the last AutoDisableWindow ticks at or above which the
 	// scheduler will disable the project automatically. Default 0 = feature

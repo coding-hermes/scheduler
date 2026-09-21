@@ -75,6 +75,36 @@ SELECT COALESCE(SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE esti
 	return cost, tokensIn, tokensOut, n, nil
 }
 
+// sumSessionMeteredUSDInWindow is the budget-only cash meter. Unlike
+// sumSessionCostInWindow (which prefers actual over estimated for one tick),
+// the SCHED-GAP-127 budget contract explicitly sums both columns for every
+// fleet session overlapping [start,end]. Keeping this query separate preserves
+// the existing per-tick telemetry semantics while making the opt-in budget mode
+// auditable against Hermes state.db directly.
+func sumSessionMeteredUSDInWindow(ctx context.Context, stateDB string, start, end time.Time) (float64, error) {
+	if stateDB == "" || start.IsZero() || end.IsZero() {
+		return 0, fmt.Errorf("metered budget: no state db / window")
+	}
+	if _, err := os.Stat(stateDB); err != nil {
+		return 0, fmt.Errorf("metered budget state db %s: %w", stateDB, err)
+	}
+	db, err := sql.Open("sqlite", stateDB)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	var cost float64
+	err = db.QueryRowContext(ctx, `
+SELECT COALESCE(SUM(COALESCE(estimated_cost_usd, 0) + COALESCE(actual_cost_usd, 0)), 0)
+  FROM session_model_usage
+ WHERE first_seen <= ? AND last_seen >= ?`, end.Unix(), start.Unix()).Scan(&cost)
+	if err != nil {
+		return 0, err
+	}
+	return cost, nil
+}
+
 // resolveRealTickCost returns the real cost AND real token totals of a tick,
 // falling back to the flat estimate when real telemetry is unavailable. It
 // sums:
@@ -118,6 +148,79 @@ func resolveRealTickCost(foremanHome, workdir, project string, start, end time.T
 		return est, 0, 0, false
 	}
 	return total, tin, tout, true
+}
+
+// subIncludedLaneProviders is an explicit pricing-policy allowlist. Membership
+// means the lane is prepaid/subscription-backed and therefore has $0 marginal
+// model cost when telemetry is absent. This is intentionally code-owned rather
+// than inferred from model names or router prices: adding a provider here is a
+// human-reviewed pricing decision.
+var subIncludedLaneProviders = map[string]string{
+	"zai-glm":         "Z.AI coding-plan subscription",
+	"kimi-for-coding": "Kimi fixed-price coding subscription",
+	"ollama-cloud":    "Ollama Cloud prepaid Max subscription",
+	"opencode-go":     "OpenCode Go subscription seat",
+	"commandcode":     "CommandCode subscription seat",
+	"xkiro":           "xKiro plan allowance",
+	"neuralwatt":      "NeuralWatt prepaid plan credits",
+	"synthetic":       "Synthetic subscription allowance",
+	"openai-codex":    "OpenAI Codex OAuth subscription seat",
+}
+
+// laneMarginalUSD returns the estimated-tick marginal USD for a resolved lane.
+// Sub-included providers are $0 regardless of model; every other provider gets
+// the model/provider's public listed-price sticker. Model identity alone never
+// makes a lane free: the same model routed through a PAYG provider still bills.
+func laneMarginalUSD(model, provider string) float64 {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if _, included := subIncludedLaneProviders[provider]; included {
+		return 0
+	}
+	return stickerCostUSD(provider, model, estTokensIn, estTokensOut)
+}
+
+type resolvedTickCost struct {
+	costUSD    float64
+	stickerUSD float64
+	tokensIn   int
+	tokensOut  int
+	source     string
+}
+
+// resolveTickCost enforces the SCHED-GAP-127 provenance order: real telemetry
+// wins first; only when it is absent does lane policy apply. The listed-price
+// sticker is kept separately from the marginal truth so a sub-included lane can
+// report a real $0 without erasing what the same tokens list for publicly.
+func resolveTickCost(foremanHome, workdir, project, provider, model string, rate routerRate, start, end time.Time, clk clock.Clock) resolvedTickCost {
+	cost, tin, tout, isReal := resolveRealTickCost(foremanHome, workdir, project, start, end, clk)
+	if isReal {
+		return resolvedTickCost{
+			costUSD:    cost,
+			stickerUSD: stickerCostUSD(provider, model, tin, tout),
+			tokensIn:   tin,
+			tokensOut:  tout,
+			source:     CostSourceMeasured,
+		}
+	}
+
+	tin, tout, _ = estimateTickCost()
+	sticker := computeCostUSD(provider, model, rate, tin, tout)
+	if laneMarginalUSD(model, provider) == 0 {
+		return resolvedTickCost{
+			costUSD:    0,
+			stickerUSD: stickerCostUSD(provider, model, tin, tout),
+			tokensIn:   tin,
+			tokensOut:  tout,
+			source:     CostSourceEstimatedSubincluded,
+		}
+	}
+	return resolvedTickCost{
+		costUSD:    sticker,
+		stickerUSD: sticker,
+		tokensIn:   tin,
+		tokensOut:  tout,
+		source:     CostSourceEstimated,
+	}
 }
 
 // sumGitreinsUsageInWindow reads .gitreins/usage.jsonl lines whose ts falls in

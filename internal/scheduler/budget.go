@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -39,6 +40,28 @@ type BudgetSpend struct {
 	Daily  float64 `json:"daily"`  // since UTC midnight today
 	Weekly float64 `json:"weekly"` // since Monday 00:00 UTC of the current week
 	Total  float64 `json:"total"`  // all time
+}
+
+var meteredBudgetSettings struct {
+	sync.RWMutex
+	enabled bool
+	stateDB string
+}
+
+// SetMeteredBudgetEnabled configures the opt-in SCHED-GAP-127 budget meter.
+// The daemon points stateDB at the dedicated foreman HERMES_HOME/state.db.
+// Default false preserves the historical ticks.cost_usd gate exactly.
+func SetMeteredBudgetEnabled(enabled bool, stateDB string) {
+	meteredBudgetSettings.Lock()
+	meteredBudgetSettings.enabled = enabled
+	meteredBudgetSettings.stateDB = stateDB
+	meteredBudgetSettings.Unlock()
+}
+
+func meteredBudgetConfig() (enabled bool, stateDB string) {
+	meteredBudgetSettings.RLock()
+	defer meteredBudgetSettings.RUnlock()
+	return meteredBudgetSettings.enabled, meteredBudgetSettings.stateDB
 }
 
 // UTCDayStart returns 00:00:00 UTC on the calendar day containing t.
@@ -134,6 +157,44 @@ GROUP BY project_name`, dayStart, weekStart)
 	return out, rows.Err()
 }
 
+// loadMeteredBudgetSpends reads the dedicated Hermes state.db instead of tick
+// stickers. The meter is deliberately FLEET-WIDE: the state DB is the cash
+// ledger for every foreman/worker session, so each configured USD cap compares
+// against the same daily/weekly/lifetime truth rather than pretending an
+// overlapping session can be attributed to one project from timestamps alone.
+// The next-tick lane marginal is handled by the normal tick cost path; this
+// function only reports spend already present in the ledger.
+func loadMeteredBudgetSpends(ctx context.Context, schedulerDB *sql.DB, stateDB string, now time.Time) (map[string]BudgetSpend, error) {
+	daily, err := sumSessionMeteredUSDInWindow(ctx, stateDB, UTCDayStart(now), now)
+	if err != nil {
+		return nil, fmt.Errorf("load metered daily spend: %w", err)
+	}
+	weekly, err := sumSessionMeteredUSDInWindow(ctx, stateDB, UTCWeekStart(now), now)
+	if err != nil {
+		return nil, fmt.Errorf("load metered weekly spend: %w", err)
+	}
+	total, err := sumSessionMeteredUSDInWindow(ctx, stateDB, time.Unix(0, 0), now)
+	if err != nil {
+		return nil, fmt.Errorf("load metered total spend: %w", err)
+	}
+
+	rows, err := schedulerDB.QueryContext(ctx, `SELECT name FROM projects`)
+	if err != nil {
+		return nil, fmt.Errorf("load projects for metered budget: %w", err)
+	}
+	defer rows.Close()
+	spend := BudgetSpend{Daily: daily, Weekly: weekly, Total: total}
+	out := make(map[string]BudgetSpend)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan project for metered budget: %w", err)
+		}
+		out[name] = spend
+	}
+	return out, rows.Err()
+}
+
 // BudgetGate reports whether a project is budget-blocked at selection time:
 // given the project's name and configured caps it returns a human-readable
 // detail ("daily spent $6.25/$5.00") and true when any cap is reached, or
@@ -145,9 +206,22 @@ type BudgetGate func(name string, dailyCapUSD, weeklyCapUSD, finalCapUSD float64
 // the packers consult during selection. On query error it logs and returns
 // nil — fail-open: a broken spend query must never halt fleet scheduling.
 func NewBudgetGate(ctx context.Context, db *sql.DB, now time.Time) BudgetGate {
-	spends, err := LoadBudgetSpends(ctx, db, now)
+	enabled, stateDB := meteredBudgetConfig()
+	var (
+		spends map[string]BudgetSpend
+		err    error
+	)
+	if enabled {
+		spends, err = loadMeteredBudgetSpends(ctx, db, stateDB, now)
+	} else {
+		spends, err = LoadBudgetSpends(ctx, db, now)
+	}
 	if err != nil {
-		log.Printf("BUDGET: spend query failed (%v) — budget enforcement OFF this cycle", err)
+		mode := "tick"
+		if enabled {
+			mode = "metered"
+		}
+		log.Printf("BUDGET: %s spend query failed (%v) — budget enforcement OFF this cycle", mode, err)
 		return nil
 	}
 	return func(name string, dailyCapUSD, weeklyCapUSD, finalCapUSD float64) (string, bool) {

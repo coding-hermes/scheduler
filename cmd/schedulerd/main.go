@@ -54,6 +54,7 @@ func main() {
 	tasksPacing := flag.Duration("tasks-pacing", 60*time.Second, "Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); 0 = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
+	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
 	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
@@ -92,6 +93,7 @@ func main() {
 	// documented unset behavior: the fleet schedules against 100 weight
 	// units (admission currency, NOT dollars).
 	budgetSource := "flag-default"
+	meteredBudgetSource := "default"
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "budget" {
 			budgetSource = "flag"
@@ -130,6 +132,16 @@ func main() {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			*weightBudget = n
 			budgetSource = "env"
+		}
+	}
+	// SCHED-GAP-127: opt-in metered USD gate. A valid env value outranks
+	// the lower-precedence TOML layer, including an explicit false.
+	if v := os.Getenv("SCHEDULER_METERED_BUDGET_ENABLED"); v != "" && meteredBudgetSource == "default" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			meteredBudgetEnabled = enabled
+			meteredBudgetSource = "env"
+		} else {
+			log.Printf("WARN: SCHEDULER_METERED_BUDGET_ENABLED=%q invalid — metered budget stays %v", v, meteredBudgetEnabled)
 		}
 	}
 	// SCHED-GAP-117: per-turn gateway deadline env override, resolved BEFORE
@@ -446,6 +458,12 @@ func main() {
 				*loadGateThreshold = rootCfg.Scheduler.LoadGateThreshold
 				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
 			}
+			// SCHED-GAP-127: TOML is the lowest-precedence layer. Any valid
+			// env value (including explicit false) blocks this opt-in.
+			if rootCfg.Scheduler.MeteredBudgetEnabled && meteredBudgetSource == "default" {
+				meteredBudgetEnabled = true
+				meteredBudgetSource = "toml"
+			}
 			// SCHED-GAP-136: TOML layer for tasks-mode post-tick pacing —
 			// same default-guard pattern (only when the flag sits at its
 			// 60s default, so CLI and env keep precedence). A TOML 0s
@@ -469,6 +487,11 @@ func main() {
 			}
 		}
 	}
+	// SCHED-GAP-127: arm the budget reader only after every config layer has
+	// resolved. The dedicated foreman HERMES_HOME is the fleet cash ledger;
+	// default false keeps the historical ticks.cost_usd query unchanged.
+	scheduler.SetMeteredBudgetEnabled(meteredBudgetEnabled, filepath.Join(*foremanHome, "state.db"))
+	log.Printf("METERED-BUDGET: enabled=%v source=%s", meteredBudgetEnabled, meteredBudgetSource)
 	loop.SetAutoDisablePolicy(*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)
 	if *autoDisableRate > 0 {
 		log.Printf("AUTO-DISABLE: enabled — rate=%.2f window=%d min_ticks=%d", *autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 35
+const latestMigration = 36
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -475,6 +475,11 @@ CREATE TABLE IF NOT EXISTS deferrals (
 CREATE INDEX IF NOT EXISTS idx_deferrals_project_created ON deferrals(project_name, created_at);
 CREATE INDEX IF NOT EXISTS idx_deferrals_created ON deferrals(created_at);
 `,
+	},
+	{
+		version: 36,
+		desc:    "cost_source backfill: stamp 'legacy' on rows that pre-date metering (SCHED-GAP-127)",
+		stmt:    `UPDATE ticks SET cost_source = 'legacy' WHERE cost_source = '';`,
 	},
 }
 
