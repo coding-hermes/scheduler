@@ -3818,3 +3818,15 @@ tasks:
   status: complete
   created_at: '2026-09-21T06:26:55.608269+00:00'
   completed_at: '2026-09-21T06:54:39.272048+00:00'
+- id: sched-gap-179
+  title: Derive deploy-verify fix symbols from fix rows
+  criteria:
+  - 'Each complete fix row carries shipped_symbols (JSON array). Deploy script reads
+    them from board and greps binary; missing symbol = !! DEPLOY INCOMPLETE. Shipped_symbols
+    backfilled for SCHED-GAP-142 (nudgeAdmissionOpen), 144 (namespaceCapGateDisabled),
+    170 (GATEWAY-HEALTH-GATE). Verify: run script (or its extract) and confirm all
+    3 symbols are checked dynamically from the board, not from the hand-maintained
+    list.'
+  status: complete
+  created_at: '2026-09-21T07:22:23.906735+00:00'
+  completed_at: '2026-09-21T07:27:29.205975+00:00'
