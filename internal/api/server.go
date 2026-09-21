@@ -114,6 +114,9 @@ func (s *Server) SetBlocksStore(st *blocks.Store) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.health)
+	// SCHED-GAP-204-A: DB-free liveness probe. Registered next to health so
+	// the ops watchdog can cheap-probe here first; see live's doc comment.
+	mux.HandleFunc("/api/v1/live", s.live)
 	mux.HandleFunc("/api/v1/status", s.status)
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
@@ -143,6 +146,10 @@ func (s *Server) Handler() http.Handler {
 }
 
 // health returns server health status.
+//
+// The DB-free liveness counterpart is /api/v1/live (SCHED-GAP-204-A): the
+// ops watchdog probes that route first and falls back to this one for the
+// rich payload.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
@@ -189,6 +196,27 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// SCHED-GAP-080: transient gateway spawn failures since restart
 		// (auth rejections never counted), alongside the spawn counters.
 		"gateway_errors": s.loop.GatewayErrorCount(),
+	})
+}
+
+// live is the DB-free liveness probe (SCHED-GAP-204-A). The daemon opens ONE
+// serialized SQLite connection, so the DB-backed /api/v1/health can queue
+// behind tick work for seconds under a saturated fleet. This handler answers
+// from process memory only — version/uptime fields — and must never touch
+// s.db, the loop, or any DB-backed helper (TestLiveRoute_NoDBInteraction
+// panics the DB on use and proves the route still answers). The ops watchdog
+// probes it first; /api/v1/health remains the rich fallback.
+func (s *Server) live(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, 405, "GET only")
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"status":    "ok",
+		"version":   version.Current(),
+		"build_sha": version.CurrentCommit(),
+		"uptime":    s.clock().Since(s.started).String(),
+		"started":   s.started.UTC().Format(time.RFC3339),
 	})
 }
 

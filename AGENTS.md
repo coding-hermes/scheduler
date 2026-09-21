@@ -134,6 +134,7 @@ The table names the complete in-repo route set — the HTML pages registered in 
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
 | `/api/v1/health` | Machine health check (JSON) |
+| `/api/v1/live` | DB-free liveness probe (JSON) — process-memory fields only, safe under a saturated single-SQLite-connection fleet; watchdog's first probe, `/api/v1/health` is the rich fallback (SCHED-GAP-204-A) |
 | `/api/v1/status` | Fleet status summary (JSON) — budget, spend tiers, failure rates, eval/zero-select diagnostics |
 | `/api/v1/config` | Resolved daemon config (JSON) |
 | `/api/v1/metrics` | Read-only fleet metrics: spawns, deferrals, nudges, ticks, durations, drains and outcomes in one request (SCHED-GAP-156) |
