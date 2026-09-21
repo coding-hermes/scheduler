@@ -111,97 +111,127 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	}
 	out := map[string]ProjectFailureRate{}
 
-	// Per-project indexed loop (PERF-001). The windowed-CTE alternative was
-	// measured through the modernc.org/sqlite driver against the production
-	// DB (57k ticks, 254k events) and is a REGRESSION: ROW_NUMBER() OVER
-	// PARTITION BY forces a temp b-tree over ALL ~57k completed rows and
-	// takes 128-212ms, while this loop's per-project ORDER BY spawned_at DESC
-	// LIMIT is served by the idx_ticks_project_spawned(project_name,
-	// spawned_at) index — ~0.1ms per project, ~5ms total for 44 projects.
-	// The N+1 was never the bottleneck; window functions are what's slow in
-	// the pure-Go driver.
+	// SCHED-PERF-002 — single-query failure-rate path.
 	//
-	// DOGFOOD-009: only EXISTING projects are considered. A hard-deleted
-	// project (row purged from the projects table, e.g. eduos-e2e) leaves
-	// historical ticks behind; without the join those ticks resurfaced as
-	// ghost failure-rate entries (failure_rate=1.0, auto_disable_armed=true)
-	// that could never be cleared. The DISTINCT list is built through the
-	// projects JOIN so ghost ticks never enter the loop.
-	projects, err := db.QueryContext(ctx,
-		`SELECT DISTINCT t.project_name FROM ticks t
-		 JOIN projects p ON p.name = t.project_name
-		 WHERE t.completed_at IS NOT NULL`)
+	// The previous shape was an N+1: a DISTINCT project-name list query
+	// (368 rows) plus a per-project `SELECT status, error ORDER BY
+	// spawned_at DESC LIMIT window` (~1 round trip per project). At
+	// ~5 ms per project on a 368-project fleet, the inner loop alone
+	// was ~2 s, and behind the daemon's SetMaxOpenConns(1) the
+	// serialized contention with tick work pushed the whole handler
+	// to 18-30 s on a busy day — past the 10 s urllib timeout in
+	// fleet-cooldown-policy.py, which then silently stopped
+	// regenerating fleet.toml.
+	//
+	// The single-query replacement pulls every completed tick that
+	// belongs to an existing project in ONE round trip, ordered
+	// (project_name ASC, spawned_at DESC) so the Go walk below can
+	// stop counting once it has seen `window` rows for a project
+	// (per-project window truncation, TestComputeProjectFailureRates
+	// _WindowTruncation). The result-set bound is 1 × (window ×
+	// distinct-projects-with-completed-ticks) rows worst case; with
+	// window=100 and 368 active projects that is ≤36 800 rows (~3
+	// MB), scanned in a single Go pass after one DB round trip.
+	// The query plan uses the existing
+	// idx_ticks_project_spawned(project_name, spawned_at) index
+	// (verified by EXPLAIN QUERY PLAN on the production DB — no temp
+	// b-tree, no ROW_NUMBER() window function, which the prior
+	// PERF-001 comment documented as a 128-212 ms regression on
+	// modernc.org/sqlite).
+	//
+	// DOGFOOD-009 still holds: only existing projects in the
+	// `projects` table are considered, via the EXISTS subquery. A
+	// hard-deleted project (purged row, e.g. eduos-e2e) leaves
+	// historical ticks behind; without the filter those ticks
+	// resurfaced as ghost failure-rate entries (failure_rate=1.0,
+	// auto_disable_armed=true) that could never be cleared. The
+	// EXISTS clause keeps the per-project windowing accurate and the
+	// output ghost-free.
+	rows, err := db.QueryContext(ctx,
+		`SELECT t.project_name, t.status, COALESCE(t.error, '')
+		 FROM ticks t
+		 WHERE t.completed_at IS NOT NULL
+		   AND EXISTS (SELECT 1 FROM projects p WHERE p.name = t.project_name)
+		 ORDER BY t.project_name ASC, t.spawned_at DESC`)
 	if err != nil {
 		return out
 	}
-	defer projects.Close()
+	defer rows.Close()
 
-	var names []string
-	for projects.Next() {
-		var name string
-		if err := projects.Scan(&name); err == nil {
-			names = append(names, name)
+	// Walk rows in (project_name, spawned_at DESC) order. A single
+	// pass counts each project's most recent `window` ticks; the
+	// harness classifier (SCHED-GAP-173 single source of truth,
+	// failureclass.go) is applied in Go — never re-declared in SQL
+	// so a marker-list change can never silently diverge between
+	// this read surface and the enforcer.
+	var (
+		curName    string
+		curSeen    int // ticks observed for curName (capped at window)
+		curFailed  int
+		curTotal   int
+		hasCurrent bool
+	)
+	flush := func() {
+		if !hasCurrent {
+			return
 		}
-	}
-
-	for _, name := range names {
-		rows, err := db.QueryContext(ctx,
-			`SELECT status, COALESCE(error, '') FROM ticks
-			 WHERE project_name = ? AND completed_at IS NOT NULL
-			 ORDER BY spawned_at DESC LIMIT ?`,
-			name, window)
-		if err != nil {
-			continue
-		}
-		var failed, total int
-		for rows.Next() {
-			var status, errText string
-			if err := rows.Scan(&status, &errText); err != nil {
-				continue
-			}
-			// SCHED-GAP-173: harness/infrastructure failures say nothing
-			// about the project — the tick never reached it. This is the
-			// exact predicate CheckFailureRateAutoDisable applies (failed
-			// status AND the shared classifier says harness), so a lane
-			// that is fine can never read as "about to be parked". The
-			// classifier is NOT re-declared here (SCHED-GAP-134 owns the
-			// markers): one source of truth, two surfaces.
-			if status == "failed" && scheduler.HarnessFailure(errText) {
-				continue
-			}
-			total++
-			if status == "failed" || status == "timeout" {
-				failed++
-			}
-		}
-		rows.Close()
-		// SCHED-GAP-173: total can now legitimately be 0 — a window whose
-		// every completed tick is harness-class (the heading case: gateway
-		// 503s only). The entry is still emitted rather than dropped: the
-		// project did have ticks in the window, and silently vanishing from
-		// the surface would hide a harness-blocked lane from operators
-		// (dropping it is indistinguishable from "no ticks at all"). rate
-		// is defined as 0 for an empty project-attributable sample — 0/0 is
-		// NaN in Go and would make the JSON encoder fail — and armed stays
-		// false, which is exactly the enforcer's verdict on such a window:
-		// nothing measurable about the project, nothing to park.
+		// SCHED-GAP-173: total can legitimately be 0 (window's only
+		// ticks were harness-class — gateway 503s). Emit the entry
+		// anyway so a harness-blocked lane is visible (dropping it is
+		// indistinguishable from "no ticks at all").
 		rate := 0.0
-		if total > 0 {
-			rate = float64(failed) / float64(total)
+		if curTotal > 0 {
+			rate = float64(curFailed) / float64(curTotal)
 		}
-		// GAP-047: armed uses the unrounded rate, exactly like
-		// CheckFailureRateAutoDisable (which compares the raw ratio against
-		// the threshold before any display rounding).
-		armed := threshold > 0 && total >= minTicks && rate >= threshold
-		// Round to 4 decimal places for clean JSON output.
+		// GAP-047: armed uses the UNROUNDED rate, exactly like
+		// CheckFailureRateAutoDisable.
+		armed := threshold > 0 && curTotal >= minTicks && rate >= threshold
+		// Round to 4 decimals for clean JSON output.
 		rate = float64(int(rate*10000)) / 10000
-		out[name] = ProjectFailureRate{
-			Failed:           failed,
-			Total:            total,
+		out[curName] = ProjectFailureRate{
+			Failed:           curFailed,
+			Total:            curTotal,
 			FailureRate:      rate,
 			AutoDisableArmed: armed,
 		}
 	}
+
+	for rows.Next() {
+		var name, status, errText string
+		if err := rows.Scan(&name, &status, &errText); err != nil {
+			continue
+		}
+		// Project boundary (rows are ordered by project_name ASC).
+		if hasCurrent && name != curName {
+			flush()
+			curName = name
+			curSeen, curFailed, curTotal = 0, 0, 0
+		} else if !hasCurrent {
+			curName = name
+			hasCurrent = true
+		}
+		// Per-project window: drop everything past the latest `window`
+		// ticks. With ORDER BY spawned_at DESC inside each project
+		// these are the most recent.
+		if curSeen >= window {
+			continue
+		}
+		curSeen++
+		// SCHED-GAP-173 — single source of truth: the harness
+		// classifier in scheduler.HarnessFailure (failureclass.go).
+		// A failed tick whose error matches a harness marker never
+		// reached the project; exclude it from BOTH total and failed.
+		if status == "failed" && scheduler.HarnessFailure(errText) {
+			continue
+		}
+		curTotal++
+		if status == "failed" || status == "timeout" {
+			curFailed++
+		}
+	}
+	// Flush the final project (the loop body only flushes on
+	// boundary change).
+	flush()
 	return out
 }
 

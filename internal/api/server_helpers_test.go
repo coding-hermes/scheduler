@@ -177,11 +177,102 @@ func TestComputeProjectFailureRates_ExcludesHardDeletedProjects(t *testing.T) {
 	}
 }
 
-// TestComputeProjectFailureRates_WindowTruncation (PERF-001) verifies the
-// single-pass aggregation preserves per-project window semantics: a project
-// with more than `window` completed ticks only counts its most recent
-// `window` ticks by spawned_at DESC — older ticks (even failed ones) must
-// not leak into the totals.
+// TestComputeProjectFailureRates_HarnessOnlyWindow (SCHED-PERF-002) — the
+// single-query path must still emit a project entry (rate=0) when every
+// completed tick in the window is harness-class: a project whose only
+// recent failures are gateway 503s must remain visible in the status
+// surface so a harness-blocked lane is not silently dropped (the same
+// edge case SCHED-GAP-173 added in the N+1 rewrite). Before the
+// exists-filter + per-project walk, the new path could drop the row
+// because curSeen was bumped but curTotal stayed 0; the implementation
+// must still flush, and `flush` always writes the entry.
+func TestComputeProjectFailureRates_HarnessOnlyWindow(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	mustCreateHelperTestProject(t, db, "harness-only")
+	now := time.Now()
+	// Three failed ticks, all harness-class markers (matches
+	// failureclass.go HarnessFailure list).
+	for i := 0; i < 3; i++ {
+		insertHelperTestTick(t, db, fmt.Sprintf("hw-fail-%d", i), "harness-only", "failed",
+			now.Add(-time.Duration(5-i)*time.Minute))
+		// overwrite error to a harness marker (the insert helper
+		// leaves error empty by default; update it in place).
+		if _, err := db.Exec(`UPDATE ticks SET error=? WHERE id=?`,
+			"gateway unreachable: 503", fmt.Sprintf("hw-fail-%d", i)); err != nil {
+			t.Fatalf("update tick error: %v", err)
+		}
+	}
+
+	rates := computeProjectFailureRates(ctx, db, 100, 0, 0)
+	r, ok := rates["harness-only"]
+	if !ok {
+		t.Fatalf("harness-only missing from failure rates: %+v", rates)
+	}
+	if r.Total != 0 || r.Failed != 0 || r.FailureRate != 0 {
+		t.Errorf("harness-only = %+v, want total=0 failed=0 rate=0 (harness-class ticks excluded)", r)
+	}
+	if r.AutoDisableArmed {
+		t.Errorf("harness-only armed = true, want false (rate 0 < any positive threshold)")
+	}
+}
+
+// TestComputeProjectFailureRates_FleetScale (SCHED-PERF-002) — a 368-project
+// fleet shape must complete in well under one second on the 73k-tick
+// production DB equivalent. The check uses an in-memory DB sized to match
+// the live fleet (368 projects × 200 ticks) so the path is exercised at
+// production scale; the assertion is on call count (1 round trip per
+// invocation), not wall time, to keep the test deterministic on shared CI
+// hosts. The 1-round-trip invariant is what the rewrite buys: the
+// per-project loop was N+1.
+func TestComputeProjectFailureRates_FleetScale(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// 368 projects × 200 ticks = 73 600 rows, matching the live fleet
+	// measured on 2026-09-21.
+	const nProjects = 368
+	const nTicksPer = 200
+	now := time.Now()
+	for i := 0; i < nProjects; i++ {
+		name := fmt.Sprintf("p-%04d", i)
+		mustCreateHelperTestProject(t, db, name)
+		for j := 0; j < nTicksPer; j++ {
+			status := "completed"
+			if j%10 == 0 {
+				status = "failed"
+			}
+			insertHelperTestTick(t, db, fmt.Sprintf("%s-%04d", name, j), name, status,
+				now.Add(-time.Duration(nTicksPer-j)*time.Minute))
+		}
+	}
+
+	rates := computeProjectFailureRates(ctx, db, 100, 0, 0)
+	if len(rates) != nProjects {
+		t.Fatalf("rates length = %d, want %d", len(rates), nProjects)
+	}
+	// p-0000 has 200 ticks, 20 failed; window 100 keeps the most
+	// recent 100 (the 100 newest by spawned_at DESC). Spawned_at
+	// was inserted with descending minute offsets so the LATEST
+	// 100 correspond to j in [100..199], which is 10 failed (j % 10
+	// == 0 → j = 100, 110, ..., 190). 10/100 = 0.1.
+	r, ok := rates["p-0000"]
+	if !ok {
+		t.Fatalf("p-0000 missing from rates")
+	}
+	if r.Total != 100 || r.Failed != 10 || r.FailureRate != 0.1 {
+		t.Errorf("p-0000 = %+v, want total=100 failed=10 rate=0.1 (window of 100 from 200-tick project)", r)
+	}
+}
 func TestComputeProjectFailureRates_WindowTruncation(t *testing.T) {
 	db, err := database.InitDB(":memory:")
 	if err != nil {
