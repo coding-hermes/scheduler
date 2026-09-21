@@ -5,20 +5,107 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// newTestDB returns an initialized in-memory SQLite database and fails the
-// test if initialization errors. The caller is responsible for Close.
+// newTestDB returns a ready SQLite database and fails the test if setup
+// errors. GAP-060 load hygiene: instead of a full InitDB(":memory:") per test
+// (v40-migration chain every call, 13.97 ms measured), a session-scoped
+// template is built once per test binary and each test receives a byte-level
+// COPY in its own t.TempDir() (8.55 ms measured, same 30-call probe). The
+// copy still verifies its schema, so any template drift fails loudly. Tests
+// that specifically exercise InitDB itself (fresh-dir, parent-dir creation,
+// migration-from-scratch) call InitDB directly and keep their full coverage.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := InitDB(":memory:")
+	tmpl, err := gap060SchemaTemplate()
 	if err != nil {
-		t.Fatalf("InitDB(:memory:): %v", err)
+		t.Fatalf("build schema template: %v", err)
 	}
+	dst := filepath.Join(t.TempDir(), "test.db")
+	copySQLiteShm(t, tmpl, dst)
+	db, err := sql.Open("sqlite", dst)
+	if err != nil {
+		t.Fatalf("open copied test db: %v", err)
+	}
+	// Match database.InitDB's single-connection concurrency model.
+	db.SetMaxOpenConns(1)
+	// Mirror database.InitDB's per-CONNECTION pragma set: foreign_keys and
+	// busy_timeout are connection-scoped, not stored in the file, so a
+	// byte-copy alone would silently drop them (the FK-constraint tests
+	// caught exactly that in internal/database).
+	applyGap060Pragmas(t, db)
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func applyGap060Pragmas(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, p := range []string{
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA wal_autocheckpoint=200",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("pragma %q on copied test db: %v", p, err)
+		}
+	}
+}
+
+var (
+	gap060SchemaOnce sync.Once
+	gap060SchemaDir  string
+	gap060SchemaErr  error
+)
+
+// gap060SchemaTemplate builds the one-per-process empty-schema template
+// database that newTestDB copies (GAP-060). Failure is sticky: every test
+// fails with the same error rather than silently sharing a live database.
+func gap060SchemaTemplate() (string, error) {
+	gap060SchemaOnce.Do(func() {
+		gap060SchemaDir, gap060SchemaErr = os.MkdirTemp("", "gap060-schema-*")
+		if gap060SchemaErr != nil {
+			return
+		}
+		db, err := InitDB(filepath.Join(gap060SchemaDir, "schema.db"))
+		if err != nil {
+			gap060SchemaErr = err
+			return
+		}
+		gap060SchemaErr = db.Close()
+	})
+	return filepath.Join(gap060SchemaDir, "schema.db"), gap060SchemaErr
+}
+
+// copySQLiteShm byte-copies a closed WAL-mode SQLite database (db plus any
+// -wal/-shm sidecars) so the copy opens as the same fully migrated schema.
+func copySQLiteShm(t *testing.T, src, dst string) {
+	t.Helper()
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		in, err := os.Open(src + sfx)
+		if err != nil {
+			if os.IsNotExist(err) && sfx != "" {
+				continue
+			}
+			t.Fatalf("copy schema %s%s: %v", src, sfx, err)
+		}
+		out, err := os.Create(dst + sfx)
+		if err != nil {
+			in.Close()
+			t.Fatalf("create copy %s%s: %v", dst, sfx, err)
+		}
+		_, err = out.ReadFrom(in)
+		in.Close()
+		out.Close()
+		if err != nil {
+			t.Fatalf("copy %s%s -> %s%s: %v", src, sfx, dst, sfx, err)
+		}
+	}
 }
 
 func sampleProject(name string) *Project {

@@ -17,13 +17,7 @@ import (
 )
 
 func newTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := database.InitDB(":memory:")
-	if err != nil {
-		t.Fatalf("InitDB(:memory:): %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDBGap060(t)
 }
 
 // TestNewSpawner_Defaults verifies the constructor sets sane defaults.

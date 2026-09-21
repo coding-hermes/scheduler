@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,14 +15,88 @@ import (
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
+// GAP-060: newTestDB moved to gap060_schema_test.go for the internal
+// (package scheduler) flavor; this external flavor (package scheduler_test)
+// carries its own session-scoped template + per-test byte-copy (test files
+// never propagate through imports, so the database package's test helpers
+// cannot be reused here).
+var (
+	gap060TemplateOnce sync.Once
+	gap060TemplateDir  string
+	gap060TemplateErr  error
+)
+
+func gap060SchemaTemplate() (string, error) {
+	gap060TemplateOnce.Do(func() {
+		gap060TemplateDir, gap060TemplateErr = os.MkdirTemp("", "gap060-schema-*")
+		if gap060TemplateErr != nil {
+			return
+		}
+		db, err := database.InitDB(filepath.Join(gap060TemplateDir, "schema.db"))
+		if err != nil {
+			gap060TemplateErr = err
+			return
+		}
+		gap060TemplateErr = db.Close()
+	})
+	return filepath.Join(gap060TemplateDir, "schema.db"), gap060TemplateErr
+}
+
+func copySQLiteShm(t *testing.T, src, dst string) {
+	t.Helper()
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		in, err := os.Open(src + sfx)
+		if err != nil {
+			if os.IsNotExist(err) && sfx != "" {
+				continue
+			}
+			t.Fatalf("copy schema %s%s: %v", src, sfx, err)
+		}
+		out, err := os.Create(dst + sfx)
+		if err != nil {
+			in.Close()
+			t.Fatalf("create copy %s%s: %v", dst, sfx, err)
+		}
+		_, err = out.ReadFrom(in)
+		in.Close()
+		out.Close()
+		if err != nil {
+			t.Fatalf("copy %s%s -> %s%s: %v", src, sfx, dst, sfx, err)
+		}
+	}
+}
+
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := database.InitDB(":memory:")
+	tmpl, err := gap060SchemaTemplate()
 	if err != nil {
-		t.Fatalf("InitDB(:memory:): %v", err)
+		t.Fatalf("build schema template: %v", err)
 	}
+	dst := filepath.Join(t.TempDir(), "test.db")
+	copySQLiteShm(t, tmpl, dst)
+	db, err := sql.Open("sqlite", dst)
+	if err != nil {
+		t.Fatalf("open copied test db: %v", err)
+	}
+	// Match database.InitDB's single-connection concurrency model.
+	db.SetMaxOpenConns(1)
+	applyGap060Pragmas(t, db)
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func applyGap060Pragmas(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, p := range []string{
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA wal_autocheckpoint=200",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("pragma %q on copied test db: %v", p, err)
+		}
+	}
 }
 
 func makeProject(name string, weight, priority, cooldown int, decay float64) *database.Project {
