@@ -837,3 +837,93 @@ func TestSCHEDGAP202_MeasurementFailureRecordsUnmeasuredMarker(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// SCHED-PERF-001-B: the back-fill tool (cmd/backfill-commit-signals) rebuilds
+// historical code/board splits with THIS classifier through the exported
+// pass-through ClassifyGitCommits. Its split rule and its ok=false conditions
+// are therefore load-bearing for a tracked database — pinned here against a
+// real git repo.
+// =============================================================================
+
+// TestClassifyGitCommits_BoardVsCodeSplit exercises the classifier's split on a
+// tmp git repo with known commit anatomy: pure-code commits, a pure
+// bookkeeping commit, and a mixed commit (one code path + one board path —
+// code wins), plus every ok=false condition the back-fill turns into the
+// explicit unmeasured marker.
+func TestClassifyGitCommits_BoardVsCodeSplit(t *testing.T) {
+	workdir := t.TempDir()
+	initTickRepo(t, workdir) // baseline commit: empty, so it contributes no paths
+
+	// The tick started here; everything committed below falls inside git's
+	// --since window.
+	since := time.Now().Add(-2 * time.Minute)
+
+	writeFile := func(rel string) {
+		t.Helper()
+		abs := filepath.Join(workdir, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	// 2 pure code commits.
+	writeFile("a.go")
+	gitCommitFiles(t, workdir, []string{"a.go"}, "feat: a")
+	writeFile("internal/deep/b.go")
+	gitCommitFiles(t, workdir, []string{"internal/deep/b.go"}, "feat: b")
+
+	// 1 pure fleet-bookkeeping commit: board rows are not code.
+	writeFile(".coding-hermes/board/tasks.jsonl")
+	gitCommitFiles(t, workdir, []string{".coding-hermes/board/tasks.jsonl"}, "chore(board): tick")
+
+	// 1 mixed commit: a single non-board path makes the whole commit code.
+	writeFile("c.go")
+	writeFile(".coding-hermes/board/events.jsonl")
+	gitCommitFiles(t, workdir, []string{"c.go", ".coding-hermes/board/events.jsonl"}, "feat: c + board")
+
+	t.Run("split is code-vs-bookkeeping by touched path", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(workdir, since, 4)
+		if !ok {
+			t.Fatal("classifier returned ok=false for a reconcilable repo")
+		}
+		if code != 3 || board != 1 {
+			t.Errorf("split = (%d code, %d board), want (3, 1) — 2 pure code + 1 mixed (code) + 1 board-only", code, board)
+		}
+	})
+
+	t.Run("exported pass-through agrees with the canonical function", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(workdir, since, 4)
+		ecode, eboard, eok := ClassifyGitCommits(workdir, since, 4)
+		if code != ecode || board != eboard || ok != eok {
+			t.Errorf("ClassifyGitCommits = (%d, %d, %v), classifyGitCommits = (%d, %d, %v) — the back-fill wrapper must not diverge",
+				ecode, eboard, eok, code, board, ok)
+		}
+	})
+
+	t.Run("git under-reporting the claimed count is untrusted", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(workdir, since, 5) // 4 visible, 5 claimed
+		if ok || code != 0 || board != 0 {
+			t.Errorf("classifyGitCommits(claimed=5) = (%d, %d, %v), want (0, 0, false)", code, board, ok)
+		}
+	})
+
+	t.Run("zero claimed commits is a valid empty measurement", func(t *testing.T) {
+		code, board, ok := classifyGitCommits(workdir, since, 0)
+		if !ok || code != 0 || board != 0 {
+			t.Errorf("classifyGitCommits(claimed=0) = (%d, %d, %v), want (0, 0, true)", code, board, ok)
+		}
+	})
+
+	t.Run("no workdir and no git repo are unmeasurable", func(t *testing.T) {
+		if _, _, ok := classifyGitCommits("", since, 1); ok {
+			t.Error("empty workdir returned ok=true — the back-fill would stamp a fabricated split")
+		}
+		if _, _, ok := classifyGitCommits(t.TempDir(), since, 1); ok {
+			t.Error("non-repo workdir returned ok=true — the back-fill would stamp a fabricated split")
+		}
+	})
+}

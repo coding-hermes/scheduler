@@ -53,6 +53,10 @@ range — but it was never given a release heading of its own.
 - **Priority-ordering check fixed** — the per-eval spawn-order assertion was unsatisfiable: slot-pool goroutines start concurrently, so sub-second `spawned_at` order is scheduler-shuffled, not pack order. The check now asserts first-cycle set membership against the expected greedy-knapsack pack (urgency/priority ordering is still enforced)
 - **CI gate** — `.github/workflows/ci.yml` build job now runs `./bin/schedulerd --test-verify 3` after "Build binaries" so the end-to-end verify can't silently rot again
 
+### Observability — commit anatomy (SCHED-PERF-001-B)
+
+- **`cmd/backfill-commit-signals`** — reconstructs the code/board commit split for ticks whose `code_commits`/`board_commits` were never stamped (dry-run by default, `--apply` to write; unmeasurable ticks get the explicit `-1/-1` marker plus a `review_notes` census naming each cause). It re-runs the daemon's own `classifyGitCommits` rather than a second implementation, and differences two canonical measurements (since tick start, since tick end) so a historical row reflects its own tick window instead of every commit the workdir landed afterwards
+
 ## [1.1.0] — 2026-09-03
 
 > Tag `v1.1.0` → commit `ca9919574bf235cdbf2f32eeedfdb4c580b3c9e6` (annotated).
