@@ -3868,3 +3868,30 @@ tasks:
   status: complete
   created_at: '2026-09-22T12:14:22.538009+00:00'
   completed_at: '2026-09-22T12:17:29.332525+00:00'
+- id: SCHED-GAP-205
+  title: 'SCHED-GAP-205: assistant-output gate (zero-output-with-zero-assistant-turns
+    must NOT complete)'
+  criteria:
+  - go build ./... compiles cleanly
+  - go vet ./... passes with zero warnings
+  - go test ./internal/scheduler/ -count=1 -p 1 -run TestSCHEDGAP205 -v passes
+  - All 4 existing SCHED-GAP-079 tests still pass
+  - go test ./... -count=1 -p 1 -short passes full suite
+  status: in_progress
+  created_at: '2026-09-22T13:34:59.171882+00:00'
+- id: 'SCHED-GAP-205: tighten gateway completion gate to require assistant message'
+  title: 'Internal scheduler completion gate fix: when a gateway response has status=completed
+    but an empty Output (no assistant message), the tick must be recorded failed,
+    not committed. Measured live 2026-09-22: 73 zero-assistant-output ticks across
+    31 projects slipped through SCHED-GAP-079''s gate and were recorded status=completed/outcome=committed.
+    Acceptance: (1) helper added to detect zero assistant message in Response.Output;
+    (2) the failure expression in internal/scheduler/spawn.go HTTP-success block adds
+    the new branch; (3) TestSCHEDGAP205_ZeroAssistantOutputFails and TestSCHEDGAP205_ToolOnlyTickStillCompletes
+    both pass; (4) the 4 existing SCHED-GAP-079 tests still pass; (5) /api/v1/status
+    JSON exposes zero_output_committed_24h int field; (6) gofmt -l internal/scheduler/
+    internal/api/ is empty; (7) go build ./... is zero errors; (8) go vet ./... is
+    zero warnings.'
+  criteria: []
+  status: complete
+  created_at: '2026-09-22T17:28:33.872383+00:00'
+  completed_at: '2026-09-22T18:18:53.140933+00:00'
