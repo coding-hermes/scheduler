@@ -3895,3 +3895,11 @@ tasks:
   status: complete
   created_at: '2026-09-22T17:28:33.872383+00:00'
   completed_at: '2026-09-22T18:18:53.140933+00:00'
+- id: SCHED-GAP-205-A
+  title: tighten gateway completion gate to require assistant message
+  criteria:
+  - all 3 corrected fixtures pass; new 205 tests pass; existing 079/102 tests pass;
+    go build / go vet / gofmt clean
+  status: complete
+  created_at: '2026-09-22T18:28:46.469675+00:00'
+  completed_at: '2026-09-22T19:02:10.353013+00:00'
