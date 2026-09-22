@@ -3843,3 +3843,21 @@ tasks:
   status: complete
   created_at: '2026-09-21T22:34:55.625136+00:00'
   completed_at: '2026-09-22T00:16:55.587290+00:00'
+- id: SCHED-PERF-001-B
+  title: back-fill ticks.code_commits / board_commits for the 2026-09-19T14:03..2026-09-21
+    window
+  criteria:
+  - 'Back-fill tool: walks affected ticks in the 2026-09-19T14:03..2026-09-21 window
+    whose code_commits=0 AND board_commits=0 AND commits>0, runs the now-fixed classifyGitCommits
+    (adaptive_cooldown.go:418) on each tick''s workdir, and UPDATEs the tick row.
+    For ticks where the workdir is gone, the git history is shallow, or the workdir
+    has no commits in the (Started, NextTickStarted) window, leave code_commits=-1,
+    board_commits=-1 (the explicit unmeasured marker) and append a tasks.jsonl review_note
+    naming the unrecoverable cause. Acceptance: a tool/binary exists (cmd/backfill-commit-signals/
+    or similar), go test -short passes, the tool dry-runs and reports N affected /
+    M back-filled / K unrecoverable, the tool actually-applied changes show 0/0 ticks
+    in the affected window OR explicit -1/-1 with notes. Co-author trailer required.
+    Pre-dispatch parity: git rev-list --count origin/main..HEAD = 0 expected.'
+  status: complete
+  created_at: '2026-09-22T10:34:47.767420+00:00'
+  completed_at: '2026-09-22T11:39:42.504413+00:00'
