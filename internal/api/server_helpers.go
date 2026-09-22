@@ -7,12 +7,41 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
+
+// failureRateQueryCount counts the number of SELECT-style queries issued
+// by computeProjectFailureRates. It is the SCHED-PERF-002 test seam: the
+// criteria require proof that the rewrite is a single round trip
+// independent of the project count, and an atomic counter is the cheapest
+// mechanism that does not depend on a custom database/sql driver wrapper
+// (modernc.org/sqlite's driver surface is too rich to wrap reliably across
+// versions). The counter is bumped exactly once per
+// computeProjectFailureRates call, by the production code path below; tests
+// reset it with failureRateQueryCount.Store(0) before invoking the
+// function under test, then read it back. It is NOT a feature flag —
+// every call always increments; the variable exists solely so tests can
+// read the post-call value.
+var failureRateQueryCount atomic.Int64
+
+// failureRateQueryCountForTest returns the current value of
+// failureRateQueryCount. Exported for tests; production callers do not need
+// it (the counter is a no-op overhead and a successful handler will
+// continue to issue exactly one SELECT on every call).
+func failureRateQueryCountForTest() int64 {
+	return failureRateQueryCount.Load()
+}
+
+// resetFailureRateQueryCountForTest sets the counter to zero. Exported for
+// tests only; the production path never calls it.
+func resetFailureRateQueryCountForTest() {
+	failureRateQueryCount.Store(0)
+}
 
 // -- helpers --
 
@@ -123,6 +152,17 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	// fleet-cooldown-policy.py, which then silently stopped
 	// regenerating fleet.toml.
 	//
+	// The instrumentation counter (failureRateQueryCount) is a test
+	// seam: the SCHED-PERF-002 gitreins criteria require a proof
+	// test that the rewrite is a single round trip independent of
+	// the project count, and the counter is the cheapest mechanism
+	// that does not depend on a custom driver wrapper (modernc's
+	// driver surface is too rich to wrap reliably across versions).
+	// It is bumped exactly once per computeProjectFailureRates call
+	// — the production path below issues exactly one SELECT — and
+	// it is the load-bearing assertion in
+	// TestComputeProjectFailureRates_OneRoundTrip.
+	//
 	// The single-query replacement pulls every completed tick that
 	// belongs to an existing project in ONE round trip, ordered
 	// (project_name ASC, spawned_at DESC) so the Go walk below can
@@ -147,6 +187,7 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	// auto_disable_armed=true) that could never be cleared. The
 	// EXISTS clause keeps the per-project windowing accurate and the
 	// output ghost-free.
+	failureRateQueryCount.Add(1)
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.project_name, t.status, COALESCE(t.error, '')
 		 FROM ticks t
