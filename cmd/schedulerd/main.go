@@ -456,6 +456,14 @@ func main() {
 			// enable the gate; a TOML 0 keeps it off.
 			if rootCfg.Scheduler.LoadGateThreshold > 0 && *loadGateThreshold == 0 {
 				*loadGateThreshold = rootCfg.Scheduler.LoadGateThreshold
+				// SCHED-GAP-220: re-arm the gate AND the wave-load ceiling —
+				// the wiring setters at main.go:373/378 ran BEFORE this TOML
+				// block, so without the re-arm a [scheduler]
+				// load_gate_threshold value armed nothing (the config
+				// surface reported the TOML number while the runtime stayed
+				// off). Same dead-TOML-layer shape as tasks_pacing below.
+				scheduler.SetLoadGateThreshold(*loadGateThreshold)
+				scheduler.SetWaveLoadCeiling(*loadGateThreshold)
 				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
 			}
 			// SCHED-GAP-127: TOML is the lowest-precedence layer. Any valid
@@ -471,6 +479,12 @@ func main() {
 			if rootCfg.Scheduler.TasksPacing != "" && *tasksPacing == 60*time.Second {
 				if d, derr := time.ParseDuration(rootCfg.Scheduler.TasksPacing); derr == nil && d >= 0 {
 					*tasksPacing = d
+					// SCHED-GAP-220: re-arm the pacing floor. The wiring
+					// call at main.go:369 ran BEFORE this TOML block, so a
+					// [scheduler] tasks_pacing value was silently DEAD —
+					// the config surface reported the TOML number while the
+					// running scheduler kept pacing at the flag default.
+					scheduler.SetTasksPacing(*tasksPacing)
 					log.Printf("TASKS-PACING: set from config — %v (+up to 20%% jitter; 0 = disabled)", d)
 				} else {
 					log.Printf("WARN: scheduler.tasks_pacing=%q invalid — using %v", rootCfg.Scheduler.TasksPacing, *tasksPacing)
