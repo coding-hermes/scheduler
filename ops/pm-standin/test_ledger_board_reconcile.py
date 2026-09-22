@@ -138,11 +138,15 @@ class FixtureMixin:
         self._guard_paths(ledger, db)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
+            # SCHED-GAP-207: now=NOW makes the suite deterministic — main()
+            # previously read the wall clock, so the fixture's deliberately-
+            # young item (NOW - 2h) aged past the 48h window on 2026-09-15+
+            # and flipped no_id_match_count 6→7 (a test time-bomb).
             rc = lbr.main([
                 "--ledger", ledger,
                 "--scheduler-db", db,
                 "--backup-suffix", "bak-gap049-test",
-            ] + list(extra))
+            ] + list(extra), now=NOW)
         return rc, buf.getvalue()
 
     def summary_from(self, stdout):

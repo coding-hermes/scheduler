@@ -160,6 +160,9 @@ RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
 # PARKED spellings ("todo", "open", "rework", ...) and missing/empty statuses.
 BOARD_ALLOWED_STATUSES = ("pending", "in_progress", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
+# The canonical closed spelling (mirror of Go's closedBoardStatus,
+# internal/blocks/board.go:70) — the only terminal state a refile may follow.
+closed_status_complete = "complete"
 
 # Board content duplicate detection (check 9, class "board-content-dup").
 # A row's fingerprint is taken over EVERY field except the ones below —
@@ -178,6 +181,16 @@ VOLATILE_FINGERPRINT_FIELDS = (
 # keeps the board undrained. Closed rows are exempt.
 CONTENT_DUP_OPEN_STATUSES = ("pending", "in_progress")
 CONTENT_DUP_CLASS = "board-content-dup"
+# Board id-slot detection (check 9b, class "board-id-slot", SCHED-GAP-207).
+# An id holding TWO OR MORE OPEN rows is a recurring SLOT, not a finding: the
+# satellite lane re-filed each cycle's finding under the same id without ever
+# closing the previous row (measured 2026-09-22: 29% of open rows fleet-wide
+# collide on id; QA-CONSENSUS-1 held 85 open rows under one id). Exact-content
+# dedupe (check 9) cannot see this class — each cycle re-words the condition,
+# so every copy has a fresh fingerprint. A group where every row is closed is
+# exempt, and so is exactly ONE open row under an id whose earlier rows are
+# closed: re-filing AFTER closing the previous row is the legitimate cycle.
+ID_SLOT_CLASS = "board-id-slot"
 
 # Sync-lane orientation (check 10, class "sync-orientation"). A `*-sync` lane's
 # workdir is a SHELL, not a repo: it holds the lane's scratch space, and the
@@ -198,7 +211,7 @@ SYNC_CONTRACT_POINTER_RE = re.compile(r"/sync/|/api/|[a-z0-9][a-z0-9._-]*-sync-d
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
-                 "sync-orientation")
+                 "board-id-slot", "sync-orientation")
 
 
 def find_board_path(start: str) -> str | None:
@@ -249,6 +262,46 @@ def compute_content_fingerprint(row: dict) -> str:
     content = {k: v for k, v in row.items() if k not in VOLATILE_FINGERPRINT_FIELDS}
     serialized = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+# The metric half of SCHED-GAP-207 ask (3): "open rows" must count unique
+# FINDINGS, not accumulated slots. boardOpenRows (Go,
+# internal/scheduler/adaptive_cooldown.go) counts every open row line, so a
+# board where QA-CONSENSUS-1 was filed 85x reads as 85 rows of work. This
+# repo-side meter counts DISTINCT OPEN IDS: the number a human would call
+# "the open work". Exposed by check 9b's scan as INFO and by --json.
+def count_unique_open_ids(board: str) -> dict:
+    """Count open board rows two ways: raw open-row lines and distinct open ids.
+
+    Returns {"rows": <open rows>, "ids": <distinct open ids>,
+             "slot_rows": <open rows beyond the first per id>}.
+    ``slot_rows`` is the inflation the id-slot habit adds — the part of the
+    raw number that is log, not work. Malformed lines are skipped (same
+    tolerance as the violation scan); a missing board returns all zeros.
+    """
+    out = {"rows": 0, "ids": 0, "slot_rows": 0}
+    if not board or not os.path.isfile(board):
+        return out
+    open_ids: set[str] = set()
+    with open(board, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            status = board_row_status(row)
+            if status in BOARD_LEGACY_CLOSED_STATUSES or status == closed_status_complete:
+                continue
+            out["rows"] += 1
+            open_ids.add(board_row_id(row))
+    out["ids"] = len(open_ids)
+    out["slot_rows"] = out["rows"] - out["ids"] if out["rows"] >= len(open_ids) else 0
+    return out
 
 
 def index_sync_data_skills(skills_root: str) -> set[str]:
@@ -704,6 +757,7 @@ def main(argv: list[str] | None = None) -> int:
     if board and os.path.isfile(board):
         rows = legacy = 0
         by_fingerprint: dict[str, list[tuple[str, str]]] = {}
+        by_id: dict[str, list[str]] = {}
         with open(board, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.strip()
@@ -729,8 +783,26 @@ def main(argv: list[str] | None = None) -> int:
                 # closed or open; the exemption happens at flag time.
                 by_fingerprint.setdefault(compute_content_fingerprint(row), []).append(
                     (rid, status))
+                # 9b. board id-slot (SCHED-GAP-207) — every OPEN row joins its
+                # id's group; closed rows do not (a closed history under an id
+                # with one open row is the legitimate refile-after-close cycle).
+                # Open for slot purposes: the dispatchable pair, the legacy
+                # closed spellings are CLOSED, and everything else (including
+                # missing/empty) is open — matching the reader vocabulary
+                # (internal/scheduler/board_freshness.go openStatuses: unknown
+                # spellings are open, never hidden work).
+                if status not in BOARD_LEGACY_CLOSED_STATUSES and status != closed_status_complete:
+                    by_id.setdefault(rid, []).append(status)
         info.append({"class": "board-vocab", "subject": board,
                      "detail": f"{rows} row(s) scanned, {legacy} legacy closed spelling(s)"})
+        # SCHED-GAP-207 ask (3): surface the unique-findings view of "open
+        # rows" alongside the raw count, so burndowns and "is this done"
+        # callers can stop reading a slot-accumulated log as work.
+        open_meter = count_unique_open_ids(board)
+        info.append({"class": "open-rows", "subject": board,
+                     "detail": (f"open rows={open_meter['rows']} "
+                                f"unique open ids={open_meter['ids']} "
+                                f"slot-inflated rows={open_meter['slot_rows']}")})
         for fp, members in by_fingerprint.items():
             if len(members) < 2:
                 continue
@@ -738,6 +810,12 @@ def main(argv: list[str] | None = None) -> int:
                 continue  # all-closed groups are exempt (historical closure notes)
             bad(CONTENT_DUP_CLASS, f"[{','.join(rid for rid, _ in members)}]",
                 f"identical content (fingerprint {fp})")
+        for rid, statuses in by_id.items():
+            if len(statuses) < 2:
+                continue  # one open row under an id is a finding, not a slot
+            bad(ID_SLOT_CLASS, rid,
+                f"{len(statuses)} OPEN rows share this id — a recurring SLOT, not a "
+                f"finding (close each previous row before re-filing; SCHED-GAP-207)")
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:

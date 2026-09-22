@@ -190,6 +190,15 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	//   open rows DECREASED → this project closed net work  → progress
 	//   open rows increased/equal → injections or churn, no output → no progress
 	// Unknown baseline (-1) or a missing board file never reports progress.
+	//
+	// SCHED-GAP-207: the signal is counted over UNIQUE OPEN IDS, not open
+	// rows. An id-as-SLOT writer (a satellite re-filing each cycle's finding
+	// under the same id) grows the raw open-row count forever while the
+	// unique-id count stays flat — exactly the churn the direction rule
+	// exists to reject. The unique-id baseline lives in board_open_seen
+	// (column repurposed: rows→unique ids); a re-file that does not close
+	// the previous row leaves the count equal → no progress, which is the
+	// closure protocol (ask 2) expressed as an incentive.
 	netClosed := false
 	rowsNow, hasBoard := countBoardRows(workdir)
 	if hasBoard {
@@ -201,12 +210,12 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 			log.Printf("ADAPTIVE: %s board_rows_seen update failed: %v", project, err)
 		}
 	}
-	if openNow, openOK := boardOpenRows(workdir); openOK {
-		if openSeen >= 0 && openNow < openSeen {
+	if uniqueNow, uniqueOK := boardOpenUniqueIDs(workdir); uniqueOK {
+		if openSeen >= 0 && uniqueNow < openSeen {
 			netClosed = true // net completions — the board itself proves output
 		}
 		if _, err := db.Exec(`UPDATE projects SET board_open_seen = ? WHERE name = ?`,
-			openNow, project); err != nil {
+			uniqueNow, project); err != nil {
 			log.Printf("ADAPTIVE: %s board_open_seen update failed: %v", project, err)
 		}
 	}
@@ -374,6 +383,71 @@ func boardOpenRows(workdir string) (int, bool) {
 		}
 	}
 	return count, true
+}
+
+// boardOpenUniqueIDs is the SCHED-GAP-207 metric half: the open-work signal
+// counted the way a human counts it — DISTINCT open row ids, not open rows.
+// A satellite that re-files each cycle's finding under the same id (an
+// id-as-SLOT) produces an open-row count that grows forever without any new
+// work existing; on the fleet's 2026-09-22 measurement 29% of open rows were
+// such id-collisions. The unique-id count is the number a burndown or an
+// "is this project done" caller actually wants.
+//
+// Same contract as boardOpenRows: ok is false when the board is missing or
+// unreadable; the same open vocabulary applies (unknown/missing statuses
+// count as open); perpetual fixture rows are excluded identically. A
+// malformed row contributes ONE synthetic id ("" — it is open work whose id
+// cannot be read, never hidden). Markdown boards have no ids by
+// construction: their unchecked headers each count as one unique id (the
+// header text IS the id).
+func boardOpenUniqueIDs(workdir string) (int, bool) {
+	boardPath, hasBoard := findBoardFile(workdir)
+	if !hasBoard {
+		return 0, false
+	}
+	f, err := os.Open(boardPath)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	fixtureIDs := loadFixtureRegistry(boardPath)
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	ids := make(map[string]bool)
+	isJSONL := strings.HasSuffix(boardPath, ".jsonl")
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if !isJSONL {
+			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) &&
+				!registryDeclares(markdownTaskID(line), fixtureIDs) {
+				ids[markdownTaskID(line)] = true
+			}
+			continue
+		}
+		var row struct {
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			Perpetual bool   `json:"perpetual"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			ids[""] = true // malformed row — open work, id unreadable
+			continue
+		}
+		if isFixtureRow(row.ID, row.Perpetual) || registryDeclares(row.ID, fixtureIDs) {
+			continue // declared/perpetual fixture — not work (SCHED-GAP-106, ADV-R05)
+		}
+		s := strings.ToLower(row.Status)
+		switch s {
+		case "", "pending", "open", "in_progress", "in-progress", "claimed", "ready", "todo", "new", "rework":
+			ids[row.ID] = true
+		}
+	}
+	return len(ids), true
 }
 
 // neverDonePrefix marks the fleet-standard perpetual audit fixture row

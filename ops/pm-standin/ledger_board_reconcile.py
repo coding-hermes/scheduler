@@ -585,7 +585,7 @@ def write_ledger_atomic(path, data, backup_suffix):
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
-def main(argv=None):
+def main(argv=None, now=None):
     ap = argparse.ArgumentParser(
         description="Reconcile stand-in PM ledger statuses with project boards.")
     ap.add_argument("--apply", action="store_true",
@@ -598,7 +598,16 @@ def main(argv=None):
                     help="suffix for the pre-write backup (default: %(default)s)")
     args = ap.parse_args(argv)
 
-    now = datetime.now(timezone.utc)
+    # SCHED-GAP-207 (drive-by fix): `now` is the injectable clock seam. The
+    # GAP-049 fixture suite builds its world against a FIXED reference instant
+    # (NOW = 2026-09-13) but main() read the wall clock directly, so the
+    # fixture's deliberately-young item (added_at = NOW - 2h) silently aged
+    # past the 48h window once the wall clock reached 2026-09-15 — a test
+    # time-bomb that flipped no_id_match_count 6→7 for every run after that
+    # date. Production behaviour is unchanged (None = wall clock, as before);
+    # the test suite now passes now=NOW and is deterministic again.
+    if now is None:
+        now = datetime.now(timezone.utc)
     now_iso = now_utc_iso()
     mode = "APPLY" if args.apply else "DRY-RUN"
 
