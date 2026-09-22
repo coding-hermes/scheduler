@@ -240,94 +240,39 @@ fi
 
 # ---- DEPLOY: push-scratch → REAL board rows + ledger entries ----
 # HARD FILTER: when PM_TARGET is set, only proposals for that project pass.
+# SCHED-GAP-207: the leg moved from an inline heredoc to ops/pm-standin/
+# push_proposals.py (deployed beside this script) so its writer rules are
+# unit-testable:
+# (1) UNIQUE ID PER FILED FINDING — a proposal whose title overlaps an OPEN
+#     row's title is SUPPRESSED (annotated to events.jsonl as
+#     refile_suppressed), never appended as a sibling under the same id;
+# (2) id continuation continues after the highest suffix ever used, and the
+#     mint loop skips past any occupied id — this writer can no longer
+#     create an id holding two open rows (the 29%-of-open-rows id-slot
+#     class).
 PUSH_OUT_FILE=/tmp/pm-standin-push.out
 rm -f "$PUSH_OUT_FILE"
 if [ -s "$PUSH_SCRATCH_PATH" ] && [ "$REAL_MODE" = "1" ]; then
-  PM_TARGET="$PM_TARGET" python3 - "$PUSH_SCRATCH_PATH" > "$PUSH_OUT_FILE" <<'PYEOF'
-import json, sys, os, datetime
-scratch_path = sys.argv[1]
-target = os.environ.get("PM_TARGET", "")
-home = os.path.expanduser("~")
-led_path = os.path.join(home, ".hermes/stand-in/ledger.json")
-pushed = []
-dropped_scope = 0
-try:
-    lines = [l for l in open(scratch_path) if l.strip().startswith("{")]
-    if not lines:
-        print("PUSHED:[]")
-        sys.exit(0)
-    batch = json.loads(lines[-1])  # newest batch only
-    for pr in batch.get("proposals", []):
-        proj = pr.get("project", "")
-        title = pr.get("title", "")
-        prio = pr.get("priority", "P2")
-        gap = pr.get("gap", "")
-        if target and proj != target:
-            dropped_scope += 1
-            continue
-        board = os.path.join(home, proj, ".coding-hermes/board/tasks.jsonl")
-        if not (proj and title and os.path.isdir(os.path.join(home, proj)) and os.path.isfile(board)):
-            continue
-        # --- INSERT task row BEFORE the event (dispatch order doctrine) ---
-        n = 0
-        for l in open(board):
-            if l.strip():
-                try:
-                    r = json.loads(l)
-                    suffix = str(r.get("id", "")).split("-")[-1]
-                    n = max(n, int(suffix) if suffix.isdigit() else 0)
-                except Exception:
-                    pass
-        task_id = "PM-" + str(n + 1).zfill(3)
-        row = {
-            "id": task_id,
-            "title": title[:150], "priority": prio,
-            "status": "pending", "origin": "stand-in-pm-dagger",
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "reasoning": f"gap: {gap[:200]}"
-        }
-        with open(board, "a") as f:
-            f.write(json.dumps(row) + "\n")
-        ev_path = os.path.join(home, proj, ".coding-hermes/board/events.jsonl")
-        ev = {"id": task_id, "kind": "task_added", "source": "stand-in-pm-dagger",
-              "detail": title[:120], "ts": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-        with open(ev_path, "a") as f:
-            f.write(json.dumps(ev) + "\n")
-        # ledger entry (status=added)
-        try:
-            led = json.load(open(led_path))
-            if not isinstance(led, dict):
-                led = {"items": led}
-        except Exception:
-            led = {"items": []}
-        items = led.get("items", [])
-        if not isinstance(items, list):
-            items = []
-        items.append({"id": proj + ":" + task_id, "project": proj, "title": title[:120],
-                      "status": "added", "priority": prio,
-                      "added_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                      "origin": "dagger-stand-in"})
-        led["items"] = items
-        json.dump(led, open(led_path, "w"), indent=1)
-        pushed.append(proj + ":" + task_id + " " + title[:60])
-    print("PUSHED:" + json.dumps(pushed))
-    if dropped_scope:
-        print("DROPPED_SCOPE:" + str(dropped_scope))
-except Exception as e:
-    print("PUSH-ERROR:" + str(e))
-PYEOF
-  # archive the consumed batch so it never re-pushes
+  python3 "$SCRIPT_DIR/push_proposals.py" \
+    "$HOME/$PM_TARGET/.coding-hermes/board/tasks.jsonl" \
+    "$HOME/$PM_TARGET/.coding-hermes/board/events.jsonl" \
+    "$PUSH_SCRATCH_PATH" "$LEDGER" "$PM_TARGET" --apply > "$PUSH_OUT_FILE" 2>&1
+  # archive the consumed batch so it never re-pushes (shell owns the append)
   cat "$PUSH_SCRATCH_PATH" >> "$PUSH_SCRATCH_PATH.consumed" 2>/dev/null
   : > "$PUSH_SCRATCH_PATH"
 fi
 PUSHED=0
 PUSH_DETAIL=""
 if [ -s "$PUSH_OUT_FILE" ]; then
-  PUSH_DETAIL=$(grep -oE 'PUSHED:\[.*\]' "$PUSH_OUT_FILE" | head -1 | cut -d: -f2-)
-  [ -z "$PUSH_DETAIL" ] && PUSH_DETAIL=$(grep 'PUSH-ERROR' "$PUSH_OUT_FILE" | head -1)
+  # SCHED-GAP-207: push_proposals.py prints a JSON result line whose "filed"
+  # array carries one entry per row actually appended (the old inline leg's
+  # PUSHED:[...] format — the quote-count arithmetic below counted id+title
+  # pairs, 4 quotes per row).
+  PUSH_DETAIL=$(grep -oE '"filed": \[.*\]' "$PUSH_OUT_FILE" | head -1 | cut -d: -f2-)
+  [ -z "$PUSH_DETAIL" ] && PUSH_DETAIL=$(grep -E 'PUSH-ERROR|Traceback' "$PUSH_OUT_FILE" | head -1)
   if [ -n "$PUSH_DETAIL" ]; then
-    NQ=$(echo "$PUSH_DETAIL" | grep -o '"' | wc -l)
-    PUSHED=$((NQ / 4))
+    NQ=$(echo "$PUSH_DETAIL" | grep -o '"id"' | wc -l)
+    PUSHED=$NQ
   fi
 fi
 
