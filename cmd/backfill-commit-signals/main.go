@@ -184,7 +184,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "backfill-commit-signals: unexpected argument(s): %s\n", strings.Join(fs.Args(), " "))
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: unexpected argument(s): %s\n", strings.Join(fs.Args(), " "))
 		return 2
 	}
 
@@ -197,29 +197,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	since, err := time.Parse(time.RFC3339, *sinceRaw)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: --since %q is not RFC3339: %v\n", *sinceRaw, err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: --since %q is not RFC3339: %v\n", *sinceRaw, err)
 		return 2
 	}
 	until, err := time.Parse(time.RFC3339, *untilRaw)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: --until %q is not RFC3339: %v\n", *untilRaw, err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: --until %q is not RFC3339: %v\n", *untilRaw, err)
 		return 2
 	}
 	if until.Before(since) {
-		fmt.Fprintf(stderr, "backfill-commit-signals: --until %s precedes --since %s\n", *untilRaw, *sinceRaw)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: --until %s precedes --since %s\n", *untilRaw, *sinceRaw)
 		return 2
 	}
 
 	db, err := openDB(*dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: open db: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: open db: %v\n", err)
 		return 1
 	}
 	defer db.Close()
 
 	ticks, err := selectAffected(db, *sinceRaw, *untilRaw)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: select ticks: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: select ticks: %v\n", err)
 		return 1
 	}
 	dispositions := make([]disposition, 0, len(ticks))
@@ -246,31 +246,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	applied, skipped, err := applyDispositions(db, dispositions)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: apply: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: apply: %v\n", err)
 		return 1
 	}
 	res.Applied, res.Skipped = applied, skipped
-	fmt.Fprintf(stdout, "applied: %d tick row(s) updated (%d stamped, %d marked -1/-1), %d skipped (row changed under us)\n",
+	_, _ = fmt.Fprintf(stdout, "applied: %d tick row(s) updated (%d stamped, %d marked -1/-1), %d skipped (row changed under us)\n",
 		applied+skipped, res.Backfillable, res.Unrecoverable, skipped)
 
 	if note == "" {
-		fmt.Fprintln(stdout, "board: no review_notes entry needed (no unrecoverable ticks)")
+		_, _ = fmt.Fprintln(stdout, "board: no review_notes entry needed (no unrecoverable ticks)")
 		return 0
 	}
 	if board == "" {
-		fmt.Fprintln(stdout, "board: skipped — no review_notes write requested (--no-board, or no --board and no discoverable git root)")
+		_, _ = fmt.Fprintln(stdout, "board: skipped — no review_notes write requested (--no-board, or no --board and no discoverable git root)")
 		return 0
 	}
 	wrote, err := appendBoardReviewNote(board, *boardRow, note)
 	if err != nil {
-		fmt.Fprintf(stderr, "backfill-commit-signals: board review_notes: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: board review_notes: %v\n", err)
 		return 1
 	}
 	if !wrote {
-		fmt.Fprintf(stdout, "board: %s already carries a %q entry — left unchanged\n", board, boardNoteMarker)
+		_, _ = fmt.Fprintf(stdout, "board: %s already carries a %q entry — left unchanged\n", board, boardNoteMarker)
 		return 0
 	}
-	fmt.Fprintf(stdout, "board: appended review_notes entry to %s row %s\n", board, *boardRow)
+	_, _ = fmt.Fprintf(stdout, "board: appended review_notes entry to %s row %s\n", board, *boardRow)
 	return 0
 }
 
@@ -504,7 +504,7 @@ WHERE id = ? AND COALESCE(code_commits, 0) = 0 AND COALESCE(board_commits, 0) = 
 	if err != nil {
 		return 0, 0, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, d := range ds {
 		code, board := d.Code, d.Board
@@ -554,14 +554,14 @@ func resolveBoardPath(explicit string) string {
 // project and its cause, so the census is re-findable from the board alone.
 func buildBoardNote(res Result, sinceRaw, untilRaw string, now time.Time) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s (applied %s): %d of %d affected ticks in %s..%s are UNRECOVERABLE and carry the explicit unmeasured marker code_commits=-1/board_commits=-1 (the canonical classifier could not measure them; an unmeasured tick must never look like a zero-commit tick). Back-fillable %d/%d stamped from the same classifier, %d of them inside the tick's own window (spawned_at..completed_at) and %d on the open-ended window (no usable completed_at, so an upper bound); %d written splits still exceed the tick's own claimed count. Unmeasurable ticks: ",
+	_, _ = fmt.Fprintf(&b, "%s (applied %s): %d of %d affected ticks in %s..%s are UNRECOVERABLE and carry the explicit unmeasured marker code_commits=-1/board_commits=-1 (the canonical classifier could not measure them; an unmeasured tick must never look like a zero-commit tick). Back-fillable %d/%d stamped from the same classifier, %d of them inside the tick's own window (spawned_at..completed_at) and %d on the open-ended window (no usable completed_at, so an upper bound); %d written splits still exceed the tick's own claimed count. Unmeasurable ticks: ",
 		boardNoteMarker, now.UTC().Format(time.RFC3339), res.Unrecoverable, res.Affected, sinceRaw, untilRaw,
 		res.Backfillable, res.Affected, res.Bounded, res.Unbounded, res.OverClaim)
 	for i, d := range res.UnrecoverableTicks() {
 		if i > 0 {
 			b.WriteString("; ")
 		}
-		fmt.Fprintf(&b, "%s (%s): %s", d.Tick.ID, d.Tick.Project, d.Cause)
+		_, _ = fmt.Fprintf(&b, "%s (%s): %s", d.Tick.ID, d.Tick.Project, d.Cause)
 	}
 	return b.String()
 }
@@ -625,7 +625,7 @@ func spliceReviewNotes(line, value string) (string, error) {
 	for start < len(line) && (line[start] == ' ' || line[start] == '\t') {
 		start++
 	}
-	end := start
+	var end int
 	switch {
 	case strings.HasPrefix(line[start:], "null"):
 		end = start + len("null")
@@ -662,15 +662,15 @@ func report(w io.Writer, dbPath, sinceRaw, untilRaw string, res Result, board, b
 	if !res.DryRun {
 		mode = "APPLY (writes ticks.code_commits / ticks.board_commits)"
 	}
-	fmt.Fprintln(w, "backfill-commit-signals — "+boardNoteMarker)
-	fmt.Fprintf(w, "db        : %s\n", dbPath)
-	fmt.Fprintf(w, "window    : %s .. %s (inclusive)\n", sinceRaw, untilRaw)
-	fmt.Fprintln(w, "predicate : code_commits = 0 AND board_commits = 0 AND commits > 0")
-	fmt.Fprintf(w, "mode      : %s\n", mode)
-	fmt.Fprintf(w, "%d affected / %d back-fillable / %d unrecoverable\n", res.Affected, res.Backfillable, res.Unrecoverable)
-	fmt.Fprintf(w, "window     : %d of %d back-fillable ticks measured inside their own window (spawned_at..completed_at); %d fell back to the open-ended window (no usable completed_at) and are upper bounds\n",
+	_, _ = fmt.Fprintln(w, "backfill-commit-signals — "+boardNoteMarker)
+	_, _ = fmt.Fprintf(w, "db        : %s\n", dbPath)
+	_, _ = fmt.Fprintf(w, "window    : %s .. %s (inclusive)\n", sinceRaw, untilRaw)
+	_, _ = fmt.Fprintln(w, "predicate : code_commits = 0 AND board_commits = 0 AND commits > 0")
+	_, _ = fmt.Fprintf(w, "mode      : %s\n", mode)
+	_, _ = fmt.Fprintf(w, "%d affected / %d back-fillable / %d unrecoverable\n", res.Affected, res.Backfillable, res.Unrecoverable)
+	_, _ = fmt.Fprintf(w, "window     : %d of %d back-fillable ticks measured inside their own window (spawned_at..completed_at); %d fell back to the open-ended window (no usable completed_at) and are upper bounds\n",
 		res.Bounded, res.Backfillable, res.Unbounded)
-	fmt.Fprintf(w, "over-claim : %d of %d written splits still exceed the tick's own claimed commit count\n", res.OverClaim, res.Backfillable)
+	_, _ = fmt.Fprintf(w, "over-claim : %d of %d written splits still exceed the tick's own claimed commit count\n", res.OverClaim, res.Backfillable)
 
 	if res.Unrecoverable > 0 {
 		counts := map[string]int{}
@@ -682,21 +682,21 @@ func report(w io.Writer, dbPath, sinceRaw, untilRaw string, res Result, board, b
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Fprintln(w, "unrecoverable by cause class:")
+		_, _ = fmt.Fprintln(w, "unrecoverable by cause class:")
 		for _, k := range keys {
-			fmt.Fprintf(w, "  %4d  %s\n", counts[k], k)
+			_, _ = fmt.Fprintf(w, "  %4d  %s\n", counts[k], k)
 		}
-		fmt.Fprintln(w, "unrecoverable ticks (tick id | project | cause):")
+		_, _ = fmt.Fprintln(w, "unrecoverable ticks (tick id | project | cause):")
 		for _, d := range res.UnrecoverableTicks() {
-			fmt.Fprintf(w, "  %s | %s | %s\n", d.Tick.ID, d.Tick.Project, d.Cause)
+			_, _ = fmt.Fprintf(w, "  %s | %s | %s\n", d.Tick.ID, d.Tick.Project, d.Cause)
 		}
 	}
 	if board != "" {
-		fmt.Fprintf(w, "board     : %s (row %s)\n", board, boardRow)
+		_, _ = fmt.Fprintf(w, "board     : %s (row %s)\n", board, boardRow)
 	} else {
-		fmt.Fprintln(w, "board     : none (no --board and no git root discovered) — the unrecoverable census stays in this output only")
+		_, _ = fmt.Fprintln(w, "board     : none (no --board and no git root discovered) — the unrecoverable census stays in this output only")
 	}
 	if res.DryRun && note != "" {
-		fmt.Fprintf(w, "board note text that --apply would append:\n%s\n", note)
+		_, _ = fmt.Fprintf(w, "board note text that --apply would append:\n%s\n", note)
 	}
 }

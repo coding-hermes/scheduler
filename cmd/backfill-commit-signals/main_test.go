@@ -96,7 +96,10 @@ func initRepo(t *testing.T, base time.Time) string {
 // commitPaths writes each path and commits exactly those paths at `when`.
 func commitPaths(t *testing.T, dir string, when time.Time, rels []string, msg string) {
 	t.Helper()
-	args := []string{"-C", dir, "add"}
+	args := make([]string, 3, 3+len(rels))
+	args[0] = "-C"
+	args[1] = dir
+	args[2] = "add"
 	for _, rel := range rels {
 		abs := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -143,7 +146,7 @@ func readTicks(t *testing.T, db *sql.DB) string {
 		if err := rows.Scan(ptrs...); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		fmt.Fprintf(&b, "%v\n", vals)
+		_, _ = fmt.Fprintf(&b, "%v\n", vals)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
