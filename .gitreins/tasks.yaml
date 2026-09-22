@@ -3903,3 +3903,15 @@ tasks:
   status: complete
   created_at: '2026-09-22T18:28:46.469675+00:00'
   completed_at: '2026-09-22T19:02:10.353013+00:00'
+- id: SCHED-GAP-204-210
+  title: 'Build + deploy: ship SCHED-GAP-204-A (/api/v1/live) and close the 5-commit
+    deploy gap (SCHED-GAP-210)'
+  criteria:
+  - 'Live measurement under load (loadavg >= 8, 10 concurrent ticks): /api/v1/live
+    answers 200 inside 100ms; /api/v1/health still DB-backed but no longer the watchdog''s
+    first probe; supervisor watchdog emits no DOWN line; tier-1 gitreins guard PASS;
+    CI green on the deployment commit; both SCHED-GAP-204 and SCHED-GAP-210 closed
+    on the board; the running daemon''s last_commit matches HEAD.'
+  status: complete
+  created_at: '2026-09-22T20:07:17.829100+00:00'
+  completed_at: '2026-09-22T20:16:37.332367+00:00'
