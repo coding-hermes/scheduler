@@ -65,10 +65,11 @@ func TestBoardOpenUniqueIDsCollapsesIdSlots_GAP207(t *testing.T) {
 // without re-filing drops it. Re-filing WITHOUT closing leaves it equal —
 // the "no progress" incentive.
 func TestBoardOpenUniqueIDSDirectionTracksClosure_GAP207(t *testing.T) {
-	rows := []map[string]interface{}{
-		{"id": "S-1", "title": "finding one", "status": "pending"},
-		{"id": "S-2", "title": "finding two", "status": "pending"},
-	}
+	rows := make([]map[string]interface{}, 0, 3)
+	rows = append(rows,
+		map[string]interface{}{"id": "S-1", "title": "finding one", "status": "pending"},
+		map[string]interface{}{"id": "S-2", "title": "finding two", "status": "pending"},
+	)
 	dir := writeGap207Board(t, rows)
 	before, _ := boardOpenUniqueIDs(dir)
 	if before != 2 {
