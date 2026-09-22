@@ -31,7 +31,9 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-08-04
+## [Unreleased] — 2026-09-22
+
+## [1.4.0] — 2026-09-22
 
 Entries accumulated here after `1.0.0`. **This section shipped as part of
 v1.1.0** — it was written by `167cc99d`, which is inside the `v1.0.0..v1.1.0`
