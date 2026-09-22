@@ -109,16 +109,22 @@ func TestApplyFleetConfig_BumpInactiveRepinsNormally(t *testing.T) {
 		t.Fatalf("UpdateProject: %v", err)
 	}
 
-	// Regen should re-pin cooldown from fleet.toml (no bump active).
+	// SCHED-GAP-219: the DB is the cooldown authority — a restart does NOT
+	// re-pin cooldown from fleet.toml. The API value survives; the toml's
+	// 3600 is recorded as the row's operator pin instead (a floor, never a
+	// live-value overwrite).
 	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
-		t.Fatalf("ApplyFleetConfig (regen): %v", err)
+		t.Fatalf("ApplyFleetConfig (restart): %v", err)
 	}
 
 	p, err := database.GetProject(ctx, db, "normal")
 	if err != nil {
-		t.Fatalf("GetProject after regen: %v", err)
+		t.Fatalf("GetProject after restart: %v", err)
 	}
-	if p.CooldownS != 3600 {
-		t.Errorf("CooldownS after regen = %d, want 3600 (fleet.toml re-pin without bump)", p.CooldownS)
+	if p.CooldownS != 7200 {
+		t.Errorf("CooldownS after restart = %d, want 7200 (API-set cooldown must survive the restart — SCHED-GAP-219)", p.CooldownS)
+	}
+	if p.CooldownPinS == nil || *p.CooldownPinS != 3600 {
+		t.Errorf("CooldownPinS after restart = %v, want 3600 (the fleet.toml value imports as the operator pin)", p.CooldownPinS)
 	}
 }

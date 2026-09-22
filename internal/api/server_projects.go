@@ -342,17 +342,12 @@ func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name strin
 	if err := cascadePauseToSatellites(ctx, s.db, name, by); err != nil {
 		log.Printf("SCHED-GAP-180: pause %s: satellite cascade: %v", name, err)
 	}
-	// SCHED-GAP-137b: keep fleet.toml in parity with the DB. The loader
-	// (internal/config/loader.go ApplyFleetConfig) re-pins enabled from
-	// fleet.toml at every startup, so a pause that lives only in the DB is
-	// silently undone on restart. Regenerate the toml via the official
-	// policy script (SCHED-GAP-025: it is the ONLY writer of fleet.toml).
-	// Log errors but never poison the API response: the policy script has
-	// its own success criterion (the next policy run / --verify is the
-	// backstop).
-	if err := s.regenFleetTomlViaPolicy(); err != nil {
-		log.Printf("SCHED-GAP-137b: pause %s: fleet.toml regen failed: %v", name, err)
-	}
+	// SCHED-GAP-219: the fleet.toml regen is RETIRED. The DB is the cooldown
+	// authority and the seed-only loader no longer re-pins `enabled` (or
+	// cooldown/model/provider) from fleet.toml, so a pause that lives only
+	// in the DB SURVIVES a restart — there is nothing left to resync. The
+	// policy script that this call used to shell out to is itself retired
+	// as a writer (SCHED-GAP-025's two-config law is closed).
 	writeJSON(w, 200, map[string]string{"status": "paused", "project": name})
 }
 
@@ -369,11 +364,8 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 	if err := cascadeResumeSatellites(ctx, s.db, name); err != nil {
 		log.Printf("SCHED-GAP-180: resume %s: satellite cascade: %v", name, err)
 	}
-	// SCHED-GAP-137b: mirror pause — regenerate fleet.toml so the durable
-	// pin matches the re-enabled DB row before the next daemon restart.
-	if err := s.regenFleetTomlViaPolicy(); err != nil {
-		log.Printf("SCHED-GAP-137b: resume %s: fleet.toml regen failed: %v", name, err)
-	}
+	// SCHED-GAP-219: the fleet.toml regen is RETIRED (mirror of pause — the
+	// DB is the authority and the seed-only loader never re-pins enabled).
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
 }
 
@@ -466,30 +458,18 @@ func cascadeResumeSatellites(ctx context.Context, db *sql.DB, name string) error
 	return nil
 }
 
-// regenFleetTomlViaPolicy regenerates ~/.hermes/fleet.toml from live DB state
-// by running the ops policy script (SCHED-GAP-025: fleet-cooldown-policy.py
-// is the ONLY writer of fleet.toml). SCHED-GAP-137b: pause/resume call this
-// so the durable toml pin matches the DB and ApplyFleetConfig cannot
-// silently re-enable a paused project on restart.
-//
-// regenFleetTomlExec is a package-level var so tests can inject a fake
-// (the test must never touch the real fleet.toml). Any failure — script
-// non-zero exit (stderr retained in the error) or exec helper failure — is
-// returned to the caller, which logs it and proceeds: the response is never
-// poisoned and the policy script's own --verify run is the backstop.
+// regenFleetTomlViaPolicy RETIRED (SCHED-GAP-219): pause/resume no longer
+// regenerate fleet.toml. The DB is the cooldown authority and the seed-only
+// loader (internal/config ApplyFleetConfig) never re-pins enabled/cooldown/
+// model/provider for an existing row, so an API state change is durable
+// across restarts without a toml mirror. The function body is gone; the
+// policyScriptPath/regenFleetTomlExec helpers below remain ONLY as the
+// documented seam for the drift probe in server_config.go (a read-only
+// check, never a writer).
+
 // policyScriptPath resolves the ops policy script from the RUNNING user's home
-// rather than a hardcoded /home/kara. A hardcoded absolute path made pause/
-// resume fail on every fleet host that is not kara (the script lives at
-// $HOME/.hermes/scripts/…), which silently defeated SCHED-GAP-137b's whole
-// purpose: the fleet.toml regen appeared to run while doing nothing, leaving
-// the durable toml pin out of parity with the DB.
-//
-// Resolution order:
-//  1. SCHEDULER_POLICY_SCRIPT — explicit override (tests, unusual layouts)
-//  2. $HERMES_HOME/scripts/fleet-cooldown-policy.py
-//  3. $HOME/.hermes/scripts/fleet-cooldown-policy.py
-//  4. /home/kara/.hermes/scripts/fleet-cooldown-policy.py — legacy fallback,
-//     kept last so single-host behaviour is unchanged.
+// rather than a hardcoded /home/kara. RETIRED as a writer (SCHED-GAP-219);
+// kept only for the SCHEDULER_POLICY_SCRIPT test override contract.
 func policyScriptPath() string {
 	const rel = "scripts/fleet-cooldown-policy.py"
 	if p := os.Getenv("SCHEDULER_POLICY_SCRIPT"); p != "" {
@@ -518,11 +498,10 @@ var regenFleetTomlExec = func() error {
 	return nil
 }
 
-// regenFleetTomlViaPolicy invokes the injectable runner. Kept as a method so
-// handlers read uniformly and tests can swap regenFleetTomlExec directly.
-func (s *Server) regenFleetTomlViaPolicy() error {
-	return regenFleetTomlExec()
-}
+// regenFleetTomlViaPolicy RETIRED (SCHED-GAP-219): removed with the pause/
+// resume call sites. regenFleetTomlExec stays as an injectable no-op only
+// because the ops-script seam remains referenced by the policy-script test
+// override contract; nothing in production invokes it.
 
 // deleteProject removes a project. With only confirm=true it soft-deletes
 // (sets enabled=false; the row is retained so historical ticks stay

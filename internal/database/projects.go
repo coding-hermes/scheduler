@@ -134,18 +134,20 @@ const (
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, '')
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
+	var pinS sql.NullInt64
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
-		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership)
+		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
+		&pinS, &p.CooldownPinBy, &p.CooldownPinAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -156,13 +158,17 @@ FROM projects WHERE name = ?`
 	if nsID.Valid {
 		p.NamespaceID = &nsID.String
 	}
+	if pinS.Valid {
+		v := int(pinS.Int64)
+		p.CooldownPinS = &v
+	}
 	return &p, nil
 }
 
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -180,6 +186,7 @@ FROM projects`
 		var p Project
 		var enabled int
 		var nsID sql.NullString
+		var pinS sql.NullInt64
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
@@ -187,12 +194,17 @@ FROM projects`
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
-			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership); err != nil {
+			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
+			&pinS, &p.CooldownPinBy, &p.CooldownPinAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
 		if nsID.Valid {
 			p.NamespaceID = &nsID.String
+		}
+		if pinS.Valid {
+			v := int(pinS.Int64)
+			p.CooldownPinS = &v
 		}
 		out = append(out, p)
 	}
@@ -205,7 +217,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -219,6 +231,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		var p Project
 		var enabled int
 		var nsID sql.NullString
+		var pinS sql.NullInt64
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
@@ -226,12 +239,17 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
-			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership); err != nil {
+			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
+			&pinS, &p.CooldownPinBy, &p.CooldownPinAt); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
 		if nsID.Valid {
 			p.NamespaceID = &nsID.String
+		}
+		if pinS.Valid {
+			v := int(pinS.Int64)
+			p.CooldownPinS = &v
 		}
 		out = append(out, p)
 	}
@@ -302,6 +320,20 @@ type ProjectUpdates struct {
 	// (derived from the board walk), "owner" or "shared" otherwise
 	// (validated).
 	BoardOwnership *string `json:"board_ownership"`
+
+	// SCHED-GAP-219 cooldown pin. CooldownPinS semantics:
+	//   nil            — leave the pin untouched
+	//   pointer to >0  — set/raise the pin (never silently LOWERED: a
+	//                    value below the existing pin is a 400 at the API
+	//                    layer and a no-op with a log line at the loader).
+	//                    Setting the pin also snaps cooldown_s UP to the
+	//                    pin when the live cooldown sits below it, so the
+	//                    pin takes effect immediately without waiting for
+	//                    the next policy pass.
+	//                    An EQUAL value re-stamps provenance (idempotent).
+	// ClearCooldownPin — true removes the pin (and its provenance).
+	CooldownPinS     *int  `json:"cooldown_pin_s"`
+	ClearCooldownPin *bool `json:"clear_cooldown_pin"`
 }
 
 // UnmarshalJSON decodes ProjectUpdates from JSON. Canonical keys are
@@ -444,6 +476,14 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 	if u.NoProgressThreshold == nil {
 		var v int
 		fill("NoProgressThreshold", &v, func() { u.NoProgressThreshold = &v })
+	}
+	if u.CooldownPinS == nil {
+		var v int
+		fill("CooldownPinS", &v, func() { u.CooldownPinS = &v })
+	}
+	if u.ClearCooldownPin == nil {
+		var v bool
+		fill("ClearCooldownPin", &v, func() { u.ClearCooldownPin = &v })
 	}
 	return nil
 }
@@ -692,6 +732,45 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		}
 	}
 
+	// SCHED-GAP-219: cooldown pin writes. The pin is the durable operator
+	// floor: set/raise only (never silently lowered), provenance stamped,
+	// and the live cooldown snapped UP to the pin when it sits below so the
+	// pin takes effect on the very next admission decision.
+	if updates.ClearCooldownPin != nil && *updates.ClearCooldownPin {
+		if updates.CooldownPinS != nil {
+			return fmt.Errorf("clear_cooldown_pin and cooldown_pin_s are mutually exclusive for project %q", name)
+		}
+		setClauses = append(setClauses, "cooldown_pin_s = NULL", "cooldown_pin_by = ''", "cooldown_pin_at = ''")
+	}
+	if updates.CooldownPinS != nil {
+		pin := *updates.CooldownPinS
+		if pin <= 0 {
+			return fmt.Errorf("cooldown_pin_s must be > 0 for project %q (got %d; clear the pin with clear_cooldown_pin=true)", name, pin)
+		}
+		var curPin sql.NullInt64
+		var curCD int
+		if err := db.QueryRowContext(ctx,
+			`SELECT cooldown_pin_s, cooldown_s FROM projects WHERE name = ?`, name,
+		).Scan(&curPin, &curCD); err != nil {
+			return fmt.Errorf("read current pin for %q: %w", name, err)
+		}
+		if curPin.Valid && pin < int(curPin.Int64) {
+			// Never silently LOWER an operator pin. An explicit clear +
+			// re-set is the sanctioned path to a smaller value.
+			return fmt.Errorf("cooldown_pin_s %d would LOWER the existing pin %d for project %q — clear the pin (clear_cooldown_pin=true) first if the lower value is intended", pin, int(curPin.Int64), name)
+		}
+		now := nowUTC(ctx)
+		setClauses = append(setClauses, "cooldown_pin_s = ?", "cooldown_pin_by = ?", "cooldown_pin_at = ?")
+		args = append(args, pin, "api", now)
+		if curCD < pin {
+			// Snap the live cooldown up to the pin so it takes effect
+			// immediately; a pin below the live cooldown is a floor, not
+			// a forced slowdown.
+			setClauses = append(setClauses, "cooldown_s = ?")
+			args = append(args, pin)
+		}
+	}
+
 	args = append(args, name)
 	q := "UPDATE projects SET " + strings.Join(setClauses, ", ") + " WHERE name = ?"
 
@@ -772,8 +851,64 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// CooldownPinImportBy is the cooldown_pin_by value stamped on pins imported
+// from fleet.toml by the boot loader (SCHED-GAP-219) or by the v38 migration
+// backfill. Distinct from "api" so an operator can always tell where a pin
+// came from.
+const CooldownPinImportBy = "fleet-toml-import"
+
+// SetCooldownPin imports an operator pin onto the project row WITHOUT
+// touching the live cooldown_s (unlike the API PUT path, which snaps the
+// cooldown up). This is the loader/import path: the pin records the
+// operator intent discovered in fleet.toml; the cooldown the row already
+// carries IS that value in the common case, and when it differs the pin
+// still must not silently rewrite scheduling state at boot (the pin is a
+// floor, enforced at the next write). Returns the project's post-write pin.
+// A pin <= 0 clears nothing — pass zero pins only from paths that already
+// validated.
+func SetCooldownPin(ctx context.Context, db *sql.DB, name string, pinS int, by string) error {
+	if pinS <= 0 {
+		return fmt.Errorf("cooldown pin for %q must be > 0 (got %d)", name, pinS)
+	}
+	if by == "" {
+		by = CooldownPinImportBy
+	}
+	_, err := db.ExecContext(ctx, `
+UPDATE projects SET
+    cooldown_pin_s = ?,
+    cooldown_pin_by = ?,
+    cooldown_pin_at = ?,
+    updated_at = updated_at
+WHERE name = ?`, pinS, by, nowUTC(ctx), name)
+	if err != nil {
+		return fmt.Errorf("set cooldown pin %q: %w", name, err)
+	}
+	return nil
+}
+
 // BoolPtr returns a pointer to b — a convenience for ProjectUpdates callers.
 func BoolPtr(b bool) *bool { return &b }
+
+// IsEmpty reports whether no field in updates is set. The loader uses it to
+// skip the UPDATE entirely for rows whose fleet.toml entry carries no
+// conditional keys — an empty UpdateProject would still refresh updated_at
+// and churn 130+ rows on every boot.
+func (u *ProjectUpdates) IsEmpty() bool {
+	return u.RepoURL == nil && u.Workdir == nil && u.Weight == nil &&
+		u.Priority == nil && u.CooldownS == nil && u.DecayRate == nil &&
+		u.Model == nil && u.Provider == nil &&
+		u.FallbackModel == nil && u.FallbackProvider == nil &&
+		u.NoGlobalFallback == nil && u.IdleModel == nil && u.IdleProvider == nil &&
+		u.DailyBudgetUSD == nil && u.WeeklyBudgetUSD == nil && u.FinalBudgetUSD == nil &&
+		u.WorkerModel == nil && u.WorkerProvider == nil && u.GatewayKey == nil &&
+		u.Command == nil && u.Prompt == nil && u.PromptMode == nil &&
+		u.NamespaceID == nil && u.ModelChain == nil && u.Deliver == nil &&
+		u.Enabled == nil && u.DisabledAt == nil && u.DisabledBy == nil &&
+		u.DisabledReason == nil && u.AdaptiveCooldown == nil &&
+		u.CooldownFloorS == nil && u.CooldownCeilingS == nil &&
+		u.NoProgressThreshold == nil && u.AdmissionMode == nil &&
+		u.BoardOwnership == nil && u.CooldownPinS == nil && u.ClearCooldownPin == nil
+}
 
 // ---------------------------------------------------------------------------
 // Task bump (SCHED-GAP-107)

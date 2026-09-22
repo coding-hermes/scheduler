@@ -603,6 +603,9 @@ func main() {
 		templatesPath = filepath.Join(filepath.Dir(*dbPath), "templates.jsonl")
 	}
 	apiServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// SCHED-GAP-219: the config_drift probe reads the seed file the daemon
+	// actually booted from (the same --config resolution as above).
+	apiServer.SetFleetTomlPath(*configFile)
 	// SCHED-GAP-034: snapshot the ACTIVE three-layer config (TOML < env <
 	// CLI) for GET /api/v1/config. By this point the flag vars carry the
 	// resolved values — TOML overrides were applied above where flags sat

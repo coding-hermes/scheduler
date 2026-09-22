@@ -465,12 +465,22 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 }
 
 // ApplyFleetConfig seeds the namespaces and projects defined in cfg into db.
-// Namespaces are create-only (existing rows are skipped), but EXISTING
-// projects are re-pinned from fleet.toml at every startup: cooldown, model,
-// provider, and enabled are overwritten with the fleet.toml values. fleet.toml
-// is therefore the durable cooldown pin across restarts — API-side tweaks to
-// a pinned project survive only until the next restart (see the pin block
-// below; fleet-cooldown-policy.py is the only writer of fleet.toml).
+// Namespaces are create-only (existing rows are skipped); project entries
+// CREATE a row only when the DB has none (SCHED-GAP-219: fleet.toml is a
+// DECLARATIVE SEED, not a maintained mirror). For an EXISTING project the
+// loader pins nothing by default — the database is the cooldown authority —
+// except for the GatewayKey-style conditional fields where the file key's
+// PRESENCE is the operator's signal (see the per-field blocks below).
+//
+// Cooldown pin import (SCHED-GAP-219): a fleet.toml entry that carries an
+// explicit positive cooldown_s on an EXISTING project records that value as
+// the row's operator pin (cooldown_pin_s, provenance fleet-toml-import)
+// WITHOUT overwriting the live cooldown_s — an API change made after the
+// toml was written must survive the restart. The pin is enforced, not the
+// file value: nothing may lower the live cooldown below the pin.
+//
+// Bump interaction (SCHED-GAP-107): while a bump is active the bump owns
+// cooldown_s; no pin import happens for that row until the bump expires.
 //
 // Namespaces are applied first so that any project referencing one by id
 // resolves cleanly.
@@ -571,60 +581,47 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 
 	for _, pd := range cfg.Projects {
 		if _, err := database.GetProject(ctx, db, pd.Name); err == nil {
-			// Existing project — apply the fleet.toml PIN (cooldown, model,
-			// provider, enabled). This is the durable pin the supervisor
-			// relies on (supervisor skill line 424): "API PUTs revert on
-			// daemon restart; fleet.toml is the durable pin." Without this,
-			// the file's "cooldown overrides" comment lies and foreman
-			// self-pause + restart drift wins every time.
+			// SCHED-GAP-219: the DB is the cooldown authority — an EXISTING
+			// project is no longer re-pinned from fleet.toml for cooldown,
+			// model, provider, or enabled. The file is a declarative seed:
+			// it creates rows, it does not rewrite them. This retires the
+			// SCHED-GAP-025/121 two-config law (a value that lived only in
+			// the DB was drift); the DB is now the ONLY authority, and API
+			// changes are durable across restarts.
+			//
+			// The GatewayKey-style conditional pins below SURVIVE: for those
+			// fields the PRESENCE of the key in fleet.toml is itself the
+			// operator's signal (a keyless entry never rewrites the row —
+			// SCHED-GAP-064/065/066/124/141), so they never normalize an
+			// API-assigned value away.
 			existing, _ := database.GetProject(ctx, db, pd.Name)
 			p := projectFromDef(pd)
-			// SCHED-GAP-150: the loader is an enable path like any other, and
-			// it must not be the one that puts a retired dagger driver on an
-			// enabled project. fleet.toml re-pins `enabled` unconditionally,
-			// so a legacy relic row (command = a retired driver, enabled=0)
-			// that is also listed in fleet.toml would come back ENABLED with
-			// its retired command intact — the exact state the API refuses to
-			// write and the fleet gate flags. Refuse the enable and log it
-			// loudly; never fail the boot (a relic must not wedge the daemon,
-			// same doctrine as the max_concurrent=-3 normalization).
-			if p.Enabled && existing != nil {
-				if drv := retiredDriverInCommand(existing.Command); drv != "" {
-					log.Printf("Config: NOT enabling project %q — its command drives the retired driver %s; clear `command` (DB and fleet.toml) before re-enabling", pd.Name, drv)
-					p.Enabled = false
+			// Cooldown pin import (SCHED-GAP-219): an explicit positive
+			// cooldown_s in fleet.toml records the operator pin on the row.
+			// The pin NEVER overwrites the live cooldown_s — an API change
+			// made after the toml was written must survive the restart —
+			// and it never silently LOWERS an existing pin. Skipped while a
+			// bump is active (the bump owns cooldown_s; SCHED-GAP-107).
+			if pd.CooldownS > 0 && existing != nil && !existing.BumpActive {
+				// Skip the import when an equal pin is already present — a
+				// restart must not churn rows on every boot.
+				if existing.CooldownPinS == nil || *existing.CooldownPinS != pd.CooldownS {
+					// Never silently LOWER an operator pin: the pin moves
+					// only when the toml value is equal-or-higher; a lower
+					// toml value keeps the DB pin (the DB is the authority,
+					// the file is the seed). An explicit clear via the API
+					// is the sanctioned path to a smaller pin.
+					if existing.CooldownPinS == nil || pd.CooldownS >= *existing.CooldownPinS {
+						if err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy); err != nil {
+							return fmt.Errorf("import cooldown pin for %q: %w", pd.Name, err)
+						}
+						log.Printf("Config: imported cooldown pin %q = %ds (fleet-toml-import)", pd.Name, pd.CooldownS)
+					} else {
+						log.Printf("Config: fleet.toml cooldown %ds for %q is BELOW the operator pin %ds — pin kept (the DB is the cooldown authority)", pd.CooldownS, pd.Name, *existing.CooldownPinS)
+					}
 				}
 			}
-			updates := database.ProjectUpdates{
-				CooldownS: &p.CooldownS,
-				Model:     &p.Model,
-				Provider:  &p.Provider,
-				Enabled:   &p.Enabled,
-			}
-			// SCHED-GAP-107: when a bump is active, the bump owns cooldown_s.
-			// The fleet.toml pin would clobber the bump cooldown and break the
-			// bump's auto-revert (the saved cooldown was captured at bump time;
-			// re-pinning from fleet.toml makes the revert restore a stale value).
-			// Skip the cooldown pin entirely while bump_active=1; the bump's
-			// auto-revert restores the pre-bump cooldown, and the NEXT regen
-			// after the bump expires re-pins normally.
-			if existing != nil && existing.BumpActive {
-				updates.CooldownS = nil
-				updates.CooldownFloorS = nil
-				updates.CooldownCeilingS = nil
-			}
-			// Adaptive cooldown pins like enabled/cooldown_s: the fleet.toml
-			// entry is authoritative for the flag (absent key = off), so the
-			// file remains the durable on/off switch. Policy numbers pin
-			// only when the file explicitly sets them; projectFromDef already
-			// resolved floor/ceiling/threshold to effective values when the
-			// flag is on, so pass them through — the DB enable-transition
-			// normalization in UpdateProject is a no-op when they are set.
-			updates.AdaptiveCooldown = &p.AdaptiveCooldown
-			if p.AdaptiveCooldown {
-				updates.CooldownFloorS = &p.CooldownFloorS
-				updates.CooldownCeilingS = &p.CooldownCeilingS
-				updates.NoProgressThreshold = &p.NoProgressThreshold
-			}
+			updates := database.ProjectUpdates{}
 			// GatewayKey is pinned ONLY when fleet.toml explicitly sets one —
 			// a per-foreman key assigned via API must never be cleared by a
 			// restart with a keyless fleet.toml entry.
@@ -634,9 +631,9 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			// SCHED-GAP-064: fallback tiers pin the same way as GatewayKey —
 			// only when fleet.toml explicitly sets them, so an API-assigned
 			// fallback survives a restart with a keyless entry. The
-			// no_global_fallback FLAG pins unconditionally (like Enabled):
-			// the fleet.toml entry is authoritative for the flag, defaulting
-			// to false when the key is absent.
+			// no_global_fallback FLAG pins unconditionally (as before): the
+			// plain-bool TOML key cannot distinguish absent from false, and
+			// the file remains the durable switch for the flag.
 			if pd.FallbackModel != "" {
 				updates.FallbackModel = &pd.FallbackModel
 			}
@@ -645,8 +642,7 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			}
 			updates.NoGlobalFallback = &pd.NoGlobalFallback
 			// SCHED-GAP-065: idle tiers pin the same way as the fallback
-			// tiers — only when fleet.toml explicitly sets them, so an
-			// API-assigned idle lane survives a restart with a keyless entry.
+			// tiers — only when fleet.toml explicitly sets them.
 			if pd.IdleModel != "" {
 				updates.IdleModel = &pd.IdleModel
 			}
@@ -668,8 +664,7 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				updates.FinalBudgetUSD = pd.FinalBudgetUSD
 			}
 			// Bane 2026-08-27: per-project prompt text + mode pin when
-			// explicitly set in fleet.toml (API-assigned prompts survive
-			// a restart with a keyless entry — GatewayKey-style conditional).
+			// explicitly set in fleet.toml (GatewayKey-style conditional).
 			if pd.Prompt != "" {
 				updates.Prompt = &pd.Prompt
 			}
@@ -683,26 +678,61 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				updates.AdmissionMode = &pd.AdmissionMode
 			}
 			// SCHED-GAP-141: board_ownership pins the same way and for
-			// the same reason: an operator pin written ONLY to the live
-			// SQLite row is drift — the next restart re-pins from this
-			// file (SCHED-GAP-025/121 durability law). A keyless entry
-			// leaves an API-assigned value untouched, so a DB-only flip
-			// survives a restart too.
+			// the same reason: a keyless entry leaves an API-assigned
+			// value untouched, so a DB-only flip survives a restart too.
 			if pd.BoardOwnership != "" {
 				updates.BoardOwnership = &pd.BoardOwnership
 			}
-			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
-				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
+			// SCHED-GAP-150: a retired dagger-era driver must never be
+			// re-armed through the loader. The enabled re-pin is retired
+			// (SCHED-GAP-219: the DB owns enabled), but the guard still
+			// applies to the conditional-pin pass — a relic row gets no
+			// pins refreshed and a loud log line instead.
+			if existing != nil {
+				if drv := retiredDriverInCommand(existing.Command); drv != "" {
+					log.Printf("Config: NOT pinning project %q — its command drives the retired driver %s; clear `command` (DB and fleet.toml) before re-enabling", pd.Name, drv)
+					updates = database.ProjectUpdates{}
+				}
 			}
-			log.Printf("Config: pinned project %q (cooldown=%ds, model=%s, enabled=%v)",
-				pd.Name, p.CooldownS, p.Model, p.Enabled)
+			// Adaptive cooldown: the FLAG pins only when the key is
+			// explicitly present (pointer non-nil) — an API-armed row
+			// survives a restart with a keyless entry (GatewayKey-style,
+			// SCHED-GAP-219). Policy numbers ride along only when the flag
+			// is explicitly on; projectFromDef already resolved them to
+			// effective values.
+			if pd.AdaptiveCooldown != nil {
+				updates.AdaptiveCooldown = pd.AdaptiveCooldown
+				if *pd.AdaptiveCooldown {
+					updates.CooldownFloorS = &p.CooldownFloorS
+					updates.CooldownCeilingS = &p.CooldownCeilingS
+					updates.NoProgressThreshold = &p.NoProgressThreshold
+				}
+			}
+			// Apply the conditional pins only when the update set is
+			// non-empty — an empty UpdateProject would still churn
+			// updated_at on every boot for every row.
+			if !updates.IsEmpty() {
+				if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
+					return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
+				}
+				log.Printf("Config: pinned conditional keys for project %q from fleet.toml", pd.Name)
+			}
 			continue
 		} else if !errors.Is(err, database.ErrProjectNotFound) {
 			return fmt.Errorf("lookup project %q: %w", pd.Name, err)
 		}
+		// CREATE path: the seed applies only where the DB has no row.
 		p := projectFromDef(pd)
 		if err := database.CreateProject(ctx, db, p); err != nil {
 			return fmt.Errorf("create project %q: %w", pd.Name, err)
+		}
+		// Stamp the operator pin at creation (SCHED-GAP-219): the seeded
+		// cooldown IS an operator-declared value, so it records as the pin
+		// from the first boot (provenance fleet-toml-import).
+		if pd.CooldownS > 0 {
+			if err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy); err != nil {
+				return fmt.Errorf("import cooldown pin for %q: %w", pd.Name, err)
+			}
 		}
 		log.Printf("Config: imported project %q", pd.Name)
 	}

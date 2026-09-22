@@ -122,8 +122,11 @@ func TestSCHEDGAP150_EnablePathRefusesRetiredDriverCommand(t *testing.T) {
 
 // TestSCHEDGAP150_EnablePathStillEnablesCleanProjects is the control: the guard
 // is not a blanket enable-reject. A lane with no custom command, and a lane
-// with a live (non-retired) executor, must both be enabled by the same loader
-// run that refuses the relics.
+// with a live (non-retired) executor, must both be CREATED enabled by the same
+// loader run that refuses the relics. (Since SCHED-GAP-219 the loader no
+// longer re-arms an existing row — the DB owns enabled — so the create path
+// is the only enable surface left, and this is exactly where the guard now
+// lives. The rows are NOT pre-seeded: the toml block is the create surface.)
 func TestSCHEDGAP150_EnablePathStillEnablesCleanProjects(t *testing.T) {
 	db, err := database.InitDB(":memory:")
 	if err != nil {
@@ -131,9 +134,6 @@ func TestSCHEDGAP150_EnablePathStillEnablesCleanProjects(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := context.Background()
-
-	seedSchedgap150Project(t, db, "clean-default", "", false)
-	seedSchedgap150Project(t, db, "clean-executor", "/usr/local/bin/foreman-tick.sh", false)
 
 	if err := ApplyFleetConfig(ctx, db, enableEveryProjectToml("clean-default", "clean-executor")); err != nil {
 		t.Fatalf("ApplyFleetConfig: %v", err)
@@ -168,17 +168,16 @@ func TestSCHEDGAP150_SeededFleetInvariantSweep(t *testing.T) {
 	// Five relics, disabled: the 2026-09-17 cleanup left nothing behind, so
 	// these are hand-built to prove the door is shut.
 	relics := make([]string, 0, len(schedgap150RetiredDrivers))
-	clean := make([]string, 0, 3)
 	for _, driver := range schedgap150RetiredDrivers {
 		name := "sweep-relic-" + strings.TrimSuffix(driver, ".sh")
 		seedSchedgap150Project(t, db, name, driver, false)
 		relics = append(relics, name)
 	}
-	// Real lanes, disabled: must come up enabled.
-	for _, name := range []string{"sweep-lane-a", "sweep-lane-b", "sweep-lane-c"} {
-		seedSchedgap150Project(t, db, name, "", false)
-		clean = append(clean, name)
-	}
+	// Real lanes: the SEED (a toml block for a row the DB has never seen)
+	// creates them enabled. Since SCHED-GAP-219 the loader no longer re-arms
+	// an existing row, so the sweep proves the guard on the create path —
+	// the clean lanes are NOT pre-seeded, they come from the toml.
+	clean := []string{"sweep-lane-a", "sweep-lane-b", "sweep-lane-c"}
 
 	all := append(append([]string{}, relics...), clean...)
 	if err := ApplyFleetConfig(ctx, db, enableEveryProjectToml(all...)); err != nil {

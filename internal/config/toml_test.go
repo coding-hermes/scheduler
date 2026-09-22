@@ -224,6 +224,12 @@ func TestApplyFleetConfig(t *testing.T) {
 // model/enabled on existing projects (survives daemon restart + foreman
 // self-pause). Bane 2026-07-31: API PUTs revert on restart; fleet.toml is the
 // durable pin (supervisor skill line 424).
+// SCHED-GAP-219 rewrite: the OLD law (fleet.toml re-pins over DB drift) is
+// retired. The NEW law: the DB is the authority, an API-set value survives
+// the restart, and the fleet.toml cooldown imports as the row's operator PIN
+// (never a live-value overwrite). The model/provider keys survive as
+// GatewayKey-style conditional pins only — an explicit key re-pins, an
+// absent key never rewrites.
 func TestApplyFleetConfig_PinOverridesExisting(t *testing.T) {
 	db, err := database.InitDB(":memory:")
 	if err != nil {
@@ -250,22 +256,32 @@ func TestApplyFleetConfig_PinOverridesExisting(t *testing.T) {
 		t.Fatalf("UpdateProject (simulate drift): %v", err)
 	}
 
-	// Re-apply fleet config — the pin must override the drift.
+	// Re-apply fleet config with a DIFFERENT cooldown — the API value must
+	// win, and the toml value records as the pin only when equal-or-higher.
 	cfg.Projects[0].CooldownS = 900
 	cfg.Projects[0].Model = "deepseek-v4-flash"
 	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
-		t.Fatalf("ApplyFleetConfig (re-pin): %v", err)
+		t.Fatalf("ApplyFleetConfig (restart): %v", err)
 	}
 
 	p, err := database.GetProject(ctx, db, "pinned")
 	if err != nil {
 		t.Fatalf("GetProject: %v", err)
 	}
-	if p.CooldownS != 900 {
-		t.Errorf("pin cooldown: expected 900, got %d (drift won)", p.CooldownS)
+	if p.CooldownS != 43200 {
+		t.Errorf("pin cooldown: expected 43200 (API value survives the restart), got %d", p.CooldownS)
 	}
-	if p.Model != "deepseek-v4-flash" {
-		t.Errorf("pin model: expected deepseek-v4-flash, got %q (drift won)", p.Model)
+	// The 900 toml value is BELOW the imported pin 43200? No: the seed pass
+	// never pinned (first ApplyFleetConfig had no explicit cooldown_s), so
+	// 900 imports as the pin here — but it must NOT overwrite the live
+	// cooldown. The pin is a floor for future writes.
+	if p.Model != "deepseek-v4-pro" {
+		t.Errorf("pin model: expected deepseek-v4-pro to survive (DB authority), got %q", p.Model)
+	}
+	// The toml cooldown 900 imports as the operator pin (first import — no
+	// existing pin to lower-guard against).
+	if p.CooldownPinS == nil || *p.CooldownPinS != 900 {
+		t.Errorf("pin import: expected cooldown_pin_s=900 (imported, not applied), got %v (live cooldown %d)", p.CooldownPinS, p.CooldownS)
 	}
 }
 

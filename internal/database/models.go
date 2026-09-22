@@ -152,6 +152,18 @@ type Project struct {
 	// it does NOT own (paced by cooldown) even when the path check would
 	// pass. Validated at write time.
 	BoardOwnership string `json:"board_ownership"`
+
+	// SCHED-GAP-219 cooldown pin provenance. The pin is a durable row
+	// attribute: the operator value the cooldown must never silently drop
+	// below. NULL (nil) = no pin — the cooldown is policy/discretion
+	// territory. Provenance records who set it ("fleet-toml-import" for
+	// the migration backfill, "api" for a PUT-set pin) and when.
+	// CooldownPinS is a *int so "no pin" and "pinned to 0" stay
+	// distinguishable on the wire; a 0 pin is meaningless (cooldowns are
+	// positive) and is rejected at the write paths.
+	CooldownPinS  *int   `json:"cooldown_pin_s"`
+	CooldownPinBy string `json:"cooldown_pin_by"`
+	CooldownPinAt string `json:"cooldown_pin_at"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are

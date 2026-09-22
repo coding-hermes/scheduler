@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS migrations (
 	}
 
 	for _, m := range migrations {
-		if m.version >= latestMigration {
-			break // stop before the migration under test
+		if m.version >= 37 {
+			break // stop before v37 — the migration under test
 		}
 		stmt := m.stmt
 		if m.version == 1 {

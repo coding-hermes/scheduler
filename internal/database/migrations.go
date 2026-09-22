@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 37
+const latestMigration = 38
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -579,6 +579,39 @@ CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
 CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
 COMMIT;
 PRAGMA foreign_keys=ON;
+`,
+	},
+	{
+		version: 38,
+		desc:    "cooldown pin provenance (SCHED-GAP-219): cooldown_pin_s + who/when columns on projects — the DB becomes the single cooldown authority and the operator pin becomes a durable row attribute",
+		// Columns, not a side table: a pin is 1:1 with the project row and
+		// every existing reader (loader, API) already round-trips the row.
+		//   cooldown_pin_s   — the pinned value (NULL = no operator pin);
+		//                      the pin never auto-lowers: writers must
+		//                      honour "never silently LOWER an operator
+		//                      pin" (the loader skips re-pinning below it).
+		//   cooldown_pin_by  — who set it ("fleet-toml-import" on the v38
+		//                      backfill, "api" on a PUT-set pin).
+		//   cooldown_pin_at  — RFC3339 when the pin landed.
+		//
+		// THE BACKFILL imports the ELEVATED_PINS whitelist that is being
+		// retired from ~/.hermes/scripts/fleet-cooldown-policy.py — these
+		// are Bane's dated operator rulings (SCHED-GAP-012/121 lineage)
+		// and must survive the script's retirement verbatim. Values match
+		// the script's map at retirement time (2026-09-22 owner review);
+		// rows that do not exist are silently skipped, and every UPDATE
+		// is guarded so an already-pinned row keeps its provenance.
+		stmt: `
+ALTER TABLE projects ADD COLUMN cooldown_pin_s INTEGER;
+ALTER TABLE projects ADD COLUMN cooldown_pin_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN cooldown_pin_at TEXT NOT NULL DEFAULT '';
+
+UPDATE projects SET cooldown_pin_s = 86400, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'gitreins-qa' AND cooldown_pin_s IS NULL;
+UPDATE projects SET cooldown_pin_s = 43200, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'h3' AND cooldown_pin_s IS NULL;
+UPDATE projects SET cooldown_pin_s = 21600, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'warpfs' AND cooldown_pin_s IS NULL;
+UPDATE projects SET cooldown_pin_s = 86400, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-canopy-releng' AND cooldown_pin_s IS NULL;
+UPDATE projects SET cooldown_pin_s = 900,    cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-dagger' AND cooldown_pin_s IS NULL;
+UPDATE projects SET cooldown_pin_s = 21600, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-canopy' AND cooldown_pin_s IS NULL;
 `,
 	},
 }

@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -14,110 +13,19 @@ import (
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
-// TestSCHEDGAP137b_PauseResyncsFleetToml proves pauseProject and
-// resumeProject regenerate fleet.toml via the ops policy script
-// (SCHED-GAP-137b). The exec runner is injected so the test never shells out
-// and never touches the real ~/.hermes/fleet.toml; the recorded argv is
-// asserted against the documented production invocation.
-func TestSCHEDGAP137b_PauseResyncsFleetToml(t *testing.T) {
-	// regenFleetTomlExec is package-level: guard against parallel tests in
-	// this package mutating it mid-run.
-	t.Setenv("SCHEDGAP137B_PARALLEL_GUARD", "1")
+// SCHED-GAP-219 rewrite: the SCHED-GAP-137b regen is RETIRED. Pause/resume no
+// longer shell out to the ops policy script to regenerate fleet.toml — the DB
+// is the cooldown authority and the seed-only loader (config.ApplyFleetConfig)
+// no longer re-pins enabled/cooldown/model/provider for an existing row, so an
+// API state change is durable across restarts WITHOUT a toml mirror.
+//
+// These tests now pin the STRONGER property the regen existed to approximate:
+// even a STALE fleet.toml that still says enabled=true cannot undo a pause
+// (or a resume) across a restart. That is the exact failure shape the regen
+// was a workaround for, now impossible by construction.
 
-	prev := regenFleetTomlExec
-	t.Cleanup(func() { regenFleetTomlExec = prev })
-
-	calls := make(chan []string, 4) // buffered: a missed assertion fails the test, not the handler
-	regenFleetTomlExec = func() error {
-		calls <- []string{
-			"python3", "/home/kara/.hermes/scripts/fleet-cooldown-policy.py", "--apply",
-		}
-		return nil
-	}
-
-	db, err := database.InitDB(":memory:")
-	if err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	defer db.Close()
-	mustCreateHelperTestProject(t, db, "gap137b")
-	s := NewServer(db, nil)
-
-	wantArgv := []string{"python3", "/home/kara/.hermes/scripts/fleet-cooldown-policy.py", "--apply"}
-
-	t.Run("pause regenerates fleet.toml", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/api/v1/projects/gap137b/pause", nil)
-		rec := httptest.NewRecorder()
-		s.pauseProject(rec, req, "gap137b")
-		if rec.Code != 200 {
-			t.Fatalf("pause status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), `"paused"`) {
-			t.Errorf("pause body = %s, want status paused", rec.Body.String())
-		}
-
-		// Exactly one regen call, with the documented argv.
-		select {
-		case got := <-calls:
-			if !slices.Equal(got, wantArgv) {
-				t.Errorf("pause regen argv = %v, want %v", got, wantArgv)
-			}
-		default:
-			t.Fatal("pause: regenFleetTomlViaPolicy was NOT called — fleet.toml left out of parity with DB (SCHED-GAP-137b regression)")
-		}
-		select {
-		case extra := <-calls:
-			t.Errorf("pause: unexpected extra regen call: %v", extra)
-		default:
-		}
-
-		// The DB row must actually be disabled (the pause precondition).
-		p, err := database.GetProject(context.Background(), db, "gap137b")
-		if err != nil {
-			t.Fatalf("GetProject after pause: %v", err)
-		}
-		if p.Enabled {
-			t.Error("project still enabled after pause")
-		}
-	})
-
-	t.Run("resume regenerates fleet.toml", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/api/v1/projects/gap137b/resume", nil)
-		rec := httptest.NewRecorder()
-		s.resumeProject(rec, req, "gap137b")
-		if rec.Code != 200 {
-			t.Fatalf("resume status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), `"resumed"`) {
-			t.Errorf("resume body = %s, want status resumed", rec.Body.String())
-		}
-
-		select {
-		case got := <-calls:
-			if !slices.Equal(got, wantArgv) {
-				t.Errorf("resume regen argv = %v, want %v", got, wantArgv)
-			}
-		default:
-			t.Fatal("resume: regenFleetTomlViaPolicy was NOT called — fleet.toml left out of parity with DB (SCHED-GAP-137b regression)")
-		}
-		select {
-		case extra := <-calls:
-			t.Errorf("pause: unexpected extra regen call: %v", extra)
-		default:
-		}
-
-		p, err := database.GetProject(context.Background(), db, "gap137b")
-		if err != nil {
-			t.Fatalf("GetProject after resume: %v", err)
-		}
-		if !p.Enabled {
-			t.Error("project still disabled after resume")
-		}
-	})
-}
-
-// gap137bFleetToml is the fixture toml used by the re-load tests below: one
-// namespace + one project block, mirroring a minimal production fleet.toml.
+// gap137bFleetToml is the fixture toml: one namespace + one project block,
+// mirroring a minimal production fleet.toml.
 const gap137bFleetToml = `[[namespaces]]
 id = "default"
 weight = 100
@@ -150,30 +58,13 @@ func writeGap137bFleetToml(t *testing.T, dir string) string {
 	return path
 }
 
-// gap137bNewFleetToml is the fixture toml the injected regen exec writes: the
-// real policy script would regenerate the file from live DB state, so a
-// paused project's [[projects]] block disappears entirely (removal, not
-// enabled=false — projectFromDef treats a *bool nil as enabled).
-const gap137bNewFleetToml = `[[namespaces]]
-id = "default"
-weight = 100
-reserved = 0
-hard_cap = 0
-enabled = true
-`
-
-// setupGap137bReloadTest builds a temp fleet.toml (project "alpha",
+// setupGap137bRestartTest builds a temp fleet.toml (project "alpha",
 // enabled=true), loads it via the REAL config.LoadFleetConfig, seeds the DB
-// from it via the REAL config.ApplyFleetConfig, then injects a fake regen
-// exec that rewrites the toml to the alpha-less regeneration (simulating the
-// policy script regenerating from live DB state). Returns the server and the
-// toml path.
-func setupGap137bReloadTest(t *testing.T) (*Server, *sql.DB, string) {
+// from it via the REAL config.ApplyFleetConfig, and returns the server and
+// the toml path. The toml is NEVER rewritten: it stays stale (enabled=true)
+// for the whole test — that staleness is the point.
+func setupGap137bRestartTest(t *testing.T) (*Server, *sql.DB, string) {
 	t.Helper()
-	t.Setenv("SCHEDGAP137B_PARALLEL_GUARD", "1")
-
-	prev := regenFleetTomlExec
-	t.Cleanup(func() { regenFleetTomlExec = prev })
 
 	dir := t.TempDir()
 	tomlPath := writeGap137bFleetToml(t, dir)
@@ -193,8 +84,6 @@ func setupGap137bReloadTest(t *testing.T) (*Server, *sql.DB, string) {
 		t.Fatalf("ApplyFleetConfig: %v", err)
 	}
 
-	// Sanity precondition: alpha is enabled in the DB after the initial
-	// load (the restart-pinned state the pause operates from).
 	alpha, err := database.GetProject(context.Background(), db, "alpha")
 	if err != nil {
 		t.Fatalf("GetProject alpha (precondition): %v", err)
@@ -203,42 +92,29 @@ func setupGap137bReloadTest(t *testing.T) (*Server, *sql.DB, string) {
 		t.Fatal("precondition failed: alpha disabled right after initial fleet.toml load")
 	}
 
-	// The fake exec simulates the policy script: rewrite the toml from
-	// live DB state (alpha is/was just paused, so its block is gone).
-	regenFleetTomlExec = func() error {
-		return os.WriteFile(tomlPath, []byte(gap137bNewFleetToml), 0o644)
-	}
-
 	s := NewServer(db, nil)
 	return s, db, tomlPath
 }
 
-// gap137bFindProject scans the re-parsed config for the named project's
-// [[projects]] block.
-func gap137bFindProject(cfg *config.FleetConfig, name string) *config.ProjectDef {
-	for i := range cfg.Projects {
-		if cfg.Projects[i].Name == name {
-			return &cfg.Projects[i]
-		}
+// restartFromToml re-runs the exact boot sequence over the (stale) toml —
+// LoadFleetConfig + ApplyFleetConfig — the code path a daemon restart runs.
+func restartFromFleetToml(t *testing.T, db *sql.DB, tomlPath string) {
+	t.Helper()
+	reloaded, err := config.LoadFleetConfig(tomlPath)
+	if err != nil {
+		t.Fatalf("LoadFleetConfig (restart): %v", err)
 	}
-	return nil
+	if err := config.ApplyFleetConfig(context.Background(), db, reloaded); err != nil {
+		t.Fatalf("ApplyFleetConfig (restart): %v", err)
+	}
 }
 
-// TestSCHEDGAP137b_PauseReloadKeepsProjectPaused exercises the AC's required
-// step END-TO-END through the REAL loader path: pause a live project, re-load
-// the regenerated fleet.toml via config.LoadFleetConfig + ApplyFleetConfig
-// (the exact code a daemon restart runs), and assert the project STAYS
-// paused — DB enabled=false AND the [[projects]] block absent from the
-// re-parsed config. The regen exec is injected (a unit test cannot run the
-// real policy script); the loader path is not.
-//
-// Design note: the fake regen removes alpha's block entirely (what the real
-// policy script does when regenerating from live DB state). Keeping the block
-// with enabled=false would also satisfy the AC — projectFromDef pins
-// enabled from the parsed *bool — but removal matches production regen
-// behavior.
-func TestSCHEDGAP137b_PauseReloadKeepsProjectPaused(t *testing.T) {
-	s, db, tomlPath := setupGap137bReloadTest(t)
+// TestSCHEDGAP219_PauseSurvivesRestartWithStaleToml proves the pause
+// durability the 137b regen approximated, now by construction: pause alpha,
+// then run the FULL restart path against the UNCHANGED fleet.toml (which
+// still says enabled=true). The pause must survive.
+func TestSCHEDGAP219_PauseSurvivesRestartWithStaleToml(t *testing.T) {
+	s, db, tomlPath := setupGap137bRestartTest(t)
 
 	req := httptest.NewRequest("POST", "/api/v1/projects/alpha/pause", nil)
 	rec := httptest.NewRecorder()
@@ -246,60 +122,41 @@ func TestSCHEDGAP137b_PauseReloadKeepsProjectPaused(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("pause status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"paused"`) {
+		t.Errorf("pause body = %s, want status paused", rec.Body.String())
+	}
 
-	// Restart simulation: re-load the regenerated fleet.toml through the
-	// REAL loader and re-apply it to the DB — exactly what boot does.
-	reloaded, err := config.LoadFleetConfig(tomlPath)
-	if err != nil {
-		t.Fatalf("LoadFleetConfig after pause: %v", err)
-	}
-	if got := gap137bFindProject(reloaded, "alpha"); got != nil {
-		t.Errorf("re-parsed fleet.toml still contains alpha's [[projects]] block — regen did not remove it; a restart would re-pin enabled=true and undo the pause")
-	}
-	if err := config.ApplyFleetConfig(context.Background(), db, reloaded); err != nil {
-		t.Fatalf("ApplyFleetConfig after pause: %v", err)
-	}
+	// Restart simulation: re-load the STALE toml (alpha still enabled=true
+	// in the file — nobody regenerated it) through the REAL loader.
+	restartFromFleetToml(t, db, tomlPath)
 
 	alpha, err := database.GetProject(context.Background(), db, "alpha")
 	if err != nil {
-		t.Fatalf("GetProject alpha after reload: %v", err)
+		t.Fatalf("GetProject alpha after restart: %v", err)
 	}
 	if alpha.Enabled {
-		t.Errorf("AC FAILED: alpha enabled=true after pause + fleet.toml re-load — the restart re-pinned the pause away (SCHED-GAP-137b)")
+		t.Errorf("SCHED-GAP-219 FAILED: alpha enabled=true after pause + restart against a STALE fleet.toml — the seed loader re-pinned enabled and undid the pause")
+	}
+	// The cooldown pin import must ALSO not have run for a paused row's
+	// sibling state unexpectedly — alpha's toml cooldown is recorded as the
+	// pin but never overwrote anything.
+	if alpha.CooldownPinS != nil && *alpha.CooldownPinS != 21600 {
+		t.Errorf("pin import: cooldown_pin_s = %v, want 21600 (the toml value imports as the pin)", alpha.CooldownPinS)
 	}
 }
 
-// TestSCHEDGAP137b_ResumeReloadRestoresProjectEnabled mirrors the pause AC
-// for resume: a paused project is resumed, the regenerated fleet.toml is
-// re-loaded through the REAL loader path, and the project is enabled again —
-// DB enabled=true AND the [[projects]] block back in the re-parsed config.
-func TestSCHEDGAP137b_ResumeReloadRestoresProjectEnabled(t *testing.T) {
-	s, db, tomlPath := setupGap137bReloadTest(t)
+// TestSCHEDGAP219_ResumeSurvivesRestartWithStaleToml mirrors the pause case:
+// a resumed project stays enabled across a restart against a stale toml that
+// never said enabled=false in the first place.
+func TestSCHEDGAP219_ResumeSurvivesRestartWithStaleToml(t *testing.T) {
+	s, db, tomlPath := setupGap137bRestartTest(t)
 
-	// Pre-pause alpha (directly via the handler, with the injected regen
-	// active) so resume has a previously-paused project to restore.
+	// Pause alpha via the handler so resume has a previously-paused project.
 	pauseReq := httptest.NewRequest("POST", "/api/v1/projects/alpha/pause", nil)
 	pauseRec := httptest.NewRecorder()
 	s.pauseProject(pauseRec, pauseReq, "alpha")
 	if pauseRec.Code != 200 {
-		t.Fatalf("pre-pause status = %d, want 200 (body: %s)", pauseRec.Code, pauseRec.Body.String())
-	}
-	// Confirm the paused precondition via the REAL loader path before
-	// resuming.
-	pausedCfg, err := config.LoadFleetConfig(tomlPath)
-	if err != nil {
-		t.Fatalf("LoadFleetConfig after pre-pause: %v", err)
-	}
-	if got := gap137bFindProject(pausedCfg, "alpha"); got != nil {
-		t.Fatalf("precondition failed: alpha block still present in fleet.toml after pause")
-	}
-
-	// The injected regen writes the alpha-less toml; restore the full
-	// fixture (block with enabled=true) so the resume regen reflects a
-	// re-enabled project — what the real policy script emits from live
-	// DB state after a resume.
-	regenFleetTomlExec = func() error {
-		return os.WriteFile(tomlPath, []byte(gap137bFleetToml), 0o644)
+		t.Fatalf("pre-pause status = %d, want 200", pauseRec.Code)
 	}
 
 	req := httptest.NewRequest("POST", "/api/v1/projects/alpha/resume", nil)
@@ -308,24 +165,18 @@ func TestSCHEDGAP137b_ResumeReloadRestoresProjectEnabled(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("resume status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"resumed"`) {
+		t.Errorf("resume body = %s, want status resumed", rec.Body.String())
+	}
 
-	// Restart simulation again: re-load + re-apply the regenerated toml.
-	reloaded, err := config.LoadFleetConfig(tomlPath)
-	if err != nil {
-		t.Fatalf("LoadFleetConfig after resume: %v", err)
-	}
-	if got := gap137bFindProject(reloaded, "alpha"); got == nil {
-		t.Fatalf("re-parsed fleet.toml has no alpha block after resume — regen did not restore it")
-	}
-	if err := config.ApplyFleetConfig(context.Background(), db, reloaded); err != nil {
-		t.Fatalf("ApplyFleetConfig after resume: %v", err)
-	}
+	// Restart simulation over the same stale toml.
+	restartFromFleetToml(t, db, tomlPath)
 
 	alpha, err := database.GetProject(context.Background(), db, "alpha")
 	if err != nil {
-		t.Fatalf("GetProject alpha after reload: %v", err)
+		t.Fatalf("GetProject alpha after restart: %v", err)
 	}
 	if !alpha.Enabled {
-		t.Errorf("AC FAILED: alpha enabled=false after resume + fleet.toml re-load — the restart re-pinned the resume away (SCHED-GAP-137b)")
+		t.Errorf("AC FAILED: alpha enabled=false after resume + restart — the seed loader rewrote enabled from the stale toml (SCHED-GAP-219)")
 	}
 }
