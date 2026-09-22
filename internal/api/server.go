@@ -239,6 +239,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	adMinTicks := s.resolvedConfig.AutoDisableMinTicks
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	// SCHED-GAP-205: informational 24h counter for the zero-assistant
+	// false-green shape the tightened completion gate now fails at spawn
+	// time — operators watch it drain to 0 to verify the live fix.
+	zeroOutputCommitted24h := countZeroOutputCommitted24h(ctx, s.db)
 	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
 	// PERF-001: serve last_evaluation from the loop's in-memory state when a
 	// loop is attached. evaluate() sets lastEval immediately BEFORE emitting
@@ -266,16 +270,20 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// the newest commit touching admission/scheduling code, and
 		// build_time is the RFC3339 build stamp. All three come from
 		// internal/version — never a literal.
-		"version":                version.Current(),
-		"build_sha":              version.CurrentCommit(),
-		"build_time":             version.CurrentBuildDate(),
-		"active_projects":        len(projects),
-		"active_ticks":           activeTicks,
-		"paused":                 s.loop != nil && s.loop.IsPaused(),
-		"recent_outcomes":        recentOutcomes,
-		"projects_failure_rates": failureRates,
-		"failure_window":         s.failureWindow,
-		"last_evaluation":        lastEval,
+		"version":         version.Current(),
+		"build_sha":       version.CurrentCommit(),
+		"build_time":      version.CurrentBuildDate(),
+		"active_projects": len(projects),
+		"active_ticks":    activeTicks,
+		"paused":          s.loop != nil && s.loop.IsPaused(),
+		"recent_outcomes": recentOutcomes,
+		// SCHED-GAP-205: informational 24h counter for the zero-assistant
+		// false-green shape the tightened completion gate now fails at
+		// spawn time — watch it drain to 0 to verify the live fix.
+		"zero_output_committed_24h": zeroOutputCommitted24h,
+		"projects_failure_rates":    failureRates,
+		"failure_window":            s.failureWindow,
+		"last_evaluation":           lastEval,
 		// ADV-R09/G8 — budget authority chain. budget_total was a literal
 		// 100 at this spot (coincidentally equal to the --budget flag
 		// DEFAULT, which is what a hardcoded surface pretends to report);

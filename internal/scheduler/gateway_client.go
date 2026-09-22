@@ -234,6 +234,24 @@ func (r *Response) ExtractText() string {
 	return ""
 }
 
+// HasAssistantMessage reports whether the response carries any assistant
+// output item (role="assistant").
+//
+// SCHED-GAP-205: a status="completed" response with NO assistant output item
+// but non-zero token usage is a provider that billed for tokens and never
+// produced a real assistant message — the same zero-assistant shape as the
+// 102 instant-death (0/0 tokens), only with real billing behind it. Empty
+// Output with 0/0 usage stays 102's domain; this helper feeds the gate arm
+// that catches the non-zero-token zero-assistant completion.
+func (r *Response) HasAssistantMessage() bool {
+	for _, item := range r.Output {
+		if item.Role == "assistant" {
+			return true
+		}
+	}
+	return false
+}
+
 // Ping checks whether the gateway API is reachable and authenticated with
 // the client's shared daemon key.
 func (g *GatewayClient) Ping(ctx context.Context) error {

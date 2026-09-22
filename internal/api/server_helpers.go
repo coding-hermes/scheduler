@@ -86,6 +86,34 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 	return out
 }
 
+// countZeroOutputCommitted24h (SCHED-GAP-205) counts completed ticks from
+// the last 24h that billed non-zero output tokens but carry no commits and
+// no output text — the historical signature of the zero-assistant
+// completion the 205 completion gate now fails at spawn time
+// ("zero assistant output with non-zero token usage"). The ticks table
+// stores no assistant-message flag and no response text (schema v1:
+// tokens/commits/error only), so the count is DERIVED from the same
+// observable columns the gate keys on — status='completed', tokens_out>0,
+// empty error text (a 205-failed row carries the sentinel in the error
+// column; a legacy false-green completed row has none), and zero commits.
+// Informational: after the fix lands the count drains to 0 within a day,
+// giving operators a live before/after signal.
+func countZeroOutputCommitted24h(ctx context.Context, db *sql.DB) int {
+	var n int
+	_ = db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM ticks
+WHERE status = 'completed'
+  AND completed_at IS NOT NULL AND completed_at <> ''
+  AND julianday(completed_at) >= julianday('now', '-1 day')
+  AND COALESCE(tokens_out, 0) > 0
+  AND COALESCE(commits, 0) = 0
+  AND COALESCE(code_commits, 0) = 0
+  AND COALESCE(board_commits, 0) = 0
+  AND (error IS NULL OR error = '')`).Scan(&n)
+	return n
+}
+
 // ProjectFailureRate is the per-project failure-rate breakdown for a single
 // project over a window of recent ticks. It appears in /api/v1/status under
 // the "projects_failure_rates" key (SCHED-GAP-018).

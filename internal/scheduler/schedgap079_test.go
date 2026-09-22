@@ -171,7 +171,9 @@ func TestSCHEDGAP079_EmptyOutputNoSessionFails(t *testing.T) {
 }
 
 // TestSCHEDGAP079_Normal200StillCommitted — a normal 200 with real output
-// and a session id stays completed/committed. No regression.
+// and a session id stays completed/committed. No regression. (SCHED-GAP-205:
+// the fixture now carries role="assistant" + non-zero usage — a real
+// successful completion's exact shape under the tightened gate.)
 func TestSCHEDGAP079_Normal200StillCommitted(t *testing.T) {
 	db := newTestDB(t)
 
@@ -184,12 +186,17 @@ func TestSCHEDGAP079_Normal200StillCommitted(t *testing.T) {
 			"output": []map[string]any{
 				{
 					"type": "message",
+					"role": "assistant",
 					"content": []map[string]any{
 						{"type": "output_text", "text": "real output"},
 					},
 				},
 			},
-			"usage": map[string]int{},
+			"usage": map[string]int{
+				"input_tokens":  100,
+				"output_tokens": 10,
+				"total_tokens":  110,
+			},
 		})
 	})
 
@@ -219,6 +226,10 @@ func TestSCHEDGAP079_Normal200StillCommitted(t *testing.T) {
 // prompt tokens — a tool-only tick's LLM WAS invoked, so zero-token gating
 // never applies; the old 0/0 fixture was byte-identical to the auth-death
 // shape and is now covered by TestSCHED_GAP_102_ZeroTokensEmptyOutputFails.)
+// (SCHED-GAP-205: the tool calls now live INSIDE an assistant output item
+// — role="assistant", content=[{type:tool_calls}] — the real wire shape a
+// tool-only completion carries, so the assistant-message requirement holds
+// while ExtractText stays empty and the tool-only INFO event still fires.)
 func TestSCHEDGAP079_ToolOnlyEmptyOutputKeptCompleted(t *testing.T) {
 	db := newTestDB(t)
 
@@ -228,7 +239,15 @@ func TestSCHEDGAP079_ToolOnlyEmptyOutputKeptCompleted(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_tool",
 			"status": "completed",
-			"output": []map[string]any{},
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "tool_calls", "text": ""},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  1200,
 				"output_tokens": 45,

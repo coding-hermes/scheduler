@@ -87,7 +87,18 @@ func (g *gatewayKeyGuardServer) handler() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":     "resp_gap035",
 				"status": "completed",
-				"output": []map[string]any{},
+				// SCHED-GAP-205: minimal assistant item — the
+				// completed-but-zero-assistant + non-zero tokens shape is
+				// now a gated failure at spawn time.
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "ok"},
+						},
+					},
+				},
 				"usage": map[string]int{
 					"input_tokens":  800,
 					"output_tokens": 20,

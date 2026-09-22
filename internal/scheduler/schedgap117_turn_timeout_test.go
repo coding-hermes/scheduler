@@ -184,7 +184,7 @@ func TestSpawn_GatewaySlowTurnUnderDeadlineStillCompletes(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"resp_sgap117_slow","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_sgap117_slow","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
 	}))
 	defer srv.Close()
 

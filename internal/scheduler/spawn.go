@@ -1472,9 +1472,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// (placeholder), no work was done. Classify as failed to
 				// prevent phantom greens from masking outages.
 				zeroTokens := resp.Usage.InputTokens == 0 && resp.Usage.OutputTokens == 0
+				// SCHED-GAP-205: a completed response that carries NO
+				// assistant output item while billing non-zero output
+				// tokens is a provider that charged for work and never
+				// produced a real assistant message. The OutputTokens>0
+				// guard keeps this arm a strict superset of 102: 0/0
+				// stays 102's instant-death domain, 205 catches the
+				// billed-but-empty shape.
+				zeroAssistant := resp.Status == "completed" &&
+					!resp.HasAssistantMessage() &&
+					resp.Usage.OutputTokens > 0
 				failed := failureStatuses[resp.Status] ||
 					(strings.TrimSpace(text) == "" && resp.ID == "") ||
-					(zeroTokens && strings.TrimSpace(text) == "")
+					(zeroTokens && strings.TrimSpace(text) == "") ||
+					zeroAssistant
 				if failed {
 					var errText string
 					switch {
@@ -1487,6 +1498,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						// (placeholder) session id, but the LLM was never
 						// invoked — the auth-death shape.
 						errText = "provider instant-death (0 tokens, empty output) — likely auth rejection"
+					case zeroAssistant:
+						// SCHED-GAP-205: non-zero token usage but no
+						// assistant message in the output — billed work
+						// with no real response.
+						errText = "zero assistant output with non-zero token usage (provider produced no real response)"
 					default:
 						// Empty-output-AND-empty-session rule: name the
 						// missing session so the row is diagnosable.

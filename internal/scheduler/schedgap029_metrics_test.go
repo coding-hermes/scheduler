@@ -34,7 +34,17 @@ func TestSCHEDGAP029_GatewayWaitReturnsRealTokens(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp-gap029",
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  12000,
 				"output_tokens": 3500,
@@ -454,7 +464,17 @@ func TestSCHEDGAP029_SlotPoolGatewayMetricsPersist(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp-slotpool",
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  8000,
 				"output_tokens": 2000,

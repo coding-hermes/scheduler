@@ -206,7 +206,7 @@ func TestSpawn_GatewayDeadlineUsesWaveTimeout(t *testing.T) {
 		handled.Store(true)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_wave_111","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`))
+		w.Write([]byte(`{"id":"resp_wave_111","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`))
 	}))
 	defer srv.Close()
 
@@ -250,7 +250,7 @@ func TestSpawn_GatewayDeadlineBaseForSerial(t *testing.T) {
 		handled.Store(true)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"id":"resp_serial_111","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`))
+		w.Write([]byte(`{"id":"resp_serial_111","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}`))
 	}))
 	defer srv.Close()
 

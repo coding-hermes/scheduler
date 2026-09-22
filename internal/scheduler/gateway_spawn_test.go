@@ -22,7 +22,10 @@ import (
 // error — never a silently "completed" tick.
 
 // gatewaySpawnOKHandler captures the Authorization header and replies with a
-// minimal valid /v1/responses payload.
+// minimal valid /v1/responses payload. (SCHED-GAP-205: the payload carries a
+// minimal assistant output item — a completed-but-zero-assistant response
+// with non-zero tokens is now a gated failure, so the stub speaks the real
+// wire shape of a successful completion.)
 func gatewaySpawnOKHandler(capturedAuth *string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		*capturedAuth = r.Header.Get("Authorization")
@@ -31,7 +34,15 @@ func gatewaySpawnOKHandler(capturedAuth *string) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_gap001",
 			"status": "completed",
-			"output": []map[string]any{},
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  800,
 				"output_tokens": 20,
@@ -243,7 +254,17 @@ func TestSpawn_GatewayLastTickStarted(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_gap060",
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  800,
 				"output_tokens": 20,
@@ -334,7 +355,17 @@ func TestSpawn_GatewayRunningLastTickStarted(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_gap060",
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  800,
 				"output_tokens": 20,

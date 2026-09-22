@@ -81,7 +81,18 @@ func (g *chainGatewayServer) handler() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":     "resp_gap064",
 				"status": "completed",
-				"output": []map[string]any{},
+				// SCHED-GAP-205: a successful dispatch carries a minimal
+				// assistant output item — the completed-but-zero-assistant
+				// shape with non-zero tokens is now a gated failure.
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": "ok"},
+						},
+					},
+				},
 				// SCHED-GAP-102: a successful dispatch must carry billed
 				// tokens — 0/0 + empty output is now gated as provider
 				// instant-death. Tool-only ticks still have input tokens.

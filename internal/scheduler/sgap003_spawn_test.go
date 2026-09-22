@@ -30,7 +30,17 @@ func gatedGatewayHandler(arrived, release chan struct{}, respID string) http.Han
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":     respID,
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			// SCHED-GAP-102: successful dispatches carry billed tokens —
 			// 0/0 + empty output is gated as provider instant-death.
 			"usage": map[string]int{

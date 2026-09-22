@@ -108,10 +108,13 @@ func TestSCHED_GAP_102_ZeroTokensWithTextStaysCompleted(t *testing.T) {
 }
 
 // TestSCHED_GAP_102_NonZeroTokensEmptyOutputStaysCompleted — prohibition
-// guard (SCHED-GAP-079 tool-only case): non-zero token usage with empty text
+// guard (SCHED-GAP-079 tool-only case): non-zero token usage with empty TEXT
 // and a real persisted session id is a tool-only tick (DuckBrain writes etc.)
 // — it must stay completed. Never gate on output emptiness when the LLM was
-// actually invoked and billed.
+// actually invoked and billed. (SCHED-GAP-205: the tool calls live INSIDE an
+// assistant output item — role="assistant" — the real wire shape; a completed
+// response with non-zero tokens and NO assistant item at all is the 205
+// billed-but-empty failure, covered by TestSCHEDGAP205_NonZeroTokenZeroAssistantFails.)
 func TestSCHED_GAP_102_NonZeroTokensEmptyOutputStaysCompleted(t *testing.T) {
 	db := newTestDB(t)
 
@@ -121,7 +124,15 @@ func TestSCHED_GAP_102_NonZeroTokensEmptyOutputStaysCompleted(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_tool",
 			"status": "completed",
-			"output": []map[string]any{},
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "tool_calls", "text": ""},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  1200,
 				"output_tokens": 45,

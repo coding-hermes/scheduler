@@ -60,7 +60,7 @@ func sseTurnHandler(sessionID string, gaps []time.Duration, usageIn, usageOut in
 			write("response.output_text.delta", `{"type":"response.output_text.delta","delta":"chunk"}`)
 		}
 		write("response.completed", fmt.Sprintf(
-			`{"type":"response.completed","response":{"id":"resp_sse","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}`,
+			`{"type":"response.completed","response":{"id":"resp_sse","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}`,
 			usageIn, usageOut, usageIn+usageOut))
 	}
 }
@@ -74,7 +74,7 @@ func jsonTurnHandler(delay time.Duration) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"resp_json","status":"completed","output":[{"type":"answer","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_json","status":"completed","output":[{"type":"answer","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
 	}
 }
 
@@ -376,7 +376,7 @@ func TestSgap119_KnobDisabledKeepsLegacyNonStreaming(t *testing.T) {
 		gotStream = body["stream"]
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"id":"resp_legacy","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_legacy","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
 	}))
 	defer srv.Close()
 

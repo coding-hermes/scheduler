@@ -40,7 +40,17 @@ func TestSpawn_GatewaySendsTickIDAsSessionKey(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":     "resp_sgap074",
 			"status": "completed",
-			"output": []map[string]any{},
+			// SCHED-GAP-205: minimal assistant item — completed with
+			// non-zero tokens and no assistant output is a gated failure.
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
 			"usage": map[string]int{
 				"input_tokens":  800,
 				"output_tokens": 20,
