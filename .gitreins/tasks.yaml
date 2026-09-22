@@ -3831,3 +3831,15 @@ tasks:
   status: complete
   created_at: '2026-09-21T14:12:10.841799+00:00'
   completed_at: '2026-09-21T22:19:44.407204+00:00'
+- id: SCHED-PERF-002
+  title: "/api/v1/status 18-30s under load \u2014 fix the per-project failure-rate\
+    \ path so a 368-project fleet returns <1s warm"
+  criteria:
+  - 'Acceptance: (1) curl http://127.0.0.1:9090/api/v1/status returns in <1s on the
+    live fleet, numbers unchanged, with current 368 enabled projects. (2) A new benchmark
+    test under internal/api/ proves the N+1 path is replaced by a single aggregated
+    query (or equivalent <5ms plan). (3) gitreins tier-1 (lint + short -p 1 tests)
+    green. (4) Commit + push to origin/main verified with rev-list --count = 0 unpushed.'
+  status: complete
+  created_at: '2026-09-21T22:34:55.625136+00:00'
+  completed_at: '2026-09-22T00:16:55.587290+00:00'
