@@ -186,3 +186,9 @@ Reality: build/boot/API/MCP/dashboard/test-suite all solid; first boot FATALs (m
 Top findings: SCHED-GAP-182 (P1 fresh-boot FATAL), SCHED-GAP-183 (P2 repo_url required + disabled-by-default), SCHED-GAP-184 (P2 migrate-dry raw FATAL).
 Time-to-first-success: ~12 min (would be ~5 with the gaps fixed). Bunker leg: RAN — las-bunker-03 agent 974b10ac, clone 25s, make build 84s, make test EXIT=0 102s, agent destroyed.
 Artifacts: docs/dogfood/2026-09-19-integration.md
+## 2026-09-23 | coding-hermes-scheduler | ✅ SHIPPABLE (groups/templates deploy surface)
+Promise: an operator deploys a task template to a group of projects and the rows land on every member's JSONL board, idempotently, discoverable from the API/MCP alone.
+Reality: deploy/idempotence/id_pattern/labels/MCP-calls/SSE/metrics/persistence all correct; two frictions — deploy needs a hand-created board file first (SCHED-GAP-223), template create silently drops unknown task fields (SCHED-GAP-224).
+Top findings: SCHED-GAP-223 (P2 deploy no-auto-init), SCHED-GAP-224 (P3 silent field drops). Perf: none worth a row (reads 6-10ms warm, boot 24ms, bunker build 84s).
+Time-to-first-success: ~4 min (2 min = SCHED-GAP-223 gotcha). Bunker leg: RAN — las-bunker-03 agent b20ad9cb, clone 19s, go-install 37s, make build 84s, first-boot+deploy smoke PASS, agent destroyed. SCHED-GAP-182 confirmed FIXED (clean-HOME boot OK).
+Artifacts: docs/dogfood/2026-09-23-integration.md
