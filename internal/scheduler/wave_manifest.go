@@ -65,7 +65,10 @@ type WaveManifest struct {
 
 // WaveWorker is one dispatched worker as reported by the foreman. Judge and
 // Merge are normalized on parse to the tick_workers CHECK vocabularies so a
-// stray manifest value can never fail an INSERT (S12 §13).
+// stray manifest value can never fail an INSERT (S12 §13). RawJudge and
+// RawMerge retain the pre-normalization value verbatim so the ingest path
+// can detect vocabulary drift (SCHED-GAP-218) and surface it as a single
+// MEDIUM-severity event per manifest.
 type WaveWorker struct {
 	TaskID    string  `json:"task_id"`
 	Branch    string  `json:"branch"`
@@ -76,6 +79,14 @@ type WaveWorker struct {
 	CostUSD   float64 `json:"cost_usd"`
 	TokensIn  int64   `json:"tokens_in"`
 	TokensOut int64   `json:"tokens_out"`
+
+	// RawJudge / RawMerge are the original (pre-normalization) judge /
+	// merge strings as read from the manifest. They are populated by
+	// parseWaveManifest, are never written to the database, and are
+	// only used to surface vocabulary drift (SCHED-GAP-218) as a
+	// single loud event per manifest.
+	RawJudge string `json:"-"`
+	RawMerge string `json:"-"`
 }
 
 // waveManifestPath returns <workdir>/.coding-hermes/waves/<tick_id>.json —
@@ -85,28 +96,215 @@ func waveManifestPath(workdir, tickID string) string {
 }
 
 // normalizeWaveJudge maps a manifest judge value onto the tick_workers
-// vocabulary ('pass'|'fail'|'withdrawn'|'unknown'). Anything outside the
-// allowed set — including empty — degrades to 'unknown' rather than failing
-// the CHECK constraint (S12 §13: never let a manifest value fail an INSERT).
+// vocabulary ('pass'|'fail'|'withdrawn'|'unknown'). Contract (SCHED-GAP-218):
+//
+//	(1) Leading and trailing ASCII whitespace is trimmed.
+//	(2) The first whitespace-separated token is the candidate; the rest of
+//	    the string (the "evidence" tail) is ignored.
+//	(3) The token is matched case-insensitively against
+//	    {pass, fail, withdrawn, unknown}.
+//	(4) A match returns the canonical lowercase form; anything else
+//	    degrades to 'unknown' rather than failing the CHECK constraint
+//	    (S12 §13: never let a manifest value fail an INSERT).
+//
+// Examples:
+//
+//	"PASS 94b82015"        -> "pass"
+//	"pass"                 -> "pass"
+//	" Pass "               -> "pass"
+//	"FAIL <sha>"           -> "fail"
+//	"withdrawn <reason>"   -> "withdrawn"
+//	"garbage <sha>"        -> "unknown"
+//	""                     -> "unknown"
 func normalizeWaveJudge(v string) string {
-	switch v {
-	case database.TickWorkerJudgePass, database.TickWorkerJudgeFail, database.TickWorkerJudgeWithdrawn:
-		return v
-	default:
-		return database.TickWorkerJudgeUnknown
-	}
+	return matchWaveVocab(v, database.TickWorkerJudgePass,
+		database.TickWorkerJudgeFail, database.TickWorkerJudgeWithdrawn,
+		database.TickWorkerJudgeUnknown, database.TickWorkerJudgeUnknown)
 }
 
 // normalizeWaveMerge maps a manifest merge value onto the tick_workers
-// vocabulary ('merged'|'conflict'|'preserved'|'pending'). Anything outside
-// the allowed set degrades to 'pending'.
+// vocabulary ('merged'|'conflict'|'preserved'|'pending'). Contract
+// (SCHED-GAP-218) mirrors normalizeWaveJudge: case-insensitive
+// leading-token match against the four canonical tokens, trailing
+// evidence ignored, anything else degrades to 'pending'.
+//
+// Examples:
+//
+//	"already merged as 4ceb0c5" -> "merged"
+//	"merged"                    -> "merged"
+//	" MERGED "                  -> "merged"
+//	"conflict ..."              -> "conflict"
+//	"preserved as evidence"     -> "preserved"
+//	"garbage <sha>"             -> "pending"
+//	""                          -> "pending"
 func normalizeWaveMerge(v string) string {
-	switch v {
-	case database.TickWorkerMergeMerged, database.TickWorkerMergeConflict, database.TickWorkerMergePreserved:
-		return v
-	default:
-		return database.TickWorkerMergePending
+	return matchWaveVocab(v, database.TickWorkerMergeMerged,
+		database.TickWorkerMergeConflict, database.TickWorkerMergePreserved,
+		database.TickWorkerMergePending, database.TickWorkerMergePending)
+}
+
+// matchWaveVocab is the shared shape behind normalizeWaveJudge /
+// normalizeWaveMerge: trim, then look for the first canonical token
+// in the leading whitespace-separated tokens (case-insensitive).
+// Anything still outside the allowed set degrades to def. We try the
+// first two tokens because common producer phrasings prepend a
+// connector ("already merged as <sha>", "still in merged state", etc.)
+// where the canonical token sits at position 1, not 0. The "evidence
+// tail" past the canonical token (the "<sha>" portion) is ignored.
+// Allowed tokens (case-insensitive):
+//
+//	judge:  pass, fail, withdrawn, unknown
+//	merge:  merged, conflict, preserved, pending
+//
+// The five form-name args (p, f, w, u, def) map the matched token to
+// the canonical lowercase string used in the DB.
+func matchWaveVocab(v, p, f, w, u, def string) string {
+	for _, tok := range firstNVocabTokens(v, 2) {
+		switch tok {
+		case "pass":
+			return p
+		case "fail":
+			return f
+		case "withdrawn":
+			return w
+		case "unknown":
+			return u
+		case "merged":
+			return p
+		case "conflict":
+			return f
+		case "preserved":
+			return w
+		case "pending":
+			return u
+		}
 	}
+	return def
+}
+
+// firstNVocabTokens returns up to n lower-cased whitespace-separated
+// tokens from s, skipping empty tokens. Returns an empty slice for
+// the empty/whitespace input.
+func firstNVocabTokens(s string, n int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" || n <= 0 {
+		return nil
+	}
+	fields := strings.Fields(s)
+	if len(fields) > n {
+		fields = fields[:n]
+	}
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, strings.ToLower(f))
+	}
+	return out
+}
+
+// detectWaveVocabDrift reports which workers in the manifest carried a
+// raw judge/merge value the widened matchWaveVocab grammar still cannot
+// map onto the canonical vocabulary, plus a single sample of each
+// drifted value. Used by ingestWaveManifest to emit exactly one
+// MEDIUM-severity event per manifest (SCHED-GAP-218) so a future
+// writer/consumer mismatch is queryable, never silent. The function is
+// pure (no I/O) so the unit tests can drive it directly.
+func detectWaveVocabDrift(m *WaveManifest) (ids []string, judgeDrift bool, mergeDrift bool, sampleJudge string, sampleMerge string) {
+	for _, w := range m.Workers {
+		j, f, jSample, mSample := driftOne(w.RawJudge, w.RawMerge)
+		if j || f {
+			ids = append(ids, w.TaskID)
+		}
+		if j {
+			judgeDrift = true
+			if sampleJudge == "" {
+				sampleJudge = jSample
+			}
+		}
+		if f {
+			mergeDrift = true
+			if sampleMerge == "" {
+				sampleMerge = mSample
+			}
+		}
+	}
+	return ids, judgeDrift, mergeDrift, sampleJudge, sampleMerge
+}
+
+// driftOne applies the same leading-token rule as matchWaveVocab and
+// reports whether the raw values are not in the canonical vocab. A
+// raw value is considered a drift ONLY when neither its first nor
+// its second whitespace-separated token (case-insensitive) is in the
+// canonical vocab, AND the second position is only consulted when
+// the first token is a known connector word (so a bare "<sha>" or
+// "abc1234" tail can never accidentally match by coincidence). An
+// empty value is the documented "unreported verdict" path (see
+// waveWorkerTerminalState), not drift.
+func driftOne(rawJudge, rawMerge string) (judgeDrift bool, mergeDrift bool, sampleJudge, sampleMerge string) {
+	if !vocabHitStrict(rawJudge, judgeTokens) && hasAnyNonEmptyToken(rawJudge) {
+		judgeDrift = true
+		sampleJudge = rawJudge
+	}
+	if !vocabHitStrict(rawMerge, mergeTokens) && hasAnyNonEmptyToken(rawMerge) {
+		mergeDrift = true
+		sampleMerge = rawMerge
+	}
+	return judgeDrift, mergeDrift, sampleJudge, sampleMerge
+}
+
+// waveDriftConnectors is the small allow-list of leading words that
+// grant the second token a chance to be canonical. Producers that
+// need new connectors add them here with a one-line comment naming
+// the producer / evidence tick. Kept tiny on purpose — a wide
+// allow-list would silently mask real drift; a missing connector
+// produces a single loud MEDIUM event the next tick, which is
+// cheaper than misclassifying "<sha>" as a canonical token.
+var waveDriftConnectors = map[string]struct{}{
+	"already": {}, // crier-2026-09-19-19-37-43: "already merged as <sha>"
+	"still":   {}, // pending → "still pending" / merged → "still merged"
+	"now":     {}, // "now merged", "now withdrawn"
+	"as":      {}, // "as merged", "as withdrawn"
+	"is":      {}, // "is merged", "is preserved"
+	"now-":    {}, // rare: "now-merged" treated as a single token
+}
+
+// judgeTokens / mergeTokens are the canonical lowercase vocabularies
+// the drift detector consults (mirrors matchWaveVocab's switch).
+var (
+	judgeTokens = []string{"pass", "fail", "withdrawn", "unknown"}
+	mergeTokens = []string{"merged", "conflict", "preserved", "pending"}
+)
+
+// vocabHitStrict returns true iff either the first or (first
+// connector + second canonical) shape matches vocab. The second
+// position is only consulted when the first token is in
+// waveDriftConnectors — that prevents a bare hex/sha tail from
+// accidentally satisfying the canonical check.
+func vocabHitStrict(raw string, vocab []string) bool {
+	toks := firstNVocabTokens(raw, 2)
+	if len(toks) == 0 {
+		return false
+	}
+	for _, v := range vocab {
+		if toks[0] == v {
+			return true
+		}
+	}
+	if len(toks) >= 2 {
+		if _, ok := waveDriftConnectors[toks[0]]; ok {
+			for _, v := range vocab {
+				if toks[1] == v {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// hasAnyNonEmptyToken is true iff s has at least one non-whitespace
+// character (used to distinguish "unreported verdict" from "drift").
+func hasAnyNonEmptyToken(s string) bool {
+	return strings.TrimSpace(s) != ""
 }
 
 // parseWaveManifest reads and validates the wave manifest for tickID.
@@ -119,7 +317,10 @@ func normalizeWaveMerge(v string) string {
 //   - workers > 8             → first 8 kept, m.TruncatedWorkers set — caller emits one WARN
 //
 // Unknown JSON keys are ignored (json.Unmarshal default). The returned
-// manifest always carries normalized judge/merge values.
+// manifest always carries normalized judge/merge values; the
+// pre-normalization raw values are preserved on each worker as
+// RawJudge/RawMerge so the ingest path can surface vocabulary drift
+// (SCHED-GAP-218) as a single loud event per manifest, never silently.
 func parseWaveManifest(path, tickID string) (*WaveManifest, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -162,6 +363,12 @@ func parseWaveManifest(path, tickID string) (*WaveManifest, error) {
 		m.Workers = m.Workers[:waveManifestMaxWorkers]
 	}
 	for i := range m.Workers {
+		// Preserve the pre-normalization raw values so the ingest path
+		// can detect vocabulary drift (SCHED-GAP-218) and emit one
+		// loud event per manifest, not silently discard unrecognized
+		// shapes.
+		m.Workers[i].RawJudge = m.Workers[i].Judge
+		m.Workers[i].RawMerge = m.Workers[i].Merge
 		m.Workers[i].Judge = normalizeWaveJudge(m.Workers[i].Judge)
 		m.Workers[i].Merge = normalizeWaveMerge(m.Workers[i].Merge)
 	}
@@ -222,6 +429,24 @@ func ingestWaveManifest(ctx context.Context, db *sql.DB, workdir, project, tickI
 		}
 		waveWarnEvent(ctx, db, tickID, path, err.Error())
 		return 0, nil
+	}
+
+	// SCHED-GAP-218: detect vocabulary drift BEFORE opening the
+	// transaction. waveWarnEvent opens its own SQLite connection
+	// (database/sql pool), and the connection budget is
+	// SetMaxOpenConns(1) with busy_timeout=5000; emitting the drift
+	// event from inside a tx would block the tx's own worker
+	// INSERTs and deadlock. One event per manifest, naming the raw
+	// values and the tick_id — never silent, never per-worker.
+	if driftIDs, judgeDrift, mergeDrift, sampleJudge, sampleMerge := detectWaveVocabDrift(m); len(driftIDs) > 0 {
+		extra := ""
+		if len(driftIDs) > 5 {
+			extra = fmt.Sprintf(" and %d more", len(driftIDs)-5)
+		}
+		waveWarnEvent(ctx, db, tickID, path,
+			fmt.Sprintf("vocab drift: %d worker(s) — judge_drift=%v sample=%q merge_drift=%v sample=%q (ids: %s%s)",
+				len(driftIDs), judgeDrift, sampleJudge, mergeDrift, sampleMerge,
+				strings.Join(driftIDs[:min(5, len(driftIDs))], ", "), extra))
 	}
 
 	tx, err := db.BeginTx(ctx, nil)

@@ -24,10 +24,18 @@ import (
 // attributes to, and returns the tick's pre-ingest cost_usd for
 // byte-identical comparison (the §12 W4 RED check).
 func waveSeedTick(t *testing.T, db *sql.DB, tickID, workdir string) float64 {
+	return waveSeedTickProject(t, db, tickID, workdir, "wave-proj")
+}
+
+// waveSeedTickProject is the parameterized form: project name is
+// caller-chosen so a test can ingest two ticks that share a workdir
+// (the workdir uniqueness check is per-project). The default
+// waveSeedTick pins the "wave-proj" name used by every other test.
+func waveSeedTickProject(t *testing.T, db *sql.DB, tickID, workdir, projectName string) float64 {
 	t.Helper()
 	ctx := context.Background()
 	p := &database.Project{
-		Name:      "wave-proj",
+		Name:      projectName,
 		Workdir:   workdir,
 		Weight:    10,
 		Priority:  5,
@@ -129,11 +137,14 @@ func TestParseWaveManifest_Valid(t *testing.T) {
 	}
 	for i, want := range []WaveWorker{
 		{TaskID: "T-1", Branch: "wt/T-1", Worktree: "/wt/T-1", CommitSHA: "abc1234",
-			Judge: "pass", Merge: "merged", CostUSD: 0.11, TokensIn: 1000, TokensOut: 200},
+			Judge: "pass", Merge: "merged", CostUSD: 0.11, TokensIn: 1000, TokensOut: 200,
+			RawJudge: "pass", RawMerge: "merged"},
 		{TaskID: "T-2", Branch: "wt/T-2", Worktree: "/wt/T-2", CommitSHA: "def5678",
-			Judge: "unknown", Merge: "pending", CostUSD: 0.22, TokensIn: 2000, TokensOut: 400},
+			Judge: "unknown", Merge: "pending", CostUSD: 0.22, TokensIn: 2000, TokensOut: 400,
+			RawJudge: "", RawMerge: ""},
 		{TaskID: "T-3", Branch: "wt/T-3", Worktree: "/wt/T-3", CommitSHA: "90ab12",
-			Judge: "withdrawn", Merge: "preserved", CostUSD: 0.33, TokensIn: 3000, TokensOut: 600},
+			Judge: "withdrawn", Merge: "preserved", CostUSD: 0.33, TokensIn: 3000, TokensOut: 600,
+			RawJudge: "withdrawn", RawMerge: "preserved"},
 	} {
 		if m.Workers[i] != want {
 			t.Errorf("worker[%d] = %+v, want %+v (empty judge/merge must degrade, not fail)", i, m.Workers[i], want)
@@ -444,6 +455,240 @@ func TestIngestWaveManifest_SerialTickNoEvent(t *testing.T) {
 	if got := waveEventCount(t, db); got != 0 {
 		t.Errorf("wave events = %d, want 0", got)
 	}
+}
+
+// TestNormalizeWaveJudge exercises the SCHED-GAP-218 widening: the
+// grammar is case-insensitive, leading-token with optional trailing
+// evidence, anything outside the canonical vocab degrades to 'unknown'.
+func TestNormalizeWaveJudge(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"PASS 94b82015", "pass"},
+		{"pass", "pass"},
+		{" Pass ", "pass"},
+		{"FAIL <sha>", "fail"},
+		{"withdrawn <reason>", "withdrawn"},
+		{"garbage <sha>", "unknown"},
+		{"", "unknown"},
+		{"PASS", "pass"},
+		{"pAsS 12abc", "pass"},
+		{"\tUNKNOWN\n", "unknown"},
+	}
+	for _, c := range cases {
+		if got := normalizeWaveJudge(c.in); got != c.want {
+			t.Errorf("normalizeWaveJudge(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestNormalizeWaveMerge mirrors TestNormalizeWaveJudge for the merge
+// vocabulary (SCHED-GAP-218). The crier-2026-09-19-19-37-43 evidence
+// carried "already merged as <sha>" verbatim — the canonical token
+// must survive after the leading-token split.
+func TestNormalizeWaveMerge(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"already merged as 4ceb0c5", "merged"},
+		{"merged", "merged"},
+		{" MERGED ", "merged"},
+		{"conflict ...", "conflict"},
+		{"preserved as evidence", "preserved"},
+		{"pending", "pending"},
+		{"garbage <sha>", "pending"},
+		{"", "pending"},
+		{"mErGeD 12abc", "merged"},
+		{"CoNfLiCt <reason>", "conflict"},
+	}
+	for _, c := range cases {
+		if got := normalizeWaveMerge(c.in); got != c.want {
+			t.Errorf("normalizeWaveMerge(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDetectWaveVocabDrift pins the SCHED-GAP-218 contract: drift is
+// reported ONLY when a non-empty raw value carries a leading token
+// outside the canonical vocab. Empty values are NOT drift (that is
+// the documented "unreported verdict" path).
+func TestDetectWaveVocabDrift(t *testing.T) {
+	m := &WaveManifest{
+		Workers: []WaveWorker{
+			{TaskID: "T-1", RawJudge: "PASS 94b82015", RawMerge: "already merged as 4ceb0c5"},
+			{TaskID: "T-2", RawJudge: "", RawMerge: ""}, // unreported: not drift
+			{TaskID: "T-3", RawJudge: "garbage <sha>", RawMerge: "still garbage"},
+			{TaskID: "T-4", RawJudge: "withdrawn <reason>", RawMerge: "merged"},
+			{TaskID: "T-5", RawJudge: "PASS 12abc", RawMerge: "what is this"},
+		},
+	}
+	ids, judgeDrift, mergeDrift, sampleJudge, sampleMerge := detectWaveVocabDrift(m)
+	wantIDs := []string{"T-3", "T-5"}
+	if !equalStringSlices(ids, wantIDs) {
+		t.Errorf("drift ids = %v, want %v", ids, wantIDs)
+	}
+	if !judgeDrift {
+		t.Error("judgeDrift = false, want true (T-3 has 'garbage <sha>')")
+	}
+	if !mergeDrift {
+		t.Error("mergeDrift = false, want true (T-3 has 'still garbage')")
+	}
+	if sampleJudge != "garbage <sha>" {
+		t.Errorf("sampleJudge = %q, want %q", sampleJudge, "garbage <sha>")
+	}
+	if sampleMerge != "still garbage" {
+		t.Errorf("sampleMerge = %q, want %q", sampleMerge, "still garbage")
+	}
+
+	// Sanity: every-canonical manifest reports zero drift.
+	mClean := &WaveManifest{
+		Workers: []WaveWorker{
+			{TaskID: "T-1", RawJudge: "pass", RawMerge: "merged"},
+			{TaskID: "T-2", RawJudge: "", RawMerge: ""}, // unreported: not drift
+			{TaskID: "T-3", RawJudge: "fail", RawMerge: "preserved"},
+		},
+	}
+	ids, judgeDrift, mergeDrift, _, _ = detectWaveVocabDrift(mClean)
+	if len(ids) != 0 || judgeDrift || mergeDrift {
+		t.Errorf("clean manifest: ids=%v judgeDrift=%v mergeDrift=%v, want all zero", ids, judgeDrift, mergeDrift)
+	}
+}
+
+// TestIngestWaveManifestVocabularyDrift is the end-to-end SCHED-GAP-218
+// pin: a manifest whose workers carry the crier-2026-09-19-19-37-43
+// evidence strings (PASS 94b82015 / already merged as 4ceb0c5) ingests
+// as judge=pass / merge=merged / state=done (not 'running'), the
+// worker_count equals the manifest's worker count, and exactly one
+// MEDIUM-severity event was logged with "vocab drift" in the message
+// ONLY when the manifest actually drifts. The drift-detector stays
+// silent on the canonical-shape happy path.
+func TestIngestWaveManifestVocabularyDrift(t *testing.T) {
+	workdir := t.TempDir()
+	tickID := "wave-proj-2026-09-23-09-00-00"
+
+	// crier-style manifest: every worker uses the human-readable form.
+	mIn := WaveManifest{
+		TickID:    tickID,
+		Project:   "wave-proj",
+		StartedAt: "2026-09-23T09:00:00Z",
+		Workers: []WaveWorker{
+			{TaskID: "DF-CRIER-274", Branch: "wt/DF-CRIER-274", Worktree: "/wt/274",
+				CommitSHA: "94b82015", Judge: "PASS 94b82015", Merge: "already merged as 4ceb0c5",
+				CostUSD: 0.10, TokensIn: 1000, TokensOut: 200},
+			{TaskID: "DF-CRIER-275", Branch: "wt/DF-CRIER-275", Worktree: "/wt/275",
+				CommitSHA: "505246b2", Judge: "PASS 505246b2", Merge: "already merged as 40fdaca",
+				CostUSD: 0.11, TokensIn: 1100, TokensOut: 220},
+		},
+	}
+	raw, _ := json.Marshal(mIn)
+	writeWaveManifest(t, workdir, tickID, string(raw))
+
+	db := newTestDB(t)
+	wantCost := waveSeedTick(t, db, tickID, workdir)
+
+	eventsBefore := waveEventCount(t, db)
+	n, err := ingestWaveManifest(context.Background(), db, workdir, "wave-proj", tickID)
+	if err != nil {
+		t.Fatalf("ingestWaveManifest: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("ingested = %d, want 2", n)
+	}
+	wc, cost := waveTickState(t, db, tickID)
+	if wc != 2 {
+		t.Errorf("ticks.worker_count = %d, want 2", wc)
+	}
+	if cost != wantCost {
+		t.Errorf("ticks.cost_usd = %v, want byte-identical %v (W4)", cost, wantCost)
+	}
+
+	rows, err := database.ListTickWorkersByTick(context.Background(), db, tickID)
+	if err != nil {
+		t.Fatalf("ListTickWorkersByTick: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("tick_workers rows = %d, want 2", len(rows))
+	}
+	for i, w := range rows {
+		if w.Judge != database.TickWorkerJudgePass {
+			t.Errorf("worker[%d].judge = %q, want %q (crier form must normalize to canonical pass)",
+				i, w.Judge, database.TickWorkerJudgePass)
+		}
+		if w.Merge != database.TickWorkerMergeMerged {
+			t.Errorf("worker[%d].merge = %q, want %q (crier form must normalize to canonical merged)",
+				i, w.Merge, database.TickWorkerMergeMerged)
+		}
+		if w.State != database.TickWorkerStateDone {
+			t.Errorf("worker[%d].state = %q, want %q (terminal verdict must NOT land as running)",
+				i, w.State, database.TickWorkerStateDone)
+		}
+	}
+
+	// No drift event expected — the crier form is now in the grammar.
+	eventsAfter := waveEventCount(t, db)
+	if eventsAfter-eventsBefore != 0 {
+		t.Errorf("wave events delta = %d, want 0 (crier form is in the grammar, no drift expected)", eventsAfter-eventsBefore)
+	}
+
+	// Now seed a manifest that DOES drift (raw values outside the
+	// widened grammar), and assert exactly one MEDIUM event is logged.
+	// Use a separate workdir to avoid the case-insensitive cross-project
+	// workdir-uniqueness check; the manifests still live in t.TempDir()
+	// subdirectories.
+	driftWorkdir := t.TempDir()
+	tickID2 := "wave-drift-2026-09-23-09-30-00"
+	mDrift := WaveManifest{
+		TickID:    tickID2,
+		Project:   "wave-drift",
+		StartedAt: "2026-09-23T09:30:00Z",
+		Workers: []WaveWorker{
+			{TaskID: "DF-NEW-001", Branch: "wt/DF-NEW-001", Worktree: "/wt/new1",
+				CommitSHA: "abcdef0", Judge: "totally unparseable", Merge: "weird thing",
+				CostUSD: 0.05, TokensIn: 500, TokensOut: 100},
+		},
+	}
+	rawDrift, _ := json.Marshal(mDrift)
+	writeWaveManifest(t, driftWorkdir, tickID2, string(rawDrift))
+	waveSeedTickProject(t, db, tickID2, driftWorkdir, "wave-drift")
+
+	eventsBeforeDrift := waveEventCount(t, db)
+	n2, err := ingestWaveManifest(context.Background(), db, driftWorkdir, "wave-drift", tickID2)
+	if err != nil {
+		t.Fatalf("ingestWaveManifest (drift): %v", err)
+	}
+	if n2 != 1 {
+		t.Errorf("ingested (drift) = %d, want 1", n2)
+	}
+	eventsAfterDrift := waveEventCount(t, db)
+	if eventsAfterDrift-eventsBeforeDrift != 1 {
+		t.Errorf("drift event delta = %d, want exactly 1 (SCHED-GAP-218: drift must be loud, not silent)",
+			eventsAfterDrift-eventsBeforeDrift)
+	}
+	// Verify the event carries the 'vocab drift' signature.
+	var msg string
+	if err := db.QueryRow(`SELECT message FROM events WHERE component = 'wave' AND message LIKE '%vocab drift%' ORDER BY id DESC LIMIT 1`).Scan(&msg); err != nil {
+		t.Fatalf("query vocab-drift event: %v", err)
+	}
+	if !strings.Contains(msg, tickID2) {
+		t.Errorf("drift event message missing tick_id: %q", msg)
+	}
+	if !strings.Contains(msg, "DF-NEW-001") {
+		t.Errorf("drift event message missing drifted worker id: %q", msg)
+	}
+}
+
+// equalStringSlices returns true iff a and b have the same length and
+// element-wise equality.
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestWaveManifestUnfinished pins the SCHED-GAP-114 recovery-candidate

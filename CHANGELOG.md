@@ -33,6 +33,37 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-22
 
+### Wave verdict normalizers widened (SCHED-GAP-218)
+
+- **`internal/scheduler/wave_manifest.go`** — `normalizeWaveJudge` and
+  `normalizeWaveMerge` now accept the case-insensitive leading-token
+  shape that manifests in the wild actually write: `PASS <sha>`,
+  `already merged as <sha>`, `withdrawn <reason>`, etc. The old code
+  was an exact-match switch on the raw string, so any value carrying
+  trailing evidence (or a connector word before the canonical token)
+  was silently degraded to `unknown` / `pending` and the worker row
+  landed as `state='running'` — 81 completed ticks were stuck with
+  workers in `state='running'` for that reason. Widening to
+  case-insensitive leading-token match closes the live noise. A new
+  `detectWaveVocabDrift` helper flags any raw value the widened
+  grammar still cannot map onto the canonical vocab (so a future
+  writer/consumer drift is queryable, never silent) and the ingest
+  path emits exactly one MEDIUM-severity event per manifest naming
+  the drifted worker ids and the offending raw values. The drift
+  event is emitted before `BeginTx` so it does not contend with the
+  single-SQLite-connection budget. `WaveWorker` gains two
+  `json:"-"` fields (`RawJudge`, `RawMerge`) that retain the
+  pre-normalization values for the drift detector; they never
+  land in the database and the wire format is unchanged. RED/GREEN
+  proof: `TestNormalizeWaveJudge` (9 cases), `TestNormalizeWaveMerge`
+  (10 cases), `TestDetectWaveVocabDrift` (drift + clean), and
+  `TestIngestWaveManifestVocabularyDrift` (end-to-end with the
+  crier-2026-09-19-19-37-43 verbatim strings) — all pass; the
+  pre-existing `TestParseWaveManifest_Valid` was updated for the
+  new struct fields, `waveSeedTick` gained a parameterized
+  `waveSeedTickProject` helper for tests that need two distinct
+  projects under one workdir path.
+
 ### Build + Lint Convergence (SCHED-GAP-221)
 
 - **`scripts/lint-guard.sh`** — additive golangci-lint safety net invoked
