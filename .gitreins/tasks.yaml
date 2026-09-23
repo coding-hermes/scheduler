@@ -2762,8 +2762,9 @@ tasks:
   criteria:
   - GET /api/v1/events/stream emits committed events, supports Last-Event-ID replay,
     15s heartbeat, cancellation, documented OpenAPI route, and streaming test
-  status: in_progress
+  status: complete
   created_at: '2026-09-18T15:03:37.245797+00:00'
+  completed_at: '2026-09-18T20:10:00.000000+00:00'
 - id: SCHED-GAP-145
   title: Reap stale 'queued' tick rows on startup
   criteria:
@@ -2837,8 +2838,9 @@ tasks:
   title: resolve SCHED-GAP-165
   criteria:
   - AC per board row SCHED-GAP-165
-  status: in_progress
+  status: complete
   created_at: '2026-09-20T21:52:27.659218+00:00'
+  completed_at: '2026-09-21T04:10:00.000000+00:00'
 - id: SCHED-GAP-164
   title: 'Board status vocabulary drift: add a validator gate, normalize legacy ''done''/''completed''
     rows, and prevent re-emission'
@@ -3877,8 +3879,9 @@ tasks:
   - go test ./internal/scheduler/ -count=1 -p 1 -run TestSCHEDGAP205 -v passes
   - All 4 existing SCHED-GAP-079 tests still pass
   - go test ./... -count=1 -p 1 -short passes full suite
-  status: in_progress
+  status: complete
   created_at: '2026-09-22T13:34:59.171882+00:00'
+  completed_at: '2026-09-22T22:50:00.000000+00:00'
 - id: 'SCHED-GAP-205: tighten gateway completion gate to require assistant message'
   title: 'Internal scheduler completion gate fix: when a gateway response has status=completed
     but an empty Output (no assistant message), the tick must be recorded failed,
@@ -4002,15 +4005,3 @@ tasks:
   status: complete
   created_at: '2026-09-23T05:41:24.061243+00:00'
   completed_at: '2026-09-23T05:59:02.825215+00:00'
-- id: SCHED-PERF-006
-  title: Policy-script deploy-hash guard (consumer tripwire)
-  criteria:
-  - 'A new scripts/policy-script-deploy-hash-guard.sh exists; wires into install-hooks.sh
-    pre-commit + scheduler-deploy-drain-restart.sh ''verify'' block; tests/test_policy_script_deploy_hash_guard.sh
-    RED/GREEN-proven; README.md notes the guard. PASS: deliberately mutating ~/.hermes/scripts/fleet-cooldown-policy.py
-    away from the sidecar causes the guard to exit 1 with ''[SCHED-PERF-006] policy
-    script deploy hash MISMATCH'' on stderr; the in-tree test runs and passes both
-    the clean and mutated cases.'
-  status: complete
-  created_at: '2026-09-23T09:11:17.464783+00:00'
-  completed_at: '2026-09-23T09:36:12.286992+00:00'
