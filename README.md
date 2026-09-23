@@ -376,6 +376,12 @@ for a dry run, `--apply` to write). The script:
   an API `PUT /api/v1/projects/{name}` cooldown change is durable only within
   the daemon session — the next policy run normalizes it back unless the
   project has an ELEVATED_PINS entry.
+- Guarded against clobber (SCHED-PERF-006): the pre-commit hook and the
+  deploy-drain-restart verify block run
+  `scripts/policy-script-deploy-hash-guard.sh`, which aborts loudly whenever
+  the live `fleet-cooldown-policy.py` has diverged from its canonical
+  sidecar, so a consumer deploy/restart can no longer silently overwrite an
+  operator's live fix.
 
 **Override procedure:** to pin a project's cooldown permanently, add it to
 `ELEVATED_PINS` in `~/.hermes/scripts/fleet-cooldown-policy.py` (and set the
