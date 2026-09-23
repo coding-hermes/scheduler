@@ -3967,5 +3967,6 @@ tasks:
     returns 400 6. Controls: clean create still returns 201, files not written on
     rejection 7. go build, go vet, gofmt -l, golangci-lint, gitleaks all clean 8.
     full test suite passes (-p 1 -count=1 ./...)'
-  status: in_progress
+  status: complete
   created_at: '2026-09-23T03:03:33.849467+00:00'
+  completed_at: '2026-09-23T03:06:21.182807+00:00'
