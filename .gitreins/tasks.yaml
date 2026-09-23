@@ -3981,3 +3981,15 @@ tasks:
   status: complete
   created_at: '2026-09-23T04:07:32.608388+00:00'
   completed_at: '2026-09-23T04:17:36.355128+00:00'
+- id: SCHED-GAP-222
+  title: OpenAPI + docs parity for /api/v1/live (SCHED-GAP-222)
+  criteria:
+  - GET /api/v1/openapi.json includes /api/v1/live with 200 response (the DB-free
+    liveness probe, SCHED-GAP-204-A); grep 'api/v1/live' docs/api.md returns at least
+    one row; documentedPaths test list pins /api/v1/live so it cannot silently drop
+    again; TestAPI_OpenAPI_Success + TestLiveRoute_NoDBInteraction both green; gitreins
+    Tier 1 guard PASS; scripts/lint-guard.sh exit 0; full go test -short -p 1 ./...
+    green
+  status: complete
+  created_at: '2026-09-23T04:54:17.406780+00:00'
+  completed_at: '2026-09-23T05:12:00.042002+00:00'
