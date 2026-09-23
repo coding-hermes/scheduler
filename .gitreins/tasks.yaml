@@ -3956,17 +3956,3 @@ tasks:
   status: complete
   created_at: '2026-09-23T00:21:54.056189+00:00'
   completed_at: '2026-09-23T00:44:57.231058+00:00'
-- id: SCHED-GAP-224
-  title: Strict JSON decode for /api/v1/templates and /api/v1/groups
-  criteria:
-  - '1. createGroup/createTemplate/updateGroup/updateTemplate all use json.Decoder.DisallowUnknownFields()
-    2. POST /api/v1/templates with unknown per-task fields (id, priority, status)
-    returns 400 (regression: TestBlocksAPI_StrictDecode_RejectsUnknownFields) 3. PUT
-    /api/v1/templates/{name} with unknown fields returns 400 4. POST /api/v1/groups
-    with unknown fields returns 400 5. PUT /api/v1/groups/{name} with unknown fields
-    returns 400 6. Controls: clean create still returns 201, files not written on
-    rejection 7. go build, go vet, gofmt -l, golangci-lint, gitleaks all clean 8.
-    full test suite passes (-p 1 -count=1 ./...)'
-  status: complete
-  created_at: '2026-09-23T03:03:33.849467+00:00'
-  completed_at: '2026-09-23T03:06:21.182807+00:00'
