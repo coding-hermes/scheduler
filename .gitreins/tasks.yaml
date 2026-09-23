@@ -4010,3 +4010,17 @@ tasks:
   status: complete
   created_at: '2026-09-23T05:41:24.061243+00:00'
   completed_at: '2026-09-23T05:59:02.825215+00:00'
+- id: INT-CI-158
+  title: Fix stale INT-CI-007 citation in TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain
+    KNOWN FLAKE comment
+  criteria:
+  - 'Replace the bogus INT-CI-007 reference in internal/scheduler/schedgap143_drain_class_test.go:313
+    (closed 2026-09-18 for an unrelated missing-workflow-run bug, not the race-detector
+    flake) with INT-CI-158 (the actual follow-up). Verify with: grep -n ''INT-CI-00''
+    internal/scheduler/schedgap143_drain_class_test.go shows only INT-CI-158, not
+    INT-CI-007. go test -run TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain -count=1
+    ./internal/scheduler/ still passes (no assertion change, just comment). gofmt
+    -l internal/scheduler/schedgap143_drain_class_test.go is empty.'
+  status: complete
+  created_at: '2026-09-23T11:37:04.623526+00:00'
+  completed_at: '2026-09-23T11:40:10.217900+00:00'
