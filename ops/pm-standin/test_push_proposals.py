@@ -22,6 +22,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("push_proposals", os.path.join(HERE, "push_proposals.py"))
@@ -179,3 +180,98 @@ def test_title_overlap_threshold_rejects_dissimilar_titles():
     assert pp.title_overlap(
         "port pool exhausted on bunker",
         "dashboard auth loop fails after upgrade") < pp.TITLE_DUP_THRESHOLD
+
+
+# ── SCHED-GAP-206: event ids are derived from the log's max ────────────────
+
+LOG_MAX = 1789977500000000115        # this board's events.jsonl max (19 digits)
+LOG_ERA = 1789977500000000031        # the era base the 09-22 off-scale lines broke
+MICRO = 1790080373408208             # the off-scale id the row cites (epoch µs)
+
+
+def _events(path, lines):
+    with open(path, "w", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    return path
+
+
+def test_next_event_id_continues_from_the_logs_max(tmpdir):
+    """The id BASIS is the file: max(existing 19-digit ids) + 1 — the defect was
+    a writer on a fixed epoch basis, so the basis itself is what is pinned."""
+    events = _events(os.path.join(tmpdir, "events.jsonl"), [
+        '{"id": 1789977500000000001, "event_type": "task_created"}',
+        f'{{"id": {LOG_MAX}, "event_type": "audit"}}',
+        '{"id": 1789977500000000002, "event_type": "audit"}',  # below the max
+    ])
+
+    assert pp.next_event_id(events) == LOG_MAX + 1
+
+
+def test_next_event_id_ignores_legacy_and_off_scale_ids(tmpdir):
+    """Only a 19-digit JSON integer is a basis to continue from: string ids, a
+    bool, no id at all, and the epoch-microsecond ids that caused the defect must
+    not steer the next id (max+1 of a 16-digit id would be off-scale again)."""
+    events = _events(os.path.join(tmpdir, "events.jsonl"), [
+        '{"kind": "refile_suppressed", "detail": "no id"}',
+        '{"id": null}',
+        '{"id": "PM-001"}',
+        '{"id": true}',
+        'not json at all',
+        f'{{"id": {MICRO}}}',
+        f'{{"id": {LOG_ERA}}}',
+    ])
+
+    assert pp.next_event_id(events) == LOG_ERA + 1
+
+
+def test_next_event_id_base_on_empty_and_missing_logs(tmpdir):
+    """An empty (or missing) log gets a fresh 19-digit id on the same scale:
+    int(time.time()) * 1e9 — epoch nanoseconds, never a smaller-scale basis."""
+    empty = _events(os.path.join(tmpdir, "empty.jsonl"), [])
+    missing = os.path.join(tmpdir, "nope", "events.jsonl")
+
+    for path in (empty, missing):
+        before = int(time.time()) * pp.EVENT_ID_BASE_NS
+        got = pp.next_event_id(path)
+        after = int(time.time()) * pp.EVENT_ID_BASE_NS
+        assert before <= got <= after, (path, got, before, after)
+        assert got >= pp.EVENT_ID_SCALE, (path, got)
+        assert len(str(got)) == 19, (path, got)
+
+
+def test_next_event_id_is_read_only(tmpdir):
+    """Deriving the id must not write to the log — the caller appends."""
+    events = _events(os.path.join(tmpdir, "events.jsonl"), [
+        f'{{"id": {LOG_MAX}, "event_type": "audit"}}'])
+    before = open(events, "rb").read()
+
+    pp.next_event_id(events)
+
+    assert open(events, "rb").read() == before
+
+
+def test_suppression_annotation_carries_a_scale_correct_ascending_id(tmpdir):
+    """Wired end to end: the refile_suppressed annotation this leg appends now
+    carries a 19-digit id, ascending across two suppressions in one run (each
+    call re-reads the log) — the writer half of the fix."""
+    wd, board, events, ledger, home = _make_tree(
+        tmpdir, "alpha",
+        board_rows=[{"id": "PM-004", "title": "port pool exhausted on bunker",
+                     "status": "pending"},
+                    {"id": "PM-005", "title": "dashboard auth loop fails",
+                     "status": "pending"}])
+    # Seed the log with this board's era max so the minted ids continue it.
+    _events(events, [f'{{"id": {LOG_MAX}, "event_type": "task_created"}}'])
+    scratch = _scratch(tmpdir, [
+        _proposal("alpha", "port pool exhausted on bunker [day 3 re-check]"),
+        _proposal("alpha", "dashboard auth loop fails [day 3 re-check]")])
+
+    res = pp.push(board, events, scratch, ledger, "alpha", apply=True, home=home)
+
+    assert len(res["suppressed"]) == 2, res
+    ev = [json.loads(l) for l in open(events, encoding="utf-8") if l.strip()]
+    annotated = [e for e in ev if e.get("kind") == "refile_suppressed"]
+    assert len(annotated) == 2, annotated
+    assert [e["id"] for e in annotated] == [LOG_MAX + 1, LOG_MAX + 2], annotated
+    assert all(len(str(e["id"])) == 19 for e in annotated), annotated

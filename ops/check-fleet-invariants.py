@@ -93,11 +93,43 @@ Checks
                        VIOLATION sync-orientation trouble-sync: no README.md in
                        '~/.hermes/sync-workdirs/trouble-sync' — a picker/dogfood
                        agent cannot orient this -sync shell
+ 11. event-id-ascending — every INTEGER id in ``events.jsonl`` sits on the
+                     board's 19-digit epoch-nanosecond scale (>= 10^18) and does
+                     not descend below the highest id already in the file. The
+                     log is append-only and written by many hands (foreman tick,
+                     PM stand-in, boardctl, supervisor); a writer that picks its
+                     id basis from an epoch/constant source instead of reading
+                     the file's max id plants a line at a coarser scale
+                     (epoch-microsecond, 16 digits) that sorts BELOW the
+                     existing ids — measured 2026-09-22: line 1090
+                     id=1790080373408208 and line 1091 id=1790080400000000
+                     descended below id 1789977500000000031 and made the live
+                     gate (``boardctl validate``) FAIL with exactly two errors.
+                     Mirrors boardctl's own rule ("ids must ascend; gaps
+                     tolerated", duplicate and legacy-shaped ids tolerated as
+                     warnings) and adds the scale assertion boardctl does not
+                     make, so a wrong-scale id is caught even when it happens to
+                     sort above the file's max. Reads the events file resolved
+                     from ``--events``, else the sibling of ``--board``, else the
+                     walk-up from this script — the same resolution the tasks
+                     board uses. Pre-scale history (ids before the file's first
+                     >= 10^18 id: this board carries 979 of them on lines 1-999)
+                     is tolerated because an append-only log cannot be
+                     renumbered; a file with NO 19-digit id at all is entirely
+                     off-scale and every int id in it is reported. Rides the
+                     board pass: SKIPS SILENTLY when the events file is missing
+                     (test rigs, a checkout without a board dir), and lines that
+                     fail to parse or carry no int id are skipped, exactly as
+                     checks 8/9 tolerate them.
+                       VIOLATION event-id-ascending 1090: id=1790080373408208 is
+                       below the 19-digit floor 1000000000000000000 (event ids
+                       must stay on the board's 19-digit scale)
 
 Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
         python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
+        python3 ops/check-fleet-invariants.py --board-only --events .coding-hermes/board/events.jsonl
 
-``--board-only`` runs the environment-independent board checks (8-9) and
+``--board-only`` runs the environment-independent board checks (8-11) and
 nothing else, so it needs neither the live DB nor fleet.toml — that is the mode
 CI uses (a runner has no ~/.hermes state). The fleet checks (1-7 and 10) read
 the project rows and are no-ops there.
@@ -208,10 +240,31 @@ DEFAULT_SKILLS_ROOT = os.path.expanduser("~/.hermes/skills")
 # the lane's consumption contract lives, which is what (c) asks for.
 SYNC_CONTRACT_POINTER_RE = re.compile(r"/sync/|/api/|[a-z0-9][a-z0-9._-]*-sync-data", re.I)
 
+# Event id scale + ascent (check 11, class "event-id-ascending", SCHED-GAP-206).
+# events.jsonl is the board's append-only log: the foreman tick, the PM
+# stand-in, boardctl and the supervisor all mint an integer id for every line
+# they append. The board has ONE id scale — the 19-digit epoch-NANOSECOND
+# scale — and the ids must not descend. Measured 2026-09-22: two lines were
+# written at epoch-MICROSECOND scale (16 digits, 1790080373408208) while the
+# file's ids sat at 1789977500000000031, i.e. the writer picked its basis from
+# an epoch/constant source instead of reading the file's max id; the live gate
+# (boardctl validate, internal/board/validate.go validateEvents) FAILed with
+# exactly two "ids must ascend" errors. This class is the repo-side half of
+# that fix: it names the LINE and the ID, so the next off-scale write fails a
+# test instead of a live board gate.
+#
+# MUST stay in lockstep with internal/scheduler/board_event_id.go:
+#   EventIDScale int64 = 1000000000000000000
+# The Go constant literal above and EVENT_ID_SCALE / EVENT_ID_CLASS here are
+# pinned by TestValidateEventIDs_ScaleMatchesPythonGate.
+EVENT_ID_SCALE = 10 ** 18
+EVENT_ID_CLASS = "event-id-ascending"
+DEFAULT_EVENTS_NAME = "events.jsonl"
+
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
-                 "board-id-slot", "sync-orientation")
+                 "board-id-slot", "sync-orientation", "event-id-ascending")
 
 
 def find_board_path(start: str) -> str | None:
@@ -225,6 +278,43 @@ def find_board_path(start: str) -> str | None:
         if parent == cur:
             return None
         cur = parent
+
+
+def find_events_path(start: str) -> str | None:
+    """Walk up from *start* looking for ``.coding-hermes/board/events.jsonl``.
+
+    Same walk as :func:`find_board_path`, for the events log check 11 reads.
+    Returns ``None`` when no such file exists up the tree — the caller then
+    SKIPS the class silently, exactly as checks 8/9 do for a missing board.
+    """
+    cur = os.path.abspath(start)
+    while True:
+        cand = os.path.join(cur, ".coding-hermes", "board", DEFAULT_EVENTS_NAME)
+        if os.path.isfile(cand):
+            return cand
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def resolve_events_path(events_flag: str | None, board_path: str | None, start: str) -> str | None:
+    """Resolve the ``events.jsonl`` check 11 validates, in the ``--board`` order.
+
+    Precedence: an explicit ``--events``; else the SIBLING of an explicit
+    ``--board`` path (same board directory — ``--board X/tasks.jsonl`` reads
+    ``X/events.jsonl``, so a caller pointing at another project's board never
+    silently falls back to this checkout's log); else the walk up from *start*
+    (the script location), the same pattern ``--board`` itself defaults to.
+    Returns ``None`` when nothing resolves to an existing file, which the caller
+    treats as the documented silent skip.
+    """
+    if events_flag:
+        return events_flag if os.path.isfile(events_flag) else None
+    if board_path:
+        cand = os.path.join(os.path.dirname(os.path.abspath(board_path)), DEFAULT_EVENTS_NAME)
+        return cand if os.path.isfile(cand) else None
+    return find_events_path(start)
 
 
 def board_row_id(row: dict) -> str:
@@ -302,6 +392,126 @@ def count_unique_open_ids(board: str) -> dict:
     out["ids"] = len(open_ids)
     out["slot_rows"] = out["rows"] - out["ids"] if out["rows"] >= len(open_ids) else 0
     return out
+
+
+def event_int_id(row: dict) -> int | None:
+    """A row's numeric event id, or ``None`` when the row carries no int id.
+
+    Only a JSON integer counts. Absent, ``null``, string ids (the live log
+    carries ``"PM-001"``, ``"evt-1789703180"``, ``"EVT-PM-20260920-001"``, ``""``),
+    floats and booleans are all "not an event id" — the log's legacy shapes, not
+    scale violations. ``bool`` is excluded explicitly because ``isinstance(True,
+    int)`` is True in Python (mirrored by Go's ``eventIntID``, where a JSON
+    boolean does not unmarshal into an int64).
+    """
+    val = row.get("id")
+    if isinstance(val, bool) or not isinstance(val, int):
+        return None
+    return val
+
+
+def event_id_below_floor_detail(eid: int) -> str:
+    """Finding text: an id below the 19-digit floor, in a file that HAS the scale.
+
+    Shared verbatim with Go's ``eventIDBelowFloorDetail``.
+    """
+    return (f"id={eid} is below the 19-digit floor {EVENT_ID_SCALE} "
+            f"(event ids must stay on the board's 19-digit scale)")
+
+
+def event_id_no_scale_detail(eid: int) -> str:
+    """Finding text: an id in a file with NO id at the 19-digit scale at all.
+
+    Shared verbatim with Go's ``eventIDNoScaleDetail``.
+    """
+    return (f"id={eid} is below the 19-digit floor {EVENT_ID_SCALE} and the file "
+            f"carries no id at that scale (every int id in it is off-scale)")
+
+
+def event_id_descent_detail(eid: int, previous: int) -> str:
+    """Finding text: an id that descends below the highest id already in the file.
+
+    Shared verbatim with Go's ``eventIDDescentDetail``; the wording mirrors
+    boardctl's own ``validateEvents`` error.
+    """
+    return (f"id={eid} descends below earlier id {previous} "
+            f"(ids must ascend; gaps tolerated)")
+
+
+def scan_event_ids(events: str) -> tuple[list[tuple[int, str]], dict]:
+    """Scan a JSONL events log for off-scale / descending integer event ids.
+
+    Returns ``(violations, stats)``: one ``(line_number, detail)`` pair per
+    offending line, in file order, plus a stats dict for the INFO line
+    (``int_ids``, ``anchor_line``, ``legacy_prefix``, ``duplicates``, ``max_id``).
+
+    The rules, in order — mirrors ``internal/scheduler/board_event_id.go`` and
+    boardctl's ``validateEvents``:
+
+      * a line that fails to parse as JSON, or whose ``id`` is not an int, is
+        SKIPPED (legacy shapes are tolerated, exactly as checks 8/9 tolerate
+        them);
+      * a file with NO id >= 10^18 establishes no scale at all: every int id in
+        it is reported as off-scale (the shape a wrong-basis writer produces);
+      * the PRE-SCALE PREFIX — int ids before the file's first >= 10^18 id — is
+        tolerated: the log is append-only and 979 such lines exist on this
+        board's own log (1,2,3…, then an epoch-seconds and an epoch-millis era);
+      * a DUPLICATE id (one already seen) is tolerated, as boardctl warns
+        rather than errors on re-used ids;
+      * from the anchor onward an id below the floor fires, and an id below the
+        highest id already seen fires (ids must ascend; gaps tolerated).
+
+    Read-only: the file is never rewritten and no id is normalised.
+    """
+    violations: list[tuple[int, str]] = []
+    stats = {"int_ids": 0, "anchor_line": None, "legacy_prefix": 0,
+             "duplicates": 0, "max_id": None}
+    ids: list[tuple[int, int]] = []
+    with open(events, encoding="utf-8", errors="replace") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # malformed JSONL is a different gate's concern
+            if not isinstance(row, dict):
+                continue
+            eid = event_int_id(row)
+            if eid is None:
+                continue  # no id, or a non-int id — legacy shape tolerated
+            ids.append((lineno, eid))
+    stats["int_ids"] = len(ids)
+    has_scale = any(eid >= EVENT_ID_SCALE for _, eid in ids)
+
+    seen: set[int] = set()
+    max_id: int | None = None
+    scaled = False
+    for lineno, eid in ids:
+        if not has_scale:
+            violations.append((lineno, event_id_no_scale_detail(eid)))
+            continue
+        if not scaled and eid < EVENT_ID_SCALE:
+            stats["legacy_prefix"] += 1
+            continue  # pre-scale history — append-only, cannot be renumbered
+        if stats["anchor_line"] is None:
+            stats["anchor_line"] = lineno
+        scaled = True
+        if eid in seen:
+            stats["duplicates"] += 1
+            continue  # boardctl warns on re-used ids; the scale rule is the gate
+        seen.add(eid)
+        if eid < EVENT_ID_SCALE:
+            violations.append((lineno, event_id_below_floor_detail(eid)))
+            continue
+        if max_id is not None and eid < max_id:
+            violations.append((lineno, event_id_descent_detail(eid, max_id)))
+            continue
+        if max_id is None or eid > max_id:
+            max_id = eid
+    stats["max_id"] = max_id
+    return violations, stats
 
 
 def index_sync_data_skills(skills_root: str) -> set[str]:
@@ -426,13 +636,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="JSONL board for check 8; default: walk up from this script "
                          "to .coding-hermes/board/tasks.jsonl (skipped when absent)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--events", default=None,
+                    help="JSONL events log for check 11 (id scale + ascent); "
+                         "default: the sibling of --board in the same board dir, else "
+                         "the walk-up from this script to .coding-hermes/board/events.jsonl "
+                         "(skipped when absent)")
     ap.add_argument("--global-cap", type=int, default=None,
                     help="the daemon's actual global --max-concurrent value; "
                          "parity-checked against fleet.toml [scheduler] "
                          "max_concurrent (skipped when omitted — the checker "
                          "cannot see the daemon's argv on its own)")
     ap.add_argument("--board-only", action="store_true",
-                    help="run ONLY the environment-independent board checks (8/9); "
+                    help="run ONLY the environment-independent board checks (8/9/11); "
                          "skips the live-DB/TOML checks 1-7. This is the CI mode: "
                          "a runner has no ~/.hermes/coding-hermes/scheduler.db, so "
                          "the fleet checks cannot run there.")
@@ -816,6 +1031,42 @@ def main(argv: list[str] | None = None) -> int:
             bad(ID_SLOT_CLASS, rid,
                 f"{len(statuses)} OPEN rows share this id — a recurring SLOT, not a "
                 f"finding (close each previous row before re-filing; SCHED-GAP-207)")
+
+    # 11. event id scale + ascent ---------------------------------------------
+    # SCHED-GAP-206. The events log is append-only and written by many hands
+    # (foreman tick, PM stand-in, boardctl, supervisor); each of them mints an
+    # integer id, and the board has ONE id scale — the 19-digit
+    # epoch-nanosecond scale. A writer that picks its id basis from an
+    # epoch/constant source instead of reading the file's max id plants a line
+    # at a coarser scale that sorts BELOW the existing ids, which the live gate
+    # (boardctl validate) reports as "ids must ascend". Measured 2026-09-22:
+    # events.jsonl lines 1090/1091 (ids 1790080373408208 / 1790080400000000)
+    # descended below 1789977500000000031 and FAILed boardctl validate. This is
+    # the repo-side half of that fix: the offending LINE and ID are named here,
+    # so the next off-scale write fails a test instead of a live board gate.
+    #
+    # Tolerance, deliberately (mirrors boardctl's validateEvents + Go's
+    # internal/scheduler/board_event_id.go): lines that fail to parse or carry
+    # no int id are skipped; the file's PRE-SCALE prefix (int ids before its
+    # first >= 10^18 id — this board carries 979 of them on lines 1-999) is
+    # tolerated because an append-only log cannot be renumbered; duplicate ids
+    # are tolerated (boardctl warns, not errors, on re-used ids). A file with NO
+    # id at the 19-digit scale establishes no scale at all, so every int id in
+    # it is reported. A missing events file SKIPS SILENTLY, the same documented
+    # behaviour checks 8/9 have for a missing board, so the checker stays
+    # runnable in test rigs and old-style workdirs.
+    events = resolve_events_path(args.events, args.board,
+                                 os.path.dirname(os.path.abspath(__file__)))
+    if events:
+        ev_violations, ev_stats = scan_event_ids(events)
+        for lineno, detail in ev_violations:
+            bad(EVENT_ID_CLASS, str(lineno), detail)
+        anchor = ev_stats["anchor_line"] if ev_stats["anchor_line"] is not None else "none"
+        peak = ev_stats["max_id"] if ev_stats["max_id"] is not None else "none"
+        info.append({"class": EVENT_ID_CLASS, "subject": events,
+                     "detail": (f"{ev_stats['int_ids']} int id(s) scanned, scale anchor line {anchor}, "
+                                f"{ev_stats['legacy_prefix']} pre-scale legacy id(s) tolerated, "
+                                f"{ev_stats['duplicates']} duplicate id(s) tolerated, max id {peak}")})
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:

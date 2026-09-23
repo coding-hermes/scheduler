@@ -28,6 +28,13 @@ caller still appends the event row itself after this script exits 0):
      than appended. The board can therefore never gain a second open row
      under one id from this writer.
 
+Event-id rule (SCHED-GAP-206): every event this leg appends carries an id on
+the board's 19-digit epoch-nanosecond scale, derived from the LOG's own max id
+by ``next_event_id`` (never from an epoch/constant basis — the defect that
+planted two epoch-microsecond lines in this project's events.jsonl and FAILed
+the live ``boardctl validate``). The helper is public so any caller that needs
+the next event id uses the same basis.
+
 Board shape compatibility: writes the same row dict the inline leg wrote
 (id/title/priority/status/origin/created_at/reasoning) — no schema change.
 
@@ -44,12 +51,26 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
 # Title token-overlap threshold for "this proposal re-files an open row".
 # Mirrors qa.js jsFindSim: overlap over the SMALLER side, >= 0.5 = dup —
 # tolerates the "[P1] " prefix and day-counter/wording drift between runs.
 TITLE_DUP_THRESHOLD = 0.5
+# Event id scale (SCHED-GAP-206). events.jsonl uses ONE id scale — the 19-digit
+# epoch-NANOSECOND scale (>= 10^18) — and an id must ascend in file order.
+# Measured 2026-09-22 on this repo's own board: two lines were appended at
+# epoch-MICROSECOND scale (16 digits, 1790080373408208) while the file sat at
+# 1789977500000000031, because a writer picked its basis from an epoch/constant
+# source instead of reading the file's existing max id; the live gate
+# (`boardctl validate`) FAILed with "ids must ascend". EVENT_ID_SCALE mirrors
+# EVENT_ID_SCALE in ops/check-fleet-invariants.py (check 11,
+# internal/scheduler/board_event_id.go).
+EVENT_ID_SCALE = 10 ** 18
+# Nanoseconds per second: the BASE an empty (or all-legacy) log gets —
+# int(time.time()) * EVENT_ID_BASE_NS is a 19-digit epoch-nanosecond id.
+EVENT_ID_BASE_NS = 1_000_000_000
 _STOPWORDS = frozenset(
     "the and for with new pm proposal propose pending row rows already open "
     "closed fix landed should would could this that from into onto over".split()
@@ -124,6 +145,52 @@ def append_line(path, obj):
         fh.write(prefix + payload.encode("utf-8"))
 
 
+def next_event_id(events_path):
+    """Next events.jsonl id: ``max(existing int ids >= 10^18) + 1``.
+
+    The id basis is the FILE, never an epoch/constant — that is the SCHED-GAP-206
+    defect (a writer on a fixed epoch basis planted two epoch-microsecond lines
+    that descended below the board's 19-digit ids and FAILed the live gate).
+    Read-only: the log is opened, never written or rewritten; each call re-reads
+    it, so a caller appending several events in a row gets ascending ids.
+
+    The base, when *events_path* is missing/empty or carries no qualifying id
+    (the log is new, or holds only the legacy string/sub-scale shapes): a fresh
+    id on the same 19-digit scale, ``int(time.time()) * EVENT_ID_BASE_NS`` —
+    epoch nanoseconds of the current second.
+
+    Tolerance mirrors the readers (check 11, ``scan_event_ids``): malformed
+    lines are skipped, and only a JSON INTEGER id >= EVENT_ID_SCALE counts —
+    absent/null/string/bool ids and sub-scale ids are not a basis to continue
+    from.
+    """
+    max_id = None
+    try:
+        with open(events_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                eid = rec.get("id")
+                if isinstance(eid, bool) or not isinstance(eid, int):
+                    continue
+                if eid < EVENT_ID_SCALE:
+                    continue
+                if max_id is None or eid > max_id:
+                    max_id = eid
+    except (FileNotFoundError, OSError):
+        pass
+    if max_id is None:
+        return int(time.time()) * EVENT_ID_BASE_NS
+    return max_id + 1
+
+
 def push(board_path, events_path, scratch_path, ledger_path, target, apply, home=None):
     """Deploy one push-scratch batch. Returns a result dict (also printed).
 
@@ -195,6 +262,9 @@ def push(board_path, events_path, scratch_path, ledger_path, target, apply, home
             if apply and events_path:
                 try:
                     append_line(events_path, {
+                        # Scale-correct event id (SCHED-GAP-206): derived from the
+                        # log's own max, never from an epoch/constant basis.
+                        "id": next_event_id(events_path),
                         "kind": "refile_suppressed", "source": "stand-in-pm-dagger",
                         "project": proj, "title": title[:120],
                         "detail": ("re-file of an open finding suppressed "

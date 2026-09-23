@@ -55,6 +55,7 @@ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl -
 | `board-legacy-status` | legacy closed spellings (`done`/`completed`/`closed`) get their own violation so the PM cycle sweeps them | `tests/test_check_fleet_invariants_board_legacy_status.py` | covered (both arms) |
 | `board-content-dup` | two open rows with identical non-volatile content fire as one per-group violation; all-closed groups exempt; volatile-field-only diffs still collide | pre-existing `tests/test_check_fleet_invariants_board_dup_content.py` | covered (pre-existing) |
 | `sync-orientation` | every enabled `*-sync` lane's workdir carries a non-empty `README.md` naming its target DuckBrain namespace (a `namespace` line carrying the lane's base as a whole hyphen-delimited word, or a >=2-token hyphen run of it) AND a findable consumption contract (the companion `<base>-sync-data` skill under the skills root, or an in-README pointer: `/sync/` marker, `/api/` route, skill name). One violation per lane with every unmet fact in the detail; a workdir ABSENT is check 5's fact (no double-report); disabled lanes exempt; the skill axis SKIPS SILENTLY when the skills root is absent (`--skills-root`, the CI shape) while the README facts still assert | `tests/test_check_fleet_invariants_sync_orientation.py` | covered (seeded / conforming / exempt / skip arms + per-fact independence) |
+| `event-id-ascending` | every INTEGER id in `events.jsonl` (resolved from `--events`, else the sibling of `--board`, else the walk-up from the script) sits on the board's 19-digit epoch-nanosecond scale (`>= 10^18`) and does not descend below the highest id already in the file — the defect that planted two epoch-microsecond lines in this project's log and FAILed the live `boardctl validate` (SCHED-GAP-206). One violation per line, naming the LINE NUMBER and the BAD ID. Lines that fail to parse or carry no int id are skipped; the file's PRE-SCALE prefix (ids before its first `>= 10^18` id — this board has 979 on lines 1-999) and duplicate ids are tolerated, exactly as `boardctl validateEvents` tolerates them; a file with no 19-digit id at all is entirely off-scale and every int id in it fires. A missing events file SKIPS SILENTLY, same as checks 8/9 | `tests/test_check_fleet_invariants_event_ids.py` + Go `internal/scheduler/board_event_id_test.go` (`ValidateEventIDs`, floor pinned equal by `TestValidateEventIDs_ScaleMatchesPythonGate`) | covered (seeded / conforming / tolerant-prefix / duplicate / legacy-shape / skip arms) |
 
 The row's PASSING-FLEET requirement lives in
 `test_passing_fleet_full_checker_exits_zero` (a full conforming fleet exits 0
@@ -74,7 +75,9 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
   never masquerade as a passing parity assertion.
 * **Board checks** — silently skipped when no board file is given/found (the
   checker's documented behavior for test rigs); the battery always passes an
-  explicit board, so this skip cannot hide anything in CI.
+  explicit board, so this skip cannot hide anything in CI. The SAME skip covers
+  the events log (`event-id-ascending`, check 11): a board directory with no
+  `events.jsonl` produces no line for the class at all.
 * **`sync-orientation` skill axis** — silently skipped when the skills root
   (`--skills-root`) does not exist, because a CI runner carries no
   `~/.hermes/skills`. The README facts (non-empty file, namespace named) are
