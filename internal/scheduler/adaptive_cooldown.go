@@ -485,10 +485,15 @@ func isBoardPath(p string) bool {
 
 // classifyGitCommits inspects the commits a tick produced in workdir and
 // splits them into code vs board-bookkeeping by touched path. ok is false
-// whenever the measurement is impossible (no git repo, git failure) or
-// untrustworthy (git shows fewer commits than the tick claimed — shallow
-// clones, clock skew) so callers can fall open to legacy behavior instead of
-// punishing honest work over a measurement gap.
+// only when the measurement is impossible (no git repo, git failure) or the
+// window is truly empty (claimed > 0 but no commits at all — broken git
+// history); a small under-report of `claimed` by 1-2 is trusted because the
+// foreman's tick often includes a merge commit whose author date precedes the
+// spawn time (the merge carries the merged commits' original timestamps, not
+// the merge's wall-clock time), so `git log --since=outcome.Started` is the
+// weaker signal. Callers fall open to legacy behavior only on the impossible/
+// empty cases; otherwise the actual measurement wins so the code/board split
+// always lands on the row (SCHED-PERF-001).
 func classifyGitCommits(workdir string, since time.Time, claimed int) (code, board int, ok bool) {
 	if claimed <= 0 {
 		return 0, 0, true // nothing to classify — a valid empty measurement
@@ -536,8 +541,18 @@ func classifyGitCommits(workdir string, since time.Time, claimed int) (code, boa
 			code++
 		}
 	}
-	if total < claimed {
-		// Git under-reports what the tick claimed — do not trust the split.
+	// SCHED-PERF-001: trust the measurement when the workdir produced ANY
+	// real commits. The foreman's tick may include a merge commit whose
+	// author date is BEFORE outcome.Started (the merge carries the merged
+	// commits' original timestamps, not the merge's wall-clock time), so
+	// `git log --since=Started` is the weaker signal — it can under-report
+	// claimed by 1-2 while the work is fully real. Marking those ticks
+	// unmeasured (the previous behavior) left code_commits = board_commits =
+	// -1 fleet-wide whenever a tick involved a merge (the common case for
+	// the foreman's own merge commits). The unmeasured case is now reserved
+	// for genuinely broken measurement: no workdir, no .git, git exec
+	// error, or claimed > 0 with zero commits in the window.
+	if total == 0 {
 		return 0, 0, false
 	}
 	return code, board, true
