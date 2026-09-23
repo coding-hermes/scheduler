@@ -29,6 +29,7 @@ groups/templates routes are listed in the OpenAPI spec at
 | Method | Path | Section |
 |--------|------|---------|
 | GET | `/api/v1/health` | [§4](#4-health-status-config) |
+| GET | `/api/v1/live` | [§4](#4-health-status-config) |
 | GET | `/api/v1/status` | [§4](#4-health-status-config) |
 | GET | `/api/v1/config` | [§4](#4-health-status-config) |
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
@@ -112,6 +113,39 @@ canonical "is the scheduler alive" probe.
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/health
+```
+
+### GET /api/v1/live
+
+**Purpose:** DB-free liveness probe (SCHED-GAP-204-A). Process-memory only —
+`status`, `version`, `build_sha`, `uptime`, `started` — and must never touch
+the SQLite connection, the loop, or any DB-backed helper. The ops watchdog
+probes it FIRST so a saturated fleet (single serialized SQLite connection,
+busy_timeout=5000) does not false-fire a `Scheduler DOWN` CRITICAL just
+because `/api/v1/health` is stuck in DB-connection contention. `/api/v1/health`
+remains the rich DB-backed fallback for dashboards and post-mortem detail.
+
+**Query params:** none. **Request body:** none.
+
+**Response 200:**
+
+```json
+{"status":"ok","version":"v1.4.0-29-g5a5a47c2","build_sha":"5a5a47c2",
+ "uptime":"3h42m11.5s","started":"2026-09-22T18:13:09Z"}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `status` | string | `"ok"` when the handler returns |
+| `version` | string | Resolved daemon version (same identity as `/api/v1/health.version` / openapi.info.version / MCP `serverInfo.version`; ldflags tag → vcs buildinfo → `dev`) |
+| `build_sha` | string | Short commit SHA the binary was built from (best-effort; empty on `dev` builds) |
+| `uptime` | string | Go duration since daemon start |
+| `started` | string | RFC3339 UTC of daemon start |
+
+**Errors:** 405 `{"error":"GET only"}` on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/live
 ```
 
 ### GET /api/v1/status

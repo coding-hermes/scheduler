@@ -1058,11 +1058,14 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
-// documentedPaths mirrors the route table in docs/api.md (§4–§11, 28 paths).
+// documentedPaths mirrors the route table in docs/api.md (§4–§11, 29 paths).
 // The openapi.json spec must contain exactly this set — a client generator
-// needs every live route (GAP-057).
+// needs every live route (GAP-057). /api/v1/live is the DB-free liveness
+// probe (SCHED-GAP-204-A, surfaced in OpenAPI+docs by SCHED-GAP-222) and
+// MUST stay pinned here so the parity test cannot silently drop it again.
 var documentedPaths = []string{
 	"/api/v1/health",
+	"/api/v1/live",
 	"/api/v1/status",
 	"/api/v1/config",
 	"/api/v1/projects",

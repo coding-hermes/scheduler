@@ -543,6 +543,15 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/live": {
+      "get": {
+        "summary": "DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, never touches SQLite or the loop. The ops watchdog's first probe; /api/v1/health is the rich DB-backed fallback.",
+        "responses": {
+          "200": {"description": "OK — returns status, version, build_sha, uptime, started (no DB access)"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/status": {
       "get": {
         "summary": "Fleet overview",

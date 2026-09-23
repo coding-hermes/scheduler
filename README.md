@@ -667,6 +667,7 @@ leave API-assigned caps untouched.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Daemon health, uptime, active ticks |
+| `/api/v1/live` | GET | DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no SQLite, the ops watchdog's cheap pre-probe |
 | `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
 | `/api/v1/config` | GET | Resolved daemon configuration snapshot (gateway key masked) |
 | `/api/v1/projects` | GET/POST | List all or register a new project (GET response carries SCHED-GAP-066 budget telemetry: `spent_daily_usd`/`spent_weekly_usd`/`spent_total_usd`, `remaining_*`, `budget_blocked`, `blocked_reason`) |
