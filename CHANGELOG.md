@@ -137,6 +137,23 @@ range cited under its heading. The rollover itself is done by
   DEPLOY HASH MISMATCH block echoed; corrupt-live-with-no-sidecar → 4
   with NO sidecar written (no laundering); missing live → 3; python3
   stripped from PATH (coreutils-only) → 5.
+- **`tests/test_verify_policy_script_deploy_hash.sh`** (follow-up,
+  SCHED-PERF-006 rework) — restart-shape INTEGRATION proof that the
+  verify-deploy-restart wiring actually executes the guard rather than
+  only promising it in a header: drives `verify-policy-script-deploy-hash.sh`
+  exactly as the restart script's verify block would, against a hermetic
+  fixture "live". Clean fixture → wrapper exits 0 with `deploy hash OK` on
+  stdout; corrupted fixture → wrapper exits 4 (documented ABORT) with the
+  `VERIFY ABORT` AND the guard's `[SCHED-PERF-006]` markers on STDERR and
+  nothing abort-shaped leaking onto stdout, and the fixture sidecar
+  unmodified after the ABORT (no laundering); a relocated wrapper with its
+  guard missing → exit 4 with `guard not found` on stderr (fail-closed).
+  The header's INSTALL block is now a marked DEPLOY FRAGMENT
+  (operator-applied, not automatic) with a `test -x` guard so the wiring
+  snippet survives wrapper absence, and the wrapper's stream contract
+  (stdout = info, stderr = aborts) is documented and enforced.
+  `~/.hermes/scripts/scheduler-deploy-drain-restart.sh` itself remains an
+  operator file — untouched by design.
 
 ## [1.4.0] — 2026-09-22
 
