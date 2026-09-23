@@ -4002,3 +4002,15 @@ tasks:
   status: complete
   created_at: '2026-09-23T05:41:24.061243+00:00'
   completed_at: '2026-09-23T05:59:02.825215+00:00'
+- id: SCHED-PERF-006
+  title: Policy-script deploy-hash guard (consumer tripwire)
+  criteria:
+  - 'A new scripts/policy-script-deploy-hash-guard.sh exists; wires into install-hooks.sh
+    pre-commit + scheduler-deploy-drain-restart.sh ''verify'' block; tests/test_policy_script_deploy_hash_guard.sh
+    RED/GREEN-proven; README.md notes the guard. PASS: deliberately mutating ~/.hermes/scripts/fleet-cooldown-policy.py
+    away from the sidecar causes the guard to exit 1 with ''[SCHED-PERF-006] policy
+    script deploy hash MISMATCH'' on stderr; the in-tree test runs and passes both
+    the clean and mutated cases.'
+  status: complete
+  created_at: '2026-09-23T09:11:17.464783+00:00'
+  completed_at: '2026-09-23T09:36:12.286992+00:00'
