@@ -310,7 +310,7 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 // captured text, because each real drain tick costs 1 + gatewayRetryMaxAttempts
 // POSTs with backoff.
 //
-// KNOWN FLAKE — see INT-CI-007 (2026-09-23, tick #670). The CI race-detector
+// KNOWN FLAKE — see INT-CI-158 (2026-09-23, tick #670 follow-up). The CI race-detector
 // run 35848734429 on chore(board) 809b352d (2026-09-23 10:25Z) reported a
 // 33.58s timeout here with a companion "SLOT: timeout waiting for free slot --
 // dropping advr08-dropped" line. Local re-run with the same race-detector at
