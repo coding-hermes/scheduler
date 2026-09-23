@@ -105,6 +105,7 @@ var apiToolCoverage = map[string][]string{
 // convenience.
 var paritySkipList = map[string]string{
 	"/api/v1/health":       "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
+	"/api/v1/live":         "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
 	"/api/v1/openapi.json": "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
 	"/mcp":                 "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
 	"/api/v1/events/stream": "SSE push stream (CTL-002) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
@@ -117,7 +118,7 @@ var paritySkipList = map[string]string{
 func allowedSkipKey(key string) bool {
 	switch key {
 	case "/", "/health", "/queue", "/ticks", "/mcp",
-		"/api/v1/health", "/api/v1/openapi.json",
+		"/api/v1/health", "/api/v1/live", "/api/v1/openapi.json",
 		// CTL-003: the ONE /api/v1 route exempted by the brief — an SSE
 		// push stream, which is a transport shape MCP (request/response
 		// tools) cannot express. Listed explicitly rather than by prefix so
