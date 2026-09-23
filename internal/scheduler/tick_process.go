@@ -65,7 +65,14 @@ func (l *Loop) evaluate() {
 	// in-process running/reserved claim and the DEDUP view below skipped it
 	// forever (hermes-dagger, 2026-09-19). This is also the per-eval
 	// self-heal backstop for any wedge a missed reaper leaves behind.
-	if staleProjects, cleaned, _ := l.lifecycle.CleanupStaleProjects(90 * time.Minute); cleaned > 0 {
+	//
+	// SCHED-GAP-217: the cutoff is now derived from the LIVE max effective
+	// tick deadline across the in-flight running ticks (env > ns > flag
+	// cascade, ceiling 4h), plus a 30m grace, with a 90m hard floor. The
+	// prior hardcoded 90m killed legitimate 3h-wave ticks at 1.5h
+	// (phantom "stale - timeout at 1h30m0s" rows that fed the failure-rate
+	// counters). See wave_timeout.go:backstopMaxAge for the full derivation.
+	if staleProjects, cleaned, _ := l.lifecycle.CleanupStaleProjects(l.backstopMaxAge()); cleaned > 0 {
 		log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
 		if l.slotPool != nil {
 			l.slotPool.releaseReaped(staleProjects)
