@@ -33,6 +33,43 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-22
 
+### Gateway zero-assistant completion gate (SCHED-GAP-205-A)
+
+- **`internal/scheduler/spawn.go`** — gateway completion gate gains a
+  `zeroAssistant` arm: a 2xx with `status=completed`, non-zero
+  output-token usage, and NO `role:"assistant"` output item now fails
+  the gate with the sentinel "zero assistant output with non-zero
+  token usage (provider produced no real response)". The
+  `OutputTokens>0` guard keeps this arm a strict superset of the
+  102 instant-death case: `0/0` tokens stays instant-death
+  (`NonZeroTokens`, the 102 arm), `205` catches the billed-but-empty
+  shape. 73 ticks across 31 projects had committed with this shape
+  since 2026-09-21T18:00 — same zero-assistant surface as the 102
+  instant-death class, only with real billing behind it.
+- **`internal/scheduler/gateway_client.go`** — `Response` gains
+  `HasAssistantMessage()` next to `ExtractText` so the new arm reads
+  the same wire shape the assistant-message consumers already use.
+  Tool-only ticks keep their tool calls INSIDE an assistant item,
+  so `ExtractText` stays empty and the tool-only INFO event still
+  fires — the 079 regression guard (`ToolOnlyStillCompletes`) is
+  preserved.
+- **`/api/v1/status`** — informational 24h counter
+  `zero_output_committed_24h` (completed ticks with
+  `tokens_out > 0`, no commits, empty error) for the tightened
+  gate's near-miss class. Operators watch it drain to 0 to verify
+  the live fix; it is the counterpart of `gateway_errors` for the
+  102/205 zero-output class.
+- **Test fixtures** updated to speak the real wire shape:
+  successful completions now carry `role:"assistant"`. 14 sites
+  asserted the old shape — `gateway_spawn`, `gateway_key_guard`,
+  `chainGatewayServer`, `sgap003`, `sgap074`, `sgap077`, `gap021`,
+  `gap029 x2`, `gap103`, `gap117`, `gap119 x3`, `wave_timeout x2`,
+  plus the SCHED-GAP-079/102/103/117/119/`schedgap205_test.go` new
+  coverage. RED/GREEN proof: `TestNonZeroTokenZeroAssistantFails`,
+  `TestToolOnlyStillCompletes` (079 regression), and
+  `TestZeroTokenStillInstantDeath` (102 arm not displaced) — all
+  pass.
+
 ### Wave verdict normalizers widened (SCHED-GAP-218)
 
 - **`internal/scheduler/wave_manifest.go`** — `normalizeWaveJudge` and
