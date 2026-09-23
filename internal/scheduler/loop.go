@@ -1156,7 +1156,7 @@ func (l *Loop) resetZeroSelect() {
 // the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0) FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0), COALESCE(admission_mode, ''), COALESCE((SELECT admission_mode FROM namespaces WHERE id = projects.namespace_id), ''), COALESCE(workdir, ''), COALESCE(board_ownership, ''), COALESCE(last_tick_status, '') FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -1170,7 +1170,9 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		var lastComp string
 		var consecFailures int
 		var bumpActive, bumpCD int
-		if err := rows.Scan(&name, &cooldown, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD); err != nil {
+		var projMode, nsMode, workdir, boardOwnership, lastStatus string
+		if err := rows.Scan(&name, &cooldown, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD,
+			&projMode, &nsMode, &workdir, &boardOwnership, &lastStatus); err != nil {
 			continue
 		}
 		if runningSet[name] {
@@ -1214,6 +1216,15 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		// only bites tasks-mode rows (the intent).
 		if tasksPacingDeferred(comp, now) {
 			continue // post-tick pacing: packer defers this project
+		}
+		// SCHED-GAP-214 mirror: a tasks-mode lane whose last tick FAILED
+		// paces on its full effective cooldown (waiver stood down) — the
+		// three packer selection paths defer it, so the eligibility count
+		// must too (GAP-050: a project the packer skips is never eligible).
+		mode := admissionModeFor(projMode, name, map[string]string{name: nsMode})
+		if mode == database.AdmissionModeTasks && tasksAdmissionDue(workdir, boardOwnership) &&
+			lastTickStatusFailed(lastStatus) && now.Sub(comp) < cooldownDur {
+			continue
 		}
 		if now.Sub(comp) >= cooldownDur {
 			eligible++
@@ -1346,6 +1357,11 @@ const (
 	AdmissionReasonBoardUnowned  = "board_unowned"
 	AdmissionReasonBudget        = "budget"
 	AdmissionReasonTasksDeferred = "tasks_deferred"
+	// SCHED-GAP-214: a tasks-mode project whose last tick FAILED — the
+	// SCHED-GAP-124 waiver stood down and the lane is pacing on its full
+	// effective cooldown (the measured 91-ticks-in-90s retry storm this
+	// closes). Carries cooldown_remaining_s like `cooldown`.
+	AdmissionReasonFailedCooldown = "failed_cooldown"
 )
 
 // admissionReasonVocabulary is the frozen vocabulary in reporting order.
@@ -1360,6 +1376,7 @@ var admissionReasonVocabulary = []string{
 	AdmissionReasonBoardUnowned,
 	AdmissionReasonBudget,
 	AdmissionReasonTasksDeferred,
+	AdmissionReasonFailedCooldown,
 }
 
 // admissionReasonIsKnown reports whether reason is part of the vocabulary.
@@ -1388,9 +1405,12 @@ type admissionCandidate struct {
 	NamespaceAdmissionMode string // namespace default ('' = cooldown)
 	BoardOwnership         string // '' = auto, 'owner', 'shared' (SCHED-GAP-141)
 	LastCompleted          *time.Time
-	DailyBudgetUSD         float64
-	WeeklyBudgetUSD        float64
-	FinalBudgetUSD         float64
+	// SCHED-GAP-214: terminal status of the most recent tick ("" = never).
+	// Drives the failed_cooldown admission reason for tasks-mode lanes.
+	LastTickStatus  string
+	DailyBudgetUSD  float64
+	WeeklyBudgetUSD float64
+	FinalBudgetUSD  float64
 }
 
 // effectiveAdmissionMode resolves the candidate's admission mode exactly as
@@ -1562,7 +1582,7 @@ SELECT p.name, COALESCE(p.namespace_id, ''), COALESCE(p.weight, 0), COALESCE(p.c
        COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0),
        COALESCE(p.workdir, ''), COALESCE(p.admission_mode, ''),
        COALESCE(ns.admission_mode, ''), COALESCE(p.board_ownership, ''),
-       COALESCE(p.last_tick_completed, ''),
+       COALESCE(p.last_tick_completed, ''), COALESCE(p.last_tick_status, ''),
        COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0)
 FROM projects p
 LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -1582,7 +1602,7 @@ ORDER BY p.name`)
 			&c.BumpActive, &c.BumpCooldownS,
 			&c.Workdir, &c.AdmissionMode,
 			&c.NamespaceAdmissionMode, &c.BoardOwnership,
-			&lastStr,
+			&lastStr, &c.LastTickStatus,
 			&c.DailyBudgetUSD, &c.WeeklyBudgetUSD, &c.FinalBudgetUSD); err != nil {
 			log.Printf("ADMIT: scan candidate row: %v", err)
 			continue
@@ -1721,10 +1741,17 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 		if open, ok := boardOpenRows(c.Workdir); !ok || open == 0 {
 			return AdmissionReasonTasksNoWork, 0, false
 		}
-		// Waiver granted: the block (if any) is structural or the
-		// SCHED-GAP-133/136 floors downstream.
+		// Waiver granted: the block (if any) is structural, the
+		// SCHED-GAP-133/136 floors downstream, or the SCHED-GAP-214
+		// post-failure stand-down (last tick FAILED → full effective
+		// cooldown; the measured 9s retry storm this reason names).
 		if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
 			return r, 0, false
+		}
+		if lastTickStatusFailed(c.LastTickStatus) && c.LastCompleted != nil {
+			if deferred, rem, hasRem := l.cooldownVerdict(c, now); deferred {
+				return AdmissionReasonFailedCooldown, rem, hasRem
+			}
 		}
 		return AdmissionReasonTasksDeferred, 0, false
 	}

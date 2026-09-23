@@ -98,39 +98,44 @@ type scored struct {
 	decayRate           float64
 	cooldownS           int
 	consecutiveFailures int
-	budgetBlocked       bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
-	lastTickAt          *time.Time
-	createdAt           time.Time
-	workdir             string
-	repoURL             string
-	command             string
-	model               string
-	provider            string
-	fallbackModel       string
-	fallbackProvider    string
-	noGlobalFallback    bool
-	modelChain          string
-	idleModel           string
-	idleProvider        string
-	dailyBudgetUSD      float64
-	weeklyBudgetUSD     float64
-	finalBudgetUSD      float64
-	workerModel         string
-	workerProvider      string
-	gatewayKey          string
-	deliver             string
-	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
-	promptMode          string // "append" (default) | "replace"
-	bumpActive          bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
-	bumpCooldownS       int
-	bumpRemaining       int
-	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
-	namespaceID         string // namespace_id (empty = no namespace)
-	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
-	namespaceChain      string // namespace model_chain (JSON array string) (Bane 2026-08-27)
-	admissionNsMode     string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
-	admissionMode       string // SCHED-GAP-124: project admission_mode override ('' = inherit)
-	boardOwnership      string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+	// SCHED-GAP-214: projects.last_tick_status — the terminal status of the
+	// most recent tick ("" = never ticked | completed | failed | timeout |
+	// deferred). True-prefixed helper on the struct: after a FAILED tick the
+	// tasks-mode waiver stands down (see the Pick gate below).
+	lastTickStatusFailed bool
+	budgetBlocked        bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
+	lastTickAt           *time.Time
+	createdAt            time.Time
+	workdir              string
+	repoURL              string
+	command              string
+	model                string
+	provider             string
+	fallbackModel        string
+	fallbackProvider     string
+	noGlobalFallback     bool
+	modelChain           string
+	idleModel            string
+	idleProvider         string
+	dailyBudgetUSD       float64
+	weeklyBudgetUSD      float64
+	finalBudgetUSD       float64
+	workerModel          string
+	workerProvider       string
+	gatewayKey           string
+	deliver              string
+	prompt               string // Bane 2026-08-27: per-project extra foreman prompt
+	promptMode           string // "append" (default) | "replace"
+	bumpActive           bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
+	bumpCooldownS        int
+	bumpRemaining        int
+	namespaceDefaultPmt  string // namespace default_prompt (empty = built-in)
+	namespaceID          string // namespace_id (empty = no namespace)
+	namespaceMaxConc     int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
+	namespaceChain       string // namespace model_chain (JSON array string) (Bane 2026-08-27)
+	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
+	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
+	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -142,7 +147,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
-		       p.consecutive_failures,
+		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
 		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, '')
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -163,16 +168,19 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var lastStr sql.NullString
 		var createdAtStr string
 		var enabled bool
+		var lastStatus string
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
-			&s.consecutiveFailures,
+			&s.consecutiveFailures, &lastStatus,
 			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
+		// SCHED-GAP-214: after a FAILED tick the tasks-mode waiver stands down.
+		s.lastTickStatusFailed = lastTickStatusFailed(lastStatus)
 		// SCHED-GAP-066: budget-exhausted projects are excluded from the
 		// greedy pack — but kept in the candidate list, flagged, so the
 		// GAP-011 overdue force-select below can still pick them (a spend
@@ -345,6 +353,18 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		// backoff/blackout/skip above still applied.
 		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
 		if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.workdir, s.boardOwnership) {
+			// SCHED-GAP-214: after a FAILED tick the waiver stands down —
+			// the lane paces on its full effective cooldown (the same
+			// arithmetic cooldown mode applies), so a gateway outage
+			// samples the lane once per cooldown instead of once per
+			// eval (the measured 9-second retry storm). Every other
+			// status keeps the original waiver semantics.
+			if s.lastTickStatusFailed && s.lastTickAt != nil {
+				if now.Sub(*s.lastTickAt) < cooldownDur {
+					totalSkippedCooldown++
+					continue
+				}
+			}
 			// SCHED-GAP-133: tasks-mode admission still respects FailureBackoff.
 			// Without this, a project that has been failing repeatedly (e.g.
 			// gateway draining) re-admits instantly on every eval — the

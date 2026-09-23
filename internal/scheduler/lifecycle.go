@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // TickStatus is the lifecycle state.
@@ -170,11 +171,29 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	// Update project's last_tick_completed for ALL outcomes (completed, failed, timeout).
 	// Previously only updated on TickCompleted — eduos-e2e demonstrated that projects
 	// with only failed ticks need cooldown enforcement too, or they flood the scheduler.
+	// SCHED-GAP-214: the SAME write now stamps last_tick_status — the terminal
+	// status of this most-recent tick (completed | failed | timeout | deferred).
+	// The tasks-mode cooldown waiver (SCHED-GAP-124) consults it: after a FAILED
+	// tick the waiver stands down and the lane paces on its full effective
+	// cooldown, so a gateway outage samples each tasks lane at the lane cadence
+	// instead of re-spawning it every eval (the measured 91-ticks-in-90s crier
+	// storm). One UPDATE, one row, atomic in the single completion write.
+	lastStatus := ""
+	switch outcome.Status {
+	case TickCompleted:
+		lastStatus = database.LastStatusCompleted
+	case TickFailed:
+		lastStatus = database.LastStatusFailed
+	case TickTimeout:
+		lastStatus = database.LastStatusTimeout
+	case TickDeferred:
+		lastStatus = database.LastStatusDeferred
+	}
 	_, err = lt.db.Exec(`
-		UPDATE projects SET last_tick_completed = ? WHERE name = ?
-	`, outcome.Finished.Format(time.RFC3339), outcome.Project)
+		UPDATE projects SET last_tick_completed = ?, last_tick_status = ? WHERE name = ?
+	`, outcome.Finished.Format(time.RFC3339), lastStatus, outcome.Project)
 	if err != nil {
-		log.Printf("WARN: failed to update last_tick_completed for %s: %v", outcome.Project, err)
+		log.Printf("WARN: failed to update last_tick_completed/last_tick_status for %s: %v", outcome.Project, err)
 	}
 
 	// SCHED-GAP-137a: a successful tick clears the consecutive-failure backoff

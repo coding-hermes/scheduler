@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 38
+const latestMigration = 39
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -612,6 +612,13 @@ UPDATE projects SET cooldown_pin_s = 21600, cooldown_pin_by = 'fleet-toml-import
 UPDATE projects SET cooldown_pin_s = 86400, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-canopy-releng' AND cooldown_pin_s IS NULL;
 UPDATE projects SET cooldown_pin_s = 900,    cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-dagger' AND cooldown_pin_s IS NULL;
 UPDATE projects SET cooldown_pin_s = 21600, cooldown_pin_by = 'fleet-toml-import', cooldown_pin_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = 'hermes-canopy' AND cooldown_pin_s IS NULL;
+`,
+	},
+	{
+		version: 39,
+		desc:    "post-failure cooldown stamp (SCHED-GAP-214): last_tick_status on projects ('' = never ticked | completed | failed | timeout | deferred) — the terminal status of the project's most recent tick, stamped by lifecycle.Complete. The tasks-mode cooldown waiver (SCHED-GAP-124) consults it: after a FAILED tick the waiver stands down and the lane paces on its full effective cooldown, closing the 9-second retry-storm the waiver otherwise re-opens every gateway outage",
+		stmt: `
+ALTER TABLE projects ADD COLUMN last_tick_status TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

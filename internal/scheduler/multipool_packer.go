@@ -274,6 +274,16 @@ func (m *MultiPoolPacker) packFlat(
 			// SCHED-GAP-133: FailureBackoff still gates even in tasks mode.
 			mode := admissionModeFor(s.proj.AdmissionMode, nsIDOf(s.proj), nsModes)
 			if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.proj.Workdir, s.proj.BoardOwnership) {
+				// SCHED-GAP-214: after a FAILED tick the waiver stands down
+				// — the lane paces on its full effective cooldown, so a
+				// gateway outage samples the lane once per cooldown instead
+				// of once per eval. Every other status keeps the original
+				// waiver semantics (SCHED-GAP-124 unchanged).
+				if lastTickStatusFailed(s.proj.LastTickStatus) {
+					if now.Sub(*s.lastTick) < cooldownDur {
+						continue // post-failure cooldown not elapsed
+					}
+				}
 				// SCHED-GAP-133: only gate on FailureBackoff when the project
 				// has actually failed repeatedly. Normal operation (consecutive_failures ≤ 1)
 				// keeps the original tasks-mode semantics: pending work waives cooldown.

@@ -225,3 +225,28 @@ func tasksAdmissionDue(workdir, ownership string) bool {
 	}
 	return open > 0
 }
+
+// lastTickStatusFailed reports whether the project's most recent tick FAILED
+// (SCHED-GAP-214, migration v38 projects.last_tick_status). A failed tick
+// stands the SCHED-GAP-124 tasks-mode cooldown waiver down: the next tick
+// paces on the project's full effective cooldown instead of re-admitting on
+// the 5s eval debounce.
+//
+// WHY THIS EXISTS — the measured defect. Every lane in the 2026-09-16 crier
+// storm (91 DISTINCT failed ticks in ~17 minutes, 9s apart, all
+// "gateway unreachable and exec fallback disabled") was a TASKS-mode lane:
+// the waiver ignores the 21600s cooldown pin whenever open board work
+// exists, and SCHED-GAP-143 deliberately leaves consecutive_failures at 0
+// for a transport-class failure — so SCHED-GAP-133's backoff gate never
+// fired either. Cooldown-mode lanes were already protected by their pin;
+// the waiver was the one admission path with no post-failure spacing.
+//
+// Reading the status column (not re-deriving from the last tick row) keeps
+// this O(1) on the admission path and makes the state auditable in SQL:
+// SELECT name FROM projects WHERE last_tick_status='failed'.
+//
+// A legacy row (pre-v38) reads "" — treated as NOT failed, preserving the
+// pre-214 waiver behavior until the project's next terminal tick stamps it.
+func lastTickStatusFailed(lastStatus string) bool {
+	return lastStatus == database.LastStatusFailed
+}

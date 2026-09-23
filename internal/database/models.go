@@ -85,6 +85,11 @@ type Project struct {
 	UpdatedAt         string  `json:"updated_at"`          // RFC3339 timestamp
 	LastTickStarted   string  `json:"last_tick_started"`   // RFC3339 of most recent tick spawn; "" when never spawned
 	LastTickCompleted string  `json:"last_tick_completed"` // RFC3339 of most recent tick completion (any outcome); "" when never completed
+	// SCHED-GAP-214 (migration v38): terminal status of the most recent
+	// tick ("" = never ticked | completed | failed | timeout | deferred).
+	// Stamped by lifecycle.Complete; read by the tasks-mode cooldown waiver
+	// — a FAILED last tick stands the waiver down for one full cooldown.
+	LastTickStatus string `json:"last_tick_status"`
 
 	// Disable provenance (GAP-044): who disabled the project, when, and
 	// why. All empty when the project has never been disabled (or was
@@ -250,6 +255,9 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	setString("UpdatedAt", &p.UpdatedAt)
 	setString("LastTickStarted", &p.LastTickStarted)
 	setString("LastTickCompleted", &p.LastTickCompleted)
+	// SCHED-GAP-214: legacy-PascalCase backfill mirrors the tag decode;
+	// the canonical wire form is last_tick_status.
+	setString("LastTickStatus", &p.LastTickStatus)
 	setString("DisabledAt", &p.DisabledAt)
 	setString("DisabledBy", &p.DisabledBy)
 	setString("DisabledReason", &p.DisabledReason)
@@ -340,6 +348,18 @@ type Tick struct {
 	AdmitReason string `json:"admit_reason"` // the admission decision that let the tick in (SCHED-GAP-155 vocabulary)
 	NudgeSource string `json:"nudge_source"` // why this tick row exists outside the packer: startup | manual | board_wake
 }
+
+// Terminal tick statuses for projects.last_tick_status (SCHED-GAP-214,
+// migration v38). Stamped by lifecycle.Complete on every terminal outcome;
+// "" = the project has never completed a tick. The tasks-mode cooldown
+// waiver (admission_mode.go + the three packer paths) reads this field: a
+// FAILED last tick stands the waiver down for one full effective cooldown.
+const (
+	LastStatusCompleted = "completed"
+	LastStatusFailed    = "failed"
+	LastStatusTimeout   = "timeout"
+	LastStatusDeferred  = "deferred"
+)
 
 // EventSeverity enumerates the severity tiers for event log entries.
 type EventSeverity string

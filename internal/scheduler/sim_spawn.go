@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // SimSpawner replaces the real Spawner for dry-run/simulation mode.
@@ -96,7 +97,21 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource, outcome.Commits, outcome.FilesChanged,
 			outcome.TickID)
 		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
-		s.db.Exec(`UPDATE projects SET last_tick_completed = ? WHERE name = ?`, finish, outcome.Project)
+		// SCHED-GAP-214: last_tick_status rides the same write — the sim path
+		// must exercise the post-failure cooldown rule identically to live.
+		lastStatus := ""
+		switch outcome.Status {
+		case TickCompleted:
+			lastStatus = database.LastStatusCompleted
+		case TickFailed:
+			lastStatus = database.LastStatusFailed
+		case TickTimeout:
+			lastStatus = database.LastStatusTimeout
+		case TickDeferred:
+			lastStatus = database.LastStatusDeferred
+		}
+		s.db.Exec(`UPDATE projects SET last_tick_completed = ?, last_tick_status = ? WHERE name = ?`,
+			finish, lastStatus, outcome.Project)
 		// Feed the outcome through the SAME post-tick hook the real spawner
 		// uses (bump accounting first, adaptive cooldown second — doubling
 		// as bump Phase B on revert — legacy autoSlowdown as fallback) so
