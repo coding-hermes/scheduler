@@ -377,25 +377,42 @@ func classifyTick(tk affectedTick) disposition {
 	}
 
 	// A: every commit from the tick's start onward (the canonical live call).
+	//
+	// SCHED-PERF-001: the live classifier now TRUSTS the actual measurement
+	// when the workdir produced any real commits (the small-under-report
+	// case used to be the regression — merge commits whose author date
+	// precedes the spawn time left code_commits = -1 fleet-wide). The
+	// diagnostic, however, must still surface the under-report when it
+	// happens — operators reading the backfill output want to know "git
+	// saw N commits, the tick claimed M, the gap is M-N" even when the
+	// live path now stamps the row with the actual split. Compute the
+	// raw under-report here from the same git query so the cause remains
+	// re-findable; defer to the canonical classifier only for the ok=true
+	// shape.
+	rawTotal, rawErr := countCommitsWithPathsSince(tk.Workdir, tk.Started)
+	if rawErr != nil {
+		d.CauseClass = causeGitUnavailable
+		d.Cause = fmt.Sprintf("git could not read %s: %v", tk.Workdir, rawErr)
+		return d
+	}
+	d.RawTotal = rawTotal
+	if rawTotal < tk.Claimed {
+		// Under-report the live path now ignores — the diagnostic keeps
+		// flagging it so operators see the gap.
+		d.CauseClass = causeGitUnderReports
+		d.Cause = fmt.Sprintf("git history under-reports the tick: git sees %d commit(s) touching files since %s but the tick claimed %d (empty/merge commits carry no paths, and a shallow clone or rewritten history loses commits — SCHED-PERF-001 changed the live classifier to trust the actual split for under-reports, but the diagnostic still surfaces the gap so the cause stays re-findable)",
+			rawTotal, tk.SpawnedAt, tk.Claimed)
+		return d
+	}
 	code, board, ok := scheduler.ClassifyGitCommits(tk.Workdir, tk.Started, tk.Claimed)
 	if !ok {
-		// ok == false with the repo present means either git itself failed or
-		// git saw fewer commits than the tick claimed. Ask git the same
-		// question the classifier asks to name which one it was.
-		total, gerr := countCommitsWithPathsSince(tk.Workdir, tk.Started)
-		d.RawTotal = total
-		switch {
-		case gerr != nil:
-			d.CauseClass = causeGitUnavailable
-			d.Cause = fmt.Sprintf("git could not read %s: %v", tk.Workdir, gerr)
-		case total < tk.Claimed:
-			d.CauseClass = causeGitUnderReports
-			d.Cause = fmt.Sprintf("git history under-reports the tick: git sees %d commit(s) touching files since %s but the tick claimed %d (empty/merge commits carry no paths, and a shallow clone or rewritten history loses commits — the classifier refuses to trust a split it cannot reconcile)",
-				total, tk.SpawnedAt, tk.Claimed)
-		default:
-			d.CauseClass = causeClassifierRefused
-			d.Cause = fmt.Sprintf("canonical classifier returned ok=false with %d commit(s) touching files since %s (tick claimed %d)", total, tk.SpawnedAt, tk.Claimed)
-		}
+		// ok == false with the repo present and rawTotal >= claimed: the
+		// raw count reconciled but the canonical refused — surface the
+		// classifier's own reason (the only ok=false case left in the
+		// live path is "total == 0" with claimed > 0, which the raw check
+		// above already ruled out; this branch is for future refactors).
+		d.CauseClass = causeClassifierRefused
+		d.Cause = fmt.Sprintf("canonical classifier returned ok=false with %d commit(s) touching files since %s (tick claimed %d)", rawTotal, tk.SpawnedAt, tk.Claimed)
 		return d
 	}
 	d.Code, d.Board, d.OK, d.Total, d.RawTotal = code, board, true, code+board, code+board

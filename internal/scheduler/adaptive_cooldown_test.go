@@ -904,10 +904,35 @@ func TestClassifyGitCommits_BoardVsCodeSplit(t *testing.T) {
 		}
 	})
 
-	t.Run("git under-reporting the claimed count is untrusted", func(t *testing.T) {
+	t.Run("git under-reporting the claimed count is trusted (SCHED-PERF-001)", func(t *testing.T) {
+		// SCHED-PERF-001: the foreman's tick often includes a merge commit
+		// whose author date precedes the spawn time, so the per-tick window
+		// can under-report `claimed` by 1-2. The work is real — we trust
+		// the actual measurement and let the column populate. The previous
+		// "ok=false on total < claimed" gate was the regression that left
+		// code_commits = board_commits = -1 fleet-wide for every merge-tick.
+		// Expected: 4 visible commits (3 code, 1 board) with claimed=5.
 		code, board, ok := classifyGitCommits(workdir, since, 5) // 4 visible, 5 claimed
-		if ok || code != 0 || board != 0 {
-			t.Errorf("classifyGitCommits(claimed=5) = (%d, %d, %v), want (0, 0, false)", code, board, ok)
+		if !ok {
+			t.Errorf("classifyGitCommits(claimed=5) = ok=false; want true — small under-report is trusted (SCHED-PERF-001)")
+		}
+		if code != 3 || board != 1 {
+			t.Errorf("classifyGitCommits(claimed=5) = (%d, %d, %v), want (3, 1, true)", code, board, ok)
+		}
+	})
+
+	t.Run("zero commits in window with claimed > 0 is unmeasured (broken git history)", func(t *testing.T) {
+		// Build a workdir with a baseline commit, claim a future tick produced
+		// 3 commits, then point the classifier at a window where the workdir
+		// has no commits after `since` — the truly-empty case the function
+		// reserves for ok=false. (A non-git / unreadable workdir is the
+		// other ok=false case, covered by the "no workdir and no git repo
+		// are unmeasurable" subtest below.)
+		empty := t.TempDir()
+		initTickRepo(t, empty)
+		_, _, ok := classifyGitCommits(empty, time.Now().Add(time.Hour), 3)
+		if ok {
+			t.Error("classifyGitCommits claimed=3 with empty window returned ok=true — the back-fill would stamp a fabricated split")
 		}
 	})
 
