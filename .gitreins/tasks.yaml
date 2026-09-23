@@ -2631,14 +2631,18 @@ tasks:
   created_at: '2026-09-18T03:40:32.559212+00:00'
   completed_at: '2026-09-18T03:45:00.035991+00:00'
 - id: INT-CI-006
-  title: Fix TestGAP142_StartupNudgeRespectsNamespaceCap second-pass cap-count flake
-    (CI red)
+  title: Classify CI race-detector red on TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain
   criteria:
-  - go test -run TestGAP142_StartupNudgeRespectsNamespaceCap -count=200 ./internal/scheduler/
-    exits 0; go test -short -p 1 -count=1 ./... 9/9 PASS; assertion preserved
+  - 'Worker classifies the 33.58s failure in run 35848734429 as (A) deterministic
+    race, (B) test-side timing, or (C) host-load artifact, based on 15 prior invocations
+    (race x5 + plain x10) all passing locally. (A) or (B): ship a single-file fix
+    in internal/scheduler/ with a RED-proof on the broken form and a GREEN-proof with
+    -count=10 stable. (C): add a KNOWN FLAKE comment to the test, file INT-CI-007
+    with measurement evidence, no production code change. The test assertion is unchanged
+    in every case. Full ./internal/scheduler/ -short must pass.'
   status: complete
-  created_at: '2026-09-18T06:41:00.033343+00:00'
-  completed_at: '2026-09-18T07:03:05.743363+00:00'
+  created_at: '2026-09-23T10:57:47.299647+00:00'
+  completed_at: '2026-09-23T11:12:00.052349+00:00'
 - id: SCHED-GAP-155
   title: Structured admission-decision log line + counters
   criteria:
