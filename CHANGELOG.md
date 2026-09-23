@@ -104,6 +104,57 @@ range cited under its heading. The rollover itself is done by
   `TestBlocksAPI_*` updated to reflect the new appended count on the
   previously-errored `noboard` member.
 
+### Policy-script clobber guard (SCHED-PERF-006)
+
+- **`scripts/policy-script-deploy-hash-guard.sh`** — deploy-hash tripwire
+  for the live `~/.hermes/scripts/fleet-cooldown-policy.py`: runs the
+  policy script's own `--verify` (SCHED-PERF-003 deploy-hash path) AND
+  re-checks the hash directly against the sidecar next to the deployed
+  file, because the sync-time guard in task-router's `sync_runtime.sh`
+  only refuses when live MATCHES the sidecar but the repo copy differs —
+  an operator fix that diverged live away from the sidecar was silently
+  clobbered by the next sync. Exit codes: 0 clean, 1 loud HASH MISMATCH
+  refusal, 3 missing live, 4 bootstrap refusal (missing sidecar on an
+  existing live — the policy script's own `--verify` would launder the
+  corruption by writing a fresh sidecar from it), 5 python3 missing or
+  verify crash (fail-closed). Pin-drift (hash clean, pins disagree) is
+  reported and passes — the pins tripwire owns that alert.
+- **`scripts/verify-policy-script-deploy-hash.sh`** — restart-shaped
+  wrapper for the deploy-drain-restart verify block (between the caps
+  check and FIX PRESENCE): invokes the guard, logs in the restart
+  script's style, ABORTs with exit 4 on any refusal so a corrupt live halts
+  the deploy before the systemd restart / binary swap. Drop-in line for
+  `~/.hermes/scripts/scheduler-deploy-drain-restart.sh` is in the script
+  header; the installed hook at
+  `.git/hooks/pre-commit` (via `scripts/install-hooks.sh`) gained the
+  same guard as step 3, after the gitreins guard and lint-guard.sh,
+  skipping on `LINT_GUARD_SKIP=1` or a no-Go-files staged set, exit
+  non-zero blocking the commit.
+- **`tests/test_policy_script_deploy_hash_guard.sh`** — hermetic RED/GREEN
+  proof (fixture deploy copy at a temp path, the real live file is only
+  ever READ): clean fixture → 0; mutated fixture (`print("STALE...")
+  appended`) → 1 with the `[SCHED-PERF-006]` marker on stderr + the
+  DEPLOY HASH MISMATCH block echoed; corrupt-live-with-no-sidecar → 4
+  with NO sidecar written (no laundering); missing live → 3; python3
+  stripped from PATH (coreutils-only) → 5.
+- **`tests/test_verify_policy_script_deploy_hash.sh`** (follow-up,
+  SCHED-PERF-006 rework) — restart-shape INTEGRATION proof that the
+  verify-deploy-restart wiring actually executes the guard rather than
+  only promising it in a header: drives `verify-policy-script-deploy-hash.sh`
+  exactly as the restart script's verify block would, against a hermetic
+  fixture "live". Clean fixture → wrapper exits 0 with `deploy hash OK` on
+  stdout; corrupted fixture → wrapper exits 4 (documented ABORT) with the
+  `VERIFY ABORT` AND the guard's `[SCHED-PERF-006]` markers on STDERR and
+  nothing abort-shaped leaking onto stdout, and the fixture sidecar
+  unmodified after the ABORT (no laundering); a relocated wrapper with its
+  guard missing → exit 4 with `guard not found` on stderr (fail-closed).
+  The header's INSTALL block is now a marked DEPLOY FRAGMENT
+  (operator-applied, not automatic) with a `test -x` guard so the wiring
+  snippet survives wrapper absence, and the wrapper's stream contract
+  (stdout = info, stderr = aborts) is documented and enforced.
+  `~/.hermes/scripts/scheduler-deploy-drain-restart.sh` itself remains an
+  operator file — untouched by design.
+
 ## [1.4.0] — 2026-09-22
 
 Entries accumulated here after `1.0.0`. **This section shipped as part of

@@ -32,7 +32,7 @@ cd "$REPO_ROOT"
 # does not work from a worktree.)
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
 HOOK="$GIT_COMMON_DIR/hooks/pre-commit"
-MARKER="lint-guard.sh"  # presence of this line means the hook is already installed
+MARKER="policy-script-deploy-hash-guard.sh"  # presence = hook already installed (SCHED-PERF-006 block)
 
 if [ "${1:-}" = "--check" ]; then
     if [ -f "$HOOK" ] && grep -q "$MARKER" "$HOOK"; then
@@ -86,6 +86,24 @@ if [ "${LINT_GUARD_SKIP:-0}" != "1" ]; then
         LINT_RC=$?
         if [ "$LINT_RC" -ne 0 ]; then
             exit "$LINT_RC"
+        fi
+    fi
+fi
+
+# 3. policy-script-deploy-hash-guard.sh (SCHED-PERF-006) — deploy-hash
+#    tripwire for the live fleet-cooldown-policy.py. Sits AFTER the gitreins
+#    guard (primary Tier-1 signal) and AFTER lint-guard.sh. Skips when
+#    LINT_GUARD_SKIP=1 (board-only / docs-only commits share the skip
+#    path) and when no Go files are staged (same lineage as lint-guard's
+#    staged-Go-files logic — the guard adds nothing to a shell/README
+#    commit). Exit non-zero blocks the commit.
+if [ "${LINT_GUARD_SKIP:-0}" != "1" ]; then
+    STAGED_GO_CFG="$(git diff --cached --name-only --diff-filter=ACMR -- '*.go' 2>/dev/null || true)"
+    if [ -n "$STAGED_GO_CFG" ] && [ -x "$REPO_ROOT/scripts/policy-script-deploy-hash-guard.sh" ]; then
+        "$REPO_ROOT/scripts/policy-script-deploy-hash-guard.sh"
+        POLICY_RC=$?
+        if [ "$POLICY_RC" -ne 0 ]; then
+            exit "$POLICY_RC"
         fi
     fi
 fi
