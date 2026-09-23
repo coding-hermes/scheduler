@@ -82,6 +82,21 @@ to the pre-GAP-049 conflation generator and labels the bundle
 (pre-GAP-049 fallback)` (split counts `null`), so the tick still produces
 output instead of failing.
 
+## Row-authoring rule — never target AGENTS.md (2026-09-22)
+
+When a PM/proposal pass writes a row, **do not name an AGENTS.md edit as work or as a PASS
+criterion.** `AGENTS.md` / `CLAUDE.md` / `SOUL.md` / `.cursorrules` are protected instruction
+files: each write needs a per-write human approval, is not bypassed by auto-approve, and fails
+closed after `approvals.timeout` (300s). Rows authored that way stall their worker ~5 minutes and
+then fail — measured 2026-09-22: 30 timed-out protected-write prompts = 150 minutes of fleet stall,
+with AGENTS.md unchanged (see SCHED-GAP-154, which sat blocked for exactly this reason).
+
+- Design decisions and rationale belong in `docs/design-decisions.md` (or `docs/adr/`); `AGENTS.md`
+  keeps a one-line index.
+- `grep -c '<string>' AGENTS.md >= 1` is not a PASS criterion — it is a change-detector on prose.
+- If instruction-file text genuinely must change, file it as an operator request for the human
+  rather than a worker task.
+
 ## Install
 
 ```sh
