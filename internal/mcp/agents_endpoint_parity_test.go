@@ -1,17 +1,18 @@
 package mcp_test
 
-// SCHED-GAP-166 — AGENTS.md endpoint-table parity guard.
+// SCHED-GAP-166 — endpoints-table parity guard (docs/reference/endpoints.md).
 //
-// The 2026-09-18 drift this guard exists for: AGENTS.md's Endpoints table
-// listed 15 rows while the daemon served a larger route set. Four live
+// The 2026-09-18 drift this guard exists for: the endpoint table carried in
+// AGENTS.md then (now docs/reference/endpoints.md) listed 15 rows while the
+// daemon served a larger route set. Four live
 // routes were missing entirely — /api/v1/groups, /api/v1/templates,
 // /api/v1/metrics and /api/v1/events/stream — and the table carried no MCP
 // surface statement at all, so an agent building a capability or security
-// inventory from AGENTS.md understated the daemon's write surface.
+// inventory from that table understated the daemon's write surface.
 //
 // Both sides of the comparison are IN-REPO, never a live daemon process:
 //
-//   - the AGENTS.md side is parsed out of the repository's AGENTS.md, located
+//   - the documented side is parsed out of docs/reference/endpoints.md, located
 //     by walking up from the test's working directory (same idiom as
 //     readmeRepoRoot in readme_tools_parity_test.go), so the guard runs under
 //     `go test ./internal/mcp/` with no daemon running;
@@ -38,7 +39,7 @@ import (
 	"testing"
 )
 
-// agentsRouteRowRe matches one row of the AGENTS.md Endpoints table and
+// agentsRouteRowRe matches one row of the endpoints table and
 // captures the route cell — e.g. "| `/api/v1/groups` | Deploy groups … |".
 // The cell cannot contain a backtick, so a row whose DESCRIPTION is
 // backticked (the /api/v1/projects/{name} sub-route row) still yields only
@@ -54,12 +55,12 @@ var agentsMCPCountRe = regexp.MustCompile(`serves \*\*(\d+) tools\*\*`)
 var routePatternRe = regexp.MustCompile(`mux\.(?:HandleFunc|Handle)\(\s*"([^"]+)"`)
 
 // nonRouteRegistrations are mux registrations that are deliberately NOT
-// routes of their own and therefore never get an AGENTS.md row: "/api/"
+// routes of their own and therefore never get a documented row: "/api/"
 // mounts the API handler that serves the documented /api/v1/* paths, and
 // "/mcp/" is the trailing-slash alias of the documented "/mcp".
 var nonRouteRegistrations = map[string]bool{"/api/": true, "/mcp/": true}
 
-// Re-anchor floors. A regex that stops matching AGENTS.md's row shape, or a
+// Re-anchor floors. A regex that stops matching the table's row shape, or a
 // source walk that finds nothing, must fail LOUDLY instead of comparing an
 // empty set against an empty set and passing. The documented-row floor is
 // deliberately LOW: it only proves the row regex still matches the table
@@ -105,7 +106,7 @@ func agentsRepoRoot(t *testing.T) string {
 
 // agentsEndpointSection returns the body of the "## Endpoints" section
 // (everything up to the next "## " heading) so backticked identifiers in the
-// flags, clock and tier tables elsewhere in AGENTS.md cannot satisfy — or
+// flags, clock and tier tables elsewhere in the docs cannot satisfy — or
 // pollute — the route check.
 func agentsEndpointSection(agents string) (string, bool) {
 	lines := strings.Split(agents, "\n")
@@ -250,7 +251,7 @@ func agentsEndpointParityFindings(documented []string, live routeSets) []string 
 		if live.exact[d] || live.subtree[d] || underSubtree(live, d) {
 			continue
 		}
-		findings = append(findings, fmt.Sprintf("AGENTS.md documents route %q which has no live registration — remove the row or fix the path", d))
+		findings = append(findings, fmt.Sprintf("docs/reference/endpoints.md documents route %q which has no live registration — remove the row or fix the path", d))
 	}
 
 	// ── direction 2: every live registration must be documented ─────────
@@ -264,7 +265,7 @@ func agentsEndpointParityFindings(documented []string, live routeSets) []string 
 		if live.subtree[l] && documentedUnder(documentedSet, l) {
 			continue
 		}
-		findings = append(findings, fmt.Sprintf("live route %q is missing from the AGENTS.md Endpoints table — every registered route must have a row", l))
+		findings = append(findings, fmt.Sprintf("live route %q is missing from the docs/reference/endpoints.md route table — every registered route must have a row", l))
 	}
 
 	sort.Strings(findings)
@@ -290,26 +291,26 @@ func sourcePathsForRoutes(t *testing.T, root string) []string {
 	return append(paths, filepath.Join(root, "cmd", "schedulerd", "main.go"))
 }
 
-// TestAgentsEndpointTableParity is the SCHED-GAP-166 guard: the AGENTS.md
-// Endpoints table must name every route registered in the daemon's source
+// TestAgentsEndpointTableParity is the SCHED-GAP-166 guard: the docs/reference/endpoints.md
+// route table must name every route registered in the daemon's source
 // (set equality, both directions) and the stated MCP tool count must equal
 // the live registry size.
 func TestAgentsEndpointTableParity(t *testing.T) {
 	root := agentsRepoRoot(t)
 
-	raw, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "reference", "endpoints.md"))
 	if err != nil {
-		t.Fatalf("read AGENTS.md: %v", err)
+		t.Fatalf("read docs/reference/endpoints.md: %v", err)
 	}
 	agents := string(raw)
 
 	section, ok := agentsEndpointSection(agents)
 	if !ok {
-		t.Fatalf(`AGENTS.md has no "## Endpoints" section — the route table is missing`)
+		t.Fatalf(`docs/reference/endpoints.md has no "## Endpoints" section — the route table is missing`)
 	}
 	documented := parseAgentsEndpointRoutes(section)
 	if len(documented) < minDocumentedRows {
-		t.Fatalf("parsed only %d route rows from the AGENTS.md Endpoints section (want >= %d) — the table or the row regex is broken", len(documented), minDocumentedRows)
+		t.Fatalf("parsed only %d route rows from the docs/reference/endpoints.md Endpoints section (want >= %d) — the table or the row regex is broken", len(documented), minDocumentedRows)
 	}
 
 	live := routeSetsFromSources(t, sourcePathsForRoutes(t, root))
@@ -321,7 +322,7 @@ func TestAgentsEndpointTableParity(t *testing.T) {
 	}
 
 	if findings := agentsEndpointParityFindings(documented, live); len(findings) > 0 {
-		t.Errorf("SCHED-GAP-166 AGENTS.md/route-registry parity: %d divergences between AGENTS.md and the %d live route registrations:", len(findings), len(live.liveNames()))
+		t.Errorf("SCHED-GAP-166 endpoint-table/route-registry parity: %d divergences between docs/reference/endpoints.md and the %d live route registrations:", len(findings), len(live.liveNames()))
 		for _, f := range findings {
 			t.Errorf("  DRIFT %s", f)
 		}
@@ -335,14 +336,14 @@ func TestAgentsEndpointTableParity(t *testing.T) {
 	}
 	matches := agentsMCPCountRe.FindAllStringSubmatch(section, -1)
 	if len(matches) != 1 {
-		t.Fatalf("expected exactly 1 MCP tool-count statement in the AGENTS.md Endpoints section, found %d — keep one canonical count per surface so this guard can check it", len(matches))
+		t.Fatalf("expected exactly 1 MCP tool-count statement in the docs/reference/endpoints.md Endpoints section, found %d — keep one canonical count per surface so this guard can check it", len(matches))
 	}
 	got, err := strconv.Atoi(matches[0][1])
 	if err != nil {
 		t.Fatalf("stated MCP tool count is not a number: %q", matches[0][1])
 	}
 	if got != len(registry) {
-		t.Errorf("AGENTS.md states %d MCP tools but the registry serves %d — update AGENTS.md or investigate the registry change", got, len(registry))
+		t.Errorf("docs/reference/endpoints.md states %d MCP tools but the registry serves %d — update the table or investigate the registry change", got, len(registry))
 	}
 }
 
@@ -457,14 +458,14 @@ func TestAgentsEndpointTableParity_SelfCheck(t *testing.T) {
 	// The removed-row case must fail for the RIGHT reason (the missing live
 	// route), not merely because some finding appeared.
 	findings := agentsEndpointParityFindings(removeRoute(real, "/api/v1/metrics"), live)
-	want := `live route "/api/v1/metrics" is missing from the AGENTS.md Endpoints table — every registered route must have a row`
+	want := `live route "/api/v1/metrics" is missing from the docs/reference/endpoints.md route table — every registered route must have a row`
 	if len(findings) != 1 || findings[0] != want {
 		t.Fatalf("self-check: removed-row findings = %v, want exactly [%q]", findings, want)
 	}
 	// And the stale-row case likewise.
 	stale := append(append([]string(nil), real...), "/api/v1/retired-route")
 	findings = agentsEndpointParityFindings(stale, live)
-	wantStale := `AGENTS.md documents route "/api/v1/retired-route" which has no live registration — remove the row or fix the path`
+	wantStale := `docs/reference/endpoints.md documents route "/api/v1/retired-route" which has no live registration — remove the row or fix the path`
 	if len(findings) != 1 || findings[0] != wantStale {
 		t.Fatalf("self-check: stale-row findings = %v, want exactly [%q]", findings, wantStale)
 	}

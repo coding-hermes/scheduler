@@ -492,8 +492,8 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 		checkMarkdownFlagDefault(t, filepath.Join("..", "..", "README.md"), "duckbrain-ns", flagDefault)
 	})
 
-	t.Run("AGENTS.md flags table", func(t *testing.T) {
-		checkMarkdownFlagDefault(t, filepath.Join("..", "..", "AGENTS.md"), "duckbrain-ns", flagDefault)
+	t.Run("docs/reference/flags.md flags table", func(t *testing.T) {
+		checkMarkdownFlagDefault(t, filepath.Join("..", "..", "docs", "reference", "flags.md"), "duckbrain-ns", flagDefault)
 	})
 
 	t.Run("docs/api.md /api/v1/config example", func(t *testing.T) {
@@ -505,10 +505,10 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 }
 
 // duckbrainNSFlagDefaultFromSource extracts the --duckbrain-ns default from the
-// flag declaration in main.go — per AGENTS.md the flag table there is the
-// canonical source of defaults. Reading the source keeps this test from
-// hardcoding the value it polices; a reformatted declaration fails loudly
-// instead of silently comparing nothing.
+// flag declaration in main.go — per docs/reference/flags.md the flag
+// declarations there are the canonical source of defaults. Reading the source
+// keeps this test from hardcoding the value it polices; a reformatted
+// declaration fails loudly instead of silently comparing nothing.
 func duckbrainNSFlagDefaultFromSource(t *testing.T, path string) string {
 	t.Helper()
 	src, err := os.ReadFile(path)
@@ -524,7 +524,7 @@ func duckbrainNSFlagDefaultFromSource(t *testing.T, path string) string {
 
 // checkMarkdownFlagDefault asserts the default column of a
 // `| \`--flag\` | \`value\` |` row. Both spellings are accepted: README.md uses
-// `-duckbrain-ns`, AGENTS.md uses `--duckbrain-ns`.
+// `-duckbrain-ns`, docs/reference/flags.md uses `--duckbrain-ns`.
 func checkMarkdownFlagDefault(t *testing.T, path, flag, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

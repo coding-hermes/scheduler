@@ -22,9 +22,10 @@ var retiredRootTomlClaims = []string{
 	"root TOML loading comes in FEAT-005",
 }
 
-// TestRootTomlDocsParity fails the build when a documentation surface (AGENTS.md,
-// README.md, or any file under docs/) re-introduces the retired claim that the
-// root schedulerd.toml [scheduler] layer is not loaded at boot.
+// TestRootTomlDocsParity fails the build when a documentation surface
+// (README.md, the docs/reference/ reference pages, or any file under docs/)
+// re-introduces the retired claim that the root schedulerd.toml [scheduler]
+// layer is not loaded at boot.
 //
 // The guard is written against a CLAIM, not a symbol name: it greps the retired
 // phrasings so a rewording that preserves the false statement still has to pass
@@ -36,7 +37,10 @@ var retiredRootTomlClaims = []string{
 func TestRootTomlDocsParity(t *testing.T) {
 	root := repoRoot(t)
 
-	surfaces := []string{"AGENTS.md", "README.md"}
+	// The pages the route/flag tables moved to (SCHED-GAP-220) replace AGENTS.md
+	// here: they are doc surfaces now, so the retired-claim scan follows the
+	// content.
+	surfaces := []string{"README.md", "docs/reference/flags.md", "docs/reference/endpoints.md", "docs/reference/clock-modes.md"}
 	docsDir := filepath.Join(root, "docs")
 	if entries, err := os.ReadDir(docsDir); err == nil {
 		for _, e := range entries {
