@@ -3915,3 +3915,44 @@ tasks:
   status: complete
   created_at: '2026-09-22T20:07:17.829100+00:00'
   completed_at: '2026-09-22T20:16:37.332367+00:00'
+- id: SCHED-GAP-207
+  title: Satellite lanes reuse a fixed board row id as a recurring slot without closing
+    the previous row
+  criteria:
+  - Merge d775344a on main carries worker commit fd46c6ff (unique id mint + closure
+    protocol in PM push leg, board-id-slot invariant class, adaptive-cooldown counts
+    unique open ids)
+  - gitreins guard full mode PASSES on main after the merge (secrets/build/lint/go_tests)
+  - 'New test files exist and pass in the guard run: internal/scheduler/adaptive_gap207_test.go,
+    ops/pm-standin/test_push_proposals.py, tests/test_check_fleet_invariants_board_id_slot.py'
+  status: complete
+  created_at: '2026-09-22T23:44:34.156643+00:00'
+  completed_at: '2026-09-22T23:48:58.210395+00:00'
+- id: SCHED-GAP-208
+  title: Board-only commits blocked by code guards in 4+ repos (allow_skips:false
+    DEGRADED-PASS, broken pre-commit hook interpreter, unrelated mypy debt)
+  criteria:
+  - 'Each canonical repo (deepseek-dashboard, totalstack, mafia-ai-benchmark, ai_plays_poke)
+    fast-forwarded to its fix commit: b8f755fd481c / 14a1f76af2f2 / 76db78a1051b /
+    add4e276661f setting allow_skips:true in tracked .gitreins/config.yaml'
+  - Each worker clone proved a board-only commit exits 0 with guards, plus a RED proof
+    with allow_skips:false (worker log /tmp/w_208.log)
+  - mafia-ai-benchmark canonical .git/hooks/pre-commit resolves to the live pipx gitreins
+    interpreter (no deleted-worktree path)
+  - Worker log documents premise contradictions and no-push decision per each repo's
+    policy
+  status: complete
+  created_at: '2026-09-22T23:44:35.196601+00:00'
+  completed_at: '2026-09-23T00:05:08.640242+00:00'
+- id: SCHED-GAP-214
+  title: 'fix(scheduler): a FAILED tick consumes its full effective cooldown (post-failure
+    cooldown stamp)'
+  criteria:
+  - Migrate v38 adds projects.last_tick_status; lifecycle.Complete stamps it; the
+    tasks-mode cooldown waiver stands down after a FAILED last tick so the lane paces
+    on its full effective cooldown; ADMIT reason 'failed_cooldown' surfaces in /api/v1/status;
+    7 new test cases pass; sibling SCHED-GAP-203-B rebuild test premise is pinned
+    to v37 (>= latestMigration silently broke when v38 landed).
+  status: complete
+  created_at: '2026-09-23T00:21:54.056189+00:00'
+  completed_at: '2026-09-23T00:44:57.231058+00:00'
