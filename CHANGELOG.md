@@ -33,6 +33,29 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-22
 
+### Build + Lint Convergence (SCHED-GAP-221)
+
+- **`scripts/lint-guard.sh`** — additive golangci-lint safety net invoked
+  from the pre-commit hook AFTER the gitreins Tier-1 guard. The gitreins
+  `go_lint` lane is a scaffold check and cannot see real findings; the
+  divergence bit d775344a (prealloc finding only caught by CI, fixed
+  foreman-direct in 86da1e92). lint-guard.sh runs
+  `golangci-lint run --new-from-rev=HEAD --timeout=3m` (full mode via
+  `--full`) on staged Go files, with a 4-minute budget, and prints an
+  explicit DEGRADED block on tool absence or timeout. Set
+  `LINT_GUARD_SKIP=1` to bypass for board-only / docs-only commits;
+  `LINT_GUARD_REQUIRE=1` makes absence of the tool a hard failure
+  (CI shape). RED/GREEN proof: `tests/test_lint_guard.sh` — exits 1 on
+  a prealloc/staticcheck finding, 0 on the fix, 0 on no-Go-files staged,
+  0 on `LINT_GUARD_SKIP=1`, 1 on `--full` with a prealloc in tree.
+- **`scripts/install-hooks.sh`** — idempotent installer that writes the
+  new gitreins + lint-guard pre-commit hook to
+  `--git-common-dir/hooks/pre-commit` (works from a worktree too).
+  `--check` verifies presence without writing.
+- **`scripts/check-invariants.sh`** — runner now invokes the lint-guard
+  battery as step 2 of 3 (between the board-only check and the pytest
+  fixture battery); CI green requires all three to pass.
+
 ## [1.4.0] — 2026-09-22
 
 Entries accumulated here after `1.0.0`. **This section shipped as part of

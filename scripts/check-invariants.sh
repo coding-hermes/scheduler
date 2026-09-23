@@ -31,18 +31,26 @@ if [ "$rc_board" -ne 0 ]; then
 fi
 
 echo
-echo "=== [2/2] fixture battery (pytest tests/) ==="
+echo "=== [2/3] lint-guard.sh regression battery (SCHED-GAP-221) ==="
+bash tests/test_lint_guard.sh
+rc_lint=$?
+if [ "$rc_lint" -ne 0 ]; then
+    echo "FAIL: lint-guard battery exited $rc_lint" >&2
+fi
+
+echo
+echo "=== [3/3] fixture battery (pytest tests/) ==="
 python3 -m pytest tests/ -q
 rc_pytest=$?
 if [ "$rc_pytest" -ne 0 ]; then
     echo "FAIL: fixture battery exited $rc_pytest" >&2
 fi
 
-if [ "$rc_board" -ne 0 ] || [ "$rc_pytest" -ne 0 ]; then
+if [ "$rc_board" -ne 0 ] || [ "$rc_lint" -ne 0 ] || [ "$rc_pytest" -ne 0 ]; then
     echo
-    echo "BATTERY: FAIL (board=$rc_board pytest=$rc_pytest)"
+    echo "BATTERY: FAIL (board=$rc_board lint=$rc_lint pytest=$rc_pytest)"
     exit 1
 fi
 echo
-echo "BATTERY: PASS (board-only clean, fixture battery green)"
+echo "BATTERY: PASS (board-only clean, lint-guard green, fixture battery green)"
 exit 0
