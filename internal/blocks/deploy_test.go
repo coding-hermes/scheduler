@@ -53,6 +53,10 @@ func TestDeployDryRunWritesNothing(t *testing.T) {
 }
 
 func TestDeployBatchContinuesPastErrors(t *testing.T) {
+	// SCHED-GAP-223: live deploys auto-initialize the board on a fresh
+	// workdir, so the "noboard" project no longer errors. "missing" still
+	// errors (not in the projects DB) — that's the case the test still
+	// covers for batch-continues-past-errors.
 	goodWD, goodBoard := makeBoard(t, "")
 	noBoardWD := t.TempDir()
 	res := Deploy(DeployRequest{
@@ -78,19 +82,25 @@ func TestDeployBatchContinuesPastErrors(t *testing.T) {
 	if byName["good"].TaskIDs[0] != "QUALITY-SWEEP-20260903-good-01" {
 		t.Errorf("first id = %q", byName["good"].TaskIDs[0])
 	}
-	if byName["noboard"].Status != "error" {
-		t.Errorf("noboard status = %q, want error", byName["noboard"].Status)
+	// noboard: SCHED-GAP-223 auto-init now appends on the live path.
+	if byName["noboard"].Status != "appended" || len(byName["noboard"].TaskIDs) != 2 {
+		t.Errorf("noboard outcome = %+v, want appended (auto-init)", byName["noboard"])
 	}
 	if byName["missing"].Status != "error" {
 		t.Errorf("missing status = %q, want error", byName["missing"].Status)
 	}
-	if res.Summary.Appended != 1 || res.Summary.Errors != 2 {
-		t.Errorf("summary = %+v, want 1 appended 2 errors", res.Summary)
+	if res.Summary.Appended != 2 || res.Summary.Errors != 1 {
+		t.Errorf("summary = %+v, want 2 appended 1 error", res.Summary)
 	}
 	// The good board really got 2 parseable pending rows.
 	lines := readBoardLines(t, goodBoard)
 	if len(lines) != 2 {
 		t.Fatalf("good board lines = %d, want 2", len(lines))
+	}
+	// The noboard board was auto-created and holds the 2 appended rows.
+	noBoardLines := readBoardLines(t, filepath.Join(noBoardWD, ".coding-hermes", "board", "tasks.jsonl"))
+	if len(noBoardLines) != 2 {
+		t.Errorf("auto-init noboard board lines = %d, want 2", len(noBoardLines))
 	}
 }
 
