@@ -97,7 +97,9 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var g blocks.Group
-	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&g); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
@@ -167,7 +169,9 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, name string) {
 
 func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request, name string) {
 	var patch blocks.GroupUpdate
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&patch); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
@@ -241,7 +245,9 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var t blocks.Template
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&t); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
@@ -295,7 +301,9 @@ func (s *Server) getTemplate(w http.ResponseWriter, r *http.Request, name string
 
 func (s *Server) updateTemplate(w http.ResponseWriter, r *http.Request, name string) {
 	var patch blocks.TemplateUpdate
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&patch); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}

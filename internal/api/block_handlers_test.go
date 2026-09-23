@@ -601,6 +601,84 @@ func TestBlocksAPI_CreateTemplate(t *testing.T) {
 	}
 }
 
+// TestBlocksAPI_StrictDecode_RejectsUnknownFields: the create/update handlers
+// for groups and templates must reject unknown per-task / per-group fields
+// with 400 instead of silently dropping them. The OpenAPI schemas
+// (TemplateTask, Group) are the source of truth, and a client following the
+// natural "board row shape" intuition (sending id/priority/status on a
+// TemplateTask) used to get silent divergence — the row was stored with
+// default values and a generated id, contradicting what the caller sent
+// (SCHED-GAP-224). Same protection on groups: a stray field name must
+// produce a 400, not a partial update.
+func TestBlocksAPI_StrictDecode_RejectsUnknownFields(t *testing.T) {
+	b := newBlocksTestServer(t)
+
+	// 1. POST /api/v1/templates with board-row shape on the task list
+	//    (id, priority, status) must be rejected with 400, not accepted with
+	//    silent drops.
+	status, resp := b.doRaw(t, "POST", "/api/v1/templates", `{
+		"name": "strict-tpl",
+		"tasks": [
+			{"title":"A","id":"DF-101","priority":"P1","status":"todo"},
+			{"title":"B","priority":"P1"}
+		]
+	}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("template create with unknown field: status = %d, want 400: %v", status, resp)
+	}
+	if _, err := os.Stat(b.templatesPath()); err == nil {
+		t.Fatalf("templates.jsonl must not exist after rejected create")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat templates.jsonl: %v", err)
+	}
+
+	// 2. POST /api/v1/templates without unknown fields still works (control).
+	status, _ = b.doRaw(t, "POST", "/api/v1/templates", `{
+		"name": "clean-tpl",
+		"tasks": [{"title":"only task"}]
+	}`)
+	if status != http.StatusCreated {
+		t.Fatalf("template create without unknown fields: status = %d, want 201", status)
+	}
+
+	// 3. PUT /api/v1/templates/{name} with an unknown field must 400.
+	status, _ = b.doRaw(t, "PUT", "/api/v1/templates/clean-tpl", `{
+		"id_pattern": "shouldnt be allowed here",
+		"tasks": [{"title":"x"}]
+	}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("template update with unknown field: status = %d, want 400", status)
+	}
+
+	// 4. POST /api/v1/groups with an unknown field must 400.
+	status, _ = b.doRaw(t, "POST", "/api/v1/groups", `{
+		"name": "strict-grp",
+		"projects": ["p1"],
+		"color": "blue"
+	}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("group create with unknown field: status = %d, want 400", status)
+	}
+
+	// 5. POST /api/v1/groups without unknown fields still works (control).
+	status, _ = b.doRaw(t, "POST", "/api/v1/groups", `{
+		"name": "clean-grp",
+		"projects": ["p1"]
+	}`)
+	if status != http.StatusCreated {
+		t.Fatalf("group create without unknown fields: status = %d, want 201", status)
+	}
+
+	// 6. PUT /api/v1/groups/{name} with an unknown field must 400.
+	status, _ = b.doRaw(t, "PUT", "/api/v1/groups/clean-grp", `{
+		"projects": ["p1","p2"],
+		"favorite": true
+	}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("group update with unknown field: status = %d, want 400", status)
+	}
+}
+
 func TestBlocksAPI_CreateTemplateDuplicate(t *testing.T) {
 	b := newBlocksTestServer(t)
 	b.mustCreateTemplate(t, "dup-tpl")
