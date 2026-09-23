@@ -309,6 +309,17 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 // fixture carries production's own text); the remaining eight reuse that exact
 // captured text, because each real drain tick costs 1 + gatewayRetryMaxAttempts
 // POSTs with backoff.
+//
+// KNOWN FLAKE — see INT-CI-007 (2026-09-23, tick #670). The CI race-detector
+// run 35848734429 on chore(board) 809b352d (2026-09-23 10:25Z) reported a
+// 33.58s timeout here with a companion "SLOT: timeout waiting for free slot --
+// dropping advr08-dropped" line. Local re-run with the same race-detector at
+// -count=5: 0 fails in 37.3s; plain -count=10: 0 fails in 71.2s. The shape
+// matches the FND-002 load-only class already documented on gap143PollCooldown
+// (lines ~186-191 above): a CI-runner-load artifact, NOT a deterministic
+// production-code race. The test assertion is unchanged; if the failure shape
+// changes (different companion log line, or a non-33s timeout) re-classify
+// before treating it as a regression.
 func TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain(t *testing.T) {
 	db := newTestDB(t)
 	const (
