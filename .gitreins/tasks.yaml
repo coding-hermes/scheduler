@@ -4024,3 +4024,16 @@ tasks:
   status: complete
   created_at: '2026-09-23T11:37:04.623526+00:00'
   completed_at: '2026-09-23T11:40:10.217900+00:00'
+- id: RELEASE-010
+  title: CHANGELOG [Unreleased] rollover for SCHED-GAP-205-A (commit 4aaa486c, zero-assistant
+    completion gate)
+  criteria:
+  - CHANGELOG.md [Unreleased] section now contains a SCHED-GAP-205-A entry describing
+    the gateway zero-assistant completion gate fix landed in commit 4aaa486c; entry
+    follows the established heading/bullet/file-backtick convention used by sibling
+    entries (SCHED-GAP-218, SCHED-GAP-221, SCHED-GAP-223, SCHED-PERF-006); the row's
+    release-prep-blocking gap is closed so v1.5.0 tag push is no longer refused on
+    the version-authority gate (RELEASE-006) for the empty [Unreleased] body
+  status: complete
+  created_at: '2026-09-23T12:45:55.386068+00:00'
+  completed_at: '2026-09-23T12:46:34.830099+00:00'
