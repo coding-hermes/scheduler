@@ -1015,7 +1015,14 @@ func TestBlocksAPI_DeployPerProjectFailureDoesNotAbortBatch(t *testing.T) {
 	if got := out["part-good"]["status"]; got != "appended" {
 		t.Errorf("part-good status = %v, want appended (%v)", got, out["part-good"]["reason"])
 	}
-	for _, project := range []string{"part-noboard", "part-gone", "part-unknown"} {
+	// SCHED-GAP-223: part-noboard auto-inits its board on the live deploy
+	// path, so it now appends instead of erroring. The remaining failures
+	// (part-gone missing workdir, part-unknown unknown project) still
+	// exercise the batch-continues-past-errors contract.
+	if got := out["part-noboard"]["status"]; got != "appended" {
+		t.Errorf("part-noboard status = %v, want appended (auto-init, reason: %v)", got, out["part-noboard"]["reason"])
+	}
+	for _, project := range []string{"part-gone", "part-unknown"} {
 		o := out[project]
 		if o == nil {
 			t.Fatalf("no outcome for %s", project)
@@ -1033,11 +1040,11 @@ func TestBlocksAPI_DeployPerProjectFailureDoesNotAbortBatch(t *testing.T) {
 	if s := summaryInt(t, resp, "projects"); s != 4 {
 		t.Errorf("summary.projects = %d, want 4", s)
 	}
-	if s := summaryInt(t, resp, "appended"); s != 1 {
-		t.Errorf("summary.appended = %d, want 1", s)
+	if s := summaryInt(t, resp, "appended"); s != 2 {
+		t.Errorf("summary.appended = %d, want 2 (good + auto-init noboard)", s)
 	}
-	if s := summaryInt(t, resp, "errors"); s != 3 {
-		t.Errorf("summary.errors = %d, want 3", s)
+	if s := summaryInt(t, resp, "errors"); s != 2 {
+		t.Errorf("summary.errors = %d, want 2 (gone + unknown)", s)
 	}
 	// The healthy member really got its rows despite the other failures.
 	if got := len(fileLines(t, goodBoard)); got != 2 {

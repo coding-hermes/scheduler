@@ -178,21 +178,51 @@ func TestAppendTasksMissingWorkdir(t *testing.T) {
 	}
 }
 
-func TestAppendTasksNoBoard(t *testing.T) {
+func TestAppendTasksAutoInitsBoard(t *testing.T) {
+	// SCHED-GAP-223: live deploys auto-initialize an empty board file on
+	// a workdir that has no .coding-hermes/board/tasks.jsonl. The flow:
+	// fresh workdir → POST /projects → POST /groups/{n}/deploy succeeds
+	// without the operator having to mkdir+touch the JSONL.
 	rows := deployRows(sampleTemplate(), "alpha", "20260903", "grp")
 	wd := t.TempDir() // exists, but no .coding-hermes/board/tasks.jsonl
-	if _, err := AppendTasks(wd, rows); !errors.Is(err, ErrNoBoard) {
-		t.Fatalf("no-board err = %v, want ErrNoBoard", err)
+	res, err := AppendTasks(wd, rows)
+	if err != nil {
+		t.Fatalf("AppendTasks on boardless workdir err = %v, want nil (auto-init)", err)
+	}
+	if res.Skipped || len(res.Appended) != len(rows) {
+		t.Fatalf("AppendTasks res = %+v, want Appended=%d", res, len(rows))
+	}
+	// The board must now exist with exactly len(rows) task rows.
+	path := boardTasksPath(wd)
+	lines := readBoardLines(t, path)
+	if len(lines) != len(rows) {
+		t.Fatalf("after auto-init board has %d lines, want %d", len(lines), len(rows))
+	}
+	// Each line should parse as a BoardTaskRow with the planned id.
+	for i, line := range lines {
+		var got BoardTaskRow
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatalf("line %d: %v", i, err)
+		}
+		if got.ID != rows[i].ID {
+			t.Errorf("line %d id = %q, want %q", i, got.ID, rows[i].ID)
+		}
 	}
 }
 
 func TestPlanAppendIsReadOnly(t *testing.T) {
-	// Dry-run planning must never create or mutate the board.
+	// Dry-run planning must never create or mutate the board. The
+	// auto-init path lives in AppendTasks, NOT planAppend, so a dry run
+	// still surfaces ErrNoBoard to the operator and creates no files
+	// (SCHED-GAP-223).
 	wd := t.TempDir() // no board at all
 	rows := deployRows(sampleTemplate(), "alpha", "20260903", "grp")
 	skipped, _, err := planAppend(wd, rows)
-	if err == nil || skipped {
-		t.Fatalf("planAppend on boardless workdir = skipped=%v err=%v, want error", skipped, err)
+	if !errors.Is(err, ErrNoBoard) {
+		t.Fatalf("planAppend on boardless workdir err = %v, want ErrNoBoard", err)
+	}
+	if skipped {
+		t.Fatalf("planAppend on boardless workdir skipped = true, want false")
 	}
 	if _, statErr := os.Stat(filepath.Join(wd, ".coding-hermes")); !os.IsNotExist(statErr) {
 		t.Fatalf("planAppend created files: %v", statErr)
@@ -215,6 +245,43 @@ func TestPlanAppendIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestEnsureEmptyBoard(t *testing.T) {
+	// SCHED-GAP-223.
+	wd := t.TempDir()
+	path := boardTasksPath(wd)
+	if err := ensureEmptyBoard(path); err != nil {
+		t.Fatalf("ensureEmptyBoard on missing path err = %v, want nil", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("ensureEmptyBoard did not create the file: %v", err)
+	}
+	if fi.Size() != 0 {
+		t.Errorf("ensureEmptyBoard file size = %d, want 0", fi.Size())
+	}
+	// Parent dirs were created.
+	if fi2, err := os.Stat(filepath.Dir(path)); err != nil || !fi2.IsDir() {
+		t.Errorf("parent dir not created: err=%v isDir=%v", err, fi2 != nil && fi2.IsDir())
+	}
+	// Idempotent: re-running on an existing file is a no-op and does not
+	// truncate existing content.
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("PRESERVE-ME\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureEmptyBoard(path); err != nil {
+		t.Fatalf("ensureEmptyBoard on existing file err = %v, want nil", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "PRESERVE-ME\n" {
+		t.Errorf("ensureEmptyBoard clobbered existing content: %q", got)
+	}
+}
 func TestTaskIDSubstitution(t *testing.T) {
 	id, prefix := taskID("{TEMPLATE}-{DATE}-{PROJECT}-{TASK}", "TPL", "my-proj", "20260903", 1)
 	if id != "TPL-20260903-my-proj-01" {

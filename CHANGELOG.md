@@ -56,6 +56,23 @@ range cited under its heading. The rollover itself is done by
   battery as step 2 of 3 (between the board-only check and the pytest
   fixture battery); CI green requires all three to pass.
 
+### Deploy auto-initializes a missing JSONL board (SCHED-GAP-223)
+
+- **`internal/blocks/board.go`** — `AppendTasks` now auto-initializes an
+  empty `<workdir>/.coding-hermes/board/tasks.jsonl` (creating parent
+  dirs as needed) on a live deploy, so the canonical onboarding flow
+  `POST /projects` (empty workdir) → `POST /groups/{n}/deploy` succeeds
+  without the operator having to mkdir+touch the JSONL by hand. The
+  helper `ensureEmptyBoard` is idempotent and does NOT clobber an
+  existing board. **Dry runs still surface `ErrNoBoard`** so a `dry_run`
+  report tells the operator the pre-init state — only the live append
+  path auto-inits. Real failure modes (workdir missing, read errors)
+  propagate unchanged. RED/GREEN proof: `TestAppendTasksAutoInitsBoard`
+  + `TestPlanAppendIsReadOnly` + `TestEnsureEmptyBoard` (3 new tests
+  in `internal/blocks/`); `TestDeployBatchContinuesPastErrors` and
+  `TestBlocksAPI_*` updated to reflect the new appended count on the
+  previously-errored `noboard` member.
+
 ## [1.4.0] — 2026-09-22
 
 Entries accumulated here after `1.0.0`. **This section shipped as part of

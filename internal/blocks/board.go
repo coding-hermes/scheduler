@@ -3,6 +3,7 @@ package blocks
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,6 +154,32 @@ func boardTasksPath(workdir string) string {
 	return filepath.Join(workdir, ".coding-hermes", "board", "tasks.jsonl")
 }
 
+// ensureEmptyBoard creates the canonical board file (and its parent
+// directories) when it is missing. Used by AppendTasks to auto-initialize a
+// board for a fresh project workdir so the first live deploy succeeds
+// without the operator having to mkdir+touch the JSONL by hand. Idempotent:
+// re-running on a workdir that already has a board is a no-op (the file is
+// left untouched). Returns nil on success or when the file already exists.
+// SCHED-GAP-223.
+func ensureEmptyBoard(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil // already present
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil // raced: another caller just created it
+		}
+		return err
+	}
+	return f.Close()
+}
+
 // boardRow is the minimal view of an existing board row needed by the
 // idempotency scan.
 type boardRow struct {
@@ -276,7 +303,22 @@ func planAppend(workdir string, rows []BoardTaskRow) (skipped bool, skipReason s
 // same-day re-deploy after completion would otherwise duplicate ids).
 func AppendTasks(workdir string, rows []BoardTaskRow) (AppendTasksResult, error) {
 	var res AppendTasksResult
+	// SCHED-GAP-223: live deploys auto-initialize an empty board file when
+	// the workdir exists but has no .coding-hermes/board/tasks.jsonl. The
+	// canonical onboarding flow is: create project with an empty workdir
+	// via POST /api/v1/projects, then deploy a template — the operator
+	// should not have to mkdir/touch the JSONL by hand. planAppend stays
+	// strict (a dry run must still report "no board" so the operator sees
+	// the pre-init state), so on the typed ErrNoBoard we ensure the file
+	// here and re-plan. Other error kinds (workdir missing, read failure)
+	// propagate unchanged.
 	skipped, reason, err := planAppend(workdir, rows)
+	if errors.Is(err, ErrNoBoard) {
+		if initErr := ensureEmptyBoard(boardTasksPath(workdir)); initErr != nil {
+			return res, fmt.Errorf("auto-init board for %s: %w (original: %v)", workdir, initErr, err)
+		}
+		skipped, reason, err = planAppend(workdir, rows)
+	}
 	if err != nil {
 		return res, err
 	}
