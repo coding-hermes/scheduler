@@ -139,7 +139,14 @@ func TestGenerate_EmptyDatabase(t *testing.T) {
 	}
 }
 
-// TestGenerate_BudgetZero verifies percent(0, total) returns 0 and doesn't divide by zero.
+// TestGenerate_BudgetZero verifies an empty fleet renders the weight panel
+// without dividing by zero (SCHED-GAP-1583).
+//
+// This test previously asserted `width:0%`, because the panel rendered a fill
+// whose width came from percent(0, 100). That fill is gone: the two numbers are
+// not a ratio (see the template comment in generator.go), so the panel now
+// states them as labelled facts and the empty case is asserted as a VALUE rather
+// than as a width.
 func TestGenerate_BudgetZero(t *testing.T) {
 	db := newTestDB(t)
 	g := dashboard.NewGenerator(db, nil)
@@ -150,9 +157,9 @@ func TestGenerate_BudgetZero(t *testing.T) {
 	}
 	out := buf.String()
 
-	// No projects → BudgetUsed=0. percent(0, 100) = 0. Should not panic on /0.
-	if !strings.Contains(out, `width:0%`) {
-		t.Errorf("expected width:0%% for empty budget, got: %s", snippet(out, "budget-fill"))
+	// No projects → enabled weight 0. Must render 0 and not panic on a zero total.
+	if !strings.Contains(out, "Fleet weight — sum of enabled lanes</span><span>0</span>") {
+		t.Errorf("expected fleet weight 0 in the panel, got: %s", snippet(out, "budget-bar"))
 	}
 }
 
@@ -245,11 +252,13 @@ func TestGenerate_WithProjects(t *testing.T) {
 	}
 }
 
-// TestGenerate_PercentFunction_ZeroTotal verifies percent handles total=0.
-// We test this via the dashboard's Generate path with BudgetUsed=0, BudgetTotal=100
-// → percent(0, 100) = 0 → width:0%.
-// The total=0 case can't easily be exercised through Generate (BudgetTotal is hardcoded
-// to 100), but it's covered indirectly: percent(used, total) where total=0 returns 0.
+// TestGenerate_PercentFunction_ZeroTotal verifies the weight panel renders its
+// two quantities as labelled facts rather than as a ratio (SCHED-GAP-1583).
+//
+// It replaces an assertion on the literal "0/100" that the old fill rendered. The
+// percent helper's own clamp arms — including the total==0 case this test could
+// previously only reach indirectly — are covered directly in
+// weight_panel_clamp_test.go (TestPctClampsTo100).
 func TestGenerate_PercentFunction_ZeroTotal(t *testing.T) {
 	db := newTestDB(t)
 	g := dashboard.NewGenerator(db, nil)
@@ -257,11 +266,13 @@ func TestGenerate_PercentFunction_ZeroTotal(t *testing.T) {
 	if err := g.Generate(&buf); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	// Empty DB → 0/0 for Enabled/Total. The EnabledProjects card value rendering
-	// uses a different path, but the budget bar uses percent.
 	out := buf.String()
-	if !strings.Contains(out, "0/100") {
-		t.Errorf("expected budget 0/100, got: %s", snippet(out, "budget-bar"))
+	// Empty DB → enabled weight 0, against the documented per-tick budget of 100.
+	if !strings.Contains(out, "Fleet weight — sum of enabled lanes") {
+		t.Errorf("missing fleet-weight label, got: %s", snippet(out, "budget-bar"))
+	}
+	if !strings.Contains(out, "Per-tick weight budget</span><span>100</span>") {
+		t.Errorf("expected the per-tick budget 100 as a labelled value, got: %s", snippet(out, "budget-bar"))
 	}
 }
 

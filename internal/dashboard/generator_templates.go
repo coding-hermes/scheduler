@@ -19,6 +19,33 @@ func mustReadStatic(path string) []byte {
 	return data
 }
 
+// pct renders a percentage CLAMPED to [0,100] (SCHED-GAP-1583).
+//
+// Callers include the fleet progress bars and (historically) the weight panel.
+// Their numerator can legitimately exceed their denominator — the weight panel
+// compared the fleet-wide sum of every enabled lane's weight against the
+// PER-TICK packing budget, a comparison that can never be satisfied — and the
+// unclamped form emitted widths like width:1218%, running the fill far outside
+// its track and card.
+//
+// Clamping here, rather than at each render site, protects every caller at
+// once. A caller that genuinely wants to express an over-100 condition must not
+// use this helper: it should render that state explicitly instead of as an
+// overflowing width.
+func pct(used, total int) int {
+	if total == 0 {
+		return 0
+	}
+	v := used * 100 / total
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
 // loadTemplates parses every embedded template, applies the shared func map,
 // and registers each {{define "..."}} block by name. Returns the parsed set.
 func loadTemplates(seam *clock.Seam) *template.Template {
@@ -32,12 +59,7 @@ func loadTemplates(seam *clock.Seam) *template.Template {
 		clk = clock.Real()
 	}
 	funcs := template.FuncMap{
-		"percent": func(used, total int) int {
-			if total == 0 {
-				return 0
-			}
-			return used * 100 / total
-		},
+		"percent": pct,
 		"shortTime": func(s string) string {
 			if s == "" {
 				return "—"

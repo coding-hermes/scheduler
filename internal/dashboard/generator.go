@@ -528,14 +528,21 @@ const pageTemplate = `{{template "head" .}}
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
 <div class="card"><div class="label">Active Ticks</div><div class="value">{{.ActiveTicks}}</div></div>
-<div class="card"><div class="label">Budget Used</div><div class="value">{{.BudgetUsed}}/{{.BudgetTotal}}</div></div>
+<div class="card"><div class="label">Fleet Weight</div><div class="value">{{.BudgetUsed}}</div></div>
 {{if .CostTodayTotal}}<div class="card"><div class="label">Cost Today</div><div class="value">${{printf "%.2f" .CostTodayTotal}}</div></div>{{end}}
 {{if .CostWeekTotal}}<div class="card"><div class="label">Cost 7d</div><div class="value">${{printf "%.2f" .CostWeekTotal}}</div></div>{{end}}
 </div>
 
+{{/* SCHED-GAP-1583: these two numbers are NOT a ratio. BudgetUsed is the fleet-wide sum
+     of every enabled lane's weight; BudgetTotal is the PER-TICK packing budget. The packer
+     spends that budget once per cycle, so a fleet-wide sum can never sit under it — the old
+     "Budget Used 1218/100" fill implied a proportion that does not exist and (unclamped)
+     overflowed the card at width:1218%. The two facts are therefore shown LABELLED rather
+     than as a misleading fill. Choosing what (if anything) should replace the fill is the
+     row's remaining scope decision — it is deliberately not invented here. */}}
 <div class="budget-bar">
-<div class="budget-label"><span>Weight Budget</span><span>{{.BudgetUsed}}/{{.BudgetTotal}}</span></div>
-<div class="budget-fill" style="width:{{percent .BudgetUsed .BudgetTotal}}%"></div>
+<div class="budget-label"><span>Fleet weight — sum of enabled lanes</span><span>{{.BudgetUsed}}</span></div>
+<div class="budget-label"><span>Per-tick weight budget</span><span>{{.BudgetTotal}}</span></div>
 </div>
 
 <h2>Projects</h2>
