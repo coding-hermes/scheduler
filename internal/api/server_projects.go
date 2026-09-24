@@ -229,8 +229,19 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string) {
-	ctx := context.Background()
+	// SCHED-GAP-1575-B2: detail handler for /api/v1/projects/{name} shares the
+	// single serialized SQLite connection (SetMaxOpenConns(1)) with the list
+	// surface, so a stalled database.GetProject / getLatestTick would hang the
+	// dashboard detail page the same way /status hung. Mirror the parent
+	// pattern: deadline from r.Context() (never a bare context.Background()),
+	// obs.enter / obs.check around each DB call, 504 on stall naming the step.
+	ctx, obs := s.newRequestDeadline(r.Context(), "project", s.readTimeout())
+	defer obs.finish()
+	obs.enter("GetProject")
 	p, err := database.GetProject(ctx, s.db, name)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "project not found")
@@ -239,7 +250,11 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string)
 		writeError(w, 500, err.Error())
 		return
 	}
+	obs.enter("getLatestTick")
 	tick, _ := getLatestTick(ctx, s.db, name)
+	if !obs.check(w, ctx) {
+		return
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"project":     p,
 		"latest_tick": tick,

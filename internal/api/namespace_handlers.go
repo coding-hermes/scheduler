@@ -111,8 +111,19 @@ func (s *Server) handleNamespaceByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getNamespace(w http.ResponseWriter, r *http.Request, id string) {
-	ctx := context.Background()
+	// SCHED-GAP-1575-B2: detail handler for /api/v1/namespaces/{name} shares
+	// the single serialized SQLite connection (SetMaxOpenConns(1)) with the
+	// list surface. A stalled database.GetNamespace would hang the dashboard
+	// detail page the same way /status hung. Mirror the parent pattern:
+	// deadline from r.Context() (never a bare context.Background()), 504 on
+	// stall naming the step.
+	ctx, obs := s.newRequestDeadline(r.Context(), "namespace", s.readTimeout())
+	defer obs.finish()
+	obs.enter("GetNamespace")
 	ns, err := database.GetNamespace(ctx, s.db, id)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "namespace not found")
