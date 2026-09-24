@@ -318,7 +318,7 @@ func TestGenerateHealth_ProbesGatewayAndAutoRefreshes(t *testing.T) {
 		t.Fatalf("GenerateHealth: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"System Health", "Daemon", "Gateway", "connected", "Uptime", "Goroutines", "Memory", `hx-get="/health"`, `hx-trigger="every 10s"`} {
+	for _, want := range []string{"System Health", "Daemon", "Gateway", "connected", "Uptime", "Goroutines", "Memory", `hx-get="/health"`, `hx-trigger="autorefresh from:body"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("health page missing %q", want)
 		}

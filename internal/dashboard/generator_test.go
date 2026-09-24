@@ -128,7 +128,7 @@ func TestGenerate_EmptyDatabase(t *testing.T) {
 	out := buf.String()
 
 	// Must contain core HTML scaffolding.
-	for _, want := range []string{"<!DOCTYPE html>", "<title>Fleet Overview · Coding Hermes Fleet</title>", "Generated ", "auto-refresh 60s", "sidebar"} {
+	for _, want := range []string{"<!DOCTYPE html>", "<title>Fleet Overview · Coding Hermes Fleet</title>", "Generated ", "sidebar", `id="rbSel"`, `id="rbCd"`, `hx-trigger="autorefresh from:body"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -180,7 +180,10 @@ func TestGenerate_GeneratedAtIsRFC3339(t *testing.T) {
 		t.Fatal("missing 'Generated ' marker")
 	}
 	rest := out[idx+len("Generated "):]
-	end := strings.Index(rest, " ")
+	// The timestamp runs to the end of its <div>. It used to be followed by a
+	// cadence suffix (" · auto-refresh 60s"), which is exactly what SCHED-GAP-1606
+	// removed, so cut on the closing tag rather than on a space.
+	end := strings.Index(rest, "</div>")
 	if end < 0 {
 		t.Fatal("malformed 'Generated' line")
 	}

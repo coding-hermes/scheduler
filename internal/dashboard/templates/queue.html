@@ -1,11 +1,11 @@
 {{define "queue"}}{{template "head" .}}
 {{template "sidebar" "queue"}}
-<div class="main" id="main">
+<div class="main" id="main" hx-get="/queue" hx-trigger="autorefresh from:body" hx-select="#main" hx-swap="outerHTML">
 <div class="page-head">
 <h1>Evaluation Queue</h1>
 <div class="actions"><span class="signal"><span class="dot"></span> {{.Count}} eligible</span></div>
 </div>
-<div class="meta">Sorted by urgency (descending) · auto-refresh 30s</div>
+<div class="meta">Sorted by urgency (descending)</div>
 
 <div class="cards">
 <div class="card"><div class="label">Eligible</div><div class="value">{{.Count}}</div></div>
@@ -28,7 +28,6 @@
 </tbody>
 </table>
 </div>
-<p class="meta" style="margin-top:16px"><span hx-get="/queue" hx-trigger="every 30s" hx-swap="none">updating in 30s...</span></p>
 </div>
 {{template "ready_js"}}
 </body>
