@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/coding-hermes/scheduler/internal/dashboard"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // SCHED-GAP-1606. Operator request: the auto-refresh interval must be changeable
@@ -30,7 +31,7 @@ func TestAutoRefresh_ControlOnEveryPageAndNoHardcodedCadence(t *testing.T) {
 		{"overview", gen.Generate},
 		{"health", gen.GenerateHealth},
 		{"queue", gen.GenerateQueue},
-		{"ticks", func(w io.Writer) error { return gen.GenerateTickHistory(w, 1) }},
+		{"ticks", func(w io.Writer) error { return gen.GenerateTickHistory(w, 1, database.TickFilter{}) }},
 	}
 
 	for _, p := range pages {
@@ -77,7 +78,7 @@ func TestAutoRefresh_PollingUsesTheSharedEvent(t *testing.T) {
 		{"overview", gen.Generate},
 		{"health", gen.GenerateHealth},
 		{"queue", gen.GenerateQueue},
-		{"ticks", func(w io.Writer) error { return gen.GenerateTickHistory(w, 1) }},
+		{"ticks", func(w io.Writer) error { return gen.GenerateTickHistory(w, 1, database.TickFilter{}) }},
 	}
 
 	for _, c := range cases {

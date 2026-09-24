@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/agentlog"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -204,6 +205,63 @@ type TickHistoryData struct {
 	PreviousPage int
 	HasNext      bool
 	NextPage     int
+	// Search/filter state (SCHED-GAP-1593). Filters are server-side; the
+	// empty strings mean "no filter". Filtered=false renders the plain
+	// history heading.
+	Filtered       bool
+	FilterQ        string   // substring match against tick id / project name
+	FilterP        string   // exact project (lane) name
+	FilterS        string   // exact status
+	FilterO        string   // exact outcome
+	StatusOptions  []string // the tick status vocabulary, for the dropdown
+	OutcomeOptions []string // the tick outcome vocabulary, for the dropdown
+	ProjectOptions []string // lanes seen in the tick table, for the dropdown
+	// BaseQS is the filter query string WITHOUT the page parameter —
+	// pagination links append their own ?page=N so filtering survives
+	// paging.
+	BaseQS string
+}
+
+// TickEventRow is one scheduler log event on the tick detail page.
+type TickEventRow struct {
+	ID        int64
+	Severity  string
+	Component string
+	Message   string
+	CreatedAt string
+	Matched   bool // event message explicitly names this tick's id
+}
+
+// TickDetailData holds everything /ticks/{id} renders. The agent-side
+// fields carry the honest-degradation contract: AgentStatus says exactly
+// why the transcript is absent when it is (SCHED-GAP-1593 AC 4 — an
+// operator must never mistake "could not fetch" for "nothing generated").
+type TickDetailData struct {
+	Title       string
+	GeneratedAt string
+	Tick        *database.Tick
+
+	// GatewayTrace state.
+	HasTrace      bool
+	TraceModel    string
+	TraceProvider string
+	TraceSession  string
+	TraceElapsedS int
+	TraceEvents   int
+	TraceAttempts int
+	TraceClass    string
+
+	// Agent transcript state (from the trace's session_id → state.db).
+	AgentStatus  string // "resolved" | "session-not-found" | "unavailable" | "no-trace"
+	AgentDetail  string // explicit human explanation when status != resolved
+	AgentSession *agentlog.SessionInfo
+	AgentTurns   []agentlog.Turn
+	AgentCapped  bool
+
+	// Scheduler log events around the tick window.
+	Events      []TickEventRow
+	EventsTotal int
+	HasMore     bool
 }
 
 // NamespaceViewData holds namespace configuration, projects, and recent

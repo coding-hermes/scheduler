@@ -1,19 +1,40 @@
 {{define "tick_history_partial"}}<div class="pagination" id="tick-history"
-     hx-get="/ticks?page={{.Page}}"
+     hx-get="/ticks?page={{.Page}}{{if .BaseQS}}&{{.BaseQS}}{{end}}"
      hx-swap="outerHTML"
      hx-target="#tick-history">
-{{if .HasPrevious}}<a class="page-btn" href="/ticks?page={{.PreviousPage}}" hx-get="/ticks?page={{.PreviousPage}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+{{if .HasPrevious}}<a class="page-btn" href="/ticks?page={{.PreviousPage}}{{if .BaseQS}}&{{.BaseQS}}{{end}}" hx-get="/ticks?page={{.PreviousPage}}{{if .BaseQS}}&{{.BaseQS}}{{end}}" hx-target="#tick-history">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
 <span class="page-current">Page {{.Page}} / {{.TotalPages}}</span>
-{{if .HasNext}}<a class="page-btn" href="/ticks?page={{.NextPage}}" hx-get="/ticks?page={{.NextPage}}" hx-target="#tick-history">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+{{if .HasNext}}<a class="page-btn" href="/ticks?page={{.NextPage}}{{if .BaseQS}}&{{.BaseQS}}{{end}}" hx-get="/ticks?page={{.NextPage}}{{if .BaseQS}}&{{.BaseQS}}{{end}}" hx-target="#tick-history">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
 </div>{{end}}
 {{define "tick_history"}}{{template "head" .}}
 {{template "sidebar" "ticks"}}
-<div class="main" id="main" hx-get="/ticks?page={{.Page}}" hx-trigger="autorefresh from:body" hx-select="#main" hx-swap="outerHTML">
+<div class="main" id="main" hx-get="/ticks?page={{.Page}}{{if .BaseQS}}&{{.BaseQS}}{{end}}" hx-trigger="autorefresh from:body" hx-select="#main" hx-swap="outerHTML">
 <div class="page-head">
 <h1>Tick History</h1>
-<div class="actions"><span class="signal"><span class="dot"></span> {{.TotalTicks}} total</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> {{if .Filtered}}{{.TotalTicks}} match{{else}}{{.TotalTicks}} total{{end}}</span></div>
 </div>
-<div class="meta">Page {{.Page}} of {{.TotalPages}} · generated {{.GeneratedAt}}</div>
+<div class="meta">Page {{.Page}} of {{.TotalPages}} · generated {{.GeneratedAt}} · click a tick id to drill into its log events and agent output</div>
+
+{{/* SCHED-GAP-1593: server-side search/filter. A plain GET form (no htmx)
+     so it works identically with and without JS; the active filter is
+     carried through pagination via .BaseQS. */}}
+<form class="tick-filter" method="get" action="/ticks">
+<input type="search" name="q" value="{{.FilterQ}}" placeholder="search tick id or project…" aria-label="Search tick id or project">
+<select name="project" aria-label="Filter by project">
+<option value="">project: all</option>
+{{range .ProjectOptions}}<option value="{{.}}" {{if eq . $.FilterP}}selected{{end}}>{{.}}</option>{{end}}
+</select>
+<select name="status" aria-label="Filter by status">
+<option value="">status: all</option>
+{{range .StatusOptions}}<option value="{{.}}" {{if eq . $.FilterS}}selected{{end}}>{{.}}</option>{{end}}
+</select>
+<select name="outcome" aria-label="Filter by outcome">
+<option value="">outcome: all</option>
+{{range .OutcomeOptions}}<option value="{{.}}" {{if eq . $.FilterO}}selected{{end}}>{{.}}</option>{{end}}
+</select>
+<button type="submit">Apply</button>
+{{if .Filtered}}<a class="page-btn" href="/ticks">Clear</a>{{end}}
+</form>
 
 <div class="table-wrap">
 <table>
@@ -21,7 +42,7 @@
 <tbody>
 {{range .Ticks}}
 <tr>
-<td class="meta mono">{{.ID}}</td>
+<td class="meta mono"><a href="/ticks/{{.ID}}" title="open tick detail">{{.ID}}</a></td>
 <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
 <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else if eq .Status "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">{{.Status}}</span>{{end}}</td>
 <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
@@ -30,6 +51,9 @@
 <td class="num">{{.Commits}}</td>
 <td class="num">{{.FilesChanged}}</td>
 </tr>{{end}}
+{{if not .Ticks}}
+<tr><td colspan="8" class="meta">No ticks match the active filter{{if .Filtered}} — clear it to see the full history{{end}}.</td></tr>
+{{end}}
 </tbody>
 </table>
 </div>
@@ -43,6 +67,14 @@
 .page-btn:hover{background:var(--surface2);text-decoration:none}
 .page-btn.disabled{opacity:0.4;cursor:default}
 .page-current{color:var(--muted);font-size:0.82rem;padding:6px 12px}
+/* SCHED-GAP-1593: tick search/filter bar */
+.tick-filter{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 16px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:10px}
+.tick-filter input[type=search]{flex:1;min-width:200px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--fg);font-family:var(--mono);font-size:0.8rem;padding:7px 10px}
+.tick-filter input[type=search]:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+.tick-filter select{background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-family:var(--mono);font-size:0.78rem;padding:7px 8px;cursor:pointer}
+.tick-filter select:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+.tick-filter button{background:var(--signal);border:none;border-radius:7px;color:#0a0c11;font-weight:600;font-size:0.8rem;padding:7px 16px;cursor:pointer;font-family:var(--mono)}
+.tick-filter button:hover{background:var(--signal-hi)}
 </style>
 {{template "ready_js"}}
 </body>

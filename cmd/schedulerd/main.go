@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/agentlog"
 	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -738,6 +739,17 @@ func main() {
 	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
+	// SCHED-GAP-1593: the tick drill-down resolves gateway_trace.session_id
+	// into the agent's own state database to show what the agent generated.
+	// Default path matches the Hermes state database; opened lazily and
+	// read-only inside the dashboard (missing/unreachable degrades to an
+	// explicit notice, never a failed render). The agentlog package holds
+	// the read-only contract.
+	agentStatePath := strings.TrimSpace(os.Getenv("SCHEDULER_AGENT_STATE_DB"))
+	if agentStatePath == "" {
+		agentStatePath = os.ExpandEnv("$HOME/.hermes/state.db")
+	}
+	dashGen.SetAgentStateDB(agentlog.NewReader(agentStatePath))
 	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
 	// was built with — never an independent literal.
 	dashGen.SetWeightBudget(loop.WeightBudget())
@@ -793,7 +805,10 @@ func main() {
 		}
 	})
 
-	// Tick history page: /ticks (paginated, global tick log).
+	// Tick history page: /ticks (paginated, global tick log). Supports
+	// server-side search/filter (SCHED-GAP-1593): q (substring against tick
+	// id / project name), project, status, outcome — all optional, all
+	// preserved across pagination links.
 	// htmx polls return the #tick-history fragment only (HX-Request) — the
 	// full page must never be swapped into its own poller.
 	mux.HandleFunc("GET /ticks", func(w http.ResponseWriter, r *http.Request) {
@@ -803,14 +818,35 @@ func main() {
 				page = n
 			}
 		}
+		filter := database.TickFilter{
+			Query:   r.URL.Query().Get("q"),
+			Project: r.URL.Query().Get("project"),
+			Status:  r.URL.Query().Get("status"),
+			Outcome: r.URL.Query().Get("outcome"),
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		var err error
 		if r.Header.Get("HX-Request") != "" {
-			err = dashGen.GenerateTickHistoryPartial(w, page)
+			err = dashGen.GenerateTickHistoryPartial(w, page, filter)
 		} else {
-			err = dashGen.GenerateTickHistory(w, page)
+			err = dashGen.GenerateTickHistory(w, page, filter)
 		}
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Tick detail page: /ticks/{id} (SCHED-GAP-1593) — the tick's own row,
+	// its scheduler log events, and the agent's generated text resolved via
+	// gateway_trace.session_id → the agent state database (read-only).
+	mux.HandleFunc("GET /ticks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateTickDetail(w, id); err != nil {
+			if errors.Is(err, database.ErrTickNotFound) {
+				http.Error(w, "tick not found: "+id, http.StatusNotFound)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

@@ -1,0 +1,122 @@
+{{define "tick_detail"}}{{template "head" .}}
+{{template "sidebar" "ticks"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>{{.Tick.ID}}</h1>
+<div class="actions">
+<a class="page-btn" href="/projects/{{.Tick.ProjectName}}">lane: {{.Tick.ProjectName}}</a>
+<a class="page-btn" href="/ticks">← all ticks</a>
+</div>
+</div>
+<div class="meta">generated {{.GeneratedAt}} · scheduler record + agent transcript for this one tick</div>
+
+{{/* ── The tick's own row (SCHED-GAP-1593 AC 2) ── */}}
+<h2>Tick</h2>
+<div class="table-wrap">
+<table>
+<tbody>
+<tr><th>Project</th><td><a href="/projects/{{.Tick.ProjectName}}">{{.Tick.ProjectName}}</a></td></tr>
+<tr><th>Status</th><td>{{if eq .Tick.Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Tick.Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Tick.Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else if eq .Tick.Status "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">{{.Tick.Status}}</span>{{end}}</td></tr>
+<tr><th>Outcome</th><td>{{if .Tick.Outcome}}{{.Tick.Outcome}}{{else}}<span class="meta">—</span>{{end}}</td></tr>
+<tr><th>Spawned</th><td class="meta mono">{{if .Tick.SpawnedAt}}{{.Tick.SpawnedAt}}{{else}}—{{end}}</td></tr>
+<tr><th>Completed</th><td class="meta mono">{{if .Tick.CompletedAt}}{{.Tick.CompletedAt}}{{else}}<span class="meta">—{{if eq .Tick.Status "running"}} (still running){{end}}</span>{{end}}</td></tr>
+<tr><th>Duration</th><td>{{if eq .Tick.Status "running"}}{{liveDur .Tick.SpawnedAt}}{{else if .Tick.CompletedAt}}{{duration .Tick.SpawnedAt .Tick.CompletedAt}}{{else}}<span class="meta">—</span>{{end}}</td></tr>
+<tr><th>Cost</th><td class="num">${{printf "%.4f" .Tick.CostUSD}}{{if .Tick.CostSource}} <span class="meta">({{.Tick.CostSource}})</span>{{end}}</td></tr>
+<tr><th>Commits / files</th><td class="num">{{.Tick.Commits}} / {{.Tick.FilesChanged}}</td></tr>
+<tr><th>Tokens in / out</th><td class="num">{{.Tick.TokensIn}} / {{.Tick.TokensOut}}</td></tr>
+{{if .Tick.Error}}<tr><th>Error</th><td class="status-fail">{{.Tick.Error}}</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+
+{{/* ── Gateway trace: the bridge to the agent's session ── */}}
+<h2>Gateway trace</h2>
+{{if .HasTrace}}
+<div class="table-wrap">
+<table>
+<tbody>
+<tr><th>Model / provider</th><td class="mono">{{if .TraceModel}}{{.TraceModel}}{{else}}—{{end}} @ {{if .TraceProvider}}{{.TraceProvider}}{{else}}—{{end}}</td></tr>
+<tr><th>Classification</th><td>{{if .TraceClass}}{{.TraceClass}}{{else}}—{{end}}</td></tr>
+<tr><th>Elapsed</th><td class="num">{{if .TraceElapsedS}}{{.TraceElapsedS}}s{{else}}—{{end}}</td></tr>
+<tr><th>SSE events / attempts</th><td class="num">{{.TraceEvents}} / {{.TraceAttempts}}</td></tr>
+<tr><th>Agent session</th><td class="mono">{{if .TraceSession}}{{.TraceSession}}{{else}}<span class="meta">none recorded</span>{{end}}</td></tr>
+</tbody>
+</table>
+</div>
+{{else}}
+<p class="degraded">No gateway trace recorded on this tick{{if .Tick.Error}} — it failed before a gateway POST completed{{else}} — it predates per-POST tracing{{end}}.</p>
+{{end}}
+
+{{/* ── The agent's generated text (SCHED-GAP-1593 AC 2 + AC 4).
+       The four states below are EXHAUSTIVE and each says exactly why the
+       transcript is present or absent — never an empty box. ── */}}
+<h2>Agent output</h2>
+{{if eq .AgentStatus "resolved"}}
+<div class="meta transcript-meta">
+session <span class="mono">{{.AgentSession.ID}}</span>
+{{if .AgentSession.Model}} · model <span class="mono">{{.AgentSession.Model}}</span>{{end}}
+{{if .AgentSession.Provider}} · provider <span class="mono">{{.AgentSession.Provider}}</span>{{end}}
+{{if .AgentCapped}} · showing the first {{len .AgentTurns}} turns — MORE TURNS EXIST in the session log{{end}}
+</div>
+<div class="transcript">
+{{range .AgentTurns}}
+<div class="turn turn-{{.Role}}">
+<div class="turn-head"><span class="turn-role role-{{.Role}}">{{if .ToolName}}{{.Role}} · {{.ToolName}}{{else}}{{.Role}}{{end}}</span><span class="turn-time mono">{{.Timestamp.Format "15:04:05"}}</span></div>
+{{if or (eq .Role "assistant") (eq .Role "user")}}<div class="turn-text">{{.Content}}</div>{{else}}<pre class="turn-text turn-tool"><code>{{.Content}}</code></pre>{{end}}
+{{if .Truncated}}<div class="turn-truncated">[this turn was truncated for display — the full text is in the session log]</div>{{end}}
+</div>
+{{end}}
+{{if not .AgentTurns}}<p class="degraded">Session resolved, but it contains NO message rows — the agent started but produced nothing retrievable.</p>{{end}}
+</div>
+{{else if eq .AgentStatus "session-not-found"}}
+<p class="degraded">⚠ AGENT SESSION NOT FOUND — {{.AgentDetail}}</p>
+{{else if eq .AgentStatus "unavailable"}}
+<p class="degraded">⚠ AGENT STATE DATABASE UNAVAILABLE — {{.AgentDetail}}</p>
+{{else}}
+<p class="degraded">⚠ NO AGENT TRANSCRIPT AVAILABLE — {{.AgentDetail}}</p>
+{{end}}
+
+{{/* ── Scheduler log events around this tick ── */}}
+<h2>Scheduler log events</h2>
+{{if .Events}}
+<p class="meta">{{len .Events}} event(s) inside this tick's window (±60s) or explicitly naming it{{if .HasMore}} — the scan window ended before any match; older events were not scanned{{end}}.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>When</th><th>Severity</th><th>Component</th><th>Message</th></tr></thead>
+<tbody>
+{{range .Events}}
+<tr class="{{if .Matched}}ev-match{{end}}">
+<td class="meta mono">{{.CreatedAt}}</td>
+<td>{{if eq .Severity "HIGH"}}<span class="pill warn">{{.Severity}}</span>{{else if eq .Severity "CRITICAL"}}<span class="pill fail">{{.Severity}}</span>{{else}}<span class="meta">{{.Severity}}</span>{{end}}</td>
+<td class="meta">{{.Component}}</td>
+<td>{{.Message}}{{if .Matched}} <span class="pill ok" title="this event names the tick id">tick</span>{{end}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
+{{else}}
+<p class="degraded">No scheduler log events fall inside this tick's window (±60s) and none of the scanned recent events name this tick id.{{if not .Tick.CompletedAt}} Note: the tick has no completed timestamp, so the window is open-ended from spawn.{{end}} The scheduler's event log carries no tick-id column — selection is a window scan, so events older than the scanned tail are out of reach.</p>
+{{end}}
+
+<style>
+/* SCHED-GAP-1593: tick drill-down */
+.degraded{background:var(--surface);border:1px solid var(--border-hi);border-left:3px solid var(--signal);border-radius:8px;color:var(--text);font-size:0.85rem;line-height:1.5;padding:12px 14px;margin:0 0 12px}
+.transcript{display:flex;flex-direction:column;gap:10px}
+.turn{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.turn-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.turn-role{font-family:var(--mono);font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em}
+.role-user{color:var(--signal-hi)}
+.role-assistant{color:var(--live)}
+.role-tool{color:var(--muted)}
+.role-system{color:var(--faint)}
+.turn-time{color:var(--faint);font-size:0.72rem}
+.turn-text{white-space:pre-wrap;word-break:break-word;color:var(--text);font-size:0.82rem;line-height:1.55;font-family:var(--mono)}
+.turn-tool{background:var(--surface2);border-radius:6px;padding:8px 10px;max-height:220px;overflow:auto;font-size:0.76rem}
+.turn-truncated{color:var(--warn);font-size:0.74rem;margin-top:6px;font-family:var(--mono)}
+.transcript-meta{margin:0 0 10px}
+.ev-match{background:rgba(232,163,61,0.06)}
+table th:first-child,table td:first-child{width:130px}
+</style>
+{{template "ready_js"}}
+</body>
+</html>{{end}}
