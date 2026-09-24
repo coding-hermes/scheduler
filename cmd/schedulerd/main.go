@@ -70,8 +70,10 @@ func main() {
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
-	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultZombieReapThreshold, "Zombie session reaper age threshold (SCHED-GAP-089; default 24h)")
-	reapSessionsOnly := flag.Bool("reap-sessions-only", false, "Reap zombie sessions in --db once and exit (SCHED-GAP-089)")
+	reapThreshold := flag.Duration("session-reap-threshold", database.DefaultHermesReapStaleAfter, "Stale api_server session reap threshold (SCHED-GAP-089; default 24h)")
+	reapSessions := flag.Bool("reap-sessions", false, "Run one SCHED-GAP-089 reap pass against the agent state store (~/.hermes/state.db) and exit — DRY-RUN by default, writes nothing")
+	reapApply := flag.Bool("reap-sessions-apply", false, "With --reap-sessions: APPLY the pass — close selected sessions (ended_at + end_reason='reaped'). Without it the pass is a dry-run (SCHED-GAP-089)")
+	sessionDBPath := flag.String("session-db", database.DefaultHermesSessionDBPath(), "Agent state database path for --reap-sessions (SCHED-GAP-089)")
 	duckbrainNS := flag.String("duckbrain-ns", "scheduler", "DuckBrain namespace for sync (Bane 2026-08-27: sync consolidated under the scheduler namespace)")
 	duckbrainURL := flag.String("duckbrain-url", "http://localhost:3000", "DuckBrain HTTP server URL")
 	duckbrainInterval := flag.Duration("duckbrain-interval", 5*time.Minute, "DuckBrain sync interval (spool replay cadence)")
@@ -318,6 +320,47 @@ func main() {
 		return
 	}
 
+	// ── SCHED-GAP-089 one-shot session reaper over the REAL agent state store ──
+	// Runs BEFORE the scheduler database is opened: the reaper never touches
+	// the scheduler's own --db (it holds no sessions table and must never
+	// grow one — the fake v23 path is tombstoned, see migrations.go).
+	//
+	// Default is a DRY-RUN: the pass reports what it would close and writes
+	// nothing. Only the explicit --reap-sessions-apply turns the same pass
+	// into a write, and even then it targets ~/.hermes/state.db opened
+	// mode=rw (never creates, busy-timeout against the live agent) — see
+	// internal/database/hermesstate.go for the full safety model.
+	//
+	// There is deliberately NO startup hook and NO ticker: state.db is the
+	// live agent's own database and the scheduler has no liveness handshake
+	// with the gateway, so "stale" is an inactivity heuristic, not proof the
+	// client is gone. Automated writes stay out of scope until that changes
+	// (blocker documented in docs/sessions-reaper.md).
+	if *reapApply && !*reapSessions {
+		log.Fatalf("FATAL: --reap-sessions-apply requires --reap-sessions (refusing to write by implication)")
+	}
+	if *reapSessions {
+		hermesDB, herr := database.OpenHermesStateDB(*sessionDBPath)
+		if herr != nil {
+			log.Fatalf("FATAL: session reaper: %v", herr)
+		}
+		defer func() { _ = hermesDB.Close() }()
+		res, rerr := scheduler.ReapStaleHermesSessions(
+			clock.WithClock(context.Background(), clk), hermesDB,
+			database.HermesReaperConfig{StaleAfter: *reapThreshold, Apply: *reapApply})
+		if rerr != nil {
+			log.Fatalf("FATAL: session reaper: %v", rerr)
+		}
+		if *reapApply {
+			fmt.Printf("SESSION-REAPER: closed %d of %d stale api_server session(s) (stalest idle %s, threshold %s)\n",
+				res.Reaped, res.Candidates, res.OldestIdle, *reapThreshold)
+		} else {
+			fmt.Printf("SESSION-REAPER (dry-run): %d stale api_server session(s) would be closed (stalest idle %s, threshold %s) — rerun with --reap-sessions-apply to write\n",
+				res.Candidates, res.OldestIdle, *reapThreshold)
+		}
+		return
+	}
+
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// Persist all logs to a file as well as stdout (system-plan-v2 §1.1).
@@ -340,23 +383,6 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
-
-	// SCHED-GAP-089: zombie session reaper. Closes api_server sessions whose
-	// ended_at is still NULL past a configurable age threshold (default 24h).
-	// Runs once at daemon startup; it is idempotent (safe to run repeatedly)
-	// and best-effort — a failure is logged as a warning and must never block
-	// boot. All work happens against the local SQLite --db via the existing
-	// database layer; no external HTTP endpoints are contacted. In
-	// --reap-sessions-only mode we reap once against --db and exit.
-	if *reapSessionsOnly {
-		if _, err := scheduler.ReapZombieSessions(context.Background(), db, *reapThreshold); err != nil {
-			log.Fatalf("FATAL: zombie session reaper: %v", err)
-		}
-		return
-	}
-	if _, err := scheduler.ReapZombieSessions(context.Background(), db, *reapThreshold); err != nil {
-		log.Printf("WARN: zombie session reaper at startup: %v", err)
-	}
 
 	// Declarative fleet seeding: if a fleet.toml was supplied, load and
 	// apply it before any other subsystem touches the DB. Already-existing

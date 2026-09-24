@@ -4,26 +4,38 @@ import (
 	"context"
 	"database/sql"
 	"log"
-	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
-// ReapZombieSessions closes api_server sessions in the local SQLite database
-// that are older than threshold and still have ended_at IS NULL (zombie
-// sessions that inflate metrics/billing — SCHED-GAP-089). A threshold <= 0
-// selects database.DefaultZombieReapThreshold (24h). The reaped row count is
-// logged on success. The operation is idempotent (a second run reaps zero
-// rows) and performs no external HTTP calls — all work goes through the
-// existing local database layer.
-func ReapZombieSessions(ctx context.Context, db *sql.DB, threshold time.Duration) (int, error) {
-	if threshold <= 0 {
-		threshold = database.DefaultZombieReapThreshold
-	}
-	reaped, err := database.ReapZombieSessions(ctx, db, threshold)
+// ReapStaleHermesSessions runs one SCHED-GAP-089 reap pass against the
+// agent state database and logs the outcome. It is a thin, reusable seam
+// over database.ReapStaleHermesSessions — the real schema (source TEXT +
+// epoch REALs) lives there, along with the safety model:
+//
+//   - cfg is the caller's EXPLICIT decision. The zero value is a dry-run;
+//     an Apply pass only happens when the operator asked for one.
+//   - db must be an OPEN state.db handle (database.OpenHermesStateDB —
+//     mode=rw, never creates, busy-timeout against the live agent).
+//   - A wrong-shaped database fails closed (database.ErrHermesSessionsShape);
+//     the error is returned, never swallowed.
+//
+// Nothing here runs on a timer: the daemon does not schedule this function
+// (no bespoke cron — SCHED-GAP-089 round 2 deliberately leaves cadence to
+// the operator, e.g. a one-shot `--reap-sessions` run). state.db is the live
+// agent's own database and the scheduler has no liveness handshake with the
+// gateway, so automated writes stay out of scope until that changes.
+func ReapStaleHermesSessions(ctx context.Context, db *sql.DB, cfg database.HermesReaperConfig) (database.Result, error) {
+	res, err := database.ReapStaleHermesSessions(ctx, db, cfg)
 	if err != nil {
-		return 0, err
+		return database.Result{}, err
 	}
-	log.Printf("ZOMBIE-REAPER: reaped %d zombie session(s) (threshold %s)", reaped, threshold)
-	return reaped, nil
+	if cfg.Apply {
+		log.Printf("SESSION-REAPER: closed %d stale api_server session(s) (candidates %d, stalest idle %s, threshold %s)",
+			res.Reaped, res.Candidates, res.OldestIdle, cfg.Normalized().StaleAfter)
+	} else {
+		log.Printf("SESSION-REAPER (dry-run): %d stale api_server session(s) would be closed (stalest idle %s, threshold %s)",
+			res.Candidates, res.OldestIdle, cfg.Normalized().StaleAfter)
+	}
+	return res, nil
 }

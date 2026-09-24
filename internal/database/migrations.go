@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 43
+const latestMigration = 44
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -324,21 +324,20 @@ ALTER TABLE projects ADD COLUMN board_rows_seen INTEGER NOT NULL DEFAULT -1;
 `,
 	},
 	{
+		// SCHED-GAP-089 round 2 TOMBSTONE: the original v23 created a fake
+		// scheduler-local sessions table (platform/created_at/updated_at
+		// TEXT) no real Hermes session ever lived in, and "reaped" only rows
+		// it had written itself. Real sessions live in ~/.hermes/state.db
+		// (source TEXT, started_at/ended_at REAL, end_reason TEXT — see
+		// internal/database/hermesstate.go). The fake table is dropped and
+		// the ledger row rewritten so the lie cannot re-arm on restart.
+		// Databases that never ran the old v23 just record the tombstone.
+		// Any schema the fake created is operator data, not fleet state;
+		// v44 additionally heals ledgers that already carry the old v23.
 		version: 23,
-		desc:    "zombie session reaper (SCHED-GAP-089): sessions table for api_server sessions + backfill ended_at for existing zombies",
+		desc:    "SCHED-GAP-089 tombstone: the fake scheduler-local sessions table (v23 'zombie session reaper') is retired; real sessions live in ~/.hermes/state.db and are handled by the real-schema reaper (internal/database/hermesstate.go)",
 		stmt: `
-CREATE TABLE IF NOT EXISTS sessions (
-    id         TEXT PRIMARY KEY,
-    platform   TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT,
-    ended_at   TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_zombie ON sessions(ended_at) WHERE ended_at IS NULL;
-
-UPDATE sessions SET ended_at = COALESCE(updated_at, created_at)
- WHERE ended_at IS NULL AND platform = 'api_server';
+DROP TABLE IF EXISTS sessions;
 `,
 	},
 	{
@@ -663,6 +662,24 @@ CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent);
 		stmt: `
 ALTER TABLE namespace_ticks ADD COLUMN demand INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE namespace_ticks ADD COLUMN overcommitted INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-089 round 2 HEAL: databases that already ran the fake
+		// v23 recorded a ledger row with the OLD desc, and their live
+		// scheduler.db carries the fake sessions table (the tombstone above
+		// is skipped as already applied). This migration drops the fake
+		// table if it exists and REWRITES the v23 ledger row to the
+		// tombstone desc, so the ledger no longer advertises the fake
+		// reaper as applied schema. The conditional re-INSERT keeps the
+		// migration runnable on every history shape (row present or absent).
+		version: 44,
+		desc:    "SCHED-GAP-089 heal: drop any fake sessions table the old v23 left on live databases and rewrite the v23 ledger row to the tombstone desc (real sessions live in ~/.hermes/state.db)",
+		stmt: `
+DROP TABLE IF EXISTS sessions;
+
+UPDATE migrations SET desc = 'SCHED-GAP-089 tombstone: the fake scheduler-local sessions table (v23 ''zombie session reaper'') is retired; real sessions live in ~/.hermes/state.db and are handled by the real-schema reaper (internal/database/hermesstate.go)'
+WHERE version = 23 AND desc LIKE 'zombie session reaper%';
 `,
 	},
 }
