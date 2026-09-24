@@ -1223,3 +1223,4 @@
 {"id": 1790259164274564126, "timestamp": "2026-09-24 16:45:48.804711", "event_type": "task_completed", "task_id": "SCHED-GAP-1605", "actor": "foreman", "tick_number": null, "detail": "{\"status\":\"complete\"}"}
 {"ts": "2026-09-24T12:36:29-05:00", "id": "SCHED-GAP-1606", "type": "created", "detail": "operator request: dashboard auto-refresh interval changeable + countdown"}
 {"ts": null, "id": 1790259164274564127, "type": null, "detail": "{\"status\":\"complete\"}", "timestamp": "2026-09-24T17:46:45.204448+00:00", "event_type": "task_completed", "task_id": "SCHED-GAP-1606", "actor": "foreman"}
+{"ts": "2026-09-24T12:48:02-05:00", "id": "SCHED-GAP-1607", "type": "created", "detail": "operator request: tick-report delivery modes full|file|link"}
