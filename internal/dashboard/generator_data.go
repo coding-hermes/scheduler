@@ -28,6 +28,11 @@ type QueueEntry struct {
 	CooldownS int
 	Enabled   bool
 	Urgency   float64
+	// Nesting (SCHED-GAP-1590): the lane's position in the fleet hierarchy —
+	// depth, its primary's name, and which parenthood source produced the
+	// relation. Resolved by generator_lane_nesting.go over the SAME snapshot
+	// this entry came from.
+	Nesting laneNesting
 }
 
 // QueueData holds all data for the queue page.
@@ -91,6 +96,12 @@ type FleetRow struct {
 	// that the LLM-judge gate may be passing a suite that is actually failing
 	// (e.g. cached test results). "" = unknown (no CI workflow or query failed).
 	CIConclusion string
+
+	// Nesting (SCHED-GAP-1590): the lane's position in the fleet hierarchy —
+	// depth, its primary's name, and which parenthood source produced the
+	// relation. Resolved by generator_lane_nesting.go over a full projects
+	// snapshot (the fleet query itself does not select parent).
+	Nesting laneNesting
 }
 
 // TickRow is one tick in the history table.
@@ -410,6 +421,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
 		}
+	}
+
+	// SCHED-GAP-1590: the overview's Projects table renders lane nesting —
+	// each row is annotated with its depth + primary (↳ rail) resolved from
+	// the authoritative parent column via database.BuildLaneTree. The full
+	// lane list (including disabled lanes — they keep their tree position) is
+	// fetched in ONE extra query; the fleet table has no parity constraint
+	// with an API ordering, so this is purely additive markup.
+	if lanes, laneErr := database.ListProjects(ctx, g.db, false); laneErr == nil {
+		annotateFleetNesting(data.Projects, lanes)
 	}
 
 	// Second pass for cost sparklines + recent failure flags + observability.
