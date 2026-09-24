@@ -320,6 +320,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 			writeError(w, 400, err.Error())
 			return
 		}
+		// SCHED-GAP-1586: a parent reference that would make the lane its
+		// own ancestor (self-parent or longer loop) is a client-correctable
+		// 400, not a server fault.
+		if strings.Contains(err.Error(), "cycle") {
+			writeError(w, 400, err.Error())
+			return
+		}
 		if isCheckConstraint(err) {
 			writeError(w, 400, projectConstraintMessage)
 			return

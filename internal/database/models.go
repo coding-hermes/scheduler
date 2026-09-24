@@ -82,7 +82,15 @@ type Project struct {
 	Deliver          string  `json:"deliver"`            // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
 	// SCHED-GAP-1607: tick-report delivery mode — full (default) | file | link.
 	// '' and unknown values resolve to full, so pre-1607 rows are unchanged.
-	DeliverMode       string `json:"deliver_mode"`        // see scheduler.DeliverMode* constants
+	DeliverMode string `json:"deliver_mode"` // see scheduler.DeliverMode* constants
+	// SCHED-GAP-1586: the name of the lane this lane is a satellite of.
+	// '' = a primary/root lane. Arbitrary depth is allowed (a satellite may
+	// itself have satellites); writes are cycle-checked (see
+	// validateParentReference). NOT a FK: lane names are soft-deleted
+	// (enabled=0) or purged (FK off), and a purged parent must not cascade
+	// or block — dangling parents are read back verbatim and the resolver
+	// (BuildLaneTree) treats a missing parent as a root child.
+	Parent            string `json:"parent"`              // parent lane name; '' = primary/root lane
 	Enabled           bool   `json:"enabled"`             // disabled projects are never scheduled
 	CreatedAt         string `json:"created_at"`          // RFC3339 timestamp
 	UpdatedAt         string `json:"updated_at"`          // RFC3339 timestamp
