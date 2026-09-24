@@ -46,6 +46,24 @@ type Loop struct {
 
 	mu     sync.RWMutex
 	stopCh chan struct{}
+	// SCHED-GAP-1575-A: atomic mirror of the spawner gateway-response
+	// timeout so /api/v1/status can read it WITHOUT taking Loop.mu.
+	// Pre-fix, GatewayResponseTimeout() took the WRITE lock to read a
+	// single duration; on a loaded host /api/v1/status joined the same
+	// convoy as evaluate() and was stuck 28-80 min. The spawner remains
+	// the source of truth (existing tests rely on
+	// spawner.GatewayResponseTimeout()); this atomic is a write-through
+	// cache read by the Loop getter only.
+	gatewayResponseTimeoutNs atomic.Int64
+	// evalWakeCh + evalDone are the SCHED-GAP-1575-A coalescing channel
+	// for ForceEvaluate(). Buffered(1); non-blocking sends collapse N
+	// concurrent calls into at most one pending pass. The drain goroutine
+	// (started in NewLoop, stopped by closing stopCh) reads it and calls
+	// l.evaluate() in a loop. Pre-fix ForceEvaluate() spawned
+	// `go l.evaluate()` with no coalescing, so a board-wake / API POST
+	// / evaluate storm queued 180+ evaluate goroutines behind one
+	// write lock.
+	evalWakeCh chan struct{}
 	// pauseCh is a WAKE signal only (GAP-101): a parked legacy waiter or
 	// ticker stall reacts to it. It carries no state — pause state is the
 	// atomic paused flag. Buffered(1) + non-blocking sends in Pause/Resume.
@@ -193,6 +211,11 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		// from "counter missing".
 		admitCounts:   make(map[string]int, len(admissionReasonVocabulary)),
 		admitNSAdmits: make(map[string]int),
+		// SCHED-GAP-1575-A: wake channel for the coalesced ForceEvaluate()
+		// path. Buffered(1) + non-blocking send in ForceEvaluate() so N
+		// concurrent calls collapse into at most one pending pass; the
+		// drain goroutine (started below) reads it and calls evaluate().
+		evalWakeCh: make(chan struct{}, 1),
 	}
 	for _, reason := range admissionReasonVocabulary {
 		l.admitCounts[reason] = 0
@@ -214,6 +237,14 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
 	// through the loop's event logger.
 	l.spawner.SetEventLogger(l.events)
+	// SCHED-GAP-1575-A: prime the atomic mirror with the spawner's
+	// resolved default so /api/v1/status reports the right value before
+	// the daemon has called SetGatewayResponseTimeout (the SCHED-GAP-117
+	// default is 30m, observable in schedgap117_status_test.go).
+	// SetGatewayResponseTimeout will overwrite this whenever the daemon
+	// applies --gateway-response-timeout or the env-var resolver changes
+	// the value; this prime keeps the mirror aligned from boot.
+	l.gatewayResponseTimeoutNs.Store(int64(l.spawner.GatewayResponseTimeout()))
 	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
 	// through the same logger.
 	l.slotPool.SetEventLogger(l.events)
@@ -233,6 +264,14 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// is the logger every consult path — the evaluation pass and SpawnNow —
 	// shares.
 	SetGatewayHealthGateEvents(l.events)
+	// SCHED-GAP-1575-A: single drain goroutine for the coalesced
+	// ForceEvaluate() path. Reads l.evalWakeCh in a loop, calls
+	// l.evaluate(), repeats. evaluate() takes the Loop write lock
+	// internally — the drain must NOT hold it. Exits when stopCh is
+	// closed. Buffered(1) on the channel + the non-blocking send in
+	// ForceEvaluate() mean N concurrent wakeups collapse into at most
+	// one pending pass.
+	go l.evalDrain()
 	return l
 }
 
@@ -395,7 +434,14 @@ func (l *Loop) SetTickTimeout(timeout time.Duration) {
 // deadline (SCHED-GAP-117). The daemon wires --gateway-response-timeout here
 // after SetTickTimeout; 0 disables the per-turn deadline (pre-117 behavior),
 // negative values are ignored by the spawner.
+//
+// SCHED-GAP-1575-A: also write through the atomic mirror used by
+// GatewayResponseTimeout() so the GETTER can avoid taking Loop.mu. The
+// spawner remains the source of truth (existing tests rely on
+// spawner.GatewayResponseTimeout()); the atomic is a write-through cache
+// read by the Loop getter only.
 func (l *Loop) SetGatewayResponseTimeout(d time.Duration) {
+	l.gatewayResponseTimeoutNs.Store(int64(d))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.spawner != nil {
@@ -418,13 +464,14 @@ func (l *Loop) SetSlotPatience(d time.Duration) {
 
 // GatewayResponseTimeout reports the armed per-turn gateway POST deadline
 // (SCHED-GAP-117), surfaced by /api/v1/status.
+//
+// SCHED-GAP-1575-A: read the atomic mirror; the loop mutex is no longer
+// taken on the hot read path. Pre-fix this took the WRITE lock to read a
+// single duration, joining the same convoy as evaluate() — see the
+// SCHED-GAP-1575 wedge mechanism and the
+// loop_gateway_timeout_atomic_test.go RED-proof.
 func (l *Loop) GatewayResponseTimeout() time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.spawner != nil {
-		return l.spawner.GatewayResponseTimeout()
-	}
-	return 0
+	return time.Duration(l.gatewayResponseTimeoutNs.Load())
 }
 
 // RunBulkSim generates N simulated ticks and exits.
@@ -679,8 +726,52 @@ func (l *Loop) abortInFlightTicks() {
 }
 
 // ForceEvaluate triggers an immediate evaluation.
+//
+// SCHED-GAP-1575-A: coalesce via a buffered wake channel (cap 1) drained
+// by a single goroutine started in NewLoop. The pre-fix implementation
+// spawned `go l.evaluate()` with no coalescing, so a board-wake / API
+// POST / evaluate storm queued 180+ evaluate goroutines behind one write
+// lock and wedged the loop for 28-80 min on a loaded host. The coalesced
+// path collapses N concurrent ForceEvaluate calls into at most one
+// pending pass; once the drain finishes a pass the channel accepts
+// another wake for the next pass.
+//
+// Falls back to `go l.evaluate()` if the wake channel was never
+// installed (tests that build a Loop without the drain goroutine — see
+// loop_force_evaluate_test.go for the path that uses the coalescer).
 func (l *Loop) ForceEvaluate() {
-	go l.evaluate()
+	if l.evalWakeCh == nil {
+		// Drain goroutine not started (older test path) — keep the
+		// pre-fix behavior so legacy callers do not deadlock.
+		go l.evaluate()
+		return
+	}
+	select {
+	case l.evalWakeCh <- struct{}{}:
+	default:
+		// Wake already pending; coalesce this call.
+	}
+}
+
+// evalDrain is the single goroutine that services l.evalWakeCh for the
+// coalesced ForceEvaluate() path (SCHED-GAP-1575-A). It blocks until
+// either stopCh closes (graceful shutdown) or a wake arrives. On a wake
+// it calls l.evaluate() and loops; evaluate() takes the Loop write
+// lock internally, so this drain goroutine NEVER holds Loop.mu —
+// holding it across evaluate() is exactly the convoy the pre-fix code
+// caused.
+//
+// The function lives next to ForceEvaluate so the contract is local:
+// ForceEvaluate() produces the wake, evalDrain consumes it.
+func (l *Loop) evalDrain() {
+	for {
+		select {
+		case <-l.stopCh:
+			return
+		case <-l.evalWakeCh:
+			l.evaluate()
+		}
+	}
 }
 
 // ErrProjectRunning is returned by SpawnNow when the project already has a
