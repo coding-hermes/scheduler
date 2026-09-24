@@ -14,10 +14,10 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/ticks?page=N` | Paginated tick history |
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
-| `/api/v1/health` | Machine health check (JSON) |
+| `/api/v1/health` | Machine health check (JSON) — its DB calls run under a 1s liveness deadline; a stalled DB answers 504 naming the helper (SCHED-GAP-1575-B) |
 | `/api/v1/live` | DB-free liveness probe (JSON) — process-memory fields only, safe under a saturated single-SQLite-connection fleet; watchdog's first probe, `/api/v1/health` is the rich fallback (SCHED-GAP-204-A) |
-| `/api/v1/status` | Fleet status summary (JSON) — budget, spend tiers, failure rates, eval/zero-select diagnostics |
-| `/api/v1/config` | Resolved daemon config (JSON) |
+| `/api/v1/status` | Fleet status summary (JSON) — budget, spend tiers, failure rates, eval/zero-select diagnostics. Every DB step runs under a per-request deadline (default 5s, `--api-read-timeout`); a stalled step answers 504 `{"error":"deadline exceeded","helper":"<step>","detail":…}` naming it, and a request past 80% of the budget emits one slow-request WARN line (SCHED-GAP-1575-B) |
+| `/api/v1/config` | Resolved daemon config (JSON) — includes `api_read_timeout`, the ARMED heavy-read deadline (SCHED-GAP-1575-B) |
 | `/api/v1/metrics` | Read-only fleet metrics: spawns, deferrals, nudges, ticks, durations, drains and outcomes in one request (SCHED-GAP-156) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |

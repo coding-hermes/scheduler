@@ -62,8 +62,16 @@ func budgetRemaining(capUSD, spentUSD float64) *float64 {
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	// SCHED-GAP-1575-B: heavy read surface (the second-heaviest after
+	// /api/v1/status) — request-scoped deadline so a stalled budget-spend
+	// query answers 504 naming the helper instead of hanging.
+	ctx, obs := s.newRequestDeadline(r.Context(), "projects", s.readTimeout())
+	defer obs.finish()
+	obs.enter("ListProjects")
 	projects, err := database.ListProjects(ctx, s.db, false)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -74,7 +82,11 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	// SCHED-GAP-066: enrich each project with its budget spend/remaining and
 	// blocked state. Fail-open: if the spend query breaks, serve the plain
 	// project rows rather than erroring the whole endpoint.
+	obs.enter("LoadBudgetSpends")
 	spends, spendErr := scheduler.LoadBudgetSpends(ctx, s.db, s.clock().Now())
+	if !obs.check(w, ctx) {
+		return
+	}
 	if spendErr != nil {
 		writeJSON(w, 200, map[string]interface{}{"projects": projects})
 		return

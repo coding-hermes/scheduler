@@ -23,8 +23,14 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listNamespaces(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	// SCHED-GAP-1575-B: heavy read surface — request-scoped deadline.
+	ctx, obs := s.newRequestDeadline(r.Context(), "namespaces", s.readTimeout())
+	defer obs.finish()
+	obs.enter("ListNamespaces")
 	namespaces, err := database.ListNamespaces(ctx, s.db, false)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

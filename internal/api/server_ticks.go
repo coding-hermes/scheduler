@@ -10,12 +10,17 @@ import (
 )
 
 // handleTicks handles GET /ticks with optional query params.
+//
+// SCHED-GAP-1575-B: the limit is caller-supplied (unbounded before this row),
+// so the read runs under the request-scoped deadline — a scan that exceeds it
+// answers 504 naming listTicks instead of hanging the handler.
 func (s *Server) handleTicks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
 		return
 	}
-	ctx := context.Background()
+	ctx, obs := s.newRequestDeadline(r.Context(), "ticks", s.readTimeout())
+	defer obs.finish()
 	project := r.URL.Query().Get("project")
 	status := r.URL.Query().Get("status")
 	limit := 50
@@ -24,7 +29,11 @@ func (s *Server) handleTicks(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	obs.enter("listTicks")
 	ticks, err := listTicks(ctx, s.db, project, status, limit)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

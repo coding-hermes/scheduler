@@ -41,6 +41,14 @@ func main() {
 	maxConcurrent := flag.Int("max-concurrent", 10, "Max concurrent foremen")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
+	// SCHED-GAP-1575-B: per-request deadline for the heavy DB-backed read
+	// surfaces of the HTTP API (/api/v1/status, /projects, /namespaces,
+	// /ticks). The daemon opens ONE serialized SQLite connection, so a single
+	// stalled helper previously hung the whole handler with no bytes and no
+	// status code (measured 2026-09-24: /api/v1/status timed out at 8s while
+	// /live answered in 0.6ms). A step that exceeds this deadline now answers
+	// 504 naming the stalled helper. 0 or negative = keep the 5s default.
+	apiReadTimeout := flag.Duration("api-read-timeout", 5*time.Second, "Per-request deadline for the heavy read API surfaces (/api/v1/status, /projects, /namespaces, /ticks); a stalled DB helper returns 504 naming the helper instead of hanging the handler (SCHED-GAP-1575-B; <= 0 = keep the 5s default)")
 	// SCHED-GAP-117: shorter per-turn deadline for a single gateway
 	// /v1/responses POST. A hung POST previously consumed the whole
 	// --tick-timeout slot undetected; the turn deadline trips first and
@@ -171,6 +179,16 @@ func main() {
 			*tasksPacing = d
 		} else {
 			log.Printf("WARN: SCHEDULER_TASKS_PACING=%q invalid — using %v", v, *tasksPacing)
+		}
+	}
+	// SCHED-GAP-1575-B: heavy-read API deadline env override — same pattern.
+	// Only a positive parseable duration wins; an invalid value WARNs and
+	// keeps the current value (the deadline must never silently vanish).
+	if v := os.Getenv("SCHEDULER_API_READ_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			*apiReadTimeout = d
+		} else {
+			log.Printf("WARN: SCHEDULER_API_READ_TIMEOUT=%q invalid — using %v", v, *apiReadTimeout)
 		}
 	}
 	// SCHED-GAP-125: load-gate threshold env override — same pattern. Only a
@@ -436,6 +454,22 @@ func main() {
 				}
 			}
 		}
+		// SCHED-GAP-1575-B: TOML layer for the heavy-read API deadline
+		// ([api] read_timeout) — the same default-guard pattern (applied
+		// only while the flag sits at its 5s default, so CLI and env keep
+		// precedence). Only a strictly positive duration is accepted: the
+		// deadline is the point of the row, and the flag layer treats <= 0
+		// as "keep default", so a TOML "0s" would otherwise be a silent
+		// no-op.
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			if rootCfg.API.ReadTimeout != "" && *apiReadTimeout == 5*time.Second {
+				if d, derr := time.ParseDuration(rootCfg.API.ReadTimeout); derr == nil && d > 0 {
+					*apiReadTimeout = d
+				} else {
+					log.Printf("WARN: api.read_timeout=%q invalid — using %v", rootCfg.API.ReadTimeout, *apiReadTimeout)
+				}
+			}
+		}
 		// ADV-R08/G3: TOML layer for the slot-wait patience — same
 		// default-guard pattern (applied only when the flag sits at its
 		// 5m default, so CLI and env keep precedence). Only a strictly
@@ -606,6 +640,11 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// SCHED-GAP-1575-B: arm the heavy-read request deadline BEFORE the
+	// resolved-config snapshot below, so the deadline actually enforced and
+	// the value GET /api/v1/config reports are one number (both write
+	// api_read_timeout from the same resolved *apiReadTimeout).
+	apiServer.SetReadTimeout(*apiReadTimeout)
 	// Deploy blocks (groups/templates) JSONL store: default paths next to the
 	// DB when either flag is unset, overridable via --groups-file/--templates-file.
 	// Deploy blocks store: resolve default JSONL paths next to the DB when flags are empty.
@@ -636,6 +675,9 @@ func main() {
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
+		// SCHED-GAP-1575-B: the ARMED heavy-read request deadline, so
+		// /api/v1/config reports the same duration the handlers enforce.
+		APIReadTimeout:         apiReadTimeout.String(),
 		SlotPatience:           slotPatience.String(),
 		TasksPacing:            tasksPacing.String(),
 		LoadGateThreshold:      *loadGateThreshold,

@@ -230,6 +230,12 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_TICK_TIMEOUT"); v != "" {
 		cfg.Scheduler.TickTimeout = v
 	}
+	// SCHED-GAP-1575-B: heavy-read API deadline env override. No parse gate
+	// here — validation happens in Validate(); an unset variable leaves the
+	// empty string (the daemon flag default of 5s applies).
+	if v := os.Getenv("SCHEDULER_API_READ_TIMEOUT"); v != "" {
+		cfg.API.ReadTimeout = v
+	}
 	// SCHED-GAP-117: per-turn gateway deadline env override ("0s" = the
 	// explicit disable and must survive the layering, so no parse gate
 	// here — validation happens in Validate()).
@@ -321,6 +327,18 @@ func (r *RootConfig) Validate() error {
 	// normalizing one to "off" would hide a config typo from the operator.
 	if r.Scheduler.SpawnMemLimitMB < 0 {
 		errs = append(errs, fmt.Errorf("scheduler.spawn_mem_limit_mb (%d) must be >= 0 (0 = off; unset = off)", r.Scheduler.SpawnMemLimitMB))
+	}
+	// SCHED-GAP-1575-B: the heavy-read API deadline is optional — empty means
+	// "not set" (the 5s daemon flag default applies). When set it must parse
+	// and be STRICTLY positive: the deadline is the whole point of the row,
+	// and the flag layer treats <= 0 as "keep default", so accepting a TOML
+	// "0s"/negative here would be a silent no-op rather than a real setting.
+	if v := r.API.ReadTimeout; v != "" {
+		if d, err := parseDurationErr(v, "api.read_timeout"); err != nil {
+			errs = append(errs, err)
+		} else if d <= 0 {
+			errs = append(errs, fmt.Errorf("api.read_timeout (%s) must be > 0 — the heavy read surfaces need a deadline (unset means the 5s default)", v))
+		}
 	}
 	if minD > 0 && maxD > 0 && minD > maxD {
 		errs = append(errs, fmt.Errorf("scheduler.min_interval (%s) must be <= scheduler.max_interval (%s)",

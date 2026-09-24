@@ -46,6 +46,15 @@ type ResolvedConfig struct {
 	// gateway /v1/responses POST — "0s" means disabled (the POST runs on the
 	// tick deadline alone).
 	GatewayResponseTimeout string `json:"gateway_response_timeout"`
+	// APIReadTimeout (SCHED-GAP-1575-B): the per-request deadline armed for
+	// the heavy DB-backed read surfaces (/api/v1/status, /projects,
+	// /namespaces, /ticks). A step that exceeds it answers 504 naming the
+	// stalled helper. Default "5s"; set from --api-read-timeout /
+	// SCHEDULER_API_READ_TIMEOUT / [api] read_timeout. This reports the
+	// ARMED value: SetReadTimeout writes it here and the runtime reads the
+	// same duration, so the introspection surface cannot drift from the
+	// deadline actually enforced.
+	APIReadTimeout string `json:"api_read_timeout"`
 	// SlotPatience (ADV-R08/G3): how long a spawn waits for a free slot
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event). Default "5m0s".

@@ -57,6 +57,19 @@ type Server struct {
 	// config_drift block on /api/v1/status probes THIS file. Empty = the
 	// historical default (~/.hermes/fleet.toml).
 	fleetTomlPath string
+
+	// readDeadline is the per-request deadline armed for the heavy DB-backed
+	// read surfaces (SCHED-GAP-1575-B), installed by main.go via
+	// SetReadTimeout from --api-read-timeout / SCHEDULER_API_READ_TIMEOUT /
+	// [api] read_timeout. Zero = readTimeoutDefault (5s).
+	readDeadline time.Duration
+
+	// readStepHook, when non-nil, is invoked with the step name as each
+	// instrumented read step starts. It is the SCHED-GAP-1575-B test seam:
+	// it lets a test stall a NAMED step deterministically and prove the
+	// deadline trips naming that step. Production leaves it nil (one nil
+	// check per step, no behavior change).
+	readStepHook func(step string)
 }
 
 // NewServer creates an API server.
@@ -103,6 +116,25 @@ func (s *Server) SetFailureWindow(n int) {
 // status endpoint can surface fallback state (reachable, spool depth, etc).
 func (s *Server) SetDuckBrainHealth(fn func() map[string]interface{}) {
 	s.duckbrainHealth = fn
+}
+
+// SetReadTimeout arms the per-request deadline for the heavy DB-backed read
+// surfaces (SCHED-GAP-1575-B): /api/v1/status, /api/v1/projects,
+// /api/v1/namespaces, /api/v1/ticks and the JSONL-backed groups/templates
+// lists. A step that exceeds it answers 504 with the helper name instead of
+// hanging the handler on the single serialized SQLite connection.
+//
+// It also records the value on the resolved-config snapshot so
+// GET /api/v1/config reports the ARMED deadline — the runtime deadline and
+// the introspection surface are one value, never two that can drift.
+// A non-positive value is ignored (the readTimeoutDefault of 5s applies);
+// the flag/env/TOML layers treat <= 0 the same way.
+func (s *Server) SetReadTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.readDeadline = d
+	s.resolvedConfig.APIReadTimeout = d.String()
 }
 
 // SetBlocksStore installs the JSONL-backed deploy groups/templates store
@@ -155,16 +187,34 @@ func (s *Server) Handler() http.Handler {
 // The DB-free liveness counterpart is /api/v1/live (SCHED-GAP-204-A): the
 // ops watchdog probes that route first and falls back to this one for the
 // rich payload.
+//
+// SCHED-GAP-1575-B: this surface is DB-backed, so its two DB calls run under
+// a 1s deadline (livenessTimeout) derived from the request context — a health
+// probe that cannot answer within a second is not healthy, and it must fail
+// fast (504 naming the stalled helper) instead of queueing behind tick work
+// on the single serialized SQLite connection.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
 		return
 	}
-	ctx := context.Background()
+	ctx, obs := s.newRequestDeadline(r.Context(), "health", livenessTimeout)
+	defer obs.finish()
+	obs.enter("countActiveTicks")
 	activeTicks := countActiveTicks(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
 	dbOK := "connected"
+	obs.enter("PingContext")
 	if err := s.db.PingContext(ctx); err != nil {
+		if !obs.check(w, ctx) {
+			return
+		}
 		dbOK = "error: " + err.Error()
+	}
+	if !obs.check(w, ctx) {
+		return
 	}
 	lastEval := s.loop.LastEvalTime()
 	// last_evaluation is RFC3339. Zero time serializes as "0001-01-01T00:00:00Z"
@@ -226,13 +276,46 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 }
 
 // status returns fleet overview.
+//
+// SCHED-GAP-1575-B: the handler issues ~12 sequential DB calls on ONE
+// serialized SQLite connection (SetMaxOpenConns(1), busy_timeout=5000), so a
+// single stalled helper used to hang the whole response with no bytes and no
+// status code. Every step below now runs under a per-request deadline
+// (default 5s: --api-read-timeout / SCHEDULER_API_READ_TIMEOUT /
+// [api] read_timeout) derived from the REQUEST context, and the first step
+// that blows the budget answers 504 Gateway Timeout naming that step
+// ({"error":"deadline exceeded","helper":"<step>","detail":...}) instead of
+// hanging. A request that runs past 80% of the budget also emits ONE WARN
+// line naming the slowest step (requestDeadline.finish), so an operator can
+// see WHICH of the 12 calls is stalling before the deadline trips.
+//
+// Live re-probe 2026-09-24 ~07:00 local, pre-fix (the wedge this row closes):
+//
+//	GET /api/v1/live     -> 200 in 0.6ms
+//	GET /api/v1/config   -> 200 in 0.3ms
+//	GET /api/v1/projects -> 200 in 0.17s
+//	GET /api/v1/status   -> curl exit 000 after an 8s bound, 0 bytes received
+//
+// /api/v1/status was the only stuck route. Suspects named in the row:
+// spendByCostSource (PERF-001, ~43ms on 254k events rows),
+// computeProjectFailureRates (SCHED-PERF-002, 18-30s on 368 projects) and
+// configDriftBlock (re-reads the live ~/.hermes/fleet.toml on every hit).
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
 		return
 	}
-	ctx := context.Background()
+	// SCHED-GAP-1575-B: request-scoped deadline. The context is derived from
+	// r.Context() (never a bare context.Background()), so a client that goes
+	// away also cancels the in-flight queries.
+	ctx, obs := s.newRequestDeadline(r.Context(), "status", s.readTimeout())
+	defer obs.finish()
+
+	obs.enter("ListProjects")
 	projects, err := database.ListProjects(ctx, s.db, true)
+	if !obs.check(w, ctx) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -242,13 +325,29 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// zero value → threshold == 0 → feature off, no panic.
 	adThreshold := s.resolvedConfig.AutoDisableFailureRate
 	adMinTicks := s.resolvedConfig.AutoDisableMinTicks
+	obs.enter("countActiveTicks")
 	activeTicks := countActiveTicks(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
+	obs.enter("countRecentOutcomes")
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
 	// SCHED-GAP-205: informational 24h counter for the zero-assistant
 	// false-green shape the tightened completion gate now fails at spawn
 	// time — operators watch it drain to 0 to verify the live fix.
+	obs.enter("countZeroOutputCommitted24h")
 	zeroOutputCommitted24h := countZeroOutputCommitted24h(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
+	obs.enter("computeProjectFailureRates")
 	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
+	if !obs.check(w, ctx) {
+		return
+	}
 	// PERF-001: serve last_evaluation from the loop's in-memory state when a
 	// loop is attached. evaluate() sets lastEval immediately BEFORE emitting
 	// the 'evaluation started' event (internal/scheduler/tick_process.go), so
@@ -263,7 +362,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			lastEval = t.UTC().Format(time.RFC3339)
 		}
 	} else {
+		obs.enter("getLastEvalTime")
 		lastEval = getLastEvalTime(ctx, s.db)
+		if !obs.check(w, ctx) {
+			return
+		}
 	}
 	// ADV-R09/G8: the effective budget from the budget authority chain —
 	// the Loop the resolved --budget/SCHEDULER_BUDGET/TOML value built.
@@ -316,21 +419,37 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// never silently blended with the estimate tier, and states the price
 	// vintage the USD figures were priced at (as-of + provenance of the
 	// sticker maps). One GROUP BY, no per-project loop.
+	obs.enter("spendByCostSource")
 	status["spend"] = s.spendByCostSource(ctx)
+	if !obs.check(w, ctx) {
+		return
+	}
 	// SCHED-GAP-107: active bump badge + remaining count per project.
 	status["bumps"] = listActiveBumps(projects)
 	// SCHED-GAP-112 / S12 §9.4: live wave load. ONE indexed query over
 	// running ticks (no per-project loop, <2ms budget per S12 §14) —
 	// workers NEVER enter active_ticks (W1/W3).
+	obs.enter("listRunningWaves")
 	waves := s.listRunningWaves(ctx)
+	if !obs.check(w, ctx) {
+		return
+	}
 	status["wave_depth_total"] = waveDepthTotal(waves)
+	obs.enter("waveWorkersCapConfigured")
 	status["wave_workers_cap_configured"] = waveWorkersCapConfigured(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
 	status["waves"] = waves
 	// SCHED-GAP-115 (S12 §11): attributed wave cost — the cost twin of
 	// wave_depth_total. Sum of tick_workers.cost_usd over running waves;
 	// attribution-only figures (W4), so this is what the replica holds,
 	// not an additive fleet total.
+	obs.enter("runningWaveCostTotal")
 	status["wave_cost_total"] = s.runningWaveCostTotal(ctx)
+	if !obs.check(w, ctx) {
+		return
+	}
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
 	if s.loop != nil {
@@ -365,7 +484,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	status["gateway_health_gate"] = gatewayHealthGateStatusBlock()
 	// SCHED-GAP-219: the config-drift tripwire (formerly the ops script's
 	// --verify) as an API surface — DB operator pins vs the seed fleet.toml.
+	obs.enter("configDriftBlock")
 	status["config_drift"] = s.configDriftBlock(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
 	writeJSON(w, 200, status)
 }
 

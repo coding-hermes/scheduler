@@ -419,6 +419,7 @@ authority model.
 | `-max-concurrent` | `10` | Max concurrent foremen |
 | `-namespace-mode` | `false` | Enable multi-namespace scheduling |
 | `-tick-timeout` | `2h` | Maximum tick duration before timeout (2h) |
+| `-api-read-timeout` | `5s` | Per-request deadline for the heavy read API surfaces (`/api/v1/status`, `/projects`, `/namespaces`, `/ticks`); a stalled DB helper returns 504 naming the helper instead of hanging the handler (SCHED-GAP-1575-B; `<= 0` = keep the 5s default) |
 | `-test-verify` | `0` | Run N-cycle correctness verification and exit |
 | `-duckbrain-ns` | `scheduler` | DuckBrain namespace for sync |
 | `-duckbrain-url` | `http://localhost:3000` | DuckBrain HTTP server URL |

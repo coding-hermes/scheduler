@@ -190,7 +190,21 @@ armed state (`gateway_health_gate`, SCHED-GAP-170).
 | `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown) |
 | `duckbrain` | object | DuckBrain sync health `{base_url, consecutive_failures, interval, last_error, last_ok_at, reachable, spooled_pending}` (present when sync health reporting is configured) |
 
-**Errors:** 405 on non-GET.
+**Errors:** 405 on non-GET. **504** when a DB step exceeds the request deadline
+(SCHED-GAP-1575-B): the handler runs its ~12 sequential calls on ONE serialized
+SQLite connection under a per-request deadline derived from the request context
+(default 5s — `--api-read-timeout` / `SCHEDULER_API_READ_TIMEOUT` /
+`[api] read_timeout`), and answers
+
+```json
+{"error":"deadline exceeded","helper":"spendByCostSource","detail":"context deadline exceeded"}
+```
+
+naming WHICH helper blew the budget instead of hanging with no bytes. A request
+that runs past 80% of the budget emits exactly one
+`WARN: slow request handler=status step=… slowest_step=… budget=…` line. The
+same deadline covers `/api/v1/projects`, `/api/v1/namespaces` and
+`/api/v1/ticks`; `/api/v1/health` uses a 1s liveness deadline.
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_failure_rates["asce"]'
@@ -210,6 +224,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 {"db_path":"/home/kara/.hermes/coding-hermes/scheduler.db","listen":"127.0.0.1:9090",
  "min_interval":"30s","max_interval":"24h0m0s","num_levels":10,
  "weight_budget":100,"max_concurrent":4,"tick_timeout":"2h0m0s",
+ "api_read_timeout":"5s","gateway_response_timeout":"30m0s",
  "namespace_mode":true,"auto_disable_failure_rate":0.9,
  "auto_disable_window":100,"auto_disable_min_ticks":50,"failure_window":100,
  "gateway":{"url":"http://127.0.0.1:8642","key":"WZJh****",
@@ -220,6 +235,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 | Field | Type | Meaning |
 |-------|------|---------|
 | `db_path`, `listen`, `min_interval`, `max_interval`, `tick_timeout` | string | Paths/address/durations (`min_interval` "30s", `tick_timeout` "2h0m0s") |
+| `api_read_timeout` | string | The ARMED per-request deadline for the heavy read surfaces (default "5s"; `--api-read-timeout` / `SCHEDULER_API_READ_TIMEOUT` / `[api] read_timeout`) — the same duration the handlers enforce (SCHED-GAP-1575-B) |
 | `num_levels`, `weight_budget`, `max_concurrent` | int | Priority levels, budget, max parallel foremen |
 | `namespace_mode` | bool | Multi-namespace weight allocation enabled |
 | `auto_disable_failure_rate` | float | Auto-disable threshold (0 = feature off) |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -53,6 +54,226 @@ func writeJSON(w http.ResponseWriter, code int, data interface{}) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// ── SCHED-GAP-1575-B: per-request deadlines for the heavy read surfaces ──
+//
+// The daemon opens ONE serialized SQLite connection (SetMaxOpenConns(1)) and
+// the heavy read handlers issued ~12 sequential queries each on
+// context.Background() with no deadline. One stalled helper — the events-table
+// scan in spendByCostSource (PERF-001: ~43ms on 254k rows), the per-project
+// failure-rate CTE (SCHED-PERF-002: 18-30s on 368 projects) or
+// configDriftBlock (re-reads the live ~/.hermes/fleet.toml on every hit) —
+// therefore hung the whole handler for as long as the query ran, and the
+// caller got no bytes at all (no status code, no body).
+//
+// Live re-probe 2026-09-24 ~07:00 local, pre-fix:
+//
+//	GET /api/v1/live     -> 200 in 0.6ms
+//	GET /api/v1/config   -> 200 in 0.3ms
+//	GET /api/v1/projects -> 200 in 0.17s
+//	GET /api/v1/status   -> curl exit 000 after an 8s bound, 0 bytes received
+//
+// The fix is at the CALL SITE, not in the helpers: every step of an
+// instrumented handler runs under a deadline derived from the REQUEST context
+// (so a client disconnect also stops the work) and the handler answers 504
+// naming the step that blew the budget instead of hanging.
+
+const (
+	// readTimeoutDefault is the default deadline for the heavy DB-backed read
+	// surfaces (status, projects, namespaces, ticks, groups, templates).
+	// Overridable via --api-read-timeout / SCHEDULER_API_READ_TIMEOUT /
+	// [api] read_timeout. 5s is ~100x the measured healthy /api/v1/status
+	// cost on a fleet-sized DB, so it never trips on a healthy box and always
+	// trips on the 18-30s failure-rate CTE that motivated the row.
+	readTimeoutDefault = 5 * time.Second
+
+	// livenessTimeout is the deadline for the DB-backed liveness surface
+	// (/api/v1/health): a health probe that cannot answer within a second is
+	// not healthy, and the DB-free /api/v1/live (SCHED-GAP-204-A) is the
+	// watchdog's first probe anyway. /api/v1/health must fail FAST when its
+	// DB call stalls instead of queueing behind tick work.
+	livenessTimeout = 1 * time.Second
+
+	// slowRequestWarnFraction is the share of the request budget at which
+	// requestDeadline.finish emits exactly ONE structured WARN line naming
+	// the handler and the slowest step (0.8 = 80% of the deadline). It exists
+	// so an operator can see WHICH call is stalling before the deadline
+	// trips.
+	slowRequestWarnFraction = 0.8
+)
+
+// readTimeout returns the armed deadline for the heavy read surfaces: the
+// value installed by SetReadTimeout, or readTimeoutDefault when unset (a
+// Server built without it — unit tests, embedded use).
+func (s *Server) readTimeout() time.Duration {
+	if s.readDeadline > 0 {
+		return s.readDeadline
+	}
+	return readTimeoutDefault
+}
+
+// writeTimeoutError writes the structured deadline response (SCHED-GAP-1575-B):
+// HTTP 504 with the helper call that exceeded the request budget, so an
+// operator can tell WHICH of a handler's DB steps stalled. The body shape is
+// stable for machine consumption:
+//
+//	{"error":"deadline exceeded","helper":"spendByCostSource","detail":"context deadline exceeded"}
+//
+// Only the helper NAME is reported — never the SQL string, never the request
+// body (logs and responses here are publicly replayable).
+func writeTimeoutError(w http.ResponseWriter, helperName string, err error) {
+	detail := "context deadline exceeded"
+	if err != nil {
+		detail = err.Error()
+	}
+	// A struct, not a map: encoding/json sorts map keys, which would put the
+	// documented shape on the wire as detail/error/helper. The order here is
+	// the documented one (error, helper, detail) and stays stable.
+	writeJSON(w, http.StatusGatewayTimeout, struct {
+		Error  string `json:"error"`
+		Helper string `json:"helper"`
+		Detail string `json:"detail"`
+	}{
+		Error:  "deadline exceeded",
+		Helper: helperName,
+		Detail: detail,
+	})
+}
+
+// requestDeadline is the per-request deadline observer for the heavy read
+// handlers (SCHED-GAP-1575-B). One per request, created by newRequestDeadline
+// and closed by finish (always via defer). It carries:
+//
+//   - the deadline context to thread through every DB call of the handler,
+//   - the name of the step currently executing, so check can name it in the
+//     504 body, and
+//   - a per-step elapsed span map, so finish can emit ONE WARN line naming
+//     the slowest step when the request ran past slowRequestWarnFraction of
+//     its budget.
+//
+// All time reads go through the server's clock seam (SCHED-GAP-169), never
+// the stdlib — the deadline itself is enforced by context.WithTimeout.
+type requestDeadline struct {
+	handler string
+	budget  time.Duration
+	started time.Time
+	step    string
+	stepAt  time.Time
+	spans   map[string]time.Duration
+	// hook, when non-nil, is invoked with the step name as it starts. It is
+	// the test seam that lets a test stall a NAMED step deterministically and
+	// prove the deadline trips naming that step; production leaves it nil.
+	hook   func(step string)
+	now    func() time.Time
+	since  func(time.Time) time.Duration
+	cancel context.CancelFunc
+}
+
+// newRequestDeadline derives the request-scoped deadline context for handler
+// from parent (the *http.Request context, so client cancellation propagates)
+// and returns the observer that marks each step. A nil parent falls back to
+// context.Background(); a non-positive budget falls back to
+// readTimeoutDefault.
+func (s *Server) newRequestDeadline(parent context.Context, handler string, budget time.Duration) (context.Context, *requestDeadline) {
+	if budget <= 0 {
+		budget = readTimeoutDefault
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
+	clk := s.clock()
+	now := clk.Now()
+	return ctx, &requestDeadline{
+		handler: handler,
+		budget:  budget,
+		started: now,
+		step:    "start",
+		stepAt:  now,
+		spans:   make(map[string]time.Duration),
+		hook:    s.readStepHook,
+		now:     clk.Now,
+		since:   clk.Since,
+		cancel:  cancel,
+	}
+}
+
+// enter marks step as the currently executing step (closing the previous
+// one's span) and runs the observer's test hook when one is installed.
+func (d *requestDeadline) enter(step string) {
+	if d == nil {
+		return
+	}
+	d.closeStep()
+	d.step = step
+	if d.hook != nil {
+		d.hook(step)
+	}
+}
+
+// closeStep folds the elapsed time of the current step into the span map and
+// restarts the step clock.
+func (d *requestDeadline) closeStep() {
+	if d == nil || d.step == "" || d.since == nil {
+		return
+	}
+	d.spans[d.step] += d.since(d.stepAt)
+	if d.now != nil {
+		d.stepAt = d.now()
+	}
+}
+
+// check closes the current step and reports whether the request may continue.
+// When the deadline (or the client's own context) is done it writes the 504
+// naming the step that blew the budget and returns false — the caller MUST
+// return immediately, so the deadline is never silently swallowed.
+func (d *requestDeadline) check(w http.ResponseWriter, ctx context.Context) bool {
+	if d == nil {
+		return true
+	}
+	d.closeStep()
+	if err := ctx.Err(); err != nil {
+		writeTimeoutError(w, d.step, err)
+		return false
+	}
+	return true
+}
+
+// finish closes the request: it cancels the derived context (releasing the
+// timer) and emits exactly ONE structured WARN line when the request ran past
+// slowRequestWarnFraction of its budget, naming the handler and the slowest
+// step. Safe on a nil observer. Always defer it.
+func (d *requestDeadline) finish() {
+	if d == nil {
+		return
+	}
+	d.closeStep()
+	if d.cancel != nil {
+		d.cancel()
+	}
+	total := d.since(d.started)
+	if total < time.Duration(float64(d.budget)*slowRequestWarnFraction) {
+		return
+	}
+	step, stepElapsed := d.slowest()
+	log.Printf("WARN: slow request handler=%s step=%s elapsed=%s slowest_step=%s slowest_step_elapsed=%s budget=%s",
+		d.handler, d.step, total.Round(time.Millisecond), step, stepElapsed.Round(time.Millisecond), d.budget)
+}
+
+// slowest returns the step with the largest recorded span (empty + 0 when no
+// step was ever marked).
+func (d *requestDeadline) slowest() (string, time.Duration) {
+	var name string
+	for step, elapsed := range d.spans {
+		if name == "" || elapsed > d.spans[name] {
+			name = step
+		}
+	}
+	if name == "" {
+		return "", 0
+	}
+	return name, d.spans[name]
 }
 
 func splitPath(path string) []string {

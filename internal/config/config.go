@@ -201,16 +201,31 @@ type DuckBrainConfig struct {
 
 // RootConfig is the top-level structure decoded from a schedulerd.toml
 // (the FEAT-005 unified config file). It wraps the daemon/scheduler/
-// gateway/duckbrain sections plus the existing fleet definitions, which
+// gateway/duckbrain/api sections plus the existing fleet definitions, which
 // can live in the same file or a fleet-only file loaded via the legacy
-// LoadFleetConfig entrypoint.
+// LoadFleetConfig entrypoint. The [[projects]] and [[namespaces]]
+// array-of-tables slices allow the same project/namespace to be defined
+// declaratively and in order.
 type RootConfig struct {
 	Daemon     DaemonConfig    `toml:"daemon"`
 	Scheduler  SchedulerConfig `toml:"scheduler"`
 	Gateway    GatewayConfig   `toml:"gateway"`
 	DuckBrain  DuckBrainConfig `toml:"duckbrain"`
+	API        APIConfig       `toml:"api"`
 	Projects   []ProjectDef    `toml:"projects"`
 	Namespaces []NamespaceDef  `toml:"namespaces"`
+}
+
+// APIConfig covers the HTTP API surface knobs (SCHED-GAP-1575-B).
+type APIConfig struct {
+	// ReadTimeout is the per-request deadline for the heavy DB-backed read
+	// surfaces (/api/v1/status, /projects, /namespaces, /ticks), stored as a
+	// duration string (e.g. "5s"). A step that exceeds it answers 504 naming
+	// the stalled helper instead of hanging the handler on the single
+	// serialized SQLite connection. Empty = the daemon flag default (5s).
+	// Must be > 0 when set — the flag layer treats <= 0 as "keep default",
+	// so a TOML "0s" here would be a silent no-op.
+	ReadTimeout string `toml:"read_timeout"`
 }
 
 // AsFleet returns a FleetConfig view of this RootConfig's Projects and
