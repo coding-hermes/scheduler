@@ -4053,3 +4053,41 @@ tasks:
   status: complete
   created_at: '2026-09-24T02:23:59.259185+00:00'
   completed_at: '2026-09-24T02:44:49.564757+00:00'
+- id: SCHED-GAP-1576-r1
+  title: 'perf(dashboard): TTL-cache readGitReins + raise dashboard render cache TTL'
+  criteria:
+  - 'readGitReins: add a TTL cache (>=60s) keyed by workdir; mtime change invalidates;
+    size cap with documented value'
+  - dashboard render cache TTL is explicit and documented
+  - go test -short -count=1 -p 1 ./... passes; go vet clean; gofmt clean
+  - At least one new unit test for the cache (warm-path, TTL expiry, mtime-invalidation)
+  status: complete
+  created_at: '2026-09-24T04:10:50.832198+00:00'
+  completed_at: '2026-09-24T04:23:52.458407+00:00'
+- id: SCHED-GAP-1575-A
+  title: 'Loop: atomic refactor of GatewayResponseTimeout + coalesce ForceEvaluate'
+  criteria:
+  - "internal/scheduler/loop.go:421-427 \u2014 GatewayResponseTimeout() takes Loop.mu\
+    \ (WRITE lock) to read a single duration. /api/v1/status (api/server.go:348) joins\
+    \ the same convoy as evaluate() which holds the write lock for ~80s on a loaded\
+    \ box. Fix: add an atomic.Int64 (or sync/atomic.Value) on Loop for the gateway\
+    \ response timeout, set it inside SetGatewayResponseTimeout (loop.go:401-403)\
+    \ and read it from GatewayResponseTimeout() WITHOUT the Loop mutex. internal/scheduler/loop.go:682-684\
+    \ \u2014 ForceEvaluate() spawns  with no coalescing. On a busy host, every board-wake\
+    \ / API POST / evaluate call queues another full pass and starves the write lock\
+    \ for 28-80 min. Fix: introduce a single-slot wake pattern \u2014 an atomic.CompareAndSwapBool\
+    \ pending flag plus a goroutine that drains the wake channel and calls evaluate();\
+    \ ForceEvaluate just flips the flag (or sends non-blocking on a buffered chan)\
+    \ and lets the single drain goroutine do the work. PASS: (a) go test -short -count=1\
+    \ -p 1 ./internal/scheduler/ passes (full suite, 13 packages); (b) new test forces\
+    \ 100 concurrent ForceEvaluate calls and asserts evaluate() runs at most a small\
+    \ bounded number of times (e.g. <= 2) when no other work is happening; (c) new\
+    \ test asserts GatewayResponseTimeout() returns the value set by SetGatewayResponseTimeout()\
+    \ WITHOUT holding the Loop mutex (use a test that holds Loop.mu externally and\
+    \ calls the getter \u2014 pre-fix this deadlocks, post-fix it returns immediately);\
+    \ (d) go vet clean, gofmt clean, golangci-lint clean; (e) commit co-authored-by\
+    \ trailer; (f) AC2 RED-proof on a reverted control: reverting the atomic refactor\
+    \ reproduces the deadlock; reverting the coalesce causes the bound test to fail."
+  status: complete
+  created_at: '2026-09-24T05:52:27.284034+00:00'
+  completed_at: '2026-09-24T06:36:00.394900+00:00'
