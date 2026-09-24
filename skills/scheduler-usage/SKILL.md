@@ -3,13 +3,14 @@ name: scheduler-usage
 description: >-
   How to USE the Coding Hermes Scheduler for real: REST API dialect (snake_case,
   envelopes), MCP tools (fleet_* only — fleet_add accepts repo or repo_url),
-  dashboard, project lifecycle (create/PUT/DELETE soft+purge), board format,
+  dashboard (SLOW at HEAD: / ~45s per cache cycle — see Pitfalls), project
+  lifecycle (create/PUT/DELETE soft+purge), board format,
   sim/verify harnesses, and the known traps (spawn tick_id unresolvable,
   fleet_ticks PascalCase, migrate silent skips, --simulate doesn't simulate).
   Load this before operating the scheduler or writing any integration
-  against http://127.0.0.1:9090. Updated from the 2026-08-25 dogfood run
-  (docs/dogfood/2026-08-25-integration.md); supersedes the 08-15 version.
-version: 1.3.0
+  against http://127.0.0.1:9090. Updated from the 2026-09-24 dogfood run
+  (docs/dogfood/2026-09-24-integration.md); supersedes the 08-25 version.
+version: 1.4.0
 category: software-development
 ---
 
@@ -167,3 +168,22 @@ REST `POST /api/v1/projects` also works. `fleet_ticks` output is PascalCase
 - Disable-provenance: new disables stamp `disabled_at/by/reason`; 25 legacy
   disabled rows are empty (DOGFOOD-010) — don't read their absence as a bug
   in your own changes.
+- **THE DASHBOARD ROOT + STATUS ENDPOINTS ARE SLOW (measured 2026-09-24,
+  SCHED-GAP-1576):** `GET /` is ~45s cold AND ~45s again after the ~60s
+  cache cycle (2.2s warm); `/dashboard/partial` (htmx refetches it every
+  10s) is 317KB at 4.1s±7.8 (2.2–37.1s, n=20); `/api/v1/status` 94.7s;
+  `/api/v1/health` 26.4s. Root shape: one Loop write-mutex serializes
+  whole-pass `evaluate()` calls (`ForceEvaluate` = unbounded
+  `go l.evaluate()`), and handlers queue behind them
+  (`GatewayResponseTimeout` takes the write lock just to read, loop.go:422).
+  For automation prefer `GET /api/v1/projects` (0.14s), `/api/v1/events`
+  (0.8ms), per-project pages (0.17s), `/queue`/`/ticks` — avoid `/` and
+  `/api/v1/status` in scripts and health checks; never build a dashboard on
+  status-route latency until SCHED-GAP-1576/1575 close. The dashboard also
+  has NO pause/resume controls despite the README claim — use the API
+  (`POST /api/v1/projects/<name>/pause|resume`, snake_case).
+- **Board wake storms self-inflict latency:** every board write fires an
+  evaluate pass (board-wake watcher); under a write-heavy fleet the
+  goroutine WARN (`threshold: 100`) fires continuously at ~200. If your
+  automation spams board writes and the API feels dead, this is why — see
+  SCHED-GAP-1575 for the full mechanism and 2026-09-23 outage history.

@@ -300,3 +300,49 @@ scratch DB), `--sim-setup --sim-ticks 10` harness, `make build`, migrate
 see ticks in seconds; never trust the spawn API's returned tick_id blindly
 (still DOGFOOD-015's territory); check `ss -tlnp` before choosing a port
 (9091 is squatted by an unrelated local service).
+
+## 2026-09-24 dogfood run (addendum — see 2026-09-24-integration.md)
+
+**The "watch as fleet grows" item arrived.** The 2026-09-09 run measured `/`
+at 224KB / 178 projects / ~2.2s cold and said "watch as fleet grows; consider
+pagination". At 480 lanes (289 enabled) the same page is 355KB and costs
+~45s — and not just cold: the cache cycle re-pays it (~60s TTL). The growth
+curve crossed usability somewhere in the last 300 lanes; pagination or
+lazy-render is no longer optional polish.
+
+**What was exercised:** the previously-unswept surface — the htmx dashboard
+as a real operator (`/`, `/dashboard/partial`, per-project, queue, ticks,
+health, namespaces), the README quickstart verify commands, the `/debug/pprof`
+self-profiling surface, the board JSONL (id census + row format), and the
+fresh-install battery on bunker-las-02.
+
+**Findings this run (board: SCHED-GAP-1576 new; SCHED-GAP-1575 updated with
+the proven mechanism; SCHED-GAP-1577 new):**
+
+1. **One mutex is the whole story.** `Loop.evaluate()` holds the Loop
+   write-mutex across the entire pass (tick_process.go:19);
+   `ForceEvaluate()` = `go l.evaluate()` with no coalescing (loop.go:682);
+   `GatewayResponseTimeout()` takes the same write lock to READ one value
+   (loop.go:422). Board-wake storms queue ~180 evaluate goroutines (ages
+   28–80 min observed) and every status/dashboard request joins the tail.
+   The 2026-09-23 "API dark" outage (SCHED-GAP-1575) was this shape at its
+   limit; the ~45s reads are it on an ordinary day. The fix directions are
+   ranked: coalesce ForceEvaluate; split/shrink the critical section; read
+   status fields through atomics; handler deadlines.
+2. **Render cost is dominated by per-project enrichment**: `readGitReins`
+   walks every workdir's `.gitreins/history` on each cache-cold render
+   (21.7% of a 72%-busy profile). Cheap fix: background refresh or per-
+   project cache; the payload itself (621 rows) needs pagination regardless.
+3. **The daemon's own WARN (`goroutine count > 100`) fired continuously at
+   ~200 while I measured.** It is the right alarm wired to no action —
+   SCHED-GAP-1575's ask 3 (act on the threshold) stands.
+4. **Clean-machine test failure**: `TestCountPending_MtimeReread` failed on
+   the fresh-install battery while passing on the dev box — the test relies
+   on natural filesystem mtime behavior (SCHED-GAP-1577). Fix: build the
+   fixture with explicit `os.Chtimes`.
+5. **Right way for agents**: prefer `/api/v1/projects` (0.14s) and
+   `/api/v1/events` (0.8ms) for automation; treat `/` and `/api/v1/status`
+   as interactive-only until 1575/1576 close; per-project pages (0.17s),
+   `/queue` (4.5ms), `/ticks` (0.2s) are all safe. SSE at
+   `/api/v1/events/stream` streams immediately (the 08-25-era note that
+   events had no SSE is outdated at HEAD).
