@@ -37,9 +37,12 @@ func insertADVR09Tick(t *testing.T, a *apiTestServer, tickID, project string, sp
 
 // TestADVR09_StatusBudgetFlowsFromLoop: budget_total must come from the Loop
 // (the resolved --budget/SCHEDULER_BUDGET/TOML value), never a literal. The
-// test server builds its loop with budget=0 — an impossible default (the
-// real --budget default is 100), so a hardcoded 100 vs the loop's 0 is
-// directly RED-provable: reverting to the literal fails this test.
+// test server builds its loop with budget=0 — SCHED-GAP-1582 normalizes that
+// to the documented default of 100 inside NewLoop (a 0 budget must not mean
+// "hold everything"), so the loop's EFFECTIVE budget is 100 and the surface
+// must report exactly that: a hardcoded literal in api/ (0, 42, …) still
+// fails this test, and TestADVR09_StatusBudgetFollowsConfiguredLoop proves
+// the surface follows the loop rather than any constant.
 func TestADVR09_StatusBudgetFlowsFromLoop(t *testing.T) {
 	a := newAPITestServer(t)
 
@@ -51,9 +54,10 @@ func TestADVR09_StatusBudgetFlowsFromLoop(t *testing.T) {
 	if !ok {
 		t.Fatalf("budget_total missing or wrong type: %T", body["budget_total"])
 	}
-	// The test loop was built with budget=0 (deliberately non-default).
-	if got != 0 {
-		t.Errorf("budget_total = %v, want 0 (the loop's actual budget — not the 100 literal)", got)
+	// The test loop was built with budget=0 → normalized to 100
+	// (SCHED-GAP-1582). The surface reports the loop's effective budget.
+	if got != 100 {
+		t.Errorf("budget_total = %v, want 100 (the loop's effective budget after SCHED-GAP-1582 zero-normalization — not an api/ literal)", got)
 	}
 	// Provenance is surfaced next to the number.
 	if src, ok := body["budget_source"].(string); !ok || src == "" {

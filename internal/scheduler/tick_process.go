@@ -81,6 +81,9 @@ func (l *Loop) evaluate() {
 
 	// Pick projects.
 	var packed []PackedProject
+	// SCHED-GAP-1582: budget holds from the namespace-mode pack (flat
+	// fallback has no per-namespace allocation, so nothing is held there).
+	var budgetHolds []nsHold
 	// SCHED-GAP-066: install the per-cycle budget gate on BOTH selection
 	// paths (multi-pool + flat fallback). Spends are precomputed in one
 	// query anchored at this eval's `now`; a nil gate (query failure) is
@@ -112,12 +115,14 @@ func (l *Loop) evaluate() {
 			running, lastComp := l.evalContext(ctx)
 			result := l.multiPoolPacker.Pack(projs, nss, l.calculator, lastComp, running, now)
 			packed = result.Projects
+			budgetHolds = result.BudgetHolds
 			tickGroup := now.Format("2006-01-02-15-04-05")
 			for _, nt := range result.NamespaceTicks {
 				_ = database.InsertNamespaceTick(ctx, l.db, &database.NamespaceTick{
 					TickGroup: tickGroup, NamespaceID: nt.NamespaceID,
 					Allocated: nt.Allocated, Used: nt.Used,
 					Borrowed: nt.Borrowed, Lent: nt.Lent, JobCount: nt.JobCount,
+					Demand: nt.Demand, Overcommitted: nt.Overcommitted,
 				})
 			}
 		}
@@ -155,7 +160,24 @@ func (l *Loop) evaluate() {
 	// EVAL-ZERO-SELECT are untouched (operators grep ^EVAL). Must stay
 	// before the zero-select early return below, or a pass that picked
 	// nothing — the case operators most need explained — would log nothing.
-	l.emitAdmissionPass(now, packed)
+	admitPassID := l.emitAdmissionPass(now, packed)
+
+	// SCHED-GAP-1582: namespace budget holds — the oversubscribed work the
+	// packer HELD this cycle (demand > allocation, after borrowing). Each
+	// hold is logged grep-stably, persisted per lane through the SAME
+	// SCHED-GAP-157 deferrals path the admission pass uses (reason
+	// "budget", detail naming the namespace arithmetic — unlike the pass's
+	// post-hoc classifier, this row is not a residual guess: a held lane
+	// that is also in cooldown would otherwise be misreported as
+	// "cooldown"), and emitted as a HIGH event so the state reaches
+	// GET /api/v1/events/stream. Deliberately not folded into the ADMIT
+	// lines: those are per-lane; the hold is a per-namespace statement
+	// about configuration vs budget.
+	for _, h := range budgetHolds {
+		logBudgetHold(h)
+		recordBudgetHoldDeferrals(l, h, admitPassID)
+		emitBudgetHoldEvent(l.events, h, admitPassID, now)
+	}
 
 	if len(packed) == 0 {
 		// GAP-043: a zero-select eval with eligible projects present is an

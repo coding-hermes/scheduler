@@ -83,8 +83,18 @@ func (m *MultiPoolPacker) Pack(
 		selected   []*ProjectUrgency
 		queued     []*ProjectUrgency
 		usedBudget int
+		// demand (SCHED-GAP-1582): the sum of ENABLED project weights the
+		// namespace carried into this pack — the raw demand the allocation
+		// is measured against for the oversubscription verdict.
+		demand int
 	}
 	states := make(map[string]*nsPackState)
+
+	// SCHED-GAP-1582: budget holds — one entry per namespace whose enabled
+	// demand exceeded its FINAL (post-borrowing) allocation. Collected just
+	// before the result is built; recorded by the CALLER through the
+	// SCHED-GAP-157 deferrals path — the packer never writes DB rows itself.
+	var budgetHolds []nsHold
 
 	// Namespaces that exist (enabled or not) — used to detect dangling refs.
 	nsSet := make(map[string]bool, len(namespaces))
@@ -329,6 +339,10 @@ func (m *MultiPoolPacker) Pack(
 		}
 
 		st.usedBudget = alloc - budgetRemaining
+		st.demand = 0
+		for _, p := range nsProjects {
+			st.demand += p.Weight
+		}
 		states[ns.ID] = st
 	}
 
@@ -422,6 +436,16 @@ func (m *MultiPoolPacker) Pack(
 		NamespaceTicks: make([]NamespaceTickData, 0, len(states)),
 	}
 
+	// SCHED-GAP-1582: the oversubscription verdict is taken HERE — after
+	// Phase-3 borrowing — because a namespace that borrowed enough budget
+	// to place its queued work is NOT over-committed; only the surplus
+	// still queued against the FINAL allocation is held.
+	for id, st := range states {
+		if h := newNsHold(id, st.demand, newAllocations[id], st.queued); h.over() > 0 {
+			budgetHolds = append(budgetHolds, h)
+		}
+	}
+
 	for _, ns := range namespaces {
 		st, ok := states[ns.ID]
 		if !ok {
@@ -468,8 +492,14 @@ func (m *MultiPoolPacker) Pack(
 			Borrowed:    borrowMap[ns.ID],
 			Lent:        lentMap[ns.ID],
 			JobCount:    len(st.selected),
+			// SCHED-GAP-1582: demand vs final allocation — the two
+			// columns that make an oversubscribed namespace explicit
+			// on the utilization history.
+			Demand:        st.demand,
+			Overcommitted: oversubscription(st.demand, newAllocations[ns.ID]),
 		})
 	}
+	result.BudgetHolds = budgetHolds
 
 	// --- Phase 4 — unassigned projects must NEVER be silently dropped ---
 	// Projects with nil NamespaceID or a namespace ID that doesn't exist (or

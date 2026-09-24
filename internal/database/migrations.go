@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 42
+const latestMigration = 43
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -655,6 +655,14 @@ ALTER TABLE projects ADD COLUMN deliver_mode TEXT NOT NULL DEFAULT '';
 ALTER TABLE projects ADD COLUMN parent TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent);
+`,
+	},
+	{
+		version: 43,
+		desc:    "budget oversubscription observability (SCHED-GAP-1582): demand and overcommitted on namespace_ticks — the enabled-weight demand the namespace carried into the pack and by how much it exceeded the cycle's allocation. Before this, an oversubscribed namespace (demand > alloc) was invisible: CalcEffectiveWeight rescaled every member project to fit, the pack output simply shrank, and nothing recorded WHY. '' demand semantics: a hold is a statement about the namespace's configuration vs its budget, not about which project lost the race, so no per-project column is added (the per-lane hold rides the existing deferrals table, reason 'budget').",
+		stmt: `
+ALTER TABLE namespace_ticks ADD COLUMN demand INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE namespace_ticks ADD COLUMN overcommitted INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }

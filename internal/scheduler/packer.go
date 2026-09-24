@@ -69,8 +69,13 @@ type Packer struct {
 
 // NewPacker creates a packer with the given budget and concurrency cap. The
 // pending-task counter defaults to the package-level shared instance so
-// existing call sites keep working unchanged.
+// existing call sites keep working unchanged. A 0/negative budget normalizes
+// to the documented default of 100 (SCHED-GAP-1582: budget 0 / unset must
+// behave as the default, not as "hold everything").
 func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *Packer {
+	if budget < 1 {
+		budget = 100
+	}
 	return &Packer{
 		db:              db,
 		calculator:      calc,
