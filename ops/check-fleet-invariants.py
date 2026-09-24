@@ -11,7 +11,9 @@ drifts back. This is the regression gate for that class of change. Run it after
 every scheduler deploy and from the daily report.
 
 Checks
-  1. caps          — per-namespace max_concurrent (foreman 8, satellites 1).
+  1. caps          — per-namespace max_concurrent (foreman 8; satellites per
+                     the SCHED-GAP-215 policy map: qa/pm/dogfood/releases 9,
+                     duckbrain-sync 12, doc-writer 1).
                      The GLOBAL --max-concurrent has no DB column; it is
                      parity-checked instead: pass the daemon's actual
                      ``--global-cap N`` on a deploy and the checker fails when
@@ -156,6 +158,23 @@ DEFAULT_TOML = os.path.expanduser("~/.hermes/fleet.toml")
 FOREMAN_NS = "coding-hermes"
 FOREMAN_CAP_EXPECTED = 8
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
+# SCHED-GAP-215 (2026-09-24): satellite caps moved OFF the flat 1 onto the
+# ~1-slot-per-3-enabled-lanes policy for the five big families — each hosts
+# 20-34 enabled lanes and a cap of 1 serialized the whole family behind a
+# single sibling (SCHED-GAP-144 cap-gate deferrals: 1445 by 2026-09-24; the
+# lane-lag 3-6x bucket held 45 of the 150 lanes with tick history). The 12-slot
+# global --max-concurrent still bounds the fleet, so the raise redistributes
+# slots, it does not multiply them. doc-writer keeps 1 by design (7 lanes,
+# weekly cadence — the flat cap still serves it). Namespaces absent from this
+# map are not asserted (0 = unlimited infra rows).
+SATELLITE_CAP_POLICY = {
+    "qa": 9,
+    "pm": 9,
+    "dogfood": 9,
+    "releases": 9,
+    "duckbrain-sync": 12,
+    "doc-writer": 1,
+}
 COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
 # Enabled lanes legitimately paced slower than the floor (namespace cadence tiers).
 COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
@@ -688,8 +707,13 @@ def main(argv: list[str] | None = None) -> int:
             row = namespaces.get(ns)
             if row is None:
                 bad("caps", ns, "namespace missing")
-            elif row.get("max_concurrent") != 1:
-                bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected 1 (one global slot per satellite family)")
+            else:
+                # SCHED-GAP-215: per-family policy, not the flat 1 — the big
+                # families (qa/pm/dogfood/releases/duckbrain-sync) carry
+                # ~1 slot per 3 enabled lanes; doc-writer keeps the flat 1.
+                expected = SATELLITE_CAP_POLICY.get(ns, 1)
+                if row.get("max_concurrent") != expected:
+                    bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected {expected} (SCHED-GAP-215 satellite cap policy)")
 
     # 2. admission ------------------------------------------------------------
     for ns, row in namespaces.items():

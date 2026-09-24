@@ -81,7 +81,8 @@ def _make_db(path: Path, primary: dict | None, rows: list[dict],
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
     con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
-        con.execute("INSERT INTO namespaces VALUES (?, 1, 'cooldown')", (ns,))
+        con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
+                    (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
 
     if primary is not None:
         wd = path.parent / PRIMARY

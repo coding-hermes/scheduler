@@ -105,7 +105,8 @@ def _make_db(path: Path, projects: list[dict], *,
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
     con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
     for ns in SATELLITE_NS:
-        con.execute("INSERT INTO namespaces VALUES (?, 1, 'cooldown')", (ns,))
+        con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
+                    (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
     for p in projects:
         names = ("name, enabled, cooldown_s, cooldown_floor_s, cooldown_ceiling_s,"
                  " adaptive_cooldown, command, prompt, workdir, namespace_id"
@@ -147,7 +148,10 @@ def _conforming_toml(toml_path: Path, projects: list[dict]) -> None:
         lines.append(f'id = "{ns}"')
         lines.append('admission_mode = "tasks"' if ns == "coding-hermes"
                      else 'admission_mode = "cooldown"')
-        lines.append("max_concurrent = 8" if ns == "coding-hermes" else "max_concurrent = 1")
+        # SCHED-GAP-215: the conforming TOML must carry the per-family policy
+        # cap or the store-parity check (7) would flag the fixture itself.
+        cap = 8 if ns == "coding-hermes" else gate.SATELLITE_CAP_POLICY.get(ns, 1)
+        lines.append(f"max_concurrent = {cap}")
         lines.append("")
     toml_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -298,7 +302,7 @@ max_concurrent = 4
 [[namespaces]]
 id = "qa"
 admission_mode = "cooldown"
-max_concurrent = 1
+max_concurrent = 9
 """
     rc, out = _run_gate(tmp_path, projects, toml_text=toml)
 

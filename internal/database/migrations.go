@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 39
+const latestMigration = 40
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -619,6 +619,26 @@ UPDATE projects SET cooldown_pin_s = 21600, cooldown_pin_by = 'fleet-toml-import
 		desc:    "post-failure cooldown stamp (SCHED-GAP-214): last_tick_status on projects ('' = never ticked | completed | failed | timeout | deferred) — the terminal status of the project's most recent tick, stamped by lifecycle.Complete. The tasks-mode cooldown waiver (SCHED-GAP-124) consults it: after a FAILED tick the waiver stands down and the lane paces on its full effective cooldown, closing the 9-second retry-storm the waiver otherwise re-opens every gateway outage",
 		stmt: `
 ALTER TABLE projects ADD COLUMN last_tick_status TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 40,
+		desc:    "satellite namespace throughput (SCHED-GAP-215): raise the five big satellite families' max_concurrent from 1 to the ~1-slot-per-3-enabled-lanes policy (qa/pm/dogfood 9, releases 9, duckbrain-sync 12) and refresh the three descriptions that still claimed \"1 concurrent\". Supersedes the v19-era one-slot ruling for these five families: at 20-34 enabled lanes each, a cap of 1 serialized whole families behind single siblings (cap-gate deferral counter: 1445 by 2026-09-24; lane-lag 3-6x bucket = 45 of 150 ticked lanes). The 12-slot global ceiling still bounds the fleet, so the raise redistributes slots, it does not multiply them.",
+		// Guarded backfill (v38's pattern): every UPDATE is conditioned on
+		// the OLD value, so the statement is idempotent — re-running it on
+		// an already-migrated DB (crash between UPDATE and the migrations
+		// INSERT, or a hand-raised row) is a no-op, never a double-raise.
+		// Rows are named, not family-matched, so a namespace added later
+		// with cap 1 keeps its operator's value.
+		stmt: `
+UPDATE namespaces SET max_concurrent = 9, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'qa'             AND max_concurrent = 1;
+UPDATE namespaces SET max_concurrent = 9, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'pm'             AND max_concurrent = 1;
+UPDATE namespaces SET max_concurrent = 9, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'dogfood'        AND max_concurrent = 1;
+UPDATE namespaces SET max_concurrent = 9, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'releases'       AND max_concurrent = 1;
+UPDATE namespaces SET max_concurrent = 12, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'duckbrain-sync' AND max_concurrent = 1;
+UPDATE namespaces SET description = 'QA lanes — clean-machine brittleness battery (skill qa-foreman-ops). Bunker path; the Dagger qa.ts executor is retired until the new dagger is built. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'qa' AND description LIKE '%1 concurrent.%';
+UPDATE namespaces SET description = 'Per-project PM lane — board hygiene: dedupe by content fingerprint, repair reused/malformed ids, normalise priorities, no refiling. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'pm' AND description LIKE '%1 concurrent.%';
+UPDATE namespaces SET description = 'DuckBrain namespace sync lanes — skill-driven focused sync (context-sync-duckbrain). Driver retired until the new dagger is built. Capped at 12 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'duckbrain-sync' AND description LIKE '%1 concurrent.%';
 `,
 	},
 }

@@ -118,7 +118,8 @@ def _seed_namespaces(con: sqlite3.Connection) -> None:
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
-        con.execute("INSERT INTO namespaces VALUES (?, 1, 'cooldown')", (ns,))
+        con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
+                    (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
 
 
 def _make_fixture(tmp_path: Path, primary_satellites: dict[str, dict]) -> Path:

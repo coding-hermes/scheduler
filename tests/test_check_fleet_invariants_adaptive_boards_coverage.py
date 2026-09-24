@@ -71,7 +71,8 @@ def _make_db(path: Path, rows: list[dict], workdirs: dict[str, Path]) -> Path:
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
     for ns in SATELLITE_NS:
-        con.execute("INSERT INTO namespaces VALUES (?, 1, 'cooldown')", (ns,))
+        con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
+                    (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
     # The check-6 targets fallback queries ticks for recent activity when a
     # satellite's base is not a fleet project — give it an empty table so a
     # fixture satellite never crashes the gate on a missing table.
