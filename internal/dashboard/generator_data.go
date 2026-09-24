@@ -691,7 +691,7 @@ func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[str
 			}
 			r.GitReinsPass = -1
 			if r.Workdir != "" {
-				if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
+				if gr := cachedReadGitReins(r.Workdir, 0); gr.Total > 0 {
 					r.GitReinsPass = gr.RatePct
 				}
 				r.CIConclusion = g.ciConclusion(r.Workdir)
@@ -1250,10 +1250,18 @@ func runCIConclusion(workdir string) string {
 	return s
 }
 
+// gitReinsReadFile reads one verdict file. It is a var so a test can count the
+// walk's file reads and prove a warm cache hit re-walks nothing
+// (SCHED-GAP-1576); production never assigns it.
+var gitReinsReadFile = os.ReadFile
+
 // readGitReins walks a project's .gitreins/history and returns the aggregate
 // LLM-judge verdict summary (pass rate + latest verdicts). Each verdict is a
 // .gitreins/history/<YYYY-MM-DD>/<sha>/verdict.json. Best-effort: malformed
 // files are skipped; a missing/empty history yields a zero summary.
+//
+// It is the underlying walker: render call sites go through
+// cachedReadGitReins (git_reins_cache.go), which wraps this for the TTL window.
 func readGitReins(workdir string, maxLatest int) GitReinsSummary {
 	root := filepath.Join(workdir, ".gitreins", "history")
 	var sum GitReinsSummary
@@ -1277,7 +1285,7 @@ func readGitReins(workdir string, maxLatest int) GitReinsSummary {
 				continue
 			}
 			p := filepath.Join(root, dd.Name(), vd.Name(), "verdict.json")
-			data, err := os.ReadFile(p)
+			data, err := gitReinsReadFile(p)
 			if err != nil {
 				continue
 			}

@@ -66,8 +66,9 @@ type Generator struct {
 	spawnCounts  func() (httpCount, execCount int64) // optional; /health panel
 	// CI conclusion cache (DASH-PERF-001): `gh run list` is a ~0.7s
 	// subprocess; running it once per project on EVERY fleet render cost
-	// ~30s. Conclusions are cached per workdir for ciTTL (60s default) and
-	// the cold-cache warm pass is concurrency-bounded + timeout-capped.
+	// ~30s. Conclusions are cached per workdir for ciTTL (300s default —
+	// DASH-PERF-003; never below 60s, which is shorter than a cold render)
+	// and the cold-cache warm pass is concurrency-bounded + timeout-capped.
 	ciMu     sync.Mutex
 	ciCache  map[string]ciCacheEntry
 	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
@@ -208,8 +209,10 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		}
 	}
 	// GitReins LLM-judge verdict summary (pass rate + latest verdicts).
+	// cachedReadGitReins wraps the readGitReins walk in a 60s TTL cache
+	// (SCHED-GAP-1576), so repeat renders of the same project reuse the walk.
 	if project.Workdir != "" {
-		data.GitReins = readGitReins(project.Workdir, 12)
+		data.GitReins = cachedReadGitReins(project.Workdir, 12)
 	}
 	// Speed/cost-over-time chart data (last 20 completed ticks).
 	data.SpeedCost = g.speedCostSeries(ctx, name, 20)
