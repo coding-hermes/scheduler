@@ -124,17 +124,7 @@ func isRetryableSendError(err error, output string) bool {
 // trigger is "command" (custom command/script spawn) or "prompt" (LLM prompt
 // spawn) — carried in the subject (top line) and the footer (bottom line) so
 // the thread shows how the run was launched (Bane 2026-08-27).
-func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffer) {
-	deliverOutputWithMode(clock.Real(), project, tickID, deliver, trigger, output, "")
-}
-
-// deliverOutputWith is deliverOutput on an explicit clock (SCHED-GAP-169): the
-// retry backoff waits on clk, so a simulated run does not sleep in real time.
-//
-// SCHED-GAP-1607: callers that know the project's deliver_mode should call
-// deliverOutputWithMode; this wrapper keeps the historical signature so the
-// pre-1607 call shape stays byte-identical (mode "" → full).
-func deliverOutputWith(clk clock.Clock, project, tickID, deliver, trigger string, output *bytes.Buffer) {
+func deliverOutput(clk clock.Clock, project, tickID, deliver, trigger string, output *bytes.Buffer) {
 	deliverOutputWithMode(clk, project, tickID, deliver, trigger, output, "")
 }
 
