@@ -4091,3 +4091,70 @@ tasks:
   status: complete
   created_at: '2026-09-24T05:52:27.284034+00:00'
   completed_at: '2026-09-24T06:36:00.394900+00:00'
+- id: SCHED-GAP-1575-B
+  title: '/api/v1/status request deadline: handler must answer even when a DB call
+    stalls'
+  criteria:
+  - "1. /api/v1/status handler runs ~12 DB calls (ListProjects, countActiveTicks,\
+    \ countRecentOutcomes, countZeroOutputCommitted24h, computeProjectFailureRates,\
+    \ spendByCostSource, listRunningWaves, waveDepthTotal, waveWorkersCapConfigured,\
+    \ runningWaveCostTotal, gatewayHealthGateStatusBlock, configDriftBlock) sharing\
+    \ a single serialized SQLite connection (SetMaxOpenConns(1)); the handler is the\
+    \ only one stuck today (live re-probe 2026-09-24 06:50-07:00 local: /live 200/0.6ms,\
+    \ /config 200/0.3ms, /projects 200/0.17s, /status curl exit 000 with 8s budget).\n\
+    2. context.Background() on internal/api/server.go:234 means no request deadline\
+    \ \u2014 a slow DB call hangs the handler forever and the goroutine count grows\
+    \ without bound (the original 1575 measurement: 1046 goroutines at threshold 100,\
+    \ ~10x the daemon's own warning).\n3. Add a request-scoped context.WithTimeout\
+    \ to the status handler and the other heavy read handlers (handleProjects, handleNamespaces,\
+    \ handleTicks) so a slow DB call returns a 504 / structured error instead of hanging\
+    \ the request.\n4. Log a slow-request warning naming the blocked step so an operator\
+    \ can tell which of the 12 DB calls stalled.\n5. The deadline must be tuned to\
+    \ a 5s budget for liveness surfaces and a longer (configurable) budget for the\
+    \ heavy read endpoints. Pick the budget that matches existing conventions (the\
+    \ live route uses a tight bound; SCHED-PERF-002 and SCHED-GAP-204 show the surface\
+    \ has S10 < 100ms and S12 wave < 2ms budgets \u2014 but a per-call deadline that\
+    \ fails closed is what the row asks for).\n6. Add a regression test that simulates\
+    \ one of the DB calls taking >deadline and asserts the handler returns a structured\
+    \ error within the deadline, not a hang.\n7. Build / lint / test gates must pass:\
+    \ go build ./... zero errors, go vet ./... zero warnings, go test -short -p 1\
+    \ ./internal/api/... clean. Add the new test to the existing API test file pattern\
+    \ (status_test.go or similar).\n8. Add a CHANGELOG-style board note inside the\
+    \ handler docstring referencing the row and the live measurement so the next foreman\
+    \ sees the contract.\n9. Acceptance measured live: from the same workdir run a\
+    \ one-shot preview binary with --simulate on a DB copy, hit /api/v1/status, and\
+    \ prove it returns 504 within the deadline when one of the helper queries is made\
+    \ to stall (e.g., by patching the helper to time.Sleep or by holding an exclusive\
+    \ transaction from outside).\n10. Co-author trailer per repo convention (CODING_HERMES_CO_AUTHOR\
+    \ env var). No force-push, no rebase, one commit titled 'feat(api): /api/v1/status\
+    \ request deadline (SCHED-GAP-1575-B)'."
+  status: complete
+  created_at: '2026-09-24T07:08:22.498441+00:00'
+  completed_at: '2026-09-24T07:32:32.764500+00:00'
+- id: SCHED-GAP-1575-B2
+  title: apply request deadline to /api/v1/projects/{name} and /api/v1/namespaces/{name}
+    detail handlers
+  criteria:
+  - 'Both detail GET handlers use a bare context.Background(). /api/v1/projects/{name}
+    calls database.GetProject + getLatestTick; /api/v1/namespaces/{name} calls database.GetNamespace.
+    Both share the single serialized SQLite connection (SetMaxOpenConns(1)). Apply
+    the same r.Context()-derived context.WithTimeout + obs.enter / obs.check pattern
+    as the parent commit fb100da7. Mirror the 5s liveness split. 504 on stall naming
+    the helper. Add schedgap1575b2_detail_deadline_test.go with 2 tests: detail handleProjects
+    deadlocks, detail handleNamespaces deadlocks. RED proof: WithTimeout -> WithCancel
+    fails the tests. Build / vet / test gates pass.'
+  status: complete
+  created_at: '2026-09-24T08:01:54.370190+00:00'
+  completed_at: '2026-09-24T08:11:06.336476+00:00'
+- id: SCHED-GAP-215
+  title: Raise satellite namespace caps to fix 3-6x cooldown lag
+  criteria:
+  - Each satellite namespace (qa/pm/dogfood/releases/duckbrain-sync) carries max_concurrent=1
+    against 20-29 enabled lanes. 41 of 127 enabled lanes sit 3-6x behind their own
+    cooldown. Raise the caps to ~1 slot per 3 enabled lanes, document the memory/load
+    consequence, re-measure the lane-lag distribution proving the 3-6x bucket drops
+    materially, add a test asserting the new policy, and ensure go build/vet/lint/test
+    all pass.
+  status: complete
+  created_at: '2026-09-24T10:09:16.585831+00:00'
+  completed_at: '2026-09-24T11:49:46.801424+00:00'
