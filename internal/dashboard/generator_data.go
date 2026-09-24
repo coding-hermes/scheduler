@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,12 +143,214 @@ type NamespaceTickRow struct {
 	CreatedAt   string
 }
 
-// FleetData holds all data for the dashboard.
+// FleetTableParams is the server-side table state (SCHED-GAP-1598): the
+// search term, active sort, and page/size the overview tables were rendered
+// with. The overview validates raw query params into this shape and both the
+// full page and the htmx refresh render through it, so an autorefresh carries
+// the operator's current view instead of resetting it.
+type FleetTableParams struct {
+	// Table is the owning table key ("projects", "ticks", "namespaces",
+	// "nsticks") — it selects which columns are sortable.
+	Table   string
+	Q       string // substring match against lane name (projects) / namespace id
+	Sort    string // column key; "" = the table's existing default order
+	Dir     string // "asc" | "desc"; "" = asc
+	Page    int    // 1-based
+	PerPage int    // rows per page (bounded into pageSizeOptions); 0 = all
+	// Counts are filled by fleetTableSlice once the filtered set is known.
+	FilteredTotal int // rows matching search/sort (pre-pagination)
+	TotalPages    int // ceil(FilteredTotal / PerPage), minimum 1
+	// Pagination nav, filled by fleetNav after the page math.
+	HasPrevious  bool
+	PreviousPage int
+	HasNext      bool
+	NextPage     int
+	// Filters are the params echoed back into the form inputs (validated:
+	// values outside the vocabularies are dropped so a stray query param
+	// renders the unfiltered view rather than a guaranteed-empty one).
+	FilterP         string // projects: exact lane name (from DistinctTickProjects)
+	FilterS         string // projects: exact last outcome (from outcomeVocabulary)
+	PageSizeOptions []int  // selectable page sizes
+}
+
+// Query parameter keys, shared by the handler and the template so a rename
+// cannot split the form from the parser.
+const (
+	fleetQKey    = "q"
+	fleetSortKey = "sort"
+	fleetDirKey  = "dir"
+	fleetPageKey = "page"
+	fleetSizeKey = "size"
+)
+
+// defaultFleetPageSize matches the tick-history page (tickHistoryPageSize,
+// generator.go) so the two pages paginate identically.
+const defaultFleetPageSize = 50
+
+// pageSizeOptions are the per-table page-size choices. "all" is encoded as 0.
+var pageSizeOptions = []int{25, 50, 100, 0}
+
+// normalizeFleetTableParams validates raw form/query values into render-ready
+// params. Unknown sort keys and directions fall back to the default order, a
+// page beyond the result set is clamped by the caller once the total is known,
+// and an unlisted page size falls back to the tick-history default of 50.
+func normalizeFleetTableParams(raw FleetTableParams) FleetTableParams {
+	p := raw
+	p.Q = strings.TrimSpace(p.Q)
+	p.FilterP = strings.TrimSpace(p.FilterP)
+	p.FilterS = strings.TrimSpace(p.FilterS)
+	if p.Sort != "" && !fleetSortValid(p.Table, p.Sort) {
+		p.Sort = ""
+	}
+	if p.Dir != "asc" && p.Dir != "desc" {
+		p.Dir = ""
+	}
+	if p.Dir == "" {
+		p.Dir = "asc" // every sortable column defaults to ascending
+	}
+	known := false
+	for _, s := range pageSizeOptions {
+		if p.PerPage == s {
+			known = true
+			break
+		}
+	}
+	if !known {
+		p.PerPage = defaultFleetPageSize
+	}
+	if p.Page < 1 {
+		p.Page = 1
+	}
+	if p.PageSizeOptions == nil {
+		p.PageSizeOptions = pageSizeOptions
+	}
+	return p
+}
+
+// fleetSortValid reports whether key is a sortable column of the named table.
+func fleetSortValid(table, key string) bool {
+	for _, k := range fleetSortable[table] {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// fleetSortable lists the sortable column keys per overview table
+// (SCHED-GAP-1598). The other tables keep their existing default order
+// only — every listed key has a sort comparator in fleetTableSlice.
+var fleetSortable = map[string][]string{
+	"projects":   {"name", "weight", "priority", "last_tick", "outcome", "progress", "next", "cost_today"},
+	"ticks":      {"project", "spawned"},
+	"namespaces": {"id", "weight", "allocated", "used", "utilization", "projects"},
+	"nsticks":    {"namespace", "created"},
+}
+
+// fleetTableSlice filters, sorts and slices one overview table
+// (SCHED-GAP-1598). All of it is server-side on the full in-memory set — the
+// page is already heavy and shipping 485 rows to the browser to filter there
+// is exactly what this must not do. Pagination is the output of the math
+// (page clamped into range; PerPage 0 = "all"); FilteredTotal carries the
+// pre-pagination row count for the "showing N of M" line.
+func fleetTableSlice[T any](rows []T, p *FleetTableParams, key func(T) string, less func(T, T) bool) []T {
+	// 1. Search: case-insensitive substring on the row's key text.
+	q := strings.ToLower(p.Q)
+	filtered := rows
+	if q != "" {
+		filtered = make([]T, 0, len(rows))
+		for _, r := range rows {
+			if strings.Contains(strings.ToLower(key(r)), q) {
+				filtered = append(filtered, r)
+			}
+		}
+	}
+	// 2. Sort. Stable so equal rows keep the query's default order — the
+	// tables keep their existing default sequence as the unsorted baseline.
+	if p.Sort != "" && less != nil {
+		desc := p.Dir == "desc"
+		sort.SliceStable(filtered, func(i, j int) bool {
+			if desc {
+				return less(filtered[j], filtered[i])
+			}
+			return less(filtered[i], filtered[j])
+		})
+	}
+	// 3. Page math on the filtered (and sorted) set.
+	p.FilteredTotal = len(filtered)
+	if p.PerPage > 0 {
+		p.TotalPages = (p.FilteredTotal + p.PerPage - 1) / p.PerPage
+		if p.TotalPages == 0 {
+			p.TotalPages = 1
+		}
+		if p.Page > p.TotalPages {
+			p.Page = p.TotalPages
+		}
+		start := (p.Page - 1) * p.PerPage
+		if start > p.FilteredTotal {
+			start = p.FilteredTotal
+		}
+		end := start + p.PerPage
+		if end > p.FilteredTotal {
+			end = p.FilteredTotal
+		}
+		return filtered[start:end]
+	}
+	// "All" page size: one page, everything.
+	p.TotalPages = 1
+	p.Page = 1
+	return filtered
+}
+
+// fleetPrefix maps each table to its query-parameter prefix. The projects
+// table (the htmx-refreshed one) keeps the unprefixed family for backward
+// compatibility; the other three are prefixed so one URL can carry all four
+// states at once.
+var fleetPrefix = map[string]string{
+	"projects":   "",
+	"ticks":      "t",
+	"namespaces": "n",
+	"nsticks":    "h",
+}
+
+// fleetQueryParams returns the non-empty table-state values as URL-encoded
+// query-string fragments — used by pagination links and the htmx poll URL so
+// search/page/sort survive a refresh (SCHED-GAP-1598). Keys carry the
+// table's prefix so each table's links only ever touch its own params.
+func fleetQueryParams(p FleetTableParams) []string {
+	pref := fleetPrefix[p.Table]
+	var parts []string
+	if p.Q != "" {
+		parts = append(parts, pref+fleetQKey+"="+url.QueryEscape(p.Q))
+	}
+	if p.Sort != "" {
+		parts = append(parts, pref+fleetSortKey+"="+url.QueryEscape(p.Sort))
+		parts = append(parts, pref+fleetDirKey+"="+url.QueryEscape(p.Dir))
+	}
+	if p.PerPage != defaultFleetPageSize {
+		parts = append(parts, pref+fleetSizeKey+"="+url.QueryEscape(strconv.Itoa(p.PerPage)))
+	}
+	if p.FilterP != "" {
+		parts = append(parts, "project="+url.QueryEscape(p.FilterP))
+	}
+	if p.FilterS != "" {
+		parts = append(parts, "outcome="+url.QueryEscape(p.FilterS))
+	}
+	return parts
+}
+
+// fleetPageLink renders "key=value" page link parameters with the current
+// table state minus the page parameter itself (the caller appends its own),
+// mirroring tickHistoryData's BaseQS so filtering survives paging.
+func (p FleetTableParams) BaseQS() string {
+	return strings.Join(fleetQueryParams(p), "&")
+}
+
 type FleetData struct {
-	Title           string
-	GeneratedAt     string
-	BudgetTotal     int
-	BudgetUsed      int
+	Title       string
+	GeneratedAt string
+	BudgetTotal int
+	BudgetUsed  int
 	// SCHED-GAP-1582: oversubscription is an explicit, configured state —
 	// enabled namespaces' latest measured demand vs the PER-TICK budget.
 	// Shown as a labelled note, never as a fraction of the fleet-wide sum
@@ -154,15 +358,36 @@ type FleetData struct {
 	// not comparable quantities, so the note names both sides verbatim).
 	BudgetOversubscribed bool
 	NamespaceDemandTotal int
-	ActiveTicks     int
-	TotalProjects   int
-	EnabledProjects int
-	Projects        []FleetRow
-	RecentTicks     []TickRow
-	Namespaces      []NamespaceRow
-	NamespaceTicks  []NamespaceTickRow
-	CostTodayTotal  float64
-	CostWeekTotal   float64
+	ActiveTicks          int
+	TotalProjects        int
+	EnabledProjects      int
+	Projects             []FleetRow
+	RecentTicks          []TickRow
+	Namespaces           []NamespaceRow
+	NamespaceTicks       []NamespaceTickRow
+	CostTodayTotal       float64
+	CostWeekTotal        float64
+	// TableState carries the operator's per-table server-side controls
+	// (SCHED-GAP-1598): search / sort / page / size for each of the four
+	// stacked tables. The full page renders from these; the htmx autorefresh
+	// handler parses the same query params and re-renders through them, so a
+	// refresh preserves the current view instead of resetting it.
+	TableState FleetTables
+	// OutcomeOptions / PageSizeOptions are the dropdown vocabularies for the
+	// projects filter (outcome) and every table's page-size control.
+	OutcomeOptions  []string
+	PageSizeOptions []int
+}
+
+// FleetTables is the per-table parameter set for the overview page.
+type FleetTables struct {
+	Projects   FleetTableParams
+	Ticks      FleetTableParams
+	Namespaces FleetTableParams
+	NSHistory  FleetTableParams
+	// ProjectOptions is the lane-name vocabulary for the projects-table
+	// filter dropdown (lanes present in the ticks table).
+	ProjectOptions []string
 }
 
 // ProjectDetailData holds all data for the /projects/{name} page.
@@ -1624,4 +1849,244 @@ func readBoardSteps(path string) []BoardStep {
 		out = append(out, BoardStep{ID: r.id, Title: r.title, Status: status, Commit: r.commit})
 	}
 	return out
+}
+
+// ── Overview table controls (SCHED-GAP-1598) ───────────────────────────────
+//
+// The overview page stacks four tables (projects, recent ticks, namespaces,
+// namespace utilization history). Search, sort, page and page-size run
+// SERVER-SIDE in Go on the already-loaded rows — never in the browser, which
+// would require shipping all 485 project rows to filter there. Each table's
+// params are validated by normalizeFleetTableParams and applied by
+// fleetTableSlice; the same params ride the htmx autorefresh request so a
+// refresh preserves the operator's current view.
+
+// fleetProjectSortable returns the comparator for a projects-table sort key.
+// Sortable columns mirror the rendered headers: name, weight (W), priority
+// (P), last tick time, last outcome, board progress percent, next-tick
+// countdown and today's cost. Unparseable timestamps sort as zero.
+func fleetProjectSortable(key string) func(a, b FleetRow) bool {
+	switch key {
+	case "name":
+		return func(a, b FleetRow) bool { return a.Name < b.Name }
+	case "weight":
+		return func(a, b FleetRow) bool { return a.Weight < b.Weight }
+	case "priority":
+		return func(a, b FleetRow) bool { return a.Priority < b.Priority }
+	case "last_tick":
+		return func(a, b FleetRow) bool { return a.LastTick < b.LastTick }
+	case "outcome":
+		return func(a, b FleetRow) bool { return a.LastOutcome < b.LastOutcome }
+	case "progress":
+		// Progress percent is pct(done,total) clamped to 100 (SCHED-GAP-1583);
+		// compare the clamped value so the sort matches what is rendered.
+		return func(a, b FleetRow) bool {
+			return pct(a.BoardDone, a.BoardTotal) < pct(b.BoardDone, b.BoardTotal)
+		}
+	case "next":
+		// "running" < "due now" < "in Nm NS" < "—" — a rough urgency order:
+		// running lanes first, then due-now, then by remaining wait.
+		rank := func(s string) int {
+			switch {
+			case s == "running":
+				return 0
+			case s == "due now":
+				return 1
+			case strings.HasPrefix(s, "in "):
+				return 2
+			default:
+				return 3
+			}
+		}
+		return func(a, b FleetRow) bool {
+			ra, rb := rank(a.NextTickIn), rank(b.NextTickIn)
+			if ra != rb {
+				return ra < rb
+			}
+			return a.NextTickIn < b.NextTickIn
+		}
+	case "cost_today":
+		return func(a, b FleetRow) bool { return a.CostToday < b.CostToday }
+	default:
+		return nil
+	}
+}
+
+// fleetTickSortable returns the comparator for a recent-ticks sort key.
+// spawned compares raw RFC3339 strings (lexicographic = chronological).
+func fleetTickSortable(key string) func(a, b TickRow) bool {
+	switch key {
+	case "project":
+		return func(a, b TickRow) bool { return a.Project < b.Project }
+	case "spawned":
+		return func(a, b TickRow) bool { return a.SpawnedAt < b.SpawnedAt }
+	default:
+		return nil
+	}
+}
+
+// fleetNamespaceSortable returns the comparator for a namespaces sort key.
+func fleetNamespaceSortable(key string) func(a, b NamespaceRow) bool {
+	switch key {
+	case "id":
+		return func(a, b NamespaceRow) bool { return a.ID < b.ID }
+	case "weight":
+		return func(a, b NamespaceRow) bool { return a.Weight < b.Weight }
+	case "allocated":
+		return func(a, b NamespaceRow) bool { return a.Allocated < b.Allocated }
+	case "used":
+		return func(a, b NamespaceRow) bool { return a.Used < b.Used }
+	case "utilization":
+		return func(a, b NamespaceRow) bool { return a.Utilization < b.Utilization }
+	case "projects":
+		return func(a, b NamespaceRow) bool { return a.ProjectCount < b.ProjectCount }
+	default:
+		return nil
+	}
+}
+
+// fleetNSTickSortable returns the comparator for a namespace-history sort key.
+func fleetNSTickSortable(key string) func(a, b NamespaceTickRow) bool {
+	switch key {
+	case "namespace":
+		return func(a, b NamespaceTickRow) bool { return a.NamespaceID < b.NamespaceID }
+	case "created":
+		return func(a, b NamespaceTickRow) bool { return a.CreatedAt < b.CreatedAt }
+	default:
+		return nil
+	}
+}
+
+// applyFleetTables filters/sorts/slices all four overview tables in place,
+// leaving data.Projects / RecentTicks / Namespaces / NamespaceTicks holding
+// exactly the page the operator asked for. The collect query totals
+// (TotalProjects, EnabledProjects, BudgetUsed, cost totals, oversubscription)
+// are computed BEFORE this runs, so the stat cards keep describing the whole
+// fleet regardless of the active page.
+func applyFleetTables(data *FleetData) {
+	ts := &data.TableState
+
+	data.Projects = fleetTableSlice(data.Projects, &ts.Projects,
+		func(r FleetRow) string { return r.Name },
+		fleetProjectSortable(ts.Projects.Sort))
+
+	data.RecentTicks = fleetTableSlice(data.RecentTicks, &ts.Ticks,
+		func(r TickRow) string { return r.Project },
+		fleetTickSortable(ts.Ticks.Sort))
+
+	data.Namespaces = fleetTableSlice(data.Namespaces, &ts.Namespaces,
+		func(r NamespaceRow) string { return r.ID },
+		fleetNamespaceSortable(ts.Namespaces.Sort))
+
+	data.NamespaceTicks = fleetTableSlice(data.NamespaceTicks, &ts.NSHistory,
+		func(r NamespaceTickRow) string { return r.NamespaceID },
+		fleetNSTickSortable(ts.NSHistory.Sort))
+
+	fleetNav(&ts.Projects)
+	fleetNav(&ts.Ticks)
+	fleetNav(&ts.Namespaces)
+	fleetNav(&ts.NSHistory)
+}
+
+// fleetNav fills the prev/next fields from the page math fleetTableSlice
+// already did, so templates never re-derive pagination.
+func fleetNav(p *FleetTableParams) {
+	p.HasPrevious = p.Page > 1
+	p.PreviousPage = p.Page - 1
+	p.HasNext = p.Page < p.TotalPages
+	p.NextPage = p.Page + 1
+}
+
+// fleetProjectFilters narrows the project rows by the validated dropdown
+// selections (lane name + last outcome). Returns the input slice when both
+// filters are empty.
+func fleetProjectFilters(rows []FleetRow, p FleetTableParams) []FleetRow {
+	if p.FilterP == "" && p.FilterS == "" {
+		return rows
+	}
+	out := make([]FleetRow, 0, len(rows))
+	for _, r := range rows {
+		if p.FilterP != "" && r.Name != p.FilterP {
+			continue
+		}
+		if p.FilterS != "" && r.LastOutcome != p.FilterS {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// parseFleetTableParams validates raw query values into render-ready params
+// for the named table (SCHED-GAP-1598), validating the dropdown selections
+// against their vocabularies.
+func parseFleetTableParams(table string, q url.Values, projectOptions []string) FleetTableParams {
+	pref := fleetPrefix[table]
+	// An ABSENT size param means the documented default (50, matching the
+	// tick history); an EXPLICIT size=0 means "all". Atoi cannot tell the
+	// two apart (both give 0), so the presence check comes first.
+	size := defaultFleetPageSize
+	if q.Has(pref + fleetSizeKey) {
+		size, _ = strconv.Atoi(q.Get(pref + fleetSizeKey))
+	}
+	page, _ := strconv.Atoi(q.Get(pref + fleetPageKey))
+	p := normalizeFleetTableParams(FleetTableParams{
+		Table:   table,
+		Q:       q.Get(pref + fleetQKey),
+		Sort:    q.Get(pref + fleetSortKey),
+		Dir:     q.Get(pref + fleetDirKey),
+		Page:    page,
+		PerPage: size,
+		FilterP: q.Get("project"),
+		FilterS: q.Get("outcome"),
+	})
+	// Validate the dropdown selections against their vocabularies (mirrors
+	// tickHistoryFilter: an unknown value renders unfiltered, not empty).
+	if len(projectOptions) > 0 {
+		known := false
+		for _, name := range projectOptions {
+			if p.FilterP == name {
+				known = true
+				break
+			}
+		}
+		if !known {
+			p.FilterP = ""
+		}
+	}
+	if p.FilterS != "" {
+		valid := false
+		for _, s := range outcomeVocabulary {
+			if p.FilterS == s {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			p.FilterS = ""
+		}
+	}
+	return p
+}
+
+// ParseFleetTableQuery builds the four tables' params from the overview
+// page's raw query values (SCHED-GAP-1598). Each table owns a prefixed
+// parameter family so one URL carries all four states at once:
+//
+//	projects:   q, project, outcome, sort, dir, size, page
+//	recent ticks:        tq, tsort, tsize, tpage
+//	namespaces:          nq, nsort, nsize, npage
+//	utilization history: hq, hsort, hsize, hpage
+//
+// Unknown values are dropped by normalizeFleetTableParams (unknown sort keys
+// fall back to the table's default order, unlisted sizes to the tick-history
+// default), so a stray or hand-edited query string renders the documented
+// default view rather than an error.
+func ParseFleetTableQuery(q url.Values) *FleetTables {
+	ts := &FleetTables{}
+	ts.Projects = parseFleetTableParams("projects", q, nil)
+	ts.Ticks = parseFleetTableParams("ticks", q, nil)
+	ts.Namespaces = parseFleetTableParams("namespaces", q, nil)
+	ts.NSHistory = parseFleetTableParams("nsticks", q, nil)
+	return ts
 }
