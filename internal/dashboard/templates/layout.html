@@ -140,11 +140,78 @@ tbody tr{transition:background 140ms var(--ease-out)}
 .sb-collapse:hover{color:var(--fg);border-color:var(--border-hi)}
 body.sb-collapsed #sbExpand{display:grid}
 body.sb-collapsed .sidebar{display:none}
+/* SCHED-GAP-1606: one auto-refresh control for every page, with a live countdown.
+   Fixed bottom-right so it is present regardless of which page renders and
+   regardless of whether the sidebar is collapsed. */
+.refresh-bar{position:fixed;right:12px;bottom:12px;z-index:60;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel);font-family:var(--mono);font-size:0.7rem;color:var(--muted);box-shadow:0 2px 10px rgba(0,0,0,0.25)}
+.refresh-bar .rb-lbl{color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;font-size:0.6rem}
+.refresh-bar select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:5px;font-family:var(--mono);font-size:0.7rem;padding:1px 4px;cursor:pointer}
+.refresh-bar select:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+.rb-cd{min-width:84px;color:var(--live);font-variant-numeric:tabular-nums}
+.rb-cd.off{color:var(--muted)}
 </style>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <button id="sbExpand" type="button" title="Show sidebar" aria-label="Show sidebar" aria-expanded="false">&#187;</button>
+<div class="refresh-bar" id="refreshBar">
+<label class="rb-lbl" for="rbSel">refresh</label>
+<select id="rbSel" aria-label="Auto-refresh interval">
+<option value="5000">5s</option>
+<option value="10000">10s</option>
+<option value="30000">30s</option>
+<option value="60000">60s</option>
+<option value="300000">5m</option>
+<option value="0">off</option>
+</select>
+<span class="rb-cd" id="rbCd">live</span>
+</div>
+<script>
+/* SCHED-GAP-1606: ONE auto-refresh driver for every page. The htmx partials listen
+   with hx-trigger="autorefresh from:body", and this dispatches that single event on
+   the chosen cadence — so the interval lives in exactly one place instead of a
+   hardcoded value per page. The countdown ticks down to the next swap and is reset
+   by the swap itself, so it reads as live rather than as static prose. */
+(function () {
+  var KEY = 'ch.autorefresh_ms', DEFAULT = 10000;
+  var sel = document.getElementById('rbSel'), cd = document.getElementById('rbCd');
+  if (!sel || !cd) return;
+  var ms = DEFAULT, acc = 0, iv = null;
+  try {
+    var s = localStorage.getItem(KEY);
+    if (s !== null && s !== '') { var v = parseInt(s, 10); if (!isNaN(v) && v >= 0) ms = v; }
+  } catch (err) {}
+  if (sel.querySelector('option[value="' + ms + '"]')) { sel.value = String(ms); }
+  else { ms = DEFAULT; sel.value = String(DEFAULT); }
+
+  function fmt(sec) {
+    if (sec >= 60) { var m = Math.floor(sec / 60), r = sec % 60; return r ? m + 'm ' + r + 's' : m + 'm'; }
+    return sec + 's';
+  }
+  function paint() {
+    if (ms <= 0) { cd.textContent = 'paused'; cd.classList.add('off'); return; }
+    cd.classList.remove('off');
+    var left = Math.max(0, Math.round((ms - acc) / 1000));
+    cd.textContent = left > 0 ? 'next in ' + fmt(left) : 'updating\u2026';
+  }
+  function arm() {
+    if (iv) { clearInterval(iv); iv = null; }
+    acc = 0; paint();
+    if (ms <= 0) return;
+    iv = setInterval(function () {
+      acc += 1000;
+      if (acc >= ms) { acc = 0; document.body.dispatchEvent(new CustomEvent('autorefresh', { bubbles: true })); }
+      paint();
+    }, 1000);
+  }
+  sel.addEventListener('change', function () {
+    ms = parseInt(sel.value, 10) || 0;
+    try { localStorage.setItem(KEY, String(ms)); } catch (err) {}
+    arm();
+  });
+  arm();
+})();
+</script>
 {{end}}
 
 {{define "sidebar"}}

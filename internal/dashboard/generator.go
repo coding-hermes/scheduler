@@ -521,9 +521,9 @@ const pageTemplate = `{{template "head" .}}
 <div class="main" id="main">
 <div class="page-head">
 <h1>Fleet Overview</h1>
-<div class="actions"><span class="signal"><span class="dot"></span> htmx live · 10s</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> live</span></div>
 </div>
-<div class="meta">Generated {{.GeneratedAt}} · auto-refresh 60s</div>
+<div class="meta">Generated {{.GeneratedAt}}</div>
 
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
@@ -551,7 +551,7 @@ const pageTemplate = `{{template "head" .}}
 <thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Est. Completion</th><th>Next Tick</th><th>Cost</th><th>GitReins</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
-hx-trigger="every 10s"
+hx-trigger="autorefresh from:body"
 hx-swap="innerHTML">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
