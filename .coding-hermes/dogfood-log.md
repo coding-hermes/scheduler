@@ -199,3 +199,20 @@ Top findings: SCHED-GAP-1576 (P1 perf+payload+read-only UI), SCHED-GAP-1575 mech
 Time-to-first-success (dashboard open): ~49s; (API verify step): ~27-95s. Friction count: 5 (45s page, 4s+partial, 95s status, 26s health, README control promise false).
 Bunker leg: RAN — bunker-qa on bunker-las-02 agent 671e3584: fresh-install OK (toolchain bootstrap incl. go 1.26.5/zig/make), upgrade v1.3.0→HEAD OK, chaos-disconnect OK, chaos-corruption OK, ci-pass FAIL (SCHED-GAP-1577), chaos-resource FAIL (3GiB cap), docker-deploy N/A; agent destroyed + absence-verified.
 Artifacts: docs/dogfood/2026-09-24-integration.md (+ this run's probes archived in scratch under ~/.hermes/stand-in/dogfood/coding-hermes-scheduler/scratch/)
+
+## 2026-09-24 evening (coding-hermes-scheduler-dogfood tick, day-2 re-verification)
+Verdict: SHIPPABLE (same surface as the 09-24 morning run; day-2 re-measure).
+Promise: user runs the fleet scheduler, steers all lanes via dashboard/REST/MCP.
+All morning-run slow paths re-measured FIXED at HEAD 0238b8fa: GET / 2.1s warm
+(was 45.9s cold), partial 2.1s (was 4.05±7.78), status 0.23s (was 94.7s), health
+0.5ms (was 26.4s), goroutines 74 (was 191-202). MCP 45 tools, spawn contract
+verified end-to-end (202 + real tick_id + 409 dup). Top findings: SCHED-GAP-1613
+(chaos-corruption generic db-open message), SCHED-GAP-1614 (P1 weight-budget hold
+starves satellite families 60-125x demand:allocation, same lanes held every cycle,
+starved escalations 23-53h vs 6h cooldown; cap 2017 vs ok 14 deferrals/24h),
+SCHED-GAP-1615 (TestSpawn_MemLimitOffByDefault fails under capped parent —
+clean-machine class #2). Install leg RAN: bunker-las-03 agent 184e5845, full
+battery (bootstrap/fresh-install/upgrade/ci-pass/4 chaos cells), destroy verified;
+bunker-las-02 default server DOWN this tick (100.01 refused) — override worked.
+Time-to-first-success (spawn contract happy path): <1s API; dashboard open 2.1s.
+Friction count: 1 (bunker-las-02 outage, worked around via documented override).
