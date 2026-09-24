@@ -2272,12 +2272,18 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			st.completeAt.Sub(st.Started).Round(time.Second),
 			formatCostSummary(st.provider, st.model, tokensIn, tokensOut, cost, commits, files))
 		return TickOutcome{
-			TickID:       st.TickID,
-			Project:      st.Project,
-			SessionID:    st.SessionID,
-			Started:      st.Started,
-			Finished:     st.completeAt,
-			Status:       TickCompleted,
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickCompleted,
+			// SCHED-GAP-1597: 0 is the gateway-completed CONVENTION (the
+			// gateway session never exposes a process exit status), stated
+			// here explicitly — a zero left by struct-default omission and
+			// a zero stated as the convention are indistinguishable in the
+			// column, and only the second is honest.
+			ExitCode:     0,
 			Duration:     st.completeAt.Sub(st.Started),
 			TokensIn:     tokensIn,
 			TokensOut:    tokensOut,

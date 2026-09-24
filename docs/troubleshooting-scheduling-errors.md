@@ -354,13 +354,16 @@ out."
 |--------|-----------------------------------|--------------------------------------------|
 | `ticks.status` | `failed` | `timeout` |
 | `ticks.outcome` | `failed` when a session was reached; `NULL`/empty when it never was | `NULL`/empty for a reaper-driven timeout |
-| `ticks.exit_code` | `0` for a gateway-refused spawn, a real process code (e.g. `2`) when a child process ran and exited non-zero, `NULL` when there was no process exit to record | usually `NULL` |
+| `ticks.exit_code` | `NULL` when no process exit exists (a gateway-refused spawn, a graceful-shutdown drain — SCHED-GAP-1597: no longer a fabricated `0`), `0` on a **completed** gateway tick (the stated convention — the gateway session exposes no process exit), a real process code (e.g. `2`) when a child process ran and exited non-zero | usually `NULL` |
 | `ticks.error` | the refusal text, e.g. `gateway unreachable … HTTP 503 …` | a deadline text, e.g. `stale — timeout at 1h30m0s` |
 | `ticks.failure_reason` | `gateway_drain` / `gateway_transport` for harness-side; empty otherwise | empty |
 
-The trap: `exit_code = 0` on a failed row does **not** mean "the work exited cleanly." For a
-spawn the harness refused, there was no process at all, and `0` is the absence of a code rather
-than a code of zero. Distinguish by reading `error`, not by reading `exit_code` alone.
+The trap: `exit_code = 0` on a **completed** gateway row does not mean "a process exited
+cleanly" — the gateway session never exposes a process exit, and `0` is the column's stated
+completion convention (SCHED-GAP-1597). On a failed row, a `0` after 2026-09-24 is a bug (the
+convention for "no process exit" is `NULL`); before that date, `0` on a gateway-refused spawn
+meant the same absence rather than a clean exit. Either way, distinguish by reading `error`,
+not by reading `exit_code` alone.
 
 **Confirm** *(read-only)*
 
@@ -392,13 +395,14 @@ timeout  (none)   NULL       stale — timeout at 1h30m0s                1
 
 Read the rows as five different stories, one line each:
 
-- `failed` / `exit_code 0` / `gateway unreachable … 503` — **harness refused the spawn.** No
-  process ran. Not the project's fault (entry 1).
+- `failed` / `NULL` / `gateway unreachable … 503` — **harness refused the spawn.** No
+  process ran (SCHED-GAP-1597: no-process failures persist `NULL`; rows before
+  2026-09-24 show the fabricated `0`). Not the project's fault (entry 1).
 - `failed` / `NULL` / `stalled: no progress for 30m0s` — **a real session that stopped
   reporting** inside its per-turn deadline. The tick budget was still alive; this is the
   turn-level deadline, not the tick-level one.
-- `failed` / `exit_code 0` / `aborted by graceful shutdown — drain timed out` — **an operator
-  drain** (entry 3).
+- `failed` / `NULL` / `aborted by graceful shutdown — drain timed out` — **an operator
+  drain** (entry 3; SCHED-GAP-1597: the drain reap no longer writes a fabricated `0`).
 - `timeout` / `NULL` / `(none)` — **no error text at all**, which is the shape of a tick reaped
   by the reaper rather than one that failed on its own.
 - `failed` / `exit_code 2` / `exit status 2` — **a child process ran and exited 2.** This is the

@@ -479,21 +479,33 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// point stamp ("" for packer ticks). Best-effort observability —
 		// a failed stamp is logged by the writer and never blocks the
 		// spawn. A nil db (standalone-pool tests) records nothing.
-		if db != nil {
-			admitReason := AdmissionReasonOK
-			if nudgeSource != "" {
-				admitReason = "resume:" + nudgeSource
-			}
-			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource)
-		}
-
-		// Enqueue and start.
+		//
+		// SCHED-GAP-1597: the stamp ALSO persists the packer's selection
+		// facts — proj.Urgency (the computed urgency at selection time)
+		// and proj.Weight (the effective weight the packer allocated).
+		// 0/0 is the honest value for a tick no packer selected (manual,
+		// resume) — the same honest-empty convention nudge_source uses.
+		// The stamp MUST run only after the tick row exists: it is an
+		// UPDATE, and the pre-1597 ordering (stamp before the Enqueue)
+		// made it match 0 rows on the packer path — 7 days of
+		// production rows carried the column defaults because of it.
+		// The enqueue itself runs for EVERY spawn (db or no db): it is
+		// lifecycle state, not observability.
 		if !enqueued {
 			if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil {
 				log.Printf("SPAWN: enqueue %s: %v", proj.Name, err)
 				return
 			}
 		}
+		if db != nil {
+			admitReason := AdmissionReasonOK
+			if nudgeSource != "" {
+				admitReason = "resume:" + nudgeSource
+			}
+			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight)
+		}
+
+		// Start.
 		if err := p.lifecycle.StartRunning(tickID); err != nil {
 			log.Printf("SPAWN: start %s: %v", proj.Name, err)
 			return
@@ -530,6 +542,11 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				Started:  now,
 				Finished: p.clock().Now(),
 				Status:   TickFailed,
+				// SCHED-GAP-1597: -1 → exit_code NULL. The spawn never
+				// produced a process, so there is no exit status; writing
+				// the struct-default 0 here would be a fabricated
+				// "exited cleanly".
+				ExitCode: -1,
 				Error:    err.Error(),
 			})
 			return

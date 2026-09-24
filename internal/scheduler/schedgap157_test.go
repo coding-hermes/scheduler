@@ -197,17 +197,17 @@ func TestSCHEDGAP157_SlotWaitStampExactAndMonotonic(t *testing.T) {
 	// read before Acquire, Since(waitStart) is taken at the admit boundary).
 	waitStart := sim.Now()
 	sim.Advance(90 * time.Second)
-	stampTickAdmission(db, firstID, sim.Since(waitStart), AdmissionReasonOK, "")
+	stampTickAdmission(db, firstID, sim.Since(waitStart), AdmissionReasonOK, "", 0, 0)
 
 	// A second, longer wait: the second wait is compared against the first for
 	// monotonicity, so "always 0" and "always 1ms" both fail here.
 	sim.Advance(45 * time.Second)
-	stampTickAdmission(db, secondID, sim.Since(waitStart), AdmissionReasonOK, "")
+	stampTickAdmission(db, secondID, sim.Since(waitStart), AdmissionReasonOK, "", 0, 0)
 
 	// A lane that never waited. Stamped with a zero duration (the pool's own
 	// value when the slot is free) AND left completely unstamped: both must read
 	// back as the column default 0.
-	stampTickAdmission(db, zeroedID, 0, AdmissionReasonOK, "")
+	stampTickAdmission(db, zeroedID, 0, AdmissionReasonOK, "", 0, 0)
 
 	wantFirst, wantSecond := int64(90_000), int64(135_000)
 	gotFirst, reasonFirst, _ := schedGap157Stamps(t, db, firstID)
@@ -778,7 +778,7 @@ func TestSCHEDGAP157_NudgeSourceStampedDistinctly(t *testing.T) {
 		tickID := proj + "-t1"
 		admitInsertProject(t, db, admitProjectSpec{Name: proj, CooldownS: 21600})
 		queuedTickRow(t, db, tickID, proj)
-		if err := database.RecordTickAdmission(ctx, db, tickID, 7*time.Second, AdmissionReasonOK, src); err != nil {
+		if err := database.RecordTickAdmission(ctx, db, tickID, 7*time.Second, AdmissionReasonOK, src, 0, 0); err != nil {
 			t.Fatalf("RecordTickAdmission(%s, nudge=%s): %v", tickID, src, err)
 		}
 		wait, reason, nudge := schedGap157Stamps(t, db, tickID)
@@ -797,10 +797,10 @@ func TestSCHEDGAP157_NudgeSourceStampedDistinctly(t *testing.T) {
 	const packerProj, packerTick = "157-packer", "157-packer-t1"
 	admitInsertProject(t, db, admitProjectSpec{Name: packerProj, CooldownS: 21600})
 	queuedTickRow(t, db, packerTick, packerProj)
-	if err := database.RecordTickAdmission(ctx, db, packerTick, 0, AdmissionReasonOK, NudgeSourceStartup); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, packerTick, 0, AdmissionReasonOK, NudgeSourceStartup, 0, 0); err != nil {
 		t.Fatalf("seed enqueue-path nudge stamp: %v", err)
 	}
-	if err := database.RecordTickAdmission(ctx, db, packerTick, 12*time.Second, AdmissionReasonOK, ""); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, packerTick, 12*time.Second, AdmissionReasonOK, "", 0, 0); err != nil {
 		t.Fatalf("packer-path stamp: %v", err)
 	}
 	wait, reason, nudge := schedGap157Stamps(t, db, packerTick)
@@ -813,7 +813,7 @@ func TestSCHEDGAP157_NudgeSourceStampedDistinctly(t *testing.T) {
 
 	// Positive control for the column-write contract: a NON-empty source does
 	// overwrite, so a mutation that drops nudge_source from the UPDATE fails.
-	if err := database.RecordTickAdmission(ctx, db, packerTick, 12*time.Second, AdmissionReasonOK, NudgeSourceBoardWake); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, packerTick, 12*time.Second, AdmissionReasonOK, NudgeSourceBoardWake, 0, 0); err != nil {
 		t.Fatalf("overwrite nudge stamp: %v", err)
 	}
 	if _, _, nudge := schedGap157Stamps(t, db, packerTick); nudge != NudgeSourceBoardWake {
@@ -822,7 +822,7 @@ func TestSCHEDGAP157_NudgeSourceStampedDistinctly(t *testing.T) {
 
 	// Best-effort writer contract: an unknown id is reported, not silently
 	// swallowed (the caller logs it; the tick's scheduling outcome is unchanged).
-	err := database.RecordTickAdmission(ctx, db, "157-no-such-tick", time.Second, AdmissionReasonOK, NudgeSourceManual)
+	err := database.RecordTickAdmission(ctx, db, "157-no-such-tick", time.Second, AdmissionReasonOK, NudgeSourceManual, 0, 0)
 	if !errors.Is(err, database.ErrTickNotFound) {
 		t.Errorf("RecordTickAdmission for an unknown id = %v, want database.ErrTickNotFound", err)
 	}
@@ -905,7 +905,7 @@ func TestSCHEDGAP157_SlotPoolStampsAdmitReasonForNudgeTicks(t *testing.T) {
 	admitInsertProject(t, db, admitProjectSpec{Name: packerProj, NS: "157-nudge-packer", CooldownS: 21600})
 	packerTick := database.NextTickID(clock.WithClock(context.Background(), sim), packerProj)
 	queuedTickRow(t, db, packerTick, packerProj)
-	if err := database.RecordTickAdmission(context.Background(), db, packerTick, 0, "", NudgeSourceStartup); err != nil {
+	if err := database.RecordTickAdmission(context.Background(), db, packerTick, 0, "", NudgeSourceStartup, 0, 0); err != nil {
 		t.Fatalf("seed enqueue-path nudge stamp on the packer row: %v", err)
 	}
 	l.slotPool.SpawnEnqueued(PackedProject{Name: packerProj, NamespaceID: "157-nudge-packer"}, packerTick, sim.Now(), true, db)
