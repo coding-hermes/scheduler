@@ -226,8 +226,13 @@ func TestSCHEDGAP091_DrainTimeoutStampsOrphan(t *testing.T) {
 func TestSCHEDGAP091_ZombieReapStampsOrphan(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "zombie-proj")
-	// Dead pid (12345 does not exist) — the reaper's /proc check kills it.
-	insertRunningTick(t, db, "zombie-tick", "zombie-proj", 12345)
+	// Dead pid — the reaper's /proc check kills it. deadTestPID is the Linux
+	// pid_max upper bound (2147483647), a value no real host can ever have
+	// allocated, so os.Stat("/proc/<pid>/stat") returns IsNotExist on every
+	// machine this test runs on. A low pid such as 12345 can carry a live
+	// /proc entry (and did on dev hosts and fresh CI runners), making the
+	// test host-dependent — SCHED-GAP-1577-R1.
+	insertRunningTick(t, db, "zombie-tick", "zombie-proj", deadTestPID)
 
 	l := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
 	l.reapZombies()
