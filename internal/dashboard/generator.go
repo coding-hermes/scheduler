@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -169,18 +170,86 @@ func (g *Generator) SetWeightBudget(n int) {
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
 func (g *Generator) HTMXJS() []byte { return htmxJS }
 
-// Generate writes the dashboard HTML to w. Template is pre-parsed — zero hot-path overhead.
+// Generate writes the dashboard HTML to w, applying the per-table controls
+// with their defaults (SCHED-GAP-1598). Template is pre-parsed — zero
+// hot-path overhead beyond the render.
 func (g *Generator) Generate(w io.Writer) error {
+	return g.GenerateParams(w, nil)
+}
+
+// GenerateParams writes the dashboard HTML to w, applying the operator's
+// per-table table state (search / sort / page / size) to the four stacked
+// tables. A nil params value renders the default view. The stat cards
+// (TotalProjects / EnabledProjects / BudgetUsed / cost totals) describe the
+// WHOLE fleet — they are computed in collect() before the tables are sliced.
+func (g *Generator) GenerateParams(w io.Writer, params *FleetTables) error {
 	ctx := context.Background()
 	data := g.collect(ctx)
+	if params != nil {
+		data.TableState = *params
+	} else {
+		data.TableState = defaultFleetTables()
+	}
+	// Dropdown vocabulary for the projects-table filters (lane names seen in
+	// the ticks table — the same list the tick history page offers).
+	var projectOptions []string
+	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
+		projectOptions = projs
+	}
+	// Validate the lane filter against the fetched vocabulary: the generic
+	// parser cannot know the lane list (mirrors tickHistoryFilter — an
+	// unknown value renders unfiltered, not empty).
+	if data.TableState.Projects.FilterP != "" && !slices.Contains(projectOptions, data.TableState.Projects.FilterP) {
+		data.TableState.Projects.FilterP = ""
+	}
+	data.TableState.ProjectOptions = projectOptions
+	data.OutcomeOptions = outcomeVocabulary
+	data.PageSizeOptions = pageSizeOptions
+	// Narrow by the validated dropdowns, then search/sort/slice every table.
+	data.Projects = fleetProjectFilters(data.Projects, data.TableState.Projects)
+	applyFleetTables(&data)
 	return g.tmpl.ExecuteTemplate(w, "page", data)
+}
+
+// defaultFleetTables returns validated default params for all four tables:
+// page 1, the tick-history page size, the tables' existing default order.
+func defaultFleetTables() FleetTables {
+	return FleetTables{
+		Projects:   normalizeFleetTableParams(FleetTableParams{Table: "projects", PerPage: defaultFleetPageSize}),
+		Ticks:      normalizeFleetTableParams(FleetTableParams{Table: "ticks", PerPage: defaultFleetPageSize}),
+		Namespaces: normalizeFleetTableParams(FleetTableParams{Table: "namespaces", PerPage: defaultFleetPageSize}),
+		NSHistory:  normalizeFleetTableParams(FleetTableParams{Table: "nsticks", PerPage: defaultFleetPageSize}),
+	}
 }
 
 // GenerateFleetTable renders the fleet table partial (tbody only) for htmx
 // to swap into the dashboard page. Routes get this from /dashboard/partial.
+// The query string carries the operator's current table state; the SAME
+// params the full page was rendered with ride the autorefresh request, so a
+// refresh re-renders the current view (search / sort / page / size) instead
+// of resetting it (SCHED-GAP-1598).
 func (g *Generator) GenerateFleetTable(w io.Writer) error {
+	return g.GenerateFleetTableParams(w, url.Values{})
+}
+
+// GenerateFleetTableParams renders the fleet-table partial from raw query
+// values. The partial owns the projects table's tbody only, so only that
+// table's state applies here.
+func (g *Generator) GenerateFleetTableParams(w io.Writer, q url.Values) error {
 	ctx := context.Background()
 	data := g.collect(ctx)
+	var projectOptions []string
+	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
+		projectOptions = projs
+	}
+	p := parseFleetTableParams("projects", q, projectOptions)
+	// Dropdown narrowing happens before the slice so the "showing N of M"
+	// count reflects the rows matching the filters.
+	data.Projects = fleetProjectFilters(data.Projects, p)
+	ts := defaultFleetTables()
+	ts.Projects = p
+	data.TableState = ts
+	applyFleetTables(&data)
 	return g.fleetTmpl.Execute(w, data)
 }
 
@@ -769,11 +838,52 @@ const pageTemplate = `{{template "head" .}}
 </div>
 
 <h2>Projects</h2>
+{{/* SCHED-GAP-1598: per-table server-side search / filter / sort / page-size.
+     A plain GET form (no htmx) so it works with and without JS, mirroring the
+     tick-history filter bar (SCHED-GAP-1593). The hidden p=1 resets to the
+     first page whenever the criteria change. */}}
+<div class="table-controls">
+<form class="tick-filter" method="get" action="/">
+<input type="hidden" name="page" value="1">
+<input type="search" name="q" value="{{.TableState.Projects.Q}}" placeholder="search lanes…" aria-label="Search projects by lane name">
+<select name="project" aria-label="Filter by lane">
+<option value="">lane: all</option>
+{{range .TableState.ProjectOptions}}<option value="{{.}}" {{if eq . $.TableState.Projects.FilterP}}selected{{end}}>{{.}}</option>{{end}}
+</select>
+<select name="outcome" aria-label="Filter by last outcome">
+<option value="">outcome: all</option>
+{{range .OutcomeOptions}}<option value="{{.}}" {{if eq . $.TableState.Projects.FilterS}}selected{{end}}>{{.}}</option>{{end}}
+</select>
+<select name="size" aria-label="Rows per page">
+{{$ps := .TableState.Projects.PerPage}}{{range .PageSizeOptions}}<option value="{{.}}" {{if eq . $ps}}selected{{end}}>{{if eq . 0}}all{{else}}{{.}}{{end}}</option>{{end}}
+</select>
+<select name="sort" aria-label="Sort projects by">
+{{$psort := .TableState.Projects.Sort}}
+<option value="" {{if eq $psort ""}}selected{{end}}>sort: default</option>
+<option value="name" {{if eq $psort "name"}}selected{{end}}>name</option>
+<option value="weight" {{if eq $psort "weight"}}selected{{end}}>weight</option>
+<option value="priority" {{if eq $psort "priority"}}selected{{end}}>priority</option>
+<option value="last_tick" {{if eq $psort "last_tick"}}selected{{end}}>last tick</option>
+<option value="outcome" {{if eq $psort "outcome"}}selected{{end}}>outcome</option>
+<option value="progress" {{if eq $psort "progress"}}selected{{end}}>progress</option>
+<option value="next" {{if eq $psort "next"}}selected{{end}}>next tick</option>
+<option value="cost_today" {{if eq $psort "cost_today"}}selected{{end}}>cost today</option>
+</select>
+<select name="dir" aria-label="Sort direction">
+{{$pdir := .TableState.Projects.Dir}}
+<option value="asc" {{if eq $pdir "asc"}}selected{{end}}>ascending</option>
+<option value="desc" {{if eq $pdir "desc"}}selected{{end}}>descending</option>
+</select>
+<button type="submit">Apply</button>
+{{if or .TableState.Projects.Q .TableState.Projects.FilterP .TableState.Projects.FilterS .TableState.Projects.Sort}}<a class="page-btn" href="/">Clear</a>{{end}}
+</form>
+</div>
+<div class="showing-count">showing {{len .Projects}} of {{.TableState.Projects.FilteredTotal}} lanes</div>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Est. Completion</th><th>Next Tick</th><th>Cost</th><th>GitReins</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
-hx-get="/dashboard/partial"
+hx-get="/dashboard/partial?{{if .TableState.Projects.BaseQS}}{{.TableState.Projects.BaseQS}}&{{end}}page={{.TableState.Projects.Page}}"
 hx-trigger="autorefresh from:body"
 hx-swap="innerHTML">
 {{range .Projects}}
@@ -798,11 +908,39 @@ hx-swap="innerHTML">
 <td>{{if lt .GitReinsPass 0}}<span class="meta">—</span>{{else}}{{if and (eq .GitReinsPass 100) (eq .CIConclusion "failure")}}<span class="pill fail" title="GitReins says 100% but CI failed — judge may be passing a red suite (cached/LLM-asserted). Trust CI.">{{.GitReinsPass}}% ⚠CI</span>{{else if eq .GitReinsPass 100}}<span class="pill ok">{{.GitReinsPass}}%</span>{{else if ge .GitReinsPass 70}}<span class="pill warn">{{.GitReinsPass}}%</span>{{else}}<span class="pill fail">{{.GitReinsPass}}%</span>{{end}}{{if eq .CIConclusion "failure"}} <span class="meta" title="CI failing">ci✗</span>{{else if eq .CIConclusion "success"}} <span class="meta" title="CI green">ci✓</span>{{end}}{{end}}</td>
 <td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
+{{if or .TableState.Projects.Q .TableState.Projects.FilterP .TableState.Projects.FilterS}}<tr><td colspan="12" class="meta">No lanes match the current search/filter{{if or .TableState.Projects.Q .TableState.Projects.FilterP .TableState.Projects.FilterS}} — clear it to see all lanes{{end}}.</td></tr>{{end}}
 </tbody>
 </table>
 </div>
+{{if gt .TableState.Projects.TotalPages 1}}
+<div class="pagination">
+{{if .TableState.Projects.HasPrevious}}<a class="page-btn" href="/?{{if .TableState.Projects.BaseQS}}{{.TableState.Projects.BaseQS}}&{{end}}page={{.TableState.Projects.PreviousPage}}">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.TableState.Projects.Page}} / {{.TableState.Projects.TotalPages}}</span>
+{{if .TableState.Projects.HasNext}}<a class="page-btn" href="/?{{if .TableState.Projects.BaseQS}}{{.TableState.Projects.BaseQS}}&{{end}}page={{.TableState.Projects.NextPage}}">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+</div>
+{{end}}
 
 <h2>Recent Ticks</h2>
+{{/* SCHED-GAP-1598: server-side search + sort + page-size on the recent-ticks
+     table. Sorting by spawned reverses the default newest-first order. */}}
+<div class="table-controls">
+<form class="tick-filter" method="get" action="/">
+<input type="hidden" name="tpage" value="1">
+<input type="search" name="tq" value="{{.TableState.Ticks.Q}}" placeholder="search recent ticks…" aria-label="Search recent ticks by project">
+<select name="tsort" aria-label="Sort recent ticks by">
+{{$tsort := .TableState.Ticks.Sort}}
+<option value="" {{if eq $tsort ""}}selected{{end}}>sort: newest first</option>
+<option value="project" {{if eq $tsort "project"}}selected{{end}}>project</option>
+<option value="spawned" {{if eq $tsort "spawned"}}selected{{end}}>spawned (oldest first)</option>
+</select>
+<select name="tsize" aria-label="Recent ticks per page">
+{{$tsz := .TableState.Ticks.PerPage}}{{range .PageSizeOptions}}<option value="{{.}}" {{if eq . $tsz}}selected{{end}}>{{if eq . 0}}all{{else}}{{.}}{{end}}</option>{{end}}
+</select>
+<button type="submit">Apply</button>
+{{if or .TableState.Ticks.Q .TableState.Ticks.Sort}}<a class="page-btn" href="/">Clear</a>{{end}}
+</form>
+</div>
+<div class="showing-count">showing {{len .RecentTicks}} of {{.TableState.Ticks.FilteredTotal}} ticks</div>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Project</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
@@ -817,12 +955,44 @@ hx-swap="innerHTML">
 <td class="num">{{.Commits}}</td>
 <td class="num">{{.FilesChanged}}</td>
 </tr>{{end}}
+{{if .TableState.Ticks.Q}}<tr><td colspan="7" class="meta">No ticks match the search.</td></tr>{{end}}
 </tbody>
 </table>
 </div>
+{{if gt .TableState.Ticks.TotalPages 1}}
+<div class="pagination">
+{{if .TableState.Ticks.HasPrevious}}<a class="page-btn" href="/?{{if .TableState.Ticks.BaseQS}}{{.TableState.Ticks.BaseQS}}&{{end}}tpage={{.TableState.Ticks.PreviousPage}}">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.TableState.Ticks.Page}} / {{.TableState.Ticks.TotalPages}}</span>
+{{if .TableState.Ticks.HasNext}}<a class="page-btn" href="/?{{if .TableState.Ticks.BaseQS}}{{.TableState.Ticks.BaseQS}}&{{end}}tpage={{.TableState.Ticks.NextPage}}">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+</div>
+{{end}}
 
 <h2>Namespaces</h2>
-{{if .Namespaces}}
+{{/* SCHED-GAP-1598: controls, table and count render for ALL tables
+   regardless of row count; the paragraph below distinguishes "not
+   configured" from "search matched nothing" from "empty page". */}}
+<div class="table-controls">
+<form class="tick-filter" method="get" action="/">
+<input type="hidden" name="npage" value="1">
+<input type="search" name="nq" value="{{.TableState.Namespaces.Q}}" placeholder="search namespaces…" aria-label="Search namespaces">
+<select name="nsort" aria-label="Sort namespaces by">
+{{$nsort := .TableState.Namespaces.Sort}}{{$nsq := .TableState.Namespaces.Q}}
+<option value="" {{if eq $nsort ""}}selected{{end}}>sort: default</option>
+<option value="id" {{if eq $nsort "id"}}selected{{end}}>name</option>
+<option value="weight" {{if eq $nsort "weight"}}selected{{end}}>weight</option>
+<option value="allocated" {{if eq $nsort "allocated"}}selected{{end}}>allocated</option>
+<option value="used" {{if eq $nsort "used"}}selected{{end}}>used</option>
+<option value="utilization" {{if eq $nsort "utilization"}}selected{{end}}>utilization</option>
+<option value="projects" {{if eq $nsort "projects"}}selected{{end}}>projects</option>
+</select>
+<select name="nsize" aria-label="Namespaces per page">
+{{$nsz := .TableState.Namespaces.PerPage}}{{range .PageSizeOptions}}<option value="{{.}}" {{if eq . $nsz}}selected{{end}}>{{if eq . 0}}all{{else}}{{.}}{{end}}</option>{{end}}
+</select>
+<button type="submit">Apply</button>
+{{if or .TableState.Namespaces.Q .TableState.Namespaces.Sort}}<a class="page-btn" href="/">Clear</a>{{end}}
+</form>
+</div>
+<div class="showing-count">showing {{len .Namespaces}} of {{.TableState.Namespaces.FilteredTotal}} namespaces</div>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Namespace</th><th>Weight</th><th>Reserved</th><th>Hard Cap</th><th>Allocated</th><th>Used</th><th>Demand</th><th>Status</th><th>Utilization</th><th>Borrowed</th><th>Lent</th><th>Projects</th></tr></thead>
@@ -842,15 +1012,44 @@ hx-swap="innerHTML">
   <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
   <td>{{.ProjectCount}}</td>
 </tr>{{end}}
+{{/* SCHED-GAP-1598: the empty-state row tests the VALIDATED search term ($nsq),
+     not .Namespaces — a search that matches nothing empties the sliced slice,
+     so a guard on the slice would never fire. */}}
+{{if eq $nsq ""}}{{else}}<tr><td colspan="12" class="meta">No namespaces match the search.</td></tr>{{end}}
 </tbody>
 </table>
 </div>
-{{else}}
-<p class="meta">No namespaces configured</p>
+{{if gt .TableState.Namespaces.TotalPages 1}}
+<div class="pagination">
+{{if .TableState.Namespaces.HasPrevious}}<a class="page-btn" href="/?{{if .TableState.Namespaces.BaseQS}}{{.TableState.Namespaces.BaseQS}}&{{end}}npage={{.TableState.Namespaces.PreviousPage}}">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.TableState.Namespaces.Page}} / {{.TableState.Namespaces.TotalPages}}</span>
+{{if .TableState.Namespaces.HasNext}}<a class="page-btn" href="/?{{if .TableState.Namespaces.BaseQS}}{{.TableState.Namespaces.BaseQS}}&{{end}}npage={{.TableState.Namespaces.NextPage}}">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+</div>
 {{end}}
+<p class="meta">{{if .TableState.Namespaces.Q}}No namespaces match the search{{else if not .TableState.Namespaces.FilteredTotal}}No namespaces configured{{else}}No namespaces on this page{{end}}</p>
 
 <h2>Namespace Utilization History</h2>
-{{if .NamespaceTicks}}
+{{/* SCHED-GAP-1598: same rule as the namespaces table — controls, table and
+   count always render; the paragraph distinguishes "no data" from "no
+   match". */}}
+<div class="table-controls">
+<form class="tick-filter" method="get" action="/">
+<input type="hidden" name="hpage" value="1">
+<input type="search" name="hq" value="{{.TableState.NSHistory.Q}}" placeholder="search namespaces…" aria-label="Search utilization history by namespace">
+<select name="hsort" aria-label="Sort utilization history by">
+{{$hsort := .TableState.NSHistory.Sort}}
+<option value="" {{if eq $hsort ""}}selected{{end}}>sort: newest first</option>
+<option value="namespace" {{if eq $hsort "namespace"}}selected{{end}}>namespace</option>
+<option value="created" {{if eq $hsort "created"}}selected{{end}}>oldest first</option>
+</select>
+<select name="hsize" aria-label="History rows per page">
+{{$hsz := .TableState.NSHistory.PerPage}}{{range .PageSizeOptions}}<option value="{{.}}" {{if eq . $hsz}}selected{{end}}>{{if eq . 0}}all{{else}}{{.}}{{end}}</option>{{end}}
+</select>
+<button type="submit">Apply</button>
+{{if or .TableState.NSHistory.Q .TableState.NSHistory.Sort}}<a class="page-btn" href="/">Clear</a>{{end}}
+</form>
+</div>
+<div class="showing-count">showing {{len .NamespaceTicks}} of {{.TableState.NSHistory.FilteredTotal}} history rows</div>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Namespace</th><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Borrowed</th><th>Lent</th><th>Time</th></tr></thead>
@@ -865,16 +1064,34 @@ hx-swap="innerHTML">
   <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
   <td class="meta">{{shortTime .CreatedAt}}</td>
 </tr>{{end}}
+{{if .TableState.NSHistory.Q}}<tr><td colspan="7" class="meta">No history rows match the search.</td></tr>{{end}}
 </tbody>
 </table>
 </div>
-{{else}}
-<p class="meta">No namespace tick data available</p>
+{{if gt .TableState.NSHistory.TotalPages 1}}
+<div class="pagination">
+{{if .TableState.NSHistory.HasPrevious}}<a class="page-btn" href="/?{{if .TableState.NSHistory.BaseQS}}{{.TableState.NSHistory.BaseQS}}&{{end}}hpage={{.TableState.NSHistory.PreviousPage}}">← Previous</a>{{else}}<span class="page-btn disabled">← Previous</span>{{end}}
+<span class="page-current">Page {{.TableState.NSHistory.Page}} / {{.TableState.NSHistory.TotalPages}}</span>
+{{if .TableState.NSHistory.HasNext}}<a class="page-btn" href="/?{{if .TableState.NSHistory.BaseQS}}{{.TableState.NSHistory.BaseQS}}&{{end}}hpage={{.TableState.NSHistory.NextPage}}">Next →</a>{{else}}<span class="page-btn disabled">Next →</span>{{end}}
+</div>
 {{end}}
+{{if not .TableState.NSHistory.FilteredTotal}}<p class="meta">No namespace tick data available{{if .TableState.NSHistory.Q}} matching the search{{end}}</p>{{end}}
 </div>
 {{template "ready_js"}}
 </body>
-</html>`
+</html>
+
+<style>
+/* SCHED-GAP-1598: overview table controls. The form reuses the tick-filter
+   bar styles (layout-level classes); the pagination styles live only on the
+   tick-history template's own <style> block, so they are restated here. */
+.showing-count{color:var(--muted);font-size:0.74rem;font-family:var(--mono);margin:-6px 0 8px}
+.pagination{display:flex;gap:8px;align-items:center;justify-content:center;margin:14px 0}
+.page-btn{padding:6px 14px;border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:0.82rem;font-weight:510;transition:background 160ms var(--ease-out)}
+.page-btn:hover{background:var(--surface2);text-decoration:none}
+.page-btn.disabled{opacity:0.4;cursor:default}
+.page-current{color:var(--muted);font-size:0.82rem;padding:6px 12px}
+</style>`
 
 // SetClock installs the clock this generator renders time through
 // (SCHED-GAP-169). nil keeps the wall clock. Installing a clock re-anchors the

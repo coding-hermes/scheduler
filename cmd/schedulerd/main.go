@@ -757,22 +757,33 @@ func main() {
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
 
-	// Dashboard at /
+	// Dashboard at /. Supports the per-table server-side controls
+	// (SCHED-GAP-1598): each of the four stacked tables takes its own
+	// search / sort / page / size params — projects (q/project/outcome/
+	// sort/dir/size/page), recent ticks (tq/tsort/tsize/tpage), namespaces
+	// (nq/nsort/nsize/npage) and utilization history (hq/hsort/hsize/hpage).
+	// All optional; unknown values fall back to the documented defaults.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" && r.URL.Path != "/dashboard" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := dashGen.Generate(w); err != nil {
+		q := r.URL.Query()
+		params := dashboard.ParseFleetTableQuery(q)
+		if err := dashGen.GenerateParams(w, params); err != nil {
 			http.Error(w, err.Error(), 500)
 		}
 	})
 
-	// htmx partial: rendered for the main dashboard's tbody every 10s.
+	// htmx partial: rendered for the main dashboard's tbody every 10s, and
+	// on every autorefresh with the SAME query params the page was rendered
+	// with (the tbody's hx-get carries the operator's current table state),
+	// so a refresh preserves search / page / sort instead of resetting it
+	// (SCHED-GAP-1598).
 	mux.HandleFunc("GET /dashboard/partial", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := dashGen.GenerateFleetTable(w); err != nil {
+		if err := dashGen.GenerateFleetTableParams(w, r.URL.Query()); err != nil {
 			http.Error(w, err.Error(), 500)
 		}
 	})
