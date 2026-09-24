@@ -17,6 +17,8 @@
 {{if .LatestTick}}
 <div class="card"><div class="label">Allocated</div><div class="value">{{.LatestTick.Allocated}}</div></div>
 <div class="card"><div class="label">Used</div><div class="value">{{.LatestTick.Used}}</div></div>
+<div class="card"><div class="label">Demand (enabled weight)</div><div class="value">{{.LatestTick.Demand}}</div></div>
+<div class="card"><div class="label">Budget State</div><div class="value" style="font-size:1.1rem">{{if .LatestTick.Overcommitted}}<span class="pill fail">over by {{.LatestTick.Overcommitted}}</span>{{else}}<span class="pill ok">within budget</span>{{end}}</div></div>
 <div class="card"><div class="label">Utilization</div><div class="value" style="font-size:1.1rem">{{printf "%.0f" .Utilization}}%</div></div>
 {{end}}
 </div>
@@ -46,13 +48,15 @@
 {{if .RecentTicks}}
 <div class="table-wrap">
 <table>
-<thead><tr><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Borrowed</th><th>Lent</th><th>Jobs</th><th>Time</th></tr></thead>
+<thead><tr><th>Tick Group</th><th>Allocated</th><th>Used</th><th>Demand</th><th>Over By</th><th>Borrowed</th><th>Lent</th><th>Jobs</th><th>Time</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
 <td>{{.TickGroup}}</td>
 <td class="num">{{.Allocated}}</td>
 <td class="num">{{.Used}}</td>
+<td class="num">{{.Demand}}</td>
+<td>{{if .Overcommitted}}<span class="pill fail">{{.Overcommitted}}</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
 <td>{{if .Lent}}-{{.Lent}}{{end}}</td>
 <td class="num">{{.JobCount}}</td>

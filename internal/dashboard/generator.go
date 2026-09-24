@@ -541,11 +541,14 @@ const pageTemplate = `{{template "head" .}}
      spends that budget once per cycle, so a fleet-wide sum can never sit under it — the old
      "Budget Used 1218/100" fill implied a proportion that does not exist and (unclamped)
      overflowed the card at width:1218%. The two facts are therefore shown LABELLED rather
-     than as a misleading fill. Choosing what (if anything) should replace the fill is the
-     row's remaining scope decision — it is deliberately not invented here. */}}
+     than as a misleading fill. SCHED-GAP-1582 extends the honesty: when enabled namespaces
+     carry more demand than the per-tick budget, the OVERSUBSCRIBED note states it — a
+     configured fleet may legitimately oversubscribe, but the state must be named, not
+     implied by a bar that always overflows. */}}
 <div class="budget-bar">
 <div class="budget-label"><span>Fleet weight — sum of enabled lanes</span><span>{{.BudgetUsed}}</span></div>
 <div class="budget-label"><span>Per-tick weight budget</span><span>{{.BudgetTotal}}</span></div>
+{{if .BudgetOversubscribed}}<div class="budget-label oversubscribed"><span>Namespace demand vs per-tick budget</span><span>OVERSUBSCRIBED — enabled namespaces demand {{.NamespaceDemandTotal}} against a per-tick budget of {{.BudgetTotal}}; lanes over their namespace's share are held (reason: budget)</span></div>{{end}}
 </div>
 
 <h2>Projects</h2>
@@ -605,7 +608,7 @@ hx-swap="innerHTML">
 {{if .Namespaces}}
 <div class="table-wrap">
 <table>
-<thead><tr><th>Namespace</th><th>Weight</th><th>Reserved</th><th>Hard Cap</th><th>Allocated</th><th>Used</th><th>Utilization</th><th>Borrowed</th><th>Lent</th><th>Projects</th></tr></thead>
+<thead><tr><th>Namespace</th><th>Weight</th><th>Reserved</th><th>Hard Cap</th><th>Allocated</th><th>Used</th><th>Demand</th><th>Status</th><th>Utilization</th><th>Borrowed</th><th>Lent</th><th>Projects</th></tr></thead>
 <tbody>
 {{range .Namespaces}}
 <tr class="{{utilClass .Reserved .HardCap .Used}}">
@@ -615,6 +618,8 @@ hx-swap="innerHTML">
   <td>{{if .HardCap}}{{.HardCap}}{{else}}∞{{end}}</td>
   <td>{{.Allocated}}</td>
   <td>{{.Used}}</td>
+  <td>{{.Demand}}</td>
+  <td>{{if .Overcommitted}}<span class="pill fail" title="enabled weight {{.Demand}} exceeds the allocated {{.Allocated}} by {{.Overcommitted}} — the surplus is held each cycle (reason: budget)">over by {{.Overcommitted}}</span>{{else}}<span class="pill ok">within budget</span>{{end}}</td>
   <td><div class="urgency-bar" style="width:{{printf "%.0f" .Utilization}}%;background:{{utilColor .Utilization}}"></div>{{printf "%.0f" .Utilization}}%</td>
   <td>{{if .Borrowed}}+{{.Borrowed}}{{end}}</td>
   <td>{{if .Lent}}-{{.Lent}}{{end}}</td>

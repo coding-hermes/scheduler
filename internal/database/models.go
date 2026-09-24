@@ -534,5 +534,10 @@ type NamespaceTick struct {
 	Borrowed    int    `json:"borrowed"`     // extra budget from other namespaces
 	Lent        int    `json:"lent"`         // budget given to other namespaces
 	JobCount    int    `json:"job_count"`    // how many jobs ran
-	CreatedAt   string `json:"created_at"`   // RFC3339
+	// Demand (SCHED-GAP-1582): the enabled-weight the namespace carried
+	// into the pack; Overcommitted the surplus HELD when demand exceeded
+	// the cycle's allocation. 0 = not oversubscribed / not packed.
+	Demand        int    `json:"demand"`
+	Overcommitted int    `json:"overcommitted"`
+	CreatedAt     string `json:"created_at"` // RFC3339
 }

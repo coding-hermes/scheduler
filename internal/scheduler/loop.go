@@ -183,6 +183,15 @@ func (l *Loop) SetNoDeliver(v bool) { l.noDeliver = v }
 // NewLoop creates the evaluation loop. namespaceMode is optional for backward
 // compatibility with existing callers; omitted values default to false.
 func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int, namespaceMode ...bool) *Loop {
+	// SCHED-GAP-1582: 0/negative budget normalizes to the documented
+	// default of 100 — "budget of 0 / unset behaves as the current default,
+	// not as hold-everything". The packer's greedy loop with budget 0
+	// would otherwise reject every weight>0 project (used+weight > 0
+	// always), silently holding the entire fleet. Callers that truly want
+	// a tiny budget pass a positive value.
+	if budget < 1 {
+		budget = 100
+	}
 	calc := NewUrgencyCalculator(minI, maxI, numLevels)
 	nsMode := false
 	if len(namespaceMode) > 0 {
@@ -1877,18 +1886,21 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 // pass and emits one ADMIT line per candidate. Called from evaluate() with
 // the selection resolved (both packer paths done) and BEFORE anything is
 // spawned, so the emitted decision is the decision the pass acted on.
+// Returns the pass id the decisions were emitted under (0 = the pass bailed
+// before emitting — no candidate query, no lines) so SCHED-GAP-1582's
+// budget-hold records can share the same pass id.
 //
 // Callers hold l.mu (evaluate does); this function never locks it (a second
 // acquisition would deadlock) and only touches admitMu, the slot pool's own
 // mutex and the DB.
-func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) {
+func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) int64 {
 	if l.db == nil {
-		return
+		return 0
 	}
 	cands, err := l.admissionCandidates(context.Background())
 	if err != nil {
 		log.Printf("ADMIT: candidate query failed: %v — no admission lines this pass", err)
-		return
+		return 0
 	}
 
 	packedNames := make(map[string]bool, len(packed))
@@ -1960,4 +1972,5 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) {
 	for _, d := range decisions {
 		l.emitAdmissionDecision(passID, eligible, admitted, deferred, d)
 	}
+	return int64(passID)
 }

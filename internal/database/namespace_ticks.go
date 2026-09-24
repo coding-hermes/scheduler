@@ -7,17 +7,19 @@ import (
 )
 
 // InsertNamespaceTick writes a single namespace_tick row. CreatedAt is set
-// automatically if empty.
+// automatically if empty. Demand/Overcommitted (SCHED-GAP-1582) ride the same
+// row: 0/0 = the namespace was not oversubscribed (or was not packed), so
+// pre-1582 readers see the columns as absent and rows as unchanged.
 func InsertNamespaceTick(ctx context.Context, db *sql.DB, nt *NamespaceTick) error {
 	if nt.CreatedAt == "" {
 		nt.CreatedAt = nowUTC(ctx)
 	}
 	const q = `INSERT INTO namespace_ticks
-(tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at)
-VALUES (?,?,?,?,?,?,?,?)`
+(tick_group, namespace_id, allocated, used, borrowed, lent, job_count, demand, overcommitted, created_at)
+VALUES (?,?,?,?,?,?,?,?,?,?)`
 	res, err := db.ExecContext(ctx, q,
 		nt.TickGroup, nt.NamespaceID, nt.Allocated, nt.Used,
-		nt.Borrowed, nt.Lent, nt.JobCount, nt.CreatedAt)
+		nt.Borrowed, nt.Lent, nt.JobCount, nt.Demand, nt.Overcommitted, nt.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert namespace_tick: %w", err)
 	}
@@ -32,7 +34,7 @@ VALUES (?,?,?,?,?,?,?,?)`
 // ListNamespaceTicks returns the most recent namespace_ticks for a given
 // namespace, newest first. limit caps the result count; pass 0 for unbounded.
 func ListNamespaceTicks(ctx context.Context, db *sql.DB, namespaceID string, limit int) ([]NamespaceTick, error) {
-	q := `SELECT id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at
+	q := `SELECT id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, demand, overcommitted, created_at
 FROM namespace_ticks WHERE namespace_id = ?
 ORDER BY created_at DESC`
 	args := []any{namespaceID}
@@ -52,7 +54,7 @@ ORDER BY created_at DESC`
 		var nt NamespaceTick
 		if err := rows.Scan(
 			&nt.ID, &nt.TickGroup, &nt.NamespaceID, &nt.Allocated,
-			&nt.Used, &nt.Borrowed, &nt.Lent, &nt.JobCount, &nt.CreatedAt); err != nil {
+			&nt.Used, &nt.Borrowed, &nt.Lent, &nt.JobCount, &nt.Demand, &nt.Overcommitted, &nt.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan namespace_tick row: %w", err)
 		}
 		out = append(out, nt)
@@ -66,7 +68,7 @@ ORDER BY created_at DESC`
 // ListNamespaceTicksByGroup returns all namespace_ticks for a given tick_group.
 // Used to reconstruct what happened in a specific evaluation cycle.
 func ListNamespaceTicksByGroup(ctx context.Context, db *sql.DB, tickGroup string) ([]NamespaceTick, error) {
-	const q = `SELECT id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, created_at
+	const q = `SELECT id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, demand, overcommitted, created_at
 FROM namespace_ticks WHERE tick_group = ?
 ORDER BY namespace_id ASC`
 
@@ -81,7 +83,7 @@ ORDER BY namespace_id ASC`
 		var nt NamespaceTick
 		if err := rows.Scan(
 			&nt.ID, &nt.TickGroup, &nt.NamespaceID, &nt.Allocated,
-			&nt.Used, &nt.Borrowed, &nt.Lent, &nt.JobCount, &nt.CreatedAt); err != nil {
+			&nt.Used, &nt.Borrowed, &nt.Lent, &nt.JobCount, &nt.Demand, &nt.Overcommitted, &nt.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan namespace_tick row: %w", err)
 		}
 		out = append(out, nt)

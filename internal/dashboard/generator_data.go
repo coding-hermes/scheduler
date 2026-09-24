@@ -111,6 +111,11 @@ type NamespaceRow struct {
 	Lent         int
 	ProjectCount int
 	Utilization  float64
+	// Demand (SCHED-GAP-1582): the enabled-weight the namespace carried
+	// into its latest pack; Overcommitted the surplus HELD when demand
+	// exceeded the allocation. 0 = not oversubscribed / no tick data.
+	Demand        int
+	Overcommitted int
 }
 
 // NamespaceTickRow is one namespace_tick in the utilization history table.
@@ -130,6 +135,13 @@ type FleetData struct {
 	GeneratedAt     string
 	BudgetTotal     int
 	BudgetUsed      int
+	// SCHED-GAP-1582: oversubscription is an explicit, configured state —
+	// enabled namespaces' latest measured demand vs the PER-TICK budget.
+	// Shown as a labelled note, never as a fraction of the fleet-wide sum
+	// (the SCHED-GAP-1583 lesson: a fleet sum and a per-tick budget are
+	// not comparable quantities, so the note names both sides verbatim).
+	BudgetOversubscribed bool
+	NamespaceDemandTotal int
 	ActiveTicks     int
 	TotalProjects   int
 	EnabledProjects int
@@ -389,12 +401,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	namespaces, err := database.ListNamespaces(ctx, g.db, false)
 	if err == nil && len(namespaces) > 0 {
 		// Batch 1: latest namespace_tick per namespace (1 query, not N).
+		// SCHED-GAP-1582: demand/overcommitted ride the same row — they are
+		// what makes an oversubscribed namespace explicit instead of a bar
+		// that overflows by construction.
 		type nsTickVal struct {
 			allocated, used, borrowed, lent int
+			demand, overcommitted           int
 		}
 		latestTicks := make(map[string]nsTickVal)
 		tickRows, terr := g.db.QueryContext(ctx, `
-			SELECT nt.namespace_id, nt.allocated, nt.used, nt.borrowed, nt.lent
+			SELECT nt.namespace_id, nt.allocated, nt.used, nt.borrowed, nt.lent, nt.demand, nt.overcommitted
 			FROM namespace_ticks nt
 			INNER JOIN (
 				SELECT namespace_id, MAX(created_at) AS max_created
@@ -407,7 +423,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			for tickRows.Next() {
 				var nsID string
 				var v nsTickVal
-				if tickRows.Scan(&nsID, &v.allocated, &v.used, &v.borrowed, &v.lent) == nil {
+				if tickRows.Scan(&nsID, &v.allocated, &v.used, &v.borrowed, &v.lent, &v.demand, &v.overcommitted) == nil {
 					latestTicks[nsID] = v
 				}
 			}
@@ -441,6 +457,8 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				row.Used = v.used
 				row.Borrowed = v.borrowed
 				row.Lent = v.lent
+				row.Demand = v.demand
+				row.Overcommitted = v.overcommitted
 			}
 			if row.Allocated > 0 {
 				row.Utilization = float64(row.Used) / float64(row.Allocated) * 100
@@ -448,6 +466,19 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			row.ProjectCount = projectCounts[ns.ID]
 			data.Namespaces = append(data.Namespaces, row)
 		}
+
+		// SCHED-GAP-1582: the oversubscription note — SUM of the latest
+		// measured per-namespace DEMAND of ENABLED namespaces, compared
+		// against the per-tick budget. This is a deliberate, labelled
+		// comparison of demand-vs-budget (not the fleet weight sum vs
+		// budget), and it never renders as a percentage.
+		for _, ns := range namespaces {
+			if !ns.Enabled {
+				continue
+			}
+			data.NamespaceDemandTotal += latestTicks[ns.ID].demand
+		}
+		data.BudgetOversubscribed = data.NamespaceDemandTotal > budgetTotal
 	}
 
 	// Recent namespace ticks for the utilization chart.

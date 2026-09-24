@@ -227,8 +227,8 @@ func TestSCHEDGAP215_MigrationRecorded(t *testing.T) {
 	if v != latestMigration {
 		t.Fatalf("migration version = %d, want %d", v, latestMigration)
 	}
-	if latestMigration != 42 {
-		t.Fatalf("latestMigration = %d, want 42 (SCHED-GAP-1586 lands as v42; v41 stays SCHED-GAP-1607)", latestMigration)
+	if latestMigration != 43 {
+		t.Fatalf("latestMigration = %d, want 43 (SCHED-GAP-1582 lands as v43; v42 stays SCHED-GAP-1586)", latestMigration)
 	}
 	// The recorded description names the row, so ops can trace the change.
 	var desc string

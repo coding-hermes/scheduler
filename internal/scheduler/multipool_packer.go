@@ -34,12 +34,26 @@ type NamespaceTickData struct {
 	Borrowed    int
 	Lent        int
 	JobCount    int
+	// Demand (SCHED-GAP-1582): the sum of ENABLED project weights the
+	// namespace carried into this pack. 0 = the namespace was not packed
+	// this cycle (no candidates / allocation 0), so no demand was measured.
+	// Oversubscription is demand > Allocated; Overcommitted is the surplus
+	// that was HELD (queued, recorded via the deferrals path) rather than
+	// placed by the fair-share rescale.
+	Demand        int
+	Overcommitted int
 }
 
 // PackResult holds the packing outcome.
 type PackResult struct {
 	Projects       []PackedProject     // selected projects across all namespaces
 	NamespaceTicks []NamespaceTickData // per-namespace stats for recording
+	// BudgetHolds (SCHED-GAP-1582): one entry per namespace whose demand
+	// exceeded its allocation this cycle, with the candidates the greedy
+	// pack queued because they did not fit. Empty = nothing was held.
+	// The caller (Loop.evaluate) records these through the existing
+	// deferrals path and emits the event; the packer itself owns neither.
+	BudgetHolds []nsHold
 }
 
 // ---------------------------------------------------------------------------
@@ -71,8 +85,14 @@ type MultiPoolPacker struct {
 
 // NewMultiPoolPacker creates a packer with the given global budget and
 // concurrency cap. The pending-task counter defaults to the package-level
-// shared instance so existing call sites keep working unchanged.
+// shared instance so existing call sites keep working unchanged. A 0/negative
+// budget normalizes to the documented default of 100 (SCHED-GAP-1582: budget
+// 0 / unset must behave as the default, not as "hold everything" — with 0 the
+// allocator would hand every namespace 0 and the pack would hold the fleet).
 func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *MultiPoolPacker {
+	if budget < 1 {
+		budget = 100
+	}
 	return &MultiPoolPacker{
 		allocator:       NewNamespaceAllocator(budget),
 		maxConcurrent:   maxConcurrent,
