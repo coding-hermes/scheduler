@@ -78,7 +78,15 @@ body.ready .card{opacity:1;transform:translateY(0)}
 /* Tables */
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:auto}
 table{width:100%;border-collapse:collapse;font-size:0.82rem}
-th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
+/* SCHED-GAP-1605/1588: top-align so a 1-line cell shares a baseline with its
+   two-line neighbours (vertical-align:middle centred them at different heights,
+   which is the "numbers don't line up" report). Wrapping is allowed on data
+   cells so a 12-column table can fit instead of forcing a horizontal scroll;
+   headers and .num cells stay on one line. */
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+th{white-space:nowrap}
+td{white-space:normal}
+td.num{white-space:nowrap}
 th{background:var(--panel);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.62rem;letter-spacing:0.09em;position:sticky;top:0;font-family:var(--mono)}
 tr:last-child td{border-bottom:none}
 tbody tr{transition:background 140ms var(--ease-out)}
@@ -123,14 +131,25 @@ tbody tr{transition:background 140ms var(--ease-out)}
 @media (prefers-reduced-motion: reduce){.card{opacity:1;transform:none;transition:none}.running-dot,.signal .dot{animation:none}}
 @media (prefers-reduced-transparency: reduce){.sidebar,.table-wrap{background:var(--panel)}}
 @media (prefers-contrast: more){:root{--border:rgba(255,255,255,0.2)}.sidebar,.surface{border-color:var(--border)}}
+/* SCHED-GAP-1588: collapsible sidebar. The collapse control lives inside the
+   sidebar; the expand control is FIXED and outside it, so it stays reachable
+   once the sidebar is hidden. State persists in localStorage. */
+#sbExpand{display:none;position:fixed;top:12px;left:12px;z-index:60;width:28px;height:28px;border-radius:7px;border:1px solid var(--border);background:var(--panel);color:var(--muted);cursor:pointer;font-family:var(--mono);font-size:13px;line-height:1;place-items:center}
+#sbExpand:hover{color:var(--fg);border-color:var(--border-hi)}
+.sb-collapse{position:absolute;top:18px;right:10px;z-index:5;width:24px;height:24px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--faint);cursor:pointer;font-family:var(--mono);font-size:12px;line-height:1;place-items:center}
+.sb-collapse:hover{color:var(--fg);border-color:var(--border-hi)}
+body.sb-collapsed #sbExpand{display:grid}
+body.sb-collapsed .sidebar{display:none}
 </style>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
+<button id="sbExpand" type="button" title="Show sidebar" aria-label="Show sidebar" aria-expanded="false">&#187;</button>
 {{end}}
 
 {{define "sidebar"}}
-<aside class="sidebar">
+<aside class="sidebar" id="sidebar">
+<button class="sb-collapse" id="sbCollapse" type="button" title="Hide sidebar" aria-label="Hide sidebar" aria-expanded="true">&#171;</button>
 <a class="brand" href="/"><span class="logo">❯</span> Coding&nbsp;Hermes</a>
 <div class="side-label">Fleet</div>
 <nav class="side-nav" aria-label="Fleet">
@@ -139,6 +158,27 @@ tbody tr{transition:background 140ms var(--ease-out)}
 <a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Tick History</a>
 <a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Health</a>
 </nav>
+<script>
+/* SCHED-GAP-1588: collapse/expand the sidebar, remembered across navigation.
+   Runs inline so the class lands before first paint (no flash of the sidebar). */
+(function () {
+  var KEY = 'ch.sidebar.collapsed';
+  function set(collapsed) {
+    document.body.classList.toggle('sb-collapsed', collapsed);
+    var e = document.getElementById('sbExpand');
+    var c = document.getElementById('sbCollapse');
+    if (e) e.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
+    if (c) c.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+  var collapsed = false;
+  try { collapsed = localStorage.getItem(KEY) === '1'; } catch (err) {}
+  set(collapsed);
+  var e = document.getElementById('sbExpand');
+  var c = document.getElementById('sbCollapse');
+  if (e) e.addEventListener('click', function () { set(false); try { localStorage.setItem(KEY, '0'); } catch (err) {} });
+  if (c) c.addEventListener('click', function () { set(true); try { localStorage.setItem(KEY, '1'); } catch (err) {} });
+})();
+</script>
 </aside>
 {{end}}
 
