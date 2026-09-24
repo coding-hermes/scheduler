@@ -54,6 +54,7 @@ type Generator struct {
 	tickHistoryTmpl   *template.Template // full page: /ticks
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
+	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -115,6 +116,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.tickHistoryTmpl = g.tmpl.Lookup("tick_history")
 	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
 	g.healthTmpl = g.tmpl.Lookup("health")
+	g.tapeTmpl = g.tmpl.Lookup("tape")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -122,6 +124,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 		"tick_history":   g.tickHistoryTmpl,
 		"namespace_view": g.namespaceViewTmpl,
 		"health":         g.healthTmpl,
+		"tape":           g.tapeTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")
