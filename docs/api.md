@@ -711,7 +711,7 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `status` | string | `queued` \| `running` \| `completed` \| `failed` \| `timeout` \| `deferred` (`deferred` = terminal gateway-side deferral: a transient gateway blip, SCHED-GAP-203 — not a lane failure) |
 | `outcome` | string | Terminal outcome: `committed` \| `dry_run` \| `failed` \| `timeout` \| `deferred`; `""` while running/queued |
 | `spawned_at`, `completed_at` | string | RFC3339; `completed_at` `""` while not terminal |
-| `exit_code` | int | Process exit code |
+| `exit_code` | int | Process exit code (`0` on a completed gateway tick is the stated convention — gateway sessions expose no process exit; the DB column is `NULL` when no process exit exists and `0` only for the gateway-completed convention) |
 | `commits`, `files_changed` | int | Work metrics |
 | `tokens_in`, `tokens_out` | int | Token usage |
 | `cost_usd` | float | Dollar cost |

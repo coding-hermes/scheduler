@@ -708,6 +708,11 @@ func (l *Loop) abortInFlightTicks() {
 			Started:  finished,
 			Finished: finished,
 			Status:   TickFailed,
+			// SCHED-GAP-1597: -1 → exit_code NULL. No process was
+			// reaped — the drain reaped the row, not the child — so
+			// the struct-default 0 would be a fabricated "exited
+			// cleanly".
+			ExitCode: -1,
 			Error:    OrphanAbortMarker + " — drain timed out with tick in flight",
 		})
 		if err != nil {

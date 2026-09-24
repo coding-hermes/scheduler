@@ -42,18 +42,27 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // RecordTickAdmission persists the SCHED-GAP-157 admission-lifecycle stamp on
 // an existing tick row: how long the tick waited for a slot (slotWait, already
-// measured by the caller through internal/clock) and the admission decision
+// measured by the caller through internal/clock), the admission decision
 // that let it in (admitReason, one of the scheduler's SCHED-GAP-155 vocabulary
-// strings). nudgeSource ("startup" | "manual" | "board_wake") is stored only
+// strings), and the SCHED-GAP-1597 selection facts (urgency, weightUsed — the
+// packer's computed urgency and effective weight at the admit boundary; 0/0 for
+// a tick no packer selected, which is the honest value for manual and resume
+// spawns). nudgeSource ("startup" | "manual" | "board_wake") is stored only
 // when non-empty, so a packer tick never overwrites the nudge-source stamp its
 // own enqueue path wrote.
+//
+// SCHED-GAP-1597: urgency/weight_used/slot_wait_ms/admit_reason previously read
+// as never-written over 7 days of production rows because the packer path
+// stamped BEFORE the row existed (the UPDATE matched 0 rows and was silently
+// lost). The caller must enqueue the row FIRST; this writer reports
+// ErrTickNotFound when it does not.
 //
 // Best-effort by contract: the stamp is observability, never a gate — an
 // unknown id or a write error is returned and logged by the caller, and can
 // never change the tick's scheduling outcome.
-func RecordTickAdmission(ctx context.Context, db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string) error {
-	q := `UPDATE ticks SET slot_wait_ms = ?, admit_reason = ?`
-	args := []any{slotWait.Milliseconds(), admitReason}
+func RecordTickAdmission(ctx context.Context, db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int) error {
+	q := `UPDATE ticks SET slot_wait_ms = ?, admit_reason = ?, urgency = ?, weight_used = ?`
+	args := []any{slotWait.Milliseconds(), admitReason, urgency, weightUsed}
 	if nudgeSource != "" {
 		q += `, nudge_source = ?`
 		args = append(args, nudgeSource)
@@ -200,6 +209,11 @@ WHERE id = ?`
 
 // RecordTickMetrics persists the post-run metrics (commits, files, tokens,
 // cost, urgency, weight) for a completed tick.
+//
+// SCHED-GAP-1597: in production the urgency/weight_used columns are stamped at
+// the admit boundary by RecordTickAdmission (the packer's selection-time
+// values); this writer's urgency/weight arguments are for the test/seeding
+// path only and would overwrite an admission stamp if used on a live row.
 func RecordTickMetrics(ctx context.Context, db *sql.DB, id string, commits, filesChanged, weightUsed int, tokensIn, tokensOut int64, costUSD, urgency float64) error {
 	q := `UPDATE ticks
 SET commits = ?, files_changed = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?, urgency = ?, weight_used = ?

@@ -18,6 +18,16 @@ import (
 // change both answers required reading log-line ORDER across a rotated
 // scheduler.log.
 //
+// SCHED-GAP-1597 — declared-but-never-written tick columns. The production
+// audit (7 days, 2,877 rows) found slot_wait_ms non-zero on 2 rows and
+// admit_reason non-empty on 50, urgency/weight_used on 0 — despite the
+// writers existing. Root cause: the packer path stamped the row BEFORE
+// lifecycle.Enqueue created it, so the stamp's UPDATE matched 0 rows and was
+// silently lost; the pre-enqueued resume/nudge rows were the only ones ever
+// stamped. The slot pool now enqueues first and stamps after, and the stamp
+// also persists the packer's selection facts (urgency, weight_used — see
+// slot_pool.go).
+//
 // What is persisted where:
 //
 //   - ticks.slot_wait_ms  — the wait between a tick being handed to the slot
@@ -25,6 +35,11 @@ import (
 //   - ticks.admit_reason  — the SCHED-GAP-155 admission decision that let the
 //     tick in ("ok" for every packer-selected tick; a nudge tick carries the
 //     orphan-resume reason it was re-fired for).
+//   - ticks.urgency / ticks.weight_used (SCHED-GAP-1597) — the packer's
+//     computed urgency at selection time and the effective weight it
+//     allocated, stamped at the same admit boundary. 0/0 = no packer
+//     selected this tick (manual/resume spawns), the honest value — never
+//     a fabricated selection.
 //   - ticks.nudge_source  — why this tick row exists OUTSIDE the packer:
 //     "startup" | "manual" | "board_wake". Every packer tick carries "" — the
 //     packer path IS the default, and stamping it would be a fabricated value.
@@ -96,16 +111,17 @@ func (l *Loop) recordDeferral(project, reason string, passID int64, detail strin
 	}
 }
 
-// stampTickAdmission persists the SCHED-GAP-157 admission-lifecycle stamp on
+// stampTickAdmission persists the SCHED-GAP-1597 admission-lifecycle stamp on
 // an existing tick row: the measured slot wait, the admission decision that
-// let the tick in, and (when non-empty) the non-packer entry point. Called by
-// SlotPool.spawn at the admit → start boundary and by tests. Best-effort: the
-// stamp is observability — a failed write is logged and never blocks the
-// spawn.
-func stampTickAdmission(db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string) {
+// let the tick in, the SCHED-GAP-1597 selection facts (the packer's computed
+// urgency and effective weight, 0/0 when no packer selected the tick), and
+// (when non-empty) the non-packer entry point. Called by SlotPool.spawn at the
+// admit → start boundary and by tests. Best-effort: the stamp is
+// observability — a failed write is logged and never blocks the spawn.
+func stampTickAdmission(db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := database.RecordTickAdmission(ctx, db, id, slotWait, admitReason, nudgeSource); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, id, slotWait, admitReason, nudgeSource, urgency, weightUsed); err != nil {
 		log.Printf("ADMIT: record admission stamp tick %s: %v", id, err)
 	}
 }

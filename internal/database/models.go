@@ -321,11 +321,17 @@ type Tick struct {
 	TokensOut    int64       `json:"tokens_out"`
 	CostUSD      float64     `json:"cost_usd"`
 	CostSource   string      `json:"cost_source"` // ADV-R09/G8: measured | gateway | estimated | simulated | "" (legacy)
-	// SCHED-GAP-176 (surface honesty): both columns are structurally always
-	// zero — RecordTickMetrics (internal/database/ticks.go) is their only
-	// writer and is dead code, so the REST payload emitted 0 for every one of
-	// the 72k+ ticks rows. The columns stay in the schema and the struct
-	// fields stay for the dead writer + tests, but nothing serializes them.
+	// SCHED-GAP-176 (surface honesty), as amended by SCHED-GAP-1597: the
+	// columns USED to be structurally always zero — RecordTickMetrics was
+	// their only writer and was dead code, so the REST payload emitted 0 for
+	// every one of the 72k+ ticks rows and the fields were dropped from
+	// serialization. SCHED-GAP-1597 made the slot pool stamp the real values
+	// (RecordTickAdmission) at the admit boundary: urgency = the packer's
+	// computed urgency at selection time, weight_used = the effective weight
+	// the packer allocated; 0/0 reads as "no packer selected this tick"
+	// (manual/resume spawns) — the same honest-empty convention nudge_source
+	// uses. The fields stay out of the REST payload until a surface consumes
+	// them (SCHED-GAP-1593's call); the DB columns are the source of truth.
 	Urgency    float64 `json:"-"`
 	WeightUsed int     `json:"-"`
 	Error      string  `json:"error"`
