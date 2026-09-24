@@ -135,7 +135,7 @@
 <tbody>
 {{range .RecentTicks}}
 <tr>
-  <td class="mono">{{.ID}}</td>
+  <td class="mono"><a href="/ticks/{{.ID}}" title="open tick detail">{{.ID}}</a></td>
   <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="pill warn">{{.Status}}</span>{{end}}</td>
   <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
   <td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>

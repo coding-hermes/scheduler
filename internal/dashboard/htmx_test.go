@@ -236,10 +236,10 @@ func TestGenerateTickHistory_PaginatesGlobalTicks(t *testing.T) {
 
 	gen := dashboard.NewGenerator(db, nil)
 	var page1, page2 strings.Builder
-	if err := gen.GenerateTickHistory(&page1, 1); err != nil {
+	if err := gen.GenerateTickHistory(&page1, 1, database.TickFilter{}); err != nil {
 		t.Fatalf("GenerateTickHistory page 1: %v", err)
 	}
-	if err := gen.GenerateTickHistory(&page2, 2); err != nil {
+	if err := gen.GenerateTickHistory(&page2, 2, database.TickFilter{}); err != nil {
 		t.Fatalf("GenerateTickHistory page 2: %v", err)
 	}
 

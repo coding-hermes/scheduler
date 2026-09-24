@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -16,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/agentlog"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
@@ -52,6 +55,7 @@ type Generator struct {
 	projectTmpl       *template.Template // full page: /projects/{name}
 	queueTmpl         *template.Template // full page: /queue
 	tickHistoryTmpl   *template.Template // full page: /ticks
+	tickDetailTmpl    *template.Template // full page: /ticks/{id}
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
@@ -65,6 +69,11 @@ type Generator struct {
 	// of 100 — never a bare literal at the render site.
 	weightBudget int
 	spawnCounts  func() (httpCount, execCount int64) // optional; /health panel
+	// agentLog (SCHED-GAP-1593): read-only, lazily-opened reader on the
+	// agent's own state database; the tick drill-down resolves
+	// gateway_trace.session_id through it. Nil = the drill-down renders the
+	// explicit "agent state database not configured" notice.
+	agentLog *agentlog.Reader
 	// CI conclusion cache (DASH-PERF-001): `gh run list` is a ~0.7s
 	// subprocess; running it once per project on EVERY fleet render cost
 	// ~30s. Conclusions are cached per workdir for ciTTL (300s default —
@@ -75,6 +84,13 @@ type Generator struct {
 	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
 	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
 }
+
+// SetAgentStateDB wires the reader the tick drill-down uses to resolve
+// gateway_trace.session_id into the agent's transcript (SCHED-GAP-1593).
+// Nil disables agent-text resolution (the page then degrades with an
+// explicit notice). The reader itself is read-only and lazy — see the
+// agentlog package contract.
+func (g *Generator) SetAgentStateDB(r *agentlog.Reader) { g.agentLog = r }
 
 // SetSpawnCounts wires a callback returning (http, exec) spawn counts since
 // restart, surfaced on the /health panel (upstream merge compatibility).
@@ -114,6 +130,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.projectTmpl = g.tmpl.Lookup("project_detail")
 	g.queueTmpl = g.tmpl.Lookup("queue")
 	g.tickHistoryTmpl = g.tmpl.Lookup("tick_history")
+	g.tickDetailTmpl = g.tmpl.Lookup("tick_detail")
 	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
 	g.healthTmpl = g.tmpl.Lookup("health")
 	g.tapeTmpl = g.tmpl.Lookup("tape")
@@ -237,9 +254,11 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 const tickHistoryPageSize = 50
 
 // GenerateTickHistory renders one page of the global tick history. Pages are
-// one-based; values below one are normalized to the first page.
-func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
-	data, err := g.tickHistoryData(page)
+// one-based; values below one are normalized to the first page. Filter is
+// the server-side search/filter (SCHED-GAP-1593); a zero Filter disables
+// filtering entirely.
+func (g *Generator) GenerateTickHistory(w io.Writer, page int, filter database.TickFilter) error {
+	data, err := g.tickHistoryData(page, filter)
 	if err != nil {
 		return err
 	}
@@ -250,25 +269,90 @@ func (g *Generator) GenerateTickHistory(w io.Writer, page int) error {
 // polling (HX-Request). The page's #tick-history div polls /ticks with
 // hx-swap=outerHTML, so the response must be the fragment — a full page
 // swapped in compounds itself on every 30s refresh.
-func (g *Generator) GenerateTickHistoryPartial(w io.Writer, page int) error {
-	data, err := g.tickHistoryData(page)
+func (g *Generator) GenerateTickHistoryPartial(w io.Writer, page int, filter database.TickFilter) error {
+	data, err := g.tickHistoryData(page, filter)
 	if err != nil {
 		return err
 	}
 	return g.tickHistoryTmpl.ExecuteTemplate(w, "tick_history_partial", data)
 }
 
+// statusVocabulary is the fixed tick status list (database.TickStatus
+// constants) used for the status filter dropdown and query validation.
+var statusVocabulary = []string{
+	string(database.StatusQueued),
+	string(database.StatusRunning),
+	string(database.StatusCompleted),
+	string(database.StatusFailed),
+	string(database.StatusTimeout),
+}
+
+// outcomeVocabulary is the fixed tick outcome list for the outcome filter
+// dropdown and query validation.
+var outcomeVocabulary = []string{
+	string(database.OutcomeCommitted),
+	string(database.OutcomeDryRun),
+	string(database.OutcomeFailed),
+	string(database.OutcomeTimeout),
+}
+
+// tickHistoryFilter validates a raw filter against the known vocabularies.
+// An unknown status/outcome value is dropped (rendering the unfiltered view
+// beats rendering a guaranteed-empty result from a stray query param).
+func tickHistoryFilter(f database.TickFilter) database.TickFilter {
+	f.Project = strings.TrimSpace(f.Project)
+	f.Query = strings.TrimSpace(f.Query)
+	f.Status = strings.TrimSpace(f.Status)
+	f.Outcome = strings.TrimSpace(f.Outcome)
+	valid := func(v string, vocab []string) bool {
+		for _, s := range vocab {
+			if s == v {
+				return true
+			}
+		}
+		return false
+	}
+	if !valid(f.Status, statusVocabulary) {
+		f.Status = ""
+	}
+	if !valid(f.Outcome, outcomeVocabulary) {
+		f.Outcome = ""
+	}
+	return f
+}
+
+// filterQueryParams returns the non-empty filter values as parallel
+// query-string fragments (already URL-encoded), used to build pagination
+// links that preserve the active filter.
+func filterQueryParams(f database.TickFilter) []string {
+	var parts []string
+	if f.Query != "" {
+		parts = append(parts, "q="+url.QueryEscape(f.Query))
+	}
+	if f.Project != "" {
+		parts = append(parts, "project="+url.QueryEscape(f.Project))
+	}
+	if f.Status != "" {
+		parts = append(parts, "status="+url.QueryEscape(f.Status))
+	}
+	if f.Outcome != "" {
+		parts = append(parts, "outcome="+url.QueryEscape(f.Outcome))
+	}
+	return parts
+}
+
 // tickHistoryData loads the paginated tick list shared by the full page and
-// the htmx partial.
-func (g *Generator) tickHistoryData(page int) (TickHistoryData, error) {
+// the htmx partial, honoring the server-side search/filter.
+func (g *Generator) tickHistoryData(page int, raw database.TickFilter) (TickHistoryData, error) {
 	ctx := context.Background()
+	filter := tickHistoryFilter(raw)
 	if page < 1 {
 		page = 1
 	}
 
-	var total int
-	if err := g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks`).Scan(&total); err != nil {
-		return TickHistoryData{}, fmt.Errorf("count ticks: %w", err)
+	ticks, total, err := database.ListTicksFiltered(ctx, g.db, filter, tickHistoryPageSize, (page-1)*tickHistoryPageSize)
+	if err != nil {
+		return TickHistoryData{}, fmt.Errorf("load tick history page %d: %w", page, err)
 	}
 	totalPages := (total + tickHistoryPageSize - 1) / tickHistoryPageSize
 	if totalPages == 0 {
@@ -278,11 +362,7 @@ func (g *Generator) tickHistoryData(page int) (TickHistoryData, error) {
 		page = totalPages
 	}
 
-	ticks, err := database.ListAllTicks(ctx, g.db, tickHistoryPageSize, (page-1)*tickHistoryPageSize)
-	if err != nil {
-		return TickHistoryData{}, fmt.Errorf("load tick history page %d: %w", page, err)
-	}
-	return TickHistoryData{
+	data := TickHistoryData{
 		Title:        "Tick History",
 		GeneratedAt:  g.clock().Now().UTC().Format(time.RFC3339),
 		Ticks:        ticks,
@@ -294,7 +374,144 @@ func (g *Generator) tickHistoryData(page int) (TickHistoryData, error) {
 		PreviousPage: page - 1,
 		HasNext:      page < totalPages,
 		NextPage:     page + 1,
-	}, nil
+		Filtered:     filter.Query != "" || filter.Project != "" || filter.Status != "" || filter.Outcome != "",
+		FilterQ:      filter.Query,
+		FilterP:      filter.Project,
+		FilterS:      filter.Status,
+		FilterO:      filter.Outcome,
+	}
+	parts := filterQueryParams(filter)
+	data.BaseQS = strings.Join(parts, "&")
+	data.StatusOptions = statusVocabulary
+	data.OutcomeOptions = outcomeVocabulary
+	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
+		data.ProjectOptions = projs
+	}
+	return data, nil
+}
+
+// tickDetailEventLimit bounds the scheduler log-event scan per tick page.
+// The events table has no tick-id column, so the page scans the newest tail
+// and selects the events inside (or nearest-before) the tick window.
+const tickDetailEventLimit = 400
+
+// GenerateTickDetail renders /ticks/{id}: the tick's own row, the scheduler
+// log events around its window, and — when the tick carries a gateway trace
+// with a resolvable session id — the agent's actual generated text
+// (SCHED-GAP-1593). Every degradation is explicit: no trace, an unknown
+// session id, or an unreachable agent state database each render a named
+// notice, never an empty pane that could read as "the agent said nothing".
+func (g *Generator) GenerateTickDetail(w io.Writer, id string) error {
+	if id == "" {
+		return errors.New("tick id is required")
+	}
+	ctx := context.Background()
+	tick, traceRaw, err := database.GetTickWithTrace(ctx, g.db, id)
+	if err != nil {
+		return err
+	}
+
+	data := TickDetailData{
+		Title:       "Tick " + id,
+		GeneratedAt: g.clock().Now().UTC().Format(time.RFC3339),
+		Tick:        tick,
+	}
+
+	// ── Gateway trace ──
+	// The trace is the ONLY bridge to the agent's transcript: ticks.session_id
+	// is the scheduler's own tick id and resolves nowhere.
+	if traceRaw != "" {
+		var tr scheduler.GatewayPOSTTrace
+		if err := json.Unmarshal([]byte(traceRaw), &tr); err != nil {
+			data.AgentStatus = "no-trace"
+			data.AgentDetail = fmt.Sprintf(
+				"this tick has a gateway trace, but it could not be parsed (%v) — no session id can be extracted, so the agent's transcript cannot be resolved. Raw trace is preserved in ticks.gateway_trace.", err)
+		} else {
+			data.HasTrace = true
+			data.TraceModel = tr.Model
+			data.TraceProvider = tr.Provider
+			data.TraceSession = tr.SessionID
+			data.TraceElapsedS = int(tr.ElapsedMS / 1000)
+			data.TraceEvents = tr.Events
+			data.TraceAttempts = tr.Attempts
+			data.TraceClass = tr.Classification
+
+			switch {
+			case tr.SessionID == "":
+				data.AgentStatus = "no-trace"
+				data.AgentDetail = "the gateway trace on this tick carries NO session id (older gateway, or the response header was missing) — the agent's transcript cannot be resolved."
+			case g.agentLog == nil:
+				data.AgentStatus = "unavailable"
+				data.AgentDetail = "the agent state database is not configured on this dashboard (no reader wired), so the transcript of session " + tr.SessionID + " cannot be fetched. The session id IS recorded in the trace above."
+			default:
+				res := g.agentLog.FetchSession(ctx, tr.SessionID)
+				data.AgentStatus = string(res.Status)
+				data.AgentDetail = res.Detail
+				if res.Status == agentlog.StatusResolved {
+					s := res.Session
+					data.AgentSession = &s
+					data.AgentTurns = res.Turns
+					data.AgentCapped = res.Capped
+				}
+			}
+		}
+	} else {
+		data.AgentStatus = "no-trace"
+		data.AgentDetail = "this tick has NO gateway trace recorded (predates SCHED-GAP-119 tracing, or the POST never completed) — there is no session id to resolve, so the agent's transcript cannot be fetched. That is a data gap, not an empty transcript."
+	}
+
+	// ── Scheduler log events around the tick window ──
+	// The events table carries no tick-id column, so selection is a
+	// time-window scan over the newest tail: everything inside
+	// [spawned−60s, completed+60s] (or everything after spawn when the tick
+	// never completed), with events that literally name the tick id marked
+	// as matched. Event listing must never fail the page.
+	events, err := database.ListEventsRecent(ctx, g.db, tickDetailEventLimit)
+	if err == nil {
+		evs := make([]TickEventRow, 0, len(events))
+		spawned := parseWhen(tick.SpawnedAt)
+		completed := parseWhen(tick.CompletedAt)
+		hasWindow := !spawned.IsZero()
+		for _, e := range events {
+			at := parseWhen(e.CreatedAt)
+			inWindow := false
+			if hasWindow && !at.IsZero() {
+				if completed.IsZero() {
+					inWindow = at.After(spawned.Add(-time.Minute))
+				} else {
+					inWindow = at.After(spawned.Add(-time.Minute)) && at.Before(completed.Add(time.Minute))
+				}
+			}
+			matched := strings.Contains(e.Message, tick.ID) ||
+				strings.Contains(e.Details, tick.ID)
+			if inWindow || matched {
+				evs = append(evs, TickEventRow{
+					ID: e.ID, Severity: string(e.Severity),
+					Component: e.Component, Message: e.Message,
+					CreatedAt: e.CreatedAt, Matched: matched,
+				})
+			}
+		}
+		data.Events = evs
+		data.EventsTotal = len(events)
+		if data.EventsTotal == tickDetailEventLimit && len(evs) == 0 {
+			data.HasMore = true
+		}
+	}
+
+	return g.tickDetailTmpl.Execute(w, data)
+}
+
+// parseWhen parses the RFC3339-ish timestamps the ticks/events tables use.
+// Returns the zero time for empty or unparseable values.
+func parseWhen(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // GenerateNamespaceView renders namespace configuration, assigned projects,

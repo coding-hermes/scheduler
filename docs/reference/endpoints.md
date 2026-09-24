@@ -11,7 +11,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/static/htmx.min.js` | Bundled htmx asset (Go embed) |
 | `/projects/{name}` | Per-project detail page |
 | `/queue` | Global queue view |
-| `/ticks?page=N` | Paginated tick history |
+| `/ticks?page=N` | Paginated tick history — server-side search/filter: `q` (substring over tick id + project name), `project`, `status`, `outcome` (SCHED-GAP-1593) |
+| `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
 | `/tape` | Fleet Tape — stock-ticker fleet view (index bar, marquee, market board); htmx polls return the board-rows fragment (SCHED-GAP-1596) |
