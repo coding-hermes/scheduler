@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 41
+const latestMigration = 42
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -646,6 +646,15 @@ UPDATE namespaces SET description = 'DuckBrain namespace sync lanes — skill-dr
 		desc:    "tick-report delivery mode (SCHED-GAP-1607): deliver_mode on projects ('' = full | full | file | link) — how a completed tick's report reaches the deliver target. full keeps the historical single-message shape (byte-identical); file sends the short header+footer message plus the complete report as a .md document attachment; link sends the short message plus one absolute dashboard URL built from --public-url. '' and unknown values resolve to full at delivery time, so pre-1607 rows are unchanged.",
 		stmt: `
 ALTER TABLE projects ADD COLUMN deliver_mode TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 42,
+		desc:    "lane parent reference (SCHED-GAP-1586): parent on projects — the NAME of the lane this lane is a satellite of ('' = a primary/root lane). The satellite relation was previously INFERRED from name suffixes and the board-symlink walk (SCHED-GAP-1587 retires those heuristics); this column makes it explicit and authoritative. Arbitrary depth is allowed (a satellite may itself have satellites); cycles are impossible — every write path validates (UpdateProject refuses self-parenting and any parent chain that loops back to the lane) and a dangling parent is tolerated (deleted lanes stay referentially valid), so the resolver treats an unknown parent as a root.",
+		stmt: `
+ALTER TABLE projects ADD COLUMN parent TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent);
 `,
 	},
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,8 +77,8 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		}
 	}
 	const q = `INSERT INTO projects
-(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s, no_progress_threshold, no_progress_ticks, board_rows_seen, admission_mode, board_ownership)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, parent, enabled, created_at, updated_at, adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s, no_progress_threshold, no_progress_ticks, board_rows_seen, admission_mode, board_ownership)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	// A zero-valued BoardRowsSeen on a brand-new row would read as "board
 	// observed with 0 rows"; store the unseen sentinel instead so the first
 	// adaptive observation only ever establishes a baseline.
@@ -96,7 +97,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
 		p.DecayRate, p.Model, p.Provider, p.FallbackModel, p.FallbackProvider, boolToInt(p.NoGlobalFallback),
 		p.IdleModel, p.IdleProvider,
 		p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD,
-		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.Command, p.Prompt, p.PromptMode, p.NamespaceID, p.Deliver, p.DeliverMode, boolToInt(p.Enabled),
+		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.Command, p.Prompt, p.PromptMode, p.NamespaceID, p.Deliver, p.DeliverMode, p.Parent, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt,
 		boolToInt(p.AdaptiveCooldown), p.CooldownFloorS, p.CooldownCeilingS, p.NoProgressThreshold, p.NoProgressTicks, boardRowsSeen, p.AdmissionMode, p.BoardOwnership)
 	if err != nil {
@@ -134,7 +135,7 @@ const (
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, '')
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
@@ -147,7 +148,7 @@ FROM projects WHERE name = ?`
 		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
-		&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus)
+		&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -168,7 +169,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -195,7 +196,7 @@ FROM projects`
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
-			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus); err != nil {
+			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -217,7 +218,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, '')
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -240,7 +241,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
-			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus); err != nil {
+			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -292,7 +293,13 @@ type ProjectUpdates struct {
 	ModelChain       *string  `json:"model_chain"`  // SCHED-GAP-095: ordered "model@provider" hops (JSON array); "" clears
 	Deliver          *string  `json:"deliver"`      // SCHED-GAP-095: delivery target platform:chat_id:thread_id; "" clears
 	DeliverMode      *string  `json:"deliver_mode"` // SCHED-GAP-1607: "full" (default) | "file" | "link"; "" resets to full
-	Enabled          *bool    `json:"enabled"`
+	// SCHED-GAP-1586: parent lane reference — the name of the lane this lane
+	// is a satellite of; "" clears back to a primary/root lane. Every write
+	// is cycle-checked (self-parenting and any chain that loops back to the
+	// lane are refused); a parent that names a non-existent lane is
+	// tolerated at write time (dangling, resolved as a root child).
+	Parent  *string `json:"parent"`
+	Enabled *bool   `json:"enabled"`
 	// Disable provenance overrides (GAP-044): when Enabled transitions
 	// true→false, DisabledBy/DisabledReason default to "api"/"disabled via
 	// API update" unless explicitly supplied here; DisabledAt defaults to
@@ -445,6 +452,10 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 	if u.Deliver == nil {
 		var v string
 		fill("Deliver", &v, func() { u.Deliver = &v })
+	}
+	if u.Parent == nil {
+		var v string
+		fill("Parent", &v, func() { u.Parent = &v })
 	}
 	if u.Enabled == nil {
 		var v bool
@@ -681,6 +692,19 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		setClauses = append(setClauses, "deliver_mode = ?")
 		args = append(args, *updates.DeliverMode)
 	}
+	// SCHED-GAP-1586: parent lane reference with cycle validation — a lane
+	// can never become its own ancestor. Self-parenting and any parent
+	// chain that loops back to this lane are refused; a parent that names
+	// a lane that does not exist is tolerated (dangling reference, the
+	// resolver treats the child as a root-level orphan). "" clears back to
+	// a primary/root lane.
+	if updates.Parent != nil {
+		if err := validateParentReference(ctx, db, name, *updates.Parent); err != nil {
+			return err
+		}
+		setClauses = append(setClauses, "parent = ?")
+		args = append(args, *updates.Parent)
+	}
 	if updates.Enabled != nil {
 		setClauses = append(setClauses, "enabled = ?")
 		args = append(args, boolToInt(*updates.Enabled))
@@ -908,6 +932,7 @@ func (u *ProjectUpdates) IsEmpty() bool {
 		u.WorkerModel == nil && u.WorkerProvider == nil && u.GatewayKey == nil &&
 		u.Command == nil && u.Prompt == nil && u.PromptMode == nil &&
 		u.NamespaceID == nil && u.ModelChain == nil && u.Deliver == nil &&
+		u.DeliverMode == nil && u.Parent == nil &&
 		u.Enabled == nil && u.DisabledAt == nil && u.DisabledBy == nil &&
 		u.DisabledReason == nil && u.AdaptiveCooldown == nil &&
 		u.CooldownFloorS == nil && u.CooldownCeilingS == nil &&
@@ -1027,4 +1052,138 @@ WHERE name = ? AND COALESCE(bump_active, 0) = 1`,
 		return ErrNoActiveBump
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Lane hierarchy (SCHED-GAP-1586)
+// ---------------------------------------------------------------------------
+
+// ErrLaneCycle is returned when a parent update would make a lane its own
+// ancestor — self-parenting (a→a) and any longer loop (a→b→c→a) both land
+// here, so the stored parent graph is always a forest.
+var ErrLaneCycle = errors.New("lane parent reference would create a cycle")
+
+// validateParentReference rejects a parent update that would put the lane
+// under its own subtree. The child must exist (UpdateProject has already
+// proven that by the time this runs); the parent may name a non-existent
+// lane (dangling references are tolerated — soft-deleted and purged lanes
+// must never block a satellite's reparent) and the walk stops at dangling
+// or self-referential EXISTING links rather than looping forever.
+func validateParentReference(ctx context.Context, db *sql.DB, child, parent string) error {
+	if parent == "" {
+		return nil // "" clears back to a primary/root lane — never a cycle
+	}
+	if parent == child {
+		return fmt.Errorf("%w: %q cannot be its own parent", ErrLaneCycle, child)
+	}
+	const maxLaneDepth = 4096 // defensive bound; far above any real nesting
+	seen := map[string]bool{child: true}
+	cur := parent
+	for i := 0; i < maxLaneDepth; i++ {
+		if cur == "" || seen[cur] {
+			if seen[cur] {
+				return fmt.Errorf("%w: setting parent of %q to %q loops back through %q", ErrLaneCycle, child, parent, cur)
+			}
+			return nil // dangling parent name — tolerated (resolved as a root child)
+		}
+		seen[cur] = true
+		var next string
+		err := db.QueryRowContext(ctx, `SELECT COALESCE(parent, '') FROM projects WHERE name = ?`, cur).Scan(&next)
+		if err == sql.ErrNoRows {
+			return nil // dangling parent name — tolerated (resolved as a root child)
+		}
+		if err != nil {
+			return fmt.Errorf("parent cycle check for %q: %w", child, err)
+		}
+		cur = next
+	}
+	return fmt.Errorf("%w: parent chain from %q exceeds %d hops", ErrLaneCycle, parent, maxLaneDepth)
+}
+
+// LaneTree is the resolved lane hierarchy over one snapshot of the projects
+// table. This is the ONE implementation later surfaces consume (1587 tree,
+// 1590 nesting-in-lists, 1595 parent pages) — do not fork it per surface.
+// Nesting depth is a property of a node's position (root = level 0, each
+// child = parent + 1); consumers compute it during their own traversal.
+type LaneTree struct {
+	// Roots holds every lane with no parent ('' parent), plus any orphan
+	// whose parent name does not resolve within this snapshot (dangling
+	// references survive soft-deletes and purges by design). Ordered by
+	// lane name ASC.
+	Roots []*LaneNode
+}
+
+// LaneNode is one lane in the tree with its children attached.
+type LaneNode struct {
+	Project Project
+	// Children are this lane's satellites, ordered by lane name ASC.
+	Children []*LaneNode
+}
+
+// BuildLaneTree resolves the lane hierarchy from the given lane list (pass
+// ListProjects' enabledOnly=false listing so disabled lanes keep their
+// position in the tree). Arbitrary depth is allowed — a satellite may itself
+// have satellites. The parent graph is a forest by construction (every write
+// is cycle-checked in validateParentReference), and this resolver stays safe
+// on top of corrupted/out-of-band data too: a lane whose parent resolves
+// within the snapshot but is itself unreachable from a root (a data-level
+// cycle) is simply excluded from the tree rather than hung or looped on.
+// Roots and every Children slice are ordered by lane name ASC, so the output
+// is deterministic regardless of input order.
+func BuildLaneTree(projects []Project) *LaneTree {
+	byName := make(map[string]*LaneNode, len(projects))
+	for i := range projects {
+		byName[projects[i].Name] = &LaneNode{Project: projects[i]}
+	}
+
+	// attach[parentName] = children pointing at that in-snapshot parent.
+	attach := make(map[string][]*LaneNode, len(projects))
+	for _, p := range projects {
+		if p.Parent == "" {
+			continue
+		}
+		if _, ok := byName[p.Parent]; !ok {
+			continue // dangling parent (purged/soft-deleted lane) — surfaces as a root-level orphan
+		}
+		if p.Name == p.Parent {
+			continue // corrupted self-link in data — never self-attach
+		}
+		attach[p.Parent] = append(attach[p.Parent], byName[p.Name])
+	}
+	// Deterministic order: lane name ASC within every children slice.
+	for k := range attach {
+		kids := attach[k]
+		sort.Slice(kids, func(i, j int) bool { return kids[i].Project.Name < kids[j].Project.Name })
+		attach[k] = kids
+	}
+
+	// Roots: no parent, or a parent that does not resolve in this snapshot
+	// (dangling reference — the lane is the top of its fragment).
+	var roots []*LaneNode
+	for _, p := range projects {
+		if p.Parent == "" {
+			roots = append(roots, byName[p.Name])
+			continue
+		}
+		if _, ok := byName[p.Parent]; !ok {
+			roots = append(roots, byName[p.Name])
+		}
+	}
+	sort.Slice(roots, func(i, j int) bool { return roots[i].Project.Name < roots[j].Project.Name })
+
+	// Hang children depth-first. attach edges only point DOWN the tree
+	// from a root, and the write path forbids cycles, so this terminates;
+	// data-level cycles never reach here because neither participant is a
+	// root (see the exclusion note in the doc comment).
+	var hang func(parent *LaneNode)
+	hang = func(parent *LaneNode) {
+		for _, kid := range attach[parent.Project.Name] {
+			parent.Children = append(parent.Children, kid)
+			hang(kid)
+		}
+	}
+	for _, r := range roots {
+		hang(r)
+	}
+	return &LaneTree{Roots: roots}
 }
