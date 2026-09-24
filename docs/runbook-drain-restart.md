@@ -29,6 +29,9 @@ Two facts drive the whole procedure:
 
 **Time budget:** 5–40 min, dominated by the drain. Running ticks must finish on their own; the tick
 timeout is `7200s` (2 h), so a drain can legitimately take that long. Do not shorten it by killing ticks.
+**Busy-fleet exception:** §4b, below — an operator-APPROVED restart may proceed without
+`active_ticks=0`, with the in-flight reaps it causes acknowledged in advance and excluded from lane
+accounting. The default path (§2–§7) stays conservative.
 
 **Repo (build + ops scripts):** `/home/kara/coding-hermes-scheduler/coding-herms-scheduler/`
 (the outer `/home/kara/coding-hermes-scheduler/` directory is **not** the repo).
@@ -372,10 +375,42 @@ Poll until `running = 0`. Do not kill ticks to speed this up; `--tick-timeout 72
 
 *(mutating — not run while authoring this page)*
 
+The normal, conservative path reaches `active_ticks=0` first (§3) and then restarts:
+
 ```sh
 systemctl --user restart coding-hermes-scheduler.service
 # NOT executed in authoring — expected output shown
 ```
+
+### 4b. Busy-fleet, operator-approved restart
+
+A busy fleet may never reach zero: pausing stops admission, but existing ticks can keep
+heartbeating until their effective deadline. Do not silently bypass the drain. If deploying
+now is more valuable than preserving in-flight work, the operator must explicitly acknowledge
+the expected reaps and classify them as transport events:
+
+```sh
+systemctl --user set-environment SCHEDULER_OPERATOR_RESTART_APPROVED=1
+systemctl --user restart coding-hermes-scheduler.service
+systemctl --user unset-environment SCHEDULER_OPERATOR_RESTART_APPROVED
+```
+
+The scheduler records reaps from this approved stop as `orphan_reason=operator_restart`.
+Legacy `drain_timeout` reaps are also excluded from lane failure-rate and auto-disable accounting,
+but the explicit reason is required for this intentional path. Record the expected reap count
+before proceeding and verify it afterward; this is an operator decision, not an automatic fallback.
+The `set-environment` value must be present in the user manager environment before the restart;
+an environment variable prefixed to `systemctl` itself does not reach the daemon.
+
+If the unit is stopped, `kill $MAINPID` does not start it again on this host. Use the authoritative
+user-unit verb:
+
+```sh
+systemctl --user start coding-hermes-scheduler.service
+```
+
+This page documents the contract; the busy-fleet path was rehearsed only against a hermetic
+fixture, not by pausing or restarting the live fleet.
 
 EXPECTED OUTPUT **shape** — `systemctl` prints **nothing** on success (a failure prints
 `Job for coding-hermes-scheduler.service failed` plus a reason to stderr and exits non-zero). This

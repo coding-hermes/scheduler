@@ -708,7 +708,7 @@ func (l *Loop) abortInFlightTicks() {
 			Started:  finished,
 			Finished: finished,
 			Status:   TickFailed,
-			Error:    "aborted by graceful shutdown — drain timed out with tick in flight",
+			Error:    OrphanAbortMarker + " — drain timed out with tick in flight",
 		})
 		if err != nil {
 			log.Printf("LOOP: shutdown drain: mark tick %s (project %s) failed: %v", t.id, t.project, err)
@@ -717,8 +717,19 @@ func (l *Loop) abortInFlightTicks() {
 		// SCHED-GAP-091: the owner was alive but the drain gave up — this
 		// is a drop. Stamp it so the gateway-health-return scan re-nudges
 		// the tick instead of leaving the session lost.
-		l.stampOrphaned(t.id, OrphanReasonDrainTimeout)
-		log.Printf("LOOP: shutdown drain timed out — marked tick %s (project %s) failed", t.id, t.project)
+		// SCHED-GAP-1608: when the OPERATOR approved this restart
+		// (SCHEDULER_OPERATOR_RESTART_APPROVED — restart_approval.go), the
+		// reap is an acknowledged, scheduled event, and the row carries the
+		// DISTINCT reason 'operator_restart' so failure-rate/auto-disable
+		// accounting (orphan_exclusion.go) can exclude it structurally.
+		// Both spellings — this one and the legacy drain_timeout — are
+		// excluded from lane accounting by the same shared predicate.
+		reason := OrphanReasonDrainTimeout
+		if OperatorRestartApproved() {
+			reason = OrphanReasonOperatorRestart
+		}
+		l.stampOrphaned(t.id, reason)
+		log.Printf("LOOP: shutdown drain timed out — marked tick %s (project %s) failed (orphan=%s)", t.id, t.project, reason)
 	}
 	if len(stuck) > 0 {
 		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain timed out — marking %d in-flight ticks failed", len(stuck)), map[string]any{"tick_ids": ids})

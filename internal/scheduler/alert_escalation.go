@@ -386,8 +386,11 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 	}
 
 	for _, name := range names {
+		// SCHED-GAP-1608: the tuple predicate (orphan_exclusion.go) is shared
+		// with the API status surface — the SQL gains ticks.orphan_reason and
+		// every exclusion rides on one verdict, never a re-declared carve-out.
 		rows, err := ae.db.QueryContext(ctx,
-			`SELECT status, COALESCE(error, '') FROM ticks
+			`SELECT status, COALESCE(error, ''), COALESCE(orphan_reason, '') FROM ticks
 			 WHERE project_name = ? AND completed_at IS NOT NULL
 			 ORDER BY spawned_at DESC LIMIT ?`,
 			name, window)
@@ -398,16 +401,18 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 
 		var failed, total int
 		for rows.Next() {
-			var status, errText string
-			if err := rows.Scan(&status, &errText); err != nil {
+			var status, errText, orphanReason string
+			if err := rows.Scan(&status, &errText, &orphanReason); err != nil {
 				continue
 			}
-			// Harness/infrastructure failures say nothing about the project:
-			// the tick never reached it. Counting them let one gateway restart
-			// mass-disable healthy lanes (SCHED-GAP-134 — 2026-09-16: six of
+			// One shared predicate for failed+timeout rows: operator-induced
+			// drain reaps (orphan_reason drain_timeout / operator_restart, or
+			// the legacy row that carries only the abort error text) never
+			// reached the project, and harness-class spawn refusals say
+			// nothing about it either (SCHED-GAP-134 — 2026-09-16: six of
 			// the fleet's top foreman lanes were auto-disabled on 90/100
 			// gateway-drain 503s during a graceful gateway restart).
-			if status == "failed" && harnessFailure(errText) {
+			if !FailureIsLaneAttributableT(status, errText, orphanReason) {
 				continue
 			}
 			total++

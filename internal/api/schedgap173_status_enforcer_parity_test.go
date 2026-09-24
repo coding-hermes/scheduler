@@ -389,7 +389,12 @@ func TestSCHEDGAP173_ClassifierIsSingleAuthority(t *testing.T) {
 		t.Fatalf("read %s: %v", shared, err)
 	}
 	for _, m := range markers {
-		if !strings.Contains(string(sharedSrc), `"`+m+`",`) {
+		// SCHED-GAP-1608: the abort wording may live as the named constant
+		// OrphanAbortMarker (same file) instead of an inline list literal —
+		// the single-authority requirement is "declared HERE, once", which
+		// the const satisfies.
+		if !strings.Contains(string(sharedSrc), `"`+m+`",`) &&
+			!strings.Contains(string(sharedSrc), `"`+m+`"`) {
 			t.Errorf("%s does not declare marker %q — the shared classifier list is incomplete", shared, m)
 		}
 	}
@@ -401,8 +406,9 @@ func TestSCHEDGAP173_ClassifierIsSingleAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read internal/api/server_helpers.go: %v", err)
 	}
-	if !strings.Contains(string(surfaceSrc), "scheduler.HarnessFailure(") {
-		t.Error("internal/api/server_helpers.go does not call scheduler.HarnessFailure — the status surface must classify with the shared classifier")
+	if !strings.Contains(string(surfaceSrc), "scheduler.HarnessFailure(") &&
+		!strings.Contains(string(surfaceSrc), "scheduler.FailureIsLaneAttributableT(") {
+		t.Error("internal/api/server_helpers.go does not call scheduler.HarnessFailure nor scheduler.FailureIsLaneAttributableT — the status surface must classify with the shared classifier (SCHED-GAP-173; SCHED-GAP-1608 moved the call to the tuple predicate in internal/scheduler/orphan_exclusion.go, which itself calls HarnessFailure)")
 	}
 	if strings.Contains(string(surfaceSrc), "func harnessFailure(") {
 		t.Error("internal/api/server_helpers.go declares its own harnessFailure — the classifier must have exactly one implementation")

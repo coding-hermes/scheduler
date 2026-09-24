@@ -438,7 +438,8 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	// output ghost-free.
 	failureRateQueryCount.Add(1)
 	rows, err := db.QueryContext(ctx,
-		`SELECT t.project_name, t.status, COALESCE(t.error, '')
+		`SELECT t.project_name, t.status, COALESCE(t.error, ''),
+		        COALESCE(t.orphan_reason, '')
 		 FROM ticks t
 		 WHERE t.completed_at IS NOT NULL
 		   AND EXISTS (SELECT 1 FROM projects p WHERE p.name = t.project_name)
@@ -487,8 +488,8 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	}
 
 	for rows.Next() {
-		var name, status, errText string
-		if err := rows.Scan(&name, &status, &errText); err != nil {
+		var name, status, errText, orphanReason string
+		if err := rows.Scan(&name, &status, &errText, &orphanReason); err != nil {
 			continue
 		}
 		// Project boundary (rows are ordered by project_name ASC).
@@ -509,9 +510,17 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 		curSeen++
 		// SCHED-GAP-173 — single source of truth: the harness
 		// classifier in scheduler.HarnessFailure (failureclass.go).
-		// A failed tick whose error matches a harness marker never
-		// reached the project; exclude it from BOTH total and failed.
-		if status == "failed" && scheduler.HarnessFailure(errText) {
+		// SCHED-GAP-1608 — one shared predicate with the enforcer:
+		// the tuple classifier (orphan_exclusion.go) also excludes
+		// operator-induced drain reaps — a failed/timeout row whose
+		// orphan_reason is drain_timeout/operator_restart, or whose
+		// only legacy signature is the "aborted by graceful shutdown"
+		// error text — because an operator stopping the process says
+		// nothing about the lane. Both surfaces now consume the exact
+		// same verdict, so a noisy-drain window can no longer read
+		// failure_rate=0.91/armed=true here while the enforcer parks
+		// nothing (or vice versa).
+		if !scheduler.FailureIsLaneAttributableT(status, errText, orphanReason) {
 			continue
 		}
 		curTotal++

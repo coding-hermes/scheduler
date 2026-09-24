@@ -2,6 +2,14 @@ package scheduler
 
 import "strings"
 
+// OrphanAbortMarker is the drain-abort error wording stampAbort uses when it
+// reaps in-flight ticks (loop.go). It is ONE constant for the whole package:
+// the harness marker list above matches the text for pre-1608 rows whose only
+// persisted signature is the abort wording, and the SCHED-GAP-1608
+// orphan-stamp exclusion (orphan_exclusion.go) matches the same wording for
+// its legacy text-only probe — never restate the abort text anywhere else.
+const OrphanAbortMarker = "aborted by graceful shutdown"
+
 // HarnessFailure reports whether a failed tick's error came from the harness
 // (gateway / scheduler infrastructure) rather than from the project itself.
 // These ticks never reached the project, so they must not feed per-project
@@ -35,7 +43,7 @@ func HarnessFailure(errText string) bool {
 		"invalid gateway api key",
 		"connection refused",
 		"exec fallback disabled",
-		"aborted by graceful shutdown",
+		OrphanAbortMarker,
 		// SCHED-GAP-203: the transport-class transient errors. The spawn path
 		// classifies these as ErrGatewayTransient (gateway_client.go) and the
 		// deferral path (Spawner.transientGatewayDeferral) keeps them OUT of

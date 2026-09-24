@@ -35,7 +35,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 			completed_at TEXT,
 			spawned_at TEXT,
 			started_at TEXT,
-			error TEXT DEFAULT ''
+			error TEXT DEFAULT '',
+			orphan_reason TEXT DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
