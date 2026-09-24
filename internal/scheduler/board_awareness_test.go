@@ -106,13 +106,31 @@ func TestCountPending_MtimeReread(t *testing.T) {
 	// Move the SEAM past the cache TTL instead of sleeping for it. The cache
 	// key is (fetchedAt within TTL, board mtime, registry mtime); the mtime is
 	// what actually changes below, so this is the control case — stepping the
-	// clock must NOT be what makes the new count visible (the next assertion
-	// proves the third read is served by an mtime change, not by TTL expiry).
+	// clock must NOT be what makes the new count visible (the next assertions
+	// prove the third read is served by an mtime change, not by TTL expiry).
 	sim := clock.NewManualSimClock(time.Date(2026, 9, 20, 7, 0, 0, 0, time.UTC))
 	c.SetClock(sim)
 	sim.Advance(1100 * time.Millisecond) // was time.Sleep(1100ms): mtime granularity
 	if err := os.WriteFile(path, []byte(`{"status":"pending"}`+"\n"+`{"status":"pending"}`+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile 2: %v", err)
+	}
+	// SCHED-GAP-1577: on filesystems with coarse mtime granularity (1s
+	// HFS+/ext3-style fallback, some overlayfs) the second write can land in
+	// the SAME mtime tick as the first — the cache key still matches, the
+	// board is never re-read, and this test fails only on fresh-install
+	// machines. Force a mtime deterministically different from the current
+	// one (current +2s, anchored to the file itself so it holds on any
+	// machine; os.Chtimes precedent: dashboard/git_reins_cache_test.go). The
+	// assertion below now proves "a changed mtime forces a re-read" — a
+	// property no FS granularity can quantize away — instead of "a quick
+	// rewrite happened to move the mtime on this machine".
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat before Chtimes: %v", err)
+	}
+	future := fi.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
 	}
 	got = c.CountPending(dir)
 	if got != 2 {
