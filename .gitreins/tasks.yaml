@@ -4037,3 +4037,19 @@ tasks:
   status: complete
   created_at: '2026-09-23T12:45:55.386068+00:00'
   completed_at: '2026-09-23T12:46:34.830099+00:00'
+- id: SCHED-GAP-1577-R1
+  title: Fix race-detector red on TestSCHEDGAP091_ZombieReapStampsOrphan
+  criteria:
+  - 'internal/scheduler/schedgap091_resume_test.go uses hardcoded pid 12345; on a
+    fresh CI runner (Ubuntu 24.04) pid 12345 is a real process, so reapZombies''s
+    /proc/<pid>/stat IsNotExist check fails and the test''s status==''timeout'' assertion
+    fails with status=''running''. Replace 12345 with a guaranteed-dead pid in the
+    [2^22, 2^31) range. PASS: go test -run TestSCHEDGAP091_ZombieReapStampsOrphan
+    -count=1 PASS; go test -short -p 1 -count=1 ./internal/scheduler/ PASS; go test
+    -run TestSCHEDGAP091 -race -count=20 -p 1 PASS; go vet ./... clean; gofmt -l empty;
+    only schedgap091_resume_test.go in the diff; commit subject includes SCHED-GAP-1577-R1;
+    co-author trailer present; RED-proof: reverting pid back to 12345 reproduces the
+    failure in AC3.'
+  status: complete
+  created_at: '2026-09-24T02:23:59.259185+00:00'
+  completed_at: '2026-09-24T02:44:49.564757+00:00'
