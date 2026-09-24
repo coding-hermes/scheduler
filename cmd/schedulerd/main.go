@@ -844,6 +844,26 @@ func main() {
 		}
 	})
 
+	// Fleet Tape page: /tape (SCHED-GAP-1596) — the fleet as one instrument.
+	// htmx polls return the board-rows fragment only (HX-Request) — the full
+	// page must never be swapped into its own poller (same contract as
+	// /ticks and /health). The browser JS drives updates from the SSE stream
+	// (/api/v1/events/stream) with the shared auto-refresh cadence as
+	// fallback; no poll against /api/v1/status or /api/v1/queue exists by
+	// design (both wedge under load).
+	mux.HandleFunc("GET /tape", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateTapeRows(w)
+		} else {
+			err = dashGen.GenerateTape(w)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
 	// API at /api/
 	mux.Handle("/api/", apiServer.Handler())
 

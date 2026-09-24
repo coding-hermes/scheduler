@@ -221,9 +221,10 @@ body.sb-collapsed .sidebar{display:none}
 <div class="side-label">Fleet</div>
 <nav class="side-nav" aria-label="Fleet">
 <a href="/" {{if eq . "overview"}}class="active"{{end}}><span class="ic" aria-hidden="true">01</span> Overview</a>
-<a href="/queue" {{if eq . "queue"}}class="active"{{end}}><span class="ic" aria-hidden="true">02</span> Queue</a>
-<a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Tick History</a>
-<a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Health</a>
+<a href="/tape" {{if eq . "tape"}}class="active"{{end}}><span class="ic" aria-hidden="true">02</span> Fleet Tape</a>
+<a href="/queue" {{if eq . "queue"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Queue</a>
+<a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Tick History</a>
+<a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">05</span> Health</a>
 </nav>
 <script>
 /* SCHED-GAP-1588: collapse/expand the sidebar, remembered across navigation.

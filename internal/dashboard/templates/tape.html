@@ -1,0 +1,117 @@
+{{define "tape"}}{{template "head" .}}
+{{template "sidebar" "tape"}}
+<style>
+/* SCHED-GAP-1596: the tape's own vocabulary, scoped so it cannot bleed into
+   the shared design system. Colors come from the layout's variables — the
+   tape introduces no new palette. */
+.tape-page{padding:0}
+.tape-page .main{padding:0}
+.idx{display:flex;align-items:baseline;gap:20px;padding:13px 20px;background:var(--panel);
+border-bottom:1px solid var(--border);flex-wrap:wrap}
+.idx .mk{font-family:var(--mono);font-weight:700;font-size:1.1rem;letter-spacing:0.02em}
+.idx .big{font-family:var(--mono);font-size:1.1rem;font-weight:700;color:var(--live)}
+.t-k{color:var(--faint);font-size:.68rem;text-transform:uppercase;letter-spacing:.09em;font-family:var(--mono)}
+.t-v{font-family:var(--mono);font-weight:600}
+.t-up{color:var(--ok)} .t-down{color:var(--err)} .t-flat{color:var(--faint)}
+.tape{overflow:hidden;background:#070910;border-bottom:1px solid var(--border);white-space:nowrap}
+.tape .reel{display:inline-block;padding:9px 0;animation:tapereel 110s linear infinite}
+.tape:hover .reel,.tape:focus-within .reel{animation-play-state:paused}
+@media (prefers-reduced-motion: reduce){.tape .reel{animation:none}}
+@keyframes tapereel{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.tick{font-family:var(--mono);font-size:.79rem;margin-right:24px;color:var(--text);display:inline-block}
+.tick b{color:var(--fg)} .tick .px{color:var(--muted)} .tick .vol{color:var(--faint)}
+.tick.halt{opacity:.4}
+.tick.warn b{color:var(--warn)}
+.tape-board{padding:16px 20px 24px}
+.tape-board h2{margin:0 0 9px;font-family:var(--mono);font-size:.7rem;letter-spacing:.11em}
+.tape-table{font-family:var(--mono);font-size:.78rem;width:100%}
+.tape-table th{text-align:left;color:var(--faint);font-size:.61rem;letter-spacing:.09em;text-transform:uppercase;
+padding:6px 8px;font-weight:600}
+.tape-table td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.045);vertical-align:middle}
+.tape-table td.num{text-align:right}
+.tape-table td.s{font-weight:700;color:var(--fg)}
+.tape-table td.s a{color:var(--fg)}
+.tape-table td.s a:hover{color:var(--signal-hi)}
+.tape-table td.n{color:var(--text);font-size:.74rem}
+.tape-table tbody tr.halt{opacity:.45}
+.u{color:var(--faint);font-size:.61rem}
+.spark{width:68px;height:15px;display:block}
+.spark polyline{fill:none;stroke:var(--live);stroke-width:1.5}
+.spark.halt polyline{stroke:var(--faint)} .spark.warn polyline{stroke:var(--signal)}
+.t-pill{font-size:.59rem;letter-spacing:.07em;padding:2px 6px;border-radius:20px;
+border:1px solid var(--border);color:var(--muted)}
+.t-pill.live{color:var(--ok);border-color:rgba(55,211,153,.35)}
+.t-pill.halt{color:var(--err);border-color:rgba(255,107,107,.35)}
+.t-pill.warn{color:var(--warn);border-color:rgba(232,163,61,.35)}
+.tape-note{color:var(--faint);font-size:.68rem;font-family:var(--mono);padding:12px 20px;
+border-top:1px solid var(--border)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+<div class="main tape-page" id="main">
+<div class="idx" id="tapeIndex" data-feed-url="{{.FeedURL}}">
+  <span class="mk">HERMES-X</span>
+  <span class="big">{{.LanesEnabled}}<span class="t-k"> / {{.LanesTotal}} lanes open</span></span>
+  <span><span class="t-k">ticks 24h</span> <span class="t-v">{{.Ticks24h}}</span>
+        <span class="{{if eq .IndexMoveClass "up"}}t-up{{else if eq .IndexMoveClass "down"}}t-down{{else}}t-flat{{end}}">{{.IndexMoveLabel}}</span></span>
+  <span><span class="t-k">notional 24h</span> <span class="t-v">{{.NotionalLabel}}</span></span>
+  <span><span class="t-k">settle</span> <span class="t-v {{if eq .SettleClass "up"}}t-up{{else if eq .SettleClass "down"}}t-down{{else}}t-flat{{end}}">{{.SettleLabel}}</span></span>
+  <span id="tapeFeedPill"><span class="t-k">feed</span> <span class="t-v"><span id="tapeFeedDot" class="t-dot t-up">●</span> <span id="tapeFeedTxt">SSE live</span></span></span>
+</div>
+
+<div class="tape" aria-hidden="true"><span class="reel">
+{{template "tape_reel" .Reel}}{{template "tape_reel" .Reel}}
+</span></div>
+
+<div class="tape-board">
+<h2>Fleet board — 24h</h2>
+<table class="tape-table">
+<thead><tr>
+<th scope="col">Sym</th><th scope="col">Lane</th><th scope="col">Trend (14h)</th><th scope="col">$ / hour</th><th scope="col">Δ vs prior 24h</th>
+<th scope="col">Ticks/h</th><th scope="col">Settle</th><th scope="col">Urgency</th><th scope="col">State</th>
+</tr></thead>
+<tbody id="tapeRows" hx-get="/tape" hx-trigger="tape-sse from:body, autorefresh from:body" hx-swap="innerHTML" hx-select="#tapeRows > *">
+{{template "tape_rows" .}}
+</tbody>
+</table>
+</div>
+
+<p class="tape-note">HERMES-X — every figure is real: lane names, 24h ticks / cost / tokens / settle
+from the scheduler database, engine urgency, real Δ (last 24h vs prior 24h), real 14-hour trend.
+Only the marquee motion is CSS. Generated {{.GeneratedAt}}.</p>
+</div>
+<script>
+(function () {
+  var THR = {{.RefreshThrottleMs}};
+  var idx = document.getElementById('tapeIndex');
+  var dot = document.getElementById('tapeFeedDot');
+  var txt = document.getElementById('tapeFeedTxt');
+  function say(t, cls) {
+    if (txt) txt.textContent = t;
+    if (dot) dot.className = 't-dot ' + cls;
+  }
+  function poke() {
+    if (poke.timer) return;
+    poke.timer = setTimeout(function () {
+      poke.timer = null;
+      document.body.dispatchEvent(new CustomEvent('tape-sse', { bubbles: true }));
+    }, THR);
+  }
+  var feedURL = idx ? idx.getAttribute('data-feed-url') : '';
+  if (!feedURL) { say('SSE unavailable — using the auto-refresh cadence', 't-down'); return; }
+  try {
+    var es = new EventSource(feedURL);
+    es.onopen = function () { say('SSE live', 't-up'); };
+    es.onerror = function () { say('SSE down — falling back to the auto-refresh cadence', 't-down'); };
+    es.onmessage = poke;
+  } catch (err) {
+    say('SSE unavailable — using the auto-refresh cadence', 't-down');
+  }
+})();
+</script>
+{{template "ready_js"}}
+</body>
+</html>{{end}}
+
+{{define "tape_reel"}}{{range .}}<span class="tick {{.RowClass}}"><b>{{.Sym}}</b> <span class="{{if eq .MoveClass "up"}}t-up{{else if eq .MoveClass "down"}}t-down{{else}}t-flat{{end}}">{{.MoveLabel}}</span> <span class="px">{{.PriceLabel}}</span> <span class="vol">{{.RateLabel}} t/h</span></span>{{end}}{{end}}
+
+{{define "tape_rows"}}{{range .Lanes}}<tr class="{{.RowClass}}"><td class="s">{{.Sym}}</td><td class="n"><a href="/projects/{{.Name}}">{{.Name}}</a></td><td><svg class="spark {{.SparkClass}}" viewBox="0 0 100 22" preserveAspectRatio="none" role="img" aria-label="14h trend: {{.Name}}"><polyline points="{{.SparkPoints}}"/></svg></td><td class="num">{{.PriceLabel}}</td><td class="num"><span class="{{if eq .MoveClass "up"}}t-up{{else if eq .MoveClass "down"}}t-down{{else}}t-flat{{end}}">{{.MoveLabel}}</span></td><td class="num">{{.RateLabel}}</td><td class="num">{{.SettleLabel}}</td><td class="num">{{.UrgencyLabel}}</td><td><span class="t-pill {{.PillClass}}">{{.State}}</span></td></tr>{{end}}{{end}}
