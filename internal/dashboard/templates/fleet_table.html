@@ -1,7 +1,7 @@
 {{define "fleet_table"}}
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td data-parent-source="{{.Nesting.ParentSource}}">{{if .Nesting.Rail}}<span class="lane-rail">{{.Nesting.Rail}}</span> {{end}}<a href="/projects/{{.Name}}">{{.Name}}</a>{{if .Nesting.Parent}} <span class="lane-parent" title="satellite of {{.Nesting.Parent}} ({{.Nesting.ParentSource}})">↳ {{.Nesting.Parent}}{{if .Nesting.ParentKnown}} (L{{.Nesting.Depth}}){{end}}</span>{{end}}{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
 <td class="num">{{.Weight}}</td>
 <td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>

@@ -685,7 +685,7 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 	data := QueueData{Title: "Evaluation Queue"}
 
-	rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,'') FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
+	rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,''), COALESCE(parent,'') FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
 	if err != nil {
 		return data, fmt.Errorf("query queue: %w", err)
 	}
@@ -693,13 +693,18 @@ func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 
 	calc := g.urgencyCalc
 	now := g.clock().Now()
+	var laneParents map[string]string // name → explicit parent (SCHED-GAP-1590); built from the same rows, zero extra queries
 	for rows.Next() {
 		var e QueueEntry
 		var decayRate float64
-		var createdAtStr, lastStr string
-		if err := rows.Scan(&e.Name, &e.Weight, &e.Priority, &e.CooldownS, &e.Enabled, &decayRate, &createdAtStr, &lastStr); err != nil {
+		var createdAtStr, lastStr, parentStr string
+		if err := rows.Scan(&e.Name, &e.Weight, &e.Priority, &e.CooldownS, &e.Enabled, &decayRate, &createdAtStr, &lastStr, &parentStr); err != nil {
 			return data, fmt.Errorf("scan queue row: %w", err)
 		}
+		if laneParents == nil {
+			laneParents = make(map[string]string)
+		}
+		laneParents[e.Name] = parentStr
 		if calc != nil {
 			// Mirror the engine's input handling exactly, as listQueue does
 			// (internal/api/server_helpers.go): created_at parses as RFC3339;
@@ -731,6 +736,22 @@ func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 	sort.SliceStable(data.Entries, func(i, j int) bool {
 		return data.Entries[i].Urgency > data.Entries[j].Urgency
 	})
+
+	// SCHED-GAP-1590: annotate every entry with its lane nesting (depth +
+	// primary name + parenthood source) resolved over the SAME row set this
+	// function just scanned — laneParents was collected in the loop above, so
+	// no additional query runs and the SCHED-GAP-174 one-query budget holds.
+	// The sort is deliberately untouched: global urgency order with per-row
+	// annotation is the documented sort-vs-nesting decision (see the header
+	// of generator_lane_nesting.go) — grouping families under primaries would
+	// fork this ordering from /api/v1/queue, breaking the parity contract.
+	if laneParents != nil {
+		lanes := make([]database.Project, len(data.Entries))
+		for i, e := range data.Entries {
+			lanes[i] = database.Project{Name: e.Name, Parent: laneParents[e.Name]}
+		}
+		annotateQueueNesting(data.Entries, lanes)
+	}
 
 	data.Count = len(data.Entries)
 	return data, nil
@@ -778,7 +799,7 @@ hx-trigger="autorefresh from:body"
 hx-swap="innerHTML">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td data-parent-source="{{.Nesting.ParentSource}}">{{if .Nesting.Rail}}<span class="lane-rail">{{.Nesting.Rail}}</span> {{end}}<a href="/projects/{{.Name}}">{{.Name}}</a>{{if .Nesting.Parent}} <span class="lane-parent" title="satellite of {{.Nesting.Parent}} ({{.Nesting.ParentSource}})">↳ {{.Nesting.Parent}}{{if .Nesting.ParentKnown}} (L{{.Nesting.Depth}}){{end}}</span>{{end}}{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
 <td class="num">{{.Weight}}</td>
 <td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>

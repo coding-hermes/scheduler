@@ -5,7 +5,14 @@
 <h1>Evaluation Queue</h1>
 <div class="actions"><span class="signal"><span class="dot"></span> {{.Count}} eligible</span></div>
 </div>
-<div class="meta">Sorted by urgency (descending)</div>
+{{/* SCHED-GAP-1590: the queue keeps its GLOBAL urgency order (the
+     SCHED-GAP-174 parity contract pins this row order to /api/v1/queue) and
+     annotates each satellite in place instead of regrouping families: the ↳
+     marker names the lane's primary and the └ rail shows the depth. Each
+     row's data-parent-source states where the relation came from —
+     "explicit" (the projects.parent column, authoritative) or "inferred"
+     (legacy name-suffix fallback used only when parent is empty). */}}
+<div class="meta">Sorted by urgency (descending); satellites stay in global order and are annotated with their primary (↳)</div>
 
 <div class="cards">
 <div class="card"><div class="label">Eligible</div><div class="value">{{.Count}}</div></div>
@@ -19,7 +26,7 @@
 {{range $i, $e := .Entries}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
 <td class="meta">{{add1 $i}}</td>
-<td><a href="/projects/{{.Name}}">{{.Name}}</a></td>
+<td data-parent-source="{{.Nesting.ParentSource}}">{{if .Nesting.Rail}}<span class="lane-rail">{{.Nesting.Rail}}</span> {{end}}<a href="/projects/{{.Name}}">{{.Name}}</a>{{if .Nesting.Parent}} <span class="lane-parent" title="satellite of {{.Nesting.Parent}} ({{.Nesting.ParentSource}})">↳ {{.Nesting.Parent}}{{if .Nesting.ParentKnown}} (L{{.Nesting.Depth}}){{end}}</span>{{end}}</td>
 <td class="num">{{.Weight}}</td>
 <td class="num">{{.Priority}}</td>
 <td class="num">{{.CooldownS}}s</td>

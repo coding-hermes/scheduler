@@ -150,6 +150,11 @@ body.sb-collapsed .sidebar{display:none}
 .refresh-bar select:focus-visible{outline:2px solid var(--live);outline-offset:1px}
 .rb-cd{min-width:84px;color:var(--live);font-variant-numeric:tabular-nums}
 .rb-cd.off{color:var(--muted)}
+/* SCHED-GAP-1590: lane nesting in list views. The rail is TEXT (─└ marks),
+   so nesting stays legible without colour; the ↳ annotation names the lane's
+   primary explicitly. */
+.lane-rail{color:var(--faint);font-family:var(--mono);white-space:pre}
+.lane-parent{color:var(--muted);font-size:0.75rem;white-space:nowrap}
 </style>
 </head>
 <body>
