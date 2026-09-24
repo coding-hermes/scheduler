@@ -412,6 +412,7 @@ authority model.
 |------|---------|-------------|
 | `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
 | `-listen` | `127.0.0.1:9090` | HTTP listen address |
+| `-public-url` | _(empty)_ | Public base URL of the dashboard (e.g. `https://sched.example.com`) used to build tick-report permalinks for `deliver_mode=link`; empty = link mode falls back to full (SCHED-GAP-1607). Env: `SCHEDULER_PUBLIC_URL` |
 | `-min-interval` | `30s` | Fastest tick interval |
 | `-max-interval` | `24h` | Slowest tick interval |
 | `-num-levels` | `10` | Number of priority levels |

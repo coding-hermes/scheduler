@@ -31,10 +31,13 @@ type PackedProject struct {
 	WorkerProvider   string // optional: suggested worker provider (foreman can override)
 	GatewayKey       string // per-foreman Hermes gateway key (empty = shared --gateway-key)
 	Deliver          string // delivery target (telegram:chat_id:thread_id)
-	Prompt           string // Bane 2026-08-27: per-project extra foreman prompt (append or replace per PromptMode)
-	PromptMode       string // "append" (default) | "replace"
-	NamespacePrompt  string // namespace default_prompt (empty = built-in prompt)
-	NamespaceChain   string // namespace model_chain (JSON array); tier between project chain and router (Bane 2026-08-27)
+	// DeliverMode (SCHED-GAP-1607): how the tick report is delivered —
+	// "" / "full" | "file" | "link" (resolved to full on anything else).
+	DeliverMode     string
+	Prompt          string // Bane 2026-08-27: per-project extra foreman prompt (append or replace per PromptMode)
+	PromptMode      string // "append" (default) | "replace"
+	NamespacePrompt string // namespace default_prompt (empty = built-in prompt)
+	NamespaceChain  string // namespace model_chain (JSON array); tier between project chain and router (Bane 2026-08-27)
 	// NamespaceID (SCHED-GAP-111): the project's namespace, threaded from
 	// the packer's namespace join. Spawn() uses it to resolve the effective
 	// tick deadline for wave-enabled namespaces (S12 §4.3). Empty = no
@@ -124,6 +127,7 @@ type scored struct {
 	workerProvider       string
 	gatewayKey           string
 	deliver              string
+	deliverMode          string // SCHED-GAP-1607: "" | full | file | link
 	prompt               string // Bane 2026-08-27: per-project extra foreman prompt
 	promptMode           string // "append" (default) | "replace"
 	bumpActive           bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
@@ -144,7 +148,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT p.name, p.weight, p.priority, p.decay_rate, p.enabled, p.cooldown_s,
 		       p.last_tick_completed,
 		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
-		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''),
+		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''), COALESCE(p.deliver_mode, ''),
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
@@ -171,7 +175,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var lastStatus string
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver, &s.deliverMode,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
@@ -524,6 +528,7 @@ func (s scored) packed() PackedProject {
 		WorkerProvider:   s.workerProvider,
 		GatewayKey:       s.gatewayKey,
 		Deliver:          s.deliver,
+		DeliverMode:      s.deliverMode,
 		Prompt:           s.prompt,
 		PromptMode:       s.promptMode,
 		NamespacePrompt:  s.namespaceDefaultPmt,

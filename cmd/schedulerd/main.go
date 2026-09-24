@@ -34,6 +34,10 @@ import (
 func main() {
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
+	// SCHED-GAP-1607: public dashboard origin for link-mode tick-report
+	// delivery (deliver_mode=link). Empty = not configured → link mode
+	// degrades to full. Also SCHEDULER_PUBLIC_URL env override below.
+	publicURL := flag.String("public-url", "", "Public base URL of the dashboard (e.g. https://sched.example.com) used to build tick-report permalinks for deliver_mode=link; empty = link mode falls back to full. Env: SCHEDULER_PUBLIC_URL")
 	minInterval := flag.Duration("min-interval", 30*time.Second, "Fastest tick interval")
 	maxInterval := flag.Duration("max-interval", 24*time.Hour, "Slowest tick interval")
 	numLevels := flag.Int("num-levels", 10, "Number of priority levels")
@@ -215,6 +219,12 @@ func main() {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
 		}
+	}
+	// SCHED-GAP-1607: public dashboard base URL for link-mode delivery.
+	// Env override of --public-url (env wins, matching the other SCHEDULER_*
+	// knobs); empty stays empty (link mode degrades to full at delivery).
+	if v := os.Getenv("SCHEDULER_PUBLIC_URL"); v != "" {
+		*publicURL = v
 	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -667,6 +677,7 @@ func main() {
 	apiServer.SetResolvedConfig(api.ResolvedConfig{
 		DBPath:                 *dbPath,
 		Listen:                 *listen,
+		PublicURL:              *publicURL,
 		MinInterval:            minInterval.String(),
 		MaxInterval:            maxInterval.String(),
 		NumLevels:              *numLevels,
@@ -845,6 +856,13 @@ func main() {
 	pprofMux := http.NewServeMux()
 	pprofMux.Handle("/debug/pprof/", http.DefaultServeMux)
 	pprofMux.Handle("/", mux)
+
+	// SCHED-GAP-1607: arm the tick-permalink base for link-mode delivery.
+	// Empty (unset) keeps link mode degrading to full at delivery time.
+	scheduler.SetPublicBaseURL(*publicURL)
+	if *publicURL != "" {
+		log.Printf("DELIVER: public URL %s — deliver_mode=link builds tick permalinks against it", *publicURL)
+	}
 
 	server := &http.Server{
 		Addr:    *listen,

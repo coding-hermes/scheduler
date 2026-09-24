@@ -448,6 +448,7 @@ func (m *MultiPoolPacker) Pack(
 				WorkerProvider:   pu.Project.WorkerProvider,
 				GatewayKey:       pu.Project.GatewayKey,
 				Deliver:          pu.Project.Deliver,
+				DeliverMode:      pu.Project.DeliverMode,
 				Prompt:           pu.Project.Prompt,
 				PromptMode:       pu.Project.PromptMode,
 				NamespacePrompt:  ns.DefaultPrompt,

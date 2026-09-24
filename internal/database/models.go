@@ -54,37 +54,40 @@ func DefaultAdaptiveCooldownCeiling(floorS int) int {
 // Project is a single managed codebase the scheduler may spawn ticks against.
 // Field ordering matches the projects table column order for scan ergonomics.
 type Project struct {
-	Name              string  `json:"name"`                // PRIMARY KEY — also the DuckBrain project key
-	RepoURL           string  `json:"repo_url"`            // git clone URL
-	Workdir           string  `json:"workdir"`             // absolute path to the working copy on this host
-	Weight            int     `json:"weight"`              // 1..100 — weight budget consumed per tick (default 10)
-	Priority          int     `json:"priority"`            // 1..10 — base urgency multiplier (default 5)
-	CooldownS         int     `json:"cooldown_s"`          // seconds between successive ticks (default 900)
-	DecayRate         float64 `json:"decay_rate"`          // urgency decay rate (default 1.0)
-	Model             string  `json:"model"`               // LLM model id passed to the spawned agent
-	Provider          string  `json:"provider"`            // LLM provider id passed to the spawned agent
-	FallbackModel     string  `json:"fallback_model"`      // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
-	FallbackProvider  string  `json:"fallback_provider"`   // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
-	NoGlobalFallback  bool    `json:"no_global_fallback"`  // true → skip the spawner-level (env) fallback tier entirely (SCHED-GAP-064)
-	ModelChain        string  `json:"model_chain"`         // ordered list of "model@provider" hops (JSON array); empty = use model/provider + fallback_model/provider (SCHED-GAP-075)
-	IdleModel         string  `json:"idle_model"`          // optional: idle-tick model tier, prepended to the spawn chain when the board has zero pending tasks (SCHED-GAP-065)
-	IdleProvider      string  `json:"idle_provider"`       // optional: idle-tick provider tier (SCHED-GAP-065)
-	DailyBudgetUSD    float64 `json:"daily_budget_usd"`    // per-UTC-day spend cap; <= 0 = unlimited (SCHED-GAP-066)
-	WeeklyBudgetUSD   float64 `json:"weekly_budget_usd"`   // per-UTC-week spend cap (Monday 00:00 UTC reset); <= 0 = unlimited (SCHED-GAP-066)
-	FinalBudgetUSD    float64 `json:"final_budget_usd"`    // one-time lifetime spend cap, never resets; <= 0 = unlimited (SCHED-GAP-066)
-	WorkerModel       string  `json:"worker_model"`        // optional: suggested worker model (foreman can override)
-	WorkerProvider    string  `json:"worker_provider"`     // optional: suggested worker provider (foreman can override)
-	GatewayKey        string  `json:"gateway_key"`         // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
-	Command           string  `json:"command"`             // optional: custom spawn command (overrides default hermes chat)
-	Prompt            string  `json:"prompt"`              // optional: extra foreman prompt text; appended to the namespace default_prompt unless PromptMode=replace (Bane 2026-08-27)
-	PromptMode        string  `json:"prompt_mode"`         // "append" (default): project prompt appends to namespace default; "replace": project prompt replaces it entirely
-	NamespaceID       *string `json:"namespace_id"`        // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
-	Deliver           string  `json:"deliver"`             // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
-	Enabled           bool    `json:"enabled"`             // disabled projects are never scheduled
-	CreatedAt         string  `json:"created_at"`          // RFC3339 timestamp
-	UpdatedAt         string  `json:"updated_at"`          // RFC3339 timestamp
-	LastTickStarted   string  `json:"last_tick_started"`   // RFC3339 of most recent tick spawn; "" when never spawned
-	LastTickCompleted string  `json:"last_tick_completed"` // RFC3339 of most recent tick completion (any outcome); "" when never completed
+	Name             string  `json:"name"`               // PRIMARY KEY — also the DuckBrain project key
+	RepoURL          string  `json:"repo_url"`           // git clone URL
+	Workdir          string  `json:"workdir"`            // absolute path to the working copy on this host
+	Weight           int     `json:"weight"`             // 1..100 — weight budget consumed per tick (default 10)
+	Priority         int     `json:"priority"`           // 1..10 — base urgency multiplier (default 5)
+	CooldownS        int     `json:"cooldown_s"`         // seconds between successive ticks (default 900)
+	DecayRate        float64 `json:"decay_rate"`         // urgency decay rate (default 1.0)
+	Model            string  `json:"model"`              // LLM model id passed to the spawned agent
+	Provider         string  `json:"provider"`           // LLM provider id passed to the spawned agent
+	FallbackModel    string  `json:"fallback_model"`     // optional: fallback model tier for the spawn chain (SCHED-GAP-064)
+	FallbackProvider string  `json:"fallback_provider"`  // optional: fallback provider tier for the spawn chain (SCHED-GAP-064)
+	NoGlobalFallback bool    `json:"no_global_fallback"` // true → skip the spawner-level (env) fallback tier entirely (SCHED-GAP-064)
+	ModelChain       string  `json:"model_chain"`        // ordered list of "model@provider" hops (JSON array); empty = use model/provider + fallback_model/provider (SCHED-GAP-075)
+	IdleModel        string  `json:"idle_model"`         // optional: idle-tick model tier, prepended to the spawn chain when the board has zero pending tasks (SCHED-GAP-065)
+	IdleProvider     string  `json:"idle_provider"`      // optional: idle-tick provider tier (SCHED-GAP-065)
+	DailyBudgetUSD   float64 `json:"daily_budget_usd"`   // per-UTC-day spend cap; <= 0 = unlimited (SCHED-GAP-066)
+	WeeklyBudgetUSD  float64 `json:"weekly_budget_usd"`  // per-UTC-week spend cap (Monday 00:00 UTC reset); <= 0 = unlimited (SCHED-GAP-066)
+	FinalBudgetUSD   float64 `json:"final_budget_usd"`   // one-time lifetime spend cap, never resets; <= 0 = unlimited (SCHED-GAP-066)
+	WorkerModel      string  `json:"worker_model"`       // optional: suggested worker model (foreman can override)
+	WorkerProvider   string  `json:"worker_provider"`    // optional: suggested worker provider (foreman can override)
+	GatewayKey       string  `json:"gateway_key"`        // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
+	Command          string  `json:"command"`            // optional: custom spawn command (overrides default hermes chat)
+	Prompt           string  `json:"prompt"`             // optional: extra foreman prompt text; appended to the namespace default_prompt unless PromptMode=replace (Bane 2026-08-27)
+	PromptMode       string  `json:"prompt_mode"`        // "append" (default): project prompt appends to namespace default; "replace": project prompt replaces it entirely
+	NamespaceID      *string `json:"namespace_id"`       // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
+	Deliver          string  `json:"deliver"`            // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
+	// SCHED-GAP-1607: tick-report delivery mode — full (default) | file | link.
+	// '' and unknown values resolve to full, so pre-1607 rows are unchanged.
+	DeliverMode       string `json:"deliver_mode"`        // see scheduler.DeliverMode* constants
+	Enabled           bool   `json:"enabled"`             // disabled projects are never scheduled
+	CreatedAt         string `json:"created_at"`          // RFC3339 timestamp
+	UpdatedAt         string `json:"updated_at"`          // RFC3339 timestamp
+	LastTickStarted   string `json:"last_tick_started"`   // RFC3339 of most recent tick spawn; "" when never spawned
+	LastTickCompleted string `json:"last_tick_completed"` // RFC3339 of most recent tick completion (any outcome); "" when never completed
 	// SCHED-GAP-214 (migration v38): terminal status of the most recent
 	// tick ("" = never ticked | completed | failed | timeout | deferred).
 	// Stamped by lifecycle.Complete; read by the tasks-mode cooldown waiver

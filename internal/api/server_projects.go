@@ -148,6 +148,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if p.DecayRate == 0 {
 		p.DecayRate = 1.0
 	}
+	// SCHED-GAP-1607: deliver_mode is stored as given — settable exactly the
+	// way deliver is (free-form string; no API-side validation). The delivery
+	// path fails safe: '' and unknown values resolve to full.
 	if err := database.CreateProject(context.Background(), s.db, &p); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
 			writeError(w, 409, "project already exists")
