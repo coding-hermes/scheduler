@@ -36,20 +36,24 @@ var publicBaseURL string
 // zero value) means "not configured" — link mode degrades to full.
 func SetPublicBaseURL(u string) { publicBaseURL = strings.TrimRight(u, "/") }
 
-// tickPermalink builds the absolute dashboard URL for one tick's report —
-// the SINGLE place link-mode URLs are composed. The /ticks page is the only
-// dashboard surface carrying tick rows, so the permalink anchors the page
-// (scroll target) rather than promising a per-tick route that does not exist.
+// tickPermalink builds the absolute dashboard URL for one tick's report — the
+// SINGLE place link-mode URLs are composed.
+//
+// There is no per-tick route yet (SCHED-GAP-1593 adds one), so the link targets
+// the LANE page, which lists that lane's recent ticks — the one surface where a
+// just-delivered tick is actually findable. It deliberately does NOT point at
+// /ticks with a ?tick= parameter: the tick rows carry no anchors and the /ticks
+// handler reads only `page`, so that parameter would be inert while LOOKING
+// targeted. The fragment names the anchor SCHED-GAP-1593 will put on each tick
+// row; until then it is inert too and the link simply opens the lane's list.
+// When 1593 lands, only THIS function changes.
 func tickPermalink(baseURL, lane, tickID string) string {
-	page := strings.TrimRight(baseURL, "/") + "/ticks"
-	anchor := tickID
-	if lane != "" {
-		anchor = lane + "-" + tickID
+	base := strings.TrimRight(baseURL, "/")
+	if lane == "" {
+		// No lane to scope to: tick history is the only surface listing ticks.
+		return base + "/ticks"
 	}
-	v := url.Values{}
-	v.Set("page", "1")
-	v.Set("tick", anchor)
-	return page + "?" + v.Encode()
+	return base + "/projects/" + url.PathEscape(lane) + "#tick-" + url.PathEscape(lane+"-"+tickID)
 }
 
 // resolveDeliverMode maps a stored deliver_mode value to a mode constant.
