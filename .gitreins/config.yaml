@@ -3,6 +3,11 @@ guards:
   lint: false
   tests: false
   test_mode: full
+  # The full suite is the whole module (the scheduler package alone runs ~115s at
+  # idle). 180s was below that under fleet load — with judge jobs running, the
+  # suite exceeds it and the hook blocks EVERY commit, code or not. 900s covers
+  # the suite at load ~46 with room to spare.
+  test_timeout: 900
   go:
     build: true
     lint: true
