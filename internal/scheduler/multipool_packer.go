@@ -322,6 +322,7 @@ func (m *MultiPoolPacker) packFlat(
 			WorkerProvider:   s.proj.WorkerProvider,
 			GatewayKey:       s.proj.GatewayKey,
 			Deliver:          s.proj.Deliver,
+			DeliverMode:      s.proj.DeliverMode,
 			Prompt:           s.proj.Prompt,
 			PromptMode:       s.proj.PromptMode,
 			// SCHED-GAP-111: thread the namespace id (may be nil for

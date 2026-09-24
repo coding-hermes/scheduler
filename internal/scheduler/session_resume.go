@@ -391,6 +391,7 @@ func (l *Loop) packedProjectFrom(p database.Project) PackedProject {
 		WorkerProvider:   p.WorkerProvider,
 		GatewayKey:       p.GatewayKey,
 		Deliver:          p.Deliver,
+		DeliverMode:      p.DeliverMode,
 		Prompt:           p.Prompt,
 		PromptMode:       p.PromptMode,
 		// SCHED-GAP-111: thread the namespace id so resume spawns also

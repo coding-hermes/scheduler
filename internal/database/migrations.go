@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 40
+const latestMigration = 41
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -639,6 +639,13 @@ UPDATE namespaces SET max_concurrent = 12, updated_at = strftime('%Y-%m-%dT%H:%M
 UPDATE namespaces SET description = 'QA lanes — clean-machine brittleness battery (skill qa-foreman-ops). Bunker path; the Dagger qa.ts executor is retired until the new dagger is built. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'qa' AND description LIKE '%1 concurrent.%';
 UPDATE namespaces SET description = 'Per-project PM lane — board hygiene: dedupe by content fingerprint, repair reused/malformed ids, normalise priorities, no refiling. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'pm' AND description LIKE '%1 concurrent.%';
 UPDATE namespaces SET description = 'DuckBrain namespace sync lanes — skill-driven focused sync (context-sync-duckbrain). Driver retired until the new dagger is built. Capped at 12 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).' WHERE id = 'duckbrain-sync' AND description LIKE '%1 concurrent.%';
+`,
+	},
+	{
+		version: 41,
+		desc:    "tick-report delivery mode (SCHED-GAP-1607): deliver_mode on projects ('' = full | full | file | link) — how a completed tick's report reaches the deliver target. full keeps the historical single-message shape (byte-identical); file sends the short header+footer message plus the complete report as a .md document attachment; link sends the short message plus one absolute dashboard URL built from --public-url. '' and unknown values resolve to full at delivery time, so pre-1607 rows are unchanged.",
+		stmt: `
+ALTER TABLE projects ADD COLUMN deliver_mode TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

@@ -475,15 +475,16 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 		project.Name, tickID, gwErr)
 	s.noteTransientGatewayDeferral(project.Name, gwErr.Error())
 	return &SpawnedTick{
-		TickID:     tickID,
-		Project:    project.Name,
-		SessionID:  tickID, // placeholder — a blip with no terminal event persisted no session
-		Started:    reqStart,
-		Deliver:    project.Deliver,
-		spawner:    s,
-		completed:  false,
-		completeAt: s.clock().Now(),
-		gwDeferred: true,
+		TickID:      tickID,
+		Project:     project.Name,
+		SessionID:   tickID, // placeholder — a blip with no terminal event persisted no session
+		Started:     reqStart,
+		Deliver:     project.Deliver,
+		DeliverMode: project.DeliverMode,
+		spawner:     s,
+		completed:   false,
+		completeAt:  s.clock().Now(),
+		gwDeferred:  true,
 		// The gateway's own error text is carried through to ticks.error: the
 		// deferral must be auditable, not silent (the row's acceptance asks
 		// for "the gateway reason recorded").
@@ -1530,22 +1531,23 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					// Do NOT increment spawnCountHTTP beyond the one above and
 					// do NOT reset consecutive_failures — this is a failure.
 					return &SpawnedTick{
-						TickID:     tickID,
-						Project:    project.Name,
-						SessionID:  tickID, // placeholder — no real session persisted
-						Started:    reqStart,
-						Deliver:    project.Deliver,
-						spawner:    s,
-						completed:  false,
-						completeAt: now,
-						gwFailErr:  errText,
-						usage:      resp.Usage,
-						model:      model,
-						provider:   provider,
-						rate:       rate,
-						workdir:    project.Workdir,
-						reqStart:   reqStart,
-						Trigger:    "prompt",
+						TickID:      tickID,
+						Project:     project.Name,
+						SessionID:   tickID, // placeholder — no real session persisted
+						Started:     reqStart,
+						Deliver:     project.Deliver,
+						DeliverMode: project.DeliverMode,
+						spawner:     s,
+						completed:   false,
+						completeAt:  now,
+						gwFailErr:   errText,
+						usage:       resp.Usage,
+						model:       model,
+						provider:    provider,
+						rate:        rate,
+						workdir:     project.Workdir,
+						reqStart:    reqStart,
+						Trigger:     "prompt",
 					}, nil
 				}
 
@@ -1591,15 +1593,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
 					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 				return &SpawnedTick{
-					TickID:     tickID,
-					Project:    project.Name,
-					SessionID:  sessionID,
-					Started:    reqStart, // SCHED-GAP-029: use request start, not completion
-					Deliver:    project.Deliver,
-					Output:     *bytes.NewBufferString(text),
-					spawner:    s,
-					completed:  true,
-					completeAt: now,
+					TickID:      tickID,
+					Project:     project.Name,
+					SessionID:   sessionID,
+					Started:     reqStart, // SCHED-GAP-029: use request start, not completion
+					Deliver:     project.Deliver,
+					DeliverMode: project.DeliverMode,
+					Output:      *bytes.NewBufferString(text),
+					spawner:     s,
+					completed:   true,
+					completeAt:  now,
 					// SCHED-GAP-029: carry real usage + context for outcome metrics.
 					usage:    resp.Usage,
 					model:    model,
@@ -1667,21 +1670,22 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// slot_pool's existing lifecycle.Complete path persists
 				// status=failed / outcome=failed / error=stallErr.
 				return &SpawnedTick{
-					TickID:     tickID,
-					Project:    project.Name,
-					SessionID:  stallSessionID, // SCHED-GAP-119: real session id when observed
-					Started:    reqStart,
-					Deliver:    project.Deliver,
-					spawner:    s,
-					completed:  false,
-					completeAt: s.clock().Now(),
-					gwFailErr:  stallErr,
-					model:      model,
-					provider:   provider,
-					rate:       rate,
-					workdir:    project.Workdir,
-					reqStart:   reqStart,
-					Trigger:    "prompt",
+					TickID:      tickID,
+					Project:     project.Name,
+					SessionID:   stallSessionID, // SCHED-GAP-119: real session id when observed
+					Started:     reqStart,
+					Deliver:     project.Deliver,
+					DeliverMode: project.DeliverMode,
+					spawner:     s,
+					completed:   false,
+					completeAt:  s.clock().Now(),
+					gwFailErr:   stallErr,
+					model:       model,
+					provider:    provider,
+					rate:        rate,
+					workdir:     project.Workdir,
+					reqStart:    reqStart,
+					Trigger:     "prompt",
 					// SCHED-GAP-119: pre-counted work so the failed row keeps
 					// its commits/files even though no gateway usage arrived.
 					gwFailCounted: true,
@@ -2019,20 +2023,23 @@ func scannerErrIsBenign(err error) bool {
 
 // SpawnedTick represents a running foreman process.
 type SpawnedTick struct {
-	TickID     string
-	Project    string
-	PID        int
-	Started    time.Time
-	SessionID  string
-	Output     bytes.Buffer // full stdout for delivery after completion
-	Deliver    string       // delivery target (telegram:chat_id:thread_id)
-	cmd        *exec.Cmd
-	stdout     interface{ Close() error }
-	stderr     interface{ Close() error }
-	spawner    *Spawner
-	scanCancel context.CancelFunc
-	scanDone   chan struct{} // closed when the stdout scanner exits (drain finished)
-	mu         sync.Mutex
+	TickID    string
+	Project   string
+	PID       int
+	Started   time.Time
+	SessionID string
+	Output    bytes.Buffer // full stdout for delivery after completion
+	Deliver   string       // delivery target (telegram:chat_id:thread_id)
+	// DeliverMode (SCHED-GAP-1607): the project's deliver_mode at spawn
+	// time, consumed by slot_pool's completion hook (deliverOutputWithMode).
+	DeliverMode string
+	cmd         *exec.Cmd
+	stdout      interface{ Close() error }
+	stderr      interface{ Close() error }
+	spawner     *Spawner
+	scanCancel  context.CancelFunc
+	scanDone    chan struct{} // closed when the stdout scanner exits (drain finished)
+	mu          sync.Mutex
 
 	// stopHeartbeat is closed by Wait() to stop the tick-row heartbeat
 	// goroutine started in Spawn() (S-GAP-003). Nil for gateway spawns —

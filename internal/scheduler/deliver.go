@@ -4,14 +4,71 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 )
+
+// Delivery modes (SCHED-GAP-1607): how a tick report reaches the project's
+// deliver target. Resolved by resolveDeliverMode — ” and unknown values
+// resolve to DeliverModeFull, so pre-1607 rows and typo'd values behave
+// exactly as before.
+const (
+	DeliverModeFull = "full" // header + body + footer in the message (historical shape)
+	DeliverModeFile = "file" // short message + the full report as a .md document attachment
+	DeliverModeLink = "link" // short message + one absolute dashboard URL for this tick
+)
+
+// publicBaseURL holds the dashboard origin used by DeliverModeLink to build
+// tick permalinks. Threaded from --public-url / SCHEDULER_PUBLIC_URL at boot
+// (cmd/schedulerd/main.go); package-level because deliverOutputWith is a free
+// function in the historical (pre-seam) style — a "" value degrades link mode
+// to full and logs why, never an unopenable URL.
+var publicBaseURL string
+
+// SetPublicBaseURL arms the tick-permalink base (SCHED-GAP-1607). Empty (the
+// zero value) means "not configured" — link mode degrades to full.
+func SetPublicBaseURL(u string) { publicBaseURL = strings.TrimRight(u, "/") }
+
+// tickPermalink builds the absolute dashboard URL for one tick's report — the
+// SINGLE place link-mode URLs are composed.
+//
+// There is no per-tick route yet (SCHED-GAP-1593 adds one), so the link targets
+// the LANE page, which lists that lane's recent ticks — the one surface where a
+// just-delivered tick is actually findable. It deliberately does NOT point at
+// /ticks with a ?tick= parameter: the tick rows carry no anchors and the /ticks
+// handler reads only `page`, so that parameter would be inert while LOOKING
+// targeted. The fragment names the anchor SCHED-GAP-1593 will put on each tick
+// row; until then it is inert too and the link simply opens the lane's list.
+// When 1593 lands, only THIS function changes.
+func tickPermalink(baseURL, lane, tickID string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if lane == "" {
+		// No lane to scope to: tick history is the only surface listing ticks.
+		return base + "/ticks"
+	}
+	return base + "/projects/" + url.PathEscape(lane) + "#tick-" + url.PathEscape(lane+"-"+tickID)
+}
+
+// resolveDeliverMode maps a stored deliver_mode value to a mode constant.
+// ” (pre-1607 rows) and any unknown value resolve to full — delivery never
+// drops or changes shape because of a mode problem.
+func resolveDeliverMode(mode string) string {
+	switch mode {
+	case DeliverModeFile:
+		return DeliverModeFile
+	case DeliverModeLink:
+		return DeliverModeLink
+	default:
+		return DeliverModeFull
+	}
+}
 
 // sendWithRetry runs `hermes send` with the given args, retrying transient
 // failures (timeout, connection reset, 429/5xx, "Timed out") with exponential
@@ -68,12 +125,36 @@ func isRetryableSendError(err error, output string) bool {
 // spawn) — carried in the subject (top line) and the footer (bottom line) so
 // the thread shows how the run was launched (Bane 2026-08-27).
 func deliverOutput(project, tickID, deliver, trigger string, output *bytes.Buffer) {
-	deliverOutputWith(clock.Real(), project, tickID, deliver, trigger, output)
+	deliverOutputWithMode(clock.Real(), project, tickID, deliver, trigger, output, "")
 }
 
 // deliverOutputWith is deliverOutput on an explicit clock (SCHED-GAP-169): the
 // retry backoff waits on clk, so a simulated run does not sleep in real time.
+//
+// SCHED-GAP-1607: callers that know the project's deliver_mode should call
+// deliverOutputWithMode; this wrapper keeps the historical signature so the
+// pre-1607 call shape stays byte-identical (mode "" → full).
 func deliverOutputWith(clk clock.Clock, project, tickID, deliver, trigger string, output *bytes.Buffer) {
+	deliverOutputWithMode(clk, project, tickID, deliver, trigger, output, "")
+}
+
+// deliverOutputWithMode delivers one tick report according to the project's
+// deliver_mode (SCHED-GAP-1607):
+//
+//   - full  — header + report body + footer in one message (historical shape,
+//     byte-identical to pre-1607).
+//   - file  — the SHORT message (header + footer only) plus the complete
+//     report as a .md document attachment (MEDIA:<abs path> in the message
+//     text; `hermes send` turns non-image MEDIA: refs into documents with no
+//     CLI change).
+//   - link  — the SHORT message plus one absolute URL opening this tick's
+//     report in the dashboard (built by tickPermalink from --public-url).
+//
+// Fail-safe contract: ” and unknown modes resolve to full, and any
+// mode-specific failure (temp-file, write) falls back to full — a tick report
+// is never silently dropped because of a delivery-mode problem. deliverAlert
+// is out of scope and unchanged.
+func deliverOutputWithMode(clk clock.Clock, project, tickID, deliver, trigger string, output *bytes.Buffer, mode string) {
 	if output == nil || output.Len() == 0 {
 		log.Printf("DELIVER: %s tick=%s — no output", project, tickID)
 		return
@@ -84,10 +165,90 @@ func deliverOutputWith(clk clock.Clock, project, tickID, deliver, trigger string
 		return
 	}
 
-	body := trimToolNoise(strings.TrimSpace(output.String()))
-	body = fmt.Sprintf("%s\n\n_%s · %s_", body, tickID, trigger)
+	resolved := resolveDeliverMode(mode)
+	if mode != "" && mode != resolved {
+		log.Printf("DELIVER: %s tick=%s — unknown deliver_mode %q, falling back to full", project, tickID, mode)
+	}
+	if resolved == DeliverModeLink && publicBaseURL == "" {
+		log.Printf("DELIVER: %s tick=%s — deliver_mode=link but no public base URL configured (--public-url), falling back to full", project, tickID)
+		resolved = DeliverModeFull
+	}
 
-	f, err := os.CreateTemp("", fmt.Sprintf("chtick-%s-*.txt", tickID))
+	subject := fmt.Sprintf("🤖 %s [%s] · %s", project, tickID, trigger)
+	footer := fmt.Sprintf("_%s · %s_", tickID, trigger)
+
+	if resolved == DeliverModeFull {
+		body := trimToolNoise(strings.TrimSpace(output.String()))
+		body = fmt.Sprintf("%s\n\n%s", body, footer)
+		sendReportBody(clk, project, tickID, deliver, subject, body, fmt.Sprintf("chtick-%s-*.txt", tickID))
+		return
+	}
+
+	// file/link: the thread gets the SHORT message (header + footer);
+	// the complete report rides the attachment or the permalink.
+	short := fmt.Sprintf("%s\n\n%s", subject, footer)
+
+	if resolved == DeliverModeFile {
+		body := trimToolNoise(strings.TrimSpace(output.String()))
+		fpath, err := writeTickReportFileFn(tickID, body)
+		if err != nil {
+			// Fail-safe: a temp-file problem must never drop the report.
+			log.Printf("DELIVER: %s tick=%s — file mode (%v), falling back to full", project, tickID, err)
+			body = fmt.Sprintf("%s\n\n%s", body, footer)
+			sendReportBody(clk, project, tickID, deliver, subject, body, fmt.Sprintf("chtick-%s-*.txt", tickID))
+			return
+		}
+		// SCHED-GAP-1607 ordering contract: the attachment must still exist
+		// on disk while hermes send runs, so the removal is deferred until
+		// AFTER the send returns (sendWithRetry is fully synchronous).
+		defer func() { _ = os.Remove(fpath) }()
+		msg := short + "\n\nMEDIA:" + fpath
+		sendShort(clk, project, tickID, deliver, msg)
+		return
+	}
+
+	// DeliverModeLink.
+	link := tickPermalink(publicBaseURL, project, tickID)
+	msg := fmt.Sprintf("%s\n\nReport: %s", short, link)
+	sendShort(clk, project, tickID, deliver, msg)
+}
+
+// writeTickReportFileFn is the injection seam for the report writer: the
+// file-mode fallback test swaps it to prove the file→full degrade contract
+// without OS-level error injection (long names break the full-mode temp file
+// too, since both embed the tick id).
+var writeTickReportFileFn = writeTickReportFile
+
+// writeTickReportFile writes the (noise-trimmed) full report body to
+// <lane>-<tickID>.md in a temp dir and returns the absolute path. The .md
+// extension is what makes `hermes send` deliver it as a document.
+func writeTickReportFile(tickID, body string) (string, error) {
+	dir, err := os.MkdirTemp("", "chtick-md-")
+	if err != nil {
+		return "", fmt.Errorf("temp dir: %w", err)
+	}
+	name := fmt.Sprintf("%s.md", sanitizeReportName(tickID))
+	fpath := filepath.Join(dir, name)
+	if err := os.WriteFile(fpath, []byte(body), 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("write report: %w", err)
+	}
+	return fpath, nil
+}
+
+// sanitizeReportName strips characters that are unsafe or noisy in a
+// filename (a tick id is host-name-safe already, but lane names reach this
+// path via the file-mode name and must not smuggle separators).
+func sanitizeReportName(s string) string {
+	r := strings.NewReplacer("/", "-", "\\", "-", ":", "-", " ", "-", "..", ".")
+	return r.Replace(s)
+}
+
+// sendReportBody is the historical send shape: one temp text file holding the
+// composed body, sent with --subject. Kept byte-identical to pre-1607 for
+// full mode.
+func sendReportBody(clk clock.Clock, project, tickID, deliver, subject, body, tempPattern string) {
+	f, err := os.CreateTemp("", tempPattern)
 	if err != nil {
 		log.Printf("DELIVER: %s tick=%s — temp file: %v", project, tickID, err)
 		return
@@ -101,8 +262,19 @@ func deliverOutputWith(clk clock.Clock, project, tickID, deliver, trigger string
 	}
 	f.Close()
 
-	subject := fmt.Sprintf("🤖 %s [%s] · %s", project, tickID, trigger)
 	out, ok := sendWithRetry(clk, "--to", deliver, "--subject", subject, "--file", f.Name())
+	if !ok {
+		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
+		return
+	}
+	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)
+}
+
+// sendShort sends the short file/link message. The subject is already the
+// message's first line, so no --subject flag is passed (the header stays the
+// visible header; the whole short text lives in the body).
+func sendShort(clk clock.Clock, project, tickID, deliver, msg string) {
+	out, ok := sendWithRetry(clk, "--to", deliver, msg)
 	if !ok {
 		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
 		return

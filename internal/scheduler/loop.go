@@ -830,6 +830,7 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		WorkerProvider:   project.WorkerProvider,
 		GatewayKey:       project.GatewayKey,
 		Deliver:          project.Deliver,
+		DeliverMode:      project.DeliverMode,
 		// SCHED-GAP-111: thread the namespace id for effectiveTickTimeout
 		// in the spawn path (manual spawns resolve the wave deadline too).
 		NamespaceID: nsIDOf(project),
