@@ -22,12 +22,22 @@ import (
 )
 
 // apiTestServer spins up an in-memory DB + Loop + api.Server wired to httptest.
+//
+// SCHED-GAP-1602: the shared stack arms the operator credential and the do
+// helper sends it on every request. This keeps ~90 existing handler tests
+// exercising the same code paths as before (authenticated, like the real
+// operator), while the fail-closed default for a BARE Server is proven by
+// TestAuthFailClosedUnset building its own un-armed Server.
 type apiTestServer struct {
 	db     *sql.DB
 	loop   *scheduler.Loop
 	server *api.Server
 	ts     *httptest.Server
 }
+
+// testOperatorToken is the shared-stack credential. Test code that must
+// prove refusal behavior sends a DIFFERENT (or no) credential explicitly.
+const testOperatorToken = "api-test-operator-token"
 
 func newAPITestServer(t *testing.T) *apiTestServer {
 	t.Helper()
@@ -46,6 +56,10 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 	// tick_id) holds without a live spawn.
 	loop.SetNoExecFallback(true)
 	srv := api.NewServer(db, loop)
+	// SCHED-GAP-1602: arm the operator gate so the shared stack's mutations
+	// behave like the real (credentialed) operator's; the do helper below
+	// sends the credential on every request.
+	srv.SetAuthConfig(api.ResolveAuthConfig(testOperatorToken, "", ""))
 	// Wire a temp-dir JSONL groups/templates store so the new
 	// /api/v1/groups* + /api/v1/templates* routes are live in every test.
 	storeDir := t.TempDir()
@@ -77,6 +91,8 @@ func (a *apiTestServer) do(t *testing.T, method, path string, body interface{}) 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// SCHED-GAP-1602: the shared stack authenticates like the real operator.
+	req.Header.Set("X-Operator-Token", testOperatorToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -476,6 +492,8 @@ func TestAPI_CreateProject_InvalidJSON(t *testing.T) {
 	a := newAPITestServer(t)
 	req, _ := http.NewRequest("POST", a.ts.URL+"/api/v1/projects", strings.NewReader("{not json"))
 	req.Header.Set("Content-Type", "application/json")
+	// SCHED-GAP-1602: authenticate like the operator.
+	req.Header.Set("X-Operator-Token", testOperatorToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)

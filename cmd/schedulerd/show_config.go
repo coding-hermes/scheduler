@@ -67,6 +67,15 @@ func printSchema() {
         "url":       { "type": "string", "default": "http://localhost:3000", "env": "SCHEDULER_DUCK_BRAIN_URL", "cli": "--duckbrain-url" }
       }
     },
+    "api": {
+      "type": "object",
+      "properties": {
+        "read_timeout":   { "type": "string", "default": "5s", "env": "SCHEDULER_API_READ_TIMEOUT", "cli": "--api-read-timeout", "description": "Per-request deadline for the heavy DB-backed read surfaces (SCHED-GAP-1575-B)." },
+        "operator_token": { "type": "string", "default": "", "env": "SCHEDULER_OPERATOR_TOKEN", "description": "Shared operator credential gating every mutating API route (SCHED-GAP-1602). Empty = fail-closed: mutations answer 503 until set. NEVER a CLI flag (GAP-038: argv leaks via ps). Accepted on requests as X-Operator-Token, Authorization: Bearer, or Basic (token as password)." },
+        "operator_user": { "type": "string", "description": "Basic-mode username for the browser path (used only when operator_token is empty). MUST be set together with operator_password." },
+        "operator_password": { "type": "string", "description": "Basic-mode password for the browser path (used only when operator_token is empty). MUST be set together with operator_user." }
+      }
+    },
     "projects": {
       "type": "array",
       "items": {
@@ -221,5 +230,12 @@ url = %q
 			}
 			fmt.Printf("#   %s=%s\n", name, val)
 		}
+	}
+	// SCHED-GAP-1602: the operator token is listed as SET but never printed —
+	// this surface prints every other env value in cleartext, and the
+	// credential must not join them (same doctrine as the masked gateway key
+	// on GET /api/v1/config).
+	if os.Getenv("SCHEDULER_OPERATOR_TOKEN") != "" {
+		fmt.Printf("#   SCHEDULER_OPERATOR_TOKEN=<set; masked>\n")
 	}
 }

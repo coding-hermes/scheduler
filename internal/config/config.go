@@ -226,6 +226,19 @@ type APIConfig struct {
 	// Must be > 0 when set — the flag layer treats <= 0 as "keep default",
 	// so a TOML "0s" here would be a silent no-op.
 	ReadTimeout string `toml:"read_timeout"`
+	// OperatorToken (SCHED-GAP-1602) is the shared operator credential for
+	// the mutating routes. Empty = fail-closed: the mutation gate answers
+	// 503 on every mutating route until a credential is configured. The
+	// credential lives in env/TOML only — NEVER a CLI flag (GAP-038:
+	// credentials in argv leak via ps).
+	OperatorToken string `toml:"operator_token"`
+	// OperatorUser + OperatorPassword (SCHED-GAP-1602) configure HTTP basic
+	// mode — the browser path: the dashboard cannot send custom headers
+	// without an extension, so the operator's browser authenticates via the
+	// native basic prompt. Used only when operator_token is empty (token
+	// mode wins). Setting exactly one of the pair is a load error.
+	OperatorUser     string `toml:"operator_user"`
+	OperatorPassword string `toml:"operator_password"`
 }
 
 // AsFleet returns a FleetConfig view of this RootConfig's Projects and

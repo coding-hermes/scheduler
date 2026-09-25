@@ -107,6 +107,12 @@ func main() {
 	// units (admission currency, NOT dollars).
 	budgetSource := "flag-default"
 	meteredBudgetSource := "default"
+	// SCHED-GAP-1602: the operator credential — env/TOML ONLY, never a CLI
+	// flag (GAP-038: credentials in argv are visible in ps and shell
+	// history). Declared before the env-override block so --show-config and
+	// --schema see the resolved value like every other knob. Basic mode
+	// (operator_user + operator_password) resolves from TOML only.
+	var operatorToken, operatorUser, operatorPassword string
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "budget" {
 			budgetSource = "flag"
@@ -196,6 +202,13 @@ func main() {
 			log.Printf("WARN: SCHEDULER_API_READ_TIMEOUT=%q invalid — using %v", v, *apiReadTimeout)
 		}
 	}
+	// SCHED-GAP-1602: operator credential env override. Trimmed — a
+	// whitespace-only value is treated as unset so the daemon cannot be
+	// "armed" with an accidental space (fail-closed either way: with no
+	// credential the mutation gate answers 503 on every mutating route).
+	// Basic mode has no env layer by design: the password would sit in a
+	// dotfile-read env file next to the TOML it exists to complement.
+	operatorToken = strings.TrimSpace(os.Getenv("SCHEDULER_OPERATOR_TOKEN"))
 	// SCHED-GAP-125: load-gate threshold env override — same pattern. Only a
 	// positive parseable float enables the gate; 0/negative/invalid keeps it
 	// off. The gate defers spawns while 1m loadavg >= threshold.
@@ -480,6 +493,22 @@ func main() {
 					log.Printf("WARN: api.read_timeout=%q invalid — using %v", rootCfg.API.ReadTimeout, *apiReadTimeout)
 				}
 			}
+			// SCHED-GAP-1602: TOML layer for the operator credentials —
+			// token mode wins when both are configured (one credential to
+			// rotate beats two); basic mode is the fallback when no token
+			// exists anywhere (env or TOML). There is no flag layer by
+			// design (GAP-038).
+			if rootCfg.API.OperatorToken != "" && operatorToken == "" {
+				operatorToken = strings.TrimSpace(rootCfg.API.OperatorToken)
+			}
+			if operatorToken == "" {
+				if rootCfg.API.OperatorUser != "" {
+					operatorUser = strings.TrimSpace(rootCfg.API.OperatorUser)
+				}
+				if rootCfg.API.OperatorPassword != "" {
+					operatorPassword = rootCfg.API.OperatorPassword
+				}
+			}
 		}
 		// ADV-R08/G3: TOML layer for the slot-wait patience — same
 		// default-guard pattern (applied only when the flag sits at its
@@ -651,6 +680,12 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// SCHED-GAP-1602: arm the operator-credential gate. Token mode wins when
+	// both credentials are configured; basic mode is the browser path. An
+	// EMPTY credential set leaves authOff, which is fail-closed — every
+	// mutating route answers 503 until the operator configures one. Reads
+	// are never gated.
+	apiServer.SetAuthConfig(api.ResolveAuthConfig(operatorToken, operatorUser, operatorPassword))
 	// SCHED-GAP-1575-B: arm the heavy-read request deadline BEFORE the
 	// resolved-config snapshot below, so the deadline actually enforced and
 	// the value GET /api/v1/config reports are one number (both write
@@ -940,6 +975,16 @@ func main() {
 		log.Printf("  Dashboard: http://%s/", *listen)
 		log.Printf("  API:       http://%s/api/v1/health", *listen)
 		log.Printf("  MCP:       http://%s/mcp", *listen)
+		// SCHED-GAP-1602: one boot line that answers "are mutations gated?" —
+		// NEVER prints the credential itself.
+		switch {
+		case operatorToken != "":
+			log.Printf("  Auth:      operator token REQUIRED for mutating routes")
+		case operatorUser != "":
+			log.Printf("  Auth:      operator basic auth REQUIRED for mutating routes")
+		default:
+			log.Printf("  Auth:      FAIL-CLOSED — no operator credential configured; every mutating route answers 503 until SCHEDULER_OPERATOR_TOKEN/[api] operator_token is set")
+		}
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP: %v", err)
 		}

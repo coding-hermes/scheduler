@@ -16,6 +16,10 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.listNamespaces(w, r)
 	case http.MethodPost:
+		// SCHED-GAP-1602: create is a mutation — identity required.
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
 		s.createNamespace(w, r)
 	default:
 		writeError(w, 405, "GET or POST only")
@@ -91,6 +95,10 @@ func (s *Server) handleNamespaceByID(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 405, "POST only")
 				return
 			}
+			// SCHED-GAP-1602: move is a mutation — identity required.
+			if !s.requireOperator(w, r, "namespace "+id+" move") {
+				return
+			}
 			s.moveProjectToNamespace(w, r, id)
 			return
 		}
@@ -102,8 +110,16 @@ func (s *Server) handleNamespaceByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.getNamespace(w, r, id)
 	case http.MethodPut:
+		// SCHED-GAP-1602: update is a mutation — identity required.
+		if !s.requireOperator(w, r, "namespace "+id) {
+			return
+		}
 		s.updateNamespace(w, r, id)
 	case http.MethodDelete:
+		// SCHED-GAP-1602: delete is a mutation — identity required.
+		if !s.requireOperator(w, r, "namespace "+id) {
+			return
+		}
 		s.deleteNamespace(w, r, id)
 	default:
 		writeError(w, 405, "GET, PUT, or DELETE only")

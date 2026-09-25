@@ -19,6 +19,19 @@ import (
 // <name>, <name>-qa, <name>-pm, <name>-sync, <name>-dogfood.
 var cascadeTestProjects = []string{"", "-qa", "-pm", "-sync", "-dogfood"}
 
+// gap180OperatorToken is this file's credential: the cascade tests build
+// bare api-internal Servers and must arm the SCHED-GAP-1602 operator gate
+// before exercising mutating handlers (fail-closed default otherwise 503s).
+const gap180OperatorToken = "gap180-operator-token"
+
+// newGap180Server is NewServer plus the armed operator gate.
+func newGap180Server(t *testing.T, db *sql.DB) *Server {
+	t.Helper()
+	s := NewServer(db, nil)
+	s.SetAuthConfig(ResolveAuthConfig(gap180OperatorToken, "", ""))
+	return s
+}
+
 // mustCreateCascadeLane creates one lane of the family as enabled. Separate
 // workdirs per lane (the helper's /tmp/<name> default is fine — every lane has
 // a distinct name, hence a distinct workdir, so no uniqueness guard trips).
@@ -43,7 +56,7 @@ func TestSCHEDGAP180_PauseCascadesToSatelliteLanes(t *testing.T) {
 
 	const primary = "gap180"
 	db := mustOpenGap180DB(t)
-	s := NewServer(db, nil)
+	s := newGap180Server(t, db)
 
 	// Precondition: all 5 lanes enabled.
 	for _, suffix := range cascadeTestProjects {
@@ -100,7 +113,7 @@ func TestSCHEDGAP180_ResumeRestoresOnlyCascadePausedSatellites(t *testing.T) {
 
 	const primary = "gap180r"
 	db := mustOpenGap180DB(t)
-	s := NewServer(db, nil)
+	s := newGap180Server(t, db)
 
 	for _, suffix := range cascadeTestProjects {
 		mustCreateHelperTestProject(t, db, primary+suffix)
@@ -111,6 +124,8 @@ func TestSCHEDGAP180_ResumeRestoresOnlyCascadePausedSatellites(t *testing.T) {
 	mustCreateHelperTestProject(t, db, independent)
 	putBody := strings.NewReader(`{"enabled": false}`)
 	putReq := httptest.NewRequest("PUT", "/api/v1/projects/"+independent, putBody)
+	// SCHED-GAP-1602: authenticate the in-process PUT like the operator.
+	putReq.Header.Set("X-Operator-Token", gap180OperatorToken)
 	putRec := httptest.NewRecorder()
 	s.handleProjectByID(putRec, putReq)
 	if putRec.Code != 200 {
@@ -189,7 +204,7 @@ func TestSCHEDGAP180_PUTCascade(t *testing.T) {
 
 	const primary = "gap180put"
 	db := mustOpenGap180DB(t)
-	s := NewServer(db, nil)
+	s := newGap180Server(t, db)
 
 	for _, suffix := range cascadeTestProjects {
 		mustCreateHelperTestProject(t, db, primary+suffix)
@@ -197,6 +212,8 @@ func TestSCHEDGAP180_PUTCascade(t *testing.T) {
 
 	putBody := strings.NewReader(`{"enabled": false}`)
 	putReq := httptest.NewRequest("PUT", "/api/v1/projects/"+primary, putBody)
+	// SCHED-GAP-1602: authenticate the in-process PUT like the operator.
+	putReq.Header.Set("X-Operator-Token", gap180OperatorToken)
 	putRec := httptest.NewRecorder()
 	s.handleProjectByID(putRec, putReq)
 	if putRec.Code != 200 {

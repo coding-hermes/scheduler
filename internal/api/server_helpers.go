@@ -764,6 +764,7 @@ var openapiSpec = []byte(`{
     "description": "REST API for the Coding Hermes fleet scheduler — manage projects, namespaces, ticks, and fleet health."
   },
   "servers": [{"url": "http://127.0.0.1:9090", "description": "Local scheduler daemon"}],
+  "security-note": "SCHED-GAP-1602: every MUTATING operation (POST/PUT/DELETE below, marked per-operation with security) requires the operator credential — components.securitySchemes.operatorToken or operatorBasic. READ operations are deliberately open (tailnet-only bind; cron probes, the ops watchdog and Observatory-style pullers consume them unauthenticated). With NO credential configured the daemon fails CLOSED: mutating operations answer 503 Service Unavailable.",
   "paths": {
     "/api/v1/health": {
       "get": {
@@ -815,6 +816,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Create a project",
         "requestBody": {
           "required": true,
@@ -835,6 +837,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "security": [{"operatorToken": []}],
         "summary": "Update project fields",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -845,6 +848,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "security": [{"operatorToken": []}],
         "summary": "Delete a project. confirm=true soft-deletes (enabled=false, row retained); confirm=true&purge=true permanently removes the row (DOGFOOD-009)",
         "parameters": [
           {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}},
@@ -861,6 +865,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/spawn": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Manually trigger a tick for this project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -874,6 +879,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/pause": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Pause a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -887,6 +893,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/resume": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Resume a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -900,6 +907,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/bump": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Temporarily accelerate the project (SCHED-GAP-107): run at a small cooldown for N ticks, then auto-revert (Phase A restore + Phase B adaptive re-eval)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -916,6 +924,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/unbump": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Manually abort an active bump — restores the saved pre-bump cooldown state verbatim (no adaptive re-evaluation)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -936,6 +945,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Create a namespace",
         "requestBody": {
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Namespace"}}}
@@ -954,6 +964,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "security": [{"operatorToken": []}],
         "summary": "Update namespace (partial — only supplied fields are applied)",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -966,6 +977,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "security": [{"operatorToken": []}],
         "summary": "Delete a namespace. confirm=true soft-deletes (enabled=false, row retained, member projects unassigned); confirm=true&purge=true permanently removes the row (SCHED-GAP-097)",
         "parameters": [
           {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
@@ -992,6 +1004,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/namespaces/{id}/move": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Assign a project to a namespace (sets its namespace_id)",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -1013,6 +1026,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Create a deploy group",
         "requestBody": {
           "required": true,
@@ -1035,6 +1049,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "security": [{"operatorToken": []}],
         "summary": "Partial-update a deploy group (name is immutable — comes from the path)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -1047,6 +1062,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "security": [{"operatorToken": []}],
         "summary": "Delete a deploy group (JSONL row removed)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1057,6 +1073,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/groups/{name}/deploy": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Deploy a template to a group — appends the template's task rows to each member project's .coding-hermes/board/tasks.jsonl. Idempotent per (template, date, project): members whose board already carries the deployment are skipped. dry_run=true returns the plan without writing. One event-log entry per deploy.",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -1078,6 +1095,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Create a deploy template",
         "requestBody": {
           "required": true,
@@ -1100,6 +1118,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "security": [{"operatorToken": []}],
         "summary": "Partial-update a deploy template (name is immutable)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "requestBody": {
@@ -1112,6 +1131,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "security": [{"operatorToken": []}],
         "summary": "Delete a deploy template (JSONL row removed)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1144,6 +1164,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/evaluate": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Force an evaluation cycle",
         "requestBody": {
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
@@ -1155,6 +1176,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/pause": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Pause the scheduler globally",
         "requestBody": {
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
@@ -1166,6 +1188,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/resume": {
       "post": {
+        "security": [{"operatorToken": []}],
         "summary": "Resume the scheduler globally",
         "requestBody": {
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
@@ -1219,6 +1242,19 @@ var openapiSpec = []byte(`{
     }
   },
   "components": {
+    "securitySchemes": {
+      "operatorToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Operator-Token",
+        "description": "Shared operator credential (SCHED-GAP-1602). Also accepted: Authorization: Bearer <token>, or Basic with the token as the password. Configured via SCHEDULER_OPERATOR_TOKEN or [api] operator_token. UNSET = fail-closed: every mutating operation answers 503 until a credential is configured."
+      },
+      "operatorBasic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Browser path (SCHED-GAP-1602): [api] operator_user + operator_password; active only when no operator token is configured."
+      }
+    },
     "schemas": {
       "Project": {
         "type": "object",

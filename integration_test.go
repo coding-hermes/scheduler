@@ -18,6 +18,11 @@ import (
 
 const testPort = ":9199"
 
+// testOperatorToken (SCHED-GAP-1602) arms every schedulerd this battery
+// spawns, so its mutating calls authenticate like the real operator. The
+// daemon has no flag layer for credentials (GAP-038) — env only.
+const testOperatorToken = "integration-operator-token"
+
 var testDB string
 
 func TestMain(m *testing.M) {
@@ -52,6 +57,7 @@ func TestIntegrationAllLayers(t *testing.T) {
 		"-listen", "127.0.0.1"+testPort,
 		"-db", testDB,
 	)
+	cmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -91,7 +97,9 @@ func restartScheduler(t *testing.T, old *exec.Cmd, envVars []string) *exec.Cmd {
 		"-listen", "127.0.0.1"+testPort,
 		"-db", testDB,
 	)
-	newCmd.Env = append(os.Environ(), envVars...)
+	// SCHED-GAP-1602: keep the operator credential armed across restarts.
+	newCmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
+	newCmd.Env = append(newCmd.Env, envVars...)
 	newCmd.Stdout = os.Stdout
 	newCmd.Stderr = os.Stderr
 	if err := newCmd.Start(); err != nil {
@@ -116,7 +124,9 @@ func restartSchedulerWithDB(t *testing.T, old *exec.Cmd, dbPath string, envVars 
 		"-listen", "127.0.0.1"+testPort,
 		"-db", dbPath,
 	)
-	newCmd.Env = append(os.Environ(), envVars...)
+	// SCHED-GAP-1602: keep the operator credential armed across restarts.
+	newCmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
+	newCmd.Env = append(newCmd.Env, envVars...)
 	newCmd.Stdout = os.Stdout
 	newCmd.Stderr = os.Stderr
 	if err := newCmd.Start(); err != nil {

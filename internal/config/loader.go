@@ -340,6 +340,22 @@ func (r *RootConfig) Validate() error {
 			errs = append(errs, fmt.Errorf("api.read_timeout (%s) must be > 0 — the heavy read surfaces need a deadline (unset means the 5s default)", v))
 		}
 	}
+	// SCHED-GAP-1602: a blank/whitespace api.operator_token is REJECTED at
+	// load time — the operator almost certainly meant to configure a
+	// credential (a quoted empty string survives as ""), and silently
+	// treating it as unset would put the daemon in the fail-closed 503 mode
+	// with no explanation. Fail at load instead.
+	if v := r.API.OperatorToken; strings.TrimSpace(v) == "" && v != "" {
+		errs = append(errs, fmt.Errorf("api.operator_token is blank/whitespace — set a real token or remove the key entirely (mutations stay fail-closed 503 either way)"))
+	}
+	// SCHED-GAP-1602: basic mode needs BOTH halves. Exactly one set = a typo
+	// the operator should hear about at load, not a daemon that refuses
+	// every login with 401.
+	userSet := strings.TrimSpace(r.API.OperatorUser) != ""
+	passSet := strings.TrimSpace(r.API.OperatorPassword) != ""
+	if userSet != passSet {
+		errs = append(errs, fmt.Errorf("api.operator_user and api.operator_password must be set together (basic mode) — set both or neither"))
+	}
 	if minD > 0 && maxD > 0 && minD > maxD {
 		errs = append(errs, fmt.Errorf("scheduler.min_interval (%s) must be <= scheduler.max_interval (%s)",
 			r.Scheduler.MinInterval, r.Scheduler.MaxInterval))

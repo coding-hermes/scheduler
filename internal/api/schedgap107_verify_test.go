@@ -81,6 +81,9 @@ func TestVerify_BumpAPI_InvalidJSON400(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Body = http.NoBody
+	// SCHED-GAP-1602: authenticate like the operator (the stack arms the
+	// same token; see newAPITestServer).
+	req.Header.Set("X-Operator-Token", testOperatorToken)
 	// Force the decode error path: empty body → EOF from json.Decoder.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -71,6 +71,10 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.listGroups(w, r)
 	case http.MethodPost:
+		// SCHED-GAP-1602: create is a mutation — identity required.
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
 		s.createGroup(w, r)
 	default:
 		writeError(w, 405, "GET or POST only")
@@ -136,6 +140,10 @@ func (s *Server) handleGroupByID(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 405, "POST only")
 				return
 			}
+			// SCHED-GAP-1602: deploy is a mutation — identity required.
+			if !s.requireOperator(w, r, "group "+name+" deploy") {
+				return
+			}
 			s.deployGroup(w, r, name)
 			return
 		}
@@ -150,8 +158,16 @@ func (s *Server) handleGroupByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.getGroup(w, r, name)
 	case http.MethodPut:
+		// SCHED-GAP-1602: update is a mutation — identity required.
+		if !s.requireOperator(w, r, "group "+name) {
+			return
+		}
 		s.updateGroup(w, r, name)
 	case http.MethodDelete:
+		// SCHED-GAP-1602: delete is a mutation — identity required.
+		if !s.requireOperator(w, r, "group "+name) {
+			return
+		}
 		s.deleteGroup(w, r, name)
 	default:
 		writeError(w, 405, "GET, PUT, or DELETE only")
@@ -219,6 +235,10 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.listTemplates(w, r)
 	case http.MethodPost:
+		// SCHED-GAP-1602: create is a mutation — identity required.
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
 		s.createTemplate(w, r)
 	default:
 		writeError(w, 405, "GET or POST only")
@@ -282,8 +302,16 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.getTemplate(w, r, name)
 	case http.MethodPut:
+		// SCHED-GAP-1602: update is a mutation — identity required.
+		if !s.requireOperator(w, r, "template "+name) {
+			return
+		}
 		s.updateTemplate(w, r, name)
 	case http.MethodDelete:
+		// SCHED-GAP-1602: delete is a mutation — identity required.
+		if !s.requireOperator(w, r, "template "+name) {
+			return
+		}
 		s.deleteTemplate(w, r, name)
 	default:
 		writeError(w, 405, "GET, PUT, or DELETE only")
