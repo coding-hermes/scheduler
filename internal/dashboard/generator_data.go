@@ -30,6 +30,27 @@ type QueueEntry struct {
 	CooldownS int
 	Enabled   bool
 	Urgency   float64
+	// SCHED-GAP-1589 display-only context. IntervalText is the lane's own
+	// tick interval derived from its priority (ComputeInterval); WaitedText
+	// is how long since last completion (else creation, the engine's elapsed
+	// input); Band is the urgency band relative to this page's distribution.
+	IntervalText string
+	WaitedText   string
+	Band         string
+	// CooldownActive/CooldownText: the lane is still inside its cooldown
+	// window (a pacing floor, not the queue order).
+	CooldownActive bool
+	CooldownText   string
+	// WhyWaiting evidence: running lanes show their SCHED-GAP-157 admission
+	// stamp; eligible-but-passed-over lanes show the latest deferrals
+	// record. WhyRunning distinguishes the two shapes. WhyAt/WhyWaitMs are
+	// the raw scanned stamps (RFC3339 / ms) the cell renders from.
+	WhyRunning bool
+	WhyReason  string
+	WhyDetail  string
+	WhyTitle   string
+	WhyAt      string
+	WhyWaitMs  int64
 	// Nesting (SCHED-GAP-1590): the lane's position in the fleet hierarchy —
 	// depth, its primary's name, and which parenthood source produced the
 	// relation. Resolved by generator_lane_nesting.go over the SAME snapshot
@@ -43,6 +64,9 @@ type QueueData struct {
 	Count       int
 	TotalWeight int
 	Entries     []QueueEntry
+	// SCHED-GAP-1589: the page's own urgency scale, for the header sentence.
+	MedianUrgencyText string
+	P90UrgencyText    string
 }
 
 // FleetRow is one project in the fleet overview table.

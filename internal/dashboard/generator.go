@@ -754,7 +754,7 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 	data := QueueData{Title: "Evaluation Queue"}
 
-	rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,''), COALESCE(parent,'') FROM projects WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
+	rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(weight,0), COALESCE(priority,0), COALESCE(cooldown_s,0), COALESCE(enabled,1), COALESCE(decay_rate,0), COALESCE(created_at,''), COALESCE(last_tick_completed,''), COALESCE(parent,'')`+queueEvidenceSelect+` FROM projects p WHERE enabled = 1 ORDER BY priority DESC LIMIT 200`)
 	if err != nil {
 		return data, fmt.Errorf("query queue: %w", err)
 	}
@@ -767,13 +767,27 @@ func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 		var e QueueEntry
 		var decayRate float64
 		var createdAtStr, lastStr, parentStr string
-		if err := rows.Scan(&e.Name, &e.Weight, &e.Priority, &e.CooldownS, &e.Enabled, &decayRate, &createdAtStr, &lastStr, &parentStr); err != nil {
+		var evidence queueLaneEvidence
+		if err := rows.Scan(&e.Name, &e.Weight, &e.Priority, &e.CooldownS, &e.Enabled, &decayRate, &createdAtStr, &lastStr, &parentStr,
+			&evidence.DefReason, &evidence.DefDetail, &evidence.DefAt, &evidence.RunTickID, &evidence.RunAdmit, &evidence.RunWaitMs, &evidence.RunAt); err != nil {
 			return data, fmt.Errorf("scan queue row: %w", err)
 		}
 		if laneParents == nil {
 			laneParents = make(map[string]string)
 		}
 		laneParents[e.Name] = parentStr
+		// SCHED-GAP-1589: carry the scanned evidence onto the entry; the
+		// rendered why-waiting cell is built after the sort (bands and
+		// percentiles are order-derived).
+		e.WhyReason = evidence.DefReason
+		e.WhyDetail = evidence.DefDetail
+		e.WhyAt = evidence.DefAt
+		if evidence.RunTickID != "" {
+			e.WhyRunning = true
+			e.WhyReason = evidence.RunAdmit
+			e.WhyWaitMs = evidence.RunWaitMs
+			e.WhyAt = evidence.RunAt
+		}
 		if calc != nil {
 			// Mirror the engine's input handling exactly, as listQueue does
 			// (internal/api/server_helpers.go): created_at parses as RFC3339;
@@ -787,6 +801,11 @@ func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 				}
 			}
 			e.Urgency = calc.ComputeUrgency(float64(e.Priority), decayRate, now, lastCompleted, createdAt)
+			// SCHED-GAP-1589: display-only timing context (interval from
+			// priority, waited time, active-cooldown flag) from the same
+			// parsed inputs the score used — no extra queries, no second
+			// formula.
+			fillQueueTiming(&e, calc, now, lastCompleted, createdAt)
 		} else {
 			// No calculator configured: priority-only base, same fallback the
 			// API applies (keeps the surfaces in agreement, never a second
@@ -821,6 +840,11 @@ func (g *Generator) queueEntries(ctx context.Context) (QueueData, error) {
 		}
 		annotateQueueNesting(data.Entries, lanes)
 	}
+
+	// SCHED-GAP-1589: the explain pass (why-waiting cells + urgency
+	// bands/scale) is PURE post-processing over the single scan above —
+	// it must run AFTER the sort it derives its bands from.
+	explainQueueEntries(&data, now)
 
 	data.Count = len(data.Entries)
 	return data, nil

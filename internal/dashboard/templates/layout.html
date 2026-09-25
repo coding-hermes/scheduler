@@ -155,6 +155,13 @@ body.sb-collapsed .sidebar{display:none}
    primary explicitly. */
 .lane-rail{color:var(--faint);font-family:var(--mono);white-space:pre}
 .lane-parent{color:var(--muted);font-size:0.75rem;white-space:nowrap}
+/* SCHED-GAP-1589: queue explainability. Bands are TEXT, not colour-only;
+   the blocked badge uses the error tone because "held by slots" is the
+   signal the operator scans for. */
+.urgency-band{color:var(--muted);font-size:0.7rem;font-family:var(--mono);white-space:nowrap}
+.cooldown-remaining{color:var(--muted);font-size:0.7rem;font-family:var(--mono);white-space:nowrap}
+.why-running{color:var(--live);font-family:var(--mono);font-size:0.75rem}
+.why-blocked{color:var(--err);font-family:var(--mono);font-size:0.75rem}
 </style>
 </head>
 <body>
