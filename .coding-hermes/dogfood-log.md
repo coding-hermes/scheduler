@@ -216,3 +216,17 @@ battery (bootstrap/fresh-install/upgrade/ci-pass/4 chaos cells), destroy verifie
 bunker-las-02 default server DOWN this tick (100.01 refused) — override worked.
 Time-to-first-success (spawn contract happy path): <1s API; dashboard open 2.1s.
 Friction count: 1 (bunker-las-02 outage, worked around via documented override).
+
+## 2026-09-25 | coding-hermes-scheduler | 🟡 PROMISING-BUT-ROUGH (control surface, REST+MCP)
+Promise: "monitor, pause, or adjust any project through the dashboard, REST API, or MCP tools."
+Reality: REST control surface is shippable — create/adjust/pause/resume/delete all 16-23ms,
+honest error messages, disable provenance stamped, full api.auth audit trail. MCP is the same
+power with ZERO auth: an unauthenticated fleet_pause_scheduler tools/call EXECUTED on the live
+fleet (reverted in ~60s, verified evaluations continued). MCP mutations also write no audit event.
+Top findings: SCHED-GAP-1619 (P1 /mcp bypasses SCHED-GAP-1602 gate + no audit), SCHED-GAP-1620
+(P2 spawn works on disabled projects — bump refuses, spawn doesn't check), SCHED-GAP-1621
+(PERF-002 re-measured at v1.5.0-92: cold status 28-104s, warm 0.25-0.44s — still open).
+Time-to-first-success: ~2 min (create 400 told me exactly which fields were missing).
+Friction count: 2 (MCP raw SQL errors to callers; auth mode not verifiable from any read endpoint).
+Bunker leg: LAUNCHED (bunker-las-03 agent c376f19f, full battery) — collect in flight at report time.
+Artifacts: docs/dogfood/2026-09-25-control-surface.md
