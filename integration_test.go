@@ -175,7 +175,23 @@ func testAPIProjects(t *testing.T, base string) {
 		"Enabled":   true,
 	}
 	body := mustJSON(proj)
-	resp, err := http.Post(base+"/api/v1/projects", "application/json", bytes.NewReader(body))
+
+	// SCHED-GAP-1619 regression guard: an unauthenticated mutation must still
+	// be refused, so this battery also catches a future gate REMOVAL, not
+	// just a credential dropped by the helper below.
+	anonResp, err := http.Post(base+"/api/v1/projects", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /projects without credential: %v", err)
+	}
+	anonBody, _ := io.ReadAll(anonResp.Body)
+	anonResp.Body.Close()
+	if anonResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated POST /projects = %d, want 401: %s", anonResp.StatusCode, string(anonBody))
+	}
+
+	req := operatorRequest(t, http.MethodPost, base+"/api/v1/projects", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /projects: %v", err)
 	}
@@ -298,8 +314,8 @@ func testMCP(t *testing.T, base string) {
 }
 
 func testTickLifecycle(t *testing.T, base string) {
-	// Force evaluate.
-	resp, err := http.Post(base+"/api/v1/evaluate", "application/json", nil)
+	// Force evaluate (mutation — the gate requires the credential).
+	resp, err := http.DefaultClient.Do(operatorRequest(t, http.MethodPost, base+"/api/v1/evaluate", nil))
 	if err != nil {
 		t.Fatalf("POST /evaluate: %v", err)
 	}
@@ -331,7 +347,7 @@ func testDynamicConfig(t *testing.T, base string) {
 		"Priority": 8,
 	}
 	body := mustJSON(update)
-	req, _ := http.NewRequest(http.MethodPut, base+"/api/v1/projects/integration-test",
+	req := operatorRequest(t, http.MethodPut, base+"/api/v1/projects/integration-test",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -364,10 +380,18 @@ func testDynamicConfig(t *testing.T, base string) {
 		t.Errorf("expected priority 8, got %v", project["priority"])
 	}
 
-	// Pause and resume.
-	resp, _ = http.Post(base+"/api/v1/projects/integration-test/pause", "application/json", nil)
+	// Pause and resume — mutations, so they carry the credential too.
+	resp, err = http.DefaultClient.Do(operatorRequest(t, http.MethodPost,
+		base+"/api/v1/projects/integration-test/pause", nil))
+	if err != nil {
+		t.Fatalf("POST /projects/integration-test/pause: %v", err)
+	}
 	resp.Body.Close()
-	resp, _ = http.Post(base+"/api/v1/projects/integration-test/resume", "application/json", nil)
+	resp, err = http.DefaultClient.Do(operatorRequest(t, http.MethodPost,
+		base+"/api/v1/projects/integration-test/resume", nil))
+	if err != nil {
+		t.Fatalf("POST /projects/integration-test/resume: %v", err)
+	}
 	resp.Body.Close()
 }
 
@@ -388,21 +412,34 @@ func waitForReady(t *testing.T, url string, timeout time.Duration) bool {
 	return false
 }
 
-// mustRequest is a helper for integration tests: creates a request, sends it,
-// checks status, and returns the decoded JSON body.
-func mustRequest(t *testing.T, method, url string, status int, body interface{}) map[string]interface{} {
+// operatorRequest builds a request carrying the operator credential the
+// SCHED-GAP-1619 mutation gate requires. internal/api/auth.go accepts
+// "X-Operator-Token: <token>" and "Authorization: Bearer <token>" alike; the
+// header form is the same one the in-process API tests use. Every mutating
+// call in this battery goes through here (or through mustRequest below) so a
+// guarded route can never silently degrade into a 401 that the subtest
+// ignores.
+func operatorRequest(t *testing.T, method, url string, body io.Reader) *http.Request {
 	t.Helper()
-	var req *http.Request
-	var err error
-	if body != nil {
-		b, _ := json.Marshal(body)
-		req, err = http.NewRequest(method, url, bytes.NewReader(b))
-		req.Header.Set("Content-Type", "application/json")
-	} else {
-		req, err = http.NewRequest(method, url, nil)
-	}
+	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		t.Fatalf("NewRequest %s %s: %v", method, url, err)
+	}
+	req.Header.Set("X-Operator-Token", testOperatorToken)
+	return req
+}
+
+// mustRequest is a helper for integration tests: creates an authenticated
+// request, sends it, checks status, and returns the decoded JSON body.
+func mustRequest(t *testing.T, method, url string, status int, body interface{}) map[string]interface{} {
+	t.Helper()
+	var payload io.Reader
+	if body != nil {
+		payload = bytes.NewReader(mustJSON(body))
+	}
+	req := operatorRequest(t, method, url, payload)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
