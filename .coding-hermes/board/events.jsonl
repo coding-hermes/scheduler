@@ -1240,3 +1240,4 @@
 {"event_type": "task_created", "timestamp": "2026-09-24T23:48:12+00:00", "actor": "pm", "task_id": "SCHED-GAP-1616", "detail": "{\"status\": \"complete\", \"priority\": \"P1\"}", "id": 1790281200000000010, "tick_number": null}
 {"event_type": "task_updated", "timestamp": "2026-09-25T00:44:35+00:00", "actor": "pm", "task_id": "SCHED-GAP-1591", "detail": "{\"status\": \"complete\"}", "id": 1790281200000000011, "tick_number": null}
 {"event_type": "task_created", "timestamp": "2026-09-25T00:44:35+00:00", "actor": "pm", "task_id": "SCHED-GAP-1617", "detail": "{\"status\": \"pending\", \"priority\": \"P1\"}", "id": 1790281200000000012, "tick_number": null}
+{"id": 1790281200000000013, "timestamp": "2026-09-25T00:58:38+00:00", "event_type": "task_updated", "actor": "pm", "task_id": "SCHED-GAP-1617", "detail": "{\"status\": \"complete\"}", "tick_number": null}
