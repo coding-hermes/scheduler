@@ -120,8 +120,21 @@ REST `POST /api/v1/projects` also works. `fleet_ticks` output is PascalCase
   per-project failure breakdown.
 - `--test-verify 3` on any scratch DB is the fastest way to validate the
   whole engine end-to-end without touching the live fleet.
-- `--sim-setup --sim-ticks N` gives a 13-project fixture (12 enabled + 1
-  disabled) + simulated ticks + report.
+- `--sim-setup --sim-ticks N` gives a 13-project fixture (12 enabled + 1 disabled)
+  + simulated ticks + report. **The safe fast recipe (verified 2026-09-25,
+  0.20s vs 32.2s without the env vars):** `SCHEDULER_TIME_MODE=sim
+  SCHEDULER_TIME_SCALE=1000 ./bin/schedulerd --simulate --sim-setup --sim-ticks 10
+  --db /tmp/sched-sim.db --listen 127.0.0.1:0 --log-file "" --duckbrain-url
+  http://127.0.0.1:1`. HAZARDS: default `--db` IS the live fleet DB and
+  `--sim-setup` WIPES ticks+projects on it; default `--listen` IS the live port;
+  default `--log-file` IS the live scheduler.log; a plain `--simulate` daemon
+  (without --sim-setup) DOES sync to real DuckBrain at boot. The printed
+  report's success rate is a mid-flight snapshot — reconcile against the DB
+  (`SELECT status,COUNT(*) FROM ticks GROUP BY status`). Report header
+  `Budget 100 | Max concurrent 8` is hardcoded (sim_fixture.go:175), not observed.
+  `--sim-count N` needs a pre-seeded DB (fresh DB = FATAL 'no enabled projects')
+  and on the real clock caps at ~480 ticks / 30s (opaque `context deadline
+  exceeded` FATAL); under SCHEDULER_TIME_SCALE=1000, 2000 ticks finish in 2.1s.
 - `--schema` prints a JSON Schema for a root `schedulerd.toml` that the
   daemon does NOT load yet (FEAT-005 wiring); `--show-config` prints the
   EFFECTIVE configuration (CLI flags + SCHEDULER_* env overrides applied)
@@ -161,17 +174,23 @@ REST `POST /api/v1/projects` also works. `fleet_ticks` output is PascalCase
 - Eval-stall events ("eval loop stalled — forced re-evaluation (recovered)",
   MEDIUM) fire ~hourly while the fleet idles — GAP-042 watchdog by design,
   but noisy (DOGFOOD-018); don't read them as outages.
-- No auth on anything — loopback only, treat as operator-only.
+- **Auth is FAIL-CLOSED on mutations (SCHED-GAP-1602, re-proven 2026-09-25):** with
+  no operator credential configured, EVERY mutating route answers 503
+  `mutations disabled` in ~10ms; reads are never gated. A dry daemon therefore
+  cannot be driven by POST until `SCHEDULER_OPERATOR_TOKEN` is set. (The old
+  "no auth on anything" note is dead.)
 - The daemon binary at `bin/schedulerd` is what's running; systemd user unit
   `coding-hermes-scheduler.service` builds it via ExecStartPre. Rebuild +
   `systemctl --user restart coding-hermes-scheduler` after code changes.
 - Disable-provenance: new disables stamp `disabled_at/by/reason`; 25 legacy
   disabled rows are empty (DOGFOOD-010) — don't read their absence as a bug
   in your own changes.
-- **THE DASHBOARD ROOT + STATUS ENDPOINTS ARE SLOW (measured 2026-09-24,
-  SCHED-GAP-1576):** `GET /` is ~45s cold AND ~45s again after the ~60s
-  cache cycle (2.2s warm); `/dashboard/partial` (htmx refetches it every
-  10s) is 317KB at 4.1s±7.8 (2.2–37.1s, n=20); `/api/v1/status` 94.7s;
+- **CHECK THE DATE on this bullet:** 2026-09-25 the convoy fixes ARE live
+  (/api/v1/status 0.26s, health 0.5ms at 496 lanes) but /dashboard/partial
+  regressed to 3.73s (SCHED-GAP-1623) — re-measure rather than trusting either
+  generation of numbers. Historical: `GET /` is ~45s cold AND ~45s again after
+  the ~60s cache cycle (2.2s warm); `/dashboard/partial` (htmx refetches it
+  every 10s) is 317KB at 4.1s±7.8 (2.2–37.1s, n=20); `/api/v1/status` 94.7s;
   `/api/v1/health` 26.4s. Root shape: one Loop write-mutex serializes
   whole-pass `evaluate()` calls (`ForceEvaluate` = unbounded
   `go l.evaluate()`), and handlers queue behind them

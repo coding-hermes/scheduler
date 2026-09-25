@@ -301,6 +301,41 @@ see ticks in seconds; never trust the spawn API's returned tick_id blindly
 (still DOGFOOD-015's territory); check `ss -tlnp` before choosing a port
 (9091 is squatted by an unrelated local service).
 
+## 2026-09-25 dogfood run — simulator surface (addendum — see 2026-09-25-simulator.md)
+
+**How the simulator is actually built (and why).** One clock for the whole daemon
+(`internal/clock`): every component gets it via `Loop.SetClock`, so there is a single
+choke point. `SCHEDULER_TIME_MODE=sim` swaps in `SimClock`; boot REFUSES that unless
+`--simulate` is also set (main.go:286-289) — a stray env var must never put the live
+fleet on a fake clock, and the refusal message quotes the parsed clock. `FromEnv` fails
+closed on any unparseable value (six refusal probes, six specific errors, exit 1 before
+any DB open). `--sim-setup` wipes ticks+projects inside ONE transaction (sim_fixture.go)
+so the fixture can re-run over an existing DB without FK failures (DOGFOOD-021's real
+bug class); that same wipe is the flag's real blast radius — the fixture projects are
+means to an end, the DELETE is the event. `RunMultiTick` enables simulation itself
+(sim_fixture.go:172), so `--sim-setup` cannot real-spawn even if you forget `--simulate`;
+plain `--simulate` gates only the spawn path (loop.go:867) while eval/adaptive/alerts
+stay real — dry-run means "no spawns", not "no side effects".
+
+**Errors hit this run and the right way.** (1) Report vs DB: `--sim-setup` prints
+"success 73.3%" while its own DB shows 91% resolved-success at exit (24.7% vs 90.6% on
+the sim clock) — the report samples in-flight state and labels it final; always
+reconcile against `sqlite3 <db> "SELECT status,COUNT(*) FROM ticks GROUP BY status"`.
+(2) `--sim-count 2000` FATALs `context deadline exceeded` at exactly 30s on the real
+clock — bulk mode is capped by its 500ms ticker × 8 per fire (≈480 ticks) inside a 30s
+WithTimeout; the number you want is behind `SCHEDULER_TIME_SCALE=1000` (2000 ticks in
+2.11s). (3) The rehearsal's 32s of wall time with 0.1s CPU is fixture-cooldown sleeps —
+not a flamegraph problem; the sim clock collapses it to 0.20s by construction. (4) A
+sim daemon looks identical to a real one from the API (no mode in /health or /status) —
+the only marker is the process's stdout `TIME: clock …` line; grep that, not the API.
+
+**The right way (safe rehearsal recipe).** Always: scratch `--db`, `--listen
+127.0.0.1:0`, `--log-file ""`, `--duckbrain-url http://127.0.0.1:1`, plus
+`SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000` for speed. Defaults are the live
+DB, the live port, the live log, and real DuckBrain memory — every one of those
+defaults is the wrong default for a simulation. See 2026-09-25-simulator.md for the
+full hazard map and measured numbers.
+
 ## 2026-09-24 dogfood run (addendum — see 2026-09-24-integration.md)
 
 **The "watch as fleet grows" item arrived.** The 2026-09-09 run measured `/`
