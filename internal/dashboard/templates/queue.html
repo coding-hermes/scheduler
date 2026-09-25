@@ -5,6 +5,17 @@
 <h1>Evaluation Queue</h1>
 <div class="actions"><span class="signal"><span class="dot"></span> {{.Count}} eligible</span></div>
 </div>
+{{/* SCHED-GAP-1589: the queue page now EXPLAINS itself. Urgency is the
+     packer's sort key (specs/S04-weight-packer.md 4.1: sort by urgency desc,
+     greedily pack), not a health score, and ComputeUrgency
+     (internal/scheduler/urgency.go:61-84) has no clamp anywhere — the value
+     is unbounded, so the header states the live scale (median/p90 of THIS
+     page's rows) and each row names its own tick interval, waited time, and
+     band. The Why waiting column surfaces the scheduler's own records:
+     running lanes show their SCHED-GAP-157 admission stamp
+     (ticks.admit_reason + slot_wait_ms), eligible-but-blocked lanes show
+     their latest deferrals pass-over — which is how an operator sees that a
+     high-urgency lane is held by namespace slots (cap), not cooldown. */}}
 {{/* SCHED-GAP-1590: the queue keeps its GLOBAL urgency order (the
      SCHED-GAP-174 parity contract pins this row order to /api/v1/queue) and
      annotates each satellite in place instead of regrouping families: the ↳
@@ -13,6 +24,7 @@
      "explicit" (the projects.parent column, authoritative) or "inferred"
      (legacy name-suffix fallback used only when parent is empty). */}}
 <div class="meta">Sorted by urgency (descending); satellites stay in global order and are annotated with their primary (↳)</div>
+<div class="meta">Urgency is the packer's sort key — it decides tick ORDER, not health; it is unbounded, so treat the numbers as relative (median {{.MedianUrgencyText}}, p90 {{.P90UrgencyText}} on this page). Formula: urgency = priority × (1 + waited / interval) ^ decay (internal/scheduler/urgency.go). Why waiting shows the recorded reason a ready lane is not running.</div>
 
 <div class="cards">
 <div class="card"><div class="label">Eligible</div><div class="value">{{.Count}}</div></div>
@@ -21,16 +33,27 @@
 
 <div class="table-wrap">
 <table>
-<thead><tr><th>#</th><th>Project</th><th>Weight</th><th>Priority</th><th>Cooldown</th><th>Urgency</th></tr></thead>
+<thead><tr>
+<th title="Position in this pass: the packer considers lanes top-down, highest urgency first (specs/S04-weight-packer.md 4.1)">#</th>
+<th title="Lane name. The ↳ marker and rail annotate satellite lanes: which primary they belong to and how deep (from projects.parent, or the legacy name-suffix fallback when parent is empty).">Project</th>
+<th title="What this lane costs the weight budget per tick. The packer fills the budget with the highest-urgency lanes first; heavier lanes leave less room for the rest. From the projects.weight column.">Weight</th>
+<th title="Configured priority (projects.priority). It multiplies the urgency score directly, and it sets the lane's tick interval: interval = maxInterval / ratio ^ ((priority-1)/(numLevels-1)) — priority 10 ticks every 30 seconds, priority 1 every 24 hours (internal/scheduler/urgency.go ComputeInterval).">Priority</th>
+<th title="Cooldown is a pacing floor, not the queue order: after a tick COMPLETES the lane waits cooldown_s (projects.cooldown_s) before it is eligible again — independent of urgency. Cooldown time counts in urgency's waited time, so cooldown waits raise the score too. A lane shown past its cooldown is NOT cooldown-blocked; its Why waiting cell names the real hold.">Cooldown</th>
+<th title="The packer&#39;s sort key — it decides tick ORDER, not health, and it is unbounded (no clamp in ComputeUrgency, internal/scheduler/urgency.go:61-84). Formula (urgency.go:62): urgency = priority * (1 + elapsed / interval) ^ decayRate, where elapsed is time since the last COMPLETED tick (or since creation if never completed) and interval is the lane&#39;s own tick interval from its priority — so starvation (waiting many intervals) grows it multiplicatively. Hover a row&#39;s number for that lane&#39;s own interval and waited time; bands are relative to THIS page&#39;s rows.">Urgency</th>
+<th title="The recorded reason the lane is not running right now: a running lane shows its admission stamp (ticks.admit_reason + slot_wait_ms); a ready lane shows its latest pass-over from the deferrals table (SCHED-GAP-157 vocabulary: cap / cooldown / budget / load_gate / ...). No entry means no recorded pass-over and no active cooldown — the lane is waiting on the packer's weight budget or the global concurrency cap.">Why waiting</th>
+</tr></thead>
 <tbody>
 {{range $i, $e := .Entries}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
 <td class="meta">{{add1 $i}}</td>
 <td data-parent-source="{{.Nesting.ParentSource}}">{{if .Nesting.Rail}}<span class="lane-rail">{{.Nesting.Rail}}</span> {{end}}<a href="/projects/{{.Name}}">{{.Name}}</a>{{if .Nesting.Parent}} <span class="lane-parent" title="satellite of {{.Nesting.Parent}} ({{.Nesting.ParentSource}})">↳ {{.Nesting.Parent}}{{if .Nesting.ParentKnown}} (L{{.Nesting.Depth}}){{end}}</span>{{end}}</td>
-<td class="num">{{.Weight}}</td>
-<td class="num">{{.Priority}}</td>
-<td class="num">{{.CooldownS}}s</td>
-<td><div class="urgency-bar" style="width:{{urgencyPct .Urgency}}%;background:{{urgencyColor .Urgency}}"></div><span class="num">{{printf "%.1f" .Urgency}}</span></td>
+<td class="num" title="weight {{.Weight}}: what this lane costs the weight budget per tick">{{.Weight}}</td>
+<td class="num" title="priority {{.Priority}} → tick interval {{.IntervalText}} (interval = maxInterval / ratio^((p-1)/(levels-1)), urgency.go ComputeInterval)">{{.Priority}}</td>
+<td class="num" title="cooldown_s {{.CooldownS}} from the projects table — a pacing floor after the last COMPLETED tick, not the queue order.{{if .CooldownActive}} This lane is still inside its window: {{.CooldownText}}.{{else}} This lane is past its cooldown — cooldown is NOT what is holding it back; see Why waiting.{{end}}">{{.CooldownS}}s{{if .CooldownActive}} <span class="cooldown-remaining">{{.CooldownText}}</span>{{end}}</td>
+<td>
+<div class="urgency-bar" style="width:{{urgencyPct .Urgency}}%;background:{{urgencyColor .Urgency}}"></div><span class="num" title="urgency {{printf "%.1f" .Urgency}} = priority × (1 + waited / interval) ^ decay (urgency.go:62). This lane: priority {{.Priority}}, waited {{.WaitedText}}, interval {{.IntervalText}} (from priority {{.Priority}}). The score is the packer&#39;s sort key, not a health score, and it is unbounded — bands are relative to this page (median {{$.MedianUrgencyText}}, p90 {{$.P90UrgencyText}}).">{{printf "%.1f" .Urgency}}</span>{{if .Band}} <span class="urgency-band" title="band relative to THIS page&#39;s rows, not an absolute threshold">{{.Band}}</span>{{end}}
+</td>
+<td class="why-waiting" title="{{.WhyTitle}}">{{if .WhyRunning}}<span class="why-running">running</span> <span class="meta">admitted "{{.WhyReason}}", slot wait {{.WhyDetail}}</span>{{else if .WhyReason}}<span class="why-blocked">&gt;{{.WhyReason}}</span>{{if .WhyDetail}} <span class="meta">{{.WhyDetail}}</span>{{end}}{{else}}<span class="meta">ready — waiting on budget/cap</span>{{end}}</td>
 </tr>{{end}}
 </tbody>
 </table>
