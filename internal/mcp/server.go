@@ -33,6 +33,11 @@ type Server struct {
 	// boot, so this is daemon uptime). Seeded in NewServer from the same
 	// clock the rest of the server reads time through.
 	started time.Time
+	// auth is the resolved operator-credential configuration shared with the
+	// REST mutation gate (SCHED-GAP-1619, installed by main.go via
+	// SetOperatorAuth). Nil = authOff fail-closed: every mutating tools/call
+	// is refused, reads stay open.
+	auth OperatorAuth
 }
 
 // NewServer creates an MCP server.
@@ -681,6 +686,14 @@ func (s *Server) handleToolsCall(w http.ResponseWriter, r *http.Request, req MCP
 	var params callParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeMCPError(w, req.ID, -32602, "Invalid params: "+err.Error())
+		return
+	}
+
+	// SCHED-GAP-1619: the mutation gate runs BEFORE invokeTool — a refused
+	// mutating call never reaches tool code, so no state changes and the
+	// refusal (with its mcp.auth audit row) is the whole response. Reads
+	// pass straight through.
+	if !s.gateToolCall(w, r, req, params.Name) {
 		return
 	}
 

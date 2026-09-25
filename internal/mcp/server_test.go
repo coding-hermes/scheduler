@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/database"
 	mcpserver "github.com/coding-hermes/scheduler/internal/mcp"
@@ -38,6 +39,12 @@ func newMCPTestServer(t *testing.T) *mcpTestServer {
 
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
 	srv := mcpserver.NewServer(db, loop)
+	// SCHED-GAP-1619: the shared stack is armed with the operator token and
+	// every call() sends it — the MCP mirror of the REST test convention
+	// (newAPITestServer + do authenticating every request). The refusal and
+	// fail-closed arms build their own stacks (newMCPAuthedServer /
+	// newMCPBareServer in schedgap1619_auth_test.go).
+	srv.SetOperatorAuth(api.ResolveAuthConfig(mcpOperatorToken, "", ""))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return &mcpTestServer{db: db, loop: loop, server: srv, ts: ts}
@@ -55,6 +62,7 @@ func (m *mcpTestServer) call(t *testing.T, req map[string]interface{}) (int, mcp
 		t.Fatalf("NewRequest: %v", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Operator-Token", mcpOperatorToken)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		t.Fatalf("Do: %v", err)

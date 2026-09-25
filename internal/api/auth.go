@@ -64,6 +64,17 @@ const (
 	authBasic
 )
 
+// Auth outcome vocabulary (SCHED-GAP-1619): the shared classification one
+// decision ladder writes into audit rows on BOTH control surfaces — REST
+// (requireOperator) and MCP (the tools/call mutation gate). Consumers filter
+// events by these exact strings via GET /api/v1/events?component=….
+const (
+	AuthOutcomeAllowed                = "allowed"
+	AuthOutcomeRefusedUnauthenticated = "refused-unauthenticated"
+	AuthOutcomeRefusedBadCredential   = "refused-bad-credential"
+	AuthOutcomeRefusedNoCredential    = "refused-no-credential"
+)
+
 // String renders the mode for events and introspection. It never leaks
 // credential material — only the mode name.
 func (m authMode) String() string {
@@ -208,6 +219,30 @@ func writeAuthRefused(w http.ResponseWriter, reason string, challenge bool, code
 func (a authConfig) authChallenge() bool {
 	return a.mode == authBasic
 }
+
+// SCHED-GAP-1619 — the minimal exported surface the MCP mutation gate reads.
+// MCP must reuse ONE resolved credential configuration and ONE decision
+// ladder; these three accessors expose exactly what the JSON-RPC layer needs
+// (no credential material ever leaves the package).
+
+// Evaluate authenticates a request against the configured credential using
+// the SAME constant-time checks and accepted header shapes as the REST
+// mutation gate. Returns the caller identity ("operator:token" /
+// "operator:basic" / "anonymous" / "invalid") and whether the call is
+// admitted. It NEVER returns credentials; only a classification.
+func (a authConfig) Evaluate(r *http.Request) (identity string, ok bool) {
+	return a.authenticateRequest(r)
+}
+
+// Mode reports the configured mode name ("token" / "basic" / "off") — the
+// same string the REST audit rows carry in their mode field. It never leaks
+// credential material.
+func (a authConfig) Mode() string { return a.mode.String() }
+
+// IsOff reports the fail-closed misconfiguration arm: no operator credential
+// is configured. Both gates (REST and MCP) refuse every mutation while this
+// is true, regardless of what the caller presents.
+func (a authConfig) IsOff() bool { return a.mode == authOff }
 
 // mutationAudit describes one mutating call for the audit record.
 type mutationAudit struct {

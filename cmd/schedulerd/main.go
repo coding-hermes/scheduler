@@ -785,6 +785,12 @@ func main() {
 		}
 	})
 	mcpServer := mcp.NewServer(db, loop)
+	// SCHED-GAP-1619: MCP mutations run behind the SAME resolved
+	// operator-credential contract the REST gate (SCHED-GAP-1602) was armed
+	// with above — one credential, one rotation, one decision ladder. Nil
+	// (never armed) is the fail-closed arm: mutating tools/call refused,
+	// reads open.
+	mcpServer.SetOperatorAuth(api.ResolveAuthConfig(operatorToken, operatorUser, operatorPassword))
 	// MCP serves the SAME JSONL block stores as the REST API (CTL-001):
 	// both transports read/write one groups.jsonl + templates.jsonl.
 	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))

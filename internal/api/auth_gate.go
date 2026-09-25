@@ -25,6 +25,25 @@ func IdentityFromContext(ctx context.Context) string {
 	return v
 }
 
+// AuthOutcomeFor is THE decision ladder (SCHED-GAP-1619): one classification
+// shared by BOTH control surfaces — REST requireOperator and the MCP
+// tools/call mutation gate — so the outcome vocabulary in audit rows can
+// never drift between them. Precedence matches the fail-closed contract:
+// authOff wins over any presented credential (misconfiguration arm), then an
+// accepted credential, then wrong-credential vs unauthenticated.
+func AuthOutcomeFor(auth interface{ IsOff() bool }, identity string, ok bool) string {
+	switch {
+	case auth == nil || auth.IsOff():
+		return AuthOutcomeRefusedNoCredential
+	case ok:
+		return AuthOutcomeAllowed
+	case identity == "invalid":
+		return AuthOutcomeRefusedBadCredential
+	default:
+		return AuthOutcomeRefusedUnauthenticated
+	}
+}
+
 // requireOperator is THE mutation gate. Called at the top of every mutating
 // handler; false means the refusal response has already been written (and
 // audited) and the handler must return without touching state.
@@ -46,32 +65,24 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request, target 
 		Target:   target,
 		Mode:     cfg.mode.String(),
 	}
+	audit.Outcome = AuthOutcomeFor(cfg, identity, ok)
+	auditMutation(r.Context(), s.db, audit)
 
-	switch {
-	case cfg.mode == authOff:
-		audit.Outcome = "refused-no-credential"
-		auditMutation(r.Context(), s.db, audit)
-		writeAuthRefused(w,
-			"mutations disabled: no operator credential configured "+
-				"(set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)",
-			false, http.StatusServiceUnavailable)
-		return false
-	case ok:
-		audit.Outcome = "allowed"
-		auditMutation(r.Context(), s.db, audit)
+	switch audit.Outcome {
+	case AuthOutcomeAllowed:
 		// Hand the identity to the handler via the request context so the
 		// success path can record WHO without re-checking anything.
 		*r = *r.WithContext(context.WithValue(r.Context(), operatorIdentity{}, identity))
 		return true
-	case identity == "invalid":
-		audit.Outcome = "refused-bad-credential"
-		auditMutation(r.Context(), s.db, audit)
+	case AuthOutcomeRefusedBadCredential:
 		writeAuthRefused(w, "invalid operator credential", cfg.authChallenge(), http.StatusUnauthorized)
-		return false
+	case AuthOutcomeRefusedNoCredential:
+		writeAuthRefused(w,
+			"mutations disabled: no operator credential configured "+
+				"(set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)",
+			false, http.StatusServiceUnavailable)
 	default:
-		audit.Outcome = "refused-unauthenticated"
-		auditMutation(r.Context(), s.db, audit)
 		writeAuthRefused(w, "operator credential required for mutations", cfg.authChallenge(), http.StatusUnauthorized)
-		return false
 	}
+	return false
 }
