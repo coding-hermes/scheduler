@@ -24,6 +24,10 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.listProjects(w, r)
 	case http.MethodPost:
+		// SCHED-GAP-1602: create is a mutation — identity required.
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
 		s.createProject(w, r)
 	default:
 		writeError(w, 405, "GET or POST only")
@@ -200,18 +204,35 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 		}
 		switch parts[1] {
 		case "pause":
+			// SCHED-GAP-1602: every sub-action is a mutation — identity
+			// required; target names the object for the audit record.
+			if !s.requireOperator(w, r, "project "+name+" pause") {
+				return
+			}
 			s.pauseProject(w, r, name)
 			return
 		case "resume":
+			if !s.requireOperator(w, r, "project "+name+" resume") {
+				return
+			}
 			s.resumeProject(w, r, name)
 			return
 		case "spawn":
+			if !s.requireOperator(w, r, "project "+name+" spawn") {
+				return
+			}
 			s.spawnProject(w, r, name)
 			return
 		case "bump":
+			if !s.requireOperator(w, r, "project "+name+" bump") {
+				return
+			}
 			s.bumpProject(w, r, name)
 			return
 		case "unbump":
+			if !s.requireOperator(w, r, "project "+name+" unbump") {
+				return
+			}
 			s.unbumpProject(w, r, name)
 			return
 		}
@@ -223,8 +244,16 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.getProject(w, r, name)
 	case http.MethodPut:
+		// SCHED-GAP-1602: update is a mutation — identity required.
+		if !s.requireOperator(w, r, "project "+name) {
+			return
+		}
 		s.updateProject(w, r, name)
 	case http.MethodDelete:
+		// SCHED-GAP-1602: delete is a mutation — identity required.
+		if !s.requireOperator(w, r, "project "+name) {
+			return
+		}
 		s.deleteProject(w, r, name)
 	default:
 		writeError(w, 405, "GET, PUT, POST, or DELETE only")

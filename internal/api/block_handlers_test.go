@@ -52,6 +52,9 @@ func newBlocksTestServer(t *testing.T) *blocksTestServer {
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
 	loop.SetNoExecFallback(true)
 	srv := api.NewServer(db, loop)
+	// SCHED-GAP-1602: arm the operator gate (the shared stack's do helper
+	// authenticates every request).
+	srv.SetAuthConfig(api.ResolveAuthConfig(testOperatorToken, "", ""))
 
 	storeDir := t.TempDir()
 	srv.SetBlocksStore(blocks.NewStore(
@@ -81,6 +84,9 @@ func (b *blocksTestServer) doRaw(t *testing.T, method, path, body string) (int, 
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// SCHED-GAP-1602: authenticate like the real operator (the stack arms
+	// the same token; see newBlocksTestServer).
+	req.Header.Set("X-Operator-Token", testOperatorToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -112,7 +118,16 @@ func concurrentPosts(baseURL, path string, bodies []interface{}) []int {
 				statuses[i] = -1
 				return
 			}
-			resp, err := http.Post(baseURL+path, "application/json", bytes.NewReader(payload))
+			req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(payload))
+			if err != nil {
+				statuses[i] = -3
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// SCHED-GAP-1602: authenticate like the operator (the stack
+			// arms testOperatorToken; see newBlocksTestServer).
+			req.Header.Set("X-Operator-Token", testOperatorToken)
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				statuses[i] = -2
 				return

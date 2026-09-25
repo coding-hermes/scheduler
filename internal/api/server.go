@@ -64,12 +64,29 @@ type Server struct {
 	// [api] read_timeout. Zero = readTimeoutDefault (5s).
 	readDeadline time.Duration
 
+	// SCHED-GAP-1602: the resolved operator-authentication configuration.
+	// Immutable after SetAuthConfig; read by the mutation gate (requireOperator)
+	// without locking. A zero value means authOff — fail-closed: every test
+	// Server without SetAuthConfig REFUSES mutations, never allows them.
+	auth authConfig
+
 	// readStepHook, when non-nil, is invoked with the step name as each
 	// instrumented read step starts. It is the SCHED-GAP-1575-B test seam:
 	// it lets a test stall a NAMED step deterministically and prove the
 	// deadline trips naming that step. Production leaves it nil (one nil
 	// check per step, no behavior change).
 	readStepHook func(step string)
+}
+
+// SetAuthConfig installs the resolved operator-authentication configuration
+// (SCHED-GAP-1602). main.go builds it from the --operator-token flag /
+// SCHEDULER_OPERATOR_TOKEN env / [api] operator_token TOML layer (token
+// mode), or --operator-user + --operator-password (basic mode), and calls
+// this before the HTTP server starts. A Server that never receives it stays
+// in authOff: the mutation gate answers 503 on every mutating route
+// (fail-closed) while reads behave exactly as before.
+func (s *Server) SetAuthConfig(cfg authConfig) {
+	s.auth = cfg
 }
 
 // NewServer creates an API server.
@@ -148,6 +165,12 @@ func (s *Server) SetBlocksStore(st *blocks.Store) {
 }
 
 // Handler returns an http.Handler for all API routes.
+//
+// SCHED-GAP-1602: mutating routes are gated behind requireOperator (see
+// auth_gate.go for the threat model and the fail-closed contract). The gate
+// lives INSIDE the handlers, not as mux middleware, so the read surface is
+// untouched and every gated handler keeps its own 405 semantics for wrong
+// methods.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.health)
@@ -492,10 +515,21 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, status)
 }
 
+// authConfig returns the installed auth configuration (SCHED-GAP-1602);
+// requireOperator reads it once per mutating request.
+func (s *Server) authConfig() authConfig {
+	return s.auth
+}
+
 // evaluate triggers a forced evaluation cycle.
+//
+// SCHED-GAP-1602: gated — identity required (fleet-wide action).
 func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, 405, "POST only")
+		return
+	}
+	if !s.requireOperator(w, r, "-") {
 		return
 	}
 	s.loop.ForceEvaluate()
@@ -626,9 +660,15 @@ func waveWorkersCapConfigured(ctx context.Context, db *sql.DB) bool {
 }
 
 // pause suspends the scheduler loop.
+//
+// SCHED-GAP-1602: gated — identity required (this is the fleet-wide halt
+// the row's threat model names).
 func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, 405, "POST only")
+		return
+	}
+	if !s.requireOperator(w, r, "-") {
 		return
 	}
 	s.loop.Pause()
@@ -636,9 +676,14 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 }
 
 // resume unpauses the scheduler loop.
+//
+// SCHED-GAP-1602: gated — identity required (fleet-wide action).
 func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, 405, "POST only")
+		return
+	}
+	if !s.requireOperator(w, r, "-") {
 		return
 	}
 	s.loop.Resume()
