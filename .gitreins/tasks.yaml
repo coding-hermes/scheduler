@@ -4178,3 +4178,11 @@ tasks:
   status: complete
   created_at: '2026-09-25T10:53:03.669683+00:00'
   completed_at: '2026-09-25T10:53:11.233333+00:00'
+- id: SCHED-GAP-1619
+  title: Gate mutating MCP tools with operator auth and audit events
+  criteria:
+  - Unauthenticated MCP mutations are refused; authenticated mutations succeed; refusal
+    and allowance audit events are emitted; tests prove parity with REST auth.
+  status: complete
+  created_at: '2026-09-25T11:18:24.481538+00:00'
+  completed_at: '2026-09-25T11:54:43.019591+00:00'
