@@ -162,6 +162,22 @@ body.sb-collapsed .sidebar{display:none}
 .cooldown-remaining{color:var(--muted);font-size:0.7rem;font-family:var(--mono);white-space:nowrap}
 .why-running{color:var(--live);font-family:var(--mono);font-size:0.75rem}
 .why-blocked{color:var(--err);font-family:var(--mono);font-size:0.75rem}
+/* SCHED-GAP-1601: operator console controls. Buttons are quiet until hovered;
+   the result line is the loud part — it prints the API's real status + message
+   (green = 2xx, red = refused). Danger buttons are tinted toward the error
+   tone so a confirm-class action is identifiable before the dialog. */
+.console-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.ctl-btn{padding:6px 14px;border:1px solid var(--border-hi);border-radius:7px;background:var(--surface2);color:var(--text);font-size:0.8rem;font-weight:510;font-family:var(--mono);cursor:pointer;transition:background 160ms var(--ease-out),border-color 160ms var(--ease-out)}
+.ctl-btn:hover{background:var(--panel);border-color:var(--signal);color:var(--fg)}
+.ctl-btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.ctl-btn:disabled{opacity:0.5;cursor:wait}
+.ctl-danger{border-color:rgba(255,107,107,0.45);color:var(--err)}
+.ctl-danger:hover{border-color:var(--err);background:rgba(255,107,107,0.08);color:var(--err)}
+.ctl-result{flex-basis:100%;font-family:var(--mono);font-size:0.72rem;min-height:1em;white-space:pre-wrap;overflow-wrap:anywhere}
+.ctl-result.ctl-ok{color:var(--ok)}
+.ctl-result.ctl-err{color:var(--err)}
+.signal.fleet-paused{color:var(--err);border-color:rgba(255,107,107,0.5)}
+.signal.fleet-paused .dot{background:var(--err);box-shadow:0 0 0 3px rgba(255,107,107,0.15)}
 </style>
 </head>
 <body>
@@ -225,6 +241,187 @@ body.sb-collapsed .sidebar{display:none}
   arm();
 })();
 </script>
+<script>
+/* SCHED-GAP-1601: the operator console driver. One delegated handler for every
+   .ctl-btn on any page:
+   - confirm-class buttons (delete / global pause / deploy) open the browser
+     dialog NAMING the target and only send confirm=true after it; the proxy
+     refuses the mutation without that flag, so a stray click cannot reach the
+     API (and the API re-checks its own confirm convention anyway).
+   - form-ish actions (bump: reason/ticks/cooldown; edit: config fields; move:
+     lane name) prompt for the fields, never pre-fill a guess.
+   - the credential is NEVER handled here: same-origin XHR carries the
+     browser-cached HTTP basic credentials; a 401 + WWW-Authenticate response
+     makes the BROWSER prompt natively and retry. Nothing is stored in
+     localStorage/sessionStorage/cookies — the auth row rejected that shape.
+   - no silent success: every response — 200/202/400/401/409/500/503 — is
+     printed into the button's own result line with the API's real status and
+     message, and the page's state is re-pulled (htmx autorefresh) so the view
+     reflects the new state. */
+(function () {
+  function field(promptText, def) {
+    var v = window.prompt(promptText, def || '');
+    return v === null ? undefined : v; // undefined = cancelled
+  }
+  function collect(btn) {
+    var action = btn.getAttribute('data-action');
+    var target = btn.getAttribute('data-target') || '';
+    var label  = btn.getAttribute('data-label') || action;
+    var named  = target ? ('"' + target + '"') : '(no target)';
+    var body = new URLSearchParams();
+    body.set('action', action);
+    if (target) body.set('target', target);
+    var isConfirm = btn.classList.contains('ctl-danger');
+    var dryRun = false;
+    if (isConfirm) {
+      var msg = action === 'group_deploy'
+        ? 'Deploy to group ' + named + '?\n\nOK = plan a DRY RUN first (no board writes). The deploy page shows the plan; run it without dry-run only after checking it.'
+        : 'This will ' + label.toLowerCase() + ' ' + named + (action === 'global_pause' ? ' — THE WHOLE SCHEDULER stops dispatching until resumed.' : action === 'group_deploy' ? '' : '. This cannot be undone from this console.') + '\n\nType the exact name to confirm:';
+      var typed = window.prompt(msg, target);
+      if (typed === null) return undefined;
+      if (typed !== target) { alert('Name did not match — nothing sent.'); return undefined; }
+      body.set('confirm', 'true');
+    }
+    if (btn.getAttribute('data-reason')) {
+      var reason = field('Reason for bumping ' + named + ' (required — an unattributed speed-up is unauditable):');
+      if (reason === undefined) return undefined;
+      if (!reason.trim()) { alert('A bump needs a reason — nothing sent.'); return undefined; }
+      body.set('reason', reason);
+      var ticks = field('Bump ticks (1-8, empty = default 5):', '');
+      if (ticks === undefined) return undefined;
+      if (ticks.trim() !== '') body.set('ticks', ticks.trim());
+      var cd = field('Bump cooldown seconds (>= 7200, empty = default 7200):', '');
+      if (cd === undefined) return undefined;
+      if (cd.trim() !== '') body.set('cooldown', cd.trim());
+    }
+    if (btn.getAttribute('data-form') === 'move') {
+      var lane = field('Lane name to assign to ' + named + ':');
+      if (lane === undefined) return undefined;
+      if (!lane.trim()) { alert('A lane name is required — nothing sent.'); return undefined; }
+      body.set('ns_project', lane.trim());
+    }
+    if (btn.getAttribute('data-form') === 'edit') {
+      var p;
+      if (target) { p = field('repo_url (empty = leave unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('repo_url', p); }
+      if (target) { p = field('weight 1-100 (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('weight', p); }
+      if (target) { p = field('priority 1-10 (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('priority', p); }
+      if (target) { p = field('cooldown_s (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('cooldown_s', p); }
+      if (target) { p = field('decay_rate > 0 (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('decay_rate', p); }
+      if (target) { p = field('model (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('model', p); }
+      if (target) { p = field('provider (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('provider', p); }
+      if (target) { p = field('deliver target (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('deliver', p); }
+      if (!target) {
+        var w = field('weight (required, 1-100):'); if (w === undefined) return undefined;
+        if (!w.trim()) { alert('weight is required — nothing sent.'); return undefined; }
+        body.set('ns_weight', w.trim());
+        p = field('reserved (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('ns_reserved', p);
+        p = field('hard cap (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('ns_hard_cap', p);
+        p = field('max concurrent (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('ns_max_concurrent', p);
+        p = field('description (empty = unchanged):'); if (p === undefined) return undefined; if (p !== '') body.set('ns_description', p);
+      }
+    }
+    // Create actions (no target): ask for the object name.
+    if (!target && (action === 'group_create' || action === 'template_create')) {
+      var name = field((action === 'group_create' ? 'Group' : 'Template') + ' name (no whitespace):');
+      if (name === undefined) return undefined;
+      if (!name.trim()) { alert('A name is required — nothing sent.'); return undefined; }
+      body.set('g_name', name.trim());
+      var desc = field('Description (empty = none):');
+      if (desc === undefined) return undefined;
+      if (desc !== '') body.set(action === 'group_create' ? 'g_description' : 't_description', desc);
+      if (action === 'group_create') {
+        var members = field('Member lanes, comma-separated (empty = none yet):');
+        if (members === undefined) return undefined;
+        body.set('g_projects', members);
+      } else {
+        var tasks = field('Tasks as JSON, e.g. [{"title":"do the thing"}]:');
+        if (tasks === undefined) return undefined;
+        body.set('t_tasks', tasks);
+      }
+    }
+    if (!target && action === 'namespace_create') {
+      var id = field('Namespace id (no whitespace):');
+      if (id === undefined) return undefined;
+      if (!id.trim()) { alert('An id is required — nothing sent.'); return undefined; }
+      body.set('target', id.trim());
+      var w2 = field('Weight (required, > 0):');
+      if (w2 === undefined) return undefined;
+      if (!w2.trim()) { alert('weight is required — nothing sent.'); return undefined; }
+      body.set('ns_weight', w2.trim());
+      var d2 = field('Description (empty = none):');
+      if (d2 === undefined) return undefined;
+      if (d2 !== '') body.set('ns_description', d2);
+    }
+    if (action === 'group_deploy') {
+      var tpl = field('Template to deploy to ' + named + ':');
+      if (tpl === undefined) return undefined;
+      if (!tpl.trim()) { alert('A template name is required — nothing sent.'); return undefined; }
+      body.set('deploy_template', tpl.trim());
+      if (isConfirm) body.set('dry_run', 'true'); // deploy button always plans first
+    }
+    if (action === 'template_update') {
+      var tasks2 = field('Tasks as JSON ([] replaces the task list; empty = unchanged):');
+      if (tasks2 === undefined) return undefined;
+      if (tasks2 !== '') body.set('t_tasks', tasks2);
+      var desc2 = field('Description (empty = unchanged):');
+      if (desc2 === undefined) return undefined;
+      if (desc2 !== '') body.set('t_description', desc2);
+    }
+    if (action === 'group_update') {
+      var members2 = field('Member lanes, comma-separated ([] clears; empty = unchanged):');
+      if (members2 === undefined) return undefined;
+      if (members2 !== '') body.set('g_projects', members2);
+      var desc3 = field('Description (empty = unchanged):');
+      if (desc3 === undefined) return undefined;
+      if (desc3 !== '') body.set('g_description', desc3);
+    }
+    return body;
+  }
+  function paint(btn, code, text, longrun) {
+    var out = document.getElementById(btn.id + '-result');
+    if (!out) return;
+    var verdict;
+    if (code >= 200 && code < 300) {
+      verdict = longrun ? 'ACCEPTED' : 'OK';
+    } else {
+      verdict = 'REFUSED';
+    }
+    var detail = text || '';
+    if (detail.length > 300) detail = detail.slice(0, 300) + '…';
+    out.textContent = verdict + ' HTTP ' + code + (detail ? ' — ' + detail : '');
+    out.classList.remove('ctl-ok', 'ctl-err');
+    out.classList.add(code >= 200 && code < 300 ? 'ctl-ok' : 'ctl-err');
+  }
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target.closest ? ev.target.closest('.ctl-btn') : null;
+    if (!btn) return;
+    var body = collect(btn);
+    if (body === undefined) return; // operator cancelled — nothing sent
+    var longrun = btn.getAttribute('data-longrun') === '1';
+    btn.disabled = true;
+    var out = document.getElementById(btn.id + '-result');
+    if (out) { out.textContent = '…sending'; out.classList.remove('ctl-ok', 'ctl-err'); }
+    fetch('/dashboard/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      credentials: 'same-origin'
+    }).then(function (resp) {
+      return resp.text().then(function (t) { paint(btn, resp.status, t, longrun); });
+    }).catch(function (err) {
+      paint(btn, 0, String(err), longrun);
+    }).then(function () {
+      btn.disabled = false;
+      // State after action: re-pull the page's live fragments (the same
+      // autorefresh event the partials listen for), so the view reflects
+      // the new state without the operator guessing or hand-reloading.
+      try {
+        if (window.htmx) window.htmx.trigger(document.body, 'autorefresh');
+      } catch (e) {}
+    });
+  });
+})();
+</script>
 {{end}}
 
 {{define "sidebar"}}
@@ -238,6 +435,7 @@ body.sb-collapsed .sidebar{display:none}
 <a href="/queue" {{if eq . "queue"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Queue</a>
 <a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Tick History</a>
 <a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">05</span> Health</a>
+<a href="/blocks" {{if eq . "blocks"}}class="active"{{end}}><span class="ic" aria-hidden="true">06</span> Deploy Blocks</a>
 </nav>
 <script>
 /* SCHED-GAP-1588: collapse/expand the sidebar, remembered across navigation.

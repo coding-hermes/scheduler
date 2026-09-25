@@ -15,6 +15,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
+| `/blocks` | Deploy blocks console (SCHED-GAP-1601) — groups + templates listed read-only; every write flows through `/dashboard/control` |
+| `/dashboard/control` | Operator control proxy (SCHED-GAP-1601, POST-only) — one urlencoded instruction (`action`+`target`+`confirm`/…) forwarded to the mapped mutating `/api/v1/*` operation IN-PROCESS: identical auth gate, identical handlers, identical audit; the API's status/body — success AND refusal — return verbatim |
 | `/tape` | Fleet Tape — stock-ticker fleet view (index bar, marquee, market board); htmx polls return the board-rows fragment (SCHED-GAP-1596) |
 | `/api/v1/health` | Machine health check (JSON) — its DB calls run under a 1s liveness deadline; a stalled DB answers 504 naming the helper (SCHED-GAP-1575-B) |
 | `/api/v1/live` | DB-free liveness probe (JSON) — process-memory fields only, safe under a saturated single-SQLite-connection fleet; watchdog's first probe, `/api/v1/health` is the rich fallback (SCHED-GAP-204-A) |

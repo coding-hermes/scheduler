@@ -1,0 +1,44 @@
+{{define "blocks_console"}}{{template "head" .}}
+{{template "sidebar" "overview"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Deploy Blocks</h1>
+<div class="actions">{{template "fleet_pause_badge" .}}</div>
+</div>
+<div class="meta">Groups and templates are the JSONL deploy blocks (CTL-001). Deploy appends a template's task rows to every member project's board — idempotent per template+date; dry-run plans without writing. Every control on this page calls the same authenticated API the curl surface does; refusals are shown verbatim.</div>
+
+<h2>Actions</h2>
+{{template "control_strip" .Control}}
+
+<h2>Groups ({{len .Groups}})</h2>
+{{if not .StoreAvailable}}<p class="meta">Blocks store not wired on this daemon — group and template operations answer 503 (fail-closed), matching the API.</p>{{end}}
+{{if .Groups}}
+<div class="table-wrap">
+<table>
+<thead><tr><th>Name</th><th>Members</th><th>Description</th></tr></thead>
+<tbody>
+{{range .Groups}}
+<tr><td class="mono">{{.Name}}</td><td class="num">{{len .Projects}}</td><td>{{if .Description}}{{.Description}}{{else}}<span class="meta">—</span>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{else if .StoreAvailable}}<p class="meta">No groups defined yet — create one above.</p>{{end}}
+
+<h2>Templates ({{len .Templates}})</h2>
+{{if .Templates}}
+<div class="table-wrap">
+<table>
+<thead><tr><th>Name</th><th>Tasks</th><th>Description</th></tr></thead>
+<tbody>
+{{range .Templates}}
+<tr><td class="mono">{{.Name}}</td><td class="num">{{len .Tasks}}</td><td>{{if .Description}}{{.Description}}{{else}}<span class="meta">—</span>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{else if .StoreAvailable}}<p class="meta">No templates defined yet — create one above.</p>{{end}}
+</div>
+{{template "ready_js"}}
+</body>
+</html>{{end}}

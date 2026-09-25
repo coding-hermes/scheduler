@@ -391,6 +391,15 @@ type FleetData struct {
 	NamespaceTicks       []NamespaceTickRow
 	CostTodayTotal       float64
 	CostWeekTotal        float64
+	// SCHED-GAP-1601: the console control surface. The generator proxies
+	// every control through the in-process API handler (same auth gate, same
+	// audit); FleetPaused is the loop's authoritative paused flag rendered on
+	// the console strip.
+	Control     ControlData
+	FleetPaused bool
+	// FleetPausedKnown renders as the "unknown" state (API read failed) —
+	// never a fabricated paused/resumed badge.
+	FleetPausedKnown bool
 	// TableState carries the operator's per-table server-side controls
 	// (SCHED-GAP-1598): search / sort / page / size for each of the four
 	// stacked tables. The full page renders from these; the htmx autorefresh
@@ -434,6 +443,14 @@ type ProjectDetailData struct {
 	AvgCost       float64          // mean cost per completed tick (for live-cost estimate)
 	EtaBreakdown  string           // per-type estimate, e.g. "code ×2 40m + test ×5 25m"
 	SpeedCost     []SpeedCostPoint // for the speed/cost-over-time charts
+	// SCHED-GAP-1601: the lane's control strip (pause/resume/spawn/bump/
+	// unbump/update/delete — every action the API offers on this lane) and
+	// the global paused state so the pause/resume pair reads honestly.
+	Control     ControlData
+	FleetPaused bool
+	// FleetPausedKnown renders as the "unknown" state (API read failed) —
+	// never a fabricated badge.
+	FleetPausedKnown bool
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -547,6 +564,14 @@ type NamespaceViewData struct {
 	EnabledProjects int
 	TotalWeight     int
 	Utilization     float64
+	// SCHED-GAP-1601: the namespace's control strip (update/move/delete)
+	// plus the lane-name options the move control offers.
+	Control     ControlData
+	FleetPaused bool
+	// FleetPausedKnown renders as the "unknown" state (API read failed) —
+	// never a fabricated badge.
+	FleetPausedKnown bool
+	LaneOptions      []string
 }
 
 // HealthData holds daemon, database, gateway, and DuckBrain liveness info.
