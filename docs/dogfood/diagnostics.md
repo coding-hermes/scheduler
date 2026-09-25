@@ -346,3 +346,45 @@ the proven mechanism; SCHED-GAP-1577 new):**
    `/queue` (4.5ms), `/ticks` (0.2s) are all safe. SSE at
    `/api/v1/events/stream` streams immediately (the 08-25-era note that
    events had no SSE is outdated at HEAD).
+
+**2026-09-25 (496-lane scale sweep) — how the dashboard's speed is actually made, and how "done" and "serving" diverge:**
+
+6. **The dashboard's wall-clock is dominated by waiting, not rendering.** A render is
+   "correct but slow" for two compounding reasons. First, `enrichProjects` runs a
+   bounded pool (8-wide) whose workers shell out — `tickWork`
+   (generator_data.go:1746) runs `git log --since --until --pretty=%s` as a
+   subprocess per tick sample per project — so one page render is hundreds of
+   fork/execs. The main handler parks on the pool's channel
+   (generator_data.go:1027) and the goroutine dump shows exactly that shape: one
+   handler in `[chan send]` at 1027, workers in `os/exec.(*Cmd).Output` at 1746.
+   Second, the freshness walk (`ReadBoardFreshness` → `classifyCompleteRow`) burns
+   31% of CPU under render load — but note it is mostly called by the BOARD-WAKE
+   WATCHER and the PACKER, not the dashboard; the dashboard renders slowly partly
+   because it shares SQLite and the machine with those loops. Lesson: when wall
+   time >> CPU time for a handler, profile WAITING (goroutine dump), not CPU —
+   the CPU profile alone would have blamed the wrong component.
+   The right way: renders should serve a snapshot; enrichment and freshness belong
+   to background loops with their own cadence, and per-sample git data should come
+   from a source already in memory (gitreins history) instead of fresh subprocesses.
+
+7. **"Merged + verified" and "deployed" are different facts, and only one of them
+   protects the fleet.** SCHED-GAP-1619 (unauthenticated MCP mutations) was fixed
+   (b16e61a8, 222 lines), judged PASS, and the row closed at 12:01Z. The running
+   daemon (63dfbd10, built 01:28:07Z, 13 commits behind) still had the hole, and a
+   two-line curl at 13:30Z proved it — a nonexistent-project probe was enough,
+   because it cannot mutate anything while still proving the handler ran pre-auth.
+   Same family: DASH-PERF-003's 0.87s closure number was real in the worker tree;
+   the serving process measures 3.73s. The lesson is procedural: a closeout is not
+   complete until something re-runs the row's own probe against the LIVE daemon
+   (health endpoint exposes build_sha — compare it to the fix commit) and records
+   that build. Filing rows that say "closed" while the box serves old code is how
+   a fleet ends up believing its own board instead of its own process.
+
+8. **Scale changes are when regressions hide behind old verdicts.** DASH-PERF-003's
+   <3s criterion was verified at 44-ish lanes of dashboard load in August; the fleet
+   is now 496 registered lanes and the same page takes 3.73s. Nobody did anything
+   wrong — the fleet just grew past the number's validity domain. Performance
+   criteria on boards should carry their input scale ("<3s at N lanes"), and a
+   periodic dogfood/perf pass should re-run closed rows' exact commands when the
+   input scale has moved materially (here +40% lanes since closure). A closed row
+   whose command was never re-run at the new scale is an assumption, not a result.

@@ -230,3 +230,12 @@ Time-to-first-success: ~2 min (create 400 told me exactly which fields were miss
 Friction count: 2 (MCP raw SQL errors to callers; auth mode not verifiable from any read endpoint).
 Bunker leg: LAUNCHED (bunker-las-03 agent c376f19f, full battery) — collect in flight at report time.
 Artifacts: docs/dogfood/2026-09-25-control-surface.md
+
+## 2026-09-25 (13:xx) | coding-hermes-scheduler | 🟡 PROMISING-BUT-ROUGH (dashboard info surface @ 496 lanes)
+Promise: "monitor, pause, or adjust any project through the dashboard, REST API, or MCP tools" — monitoring half holds up at the new scale.
+Reality: SCHED-GAP-1598's search/filter/pagination controls are deployed and work; dashboard numbers agree with independent API ground truth (weights 12/12, 496-lane footer matches, honest "0 lanes" empty state); /api/v1/status 0.26s and health 0.5ms (94.7s/26.4s yesterday — the convoy fixes deployed). BUT the 10s autorefresh partial regressed past its own closed criterion (DASH-PERF-003 closed at 0.87s; now 3.73s±0.73 n=10), mechanism proven (git-subprocess-per-tick-sample renders + ReadBoardFreshness 31% under render load), and the SCHED-GAP-1619 MCP-auth fix (b16e61a8) is NOT in the running daemon (63dfbd10) — pre-auth MCP mutation re-proven live at 13:30Z on a nonexistent-project probe. Chrome cold open ~80s to settled DOM.
+Top findings: SCHED-GAP-1623 (P1 refresh partial regression + mechanism), SCHED-GAP-1626 (P1 merged≠deployed, no deploy-time re-verify step), SCHED-GAP-1625 (P2 still no mutating dashboard controls), 1624 (1.15MB unpaginated list, ?limit silently ignored), 1627 (morning tick's bunker battery never collected — evidence lost), 1628 (fresh install PASSED: build 63s, dashboard 6.0ms empty-fleet).
+Time-to-first-success: ~80s cold Chrome, ~4s warm.
+Friction count: 3 (3.7s refresh partial, 1.15MB list responses, no mutating controls).
+Bunker leg: PASSED (bunker-las-03 agent 6bd25844, destroyed; clone→build 63s→boot smoke OK).
+Artifacts: docs/dogfood/2026-09-25-scale-dashboard.md; board rows SCHED-GAP-1623..1628 (commit 8c45f024); scratch dg2_* evidence.
