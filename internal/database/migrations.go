@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 44
+const latestMigration = 45
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -680,6 +680,27 @@ DROP TABLE IF EXISTS sessions;
 
 UPDATE migrations SET desc = 'SCHED-GAP-089 tombstone: the fake scheduler-local sessions table (v23 ''zombie session reaper'') is retired; real sessions live in ~/.hermes/state.db and are handled by the real-schema reaper (internal/database/hermesstate.go)'
 WHERE version = 23 AND desc LIKE 'zombie session reaper%';
+`,
+	},
+	{
+		// SCHED-GAP-1636: the per-project budget-spend aggregate
+		// (LoadBudgetSpends ⇒ /api/v1/projects) reads project_name,
+		// spawned_at and cost_usd from every tick row — Total is all-time,
+		// so it cannot be windowed. The live ticks rows are fat (the fleet
+		// database is ~634 MB for 75k ticks), so chasing cost_usd through
+		// the (project_name, spawned_at) index means reading the rows
+		// themselves. Covering cost_usd too lets the whole GROUP BY run
+		// index-only. Measured on a copy of the live database: 70-90ms ->
+		// 20ms (and 60-70ms -> 10ms with the rewritten window predicates
+		// from this same row). Build cost on that database was 0.3s and the
+		// index adds ~4 MB. It is kept ALONGSIDE idx_ticks_project_spawned
+		// (which shares its prefix) rather than replacing it: dropping an
+		// existing index is a destructive change with no upgrade path back,
+		// and one extra index write per tick is not worth that trade.
+		version: 45,
+		desc:    "SCHED-GAP-1636: covering index idx_ticks_project_spawned_cost (project_name, spawned_at, cost_usd) so the per-project spend aggregate over ticks scans the index instead of every tick row",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
 `,
 	},
 }

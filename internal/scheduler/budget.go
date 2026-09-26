@@ -123,6 +123,37 @@ func BudgetBlockDetail(p *database.Project, spend BudgetSpend) string {
 		p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD, spend)
 }
 
+// budgetSpendWindowSlack is the safety margin subtracted from a window
+// boundary to build the cheap string prefilter bound in LoadBudgetSpends.
+// Real-world RFC3339 offsets span -12:00 … +14:00, so a row's local
+// wall-clock stamp can sit at most 14h ahead of its UTC instant; 24h leaves
+// 10h of headroom and still narrows the candidate set to a couple of days of
+// rows instead of the whole table.
+const budgetSpendWindowSlack = 24 * time.Hour
+
+// budgetSpendPrefilterBound renders the index-friendly lower bound for a
+// window boundary: the boundary minus budgetSpendWindowSlack, formatted as a
+// bare space-separated local date-time with NO zone suffix.
+//
+// This bound is a SUPERSET test — it can only ever admit extra candidate rows,
+// never drop one the exact julianday() predicate keeps, so it is safe to AND
+// it in front of that predicate (and unsafe to use on its own):
+//
+//   - A row whose UTC instant is at/after the boundary has a wall-clock stamp
+//     at/after boundary-14h, i.e. strictly after boundary-24h.
+//   - Positions 0-9 hold the date and 11-18 the time, so the comparison is
+//     decided before either stamp's zone suffix is reached; a space separator
+//     also sorts below RFC3339's 'T' (and below no separator at all), and the
+//     bound's missing suffix makes a row sharing its first 19 characters
+//     compare GREATER (the longer string wins).
+//
+// The win is that the string compare is ~an order of magnitude cheaper than
+// julianday() per row, so the window predicates stop paying a date parser on
+// every tick row in the table — only the rows near the boundary reach it.
+func budgetSpendPrefilterBound(boundary time.Time) string {
+	return boundary.UTC().Add(-budgetSpendWindowSlack).Format("2006-01-02 15:04:05")
+}
+
 // LoadBudgetSpends computes per-project spend in all three windows with a
 // single GROUP BY over the ticks table. spawned_at is RFC3339 text; the
 // window predicates use julianday() so rows with non-UTC offsets compare
@@ -130,16 +161,26 @@ func BudgetBlockDetail(p *database.Project, spend BudgetSpend) string {
 // stale-gateway SQL in tick_process.go). Queued rows with NULL spawned_at
 // fall into neither window predicate but DO count toward Total, matching
 // "spent = cost of every tick the project was charged for".
+//
+// SCHED-GAP-1636: each window predicate is a cheap string prefilter AND the
+// exact julianday() compare, in that order (see budgetSpendPrefilterBound).
+// The aggregate still visits every tick row — Total is all-time and cannot be
+// windowed — but it no longer parses two dates per row on every call, which
+// is where most of the per-request cost went. The covering index
+// idx_ticks_project_spawned_cost (migration 45) lets the whole scan run from
+// the index instead of chasing fat tick rows.
 func LoadBudgetSpends(ctx context.Context, db *sql.DB, now time.Time) (map[string]BudgetSpend, error) {
-	dayStart := UTCDayStart(now).Format(time.RFC3339)
-	weekStart := UTCWeekStart(now).Format(time.RFC3339)
+	dayStart := UTCDayStart(now)
+	weekStart := UTCWeekStart(now)
 	rows, err := db.QueryContext(ctx, `
 SELECT project_name,
-       COALESCE(SUM(CASE WHEN julianday(spawned_at) >= julianday(?) THEN cost_usd ELSE 0 END), 0.0),
-       COALESCE(SUM(CASE WHEN julianday(spawned_at) >= julianday(?) THEN cost_usd ELSE 0 END), 0.0),
+       COALESCE(SUM(CASE WHEN spawned_at >= ? AND julianday(spawned_at) >= julianday(?) THEN cost_usd ELSE 0 END), 0.0),
+       COALESCE(SUM(CASE WHEN spawned_at >= ? AND julianday(spawned_at) >= julianday(?) THEN cost_usd ELSE 0 END), 0.0),
        COALESCE(SUM(cost_usd), 0.0)
 FROM ticks
-GROUP BY project_name`, dayStart, weekStart)
+GROUP BY project_name`,
+		budgetSpendPrefilterBound(dayStart), dayStart.Format(time.RFC3339),
+		budgetSpendPrefilterBound(weekStart), weekStart.Format(time.RFC3339))
 	if err != nil {
 		return nil, fmt.Errorf("load budget spends: %w", err)
 	}

@@ -86,8 +86,14 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	// SCHED-GAP-066: enrich each project with its budget spend/remaining and
 	// blocked state. Fail-open: if the spend query breaks, serve the plain
 	// project rows rather than erroring the whole endpoint.
+	//
+	// SCHED-GAP-1636: the spends come from a short-TTL snapshot cache on this
+	// read path (see budget_spend_cache.go) so a dashboard/picker poll no
+	// longer re-runs the full ticks aggregate, and so the endpoint stops
+	// occupying the daemon's single SQLite connection once per request —
+	// which is what pushed it past the 5s handler budget.
 	obs.enter("LoadBudgetSpends")
-	spends, spendErr := scheduler.LoadBudgetSpends(ctx, s.db, s.clock().Now())
+	spends, spendErr := s.loadBudgetSpends(ctx, s.clock().Now())
 	if !obs.check(w, ctx) {
 		return
 	}
