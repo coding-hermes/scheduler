@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -94,12 +95,47 @@ func TestSpawn_MemLimitAppliedToRealChild(t *testing.T) {
 	t.Fatalf("child %d never carried the RLIMIT_AS cap; soft limit = %d bytes, want %d", tick.PID, got, wantBytes)
 }
 
+// parentASSoftLimit reads the CALLING process's own RLIMIT_AS soft limit
+// in bytes via getrlimit(2) (Go stdlib, no new dependency). Returns 0 for
+// RLIM_INFINITY (uncapped) — the same sentinel meaning readProcASLimit
+// uses for "unlimited" in /proc/<pid>/limits, so the two surfaces compare
+// directly.
+func parentASSoftLimit() uint64 {
+	var rl syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_AS, &rl); err != nil {
+		// Cannot happen on Linux; if it ever did, treat the parent as
+		// uncapped and let the real assertion run rather than skipping.
+		return 0
+	}
+	// kernel RLIM_INFINITY (all bits set) — syscall.RLIM_INFINITY is an
+	// untyped -1 constant that cannot compare against the uint64 field.
+	const rlimInfinity = ^uint64(0)
+	if rl.Cur == rlimInfinity {
+		return 0
+	}
+	return rl.Cur
+}
+
 // TestSpawn_MemLimitOffByDefault proves the off half of acceptance 3/5:
 // with the limit unset (0 — the default), a spawned process carries NO
 // address-space cap. This pins the byte-identical-when-off contract.
+//
+// The OFF path makes no prlimit call at all (spawn.go: "0 = off — no
+// prlimit call at all, byte-identical spawn path"), so the child simply
+// INHERITS whatever RLIMIT_AS the parent carries — Unix fork semantics,
+// not a spawn-path defect. Under an uncapped parent (dev box) "no cap"
+// and "no prlimit call" are the same observation; under a capped parent
+// (e.g. a clean-machine battery capping its harness at 3GiB RLIMIT_AS)
+// the child legitimately inherits the cap and this assertion is
+// meaningless. Skip in that case — an explicit SKIP, not a false FAIL.
+// The byte-identical-when-off production contract stays pinned by
+// TestSpawn_MemLimitConfigAccessors and the spawn.go comment regardless.
 func TestSpawn_MemLimitOffByDefault(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-child rlimit test — skip in short mode")
+	}
+	if soft := parentASSoftLimit(); soft != 0 {
+		t.Skipf("parent harness carries RLIMIT_AS soft=%d; OFF-path inheritance test is meaningless under a capped parent — run uncapped", soft)
 	}
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "advr11-unlimited")
