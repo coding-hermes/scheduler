@@ -138,11 +138,18 @@ type SimRunner struct {
 	// reads as the wall clock; NewLoop propagates its own clock here so a
 	// test that installs a simulator clock drives the whole component tree,
 	// not just evaluate().
-	clk      clockSeam
-	loop     *Loop
-	fixture  *SimFixture
-	idleRate float64
+	clk         clockSeam
+	loop        *Loop
+	fixture     *SimFixture
+	idleRate    float64
+	successRate float64
 }
+
+// simTickIDPrefix is the ID prefix of every tick RunMultiTick spawns
+// (sim-tick<NN>-<project>-<HHMMSS>). RunBulkSim's IDs ("sim-<project>-...")
+// deliberately do not match, so the authoritative totals below count only
+// this runner's rows.
+const simTickIDPrefix = "sim-tick"
 
 // NewSimRunner creates a runner bound to an existing loop.
 func NewSimRunner(loop *Loop, fixture *SimFixture) *SimRunner {
@@ -159,6 +166,18 @@ func (sr *SimRunner) SetIdleRate(rate float64) {
 	sr.idleRate = rate
 }
 
+// SetSuccessRate sets the simulated success fraction for RunMultiTick
+// (mirrors SetIdleRate). Must be called before RunMultiTick: RunMultiTick
+// applies it to the loop's sim spawner when it enables simulation. Values
+// are clamped to (0, 1]; out-of-range values keep the 0.85 default so a
+// misconfigured flag can never simulate a 0%-success fleet.
+func (sr *SimRunner) SetSuccessRate(rate float64) {
+	if rate <= 0 || rate > 1 {
+		return
+	}
+	sr.successRate = rate
+}
+
 // RunMultiTick runs N evaluation ticks in fast-forward mode.
 // Each tick simulates a 60s advancement with cooldown decay.
 // Returns per-tick statistics.
@@ -168,7 +187,11 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		return nil, err
 	}
 
-	sr.loop.SetSimulation(0.85)
+	if sr.successRate > 0 {
+		sr.loop.SetSimulation(sr.successRate)
+	} else {
+		sr.loop.SetSimulation(0.85)
+	}
 	sr.loop.SetSimIdleRate(sr.idleRate)
 	report := &SimReport{
 		TickCount: tickCount,
@@ -195,17 +218,102 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 
 	report.Elapsed = sr.clock().Since(start)
 
-	// Collect aggregate stats.
+	// SCHED-GAP-1630: the completion goroutines of the LAST batch may still
+	// be pending on their 50-250ms sim sleeps, so per-tick snapshots taken
+	// 200ms after each batch under-count. The report must be authoritative
+	// at return — settle the outstanding completion timers (bounded by the
+	// context on both clocks), then re-read the totals straight from
+	// SQLite's GROUP BY ticks.status over this runner's rows so the report
+	// can never disagree with its own DB.
+	sr.settleSimWork(ctx)
+	report.TotalSpawned, report.TotalCompleted, report.TotalFailed, report.TotalTimeout =
+		sr.dbStatusTotals()
+	// Per-batch budget use is a packer decision known only in-process — it
+	// has no DB row to re-read — so it stays a snapshot sum.
 	for _, tr := range report.Ticks {
-		report.TotalSpawned += tr.Spawned
-		report.TotalCompleted += tr.Completed
-		report.TotalFailed += tr.Failed
-		report.TotalTimeout += tr.Timeout
 		report.TotalBudgetUsed += tr.BudgetUsed
 	}
 	report.AvgPerTick = float64(report.TotalSpawned) / float64(tickCount)
 
 	return report, nil
+}
+
+// settleSimWork waits until every simulated tick spawned during the run has
+// written its outcome row, bounded by ctx (and a hard deadline as backstop).
+//
+// Proof of settling: Spawn inserts each row SYNCHRONOUSLY with the
+// transitional 'running' status; the completion goroutine later moves its row
+// to a terminal status with a single UPDATE. A row is therefore 'running'
+// exactly while its outcome write is in flight, so zero running rows among
+// this runner's IDs proves every spawned tick has settled — on the wall
+// clock and on a simulated clock alike, with no clock-specific waiting.
+func (sr *SimRunner) settleSimWork(ctx context.Context) {
+	const (
+		poll    = 20 * time.Millisecond
+		maxWait = 30 * time.Second
+	)
+	// All reads/waits go through the component clock (SCHED-GAP-169 static
+	// guard). On a SimClock the poll is a virtual sleep; on the wall clock
+	// it is the real 20ms.
+	clk := sr.clock()
+	deadline := clk.Now().Add(maxWait)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if sr.runningCount() == 0 {
+			return
+		}
+		if clk.Now().After(deadline) {
+			return // bounded; DB totals stay authoritative even if late
+		}
+		clk.Sleep(poll)
+	}
+}
+
+// runningCount counts this runner's tick rows still in the transitional
+// 'running' status (see settleSimWork for why that is the settle oracle).
+func (sr *SimRunner) runningCount() int {
+	var n int
+	if err := sr.loop.db.QueryRow(`
+		SELECT COUNT(*) FROM ticks
+		WHERE id LIKE ? || '%' AND status = ?
+	`, simTickIDPrefix, string(TickRunning)).Scan(&n); err != nil {
+		return 0
+	}
+	return n
+}
+
+// dbStatusTotals reads the authoritative tick-status totals for this
+// runner's rows: one GROUP BY over the DB the report must agree with.
+func (sr *SimRunner) dbStatusTotals() (spawned, completed, failed, timeout int) {
+	rows, err := sr.loop.db.Query(`
+		SELECT status, COUNT(*) FROM ticks
+		WHERE id LIKE ? || '%'
+		GROUP BY status
+	`, simTickIDPrefix)
+	if err != nil {
+		return 0, 0, 0, 0
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			continue
+		}
+		spawned += count
+		switch status {
+		case string(TickCompleted):
+			completed += count
+		case string(TickFailed):
+			failed += count
+		case string(TickTimeout):
+			timeout += count
+		}
+	}
+	_ = rows.Err()
+	return spawned, completed, failed, timeout
 }
 
 func (sr *SimRunner) runOneTick(tickNum int) SimTickReport {
@@ -296,6 +404,16 @@ type SimTickReport struct {
 
 // Summary returns a human-readable summary of the simulation.
 func (r *SimReport) Summary() string {
+	// SCHED-GAP-1630: a zero-tick or zero-spawn report must render sanely —
+	// no integer divide-by-zero (TickCount=0), no NaN success rate (0/0).
+	budgetPerTick := 0
+	if r.TickCount > 0 {
+		budgetPerTick = r.TotalBudgetUsed / r.TickCount
+	}
+	successRate := 0.0
+	if r.TotalSpawned > 0 {
+		successRate = float64(r.TotalCompleted) / float64(r.TotalSpawned) * 100
+	}
 	s := fmt.Sprintf(`
 ========== SIMULATION REPORT ==========
 Ticks:       %d (%.1fs real time)
@@ -308,9 +426,9 @@ Success rate: %.1f%%
 
 Priority spread by tick:
 `, r.TickCount, r.Elapsed.Seconds(), r.Projects, r.Enabled, r.Budget, r.MaxConcur,
-		r.AvgPerTick, r.TotalBudgetUsed/r.TickCount,
+		r.AvgPerTick, budgetPerTick,
 		r.TotalSpawned, r.TotalCompleted, r.TotalFailed, r.TotalTimeout,
-		float64(r.TotalCompleted)/float64(r.TotalSpawned)*100)
+		successRate)
 
 	for _, t := range r.Ticks {
 		s += fmt.Sprintf("  tick %2d: %d projects [%v]  budget=%d/100\n",
