@@ -460,8 +460,11 @@ synchronously and the returned `tick_id` is the REAL stored row id
 canonical UTC `<name>-<YYYY>-<MM>-<DD>-<HH>-<MM>-<SS>` (same generator the
 scheduler's own spawn path uses), so it never drifts from the stored row on
 non-UTC hosts. Actual spawn still respects scheduler state (cooldown,
-budget, namespace); a project that already has a queued/running tick is
-refused with 409 (duplicate-spawn protection, SCHED-GAP-030).
+budget, namespace); a DISABLED project is refused with 409
+`{"error":"project is disabled — resume it before spawning"}` (SCHED-GAP-1620
+— mirror of bump's paused-lane guard), and a project that already has a
+queued/running tick is refused with 409 (duplicate-spawn protection,
+SCHED-GAP-030).
 
 **Response 202:**
 
@@ -470,7 +473,7 @@ refused with 409 (duplicate-spawn protection, SCHED-GAP-030).
  "tick_id":"my-project-2026-08-18-06-55-00"}
 ```
 
-**Errors:** 404 `{"error":"project not found"}`; 409 `{"error":"project already has a tick in flight"}`; 405 on non-POST.
+**Errors:** 404 `{"error":"project not found"}`; 409 `{"error":"project is disabled — resume it before spawning"}`; 409 `{"error":"project already has a tick in flight"}`; 405 on non-POST.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/spawn

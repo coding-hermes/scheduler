@@ -663,11 +663,19 @@ func logDisableEvent(ctx context.Context, db *sql.DB, name, by, reason, at strin
 // resolves. The old handler predicted an id with time.Now().UTC().Format
 // while SlotPool.Spawn stamped the stored row with LOCAL time, so on a
 // non-UTC host the returned id 404'd forever.
+//
+// SCHED-GAP-1620: a DISABLED project is refused with 409 before SpawnNow,
+// mirroring bumpProject — a lane an operator paused must not fire because a
+// script re-ran a manual spawn.
 func (s *Server) spawnProject(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := context.Background()
 	p, err := database.GetProject(ctx, s.db, name)
 	if err != nil {
 		writeError(w, 404, "project not found")
+		return
+	}
+	if !p.Enabled {
+		writeError(w, 409, "project is disabled — resume it before spawning")
 		return
 	}
 	tickID, err := s.loop.SpawnNow(*p)
