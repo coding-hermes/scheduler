@@ -1,0 +1,37 @@
+{{define "control_strip"}}{{/* SCHED-GAP-1601: one shared control strip. . is
+     ControlData; $.Target (when set) pins every action to this page's object.
+     Buttons POST urlencoded instructions to /dashboard/control through the
+     page-level console JS (see layout.html): confirm-class actions open the
+     dialog NAMING the target first; every button prints the API's real
+     status+body into its own result line. htmx buttons also re-pull the page's
+     state fragment so the view reflects the new state (no silent success, no
+     guessing). */}}
+<div class="console-controls" data-controls="true">
+{{range .Actions}}
+{{- $t := .Target}}
+{{- if .Confirm}}
+<button type="button" class="ctl-btn ctl-danger" id="{{.DomID}}" data-action="{{.ID}}" data-target="{{$t}}" data-label="{{.Label}}" data-longrun="{{if .LongRunning}}1{{else}}0{{end}}">{{.Label}}…</button>
+{{- else if eq .ID "project_bump"}}
+<button type="button" class="ctl-btn" id="{{.DomID}}" data-action="project_bump" data-target="{{$t}}" data-label="Bump" data-reason="1" data-ticks="1" data-cooldown="1" data-longrun="0">Bump…</button>
+{{- else if or (eq .ID "project_update") (eq .ID "namespace_update")}}
+<button type="button" class="ctl-btn" id="{{.DomID}}" data-action="{{.ID}}" data-target="{{$t}}" data-label="{{.Label}}" data-form="edit" data-longrun="0">{{.Label}}…</button>
+{{- else if eq .ID "namespace_move"}}
+<button type="button" class="ctl-btn" id="{{.DomID}}" data-action="namespace_move" data-target="{{$t}}" data-label="Move lane in" data-form="move" data-longrun="0">Move lane in…</button>
+{{- else}}
+<button type="button" class="ctl-btn" id="{{.DomID}}" data-action="{{.ID}}" data-target="{{$t}}" data-label="{{.Label}}" data-longrun="{{if .LongRunning}}1{{else}}0{{end}}">{{.Label}}</button>
+{{- end}}
+<span class="ctl-result meta" id="{{.DomID}}-result" role="status" aria-live="polite"></span>
+{{if eq .ID "project_pause"}}<span class="meta" title="Pause also cascades to this lane's satellites (-qa/-pm/-sync/-dogfood, SCHED-GAP-180)">⤢ cascade</span>{{end}}
+{{if eq .ID "project_spawn"}}<span class="meta" title="Spawn enqueues a tick (202); it does not wait for the agent to finish">⏱ async</span>{{end}}
+{{end}}
+</div>
+{{end}}
+
+{{define "fleet_pause_badge"}}{{/* SCHED-GAP-1601: the global paused state,
+     refreshed with the page. "unknown" is an honest state (the flag could not
+     be read), never silently rendered as resumed. */}}
+<span class="signal{{if .FleetPausedKnown}}{{if .FleetPaused}} fleet-paused{{end}}{{end}}" id="fleetPausedBadge" title="Scheduler loop pause state (the loop's authoritative flag)">
+<span class="dot"></span>
+{{if not .FleetPausedKnown}}state unknown{{else if .FleetPaused}}SCHEDULER PAUSED{{else}}scheduler live{{end}}
+</span>
+{{end}}

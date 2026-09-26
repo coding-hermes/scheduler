@@ -8,6 +8,12 @@
 </div>
 <div class="meta">{{.Project.RepoURL}}</div>
 
+{{/* SCHED-GAP-1601: the lane console — pause/resume (cascade noted), spawn
+     (async), bump (asks reason/ticks/cooldown), unbump, edit, delete
+     (confirm-gated). Results print the API's real status + message. */}}
+<h2>Lane Control</h2>
+{{template "control_strip" .Control}}
+
 <div class="cards">
 <div class="card"><div class="label">Weight</div><div class="value">{{.Project.Weight}}</div></div>
 <div class="card"><div class="label">Priority</div><div class="value">{{.Project.Priority}}</div></div>

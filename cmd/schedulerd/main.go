@@ -820,6 +820,15 @@ func main() {
 	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
 	// was built with — never an independent literal.
 	dashGen.SetWeightBudget(loop.WeightBudget())
+	// SCHED-GAP-1601: the operator console proxies every control through the
+	// IN-PROCESS API handler (identical auth gate, identical handlers,
+	// identical audit — the API is the single mutation point), and reads the
+	// loop's authoritative paused flag for the console badge. The blocks
+	// console lists the same JSONL store the API serves read-only; writes
+	// flow through the proxy, so there is exactly one audit path.
+	dashGen.SetControlAPIHandler(apiServer.Handler())
+	dashGen.SetFleetPaused(loop.IsPaused)
+	dashGen.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -957,6 +966,21 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+
+	// SCHED-GAP-1601: the deploy blocks console page (/blocks) — groups +
+	// templates listed read-only; every write goes through /dashboard/control.
+	mux.HandleFunc("GET /blocks", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateBlocksConsole(w, nil); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// SCHED-GAP-1601: the control proxy — POST /dashboard/control carries a
+	// urlencoded instruction (action + target + confirm/reason/…) and is
+	// served by the API handler the generator holds (same auth gate, same
+	// audit, same status codes). GET is refused (405) by the proxy itself.
+	mux.HandleFunc("/dashboard/control", dashGen.ControlProxy)
 
 	// Fleet Tape page: /tape (SCHED-GAP-1596) — the fleet as one instrument.
 	// htmx polls return the board-rows fragment only (HX-Request) — the full

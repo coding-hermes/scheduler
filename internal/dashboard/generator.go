@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/agentlog"
+	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
@@ -60,6 +61,7 @@ type Generator struct {
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
+	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -75,6 +77,15 @@ type Generator struct {
 	// gateway_trace.session_id through it. Nil = the drill-down renders the
 	// explicit "agent state database not configured" notice.
 	agentLog *agentlog.Reader
+	// controlAPI (SCHED-GAP-1601) is the in-process API handler the console
+	// proxies every control through (main.go passes apiServer.Handler(), the
+	// SAME handler it mounts at /api/). Nil = fail-closed: the proxy answers
+	// 503 and mutations are refused, never forwarded ungated.
+	controlAPI http.Handler
+	// blocks (SCHED-GAP-1601) is the deploy-blocks store the blocks console
+	// page lists read-only (writes flow through the control proxy). Nil =
+	// the page renders its explicit unavailable state.
+	blocks *blocks.Store
 	// CI conclusion cache (DASH-PERF-001): `gh run list` is a ~0.7s
 	// subprocess; running it once per project on EVERY fleet render cost
 	// ~30s. Conclusions are cached per workdir for ciTTL (300s default —
@@ -84,6 +95,9 @@ type Generator struct {
 	ciCache  map[string]ciCacheEntry
 	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
 	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
+	// fleetPausedFn (SCHED-GAP-1601) reads the loop's authoritative paused
+	// flag for the console badge. Nil = unknown state, never fabricated.
+	fleetPausedFn func() bool
 }
 
 // SetAgentStateDB wires the reader the tick drill-down uses to resolve
@@ -135,6 +149,8 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
 	g.healthTmpl = g.tmpl.Lookup("health")
 	g.tapeTmpl = g.tmpl.Lookup("tape")
+	// SCHED-GAP-1601: the operator console pages.
+	g.blocksTmpl = g.tmpl.Lookup("blocks_console")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -143,6 +159,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 		"namespace_view": g.namespaceViewTmpl,
 		"health":         g.healthTmpl,
 		"tape":           g.tapeTmpl,
+		"blocks_console": g.blocksTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")
@@ -164,6 +181,32 @@ func (g *Generator) SetDuckBrainURL(u string) {
 func (g *Generator) SetWeightBudget(n int) {
 	if n > 0 {
 		g.weightBudget = n
+	}
+}
+
+// globalPaused reports the loop's authoritative paused flag for the console
+// badge. Known=false means the state could not be read — the template renders
+// "unknown", never a fabricated paused/resumed badge.
+func (g *Generator) globalPaused() (paused, known bool) {
+	if g.fleetPausedFn == nil {
+		return false, false
+	}
+	return g.fleetPausedFn(), true
+}
+
+// SetFleetPaused wires the loop's IsPaused (main.go passes loop.IsPaused).
+func (g *Generator) SetFleetPaused(fn func() bool) {
+	if fn != nil {
+		g.fleetPausedFn = fn
+	}
+}
+
+// SetDB wires the dashboard's read DB (main.go passes the daemon's SQLite
+// handle; tests pass their in-memory one so rendered pages agree with the
+// seeded data). A nil argument is ignored.
+func (g *Generator) SetDB(db *sql.DB) {
+	if db != nil {
+		g.db = db
 	}
 }
 
@@ -208,6 +251,9 @@ func (g *Generator) GenerateParams(w io.Writer, params *FleetTables) error {
 	// Narrow by the validated dropdowns, then search/sort/slice every table.
 	data.Projects = fleetProjectFilters(data.Projects, data.TableState.Projects)
 	applyFleetTables(&data)
+	// SCHED-GAP-1601: the global console strip + paused badge.
+	data.Control = ControlData{Actions: globalControls(), FleetWide: true}
+	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()
 	return g.tmpl.ExecuteTemplate(w, "page", data)
 }
 
@@ -310,6 +356,10 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
 		data.RecentTicks = ticks
 	}
+
+	// SCHED-GAP-1601: the lane's control strip + paused badge.
+	data.Control = ControlData{Actions: laneControls(name)}
+	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()
 
 	// "What each tick worked on": map tick id → commit subject line(s).
 	data.TickWork = map[string]string{}
@@ -609,6 +659,18 @@ func (g *Generator) GenerateNamespaceView(w io.Writer, id string) error {
 		Projects:    projects,
 		RecentTicks: ticks,
 	}
+	// SCHED-GAP-1601: the namespace's control strip, the lane-name options
+	// the move control offers, and the paused badge. Lane names come from the
+	// full project list (the members table only shows this namespace's rows).
+	data.Control = ControlData{Actions: namespaceControls(id)}
+	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()
+	if all, err := database.ListProjects(ctx, g.db, false); err == nil {
+		options := make([]string, 0, len(all))
+		for _, p := range all {
+			options = append(options, p.Name)
+		}
+		data.LaneOptions = options
+	}
 	for _, project := range projects {
 		if project.Enabled {
 			data.EnabledProjects++
@@ -855,9 +917,18 @@ const pageTemplate = `{{template "head" .}}
 <div class="main" id="main">
 <div class="page-head">
 <h1>Fleet Overview</h1>
-<div class="actions"><span class="signal"><span class="dot"></span> live</span></div>
+<div class="actions">
+{{template "fleet_pause_badge" .}}
+<span class="signal"><span class="dot"></span> live</span>
+</div>
 </div>
 <div class="meta">Generated {{.GeneratedAt}}</div>
+
+{{/* SCHED-GAP-1601: the global console — pause-all (confirm-gated), resume-all,
+     force evaluate. Every button's result line prints the API's own status and
+     message; the badge is the loop's authoritative paused flag. */}}
+<h2>Scheduler Control</h2>
+{{template "control_strip" .Control}}
 
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>

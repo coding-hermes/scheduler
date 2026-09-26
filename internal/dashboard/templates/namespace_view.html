@@ -8,6 +8,11 @@
 </div>
 {{if .Namespace.Description}}<div class="meta">{{.Namespace.Description}}</div>{{end}}
 
+{{/* SCHED-GAP-1601: the namespace console — edit (weights/caps), move a lane
+     in, delete (confirm-gated). Results print the API's real status + message. */}}
+<h2>Namespace Control</h2>
+{{template "control_strip" .Control}}
+
 <div class="cards">
 <div class="card"><div class="label">Weight</div><div class="value">{{.Namespace.Weight}}</div></div>
 <div class="card"><div class="label">Reserved</div><div class="value">{{.Namespace.Reserved}}</div></div>
