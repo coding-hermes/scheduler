@@ -91,7 +91,14 @@ type FleetRow struct {
 	LastTickCompleted string
 	BoardDone         int
 	BoardTotal        int
-	NextTickIn        string // human-readable "in Xm Ys", "running", "due now", or "—"
+	NextTickIn        string // human-readable "in Xm Ys", "running", "due now", "due — N board rows open", "idle — board drained", "tasks admission", or "—"
+	// SCHED-GAP-1603: raw admission-mode inputs so the Next Tick cell can
+	// resolve the lane's EFFECTIVE admission mode with the scheduler's rule
+	// (project override → namespace default → cooldown). AdmissionMode "" =
+	// inherit the namespace; NamespaceID "" = unscheduled (cooldown rule).
+	AdmissionMode          string
+	NamespaceID            string
+	NamespaceAdmissionMode string
 	// Recent cost series (last up-to-N completed ticks, oldest→newest) for the
 	// cost sparkline, plus the count of recent failed/timeout ticks (failure flag).
 	CostSeries     []float64
@@ -637,8 +644,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			COALESCE(t.failed, 0)                  AS failed,
 			COALESCE(t.timed_out, 0)              AS timed_out,
 			COALESCE(t.cost_today, 0.0)            AS cost_today,
-			COALESCE(t.cost_week, 0.0)             AS cost_week
+			COALESCE(t.cost_week, 0.0)             AS cost_week,
+			COALESCE(p.admission_mode, '')          AS admission_mode,
+			COALESCE(p.namespace_id, '')            AS namespace_id,
+			COALESCE(ns.admission_mode, '')         AS ns_admission_mode
 		FROM projects p
+		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
 		LEFT JOIN (
 			SELECT
 				tk.project_name,
@@ -671,7 +682,8 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 				&r.Workdir, &r.CooldownS, &r.LastTickCompleted,
 				&r.LastTick, &r.LastOutcome, &r.SessionID,
 				&r.RunningNow, &r.Completed, &r.Failed, &r.Timeout,
-				&r.CostToday, &r.CostWeek); err != nil {
+				&r.CostToday, &r.CostWeek,
+				&r.AdmissionMode, &r.NamespaceID, &r.NamespaceAdmissionMode); err != nil {
 				continue
 			}
 			data.TotalProjects++
@@ -687,10 +699,20 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			}
 			// Board progress (done/total) from the project's tasks.md, plus the
 			// human-readable countdown to the next tick.
+			// SCHED-GAP-1603: the countdown only applies to cooldown-admission
+			// lanes. A tasks-admission lane admits on board work, so its cell
+			// renders board-driven state from the SAME readBoardProgress pass
+			// (no second board reader); a lane with no readable board renders
+			// the honest "tasks admission" label. The mode resolves with the
+			// scheduler's own rule (project → namespace → cooldown).
 			if r.Workdir != "" {
 				r.BoardDone, r.BoardTotal = readBoardProgress(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
 			}
-			r.NextTickIn = nextTickInAt(g.clock(), r.RunningNow == 1, r.LastTickCompleted, r.CooldownS)
+			if effectiveAdmissionModeFor(r.AdmissionMode, r.NamespaceID, map[string]string{r.NamespaceID: r.NamespaceAdmissionMode}) == database.AdmissionModeTasks {
+				r.NextTickIn = tasksAdmissionLabel(r.RunningNow == 1, r.BoardDone, r.BoardTotal)
+			} else {
+				r.NextTickIn = nextTickInAt(g.clock(), r.RunningNow == 1, r.LastTickCompleted, r.CooldownS)
+			}
 			data.CostTodayTotal += r.CostToday
 			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
@@ -1216,6 +1238,67 @@ func isTaskID(s string) bool {
 
 func isUpperLetter(c byte) bool {
 	return c >= 'A' && c <= 'Z'
+}
+
+// SCHED-GAP-1603: admission-mode-aware Next Tick rendering.
+//
+// The scheduler admits a lane either on its cooldown timer ("cooldown", the
+// historical cron gate) or on board work ("tasks" — non-perpetual pending
+// rows admit immediately; the cooldown pin resumes only once the board is
+// drained). The fleet table's Next Tick column used to render a cooldown
+// countdown for EVERY lane, so a tasks-mode foreman (e.g. a 6h-pin lane in
+// a tasks namespace) showed a bogus "in 5h 59m" while its cooldown-paced
+// satellites showed "due now" — the table read inverted from the actual
+// admission model. These helpers render the cell from the lane's EFFECTIVE
+// admission mode instead.
+
+// effectiveAdmissionModeFor replicates the scheduler's resolution rule
+// (internal/scheduler/admission_mode.go, admissionModeFor): the per-project
+// admission_mode override wins, otherwise the namespace's default applies,
+// otherwise cooldown semantics. It is deliberately NOT imported from the
+// scheduler package because admissionModeFor is unexported and scheduler
+// production code is not part of this change; the replication is pinned to
+// the real resolver by TestAdmissionModeReplica_MatchesSchedulerResolver,
+// which checks this precedence against the exported packer's observable
+// admission behavior for a table of cases (a lane inside its cooldown pin
+// with pending work is admitted iff its effective mode is tasks).
+func effectiveAdmissionModeFor(projectMode, namespaceID string, nsModes map[string]string) string {
+	switch projectMode {
+	case database.AdmissionModeCooldown, database.AdmissionModeTasks:
+		return projectMode
+	}
+	if m, ok := nsModes[namespaceID]; ok && m != "" {
+		return m
+	}
+	return database.AdmissionModeCooldown
+}
+
+// nsKey dereferences an optional namespace pointer into the resolver's
+// namespace key ("" when unset).
+func nsKey(nsID *string) string {
+	if nsID == nil {
+		return ""
+	}
+	return *nsID
+}
+
+// tasksAdmissionLabel renders the board-driven Next Tick state for a
+// tasks-admission lane — never a cooldown countdown. boardTotal comes from
+// the SAME readBoardProgress pass that feeds the Progress column (no second
+// board reader); boardTotal == 0 means the board could not be read (no
+// workdir, no tasks.md, or an empty board), which renders the honest
+// "tasks admission" label instead of guessing a countdown.
+func tasksAdmissionLabel(running bool, boardDone, boardTotal int) string {
+	if running {
+		return "running"
+	}
+	if boardTotal <= 0 {
+		return "tasks admission"
+	}
+	if open := boardTotal - boardDone; open > 0 {
+		return fmt.Sprintf("due — %d board rows open", open)
+	}
+	return "idle — board drained"
 }
 
 // nextTickIn returns a human-readable countdown to the next tick, or a
@@ -1935,14 +2018,20 @@ func fleetProjectSortable(key string) func(a, b FleetRow) bool {
 	case "next":
 		// "running" < "due now" < "in Nm NS" < "—" — a rough urgency order:
 		// running lanes first, then due-now, then by remaining wait.
+		// SCHED-GAP-1603: tasks-admission states share the ranks — "due —
+		// N board rows open" ranks WITH "due now" (work is admitting now),
+		// "idle — board drained" and "tasks admission" sink LAST (nothing
+		// to admit on the board signal), so mixed fleets stay sensible.
 		rank := func(s string) int {
 			switch {
 			case s == "running":
 				return 0
-			case s == "due now":
+			case s == "due now", strings.HasPrefix(s, "due — "):
 				return 1
 			case strings.HasPrefix(s, "in "):
 				return 2
+			case s == "idle — board drained", s == "tasks admission":
+				return 4
 			default:
 				return 3
 			}

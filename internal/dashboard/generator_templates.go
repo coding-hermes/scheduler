@@ -71,6 +71,10 @@ func loadTemplates(seam *clock.Seam) *template.Template {
 		},
 		"add": func(a, b, c int) int { return a + b + c },
 		"sub": func(a, b int) int { return a - b },
+		// hasPrefix drives the Next Tick cell's status class: a tasks-mode
+		// lane's board-driven "due — N board rows open" (SCHED-GAP-1603)
+		// reads with the same due class as "due now".
+		"hasPrefix": strings.HasPrefix,
 		"duration": func(spawned, completed string) string {
 			return tickDuration(spawned, completed)
 		},
