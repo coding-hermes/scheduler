@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestSimSetupDebug(t *testing.T) {
 
 	fixture := NewSimFixture(db)
 	projects := fixture.TestProjects()
-	if err := fixture.Setup(projects); err != nil {
+	if err := fixture.Setup(nil, projects); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestSimSetup_TolerantOfPreExistingTicks(t *testing.T) {
 	}
 
 	fixture := NewSimFixture(db)
-	if err := fixture.Setup(fixture.TestProjects()); err != nil {
+	if err := fixture.Setup(nil, fixture.TestProjects()); err != nil {
 		t.Fatalf("Setup with pre-existing tick rows: %v", err)
 	}
 
@@ -202,7 +203,7 @@ func newSimRunner1630(t *testing.T, db *sql.DB, c clock.Clock) (*SimRunner, []Si
 	t.Helper()
 	fixture := NewSimFixture(db)
 	projects := fixture.TestProjects()
-	if err := fixture.Setup(projects); err != nil {
+	if err := fixture.Setup(nil, projects); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	if c != nil {
@@ -533,5 +534,109 @@ func TestRunMultiTick_UnresolvedAtDeadline_SnapshotPhrasing(t *testing.T) {
 	}
 	if strings.Contains(s, "NaN") {
 		t.Errorf("Summary rendered NaN on the unresolved path:\n%s", s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SCHED-GAP-1631: the sim report header must describe the run it summarizes.
+//
+// Pre-fix, RunMultiTick hardcode report.Budget=100 / report.MaxConcur=8 as
+// literals, so a run whose loop was built with different engine inputs
+// printed "Budget: 100 | Max concurrent: 8" while the same run's packer log
+// said "PACKER: max concurrency reached (10)" and its ticks showed
+// budget=200/100 (the GAP-011 OVERDUE starvation rescue force-selects lanes
+// past 2x cooldown past the budget gate, by design). An operator using the
+// fixture to sanity-check budget/concurrency policy read numbers that
+// described neither the engine config nor the observed run. The report's
+// single authority is the loop it ran against — same rule as every other
+// budget surface (ADV-R09/G8: "no surface may hardcode a budget number").
+// ---------------------------------------------------------------------------
+
+// newSimRunner1631 builds the fixture+loop+runner stack on db with
+// caller-chosen ENGINE INPUTS (budget/maxConcur), everything on one sim
+// clock. Distinct from newSimRunner1630 so the table below can build loops
+// whose inputs differ from the old header literals 100/8.
+func newSimRunner1631(t *testing.T, db *sql.DB, budget, maxConcur int) *SimRunner {
+	t.Helper()
+	fixture := NewSimFixture(db)
+	projects := fixture.TestProjects()
+	if err := fixture.Setup(nil, projects); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
+	loop := NewLoop(db, time.Minute, time.Hour, 10, budget, maxConcur)
+	loop.SetClock(sim)
+	runner := NewSimRunner(loop, fixture)
+	runner.SetClock(sim)
+	return runner
+}
+
+// TestRunMultiTick_HeaderReportsActualEngineInputs (SCHED-GAP-1631): the
+// report's Budget/MaxConcur — in the struct AND as rendered by Summary's
+// header line — must equal the values the scheduling loop was actually
+// built with, not hardcoded literals. wantBudget accounts for NewLoop's
+// documented <1 → 100 normalization (SCHED-GAP-1582).
+func TestRunMultiTick_HeaderReportsActualEngineInputs(t *testing.T) {
+	cases := []struct {
+		name          string
+		budget        int
+		maxConcur     int
+		wantBudget    int
+		wantMaxConcur int
+	}{
+		{name: "non-default inputs", budget: 50, maxConcur: 4, wantBudget: 50, wantMaxConcur: 4},
+		{name: "engine defaults above report literals", budget: 200, maxConcur: 10, wantBudget: 200, wantMaxConcur: 10},
+		{name: "zero budget normalizes to 100", budget: 0, maxConcur: 8, wantBudget: 100, wantMaxConcur: 8},
+		{name: "default pair stays honest", budget: 100, maxConcur: 8, wantBudget: 100, wantMaxConcur: 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			runner := newSimRunner1631(t, db, tc.budget, tc.maxConcur)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			report, err := runner.RunMultiTick(ctx, 1)
+			if err != nil {
+				t.Fatalf("RunMultiTick: %v", err)
+			}
+
+			if report.Budget != tc.wantBudget {
+				t.Errorf("report.Budget = %d, want %d (the loop's actual weight budget)", report.Budget, tc.wantBudget)
+			}
+			if report.MaxConcur != tc.wantMaxConcur {
+				t.Errorf("report.MaxConcur = %d, want %d (the loop's actual max concurrency)", report.MaxConcur, tc.wantMaxConcur)
+			}
+
+			header := fmt.Sprintf("Budget:      %d  |  Max concurrent: %d", tc.wantBudget, tc.wantMaxConcur)
+			s := report.Summary()
+			if !strings.Contains(s, header) {
+				t.Errorf("Summary header must render the loop's actual inputs %q, got:\n%s", header, s)
+			}
+			// The per-tick lines denominate budget use by the report's own
+			// budget — the hardcoded /100 hid runs over or under the default.
+			if !strings.Contains(s, "budget=") {
+				t.Errorf("Summary must carry per-tick budget lines:\n%s", s)
+			}
+			if strings.Contains(s, "/100") && tc.wantBudget != 100 {
+				t.Errorf("Summary still denominates per-tick budget by a hardcoded /100 with budget=%d:\n%s", tc.wantBudget, s)
+			}
+		})
+	}
+}
+
+// TestSimReportSummary_ExplainsOverdueRescue (SCHED-GAP-1631): the header
+// must explain that per-tick budget use CAN exceed the budget — lanes past
+// 2x cooldown are force-selected (OVERDUE in the packer log) as the
+// designed starvation rescue, bypassing the budget gate — so an operator
+// reading "budget=200/100" sees the rescue, not a packer bug.
+func TestSimReportSummary_ExplainsOverdueRescue(t *testing.T) {
+	r := &SimReport{Budget: 100, MaxConcur: 8}
+	s := r.Summary()
+	for _, want := range []string{"OVERDUE", "starvation rescue", "2x cooldown"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Summary must explain the OVERDUE starvation rescue (missing %q):\n%s", want, s)
+		}
 	}
 }

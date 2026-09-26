@@ -965,6 +965,14 @@ func (l *Loop) LastEvalTime() time.Time {
 // hardcode a budget number again.
 func (l *Loop) WeightBudget() int { return l.weightBudget }
 
+// MaxConcur returns the global max-concurrency cap this loop was built
+// with (SCHED-GAP-1631). Like weightBudget it is immutable for the Loop's
+// lifetime (set once in NewLoop from the --max-concurrent flag / env /
+// TOML resolution), so reading it needs no lock. The sim fixture report
+// reads this instead of printing hardcoded numbers, so the header matches
+// the "PACKER: max concurrency reached (N)" lines the same run emits.
+func (l *Loop) MaxConcur() int { return l.maxConcur }
+
 // evalStallThreshold is the lastEval age at which the event-driven loop is
 // considered stalled (GAP-042): 10x the configured min-interval (5 minutes
 // at the default 30s min-interval). A

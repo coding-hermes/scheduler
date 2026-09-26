@@ -69,7 +69,11 @@ func (sf *SimFixture) TestProjects() []SimProject {
 // When withBoards is true, each project also gets its own workdir containing a
 // dummy .coding-hermes/board/tasks.jsonl, so the adaptive-cooldown board-row
 // signal (countBoardRows / board_rows_seen) works in dry-runs.
-func (sf *SimFixture) Setup(projects []SimProject) error {
+//
+// The runner is used for the completion log only (SCHED-GAP-1631): the log
+// prints the loop's actual budget/max-concurrency instead of claiming
+// literals the fixture does not control. Nil loop/logs silently.
+func (sf *SimFixture) Setup(sr *SimRunner, projects []SimProject) error {
 	// DOGFOOD-021: wipe CHILD rows before the parent row, inside ONE
 	// transaction. ticks.project_name carries a FOREIGN KEY to projects(name)
 	// and InitDB enforces PRAGMA foreign_keys=ON, so deleting projects first
@@ -110,7 +114,14 @@ func (sf *SimFixture) Setup(projects []SimProject) error {
 			return fmt.Errorf("insert %s: %w", p.Name, err)
 		}
 	}
-	log.Printf("SIM-SETUP: %d test projects inserted (budget=100, max_concurrent=8)", len(projects))
+	// SCHED-GAP-1631: the log must not claim budget/concurrency numbers the
+	// fixture does not control — the loop owns them (--budget /
+	// --max-concurrent / env / TOML, NewLoop-normalized). sr (and its loop)
+	// may be nil, e.g. fixture-only tests; log silently then.
+	if sr != nil && sr.loop != nil {
+		log.Printf("SIM-SETUP: %d test projects inserted (engine budget=%d, engine max_concurrent=%d)",
+			len(projects), sr.loop.WeightBudget(), sr.loop.MaxConcur())
+	}
 	return nil
 }
 
@@ -199,7 +210,7 @@ func (sr *SimRunner) SetSuccessRate(rate float64) {
 // Returns per-tick statistics.
 func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimReport, error) {
 	projects := sr.fixture.TestProjects()
-	if err := sr.fixture.Setup(projects); err != nil {
+	if err := sr.fixture.Setup(sr, projects); err != nil {
 		return nil, err
 	}
 
@@ -209,10 +220,15 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		sr.loop.SetSimulation(0.85)
 	}
 	sr.loop.SetSimIdleRate(sr.idleRate)
+	// SCHED-GAP-1631: report the loop's ACTUAL engine inputs, not literals.
+	// The report's authority is the loop this runner runs against — the same
+	// rule every other budget surface follows (ADV-R09/G8). MaxConcur has no
+	// nil-safe getter story beyond the same non-nil guarantee NewSimRunner
+	// already relies on for loop.db.
 	report := &SimReport{
 		TickCount: tickCount,
-		Budget:    100,
-		MaxConcur: 8,
+		Budget:    sr.loop.WeightBudget(),
+		MaxConcur: sr.loop.MaxConcur(),
 		Projects:  len(projects),
 		Enabled:   countEnabled(projects),
 	}
@@ -466,6 +482,9 @@ func (r *SimReport) Summary() string {
 Ticks:       %d (%.1fs real time)
 Projects:    %d total, %d enabled
 Budget:      %d  |  Max concurrent: %d
+Note: per-tick budget can exceed the budget — lanes past 2x cooldown are
+force-selected (OVERDUE) as the designed starvation rescue, bypassing the
+budget gate.
 
 Per tick:    avg %.1f projects, avg %d budget used
 Total:       %d spawned, %d completed, %d failed, %d timeout
@@ -480,8 +499,11 @@ Priority spread by tick:
 		r.TotalCompleted, r.TotalFailed, r.TotalTimeout, dbRate)
 
 	for _, t := range r.Ticks {
-		s += fmt.Sprintf("  tick %2d: %d projects [%v]  budget=%d/100\n",
-			t.Tick, t.Selected, t.NamesPicked, t.BudgetUsed)
+		// SCHED-GAP-1631: denominate by the report's own budget — the
+		// hardcoded /100 read as a packer bug whenever the OVERDUE
+		// starvation rescue pushed a tick past 100 (e.g. budget=200/100).
+		s += fmt.Sprintf("  tick %2d: %d projects [%v]  budget=%d/%d\n",
+			t.Tick, t.Selected, t.NamesPicked, t.BudgetUsed, r.Budget)
 	}
 	return s
 }

@@ -29,7 +29,7 @@ func TestSimTickID_UniqueWithinSameSecond(t *testing.T) {
 func TestRunBulkSim_UniqueTickIDs(t *testing.T) {
 	db := newTestDB(t)
 	fixture := NewSimFixture(db)
-	if err := fixture.Setup(fixture.TestProjects()); err != nil {
+	if err := fixture.Setup(nil, fixture.TestProjects()); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 8)
@@ -59,7 +59,7 @@ func TestRunBulkSim_UniqueTickIDs(t *testing.T) {
 func TestEvaluate_SimulateModeSpawnsSimulatedTicks(t *testing.T) {
 	db := newTestDB(t)
 	fixture := NewSimFixture(db)
-	if err := fixture.Setup(fixture.TestProjects()); err != nil {
+	if err := fixture.Setup(nil, fixture.TestProjects()); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 8)

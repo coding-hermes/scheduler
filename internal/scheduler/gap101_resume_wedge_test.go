@@ -42,7 +42,7 @@ func (b *syncBuf) String() string {
 func TestResume_RedundantResumeDoesNotWedgeLoop_GAP101(t *testing.T) {
 	db := newTestDB(t)
 	fixture := scheduler.NewSimFixture(db)
-	if err := fixture.Setup(fixture.TestProjects()); err != nil {
+	if err := fixture.Setup(nil, fixture.TestProjects()); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 8)
