@@ -4242,3 +4242,30 @@ tasks:
   status: complete
   created_at: '2026-09-26T05:23:28.806190+00:00'
   completed_at: '2026-09-26T06:13:59.191134+00:00'
+- id: SCHED-GAP-093
+  title: 'Destination-coverage daily checker: alert when a pipeline destination wrote
+    zero/near-zero rows'
+  criteria:
+  - scripts/destination-coverage-check.py exists (stdlib-only), counts previous-UTC-day
+    rows for telegram (state.db messages via sessions), DuckBrain namespace writes
+    (per-ns git repos), and scheduler ticks (scheduler.db), compares each to its prior-7-day
+    baseline, exits 1 with an ALERT naming the destination when a count is zero or
+    near-zero, supports --simulate-dead <dest> proving the alert path live, contains
+    no secrets and no absolute /home paths, and passes python3 -m py_compile
+  status: in_progress
+  created_at: '2026-09-26T09:23:38.915021+00:00'
+- id: SCHED-GAP-204
+  title: 'Close parent row: /api/v1/health liveness probe fix (option c, DB-free /api/v1/live)
+    landed'
+  criteria:
+  - 'Parent asked to implement ONE of three options and prove it. Option (c) landed:
+    DB-free /api/v1/live in commit 95516e44 on origin/main (sub-row 204-A complete,
+    Tier 2 PASS 13d4119a). This tick verified at HEAD c15b5c5a: throwaway daemon on
+    127.0.0.1:19099 answers GET /api/v1/live 200 at 0.23-0.34ms x6 with DB-free JSON
+    payload (build_sha c15b5c5a); watchdog.sh probes /api/v1/live first (LIVE_TIMEOUT=5)
+    before falling back to /api/v1/health; full short test suite ./... exit=0; gofmt/go
+    build/go vet clean. 204-B/204-C were never filed as rows and the parent''s ask
+    (pick one, prove it) is satisfied.'
+  status: complete
+  created_at: '2026-09-26T09:30:20.182863+00:00'
+  completed_at: '2026-09-26T09:30:25.924981+00:00'
