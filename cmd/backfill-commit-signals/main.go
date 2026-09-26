@@ -210,9 +210,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// A 0-byte file is a truncated database: SQLite opens it silently as a
+	// fresh empty DB and the first query dies on "no such table: ticks",
+	// which reads like a bug report and not the data-loss event it is
+	// (SCHED-GAP-1613 chaos battery). Name it before the open; rc stays 1 —
+	// fail-closed is correct.
+	if err := checkDBFile(*dbPath); err != nil {
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: database %v\n", err)
+		return 1
+	}
+
 	db, err := openDB(*dbPath)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: open db: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "backfill-commit-signals: open db (SQLite error; possible corruption): %v\n", err)
 		return 1
 	}
 	defer db.Close()
@@ -285,6 +295,26 @@ func visited(fs *flag.FlagSet, name string) bool {
 		}
 	})
 	return found
+}
+
+// checkDBFile stats the database file before the open. A file that exists but
+// carries 0 bytes is a truncated database (disk-full crash, chaos battery):
+// SQLite would open it silently as an empty DB and the first query would die
+// with a generic "no such table" that hides the data loss. The error text is
+// rendered after the "backfill-commit-signals: database " prefix, e.g.
+// "scheduler.db is corrupt: 0-byte (truncated) file — restore from backup or
+// delete the file to re-initialize". Any other stat failure (including
+// not-exists, which the SQLite driver creates on open) returns nil so the
+// driver's own behavior is preserved.
+func checkDBFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil // not-found or unreadable: let the open path speak
+	}
+	if fi.Size() == 0 {
+		return fmt.Errorf("%s is corrupt: 0-byte (truncated) file — restore from backup or delete the file to re-initialize", path)
+	}
+	return nil
 }
 
 // openDB opens the scheduler SQLite database read-write with the daemon's
