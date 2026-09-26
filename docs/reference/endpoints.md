@@ -22,6 +22,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/config` | Resolved daemon config (JSON) — includes `api_read_timeout`, the ARMED heavy-read deadline (SCHED-GAP-1575-B) |
 | `/api/v1/metrics` | Read-only fleet metrics: spawns, deferrals, nudges, ticks, durations, drains and outcomes in one request (SCHED-GAP-156) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
+| `/api/v1/cadence` | Configured vs achieved starts/day per lane over the trailing seven-day window; target source is explicit override, durable cooldown pin, disabled, or none (GET) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |
 | `/api/v1/namespaces` | List namespaces |
 | `/api/v1/namespaces/{id}` | Namespace detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true` soft-deletes: enabled=false, member projects unassigned, row retained; `?confirm=true&purge=true` hard-deletes the row permanently, SCHED-GAP-097) |

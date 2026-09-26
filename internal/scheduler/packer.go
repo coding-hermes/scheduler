@@ -64,7 +64,8 @@ type Packer struct {
 	// budgetGate, when non-nil, excludes budget-exhausted projects from
 	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
 	// nil = no budget enforcement (tests, spend-query failure fail-open).
-	budgetGate BudgetGate
+	budgetGate   BudgetGate
+	cadenceRates map[string]float64
 }
 
 // NewPacker creates a packer with the given budget and concurrency cap. The
@@ -95,6 +96,11 @@ func (p *Packer) SetPendingCounter(c *PendingTaskCounter) {
 // to disable budget enforcement.
 func (p *Packer) SetBudgetGate(g BudgetGate) {
 	p.budgetGate = g
+}
+
+// SetCadenceRates installs the achieved runs/day snapshot for one evaluation.
+func (p *Packer) SetCadenceRates(rates map[string]float64) {
+	p.cadenceRates = rates
 }
 
 // scored is a project with its computed urgency.
@@ -145,6 +151,8 @@ type scored struct {
 	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
 	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
 	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+	targetRunsPerDay     *float64
+	cooldownPinS         *int
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -157,7 +165,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
-		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, '')
+		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, ''),
+		       p.target_runs_per_day, p.cooldown_pin_s
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
 		WHERE p.enabled = 1
@@ -178,15 +187,26 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var createdAtStr string
 		var enabled bool
 		var lastStatus string
+		var targetRunsPerDay sql.NullFloat64
+		var cooldownPinS sql.NullInt64
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver, &s.deliverMode,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
-			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership); err != nil {
+			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership,
+			&targetRunsPerDay, &cooldownPinS); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
+		}
+		if targetRunsPerDay.Valid {
+			v := targetRunsPerDay.Float64
+			s.targetRunsPerDay = &v
+		}
+		if cooldownPinS.Valid {
+			v := int(cooldownPinS.Int64)
+			s.cooldownPinS = &v
 		}
 		// SCHED-GAP-214: after a FAILED tick the tasks-mode waiver stands down.
 		s.lastTickStatusFailed = lastTickStatusFailed(lastStatus)
@@ -241,6 +261,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if s.bumpActive && s.urgency < bumpBoostUrgency {
 			s.urgency = bumpBoostUrgency
 		}
+		s.urgency = cadenceAdjustedUrgency(s.urgency, database.Project{
+			Name: s.name, TargetRunsPerDay: s.targetRunsPerDay, CooldownPinS: s.cooldownPinS,
+		}, p.cadenceRates[s.name])
 		s.lastTickAt = lastCompleted
 		list = append(list, s)
 	}

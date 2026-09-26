@@ -263,6 +263,41 @@ func linkModeBoard(t *testing.T, laneWorkdir, ownerWorkdir string) {
 	}
 }
 
+// linkModeBoardDir creates the fleet's intentional satellite topology: the
+// canonical .coding-hermes/board DIRECTORY is a symlink to the primary lane's
+// canonical board directory. That declaration is distinguishable from an
+// arbitrary tasks.jsonl file link (linkModeBoard above).
+func linkModeBoardDir(t *testing.T, laneWorkdir, ownerWorkdir string) {
+	t.Helper()
+	metaDir := filepath.Join(laneWorkdir, ".coding-hermes")
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	src := filepath.Join(ownerWorkdir, ".coding-hermes", "board")
+	if err := os.Symlink(src, filepath.Join(metaDir, "board")); err != nil {
+		t.Fatalf("Symlink board directory: %v", err)
+	}
+}
+
+// SOL-CADENCE-BOARD: an intentional canonical board-directory link is the
+// satellite deployment contract. It admits on the primary's open work, while
+// T-MODE-7 below keeps refusing a genuinely foreign file-level board link.
+func TestTasksMode_SymlinkedBoardDirectoryWaivesCooldown(t *testing.T) {
+	ownerWd := t.TempDir()
+	writeModeBoard(t, ownerWd, `{"id":"SOL-CADENCE","status":"pending"}`)
+	laneWd := t.TempDir()
+	linkModeBoardDir(t, laneWd, ownerWd)
+
+	lane := modeProject("mode-satellite", "sync-lanes", laneWd, "")
+	ns := tasksNs("sync-lanes")
+	now := time.Now().UTC()
+	res := packNamespaces(t, []database.Project{lane}, []database.Namespace{ns},
+		map[string]time.Time{"mode-satellite": now.Add(-time.Hour)})
+	if !modeSelected(t, res, "mode-satellite") {
+		t.Fatalf("intentional symlinked board directory did not admit satellite inside cooldown")
+	}
+}
+
 // T-MODE-7 (SCHED-GAP-141a): tasks namespace + a lane whose board resolves
 // into ANOTHER project's workdir + open rows there → NOT admitted before its
 // cooldown elapses. The foreign backlog is not this lane's work signal.

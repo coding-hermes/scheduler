@@ -76,6 +76,10 @@ type MultiPoolPacker struct {
 	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
 	// nil = no budget enforcement (tests, spend-query failure fail-open).
 	budgetGate BudgetGate
+	// cadenceRates is a trailing-window achieved runs/day snapshot keyed by
+	// lane. nil/absent entries read as zero; only lanes with a configured
+	// effective target consume it.
+	cadenceRates map[string]float64
 	// waveShedDB, when non-nil, backs the per-cycle wave-shed scan
 	// (SCHED-GAP-113, S12 §6.2 admission layer). Installed per evaluation
 	// cycle by the loop via SetWaveShedDB; nil (tests, tooling) = shed
@@ -110,6 +114,11 @@ func (m *MultiPoolPacker) SetPendingCounter(c *PendingTaskCounter) {
 // to disable budget enforcement.
 func (m *MultiPoolPacker) SetBudgetGate(g BudgetGate) {
 	m.budgetGate = g
+}
+
+// SetCadenceRates installs the achieved runs/day snapshot for one evaluation.
+func (m *MultiPoolPacker) SetCadenceRates(rates map[string]float64) {
+	m.cadenceRates = rates
 }
 
 // SetWaveShedDB installs the DB handle used for the SCHED-GAP-113 wave-shed
@@ -240,6 +249,7 @@ func (m *MultiPoolPacker) packFlat(
 				urgency = bumpBoostUrgency
 			}
 		}
+		urgency = cadenceAdjustedUrgency(urgency, *p, m.cadenceRates[p.Name])
 		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick, bumpCooldownS: bumpCD})
 	}
 

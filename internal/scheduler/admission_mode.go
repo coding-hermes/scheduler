@@ -3,6 +3,7 @@ package scheduler
 import (
 	"database/sql"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -123,17 +124,22 @@ func admissionModeForProject(db *sql.DB, project string) string {
 	}
 }
 
-// laneOwnsBoard reports whether the board a lane reads at workdir is the
-// lane's OWN board (SCHED-GAP-141). Ownership is derived, never named: the
-// board file found by the standard board walk is fully symlink-resolved and
-// must live inside the lane's own (also resolved) workdir. A board reached
-// through a link into another project's workdir — the satellite-lane shape —
-// is not owned by this lane.
+// laneOwnsBoard reports whether the board a lane reads at workdir is an
+// admission-owned board. Two layouts are valid:
+//
+//   - the resolved board file lives inside the resolved lane workdir; or
+//   - the canonical `.coding-hermes/board` DIRECTORY itself is a symlink to
+//     another canonical `.coding-hermes/board` directory. This is the fleet's
+//     explicit satellite-to-primary board declaration.
+//
+// The second case is deliberately path-structural, not inode/link-count based:
+// EvalSymlinks identifies the canonical target and the target must still end in
+// `.coding-hermes/board`. A file-level tasks.jsonl link or an incidental board
+// found outside the workdir remains foreign. `board_ownership=shared` can still
+// force either layout onto cooldown pacing.
 //
 // Fail-closed: an empty workdir, a missing board, a dangling link or an
-// unresolvable path all report "not owned", which refuses the cooldown
-// waiver. Refusing the waiver only costs latency (the lane runs on its
-// cooldown pin); granting it wrongly is the leak this exists to stop.
+// unresolvable path all report "not owned", which refuses the cooldown waiver.
 func laneOwnsBoard(workdir string) bool {
 	if workdir == "" {
 		return false
@@ -154,10 +160,24 @@ func laneOwnsBoard(workdir string) bool {
 	if err != nil {
 		return false
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+
+	// Intentional satellite topology: only the canonical board DIRECTORY is
+	// the link. A direct tasks.jsonl symlink does not satisfy this declaration.
+	declaredBoardDir := filepath.Join(workdir, ".coding-hermes", "board")
+	info, err := os.Lstat(declaredBoardDir)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
 		return false
 	}
-	return true
+	resolvedBoardDir, err := filepath.EvalSymlinks(declaredBoardDir)
+	if err != nil {
+		return false
+	}
+	canonicalSuffix := filepath.Join(".coding-hermes", "board")
+	return filepath.Base(resolvedBoardDir) == "board" &&
+		strings.HasSuffix(filepath.Clean(resolvedBoardDir), canonicalSuffix)
 }
 
 // boardOwnedByLane resolves the effective ownership for a lane, honoring the

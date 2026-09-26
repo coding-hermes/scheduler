@@ -192,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
+	mux.HandleFunc("/api/v1/cadence", s.cadence)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)
 	// JSONL-backed deploy groups + templates (internal/blocks).

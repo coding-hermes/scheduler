@@ -697,6 +697,9 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.FinalBudgetUSD != nil {
 				updates.FinalBudgetUSD = pd.FinalBudgetUSD
 			}
+			if pd.TargetRunsPerDay != nil {
+				updates.TargetRunsPerDay = pd.TargetRunsPerDay
+			}
 			// Bane 2026-08-27: per-project prompt text + mode pin when
 			// explicitly set in fleet.toml (GatewayKey-style conditional).
 			if pd.Prompt != "" {
@@ -817,6 +820,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		Weight:           weight,
 		Priority:         priority,
 		CooldownS:        cooldown,
+		TargetRunsPerDay: pd.TargetRunsPerDay,
 		DecayRate:        decay,
 		Model:            model,
 		Provider:         provider,

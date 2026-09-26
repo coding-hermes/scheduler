@@ -180,6 +180,13 @@ type Project struct {
 	CooldownPinS  *int   `json:"cooldown_pin_s"`
 	CooldownPinBy string `json:"cooldown_pin_by"`
 	CooldownPinAt string `json:"cooldown_pin_at"`
+
+	// TargetRunsPerDay is the explicit cadence objective. nil derives from
+	// CooldownPinS; pointer-to-zero opts out (no cadence opinion); >0 overrides
+	// the derived target. AchievedRunsPerDay is runtime-only evidence loaded
+	// from the trailing cadence window and is surfaced separately by the API.
+	TargetRunsPerDay   *float64 `json:"target_runs_per_day_override"`
+	AchievedRunsPerDay float64  `json:"-"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are

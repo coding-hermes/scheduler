@@ -194,6 +194,8 @@ func (m *MultiPoolPacker) Pack(
 				}
 			}
 
+			urgency = cadenceAdjustedUrgency(urgency, p, m.cadenceRates[p.Name])
+
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
 			scored = append(scored, ProjectUrgency{
 				Project:         p,

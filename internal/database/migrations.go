@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 45
+const latestMigration = 46
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -701,6 +701,13 @@ WHERE version = 23 AND desc LIKE 'zombie session reaper%';
 		desc:    "SCHED-GAP-1636: covering index idx_ticks_project_spawned_cost (project_name, spawned_at, cost_usd) so the per-project spend aggregate over ticks scans the index instead of every tick row",
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
+`,
+	},
+	{
+		version: 46,
+		desc:    "SOL-CADENCE: optional per-lane target_runs_per_day override (NULL derives from cooldown pin, 0 opts out, positive overrides) for measurable cadence ordering and reporting",
+		stmt: `
+ALTER TABLE projects ADD COLUMN target_runs_per_day REAL CHECK(target_runs_per_day >= 0);
 `,
 	},
 }

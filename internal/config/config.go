@@ -259,10 +259,11 @@ type ProjectDef struct {
 	Name             string   `toml:"name"`
 	RepoURL          string   `toml:"repo_url"`
 	Workdir          string   `toml:"workdir"`
-	Weight           int      `toml:"weight"`             // default 10 if <= 0
-	Priority         int      `toml:"priority"`           // default 5 if <= 0
-	CooldownS        int      `toml:"cooldown_s"`         // default 7200 if <= 0 (2h baseline, 3-speed policy)
-	DecayRate        float64  `toml:"decay_rate"`         // default 1.0 if <= 0
+	Weight           int      `toml:"weight"`              // default 10 if <= 0
+	Priority         int      `toml:"priority"`            // default 5 if <= 0
+	CooldownS        int      `toml:"cooldown_s"`          // default 7200 if <= 0 (2h baseline, 3-speed policy)
+	TargetRunsPerDay *float64 `toml:"target_runs_per_day"` // nil = derive from explicit cooldown pin; 0 = no opinion; >0 = override
+	DecayRate        float64  `toml:"decay_rate"`
 	Model            string   `toml:"model"`              // default DefaultModel
 	Provider         string   `toml:"provider"`           // default DefaultProvider
 	FallbackModel    string   `toml:"fallback_model"`     // SCHED-GAP-064: fallback model tier for the spawn chain; empty = no project fallback
