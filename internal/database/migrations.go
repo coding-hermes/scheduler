@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 45
+const latestMigration = 46
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -701,6 +701,27 @@ WHERE version = 23 AND desc LIKE 'zombie session reaper%';
 		desc:    "SCHED-GAP-1636: covering index idx_ticks_project_spawned_cost (project_name, spawned_at, cost_usd) so the per-project spend aggregate over ticks scans the index instead of every tick row",
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
+`,
+	},
+	{
+		// SCHED-GAP-1622: partial running-ticks index — one row PER RUNNING
+		// TICK instead of one row per tick in history. countActiveTicks (the
+		// /api/v1/health active_ticks step, which has 504'd under the pool
+		// contention of a ~500-lane fleet) counts through it bounded, so the
+		// health probe stays well inside its 1s liveness budget at ~100k+
+		// historical tick rows; /api/v1/status and the /api/v1/metrics ticks
+		// block (SCHED-GAP-156) reuse the same helper. Running ticks are a
+		// handful at once (admission caps bound them), so the index holds
+		// only live work. Partial (not idx_ticks_status retune): it cannot
+		// disturb any other query's plan; full-history status counting is
+		// nonexistent in this codebase, so no query loses the old index
+		// behavior, and the 'completed'-family partial already set precedent.
+		version: 46,
+		desc:    "SCHED-GAP-1622: partial index idx_ticks_status_running (status='running') so countActiveTicks is bounded by live work, not tick history",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_status_running
+ON ticks(status)
+WHERE status = 'running';
 `,
 	},
 }

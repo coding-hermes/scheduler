@@ -257,7 +257,10 @@ func TestSCHEDGAP1575B_OtherReadSurfacesBounded(t *testing.T) {
 		call func(s *Server, w http.ResponseWriter, r *http.Request)
 	}{
 		{
-			name: "projects", step: "ListProjects",
+			// SCHED-GAP-1622: the projects read is paginated; the stalled
+			// step is the page query (the deadline must still bound the
+			// handler and name the step).
+			name: "projects", step: "ListProjectsPage",
 			call: func(s *Server, w http.ResponseWriter, r *http.Request) { s.listProjects(w, r) },
 		},
 		{

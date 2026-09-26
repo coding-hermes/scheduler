@@ -12,6 +12,14 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
+// BusyTimeoutMS is the busy_timeout (milliseconds) InitDB arms on the
+// daemon's SQLite connections (SCHED-GAP-1622). Non-zero busy_timeout is
+// what removes the pool's immediate-fail mode: database/sql pools
+// connections, and any non-first connection meeting a write lock waits for
+// the lock (up to this budget) instead of surfacing SQLITE_BUSY. Matched by
+// the GAP-060 test template's pragma set, mirroring InitDB.
+const BusyTimeoutMS = 5000
+
 // InitDB opens the SQLite database at dbPath, enables WAL mode and foreign-key
 // enforcement, runs any pending migrations, and returns the ready *sql.DB.
 //
@@ -36,13 +44,24 @@ func InitDB(dbPath string) (*sql.DB, error) {
 	// SQLite allows at most one writer in WAL mode, but multiple readers.
 	// A single connection serialized through SetMaxOpenConns(1) is the
 	// simplest correct concurrency model for this scheduler's write volume.
+	//
+	// SCHED-GAP-1622: the pool stays at 1. The row diagnosed the read
+	// timeouts as pool contention, but (a) the busy_timeout pragma below
+	// already removes the immediate-fail mode, (b) PurgeProject /
+	// PurgeNamespace / the FK-toggling migrations document their
+	// PRAGMA foreign_keys=OFF/ON pairing as race-free ONLY under the single
+	// connection (that pairing serializes database/sql's pool — max 1 in
+	// flight), and (c) modernc contention regressions were measured
+	// previously (PERF-001 comment). Single connection + busy_timeout +
+	// paginated reads is the proven shape; revisit the pool size only with
+	// the FK-window caveat re-earned.
 	db.SetMaxOpenConns(1)
 
 	// PRAGMAs must run before any DDL/DML so the on-disk format is correct.
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
+		"PRAGMA busy_timeout=5000", // database.BusyTimeoutMS (SCHED-GAP-1622: >= 5000 ms; test pins both surfaces)
 		"PRAGMA synchronous=NORMAL",
 		// DOGFOOD-006: bound WAL checkpoints. SQLite's default
 		// wal_autocheckpoint is 1000 pages (~4MB); on the single shared

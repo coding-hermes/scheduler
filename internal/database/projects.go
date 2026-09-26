@@ -166,11 +166,81 @@ FROM projects WHERE name = ?`
 	return &p, nil
 }
 
+// listProjectsColumns is the single source of the project-row SELECT list —
+// ListProjects and ListProjectsPage (SCHED-GAP-1622) both build their queries
+// from it and both scan through scanProjectRow, so a future column addition
+// or reorder is one edit here, not a two-surface drift.
+const listProjectsColumns = `name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, '')
+FROM projects`
+
+// scanProjectRow scans one ListProjects-shaped row (listProjectsColumns
+// order) into a Project, mapping the enabled/namespace/pin NULL conventions.
+func scanProjectRow(rows *sql.Rows) (Project, error) {
+	var p Project
+	var enabled int
+	var nsID sql.NullString
+	var pinS sql.NullInt64
+	if err := rows.Scan(
+		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
+		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
+		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
+		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
+		&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
+		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
+		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
+		&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent); err != nil {
+		return Project{}, fmt.Errorf("scan project row: %w", err)
+	}
+	p.Enabled = enabled != 0
+	if nsID.Valid {
+		p.NamespaceID = &nsID.String
+	}
+	if pinS.Valid {
+		v := int(pinS.Int64)
+		p.CooldownPinS = &v
+	}
+	return p, nil
+}
+
+// ListProjects pagination bounds (SCHED-GAP-1622; behavior change is the core
+// of SCHED-GAP-1624's ?limit= fix). DefaultListProjectsLimit keeps a bare
+// GET /api/v1/projects bounded — at a ~500-lane fleet the unbounded read
+// pushed the handler past its 5s budget — while MaxListProjectsLimit is the
+// deliberate over-the-default ceiling a caller can opt into (500 pages cover
+// the fleet plus headroom). The API handler serves the same bounds.
+const (
+	DefaultListProjectsLimit = 200
+	MaxListProjectsLimit     = 500
+)
+
+// ListProjectsPageOpts bounds a ListProjectsPage read. Negative values are
+// normalized (Limit <= 0 → DefaultListProjectsLimit; Offset < 0 → 0; Limit >
+// MaxListProjectsLimit → MaxListProjectsLimit). The SQL LIMIT binder sits
+// behind the clamps, so adversarial query strings cannot inflate the read.
+func ListProjectsPageOpts(limit, offset int) ListProjectsPageOptsType {
+	if limit <= 0 {
+		limit = DefaultListProjectsLimit
+	}
+	if limit > MaxListProjectsLimit {
+		limit = MaxListProjectsLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return ListProjectsPageOptsType{Limit: limit, Offset: offset}
+}
+
+// ListProjectsPageOptsType is the normalized (limit, offset) pair; see
+// ListProjectsPageOpts.
+type ListProjectsPageOptsType struct {
+	Limit  int
+	Offset int
+}
+
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, '')
-FROM projects`
+	q := `SELECT ` + listProjectsColumns
 	if enabledOnly {
 		q += " WHERE enabled = 1"
 	}
@@ -184,28 +254,9 @@ FROM projects`
 
 	var out []Project
 	for rows.Next() {
-		var p Project
-		var enabled int
-		var nsID sql.NullString
-		var pinS sql.NullInt64
-		if err := rows.Scan(
-			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
-			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
-			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
-			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
-			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
-			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
-			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent); err != nil {
-			return nil, fmt.Errorf("scan project row: %w", err)
-		}
-		p.Enabled = enabled != 0
-		if nsID.Valid {
-			p.NamespaceID = &nsID.String
-		}
-		if pinS.Valid {
-			v := int(pinS.Int64)
-			p.CooldownPinS = &v
+		p, err := scanProjectRow(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, p)
 	}
@@ -213,6 +264,76 @@ FROM projects`
 		return nil, fmt.Errorf("iterate project rows: %w", err)
 	}
 	return out, nil
+}
+
+// ListProjectsPageProject is one page of ListProjects — the Go form of
+// GET /api/v1/projects' response body (SCHED-GAP-1622, core of
+// SCHED-GAP-1624). Total is the count of rows matching enabledOnly across the
+// WHOLE table — not the page size — so a client can paginate reliably.
+type ListProjectsPageProject struct {
+	Projects []Project
+	Limit    int
+	Offset   int
+	Total    int
+}
+
+// ListProjectsPage returns one page of projects, ordered by name for stable
+// pagination. If enabledOnly is true, only enabled=1 rows are matched; Total
+// is the full match count so clients can size the walk.
+//
+// SCHED-GAP-1622: ListProjects loads every row of the projects table on one
+// serialized connection — at a ~500-lane fleet that read alone exceeded the
+// 5s handler budget. The page query carries LIMIT behind the
+// ListProjectsPageOpts clamps, so a caller cannot ask the DB for unbounded
+// rows. Derived per-row enrichment stays with the page (the handler computes
+// budget telemetry only for rows it returns).
+func ListProjectsPage(ctx context.Context, db *sql.DB, enabledOnly bool, opts ListProjectsPageOptsType) (ListProjectsPageProject, error) {
+	// The row scan is identical to ListProjects: both surfaces build from
+	// listProjectsColumns and scan through scanProjectRow, so a future
+	// column edit is one edit, not a two-surface drift.
+	const rowColumns = listProjectsColumns
+
+	scanPage := func(rows *sql.Rows) ([]Project, error) {
+		out := make([]Project, 0, opts.Limit)
+		for rows.Next() {
+			p, err := scanProjectRow(rows)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, p)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate project rows: %w", err)
+		}
+		return out, nil
+	}
+
+	var total int
+	if enabledOnly {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE enabled = 1`).Scan(&total); err != nil {
+			return ListProjectsPageProject{}, fmt.Errorf("count projects: %w", err)
+		}
+	} else {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects`).Scan(&total); err != nil {
+			return ListProjectsPageProject{}, fmt.Errorf("count projects: %w", err)
+		}
+	}
+
+	q := `SELECT ` + rowColumns // listProjectsColumns already ends with FROM projects
+	if enabledOnly {
+		q += " WHERE enabled = 1"
+	}
+	q += " ORDER BY name ASC LIMIT ? OFFSET ?"
+	rows, err := db.QueryContext(ctx, q, opts.Limit, opts.Offset)
+	if err != nil {
+		return ListProjectsPageProject{}, fmt.Errorf("list projects page: %w", err)
+	}
+	defer rows.Close()
+	page, err := scanPage(rows)
+	if err != nil {
+		return ListProjectsPageProject{}, err
+	}
+	return ListProjectsPageProject{Projects: page, Limit: opts.Limit, Offset: opts.Offset, Total: total}, nil
 }
 
 // ListProjectsByNamespace returns all projects assigned to the given namespace,

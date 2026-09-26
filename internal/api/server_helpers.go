@@ -284,9 +284,24 @@ func splitPath(path string) []string {
 	return strings.Split(trimmed, "/")
 }
 
+// countActiveTicks counts the ticks currently in status='running' — the
+// surface /api/v1/health, /api/v1/status (active_ticks) and the /api/v1/metrics
+// ticks block all serve (SCHED-GAP-1622).
+//
+// SCHED-GAP-1622 (bounded health count): the COUNT must never exceed the
+// health endpoint's livenessTimeout (server_helpers.go) — /api/v1/health has
+// 504'd on this query under the fleet's pool contention, and a health probe
+// that needs an unbounded scan is not a liveness signal. The query is bounded
+// by the partial index idx_ticks_status_running (migration v46: one row PER
+// RUNNING TICK, not one row per tick), so the count touches only live work
+// and stays far inside both the health budget and the 5s read budget even at
+// the fleet's tick-history size. Running ticks are a handful at once (the
+// admission caps bound them), so the index-scan equivalence test
+// (schedgap1622_health_count_test.go) proves the bound structurally — a
+// timing assertion would flake under suite contention.
 func countActiveTicks(ctx context.Context, db *sql.DB) int {
 	var n int
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&n)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks INDEXED BY idx_ticks_status_running WHERE status = 'running'`).Scan(&n)
 	return n
 }
 
@@ -810,9 +825,13 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects": {
       "get": {
-        "summary": "List all projects",
+        "summary": "List projects, paginated (SCHED-GAP-1622)",
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 200, "maximum": 500}, "description": "Page size; <= 0 falls back to the default, > 500 clamps to 500 (never a 4xx)"},
+          {"name": "offset", "in": "query", "schema": {"type": "integer", "default": 0}, "description": "Rows to skip; negative clamps to 0"}
+        ],
         "responses": {
-          "200": {"description": "Array of project objects"}
+          "200": {"description": "{\"projects\": [<Project>, ...], \"total\": <all matching projects>, \"limit\": <applied>, \"offset\": <applied>} — total counts the WHOLE match set (enabled AND disabled), not the page; budget telemetry is computed for the returned page only"}
         }
       },
       "post": {

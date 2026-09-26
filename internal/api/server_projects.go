@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,14 +66,77 @@ func budgetRemaining(capUSD, spentUSD float64) *float64 {
 	return &r
 }
 
+// listProjectsPagination are the runtime forms of the database-layer
+// pagination bounds (SCHED-GAP-1622; the behavior change is the core of
+// SCHED-GAP-1624's ?limit= fix). Default keeps a bare GET /api/v1/projects
+// bounded — at a ~500-lane fleet the unbounded read pushed this handler past
+// its 5s budget; Max is the deliberate ceiling (?limit= can opt up to 500,
+// never beyond). Clamping is fail-soft: a non-numeric or absurd limit never
+// 400s a dashboard poll, it just serves the bounded page.
+const (
+	defaultListProjectsLimit = database.DefaultListProjectsLimit // 200
+	maxListProjectsLimit     = database.MaxListProjectsLimit     // 500
+)
+
+// listProjectsQueryDoc is the endpoint's deferred documentation (SCHED-GAP-1622):
+// docs/api.md §5 carries the full table; this reminder keeps the handler
+// searchable from both surfaces.
+//
+// Response shape (changed with SCHED-GAP-1622 — update consumers, not just
+// the array): {"projects": [...], "total": N, "limit": L, "offset": O}.
+//
+// Query params: ?limit (default 200, max 500), ?offset (default 0). Clamped,
+// never a 400: limit<=0 → default; limit>500 → 500; offset<0 → 0. The total
+// is the count of ALL matching projects (enabled AND disabled for this
+// endpoint) — not the page length. Page-further with [offset, offset+limit)
+// while offset < total.
+//
+// ListProjectsPage clamps IDEMPOTENTLY: clamping via ListProjectsPageOpts
+// twice changes nothing, and the OPTIONS SENTINEL (any Limit <= 0, including
+// hand-rolled zero values) renormalizes to the default — so a caller that
+// pre-clamps off its own bounds and passes the clamped pair through the
+// normalizer again stays exactly where intent put it.
+func listProjectsQuery(r *http.Request) database.ListProjectsPageOptsType {
+	q := r.URL.Query()
+	limit := defaultListProjectsLimit
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil {
+		limit = n
+	}
+	offset := 0
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil {
+		offset = n
+	}
+	return database.ListProjectsPageOpts(limit, offset)
+}
+
+// projectListPage is the GET /api/v1/projects response envelope
+// (SCHED-GAP-1622): the enriched page array plus the pagination triple the
+// dashboard and picker consumers page with. Field order is the documented
+// one (listProjects doc comment links docs/api.md §5).
+type projectListPage struct {
+	Items  []projectListItem `json:"projects"`
+	Total  int               `json:"total"`
+	Limit  int               `json:"limit"`
+	Offset int               `json:"offset"`
+}
+
+// maxListProjectsLimit is referenced by the clamp test (it pins the API
+// bound at the database bound's value; exporting it keeps the doc table and
+// the code from drifting). See listProjectsPagination above.
+var _ = maxListProjectsLimit
+
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	// SCHED-GAP-1575-B: heavy read surface (the second-heaviest after
 	// /api/v1/status) — request-scoped deadline so a stalled budget-spend
 	// query answers 504 naming the helper instead of hanging.
+	//
+	// SCHED-GAP-1622: the DB read is PAGINATED (default 200 rows, max 500
+	// via ?limit=; ?offset= pages further). The full-table ListProjects read
+	// was the 504'd step at a ~500-lane fleet.
 	ctx, obs := s.newRequestDeadline(r.Context(), "projects", s.readTimeout())
 	defer obs.finish()
-	obs.enter("ListProjects")
-	projects, err := database.ListProjects(ctx, s.db, false)
+	obs.enter("ListProjectsPage")
+	page, err := database.ListProjectsPage(ctx, s.db, false, listProjectsQuery(r))
 	if !obs.check(w, ctx) {
 		return
 	}
@@ -80,9 +144,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	if projects == nil {
-		projects = []database.Project{}
-	}
+	projects := page.Projects
 	// SCHED-GAP-066: enrich each project with its budget spend/remaining and
 	// blocked state. Fail-open: if the spend query breaks, serve the plain
 	// project rows rather than erroring the whole endpoint.
@@ -92,19 +154,47 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	// longer re-runs the full ticks aggregate, and so the endpoint stops
 	// occupying the daemon's single SQLite connection once per request —
 	// which is what pushed it past the 5s handler budget.
+	//
+	// SCHED-GAP-1622: enrichment (the derived per-project budget telemetry)
+	// is computed ONLY for the returned page — never for the rows the page
+	// didn't fetch.
 	obs.enter("LoadBudgetSpends")
 	spends, spendErr := s.loadBudgetSpends(ctx, s.clock().Now())
 	if !obs.check(w, ctx) {
 		return
 	}
 	if spendErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"projects": projects})
+		// Fail-open shape (SCHED-GAP-1636 contract): plain project rows with
+		// NO budget fields (spent_daily_usd stays absent, mirroring the
+		// pre-paginated fail-open payload), inside the same pagination
+		// envelope.
+		writeJSON(w, 200, struct {
+			Projects []database.Project `json:"projects"`
+			Total    int                `json:"total"`
+			Limit    int                `json:"limit"`
+			Offset   int                `json:"offset"`
+		}{Projects: projects, Total: page.Total, Limit: page.Limit, Offset: page.Offset})
 		return
 	}
+	writeJSON(w, 200, projectListPage{
+		Items:  toProjectListItems(projects, spends),
+		Total:  page.Total,
+		Limit:  page.Limit,
+		Offset: page.Offset,
+	})
+}
+
+// toProjectListItems enriches one page of projects with the snapshot spends.
+// A nil spends map (fail-open path) serves plain rows. The result is always
+// non-nil so the JSON carries "projects": [] rather than null.
+func toProjectListItems(projects []database.Project, spends map[string]scheduler.BudgetSpend) []projectListItem {
 	items := make([]projectListItem, 0, len(projects))
 	for i := range projects {
 		p := &projects[i]
-		spend := spends[p.Name]
+		spend := scheduler.BudgetSpend{}
+		if spends != nil {
+			spend = spends[p.Name]
+		}
 		window := scheduler.BudgetBlockReason(p, spend)
 		item := projectListItem{
 			Project:            *p,
@@ -122,7 +212,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, 200, map[string]interface{}{"projects": items})
+	return items
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
