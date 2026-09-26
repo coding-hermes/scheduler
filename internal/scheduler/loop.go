@@ -1660,12 +1660,23 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	if reason == "" {
 		reason = AdmissionReasonTasksDeferred
 	}
+	// SCHED-GAP-125 telemetry (Bane 2026-09-25): record the load average the
+	// gate actually saw. Without this a deferral says "load_gate" but not
+	// whether the reading was 17 or 50 — and that is unanswerable later,
+	// because host_samples only samples every ~2-3 minutes and never at the
+	// moment of a pass. Omitted entirely when the gate is off / no telemetry,
+	// so an absent field never reads as a real reading of zero.
+	loadSuffix := ""
+	if l1, thr, ok := loadGateSnapshot(); ok {
+		loadSuffix = fmt.Sprintf(" load1=%.2f gate=%.1f", l1, thr)
+	}
 	line := fmt.Sprintf("ADMIT pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s cap=%d inflight_running=%d inflight_queued=%d project=%s reason=%s",
 		passID, eligible, admitted, deferred, ns, d.Cap, d.InflightRunning, d.InflightQueued,
 		sanitizeAdmitField(d.Project), reason)
 	if d.HasCooldownRem {
 		line += fmt.Sprintf(" cooldown_remaining_s=%.1f", d.CooldownRemainingS)
 	}
+	line += loadSuffix
 	admitWriteLine(line)
 
 	// SCHED-GAP-157: the pass-over decision is persisted, not just logged —
@@ -1675,7 +1686,7 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	// packer's cooldown clock). Detail mirrors the line's pass header so the
 	// row is self-contained. Best-effort: persistence failure is logged and
 	// the decision is unchanged.
-	detail := fmt.Sprintf("pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s", passID, eligible, admitted, deferred, ns)
+	detail := fmt.Sprintf("pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s", passID, eligible, admitted, deferred, ns) + loadSuffix
 	l.recordDeferral(d.Project, reason, int64(passID), detail)
 
 	if !admissionReasonIsKnown(reason) {

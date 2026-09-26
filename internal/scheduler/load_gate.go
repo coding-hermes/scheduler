@@ -72,6 +72,22 @@ func loadGateActive() bool {
 	return l1 >= t
 }
 
+// loadGateSnapshot returns the reading and threshold for LOGGING (Bane
+// 2026-09-25): a deferral must record what the gate actually saw, not just
+// that it fired. ok=false when the gate is disabled or the platform has no
+// reading — the caller then omits the fields rather than inventing a zero.
+func loadGateSnapshot() (l1, threshold float64, ok bool) {
+	t := loadGateThreshold()
+	if t <= 0 {
+		return 0, t, false
+	}
+	v, have := currentLoad1m()
+	if !have {
+		return 0, t, false
+	}
+	return v, t, true
+}
+
 // namespaceLoadGateOff reports whether the given namespace opted out
 // (load_gate='off'). Unknown namespace / ” / DB error → false (gate applies).
 func namespaceLoadGateOff(db *sql.DB, nsID string) bool {
