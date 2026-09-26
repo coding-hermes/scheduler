@@ -685,6 +685,15 @@ func main() {
 		fixture := scheduler.NewSimFixture(db)
 		runner := scheduler.NewSimRunner(loop, fixture)
 		runner.SetIdleRate(*simIdle)
+		// SCHED-GAP-1630: thread --sim-success into the runner. The flag
+		// value used to be parsed and dropped here (SetSuccessRate had no
+		// production call site), so every run simulated the hardcoded 0.85
+		// default regardless of the operator's flag. RunMultiTick applies
+		// the caller-set rate when it enables simulation — its precedence
+		// (caller-set wins, else 0.85) is unchanged. SetSuccessRate accepts
+		// only values in (0, 1], so an out-of-range flag value keeps the
+		// 0.85 default instead of simulating a 0%-success fleet.
+		runner.SetSuccessRate(*simSuccess)
 
 		simCtx, simCancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer simCancel()

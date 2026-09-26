@@ -320,19 +320,20 @@ func TestRunMultiTick_ReportMatchesSQLite_RealClock(t *testing.T) {
 	}
 }
 
-// TestRunMultiTick_NonHundredPercentSimSuccess pins the "non-100% sim-success"
-// requirement: success=0.5 makes completed/failed/timeout outcomes the
-// expected shape across a multi-batch run (the seam exists — Loop.SetSimulation
-// threads the rate into the sim spawner — so no new hook was needed). The
-// report totals must still equal the DB, and the report must reflect that
-// not every tick succeeded.
+// TestRunMultiTick_NonHundredPercentSimSuccess exercises the mixed-outcome
+// census across a multi-batch run driven through the caller-set rate:
+// runner.SetSuccessRate(0.5) before RunMultiTick, which installs 0.5 on the
+// loop's sim spawner when it enables simulation (the honoring mechanism is
+// pinned deterministically, seam-level, by
+// TestSimRunner_CallerSetSuccessRateHonored). The report totals must equal
+// the DB, and the report must reflect that not every tick succeeded.
 func TestRunMultiTick_NonHundredPercentSimSuccess(t *testing.T) {
 	db := newTestDB(t)
 	sim := clock.NewSimClockAt(1000, time.Now())
 	t.Cleanup(sim.Close)
 
 	runner, _ := newSimRunner1630(t, db, sim)
-	runner.loop.SetSimulation(0.5) // half success, half failed/timeout
+	runner.SetSuccessRate(0.5) // half success, half failed/timeout
 
 	const ticks = 6
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -341,8 +342,9 @@ func TestRunMultiTick_NonHundredPercentSimSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunMultiTick: %v", err)
 	}
-	// RunMultiTick re-installs its own default rate; the census below is the
-	// authority regardless of which rate actually applied.
+	// The runner's caller-set 0.5 is what RunMultiTick installed on the loop
+	// (see TestSimRunner_CallerSetSuccessRateHonored); the DB census below is
+	// the authority for the outcomes that rate produced.
 
 	_, dbCompleted, dbFailed, dbTimeout := simStatusCounts(t, db, "sim-tick")
 	if report.TotalCompleted != dbCompleted || report.TotalFailed != dbFailed || report.TotalTimeout != dbTimeout {
@@ -361,6 +363,57 @@ func TestRunMultiTick_NonHundredPercentSimSuccess(t *testing.T) {
 	if report.TotalCompleted == 0 || report.TotalFailed+report.TotalTimeout == 0 {
 		t.Errorf("report does not reflect the mixed-outcome run: completed=%d failed+timeout=%d",
 			report.TotalCompleted, report.TotalFailed+report.TotalTimeout)
+	}
+}
+
+// TestSimRunner_CallerSetSuccessRateHonored pins the SCHED-GAP-1630 judge
+// finding deterministically: SetSuccessRate(0.5) before RunMultiTick must be
+// the rate RunMultiTick installs on the loop when it enables simulation — the
+// judge's probe was loop.SetSimulation(0.5) followed by RunMultiTick, which
+// re-installed the hardcoded 0.85 default (the runner-level rate had no
+// production call site, so every run simulated 0.85 regardless). Asserted at
+// the seam the outcome roll actually reads (loop.simSpawner.success after
+// RunMultiTick enabled simulation, plus the loop's own rate field) — no
+// statistical expectation on a random draw, so it cannot flake.
+func TestSimRunner_CallerSetSuccessRateHonored(t *testing.T) {
+	db := newTestDB(t)
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
+
+	runner, _ := newSimRunner1630(t, db, sim)
+	runner.SetSuccessRate(0.5)
+
+	const ticks = 1
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := runner.RunMultiTick(ctx, ticks); err != nil {
+		t.Fatalf("RunMultiTick: %v", err)
+	}
+
+	// RunMultiTick must have enabled simulation (it always does) and the
+	// spawner's success draw must be the caller-set 0.5, not the 0.85
+	// NewLoop/NewSimSpawner default.
+	if !runner.loop.simulate {
+		t.Fatal("RunMultiTick did not enable simulation on the loop")
+	}
+	if got := runner.loop.simSpawner.success; got != 0.5 {
+		t.Errorf("sim spawner success rate = %v, want 0.5 (the caller-set rate) — RunMultiTick discarded it", got)
+	}
+	if got := runner.loop.simSuccess; got != 0.5 {
+		t.Errorf("loop sim success rate = %v, want 0.5 (the caller-set rate)", got)
+	}
+
+	// The default path is half of the contract: without a caller-set rate,
+	// RunMultiTick must install the documented 0.85.
+	db2 := newTestDB(t)
+	sim2 := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim2.Close)
+	runner2, _ := newSimRunner1630(t, db2, sim2)
+	if _, err := runner2.RunMultiTick(ctx, ticks); err != nil {
+		t.Fatalf("RunMultiTick (default): %v", err)
+	}
+	if got := runner2.loop.simSpawner.success; got != 0.85 {
+		t.Errorf("default sim spawner success rate = %v, want 0.85", got)
 	}
 }
 
