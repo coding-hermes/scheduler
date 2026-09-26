@@ -1055,7 +1055,7 @@ func tickSamplesFromCompleted(clk clock.Clock, workdir string, samples []complet
 		if d <= 0 {
 			continue
 		}
-		out = append(out, tickSample{dur: d, cost: s.costUSD, work: tickWork(clk, workdir, s.spawnedAt, s.completedAt, 4)})
+		out = append(out, tickSample{dur: d, cost: s.costUSD, work: tickWorkCached(clk, workdir, s.spawnedAt, s.completedAt, 4)})
 	}
 	return out
 }
@@ -1851,7 +1851,7 @@ func tickWork(clk clock.Clock, workdir, spawned, completed string, commitCount i
 		"--pretty=%s", "-n", fmt.Sprintf("%d", commitCount),
 	}
 	cmd := exec.Command("git", args...)
-	out, err := cmd.Output()
+	out, err := tickWorkRunnerOutput(cmd)
 	if err != nil {
 		return ""
 	}

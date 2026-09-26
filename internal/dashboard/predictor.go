@@ -182,7 +182,7 @@ func (g *Generator) fleetLearned(ctx context.Context) *fleetModel {
 			if d <= 0 {
 				return
 			}
-			typ := classifyTaskType(tickWork(g.clock(), wd[raw.proj], raw.sp, raw.co, 4))
+			typ := classifyTaskType(tickWorkCached(g.clock(), wd[raw.proj], raw.sp, raw.co, 4))
 			mu.Lock()
 			ds := m.byType[typ]
 			if ds == nil {
@@ -382,7 +382,7 @@ func (g *Generator) learnedETA(ctx context.Context, project, workdir string, ste
 			var cost float64
 			if rows.Scan(&sp, &co, &cost) == nil {
 				if d := parseDuration(sp, co); d > 0 {
-					samples = append(samples, tickSample{dur: d, cost: cost, work: tickWork(g.clock(), workdir, sp, co, 4)})
+					samples = append(samples, tickSample{dur: d, cost: cost, work: tickWorkCached(g.clock(), workdir, sp, co, 4)})
 				}
 			}
 		}
