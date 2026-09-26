@@ -46,6 +46,53 @@ func schedGap135ClosedGatewayURL(t *testing.T) string {
 	return url
 }
 
+// schedGap135WaitAllAdmitted closes the launch-window race between the
+// fire-and-forget Spawn loop in the caller and pool.Wait. SlotPool.Spawn
+// (slot_pool.go:327) returns the tick id before its goroutine has done
+// anything; the goroutine only LATER acquires a slot, enqueues the tick row
+// and dials the gateway. pool.Wait (slot_pool.go:643) is a poll loop that
+// returns nil the instant pool.Running() == 0 — which is legitimately true
+// inside that launch window — so without this wait the test could race ahead
+// to tickStatusOf and find no row at all (CI: "sql: no rows in result set",
+// load-sensitive; the orphaned "SPAWN: enqueue ...: sql: database is closed"
+// lines logged AFTER the failure are the same goroutines still logging during
+// t.Cleanup — a symptom, not the cause).
+//
+// Ordering proof (why waiting for row existence is sufficient, not merely
+// helpful): a goroutine INSERTs its tick row only AFTER its slot Acquire,
+// and the slot is Released (deferred at goroutine entry) only AFTER
+// lifecycle.Complete has written the terminal status. So once ALL n rows
+// exist, Running() >= 1 at every later instant until every tick is terminal
+// — pool.Wait can no longer exit early, and the assertions in the caller see
+// a settled pool.
+//
+// Bounded and deliberately non-failing on timeout: if the rows never appear,
+// the caller falls through to pool.Wait + the original assertions, so a
+// genuine regression (rows never created) still fails the test with its
+// original semantics instead of a different error.
+func schedGap135WaitAllAdmitted(t *testing.T, db *sql.DB, ticks []string) {
+	t.Helper()
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ticks)), ",")
+	args := make([]any, len(ticks))
+	for i, id := range ticks {
+		args[i] = id
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var have int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM ticks WHERE id IN (`+ph+`)`, args...,
+		).Scan(&have); err != nil {
+			t.Fatalf("count admitted tick rows: %v", err)
+		}
+		if have == len(ticks) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Logf("admission wait timed out after 10s — falling through to pool.Wait + original assertions")
+}
+
 // TestSCHEDGAP135_RetryExhaustMarksFailedAndReleasesSlot — the live wedge:
 // 4 projects spawn against a gateway whose listener is closed; each exhausts
 // the 3 GATEWAY RETRY attempts on transport-refused dials. Every tick row
@@ -72,6 +119,14 @@ func TestSCHEDGAP135_RetryExhaustMarksFailedAndReleasesSlot(t *testing.T) {
 		mustCreateProjectINFRA012(t, db, names[i])
 		ticks[i] = pool.Spawn(PackedProject{Name: names[i], Workdir: t.TempDir()}, time.Now(), true, db)
 	}
+
+	// Close the launch-window race BEFORE waiting on the pool: Spawn is
+	// fire-and-forget and pool.Wait returns the moment Running() == 0, which
+	// is already true here (no goroutine has acquired a slot yet). Poll for
+	// all n tick rows to exist first — see the ordering proof on the helper.
+	// Non-failing on timeout: a genuine regression still fails below, with
+	// the original error semantics.
+	schedGap135WaitAllAdmitted(t, db, ticks)
 
 	// The retry ladder sleeps ~3.5s per tick (500ms+1s+2s) and the dials
 	// fail instantly; healthy drain is <10s. A wedged spawn goroutine
