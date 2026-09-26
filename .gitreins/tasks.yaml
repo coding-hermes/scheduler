@@ -4231,3 +4231,14 @@ tasks:
   status: complete
   created_at: '2026-09-26T03:50:16.201753+00:00'
   completed_at: '2026-09-26T03:50:35.402689+00:00'
+- id: INT-CI-160
+  title: Fix TestSCHEDGAP135_RetryExhaust launch-window race
+  criteria:
+  - 'The test must never read tick rows before the spawn goroutines have acquired
+    their slots: a bounded admission-visibility wait sits between the Spawn loop and
+    pool.Wait, all original assertions (terminal status, slot release, retry-ladder
+    log line) are preserved, no production code changes, and the single test passes
+    15 consecutive -count=1 runs plus the full package -short suite'
+  status: complete
+  created_at: '2026-09-26T05:23:28.806190+00:00'
+  completed_at: '2026-09-26T06:13:59.191134+00:00'
