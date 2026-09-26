@@ -76,6 +76,17 @@ type Server struct {
 	// deadline trips naming that step. Production leaves it nil (one nil
 	// check per step, no behavior change).
 	readStepHook func(step string)
+
+	// budgetSpends caches the per-project spend snapshot the
+	// /api/v1/projects handler merges in (SCHED-GAP-1636) — the aggregate is
+	// the endpoint's most expensive step and does not change meaningfully
+	// between two seconds apart reads. See budget_spend_cache.go.
+	budgetSpends budgetSpendCache
+
+	// spendCacheTTL overrides budgetSpendCacheTTL when non-nil. Immutable
+	// after SetBudgetSpendCacheTTL (zero value = package default), so the
+	// readers need no lock.
+	spendCacheTTL *time.Duration
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration

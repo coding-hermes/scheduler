@@ -32,8 +32,8 @@ func TestSCHEDGAP1586_MigrationRecorded(t *testing.T) {
 	if v != latestMigration {
 		t.Fatalf("migration version = %d, want %d", v, latestMigration)
 	}
-	if latestMigration != 44 {
-		t.Fatalf("latestMigration = %d, want 44 (SCHED-GAP-089 tombstone lands as v44; v43 stays SCHED-GAP-1582)", latestMigration)
+	if latestMigration != 45 {
+		t.Fatalf("latestMigration = %d, want 45 (SCHED-GAP-1636 covering index lands as v45; v44 stays the SCHED-GAP-089 tombstone)", latestMigration)
 	}
 	var desc string
 	if err := db.QueryRowContext(ctx, `SELECT desc FROM migrations WHERE version = 42`).Scan(&desc); err != nil {
