@@ -164,14 +164,24 @@ type PendingTaskCounter struct {
 	m   map[string]pendingCacheEntry // keyed by workdir
 	// freshnessRead is the R06 reader seam (ADV-R07). A field so tests
 	// can stub the git verification; nil means the real
-	// ReadBoardFreshness with a zero-options (wall-clock) read.
+	// ReadBoardFreshness, served through verdictCache.
 	freshnessRead func(workdir, boardPath string) FreshnessReport
+	// verdictCache is the PERF-002 verdict memo behind the production
+	// freshnessRead (cachedFreshnessRead): the git-verified verdict for a
+	// board whose file and whose HEAD are both unchanged is by construction
+	// the same verdict, so it is not re-derived. Nil (a hand-built counter,
+	// or a test that replaced freshnessRead) means no caching.
+	verdictCache *FreshnessVerdictCache
 }
 
-// defaultFreshnessRead is the production freshness seam: the R06 reader
-// with its default flip window and the wall clock as the read clock.
-func defaultFreshnessRead(workdir, boardPath string) FreshnessReport {
-	return ReadBoardFreshness(workdir, boardPath, FreshnessOptions{})
+// cachedFreshnessRead is the production freshness seam: the R06 reader behind
+// the PERF-002 verdict cache. A hit costs one os.Stat plus the single HEAD
+// probe; a miss runs the full ReadBoardFreshness and stores its verdict.
+func (c *PendingTaskCounter) cachedFreshnessRead(workdir, boardPath string) FreshnessReport {
+	if c.verdictCache == nil {
+		return ReadBoardFreshness(workdir, boardPath, FreshnessOptions{})
+	}
+	return c.verdictCache.Read(workdir, boardPath)
 }
 
 // defaultPendingCounter is the package-level shared instance used by all
@@ -179,13 +189,26 @@ func defaultFreshnessRead(workdir, boardPath string) FreshnessReport {
 // constructors and call sites working unchanged.
 var defaultPendingCounter = NewPendingTaskCounter(60 * time.Second)
 
-// NewPendingTaskCounter creates a counter with the given cache TTL.
+// NewPendingTaskCounter creates a counter with the given cache TTL for its
+// pending COUNT. The PERF-002 verdict cache behind the counter's freshness read
+// is separate and longer-lived (DefaultFreshnessVerdictTTL): tying it to the
+// count TTL would expire both at the same instant and re-run the git battery on
+// every count re-read, which is the cost this cache exists to remove. A
+// non-positive count TTL means "cache nothing at all" — the verdict cache is
+// disabled too, so a zero-TTL counter behaves exactly as it did before the
+// cache (every read fully verified).
 func NewPendingTaskCounter(ttl time.Duration) *PendingTaskCounter {
-	return &PendingTaskCounter{
-		ttl:           ttl,
-		m:             make(map[string]pendingCacheEntry),
-		freshnessRead: defaultFreshnessRead,
+	verdictTTL := DefaultFreshnessVerdictTTL
+	if ttl <= 0 {
+		verdictTTL = 0
 	}
+	c := &PendingTaskCounter{
+		ttl:          ttl,
+		m:            make(map[string]pendingCacheEntry),
+		verdictCache: NewFreshnessVerdictCache(verdictTTL, MaxFreshnessVerdictEntries),
+	}
+	c.freshnessRead = c.cachedFreshnessRead
+	return c
 }
 
 // CountPending returns the number of pending tasks on the board in the given
@@ -405,8 +428,14 @@ func countPendingBoard(path string, fi os.FileInfo) int {
 }
 
 // SetClock installs the clock this PendingTaskCounter reads and waits on (SCHED-GAP-169).
-// nil keeps the wall clock.
-func (c *PendingTaskCounter) SetClock(clk clock.Clock) { c.clk.Set(clk) }
+// nil keeps the wall clock. The verdict cache reads the same seam so its TTL
+// is driven by the same simulator as the counter's own cache.
+func (c *PendingTaskCounter) SetClock(clk clock.Clock) {
+	c.clk.Set(clk)
+	if c.verdictCache != nil {
+		c.verdictCache.SetClock(clk)
+	}
+}
 
 // clock returns the component's clock, never nil.
 func (c *PendingTaskCounter) clock() clock.Clock { return c.clk.Get() }

@@ -682,6 +682,19 @@ func gitHeadReadable(dir string) bool {
 	return exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD^{commit}").Run() == nil
 }
 
+// gitHeadSHA returns HEAD's full commit sha, or "" when dir is not a repo or
+// has no readable commit at HEAD. It is exactly the probe gitHeadReadable
+// runs, one `git rev-parse --verify HEAD^{commit}` — the single subprocess
+// FreshnessVerdictCache is allowed on a cache-hit path (PERF-002), whose key
+// must react the moment HEAD moves.
+func gitHeadSHA(dir string) string {
+	sha, err := gitRevVerifyCommit(dir, "HEAD")
+	if err != nil {
+		return ""
+	}
+	return sha
+}
+
 // gitRevVerifyCommit resolves ref to a full commit sha, failing if ref
 // names no object, is ambiguous, or is not a commit.
 func gitRevVerifyCommit(dir, ref string) (string, error) {
