@@ -4202,3 +4202,32 @@ tasks:
   status: complete
   created_at: '2026-09-25T23:20:29.497155+00:00'
   completed_at: '2026-09-26T00:34:46.497113+00:00'
+- id: SCHED-GAP-1630
+  title: Sim-setup report must equal the DB at exit (authoritative totals)
+  criteria:
+  - Report totals equal sqlite GROUP BY status totals at exit on real and sim clock
+  - Zero-tick and zero-spawn reports do not panic or render NaN percent
+  - Caller-set sim-success rate is honored in the report path
+  - go build, go vet, gofmt, golangci-lint clean; new sim report tests pass
+  status: complete
+  created_at: '2026-09-26T03:48:13.820352+00:00'
+  completed_at: '2026-09-26T03:48:35.068759+00:00'
+- id: PERF-002
+  title: Board-freshness verdict cache keyed on board mtime + git HEAD (PERF-002)
+  criteria:
+  - go build ./... and go vet ./... clean, golangci-lint clean
+  - go test -short -p 1 -count=1 ./... green including new verdict-cache unit tests
+  - cached FreshnessReport is served when board mtime and git HEAD are unchanged;
+    full subprocess verification re-runs when either changes; no direct time.* calls
+    outside internal/clock
+  status: in_progress
+  created_at: '2026-09-26T03:49:14.866835+00:00'
+- id: SCHED-GAP-1601
+  title: 'Operator control console: drive the scheduler from the web UI'
+  criteria:
+  - go build ./... compiles; go test -short -p 1 ./... passes; console proxy reuses
+    the API's own requireOperator auth (401 forwarded), refuses destructive actions
+    without confirm=true, writes an audit row per action; gitleaks clean; gofmt clean
+  status: complete
+  created_at: '2026-09-26T03:50:16.201753+00:00'
+  completed_at: '2026-09-26T03:50:35.402689+00:00'
