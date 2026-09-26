@@ -314,6 +314,13 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	data := ProjectDetailData{Title: project.Name, Project: project}
 
 	// Board progress + next-tick timing from the project workdir/cooldown.
+	// SCHED-GAP-1603: the countdown only applies to cooldown-admission
+	// lanes; a tasks-admission lane renders board-driven state from the
+	// SAME readBoardProgress pass (no second board reader) — "due — N board
+	// rows open" / "idle — board drained" / "tasks admission" when the
+	// workdir carries no readable board. The mode resolves with the
+	// scheduler's own rule (project → namespace → cooldown; the namespace
+	// row is loaded directly — the detail page already loads the project).
 	if project.Workdir != "" {
 		data.BoardDone, data.BoardTotal = readBoardProgress(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
 		data.BoardSteps = readBoardSteps(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
@@ -325,7 +332,17 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.LatestTick = latest
 		running = latest != nil && latest.Status == database.StatusRunning
 	}
-	data.NextTickIn = nextTickInAt(g.clock(), running, lastCompleted, project.CooldownS)
+	nsModes := map[string]string{}
+	if project.NamespaceID != nil && *project.NamespaceID != "" {
+		if ns, nsErr := database.GetNamespace(ctx, g.db, *project.NamespaceID); nsErr == nil {
+			nsModes[*project.NamespaceID] = ns.AdmissionMode
+		}
+	}
+	if effectiveAdmissionModeFor(project.AdmissionMode, nsKey(project.NamespaceID), nsModes) == database.AdmissionModeTasks {
+		data.NextTickIn = tasksAdmissionLabel(running, data.BoardDone, data.BoardTotal)
+	} else {
+		data.NextTickIn = nextTickInAt(g.clock(), running, lastCompleted, project.CooldownS)
+	}
 	// Observability: avg tick duration, success rate, ETA over recent ticks.
 	var rt, rf int
 	rt, rf = g.recentTickHealth(ctx, name, 10)
@@ -1019,7 +1036,7 @@ hx-swap="innerHTML">
 </td>
 <td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="num">{{if .ETA}}{{localtime .CompletionAt}}{{if .EtaBreakdown}}<span class="meta" title="{{.EtaBreakdown}}">{{else}}<span class="meta" title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success">{{end}} · {{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}<br>{{if .ProjectedCost}}<span class="meta">~{{money .ProjectedCost}} left</span>{{end}}</td>
-<td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-ok{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
+<td class="{{if eq .NextTickIn "running"}}status-running{{else if or (eq .NextTickIn "due now") (hasPrefix .NextTickIn "due — ")}}status-ok{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
 <td>{{if lt .GitReinsPass 0}}<span class="meta">—</span>{{else}}{{if and (eq .GitReinsPass 100) (eq .CIConclusion "failure")}}<span class="pill fail" title="GitReins says 100% but CI failed — judge may be passing a red suite (cached/LLM-asserted). Trust CI.">{{.GitReinsPass}}% ⚠CI</span>{{else if eq .GitReinsPass 100}}<span class="pill ok">{{.GitReinsPass}}%</span>{{else if ge .GitReinsPass 70}}<span class="pill warn">{{.GitReinsPass}}%</span>{{else}}<span class="pill fail">{{.GitReinsPass}}%</span>{{end}}{{if eq .CIConclusion "failure"}} <span class="meta" title="CI failing">ci✗</span>{{else if eq .CIConclusion "success"}} <span class="meta" title="CI green">ci✓</span>{{end}}{{end}}</td>
 <td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
