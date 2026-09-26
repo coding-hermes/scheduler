@@ -277,18 +277,51 @@ Full Project model (response shape, snake_case):
 
 ### GET /api/v1/projects
 
-**Purpose:** List all projects (enabled AND disabled), ordered by name.
+**Purpose:** List projects (enabled AND disabled), ordered by name —
+**paginated** (SCHED-GAP-1622: the unbounded full-table read pushed this
+endpoint past its 5s handler budget at a ~500-lane fleet; the response shape
+below is the core of SCHED-GAP-1624's silent-`?limit=` fix).
 
-**Query params:** none. **Request body:** none.
+**Query params:**
 
-**Response 200:** `{"projects": [<Project>, ...]}` — empty list when none.
+| Param | Default | Meaning |
+|-------|---------|---------|
+| `limit` | 200 | Page size; values ≤ 0 fall back to the default, values > 500 are capped at **500** (clamped, never a 4xx) |
+| `offset` | 0 | Rows to skip; negative values clamp to 0 |
+
+**Request body:** none.
+
+**Response 200** (object, not a bare array):
+
+```json
+{"projects": [<Project>, ...], "total": 489, "limit": 200, "offset": 0}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `projects` | array | The page's project objects (with `spent_*`/`remaining_*`/`budget_blocked` enrichment — computed for the returned page only) |
+| `total` | int | Count of ALL matching projects (enabled AND disabled) — **not** the page length; page further with `[offset, offset+limit)` while `offset < total` |
+| `limit` | int | The APPLIED page size after clamping (echoed so clients see the effective bound) |
+| `offset` | int | The APPLIED row offset (echoed) |
+
+**Shutdown note for consumers (breaking vs a bare array before SCHED-GAP-1622):**
+in-repo consumers (dashboard, MCP, integration tests) already unwrap
+`.projects`; out-of-repo pickers that did `resp.json()` dereferenced the
+array directly and must now read `resp.json()["projects"]`.
+
+Page everything with `?limit=500` (the max) plus offsets; a short final page
+means you have reached `total`.
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/projects | jq '.projects[0].cooldown_s'
 # 3600
+curl -s 'http://127.0.0.1:9090/api/v1/projects?limit=2&offset=2' | jq '{n: (.projects|length), total, limit, offset}'
+# {"n":2,"total":489,"limit":2,"offset":2}
 ```
 
-**Errors:** 405 on non-GET.
+**Errors:** 405 on non-GET. The pagination never 4xxes a bad
+limit/offset — values are clamped (fail-soft) so a dashboard poll cannot
+break.
 
 ### POST /api/v1/projects
 
