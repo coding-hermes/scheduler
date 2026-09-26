@@ -26,7 +26,13 @@ type SimSpawner struct {
 	// which never exercises the adaptive-cooldown slow-down path. Set via
 	// SetIdleRate (wired to --sim-idle) to simulate quiet boards.
 	idleRate float64
-	mu       sync.Mutex
+	// completionDelay, when > 0, replaces the 50-250ms randomised outcome
+	// delay of every Spawn (SCHED-GAP-1630): a test that pins a large delay
+	// makes settleSimWork hit its bounded deadline deterministically, which
+	// is the only honest way to exercise the unresolved-at-deadline report
+	// path. Production code never sets it.
+	completionDelay time.Duration
+	mu              sync.Mutex
 }
 
 // NewSimSpawner creates a simulated spawner.
@@ -53,6 +59,28 @@ func (s *SimSpawner) SetIdleRate(rate float64) {
 		rate = 1
 	}
 	s.idleRate = rate
+}
+
+// SetCompletionDelay replaces the randomised 50-250ms outcome delay of every
+// subsequent Spawn with a fixed delay (SCHED-GAP-1630). A test that pins a
+// delay longer than the runner's settle deadline makes RunMultiTick's
+// bounded wait expire with work still in flight — the exact unresolved path
+// the report must phrase as an in-flight snapshot. 0 restores the default.
+// Test seam only; production code never calls it.
+func (s *SimSpawner) SetCompletionDelay(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completionDelay = d
+}
+
+// outcomeDelay returns the pre-outcome sleep of one Spawn call.
+func (s *SimSpawner) outcomeDelay() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.completionDelay > 0 {
+		return s.completionDelay
+	}
+	return time.Duration(50+rand.Intn(200)) * time.Millisecond
 }
 
 // Spawn simulates launching a foreman. It creates a tick, marks it running,
@@ -84,7 +112,7 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 	}
 
 	go func() {
-		s.clock().Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+		s.clock().Sleep(s.outcomeDelay())
 		outcome := spawned.Wait()
 		s.mu.Lock()
 		defer s.mu.Unlock()

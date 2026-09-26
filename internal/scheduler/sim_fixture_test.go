@@ -379,3 +379,106 @@ func TestSimReportSummary_NoSpawn_NoPanic(t *testing.T) {
 		t.Errorf("Summary rendered NaN on a zero-spawn report:\n%s", s)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SCHED-GAP-1630 honesty path: the report's DB-verified line (AC3) and the
+// unresolved-at-deadline snapshot phrasing (AC2). Both build on the settle
+// fix above: a fully settled run prints a plain success rate plus a
+// DB-verified line; a run whose settle deadline expires with ticks still
+// unresolved must phrase its success rate as an in-flight snapshot instead
+// of a silently wrong final percentage.
+// ---------------------------------------------------------------------------
+
+// TestSimReportSummary_DBVerifiedLine (AC3): a settled run's Summary must
+// carry the 'DB-verified:' line with completed/failed/timeout totals and a
+// resolved-success percentage that matches the report's own counts — and
+// must NOT carry in-flight phrasing.
+func TestSimReportSummary_DBVerifiedLine(t *testing.T) {
+	r := &SimReport{
+		TotalSpawned:   90,
+		TotalCompleted: 82,
+		TotalFailed:    1,
+		TotalTimeout:   7,
+	}
+	s := r.Summary()
+	if !strings.Contains(s, "DB-verified: 82 completed, 1 failed, 7 timeout") {
+		t.Errorf("Summary missing DB-verified totals line:\n%s", s)
+	}
+	if !strings.Contains(s, "DB-verified: 82 completed, 1 failed, 7 timeout (91.1% resolved-success)") {
+		t.Errorf("Summary DB-verified line wrong (want 91.1%% resolved-success):\n%s", s)
+	}
+	if strings.Contains(s, "in-flight") {
+		t.Errorf("a fully settled report must not carry in-flight phrasing:\n%s", s)
+	}
+}
+
+// TestSimReportSummary_ZeroResolvedNoNaN: a report where NOTHING resolved yet
+// (all ticks still running) must render the DB-verified line without NaN and
+// with the in-flight snapshot phrasing.
+func TestSimReportSummary_ZeroResolvedNoNaN(t *testing.T) {
+	r := &SimReport{
+		TotalSpawned: 12,
+		InFlight:     12,
+	}
+	s := r.Summary()
+	if strings.Contains(s, "NaN") {
+		t.Errorf("Summary rendered NaN with zero resolved ticks:\n%s", s)
+	}
+	if !strings.Contains(s, "in-flight at report time: 0/12 resolved") {
+		t.Errorf("Summary missing in-flight snapshot phrasing:\n%s", s)
+	}
+}
+
+// TestRunMultiTick_UnresolvedAtDeadline_SnapshotPhrasing (AC2): with the
+// sim spawner's completion delay pinned beyond the runner's settle deadline,
+// RunMultiTick must return with unresolved ticks recorded as InFlight, and
+// Summary must print the in-flight snapshot phrasing instead of presenting
+// the mid-flight success rate as a final verdict.
+func TestRunMultiTick_UnresolvedAtDeadline_SnapshotPhrasing(t *testing.T) {
+	db := newTestDB(t)
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
+
+	runner, _ := newSimRunner1630(t, db, sim)
+	runner.loop.SetSimulation(0.85)
+
+	const ticks = 1
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Pin every spawned tick's outcome delay far beyond the settle deadline,
+	// and shorten the settle deadline to a poll cycle: the bounded wait
+	// expires deterministically with work in flight.
+	runner.loop.simSpawner.SetCompletionDelay(50 * time.Minute)
+	runner.SetSettleTimeout(60 * time.Millisecond)
+
+	report, err := runner.RunMultiTick(ctx, ticks)
+	if err != nil {
+		t.Fatalf("RunMultiTick: %v", err)
+	}
+
+	if report.InFlight <= 0 {
+		t.Fatalf("InFlight = %d, want > 0 — the settle deadline expired with spawned ticks unresolved", report.InFlight)
+	}
+	s := report.Summary()
+	if !strings.Contains(s, "in-flight at report time:") {
+		t.Errorf("unresolved-at-deadline report must phrase the rate as an in-flight snapshot:\n%s", s)
+	}
+
+	// The snapshot phrasing must ride the success-rate line itself — the
+	// rate must never appear as a bare final percentage on this path.
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Success rate:") && !strings.Contains(line, "in-flight") {
+			t.Errorf("unresolved-at-deadline report printed a final success rate with no in-flight qualifier: %q", line)
+		}
+	}
+
+	// The DB-verified line must still cover exactly what did resolve — here
+	// nothing — without NaN.
+	if !strings.Contains(s, "DB-verified:") {
+		t.Errorf("unresolved-at-deadline report must still carry the DB-verified line:\n%s", s)
+	}
+	if strings.Contains(s, "NaN") {
+		t.Errorf("Summary rendered NaN on the unresolved path:\n%s", s)
+	}
+}

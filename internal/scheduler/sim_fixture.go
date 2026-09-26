@@ -143,6 +143,11 @@ type SimRunner struct {
 	fixture     *SimFixture
 	idleRate    float64
 	successRate float64
+	// settleTimeout bounds settleSimWork's wait for asynchronously resolving
+	// sim ticks (SCHED-GAP-1630). The zero value is the 30s default applied
+	// by NewSimRunner; a test shortens it to reach the unresolved-at-deadline
+	// path deterministically without waiting real minutes.
+	settleTimeout time.Duration
 }
 
 // simTickIDPrefix is the ID prefix of every tick RunMultiTick spawns
@@ -154,9 +159,20 @@ const simTickIDPrefix = "sim-tick"
 // NewSimRunner creates a runner bound to an existing loop.
 func NewSimRunner(loop *Loop, fixture *SimFixture) *SimRunner {
 	return &SimRunner{
-		loop:    loop,
-		fixture: fixture,
+		loop:          loop,
+		fixture:       fixture,
+		settleTimeout: 30 * time.Second, // SCHED-GAP-1630 settle backstop
 	}
+}
+
+// SetSettleTimeout overrides the bounded wait for asynchronously resolving
+// sim ticks (SCHED-GAP-1630). Values <= 0 restore the 30s default. Test seam
+// for the unresolved-at-deadline path; production keeps the default.
+func (sr *SimRunner) SetSettleTimeout(d time.Duration) {
+	if d <= 0 {
+		d = 30 * time.Second
+	}
+	sr.settleTimeout = d
 }
 
 // SetIdleRate sets the fraction of completed sim ticks with zero commits
@@ -224,8 +240,12 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 	// at return — settle the outstanding completion timers (bounded by the
 	// context on both clocks), then re-read the totals straight from
 	// SQLite's GROUP BY ticks.status over this runner's rows so the report
-	// can never disagree with its own DB.
-	sr.settleSimWork(ctx)
+	// can never disagree with its own DB. If the bounded deadline expires
+	// with ticks still unresolved, InFlight records how many and Summary
+	// prints the snapshot AS a snapshot, never a silently wrong verdict.
+	if !sr.settleSimWork(ctx) {
+		report.InFlight = sr.runningCount()
+	}
 	report.TotalSpawned, report.TotalCompleted, report.TotalFailed, report.TotalTimeout =
 		sr.dbStatusTotals()
 	// Per-batch budget use is a packer decision known only in-process — it
@@ -240,6 +260,9 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 
 // settleSimWork waits until every simulated tick spawned during the run has
 // written its outcome row, bounded by ctx (and a hard deadline as backstop).
+// It reports whether the wait fully settled: false means the deadline (or
+// context) expired with rows still in flight, and the caller must treat the
+// report as a snapshot (SCHED-GAP-1630), never a final verdict.
 //
 // Proof of settling: Spawn inserts each row SYNCHRONOUSLY with the
 // transitional 'running' status; the completion goroutine later moves its row
@@ -247,25 +270,22 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 // exactly while its outcome write is in flight, so zero running rows among
 // this runner's IDs proves every spawned tick has settled — on the wall
 // clock and on a simulated clock alike, with no clock-specific waiting.
-func (sr *SimRunner) settleSimWork(ctx context.Context) {
-	const (
-		poll    = 20 * time.Millisecond
-		maxWait = 30 * time.Second
-	)
+func (sr *SimRunner) settleSimWork(ctx context.Context) bool {
+	const poll = 20 * time.Millisecond
 	// All reads/waits go through the component clock (SCHED-GAP-169 static
 	// guard). On a SimClock the poll is a virtual sleep; on the wall clock
 	// it is the real 20ms.
 	clk := sr.clock()
-	deadline := clk.Now().Add(maxWait)
+	deadline := clk.Now().Add(sr.settleTimeout)
 	for {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		if sr.runningCount() == 0 {
-			return
+			return true
 		}
 		if clk.Now().After(deadline) {
-			return // bounded; DB totals stay authoritative even if late
+			return false // bounded; DB totals stay authoritative even if late
 		}
 		clk.Sleep(poll)
 	}
@@ -386,6 +406,12 @@ type SimReport struct {
 	TotalTimeout    int
 	TotalBudgetUsed int
 	AvgPerTick      float64
+	// InFlight is the number of this run's ticks that were still unresolved
+	// (no terminal status row) when the settle deadline passed
+	// (SCHED-GAP-1630). 0 on a fully settled run — the overwhelmingly
+	// common case. Non-zero downgrades Summary's success-rate line to an
+	// explicit in-flight snapshot instead of a final verdict.
+	InFlight int
 }
 
 // SimTickReport holds one tick's statistics.
@@ -414,21 +440,44 @@ func (r *SimReport) Summary() string {
 	if r.TotalSpawned > 0 {
 		successRate = float64(r.TotalCompleted) / float64(r.TotalSpawned) * 100
 	}
-	s := fmt.Sprintf(`
-========== SIMULATION REPORT ==========
+
+	// SCHED-GAP-1630: the DB-verified line is computed from the authoritative
+	// SQLite status rows the report totals were re-read from, so an operator
+	// can cross-check the printed verdict against the run's own DB. The
+	// resolved-success rate counts only ticks with a terminal status — the
+	// engine's honest per-resolved-outcome success, not spawned/total.
+	dbResolved := r.TotalCompleted + r.TotalFailed + r.TotalTimeout
+	dbRate := 0.0
+	if dbResolved > 0 {
+		dbRate = float64(r.TotalCompleted) / float64(dbResolved) * 100
+	}
+
+	// SCHED-GAP-1630: with ticks still unresolved at the settle deadline the
+	// spawned/total "success rate" is a mid-flight number, not the engine's
+	// verdict — print it AS a snapshot instead of a silently wrong final
+	// percentage.
+	rateLine := fmt.Sprintf("Success rate: %.1f%%", successRate)
+	if r.InFlight > 0 {
+		rateLine = fmt.Sprintf("Success rate: %.1f%% (in-flight at report time: %d/%d resolved)",
+			successRate, dbResolved, r.TotalSpawned)
+	}
+
+	s := fmt.Sprintf(`========== SIMULATION REPORT ==========
 Ticks:       %d (%.1fs real time)
 Projects:    %d total, %d enabled
 Budget:      %d  |  Max concurrent: %d
 
 Per tick:    avg %.1f projects, avg %d budget used
 Total:       %d spawned, %d completed, %d failed, %d timeout
-Success rate: %.1f%%
+%s
+DB-verified: %d completed, %d failed, %d timeout (%.1f%% resolved-success)
 
 Priority spread by tick:
 `, r.TickCount, r.Elapsed.Seconds(), r.Projects, r.Enabled, r.Budget, r.MaxConcur,
 		r.AvgPerTick, budgetPerTick,
 		r.TotalSpawned, r.TotalCompleted, r.TotalFailed, r.TotalTimeout,
-		successRate)
+		rateLine,
+		r.TotalCompleted, r.TotalFailed, r.TotalTimeout, dbRate)
 
 	for _, t := range r.Ticks {
 		s += fmt.Sprintf("  tick %2d: %d projects [%v]  budget=%d/100\n",
