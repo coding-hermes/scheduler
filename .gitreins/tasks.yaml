@@ -4270,3 +4270,38 @@ tasks:
   status: complete
   created_at: '2026-09-26T09:30:20.182863+00:00'
   completed_at: '2026-09-26T09:30:25.924981+00:00'
+- id: SCHED-GAP-1613
+  title: Truncated-db corruption named explicitly in backfill-commit-signals
+  criteria:
+  - Tier 1 guard passes. cmd/backfill-commit-signals detects a 0-byte truncated database
+    file and exits rc=1 with a message containing corrupt or truncated plus the file
+    path; a valid non-empty database still opens; go build ./... clean; go test ./cmd/backfill-commit-signals/
+    green.
+  status: in_progress
+  created_at: '2026-09-26T10:38:15.527454+00:00'
+- id: SCHED-GAP-1615
+  title: MemLimitOffByDefault skips under a capped parent harness
+  criteria:
+  - Tier 1 guard passes. TestSpawn_MemLimitOffByDefault skips with an explicit message
+    when the parent process carries a non-infinity RLIMIT_AS soft limit and runs the
+    existing assertion unchanged when uncapped; only test files change; go test ./internal/scheduler/
+    -run TestSpawn_MemLimit green.
+  status: in_progress
+  created_at: '2026-09-26T10:38:15.990055+00:00'
+- id: SCHED-GAP-1620
+  title: Spawn refuses disabled projects with 409
+  criteria:
+  - Tier 1 guard passes. POST /api/v1/projects/{name}/spawn returns 409 with a disabled
+    message for an enabled-false project and still returns 202 for an enabled project
+    per handler tests; go test ./internal/api/ green; docs/api.md spawn section documents
+    the 409.
+  status: in_progress
+  created_at: '2026-09-26T10:38:16.423196+00:00'
+- id: SCHED-GAP-1610
+  title: generator_data.go gofmt-clean (stale-row re-measure)
+  criteria:
+  - "Tier 1 guard passes. gofmt -l ./cmd ./internal is empty, golangci-lint run exits\
+    \ 0 with 0 issues, go build ./... clean \u2014 the internal/dashboard/generator_data.go\
+    \ formatting drift named by the row no longer reproduces at HEAD."
+  status: in_progress
+  created_at: '2026-09-26T10:39:22.689111+00:00'
