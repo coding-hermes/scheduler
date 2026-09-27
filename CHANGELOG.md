@@ -31,7 +31,9 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-09-22
+## [Unreleased] — 2026-09-27
+
+## [1.6.0] — 2026-09-27
 
 ### Gateway zero-assistant completion gate (SCHED-GAP-205-A)
 
