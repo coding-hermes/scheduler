@@ -85,6 +85,8 @@ make migrate
 
 ### 5. Run the Scheduler
 
+Every environment variable the daemon reads (precedence chain, env-only credentials, knobs with no flag) is tabulated in [docs/reference/env-vars.md](docs/reference/env-vars.md).
+
 ```bash
 # Start the daemon on port 9090
 ./bin/schedulerd
