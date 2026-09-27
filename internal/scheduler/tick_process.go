@@ -173,10 +173,23 @@ func (l *Loop) evaluate() {
 	// GET /api/v1/events/stream. Deliberately not folded into the ADMIT
 	// lines: those are per-lane; the hold is a per-namespace statement
 	// about configuration vs budget.
+	//
+	// SCHED-GAP-1614: the HIGH event is deduped to STATE CHANGE by the
+	// packer's per-namespace hold state (h.emit) — an unchanged hold
+	// (same roster, same arithmetic, continuously held) no longer emits
+	// one event per pass; the per-lane deferrals and the grep-stable
+	// BUDGET-HOLD log line stay per-pass. The in-hold view is snapshotted
+	// for the escalator so a held lane's starvation check reconciles with
+	// the hold ("held by budget ns=X") instead of double-warning.
 	for _, h := range budgetHolds {
 		logBudgetHold(h)
 		recordBudgetHoldDeferrals(l, h, admitPassID)
-		emitBudgetHoldEvent(l.events, h, admitPassID, now)
+		if h.emit {
+			emitBudgetHoldEvent(l.events, h, admitPassID, now)
+		}
+	}
+	if l.multiPoolPacker != nil {
+		l.budgetHoldViews = l.multiPoolPacker.heldByProject()
 	}
 
 	if len(packed) == 0 {
@@ -304,11 +317,16 @@ func (l *Loop) evaluate() {
 	if len(packed) > 0 && gatewayDeferred == 0 {
 		l.mu.RLock()
 		policy := l.autoDisablePolicy
+		// SCHED-GAP-1614: the per-namespace in-hold snapshot taken right
+		// after the pack — a lane in it escalates as "held by budget",
+		// not "starved".
+		holdViews := l.budgetHoldViews
 		l.mu.RUnlock()
 		escalator := NewAlertEscalator(l.db, l.events, policy)
 		// SCHED-GAP-169: the escalator reads/writes timestamps and throttle
 		// windows, so it follows the loop's clock like every other component.
 		escalator.SetClock(l.clock())
+		escalator.SetBudgetHolds(holdViews)
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}

@@ -44,6 +44,14 @@ type Loop struct {
 	// or exceeds it. Zero = feature off.
 	autoDisablePolicy autoDisablePolicy
 
+	// budgetHoldViews (SCHED-GAP-1614) is the per-namespace in-hold view
+	// snapshotted from the multi-pool packer right after each Pack (the
+	// holds' emit/dedupe bookkeeping has already run at that point). Keyed
+	// by namespace ID; handed to the alert escalator each health pass so a
+	// lane its namespace holds reports "held by budget ns=X", not
+	// "starved". Written under mu in evaluate; read under RLock.
+	budgetHoldViews map[string]BudgetHoldView
+
 	mu     sync.RWMutex
 	stopCh chan struct{}
 	// SCHED-GAP-1575-A: atomic mirror of the spawner gateway-response

@@ -824,3 +824,131 @@ func TestHarnessFailureClassification(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SCHED-GAP-1614 — a lane whose namespace is in budget-hold escalates as
+// "held by budget", not "starved". Uses this file's minimal schema: the
+// lane→namespace mapping lives entirely in the installed BudgetHoldView
+// (the packer's roster), so no namespace tables are needed here.
+// ---------------------------------------------------------------------------
+
+// TestAlertEscalator_BudgetHoldReconcilesStarvation — acceptance 3: with a
+// hold view installed, a lane in the held roster escalates as
+// "lane held by budget ns=<id>" with the hold arithmetic in the details;
+// a lane NOT in any roster still escalates as "project starved"; a held
+// lane that never completed a tick emits nothing (the pre-existing guard).
+func TestAlertEscalator_BudgetHoldReconcilesStarvation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Two 6h-old completed ticks against a 30m cooldown (threshold 1h):
+	// both starved-eligible; only held-lane is in the hold roster.
+	insertProject(t, db, "held-lane", 1800)
+	insertProject(t, db, "free-lane", 1800)
+	insertTick(t, db, "TICK-H1", "held-lane", "completed", time.Now().Add(-6*time.Hour))
+	insertTick(t, db, "TICK-F1", "free-lane", "completed", time.Now().Add(-6*time.Hour))
+	insertProject(t, db, "held-never", 1800) // no completed tick
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	escalator.SetBudgetHolds(map[string]BudgetHoldView{
+		"ns-sat": {
+			NamespaceID: "ns-sat",
+			Demand:      61,
+			Alloc:       1,
+			Members:     []string{"fat-big", "held-lane", "held-never"},
+		},
+	})
+
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation: %v", err)
+	}
+
+	var msg, details string
+	err := db.QueryRow(`SELECT message, details FROM events WHERE severity = ? AND message LIKE 'lane held by budget%'`,
+		string(SeverityMedium)).Scan(&msg, &details)
+	if err != nil {
+		t.Fatalf("no held-by-budget MEDIUM event emitted: %v", err)
+	}
+	if !strings.HasPrefix(msg, "lane held by budget ns=ns-sat: held-lane") {
+		t.Errorf("message = %q, want prefix %q", msg, "lane held by budget ns=ns-sat: held-lane")
+	}
+	if strings.Contains(msg, "starved") {
+		t.Errorf("held lane must not escalate as starved: %q", msg)
+	}
+	for _, want := range []string{`"project":"held-lane"`, `"held_by_budget":true`, `"namespace":"ns-sat"`, `"hold_demand":61`, `"hold_alloc":1`} {
+		if !strings.Contains(details, want) {
+			t.Errorf("details missing %s: %s", want, details)
+		}
+	}
+
+	// The not-held lane got its classic starvation event.
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE details LIKE '%"project":"free-lane"%' AND message LIKE 'project starved%'`).Scan(&n); err != nil {
+		t.Fatalf("count free-lane events: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("free-lane starvation events = %d, want 1 (reconciliation must not touch unheld lanes)", n)
+	}
+	// The never-completed held lane emitted nothing.
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE details LIKE '%"project":"held-never"%'`).Scan(&n); err != nil {
+		t.Fatalf("count held-never events: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("held-never events = %d, want 0 (never-completed guard applies)", n)
+	}
+}
+
+// TestAlertEscalator_BudgetHoldNilViewKeepsStarvation — no view installed
+// (flat mode, tooling): byte-identical pre-1614 behaviour.
+func TestAlertEscalator_BudgetHoldNilViewKeepsStarvation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "plain-lane", 1800)
+	insertTick(t, db, "TICK-P1", "plain-lane", "completed", time.Now().Add(-6*time.Hour))
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	escalator.SetBudgetHolds(nil)
+
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Fatalf("MEDIUM events = %d, want 1", n)
+	}
+	var msg string
+	if err := db.QueryRow(`SELECT message FROM events WHERE severity = ? LIMIT 1`, string(SeverityMedium)).Scan(&msg); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if !strings.HasPrefix(msg, "project starved: plain-lane") {
+		t.Errorf("message = %q, want %q — nil view must keep the classic path", msg, "project starved: plain-lane")
+	}
+}
+
+// TestAlertEscalator_BudgetHoldThrottled — the held-by-budget event rides
+// the SAME 30-minute starvation throttle (shared lastStarvationEvent
+// window), so a long hold re-alarms once per window, not once per pass.
+func TestAlertEscalator_BudgetHoldThrottled(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "held-lane", 1800)
+	insertTick(t, db, "TICK-H1", "held-lane", "completed", time.Now().Add(-6*time.Hour))
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	escalator.SetBudgetHolds(map[string]BudgetHoldView{
+		"ns-sat": {NamespaceID: "ns-sat", Demand: 10, Alloc: 1, Members: []string{"held-lane"}},
+	})
+
+	for i := 0; i < 3; i++ {
+		if err := escalator.CheckStarvation(context.Background()); err != nil {
+			t.Fatalf("CheckStarvation pass %d: %v", i+1, err)
+		}
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Errorf("MEDIUM events after 3 passes = %d, want 1 (throttle window shared with starvation)", n)
+	}
+}

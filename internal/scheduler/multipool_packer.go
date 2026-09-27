@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/config"
@@ -81,6 +82,14 @@ type MultiPoolPacker struct {
 	// cycle by the loop via SetWaveShedDB; nil (tests, tooling) = shed
 	// scanning disabled, packing byte-identical to pre-SCHED-GAP-113.
 	waveShedDB *sql.DB
+
+	// holdState (SCHED-GAP-1614) is each namespace's budget-hold memory:
+	// the fairness-rotation cursor and the hold-event dedupe signature.
+	// Keyed by namespace ID; entries persist for the packer's life so
+	// rotation and dedupe survive across evaluation cycles. Guarded by
+	// holdMu (Pack can be called concurrently in tests).
+	holdState map[string]*NamespaceHoldState
+	holdMu    sync.Mutex
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
@@ -98,7 +107,72 @@ func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.Blac
 		maxConcurrent:   maxConcurrent,
 		blackoutWindows: blackoutWindows,
 		pendingCounter:  defaultPendingCounter,
+		holdState:       make(map[string]*NamespaceHoldState),
 	}
+}
+
+// holdStateFor returns the per-namespace hold state for nsID, creating it on
+// first use (SCHED-GAP-1614). Never nil.
+func (m *MultiPoolPacker) holdStateFor(nsID string) *NamespaceHoldState {
+	m.holdMu.Lock()
+	defer m.holdMu.Unlock()
+	if m.holdState == nil {
+		m.holdState = make(map[string]*NamespaceHoldState)
+	}
+	st, ok := m.holdState[nsID]
+	if !ok {
+		st = NewNamespaceHoldState()
+		m.holdState[nsID] = st
+	}
+	return st
+}
+
+// heldByProject (SCHED-GAP-1614) renders the CURRENT in-hold view for the
+// escalator (SCHED-GAP-1614 item 3): one entry per namespace that is in
+// budget-hold as of the latest Pack — the structured mirror of
+// NamespaceHoldState's last NoteHold (demand/alloc/roster, heldByProject
+// reads only). A namespace not in the map was last seen NOT held.
+func (m *MultiPoolPacker) heldByProject() map[string]BudgetHoldView {
+	m.holdMu.Lock()
+	defer m.holdMu.Unlock()
+	out := make(map[string]BudgetHoldView, len(m.holdState))
+	for nsID, st := range m.holdState {
+		if !st.inHold {
+			continue
+		}
+		out[nsID] = BudgetHoldView{
+			NamespaceID: nsID,
+			Demand:      st.lastDemand,
+			Alloc:       st.lastAlloc,
+			Members:     append([]string(nil), st.lastMembers...),
+		}
+	}
+	return out
+}
+
+// BudgetHoldView is the cross-file view of one namespace's CURRENT budget
+// hold (SCHED-GAP-1614 item 3): what the alert escalator needs to know to
+// reconcile a starved escalation with the hold. demand/alloc are the last
+// hold's arithmetic; members is the held-eligible roster in canonical order.
+// The struct is mirror-only — the packer's hold state stays the single
+// source of truth, mutated by NoteHold/NoteNoHold.
+type BudgetHoldView struct {
+	NamespaceID string
+	Demand      int
+	Alloc       int
+	Members     []string
+}
+
+// Held (SCHED-GAP-1614 item 3) reports whether lane is currently held by
+// budget in this view's namespace: the roster is the held-eligible set, so
+// membership is the verdict.
+func (v BudgetHoldView) Held(lane string) bool {
+	for _, m := range v.Members {
+		if m == lane {
+			return true
+		}
+	}
+	return false
 }
 
 // SetPendingCounter overrides the pending-task counter (for tests).

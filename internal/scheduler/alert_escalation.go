@@ -24,6 +24,16 @@ type AlertEscalator struct {
 	// autoDisable configures per-project failure-rate auto-disable
 	// (SCHED-GAP-018). failureRate <= 0 = feature off.
 	autoDisable autoDisablePolicy
+	// budgetHolds (SCHED-GAP-1614) is the packer's CURRENT per-namespace
+	// in-hold view, installed per health pass by Loop.evaluate via
+	// SetBudgetHolds. A lane whose namespace is in this map AND in the
+	// namespace's held-eligible roster is held by budget, and its
+	// starvation check escalates as "held by budget ns=X" (MEDIUM, same
+	// severity/throttle) instead of "starved" — the hold event already
+	// explains WHY nothing ran, so the escalation names the hold rather
+	// than double-warning. nil/empty = no hold knowledge; behaviour is
+	// byte-identical to pre-1614.
+	budgetHolds map[string]BudgetHoldView
 }
 
 // NewAlertEscalator creates an escalator backed by db and events. The
@@ -132,10 +142,25 @@ func (ae *AlertEscalator) lastConsecutiveFailureEvent(ctx context.Context, proje
 	return t, true
 }
 
+// SetBudgetHolds installs the packer's CURRENT per-namespace in-hold view
+// (SCHED-GAP-1614). Pass nil to clear (behaviour reverts to pre-1614).
+func (ae *AlertEscalator) SetBudgetHolds(holds map[string]BudgetHoldView) {
+	ae.budgetHolds = holds
+}
+
 // CheckStarvation emits MEDIUM for each enabled project that has not had a
 // completed tick in more than 2× its configured maximum interval. Events are
 // throttled per-project: a starvation event is emitted at most once per
 // starvationThrottleWindow per project (SCHED-GAP-014).
+//
+// SCHED-GAP-1614: a lane whose namespace is currently in budget-hold and
+// whose name is in the namespace's held-eligible roster escalates as
+// "lane held by budget ns=<id>" (MEDIUM, same throttle) instead of
+// "project starved" — the weight-budget hold explains why nothing ran, so
+// the escalation must name the hold, not double-warning as starvation.
+// The never-completed guard below applies equally (a held lane that never
+// completed a tick is held work by definition, not a new hold worth its own
+// event class).
 func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 	// Query enabled projects with their intervals.
 	prows, err := ae.db.QueryContext(ctx,
@@ -194,12 +219,36 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 	for _, proj := range projects {
 		last, ok := lastCompleted[proj.name]
 		if !ok {
-			// Never completed a tick — not necessarily starved if it just started.
+			// Never completed a tick — not necessarily starved if it just
+			// started.
 			continue
 		}
 		age := now.Sub(last)
 		threshold := time.Duration(proj.cooldown) * time.Second * 2
 		if age > threshold {
+			// SCHED-GAP-1614: reconcile with the budget hold FIRST — a lane
+			// its namespace currently holds is held by budget, not starved.
+			if v, held := ae.heldByView(proj.name); held {
+				if lastEmit, ok := ae.lastStarvationEvent(ctx, proj.name); ok {
+					if now.Sub(lastEmit) < starvationThrottleWindow {
+						continue
+					}
+				}
+				ae.events.Emit(ctx, SeverityMedium, "escalation",
+					fmt.Sprintf("lane held by budget ns=%s: %s — last tick %v ago, cooldown %ds",
+						v.NamespaceID, proj.name, age.Round(time.Second), proj.cooldown),
+					map[string]any{
+						"project":        proj.name,
+						"held_by_budget": true,
+						"namespace":      v.NamespaceID,
+						"hold_demand":    v.Demand,
+						"hold_alloc":     v.Alloc,
+						"last_tick":      last.Format(time.RFC3339),
+						"cooldown":       proj.cooldown,
+						"age_seconds":    age.Seconds(),
+					})
+				continue
+			}
 			// SCHED-GAP-014: throttle — only emit if no starvation event for
 			// this project was recorded within the throttle window. This
 			// prevents ~1 event/minute spam while still emitting once every
@@ -221,6 +270,22 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// heldByView (SCHED-GAP-1614) returns the view of the namespace currently
+// holding lane (roster membership scan — the fleet's namespace count is
+// small, so a linear scan over the per-pass snapshot beats maintaining a
+// per-lane index), or ok=false when no installed view holds it.
+func (ae *AlertEscalator) heldByView(lane string) (BudgetHoldView, bool) {
+	if ae.budgetHolds == nil {
+		return BudgetHoldView{}, false
+	}
+	for _, v := range ae.budgetHolds {
+		if v.Held(lane) {
+			return v, true
+		}
+	}
+	return BudgetHoldView{}, false
 }
 
 // CheckConsecutiveFailures emits HIGH for any project with more than 3

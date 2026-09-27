@@ -87,6 +87,12 @@ func (m *MultiPoolPacker) Pack(
 		// namespace carried into this pack — the raw demand the allocation
 		// is measured against for the oversubscription verdict.
 		demand int
+		// SCHED-GAP-1614: roster is the held-eligible member names this
+		// pass (the dedupe-signature basis); rotatedNames is what BeginPass
+		// promoted to the front (rotation provenance, canonical order).
+		// Both are read back when the holds are built after borrowing.
+		roster       []string
+		rotatedNames []string
 	}
 	states := make(map[string]*nsPackState)
 
@@ -111,6 +117,13 @@ func (m *MultiPoolPacker) Pack(
 		if !ok || alloc == 0 {
 			continue
 		}
+
+		// SCHED-GAP-1614 fairness rotation: ask this namespace's hold state
+		// which previously-held lanes lead this pass's candidate order. nil
+		// result = no prior hold (or none eligible today) — order untouched.
+		// The ring advances in EndPass below, once per held pass.
+		var rotate []string
+		rotatedPos := map[string]int{}
 
 		// Filter projects belonging to this namespace.
 		var nsProjects []database.Project
@@ -153,6 +166,13 @@ func (m *MultiPoolPacker) Pack(
 
 		// Compute urgency + effective weight for each project.
 		scored := make([]ProjectUrgency, 0, len(nsProjects))
+		// SCHED-GAP-1614: this namespace's held-eligible roster — every
+		// enabled, budget-gate-passed member that entered the scoring loop.
+		// It is the basis of the hold-event dedupe signature (rotation
+		// varies the held subset every pass; the roster is what actually
+		// changed when the situation changed) and of the escalator's
+		// "held by budget" membership verdict.
+		var members []string
 		for _, p := range nsProjects {
 			var lastTick *time.Time
 			if lt, ok := lastCompleted[p.Name]; ok {
@@ -201,10 +221,34 @@ func (m *MultiPoolPacker) Pack(
 				EffectiveWeight: effW,
 				BumpCooldownS:   bumpCD,
 			})
+			members = append(members, p.Name)
+		}
+
+		// SCHED-GAP-1614: promote the previously-held lanes now that the
+		// roster is known (the BeginPass answer is scoped to the members
+		// that entered the scoring loop).
+		rotate = m.holdStateFor(ns.ID).BeginPass(members)
+		for i, name := range rotate {
+			rotatedPos[name] = i
 		}
 
 		// Sort by urgency descending, then priority, then last-tick ASC.
+		// SCHED-GAP-1614: when rotation is active, the promotion is the
+		// PRIMARY key of this ONE sort — promoted lanes (in ring order)
+		// lead, and the urgency cascade applies within each group. The
+		// promotion cannot be a separate pre-sort: a following full
+		// urgency sort would move every promoted lane straight back to
+		// its urgency position (measured: pass 2 re-held the identical
+		// set), which is exactly the defect this row closes.
 		sort.SliceStable(scored, func(i, j int) bool {
+			pi, iok := rotatedPos[scored[i].Project.Name]
+			pj, jok := rotatedPos[scored[j].Project.Name]
+			if iok && jok && pi != pj {
+				return pi < pj // promoted: ring order
+			}
+			if iok != jok {
+				return iok // promoted before non-promoted
+			}
 			if scored[i].Urgency != scored[j].Urgency {
 				return scored[i].Urgency > scored[j].Urgency
 			}
@@ -228,6 +272,10 @@ func (m *MultiPoolPacker) Pack(
 
 		// Greedy pack into namespace allocation.
 		st := &nsPackState{ns: ns, alloc: alloc}
+		// SCHED-GAP-1614: carry the roster and the rotation promotion into the
+		// state so the hold build (after borrowing) can stamp them on the hold.
+		st.roster = members
+		st.rotatedNames = rotate
 		budgetRemaining := alloc
 		for i := range scored {
 			pu := &scored[i]
@@ -440,10 +488,39 @@ func (m *MultiPoolPacker) Pack(
 	// Phase-3 borrowing — because a namespace that borrowed enough budget
 	// to place its queued work is NOT over-committed; only the surplus
 	// still queued against the FINAL allocation is held.
+	//
+	// SCHED-GAP-1614: each hold feeds its namespace's hold state — the
+	// rotation ring advances by the held set (EndPass, one step per held
+	// pass) and the dedupe memory records the hold (NoteHold), whose
+	// verdict rides the hold as Emit so the caller emits the HIGH event on
+	// STATE CHANGE only. Rotation provenance (which promoted lanes are in
+	// this hold) is stamped for the log/deferral/event surfaces. A
+	// namespace seen NOT held is noted so a later re-hold is a fresh
+	// enter (re-emit).
 	for id, st := range states {
-		if h := newNsHold(id, st.demand, newAllocations[id], st.queued); h.over() > 0 {
-			budgetHolds = append(budgetHolds, h)
+		h := newNsHold(id, st.demand, newAllocations[id], st.queued, st.roster...)
+		if h.over() <= 0 {
+			m.holdStateFor(id).NoteNoHold()
+			continue
 		}
+		var rotatedHeld []string
+		if len(st.rotatedNames) > 0 {
+			heldSet := make(map[string]bool, len(h.held))
+			for _, pu := range h.held {
+				heldSet[pu.Project.Name] = true
+			}
+			for _, n := range st.rotatedNames {
+				if heldSet[n] {
+					rotatedHeld = append(rotatedHeld, n)
+				}
+			}
+		}
+		h.rotated = len(rotatedHeld) > 0
+		h.rotatedNames = rotatedHeld
+		hs := m.holdStateFor(id)
+		hs.EndPass(h.heldNames())
+		h.emit = hs.NoteHold(h)
+		budgetHolds = append(budgetHolds, h)
 	}
 
 	for _, ns := range namespaces {
