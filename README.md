@@ -181,6 +181,11 @@ repo; it holds only the outer `.coding-hermes/tasks.md` pointer and previously
 a stale `schedulerd` binary, removed 2026-08-13). Build and run from the inner
 checkout: `bin/schedulerd` (the systemd unit builds it via `ExecStartPre`).
 `repo_url` for the repo is `github.com/coding-hermes/scheduler` (GAP-039/040).
+2026-09-26 (CLN-1): the outer directory is now exactly that pointer — stale
+siblings there (an older README copy, a stale `.gitignore`, a 0-byte
+`scheduler.db`, and a duplicate `internal/database` tree written by a
+mis-rooted command) were archived out. Do not add files to the outer
+directory; anything that is not the repo belongs in the inner checkout.
 
 ### Dedicated Gateway (recommended for production)
 
@@ -615,22 +620,96 @@ make fmt         # Format code
 
 ### Project Structure
 
+Full tracked layout — every top-level entry, verified against `git ls-files`
+(2026-09-26, CLN-1):
+
 ```
-cmd/
-  schedulerd/    # Scheduler daemon entry point
-  migrate/       # Cron → scheduler migration tool
-internal/
-  api/           # REST API server
-  dashboard/     # HTML dashboard generator
-  database/      # SQLite schema, migrations, CRUD
-  mcp/           # MCP JSON-RPC server
-  scheduler/     # Core scheduling engine
-  sync/          # DuckBrain read-replica sync
-plugin/           # Hermes plugin (Python)
-specs/            # Implementation specs
-deploy/           # Systemd unit
-docs/             # Fleet status, architecture docs
+cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe
+internal/       # api, dashboard, database, blocks, clock, config, mcp, scheduler,
+                # sync, version, agentlog
+ops/            # fleet invariant checker (check-fleet-invariants.py) + testdata,
+                # pm-standin pipeline, ci-fixture-board.jsonl
+scripts/        # gate + release + policy-hash scripts (check-invariants.sh,
+                # lint-guard.sh, release-prep.sh, install-hooks.sh)
+tests/          # pytest battery for ops/check-fleet-invariants.py and the shell guards
+deploy/         # systemd units, gateway env template, scheduler-verify.sh
+docs/           # api, fleet, design decisions, runbooks, adr/, reference/,
+                # verification/, dogfood/
+specs/          # S01–S12 implementation specs
+skills/         # in-repo skills (scheduler-usage/) + fleet-priority-editor.html
+plugin/         # Hermes plugin (Python)
+assets/         # README images (dashboard.png, hermes-scheduler-banner.png)
+.github/        # workflows (ci.yml, ci.yaml, release.yaml) + ISSUE_TEMPLATE/
+.coding-hermes/ # board/ (canonical JSONL board), tasks.md, dogfood-log.md,
+                # research/, tests/
+.gitreins/      # guard config (config.yaml, tasks.yaml); history/ logs/ usage.jsonl
+                # are host-local
 ```
+
+Tracked root files: `README.md`, `AGENTS.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+`CODE_OF_CONDUCT.md`, `CODEOWNERS`, `GOVERNANCE.md`, `SECURITY.md`, `SUPPORT.md`,
+`LICENSE`, `Makefile`, `go.mod`, `go.sum`, `integration_test.go` (build tag
+`integration`; driven by the `integration` job in `.github/workflows/ci.yaml`),
+`config.example.toml`, `fleet.example.toml`, `fleet.toml`, `.gitignore`,
+`.gitleaks.toml`, `.golangci.yml`. Nothing else belongs at the root.
+
+### Repository hygiene — intentional exceptions (CLN-1)
+
+Verified 2026-09-26. Two generated files had been committed by accident and were
+removed in the same pass; everything else below is deliberate and must not be
+"cleaned up" again:
+
+- **`coverage.html` — REMOVED.** 160 KB generated HTML report, committed by
+  accident in `b736d12b` and referenced by nothing (README/CI/Makefile/tests/
+  scripts/docs all checked). Regenerate with
+  `go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out`.
+  Now ignored by a root-anchored `/coverage.html` rule.
+- **root `scheduler.db` — REMOVED.** 0 bytes, committed by accident in
+  `9cb721e9`. The live database is `~/.hermes/coding-hermes/scheduler.db` (the
+  `--db` default); no script or test reads a repo-root `scheduler.db`. Now
+  ignored by a root-anchored `/scheduler.db` rule.
+- **`fleet.toml` (tracked)** is a curated *static mirror* of operator cooldown
+  pins, NOT the live fleet config — the live file is `~/.hermes/fleet.toml`,
+  written only by `~/.hermes/scripts/fleet-cooldown-policy.py`. The two are
+  different on purpose; never copy the live file into the repo (see the file's
+  own header).
+- **The outer directory `/home/kara/coding-hermes-scheduler/` is not the repo**
+  (see "Local layout note"): it holds only the `.coding-hermes/tasks.md` pointer
+  file. Stale siblings found there on 2026-09-26 (an old README copy, a stale
+  `.gitignore`, a 0-byte `scheduler.db` and a duplicate `internal/database` tree
+  from a mis-rooted command) were archived, not silently deleted.
+- **`bin/`** — local build output (`make build`), gitignored; the live unit runs
+  `<checkout>/bin/schedulerd`. Deploy swaps also leave `schedulerd.new` /
+  `schedulerd.bak-<stamp>` here; they are reclaimable once a swap completes.
+- **`/schedulerd` (root-anchored ignore rule)** — legacy root-level build-output
+  path. `make build` writes `bin/schedulerd`, so a `schedulerd` file at the repo
+  root is always stray binary, never an artifact.
+- **`.vfs/`** — Hilo/VFS parse cache. **`dagger.db*`** — the DAGger runtime
+  writes its SQLite store into whatever working directory an agent session runs
+  in; gitignored, never a repo artifact. **`.pytest_cache/`, `__pycache__/`** —
+  test caches (gitignored).
+- **`.coding-hermes/board/`** — `tasks.jsonl` + `events.jsonl` (+ `fixtures.jsonl`,
+  `schema.sql`) are TRACKED and are the source of truth; `board.db`, `*.parquet`,
+  `*.duckdb` are legacy/generated and gitignored; a `tasks.jsonl.bak` can appear
+  when an operator or lane takes a board backup during recovery — it is
+  gitignored, local-only, and must not be committed.
+- **`.gitreins/`** — `config.yaml` and `tasks.yaml` are tracked; `history/`,
+  `logs/`, `usage.jsonl` and `*.lock` are host-local by design (verdict artifacts
+  and locks are machine state).
+- **`.github/workflows/` has TWO CI entry points** — `ci.yml` (build, cycle
+  guard, board gate, lint, race, org multi-arch) and `ci.yaml` (lint, test
+  matrix, simulation smoke, integration tests, build artifacts, all-clear). Both
+  are live; the integration-tagged root test and the simulation smoke exist ONLY
+  in `ci.yaml`. Merging them is filed as a finding, not done blind.
+
+**Known layout drift (found by this inventory, filed — not fixed here):**
+`deploy/coding-hermes-scheduler.service` sets
+`ExecStart=%h/coding-hermes-scheduler/bin/schedulerd`, a path that does not exist
+(the repo is the doubly-nested checkout). The running daemon is the *user* unit
+`~/.config/systemd/user/coding-hermes-scheduler.service`, whose ExecStart is
+`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -config
+/home/kara/.hermes/fleet.toml`. The tracked unit file must be reconciled with the
+live one before anyone deploys it.
 
 ## Fleet & Skills
 

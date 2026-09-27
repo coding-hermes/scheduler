@@ -1,6 +1,12 @@
 # Binaries
 bin/
 
+# Generated / accidental-at-root artifacts (CLN-1 2026-09-26: both of these were
+# committed by accident — coverage.html in b736d12b, a 0-byte scheduler.db in
+# 9cb721e9. The live DB is ~/.hermes/coding-hermes/scheduler.db, never the repo.)
+/coverage.html
+/scheduler.db
+
 # Test coverage
 *.out
 *.test
