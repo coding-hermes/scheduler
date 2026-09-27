@@ -486,8 +486,20 @@ func TestGAP146_NamespaceCapDeferPreservesAllState(t *testing.T) {
 	if got := l.slotPool.NamespacePending(ns); got != 0 {
 		t.Errorf("namespace claims pending = %d, want 0 after re-admission (a claim that outlives its tick wedges the cap)", got)
 	}
+	// The terminal row flip (lifecycle.Complete) and the deferred Release/
+	// clearReserve run in the same goroutine but are separated by the
+	// post-terminal chain (wave-manifest ingest, cost attribution, deliver,
+	// adaptive cooldown, lane-family output accounting). Poll until the pool
+	// drains instead of assuming the release landed the instant the row went
+	// terminal — the same contract schedgap021 uses (waitForPool on the
+	// marker), here against the full set. Reservations must STILL be dropped
+	// on every exit path; a leak shows up as a poll timeout, not a pass.
+	poolDeadline := time.Now().Add(10 * time.Second)
+	for len(l.slotPool.RunningSet()) != 0 && time.Now().Before(poolDeadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
 	if set := l.slotPool.RunningSet(); len(set) != 0 {
-		t.Errorf("RunningSet = %v, want empty — reservations must be dropped on every exit path", set)
+		t.Errorf("RunningSet = %v, want empty — reservations must be dropped on every exit path (still held after 10s)", set)
 	}
 	// The deferral itself was never charged. The counter may go DOWN here (a
 	// successful spawn resets it to 0) but it must never go UP: the deferral is
