@@ -410,6 +410,8 @@ authority model.
 
 ## Configuration
 
+Every environment variable the daemon reads — precedence chain (flag > env > TOML > default), the env-only credentials (`SCHEDULER_OPERATOR_TOKEN`, `API_SERVER_KEY`), and the knobs with no flag — is tabulated in [docs/reference/env-vars.md](docs/reference/env-vars.md).
+
 ```bash
 ./bin/schedulerd \
   -listen 127.0.0.1:9090 \

@@ -1,0 +1,86 @@
+# Environment variables
+
+Every environment variable the daemon reads, derived from the code (`grep -rn "os.Getenv\|os.LookupEnv" internal cmd --include=*.go`, excluding tests). `--show-config` prints its own inventory of the `SCHEDULER_*` overrides it tracks plus the masked operator token; this page is the superset, including the spawner/env-only knobs that surface never prints.
+
+## The env layer
+
+- **When env is read:** once, at process boot (`cmd/schedulerd/main.go` resolves all `SCHEDULER_*` overrides after flag parsing, before `--show-config`/`--schema` print — so both surfaces show effective values). Exceptions that read later: `SCHEDULER_WAVE_TICK_TIMEOUT` (at each wave spawn), `SCHEDULER_CIRCUIT_CMD`/`SCHEDULER_ROUTER_CMD`/`SCHEDULER_FOREMAN_*` (at spawner construction), and the clock vars (after the early-exit commands).
+- **Precedence for flag-backed knobs:** CLI flag > env var > TOML (`schedulerd.toml` via the default-guard pattern in main.go — a TOML value applies only while the flag sits at its default) > flag default. The same chain holds on the library config path (`internal/config.LoadConfig`: defaults < TOML < env, flags applied by the caller).
+- **TOML coverage is partial on the daemon path.** main.go's default-guard block applies only these TOML keys: `[scheduler]` `weight_budget`, `gateway_response_timeout`, `slot_patience`, `tasks_pacing`, `spawn_mem_limit_mb`, `load_gate_threshold`, `auto_disable_*`, `failure_window`, `metered_budget_enabled`, `[api]` `read_timeout` / `operator_token` / `operator_user` / `operator_password`, plus blackout windows and the fleet seed sections. The TOML keys `daemon.db_path`, `daemon.listen`, `min_interval`, `max_interval`, `num_levels`, `max_concurrent`, `tick_timeout`, `gateway.url`, `gateway.foreman_home`, and `duckbrain.*` are declared in `--schema` output but main.go never applies them — for those knobs env is the only layer between the flag and its default. Rows below state the real chain.
+- **Invalid values:** most overrides WARN and keep the current value — a garbage value must never silently change or disable a deadline, cap, or gate (`SCHEDULER_GATEWAY_RESPONSE_TIMEOUT`, `SCHEDULER_SLOT_PATIENCE`, `SCHEDULER_TASKS_PACING`, `SCHEDULER_API_READ_TIMEOUT`, `SCHEDULER_LOAD_GATE_THRESHOLD`, `SCHEDULER_SPAWN_MEM_LIMIT_MB`, `SCHEDULER_METERED_BUDGET_ENABLED`). A few are silently ignored when unparseable (`SCHEDULER_FAILURE_WINDOW`, `SCHEDULER_BUDGET`, `SCHEDULER_AUTO_DISABLE_*`, the int fields in `applyEnvOverrides`).
+- **Sim mode:** `SCHEDULER_TIME_MODE=sim` is REFUSED at boot (fatal) unless `--simulate` is also set — a stray env var must never put the live fleet on a fake clock. See [clock-modes.md](clock-modes.md).
+- **`${VAR}` interpolation:** `${API_SERVER_KEY}`-style placeholders inside `schedulerd.toml` are expanded from the process environment before TOML decode (`internal/config`); unknown names expand to empty. This is a second way env reaches the config — it writes the TOML layer's value, not the env layer's.
+
+## Daemon and scheduling knobs (flag-backed)
+
+| Env var | Effect | Default when unset | Precedence |
+|---------|--------|--------------------|------------|
+| `SCHEDULER_DB_PATH` | Path to the scheduler SQLite database. | `~/.hermes/coding-hermes/scheduler.db` | `--db` > env > default (TOML `daemon.db_path` is in `--schema` but main.go never applies it) |
+| `SCHEDULER_LISTEN` | HTTP listen address for API + dashboard. | `127.0.0.1:9090` | `--listen` > env > default (TOML `daemon.listen` not applied by main.go) |
+| `SCHEDULER_MIN_INTERVAL` | Fastest tick interval. | `30s` | `--min-interval` > env > default (TOML `min_interval` not applied by main.go) |
+| `SCHEDULER_MAX_INTERVAL` | Slowest tick interval. | `24h` | `--max-interval` > env > default (TOML `max_interval` not applied by main.go) |
+| `SCHEDULER_NUM_LEVELS` | Number of priority levels. Invalid int ignored. | `10` | `--num-levels` > env > default (TOML `num_levels` not applied by main.go) |
+| `SCHEDULER_BUDGET` | Fleet weight budget (admission currency, not dollars). Positive parseable int only; applies only when `--budget` was NOT passed (provenance-tracked via `flag.Visit`). | `100` | `--budget` > env > TOML `weight_budget` > default |
+| `SCHEDULER_MAX_CONCURRENT` | Max concurrent foremen. | `10` | `--max-concurrent` > env > default (TOML `max_concurrent` not applied by main.go) |
+| `SCHEDULER_TICK_TIMEOUT` | Maximum tick duration before the tick times out. | `2h` | `--tick-timeout` > env > default (TOML `tick_timeout` not applied by main.go) |
+| `SCHEDULER_GATEWAY_RESPONSE_TIMEOUT` | Per-turn deadline for a gateway `/v1/responses` POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117). Positive parseable duration only (unlike the TOML layer, `0` is not accepted at the env layer). | `30m` | `--gateway-response-timeout` > env > TOML `gateway_response_timeout` > default; effective POST deadline = min(this, tick timeout) |
+| `SCHEDULER_SLOT_PATIENCE` | How long a tick waits for a free slot before being dropped (the drop emits an event, ADV-R08/G3). Must be positive; invalid WARNs. | `5m` | `--slot-patience` > env > TOML `slot_patience` > default |
+| `SCHEDULER_TASKS_PACING` | Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136). `0` disables pacing; negative/invalid WARNs. | `60s` in the fleet binary (library default 0) | `--tasks-pacing` > env > TOML `tasks_pacing` > default |
+| `SCHEDULER_API_READ_TIMEOUT` | Per-request deadline for the heavy read API surfaces (`/api/v1/status`, `/projects`, `/namespaces`, `/ticks`); a stalled DB helper returns 504 naming the helper (SCHED-GAP-1575-B). Positive parseable duration only. | `5s` | `--api-read-timeout` > env > TOML `[api] read_timeout` > default |
+| `SCHEDULER_SPAWN_MEM_LIMIT_MB` | Per-spawn `RLIMIT_AS` memory cap in MiB for spawned foreman processes, inherited by their workers (ADV-R11). NOT an admission gate; best-effort — a failed cap WARNs and the spawn continues. Positive int only; invalid WARNs. | `0` (off) | `--spawn-mem-limit-mb` > env > TOML `spawn_mem_limit_mb` > default |
+| `SCHEDULER_NAMESPACE_MODE` | Enables multi-namespace scheduling. Only the exact string `true` flips it on; every other value is a no-op. | `false` | `--namespace-mode` > env > TOML `namespace_mode` > default |
+| `SCHEDULER_FAILURE_WINDOW` | Recent ticks per project in the `/api/v1/status` per-project failure-rate breakdown (SCHED-GAP-018). Positive int only. | `100` | `--failure-window` > env > TOML `failure_window` > default |
+| `SCHEDULER_AUTO_DISABLE_FAILURE_RATE` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off (SCHED-GAP-018). Positive float only. | `0` (off) | `--auto-disable-failure-rate` > env > TOML `auto_disable_failure_rate` > default |
+| `SCHEDULER_AUTO_DISABLE_WINDOW` | Ticks per project over which the auto-disable failure rate is computed. Positive int only. | `100` | `--auto-disable-window` > env > TOML `auto_disable_window` > default |
+| `SCHEDULER_AUTO_DISABLE_MIN_TICKS` | Minimum ticks in the window before auto-disable can fire. Positive int only. | `50` | `--auto-disable-min-ticks` > env > TOML `auto_disable_min_ticks` > default |
+| `SCHEDULER_METERED_BUDGET_ENABLED` | Opt-in metered USD gate — cost accounting reads the foreman `state.db` ledger instead of the historical `ticks.cost_usd` query (SCHED-GAP-127). Parsed with `ParseBool`; a valid env value (including explicit `false`) outranks TOML; invalid WARNs. | `false` | env > TOML `metered_budget_enabled`; no flag layer |
+| `SCHEDULER_LOAD_GATE_THRESHOLD` | Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); work is deferred, not dropped. Also drives load-scaled WAVE_BUDGET (SCHED-GAP-170). Positive float only; `0`/invalid keeps the gate off. Namespaces opt out via `load_gate='off'`. | `0` (off) | `--load-gate-threshold` > env > TOML `load_gate_threshold` > default |
+| `SCHEDULER_PUBLIC_URL` | Public base URL of the dashboard used to build tick-report permalinks for `deliver_mode=link`; empty degrades link mode to full delivery (SCHED-GAP-1607). | (empty) | env > `--public-url`; no TOML layer |
+
+## Credentials
+
+Names and behavior only — never put key VALUES in argv, config committed to git, or issue text (GAP-038: argv leaks via `ps`; `--show-config` masks the operator token for the same reason).
+
+| Env var | Effect | Default when unset | Precedence |
+|---------|--------|--------------------|------------|
+| `API_SERVER_KEY` | Hermes gateway API key. Read as the FLAG DEFAULT of `--gateway-key` at flag-parse time, so it is the lowest layer — `SCHEDULER_GATEWAY_KEY` overrides it. | (empty; empty means the daemon never builds the HTTP gateway client — see `--no-exec-fallback` for what happens to ticks) | `--gateway-key` > `SCHEDULER_GATEWAY_KEY` > this var (TOML `gateway.key` exists in the schema but main.go's TOML block does not apply it to the daemon's key) |
+| `SCHEDULER_GATEWAY_KEY` | Hermes gateway API key (boot-time override). Beats `API_SERVER_KEY`; an explicit `--gateway-key` beats both env vars. | (empty) | `--gateway-key` > this var > `API_SERVER_KEY` (TOML `gateway.key` not applied to the daemon key; it does apply under env on the library `LoadConfig` path) |
+| `SCHEDULER_OPERATOR_TOKEN` | Shared operator credential gating every mutating API route (SCHED-GAP-1602). Whitespace-trimmed (a whitespace-only value counts as unset). Accepted on requests as `X-Operator-Token`, `Authorization: Bearer`/raw, or Basic (token as password). NEVER a CLI flag. `--show-config` lists it as SET but masked. | (empty → fail-closed: every mutation answers **503** until a credential exists) | env > TOML `[api] operator_token`; basic mode (`operator_user`+`operator_password`) resolves from TOML only and applies only when no token exists in any layer |
+| `DUCKBRAIN_API_KEY` | DuckBrain sync auth: when set, every sync request carries it as the `X-API-Key` header and the daemon probes the key once at startup — a rejected key (401/403) fails fast with a HIGH event and gates sync cycles off; 429 is backpressure, not error. | (empty → pre-auth compatibility mode: no header, no probe) | env only (DB-GAP-039); see the DuckBrain sync auth section in [flags.md](flags.md#duckbrain-sync-auth) |
+
+## Spawner defaults and model selection (env-only)
+
+| Env var | Effect | Default when unset | Precedence |
+|---------|--------|--------------------|------------|
+| `SCHEDULER_FOREMAN_MODEL` | Global primary model for spawned foreman sessions. | `deepseek-v4-flash` | project row (`model`) > this var (global tier) |
+| `SCHEDULER_FOREMAN_PROVIDER` | Global primary provider, paired with the model above. | `deepseek-foreman` | project row (`provider`) > this var |
+| `SCHEDULER_FOREMAN_FALLBACK_MODEL` | Global fallback model when the primary fails. | `deepseek-v4-flash` | project `fallback_model` > this var |
+| `SCHEDULER_FOREMAN_FALLBACK_PROVIDER` | Global fallback provider. | `deepseek-foreman` | project `fallback_provider` > this var |
+| `SCHEDULER_FOREMAN_IDLE_MODEL` | Extra global tier inserted ahead of the work chain for idle-kind ticks. Empty is not present and falls through (idle resolves exactly like a work tick). | (empty → no global idle tier) | project `idle_model` > this var > work chain |
+| `SCHEDULER_FOREMAN_IDLE_PROVIDER` | Provider for the global idle tier. | (empty) | project `idle_provider` > this var > work chain |
+| `SCHEDULER_WAVE_TICK_TIMEOUT` | Tick deadline override for wave-enabled namespaces (S12 §4.3). Parsed at each wave spawn; unparseable WARNs and falls through to the namespace's `wave_tick_timeout`, which falls through to `--tick-timeout`. Clamped to the 4h ceiling. | (empty → namespace `wave_tick_timeout` > `--tick-timeout`) | env > namespace `wave_tick_timeout` (TOML `namespaces.wave_tick_timeout`) > base tick timeout |
+| `SCHEDULER_ROUTER_CMD` | Full task-router command line (TASK-ROUTER-001), split on spaces; the project + `--format json` are appended at resolve time. A command that would not survive the split is treated as disabled, not mis-executed. | (empty → router disabled, fail-open) | env only |
+| `SCHEDULER_CIRCUIT_CMD` | Full circuit-recorder command line (TASK-ROUTER-002); same split contract as the router; the subcommand + pair are appended at record time. | (empty → circuit recording disabled, fail-open) | env only |
+
+## Paths and integration
+
+| Env var | Effect | Default when unset | Precedence |
+|---------|--------|--------------------|------------|
+| `SCHEDULER_AGENT_STATE_DB` | Path to the agent state database the dashboard opens read-only to resolve `gateway_trace.session_id` into what the agent generated (SCHED-GAP-1593). Missing/unreachable degrades to an explicit dashboard notice, never a failed render. | `~/.hermes/state.db` | env only |
+| `SCHEDULER_FOREMAN_HOME` | Dedicated HERMES_HOME for foreman sessions (spawner working root). | `~/.hermes/foreman` | `--foreman-home` > env > default (TOML `gateway.foreman_home` not applied by main.go) |
+| `SCHEDULER_GATEWAY_URL` | Hermes gateway API URL; empty uses `exec.Command` spawning. | `http://127.0.0.1:8642` | `--gateway-url` > env > default (TOML `gateway.url` not applied by main.go) |
+| `SCHEDULER_DUCK_BRAIN_NS` | DuckBrain namespace the syncer pushes fleet state into. | `scheduler` | `--duckbrain-ns` > env > default (TOML `duckbrain.namespace` not applied by main.go) |
+| `SCHEDULER_DUCK_BRAIN_URL` | DuckBrain HTTP server URL for the syncer. | `http://localhost:3000` | `--duckbrain-url` > env > default (TOML `duckbrain.url` not applied by main.go) |
+| `SCHEDULER_MODEL_RATES_FILE` | JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): `{as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}}`. Read as the FLAG DEFAULT of `--model-rates-file`, so the env value always surfaces in `--show-config` output. | (empty → builtin rates only) | `--model-rates-file` (explicit) > this var (its flag default) > default (TOML `model_rates_file` is in `--schema` but main.go never applies it) |
+| `SCHEDULER_POLICY_SCRIPT` | Test override for the ops policy script path (`scripts/fleet-cooldown-policy.py` resolution in the API layer). RETIRED as a writer (SCHED-GAP-219); the path is only a read-only drift-probe seam now. | `~/.hermes/scripts/fleet-cooldown-policy.py` | this var > `HERMES_HOME` > user home > `/home/kara/.hermes` |
+| `HERMES_HOME` | Fallback base for the ops policy script path above (joined with `scripts/fleet-cooldown-policy.py`). Read only when `SCHEDULER_POLICY_SCRIPT` is unset. | user home directory | after `SCHEDULER_POLICY_SCRIPT` |
+| `SCHEDULER_NAMESPACE_CAP_GATE` | Operator emergency switch for the namespace max-concurrent gate: `off`/`0`/`false`/`disabled`/`no` (case-insensitive) turns the gate OFF fleet-wide, e.g. to evacuate a backlog after a bad cap value. Any other value (including unset) keeps the gate ENABLED. | (gate enabled) | env only; per-namespace caps still come from the `namespaces` table |
+| `SCHEDULER_OPERATOR_RESTART_APPROVED` | Operator acknowledgement that session reaps from THIS restart are intended (SCHED-GAP-089 runbook §4b). Parsed with `ParseBool`; unset/unparseable = no approval (legacy classification). Set via `systemctl --user set-environment` for unit runs. | (false) | env only |
+
+## Clock (sim mode)
+
+| Env var | Effect | Default when unset | Precedence |
+|---------|--------|--------------------|------------|
+| `SCHEDULER_TIME_MODE` | Selects the process clock: `real` (production) or `sim` (test-time simulator). `sim` is REFUSED at boot unless `--simulate` is also set. Every boot logs `TIME: clock ...`; unparseable values fail closed. | `real` | env only; see [clock-modes.md](clock-modes.md) |
+
+`SCHEDULER_TIME_SCALE`, `SCHEDULER_TIME_START`, and `SCHEDULER_TIME_AUTOADVANCE` only matter when the sim clock is selected — their value tables live in [clock-modes.md](clock-modes.md) and are not duplicated here.

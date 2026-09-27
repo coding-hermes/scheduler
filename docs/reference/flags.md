@@ -52,6 +52,8 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--session-db` | `~/.hermes/state.db` | Agent state database path for `--reap-sessions` (SCHED-GAP-089) |
 | `--session-reap-threshold` | `24h0m0s` | Stale api_server session reap threshold (SCHED-GAP-089; default 24h) |
 
+Related: every environment variable the daemon reads is tabulated in [env-vars.md](env-vars.md), including the env-only knobs with no flag (`SCHEDULER_OPERATOR_TOKEN`, `SCHEDULER_WAVE_TICK_TIMEOUT`, the `SCHEDULER_FOREMAN_*` model pins).
+
 ## Canonical invocation
 
 ```
