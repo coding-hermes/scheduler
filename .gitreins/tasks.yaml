@@ -4336,17 +4336,42 @@ tasks:
   criteria:
   - 'Table-driven test: events=6/tokens_out=114 trace marks tick non-healthy; normal
     trace stays healthy; scheduler suite green'
-  status: in_progress
+  status: complete
   created_at: '2026-09-27T00:42:16.486282+00:00'
+  completed_at: '2026-09-27T03:22:18.102591+00:00'
 - id: README-2
   title: Close unclosed code fence at README.md:104
   criteria:
   - Heading-in-fence awk scan green after fix; diff adds exactly the closing fence
-  status: in_progress
+  status: complete
   created_at: '2026-09-27T00:42:17.197845+00:00'
+  completed_at: '2026-09-27T03:07:56.917466+00:00'
 - id: SCHED-GAP-1639
   title: gitignore .gitreins lock files
   criteria:
   - git check-ignore matches .gitreins/*.lock; diff touches only .gitignore
-  status: in_progress
+  status: complete
   created_at: '2026-09-27T00:42:17.885026+00:00'
+  completed_at: '2026-09-27T03:20:23.707756+00:00'
+- id: SCHED-GAP-177
+  title: Non-code lane-family output counters
+  criteria:
+  - Migration V47 lands per-family output_count and zero_output_streak columns on
+    projects; scheduler laneOutput accounts qa/pm/sync/dogfood ticks with fall-open
+    to the raw commit claim when the git split is unmeasured; HIGH lane-output event
+    at 8 consecutive zero-output ticks; /api/v1/status exposes the four-family rollup;
+    sync pushes /fleet/lane-output as its 7th section; full short suite -p 1 green
+    across all 14 packages
+  status: complete
+  created_at: '2026-09-27T01:58:33.186724+00:00'
+  completed_at: '2026-09-27T01:59:30.106434+00:00'
+- id: README-1
+  title: Fix README priority-interval formula (inverted vs urgency.go)
+  criteria:
+  - 'README formula line equals max/ratio^((priority-1)/(levels-1)) matching urgency.go
+    ComputeInterval; README table unchanged; every doc/spec line that printed the old
+    inverted form is corrected — including specs/S03-urgency-calculator.md (direction
+    claim, formula, behavior block, example table, Go transcript)'
+  status: complete
+  created_at: '2026-09-27T03:52:47.290850+00:00'
+  completed_at: '2026-09-27T03:58:08.229420+00:00'
