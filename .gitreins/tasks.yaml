@@ -4497,3 +4497,12 @@ tasks:
   status: complete
   created_at: '2026-09-27T21:49:31.869073+00:00'
   completed_at: '2026-09-27T22:09:09.752559+00:00'
+- id: INT-CI-167
+  title: 'E2E verify flake: exact-second first-cycle bucket misses late spawns'
+  criteria:
+  - First-cycle check in cmd/schedulerd/test_verify.go uses a tolerance window instead
+    of an exact spawned_at second; go build + test-verify 3 passes 3x locally and
+    lint clean
+  status: complete
+  created_at: '2026-09-27T22:24:40.554515+00:00'
+  completed_at: '2026-09-27T22:27:22.757389+00:00'
