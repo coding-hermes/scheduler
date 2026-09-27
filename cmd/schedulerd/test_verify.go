@@ -212,18 +212,35 @@ func testVerify(cycles int, clk clock.Clock) error {
 		wantFirst[c.name] = true
 		usedW += c.weight
 	}
-	// Find the earliest spawn second (first cycle) and its membership.
+	// Find the first cycle and its membership. A cycle's spawns are stamped
+	// with spawned_at at SECOND resolution (time.RFC3339) by the spawner, but
+	// the slot-pool goroutines start concurrently — on a loaded CI runner the
+	// last spawn of the first cycle can land in the next wall-clock second
+	// (seen 2026-09-27 CI: "4/5 expected projects spawned"). So the first
+	// cycle is a TOLERANCE WINDOW around the earliest spawn second, not an
+	// exact-second bucket: 2s, safe because the tightest fixture cooldown is
+	// 5s (epsilon), so the second cycle cannot begin inside the window.
 	firstCycle := ""
 	if err := db.QueryRowContext(ctx, `
 		SELECT MIN(substr(spawned_at, 1, 19)) FROM ticks
 		WHERE status IN ('completed','failed','timeout') AND spawned_at != ''`).Scan(&firstCycle); err != nil {
 		firstCycle = ""
 	}
+	firstCycleEnd := ""
+	if firstCycle != "" {
+		minT, err := time.Parse(time.RFC3339, firstCycle)
+		if err == nil {
+			firstCycleEnd = minT.Add(2 * time.Second).Format(time.RFC3339)
+		} else {
+			firstCycleEnd = firstCycle // parse failed: degrade to exact match
+		}
+	}
 	gotFirst := map[string]bool{}
 	if firstCycle != "" {
 		fcRows, _ := db.QueryContext(ctx, `
 			SELECT DISTINCT project_name FROM ticks
-			WHERE substr(spawned_at, 1, 19) = ?`, firstCycle)
+			WHERE substr(spawned_at, 1, 19) >= ? AND substr(spawned_at, 1, 19) <= ?`,
+			firstCycle, firstCycleEnd)
 		if fcRows != nil {
 			defer fcRows.Close()
 			for fcRows.Next() {
