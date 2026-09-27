@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-27
 
+## [1.6.2] — 2026-09-27
+
 ### Other Changes
 
 - Recorded the completed SCHED-GAP-1623 gitreins judge lifecycle and PASS verdict (`3e0cb4f7`).
