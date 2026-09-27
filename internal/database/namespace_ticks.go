@@ -32,11 +32,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?)`
 }
 
 // ListNamespaceTicks returns the most recent namespace_ticks for a given
-// namespace, newest first. limit caps the result count; pass 0 for unbounded.
+// namespace, newest first. id DESC breaks ties among rows sharing the same
+// created_at second (created_at has 1-second resolution, so same-second
+// rows would otherwise order arbitrarily). limit caps the result count;
+// pass 0 for unbounded.
 func ListNamespaceTicks(ctx context.Context, db *sql.DB, namespaceID string, limit int) ([]NamespaceTick, error) {
 	q := `SELECT id, tick_group, namespace_id, allocated, used, borrowed, lent, job_count, demand, overcommitted, created_at
 FROM namespace_ticks WHERE namespace_id = ?
-ORDER BY created_at DESC`
+ORDER BY created_at DESC, id DESC`
 	args := []any{namespaceID}
 	if limit > 0 {
 		q += " LIMIT ?"

@@ -154,6 +154,10 @@ func TestDashboard_NamespaceViewBudgetState(t *testing.T) {
 	if err := database.CreateNamespace(ctx, db, n); err != nil {
 		t.Fatalf("CreateNamespace: %v", err)
 	}
+	// CreatedAt is stamped explicitly so "current vs history" is data,
+	// not insertion timing: created_at has 1-second resolution and a
+	// loaded runner can push later inserts into later seconds, which
+	// flipped the intended ordering under created_at DESC (INT-CI-165).
 	if err := database.InsertNamespaceTick(ctx, db, &database.NamespaceTick{
 		TickGroup:     "2031-05-04-03-02-01",
 		NamespaceID:   "ns-fat",
@@ -162,6 +166,7 @@ func TestDashboard_NamespaceViewBudgetState(t *testing.T) {
 		JobCount:      6,
 		Demand:        36,
 		Overcommitted: 16,
+		CreatedAt:     "2031-05-04T03:02:01Z", // current cycle
 	}); err != nil {
 		t.Fatalf("InsertNamespaceTick: %v", err)
 	}
@@ -173,6 +178,7 @@ func TestDashboard_NamespaceViewBudgetState(t *testing.T) {
 		JobCount:      6,
 		Demand:        30,
 		Overcommitted: 10,
+		CreatedAt:     "2031-05-04T02:02:01Z", // older over-budget cycle
 	}); err != nil {
 		t.Fatalf("InsertNamespaceTick: %v", err)
 	}
@@ -185,6 +191,7 @@ func TestDashboard_NamespaceViewBudgetState(t *testing.T) {
 		Used:        30,
 		JobCount:    5,
 		Demand:      30,
+		CreatedAt:   "2031-05-04T01:02:01Z", // oldest, within budget
 	}); err != nil {
 		t.Fatalf("InsertNamespaceTick: %v", err)
 	}
