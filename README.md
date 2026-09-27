@@ -341,7 +341,7 @@ How much concurrency budget a project consumes per tick. Budget default: 100.
 How frequently a project runs. Mapped to interval via geometric curve:
 
 ```
-interval = min_interval × (max_interval / min_interval) ^ ((priority-1) / (levels-1))
+interval = max_interval / (max_interval / min_interval) ^ ((priority-1) / (levels-1))
 ```
 
 | Priority | Interval (min=30s, max=24h) |
