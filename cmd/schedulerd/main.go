@@ -310,13 +310,6 @@ func main() {
 		log.Fatalf("FATAL: %s=sim (%s) requires --simulate — refusing to run the real fleet on a simulated clock",
 			clock.EnvMode, clock.Describe(clk))
 	}
-	// SCHED-GAP-1647: one greppable line stamping the instance identity —
-	// db + listen address. A shutdown line in a shared log can now always be
-	// attributed: the instance that wrote a boot record with this identity
-	// is the instance the shutdown belongs to. Two schedulerd processes can
-	// be alive at once (production + scratch), so identity must not be
-	// inferred from the log file alone.
-	log.Printf("Instance: db=%s listen=%s", *dbPath, *listen)
 	log.Printf("TIME: clock %s", clock.Describe(clk))
 
 	// ── Test-verify mode: run correctness checks and exit ──
@@ -396,14 +389,34 @@ func main() {
 	// Persist all logs to a file as well as stdout (system-plan-v2 §1.1).
 	// Failures to open the log file are non-fatal — the daemon keeps running
 	// on stdout only rather than crashing at boot.
+	//
+	// SCHED-GAP-1647: one greppable line stamping the instance identity —
+	// db + listen address. A shutdown line in a shared log can now always be
+	// attributed: the instance that wrote a boot record with this identity
+	// is the instance the shutdown belongs to. Two schedulerd processes can
+	// be alive at once (production + scratch), so identity must not be
+	// inferred from the log file alone.
+	//
+	// Emitted AFTER the file writer is installed (rework of the first
+	// landing, where this line ran before log.SetOutput and reached stdout
+	// only — the log file kept an unattributed "Shutdown complete"). Every
+	// path re-emits it: the file arm so the file carries it, the open-fail
+	// and disabled arms so the line is never silently lost when stdout is
+	// the only writer.
+	const instanceIdentity = "Instance: db=%s listen=%s"
 	if effectiveLogFile != "" {
 		lf, lfErr := os.OpenFile(effectiveLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if lfErr != nil {
 			log.Printf("WARN: cannot open log file %s (%v) — logging to stdout only", effectiveLogFile, lfErr)
+			log.Printf(instanceIdentity, *dbPath, *listen)
 		} else {
 			log.SetOutput(io.MultiWriter(os.Stdout, lf))
+			log.Printf(instanceIdentity, *dbPath, *listen)
 			log.Printf("Log file: %s", effectiveLogFile)
 		}
+	} else {
+		// --log-file "": file log disabled, stdout only.
+		log.Printf(instanceIdentity, *dbPath, *listen)
 	}
 
 	// Initialize database.
