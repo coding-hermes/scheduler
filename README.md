@@ -699,6 +699,11 @@ removed in the same pass; everything else below is deliberate and must not be
   `*.duckdb` are legacy/generated and gitignored; a `tasks.jsonl.bak` can appear
   when an operator or lane takes a board backup during recovery — it is
   gitignored, local-only, and must not be committed.
+- **`.coding-hermes/waves/`** — per-wave worker manifests (one JSON per
+  concurrent wave). Local-only by design: 26 files / 124 KB on the fleet host and
+  none tracked (the `.coding-hermes/*` ignore rule covers them). The durable
+  record of a wave is its board rows plus the audit event, not the manifest —
+  do not "tidy" these away while a wave is in flight.
 - **`.gitreins/`** — `config.yaml` and `tasks.yaml` are tracked; `history/`,
   `logs/`, `usage.jsonl` and `*.lock` are host-local by design (verdict artifacts
   and locks are machine state).
