@@ -48,10 +48,10 @@ type UrgencyCalculator struct {
 func NewUrgencyCalculator(minI, maxI time.Duration, numLevels int) *UrgencyCalculator
 
 // ComputeInterval returns the geometric tick interval for a priority value.
-// priority: 1 = fastest (minInterval), numLevels = slowest (maxInterval).
+// priority: numLevels = fastest (minInterval), 1 = slowest (maxInterval).
 // Accepts `float64` for forward compatibility with fractional priorities;
 // currently cast from the database `int` (1-10) at the call site.
-// Formula: interval = minInterval * ratio ^ ((priority - 1) / (numLevels - 1))
+// Formula: interval = maxInterval / ratio ^ ((priority - 1) / (numLevels - 1))
 func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration
 
 // ComputeUrgency returns the urgency score for a project.
@@ -82,7 +82,7 @@ Given:
   ratio = maxInterval_seconds / minInterval_seconds
   position = (priority - 1) / (numLevels - 1)     // 0.0 to 1.0
 
-  interval_seconds = minInterval_seconds × ratio^position
+  interval_seconds = maxInterval_seconds / ratio^position
 ```
 
 **Step-by-step:**
@@ -92,30 +92,30 @@ Given:
 2. Compute ratio = maxInterval_seconds / minInterval_seconds
 3. Clamp priority to [1, numLevels]
 4. Compute position = (priority - 1) / (numLevels - 1)
-5. Compute multiplier = ratio ^ position
-6. Return minInterval * multiplier
+5. Compute divisor = ratio ^ position
+6. Return maxInterval / divisor
 ```
 
-### 4.2 Example: Default Range (20 min → 24 hours, 10 levels)
+### 4.2 Example: Default Range (30 s → 24 hours, 10 levels)
 
 ```
-ratio = 86400 / 1200 = 72.0
+ratio = 86400 / 30 = 2880.0
 
-P=1:  1200 × 72^(0/9)   = 1200 × 1.000  = 1,200s  (20 min)
-P=2:  1200 × 72^(1/9)   = 1200 × 1.609  = 1,931s  (32 min)
-P=3:  1200 × 72^(2/9)   = 1200 × 2.588  = 3,106s  (52 min)
-P=4:  1200 × 72^(3/9)   = 1200 × 4.163  = 4,996s  (83 min)
-P=5:  1200 × 72^(4/9)   = 1200 × 6.698  = 8,038s  (134 min)
-P=6:  1200 × 72^(5/9)   = 1200 × 10.776 = 12,931s (215 min)
-P=7:  1200 × 72^(6/9)   = 1200 × 17.340 = 20,808s (347 min)
-P=8:  1200 × 72^(7/9)   = 1200 × 27.903 = 33,484s (558 min)
-P=9:  1200 × 72^(8/9)   = 1200 × 44.900 = 53,880s (898 min)
-P=10: 1200 × 72^(9/9)   = 1200 × 72.000 = 86,400s (1440 min = 24h)
+P=1:  86400 / 2880^(0/9)  = 86400 / 1.000   = 86,400s (1440 min = 24h)
+P=2:  86400 / 2880^(1/9)  = 86400 / 2.423   = 35,656s (594 min)
+P=3:  86400 / 2880^(2/9)  = 86400 / 5.872   = 14,715s (245 min)
+P=4:  86400 / 2880^(3/9)  = 86400 / 14.228  =  6,073s (101 min)
+P=5:  86400 / 2880^(4/9)  = 86400 / 34.475  =  2,506s (42 min)
+P=6:  86400 / 2880^(5/9)  = 86400 / 83.538  =  1,034s (17 min)
+P=7:  86400 / 2880^(6/9)  = 86400 / 202.424 =    427s (7 min)
+P=8:  86400 / 2880^(7/9)  = 86400 / 490.500 =    176s (3 min)
+P=9:  86400 / 2880^(8/9)  = 86400 / 1188.545 =     73s (1 min)
+P=10: 86400 / 2880^(9/9)  = 86400 / 2880.000 =     30s
 ```
 
 **Key properties:**
-- Priority 1→2: +12 min (big meaningful jump at the fast end)
-- Priority 9→10: +9 hours (but both are "roughly once a day")
+- Priority 1→2: -14 hours (a priority bump at the slow end shortens the interval dramatically)
+- Priority 9→10: -43s (both are "roughly as fast as the daemon can go")
 - The curve expands when maxInterval grows, contracts when it shrinks
 
 ### 4.3 Urgency Formula
@@ -313,11 +313,14 @@ func (u *UrgencyCalculator) ComputeInterval(priority float64) time.Duration {
     // position = (p - 1) / (numLevels - 1)
     position := (p - 1) / float64(u.numLevels-1)
 
-    // multiplier = ratio ^ position
-    multiplier := math.Pow(u.ratio, position)
+    // divisor = ratio ^ position
+    divisor := math.Pow(u.ratio, position)
+    if divisor <= 0 {
+        divisor = 1
+    }
 
-    // interval_seconds = minInterval_seconds * multiplier
-    seconds := u.minInterval.Seconds() * multiplier
+    // interval_seconds = maxInterval_seconds / divisor
+    seconds := u.maxInterval.Seconds() / divisor
 
     return time.Duration(seconds * float64(time.Second))
 }
