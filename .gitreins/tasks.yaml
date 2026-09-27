@@ -4368,10 +4368,39 @@ tasks:
 - id: README-1
   title: Fix README priority-interval formula (inverted vs urgency.go)
   criteria:
-  - 'README formula line equals max/ratio^((priority-1)/(levels-1)) matching urgency.go
-    ComputeInterval; README table unchanged; every doc/spec line that printed the old
-    inverted form is corrected — including specs/S03-urgency-calculator.md (direction
-    claim, formula, behavior block, example table, Go transcript)'
+  - "README formula line equals max/ratio^((priority-1)/(levels-1)) matching urgency.go\
+    \ ComputeInterval; README table unchanged; every doc/spec line that printed the\
+    \ old inverted form is corrected \u2014 including specs/S03-urgency-calculator.md\
+    \ (direction claim, formula, behavior block, example table, Go transcript)"
   status: complete
   created_at: '2026-09-27T03:52:47.290850+00:00'
   completed_at: '2026-09-27T03:58:08.229420+00:00'
+- id: SCHED-GAP-1643
+  title: Watchdog must distinguish scheduler-dead from gateway-dead before restarting
+  criteria:
+  - 'scripts/scheduler-watchdog.sh gates any restart on the scheduler''s own DB-free
+    liveness route: a 200 from /api/v1/live with a failing gateway health probe NEVER
+    restarts the scheduler and exits non-zero with a gateway diagnostic; probe targets
+    and restart command env-overridable; three demo runs captured; live copy mirrored'
+  status: complete
+  created_at: '2026-09-27T04:57:23.266973+00:00'
+  completed_at: '2026-09-27T05:32:38.628755+00:00'
+- id: DOC-6
+  title: docs/api.md Authentication section for operator credential
+  criteria:
+  - 'docs/api.md gains an Authentication section: credential sources, both accepted
+    forms with curl examples, read-open vs write-gated split, fail-closed 503 behavior
+    with code-verified status codes; grep -i credential >= 5 hits; one mutating recipe
+    carries an Authorization example'
+  status: complete
+  created_at: '2026-09-27T04:57:24.274997+00:00'
+  completed_at: '2026-09-27T05:41:40.719159+00:00'
+- id: README-5
+  title: README Hermes Plugin commands block mirrors all plugin verbs
+  criteria:
+  - README.md Hermes Plugin commands block lists every verb dispatched by plugin/hooks.py
+    including the 7 missing (cooldown, decay, pause-scheduler, resume-scheduler, range,
+    budget, rebalance); descriptions match actual hook behavior; README.md-only diff
+  status: complete
+  created_at: '2026-09-27T04:57:25.076246+00:00'
+  completed_at: '2026-09-27T05:32:07.819209+00:00'
