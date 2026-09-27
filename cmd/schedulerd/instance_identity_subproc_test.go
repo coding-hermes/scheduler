@@ -105,6 +105,17 @@ func TestInstanceIdentityReachesLogFile(t *testing.T) {
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
+	// The FILE carries the identity line (written right after log.SetOutput),
+	// but that is NOT yet evidence the process can shut down gracefully:
+	// signal.Notify is registered LATER (main.go:1131) than the identity stamp
+	// (main.go:414), so a SIGTERM delivered in the window between them hits the
+	// default disposition and kills the child without ever writing
+	// "Shutdown complete". Wait for the last log line the child emits before
+	// Notify — "schedulerd ready" (main.go:1125) — so the shutdown assertion
+	// below is deterministic instead of a ~20% flake. The identity line is
+	// asserted separately below, from the log FILE.
+	const readyLine = "schedulerd ready"
+
 	want := fmt.Sprintf("Instance: db=%s listen=%s", dbPath, addr)
 	ready := false
 	deadline := time.Now().Add(20 * time.Second)
@@ -114,7 +125,8 @@ func TestInstanceIdentityReachesLogFile(t *testing.T) {
 			t.Fatalf("child exited before writing the identity line: %v\nstdout/stderr:\n%s", err, stdout.String())
 		default:
 		}
-		if b, rerr := os.ReadFile(logPath); rerr == nil && bytes.Contains(b, []byte(want)) {
+		if b, rerr := os.ReadFile(logPath); rerr == nil &&
+			bytes.Contains(b, []byte(want)) && bytes.Contains(b, []byte(readyLine)) {
 			ready = true
 			break
 		}
@@ -123,7 +135,7 @@ func TestInstanceIdentityReachesLogFile(t *testing.T) {
 	if !ready {
 		_ = cmd.Process.Kill()
 		<-waitCh
-		t.Fatalf("derived log file %s never contained %q within 20s\nstdout/stderr:\n%s", logPath, want, stdout.String())
+		t.Fatalf("derived log file %s never contained %q / %q within 20s\nstdout/stderr:\n%s", logPath, want, readyLine, stdout.String())
 	}
 
 	// Graceful shutdown, mirroring the systemd restart path under test.
