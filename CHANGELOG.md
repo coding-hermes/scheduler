@@ -33,6 +33,11 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-27
 
+### Other Changes
+
+- Recorded the completed SCHED-GAP-1623 gitreins judge lifecycle and PASS verdict (`3e0cb4f7`).
+- Closed the SCHED-GAP-1623 board row after live dashboard re-verification; `/dashboard/partial` measured 1.21–1.42s against the <3s criterion (`3773b16c`).
+
 ## [1.6.0] — 2026-09-27
 
 ### Gateway zero-assistant completion gate (SCHED-GAP-205-A)
