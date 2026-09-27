@@ -586,12 +586,22 @@ ln -s $(pwd)/plugin ~/.hermes/plugins/coding-hermes
 
 Commands:
 - `/fleet status` — Show fleet status
+- `/fleet projects` — List all projects with weight, priority, and last tick info
+- `/fleet detail <project>` — Show one project's details including tick history
 - `/fleet weight <project> <N>` — Change weight
 - `/fleet priority <project> <N>` — Change priority
+- `/fleet cooldown <project> <seconds>` — Set minimum seconds between successive ticks
+- `/fleet decay <project> <rate>` — Set urgency decay rate (higher = urgency builds faster when idle)
 - `/fleet pause <project>` — Pause project
 - `/fleet resume <project>` — Resume project
+- `/fleet add <project> repo=<url> workdir=<path>` — Add a new project to the fleet
 - `/fleet ticks <project>` — Show tick history
 - `/fleet evaluate` — Force evaluation
+- `/fleet pause-scheduler` — Pause the entire scheduler loop
+- `/fleet resume-scheduler` — Resume the scheduler loop
+- `/fleet range <min> <max>` — Change the geometric tick-interval range, e.g. `/fleet range 20m 48h` (requires scheduler restart to apply)
+- `/fleet budget <N>` — Set the weight budget, e.g. `/fleet budget 120` (requires scheduler restart to apply)
+- `/fleet rebalance` — Force an evaluation cycle (same as `/fleet evaluate`)
 
 ---
 
