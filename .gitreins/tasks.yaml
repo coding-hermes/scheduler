@@ -4421,3 +4421,12 @@ tasks:
   status: complete
   created_at: '2026-09-27T07:21:05.792128+00:00'
   completed_at: '2026-09-27T09:35:32.079728+00:00'
+- id: INT-CI-165
+  title: Fix namespace tick ordering race in dashboard budget panel
+  criteria:
+  - go test ./internal/dashboard/ -count=1 passes with a fixture that stamps created_at
+    explicitly; ListNamespaceTicks orders by created_at DESC, id DESC; go test -short
+    -p 1 ./... passes
+  status: complete
+  created_at: '2026-09-27T12:03:02.295758+00:00'
+  completed_at: '2026-09-27T12:41:38.219814+00:00'
