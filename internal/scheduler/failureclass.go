@@ -59,6 +59,11 @@ func HarnessFailure(errText string) bool {
 		// ErrGatewayTransient text and the SSE reader's own terminal phrase.
 		"gateway transient error",
 		"sse stream ended without a terminal event",
+		// SCHED-GAP-1641: an instant one-shot gateway turn is a HARNESS
+		// verdict, not a project failure — a completed response that did a
+		// near-zero-output single turn must not count in any healthy-tick
+		// surface (failure rate, auto-disable denominator, deliver).
+		GatewayInstantTurnSentinel,
 	} {
 		if strings.Contains(lower, marker) {
 			return true

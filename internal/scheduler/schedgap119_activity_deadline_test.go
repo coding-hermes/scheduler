@@ -74,7 +74,11 @@ func jsonTurnHandler(delay time.Duration) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"resp_json","status":"completed","output":[{"type":"answer","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}`))
+		// SCHED-GAP-1641: productive-scale usage — a completed response in the
+		// instant-turn band (events<=10 AND tokens_out<=300) now accounts
+		// failed, and this handler's contract is the JSON fallback deadline
+		// mechanics, not token accounting.
+		_, _ = w.Write([]byte(`{"id":"resp_json","status":"completed","output":[{"type":"answer","role":"assistant","content":[{"type":"output_text","text":"tick done"}]}],"usage":{"input_tokens":52400,"output_tokens":6200,"total_tokens":58600}}`))
 	}
 }
 
@@ -98,9 +102,9 @@ func TestSgap119_ActiveTurnExceedsWallDeadlineStillCompletes(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "sgap119-active-turn"
 	mustCreateProjectINFRA012(t, db, projectName)
+	// SCHED-GAP-1641: productive-scale usage (outside the instant-turn band).
 
-	// 3 deltas, 800ms apart = 2.4s total wall time >> 1s deadline.
-	srv := sseGateway(sseTurnHandler("sess-sgap119-active", []time.Duration{800 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}, 42, 7))
+	srv := sseGateway(sseTurnHandler("sess-sgap119-active", []time.Duration{800 * time.Millisecond, 800 * time.Millisecond, 800 * time.Millisecond}, 42400, 7000))
 	defer srv.Close()
 
 	spawner := NewSpawner(db, 4)
@@ -119,8 +123,8 @@ func TestSgap119_ActiveTurnExceedsWallDeadlineStillCompletes(t *testing.T) {
 		t.Fatalf("Wait() status = %s, want %s — an ACTIVE turn (event every 800ms) must never be failed by a 1s per-turn deadline (total wall 2.4s)",
 			outcome.Status, TickCompleted)
 	}
-	if outcome.TokensIn != 42 || outcome.TokensOut != 7 {
-		t.Errorf("usage = %d/%d, want 42/7 — SSE response.completed usage must reach the tick row", outcome.TokensIn, outcome.TokensOut)
+	if outcome.TokensIn != 42400 || outcome.TokensOut != 7000 {
+		t.Errorf("usage = %d/%d, want 42400/7000 — SSE response.completed usage must reach the tick row", outcome.TokensIn, outcome.TokensOut)
 	}
 }
 
@@ -407,7 +411,8 @@ func TestSgap119_TraceOnCompletedTurn(t *testing.T) {
 	const projectName = "sgap119-trace-ok"
 	mustCreateProjectINFRA012(t, db, projectName)
 
-	srv := sseGateway(sseTurnHandler("sess-sgap119-trace", []time.Duration{50 * time.Millisecond}, 10, 5))
+	// SCHED-GAP-1641: productive-scale usage (outside the instant-turn band).
+	srv := sseGateway(sseTurnHandler("sess-sgap119-trace", []time.Duration{50 * time.Millisecond}, 10500, 5200))
 	defer srv.Close()
 
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
