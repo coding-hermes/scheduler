@@ -4426,5 +4426,15 @@ tasks:
     >1 JSON object (glued tail) instead of silently parsing the first; 3) SCRIPT_DIR
     defined in pm-standin-tick.sh; 4) unit tests for all three; go test -short -p
     1 ./internal/scheduler/ green
-  status: in_progress
+  status: complete
   created_at: '2026-09-27T17:21:03.492797+00:00'
+  completed_at: '2026-09-27T17:55:39.473339+00:00'
+- id: SCHED-GAP-1649
+  title: Auto-disable tuning test couples to live fleet.toml
+  criteria:
+  - TestLoadRootConfig_AutoDisableTuning_SCHED_GAP_130 passes with zero diff to the
+    working tree, no LIVE-CONFIG DRIFT advisory emitted, and the live ~/.hermes/fleet.toml
+    [scheduler] block carries the four tuned keys
+  status: complete
+  created_at: '2026-09-27T18:23:29.415239+00:00'
+  completed_at: '2026-09-27T18:23:41.565021+00:00'
