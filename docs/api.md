@@ -6,6 +6,71 @@ readable OpenAPI 3.0 spec is served by the daemon itself at
 `GET /api/v1/openapi.json`. Design rationale lives in `specs/S06-rest-api.md`;
 operational examples in `docs/integration.md`.
 
+## 0. Authentication (SCHED-GAP-1602)
+
+Every MUTATING operation in this API — all POST/PUT/DELETE routes below, plus
+mutating MCP `tools/call` methods on `POST /mcp` (same gate, same decision
+ladder) — requires the operator credential. READ operations (GET) are
+deliberately unauthenticated (see "Read-open vs write-gated" below). The
+machine-readable form of this section is the `security` marking per operation
+and the `components.securitySchemes` entries `operatorToken` (bearer) /
+`operatorBasic` (http basic) in `GET /api/v1/openapi.json`.
+
+**Credential sources** (precedence top-down; never a CLI flag — GAP-038,
+credentials in argv leak via `ps`):
+
+| Source | Key | Notes |
+|--------|-----|-------|
+| Environment | `SCHEDULER_OPERATOR_TOKEN` | Highest precedence; whitespace-trimmed at boot |
+| TOML (`schedulerd.toml`) | `[api] operator_token` | Used only when the env var is unset |
+| TOML (`schedulerd.toml`) | `[api] operator_user` + `[api] operator_password` | Basic mode (the browser path); used only when no token is configured; both must be set together — exactly one of the pair is a load error. A blank/whitespace `operator_token` is rejected at load (set a real token or remove the key) |
+
+**Header forms accepted on mutating requests.** In token mode (identity
+`operator:token`), any of:
+
+```sh
+-H 'Authorization: Bearer <token>'                # preferred
+-H 'Authorization: Basic <base64(ignored:token)>' # user part ignored; token is the password
+-H 'X-Operator-Token: <token>'                    # raw header alternative
+```
+
+In basic mode (identity `operator:basic`) use the basic form with the
+configured pair: `-u '<operator_user>:<operator_password>'`. Credential
+comparisons are constant-time. Successful calls are recorded with the caller
+identity (`operator:token` / `operator:basic`).
+
+**Read-open vs write-gated.** GET routes (health, live, status, config,
+projects, namespaces, ticks, events, queue, metrics, openapi.json) are
+deliberately open — cron probes, the ops watchdog and Observatory-style
+pullers consume them unauthenticated. The daemon binds loopback by default
+(`--listen 127.0.0.1:9090`); fleet deployments reach it over the tailnet, so
+read-open is a deliberate deployment-boundary decision, not an oversight.
+Every mutating decision — allowed or refused — writes an `api.auth` audit row
+visible via `GET /api/v1/events`.
+
+**Fail-closed: 503 when no credential is configured.** With no credential
+configured anywhere (env var and TOML key both absent), the daemon boots in
+`authOff` mode and answers **503 Service Unavailable** on EVERY mutating
+route — before any handler code runs, even when the caller presents a
+credential:
+
+```json
+{"error":"mutations disabled: no operator credential configured (set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)"}
+```
+
+This is structural, not a bug: a daemon that has no way to authenticate
+operators must not execute unauthenticated mutations. Boot announces it:
+`Auth: FAIL-CLOSED — no operator credential configured`. Configure one of the
+sources above to move to token/basic mode.
+
+All gate outcomes:
+
+| Case | Status | Body |
+|------|--------|------|
+| No credential configured (`authOff`, fail-closed) | 503 | `{"error":"mutations disabled: no operator credential configured (set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)"}` |
+| Credential configured, none presented | 401 | `{"error":"operator credential required for mutations"}` + `WWW-Authenticate: Basic realm="scheduler operator"` |
+| Credential configured, wrong value presented | 401 | `{"error":"invalid operator credential"}` |
+
 ## 1. Overview
 
 The scheduler daemon exposes a JSON REST API under `/api/v1` for managing the
@@ -363,10 +428,13 @@ stamped).
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
+  -H 'Authorization: Bearer <SCHEDULER_OPERATOR_TOKEN>' \
   -H 'Content-Type: application/json' \
   -d '{"name":"my-project","repo_url":"local:/home/kara/my-project","workdir":"/home/kara/my-project"}'
+# 401 {"error":"operator credential required for mutations"} without the Authorization header
+# 503 {"error":"mutations disabled: no operator credential configured ..."} when no credential is configured daemon-side
 # 201 {"name":"my-project","weight":10,"priority":5,"cooldown_s":900,
-#      "decay_rate":1,"enabled":false,"created_at":"2026-08-18T...Z", ...}
+#      "decay_rate":1,"enabled":false,"created_at":"2026-08-18T...Z", ...} on success
 ```
 
 ### GET /api/v1/projects/{name}
