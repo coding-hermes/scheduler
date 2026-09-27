@@ -111,6 +111,7 @@ curl http://127.0.0.1:9090/api/v1/status | jq '.active_projects'
 
 # Open the dashboard
 open http://127.0.0.1:9090/
+```
 
 ### 7. Create Your First Project
 
@@ -192,6 +193,7 @@ For production fleets, run the scheduler on a dedicated Hermes gateway instance 
    └─ ...                         └─ ...
          ↑                             ↑
     systemd cgroup              separate cgroup (MemoryMax=16G)
+```
 
 ### What's Happening
 
