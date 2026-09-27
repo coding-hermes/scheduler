@@ -1,6 +1,11 @@
 # Coding Hermes Scheduler
 
 [![CI](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yml)
+[![CI Pipeline](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yaml/badge.svg)](https://github.com/coding-hermes/scheduler/actions/workflows/ci.yaml)
+
+Both workflows gate every push to `main` (each runs checks the other does
+not — see [docs/ci-workflows.md](docs/ci-workflows.md)), so neither badge
+alone reflects the full gate.
 
 ![Coding Hermes Scheduler](assets/hermes-scheduler-banner.png)
 
