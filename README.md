@@ -464,7 +464,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off |
 | `-auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed |
 | `-auto-disable-min-ticks` | `50` | Minimum ticks in window before auto-disable can fire |
-| `-log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
+| `-log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables. Default derived from `-db` (SCHED-GAP-1647): the default/production db keeps this path, any other db logs to `<db>.log`; an explicit `-log-file` always wins |
 | `-show-config` | `false` | Print resolved config (CLI + env) as TOML and exit |
 | `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 | `-duckbrain-interval` | `5m0s` | DuckBrain sync interval (spool replay cadence) |

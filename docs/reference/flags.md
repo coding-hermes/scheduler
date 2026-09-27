@@ -38,7 +38,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
 | `--sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
 | `--config` | (none) | Path to TOML fleet config file |
-| `--log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
+| `--log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables. Default derived from `--db` (SCHED-GAP-1647): the default/production db keeps this path, any other db logs to `<db>.log`; an explicit `--log-file` always wins |
 | `--show-config` | `false` | Print resolved config (CLI + env layers) as TOML and exit — the root-TOML layer resolves later in boot and is NOT reflected here |
 | `--schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 | `--failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown (SCHED-GAP-018) |

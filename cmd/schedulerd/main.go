@@ -95,7 +95,11 @@ func main() {
 	autoDisableMinTicks := flag.Int("auto-disable-min-ticks", 50, "Minimum ticks in window before auto-disable can fire")
 	groupsFile := flag.String("groups-file", "", "JSONL file for deploy groups (default <db dir>/groups.jsonl when blocks store enabled; empty = default paths)")
 	templatesFile := flag.String("templates-file", "", "JSONL file for deploy templates (default <db dir>/templates.jsonl when blocks store enabled; empty = default paths)")
-	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
+	// SCHED-GAP-1647: the default is DERIVED at boot (resolveLogFile) unless
+	// --log-file is passed explicitly — the path below is only the
+	// production fallback for the default --db. A scratch instance with its
+	// own -db logs to <db>.log instead of here.
+	logFile := flag.String("log-file", defaultLogPath(), "Path to append structured tick logs (JSON lines); empty disables; default derived from --db (production db → scheduler.log, otherwise <db>.log); an explicit --log-file always wins")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
 	showVersion := flag.Bool("version", false, "Print version/build info and exit")
@@ -109,6 +113,13 @@ func main() {
 	// units (admission currency, NOT dollars).
 	budgetSource := "flag-default"
 	meteredBudgetSource := "default"
+	// SCHED-GAP-1647: whether --log-file was explicitly set on the command
+	// line. flag.Visit reports ONLY explicitly-set flags, so this is how the
+	// log-path resolution below distinguishes "operator passed --log-file"
+	// (the flag always wins, including an explicit empty value = disable the
+	// file log) from "flag left at its default" (the path is derived from
+	// --db so a scratch instance never appends into the production log).
+	logFileSet := false
 	// SCHED-GAP-1602: the operator credential — env/TOML ONLY, never a CLI
 	// flag (GAP-038: credentials in argv are visible in ps and shell
 	// history). Declared before the env-override block so --show-config and
@@ -118,6 +129,9 @@ func main() {
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "budget" {
 			budgetSource = "flag"
+		}
+		if f.Name == "log-file" {
+			logFileSet = true
 		}
 	})
 
@@ -257,8 +271,17 @@ func main() {
 		printSchema()
 		return
 	}
+	// SCHED-GAP-1647: resolve the effective log path BEFORE any early exit
+	// that prints config (--show-config must report the effective value).
+	// Explicit flag beats derived default (FEAT-005 default-guard shape):
+	// when --log-file was passed it wins verbatim (empty disables the file
+	// log, as before). Otherwise the path is derived from --db: the DEFAULT
+	// --db keeps the documented production path, and any other db derives
+	// <db>.log so a scratch instance (its own -db + --listen) never appends
+	// its shutdown lines into the production log.
+	effectiveLogFile := resolveLogFile(*dbPath, *logFile, logFileSet)
 	if *showConfigFlag {
-		printConfig(*configFile, *dbPath, *listen, *logFile,
+		printConfig(*configFile, *dbPath, *listen, effectiveLogFile,
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
 			*tickTimeout, *gatewayResponseTimeout, *slotPatience, *tasksPacing,
@@ -287,6 +310,13 @@ func main() {
 		log.Fatalf("FATAL: %s=sim (%s) requires --simulate — refusing to run the real fleet on a simulated clock",
 			clock.EnvMode, clock.Describe(clk))
 	}
+	// SCHED-GAP-1647: one greppable line stamping the instance identity —
+	// db + listen address. A shutdown line in a shared log can now always be
+	// attributed: the instance that wrote a boot record with this identity
+	// is the instance the shutdown belongs to. Two schedulerd processes can
+	// be alive at once (production + scratch), so identity must not be
+	// inferred from the log file alone.
+	log.Printf("Instance: db=%s listen=%s", *dbPath, *listen)
 	log.Printf("TIME: clock %s", clock.Describe(clk))
 
 	// ── Test-verify mode: run correctness checks and exit ──
@@ -366,13 +396,13 @@ func main() {
 	// Persist all logs to a file as well as stdout (system-plan-v2 §1.1).
 	// Failures to open the log file are non-fatal — the daemon keeps running
 	// on stdout only rather than crashing at boot.
-	if *logFile != "" {
-		lf, lfErr := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if effectiveLogFile != "" {
+		lf, lfErr := os.OpenFile(effectiveLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if lfErr != nil {
-			log.Printf("WARN: cannot open log file %s (%v) — logging to stdout only", *logFile, lfErr)
+			log.Printf("WARN: cannot open log file %s (%v) — logging to stdout only", effectiveLogFile, lfErr)
 		} else {
 			log.SetOutput(io.MultiWriter(os.Stdout, lf))
-			log.Printf("Log file: %s", *logFile)
+			log.Printf("Log file: %s", effectiveLogFile)
 		}
 	}
 
@@ -1102,6 +1132,41 @@ func main() {
 		log.Printf("HTTP shutdown: %v", err)
 	}
 	log.Println("Shutdown complete")
+}
+
+// SCHED-GAP-1647 canonical paths — the production identity, not the flag
+// defaults. defaultLogPath is the documented production log
+// (~/.hermes/coding-hermes/scheduler.log) and defaultDBPath is the
+// production --db; resolving them at call time (not package init) keeps
+// $HOME-dependent paths testable under t.Setenv.
+var (
+	defaultDBPath  = func() string { return os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db") }
+	defaultLogPath = func() string { return os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log") }
+)
+
+// resolveLogFile returns the effective log path for a schedulerd instance
+// (SCHED-GAP-1647). The precedence is: an explicitly-passed --log-file wins
+// verbatim (explicitSet; an explicit empty value keeps its documented
+// meaning — empty disables the file log). Otherwise the path is DERIVED
+// from the db path: the default --db keeps the documented production log
+// path, and any other db derives <db>.log so a scratch instance started
+// with its own -db (and --listen) never appends its boot/shutdown lines —
+// including its "Shutdown complete" — into the production log. A shutdown
+// line in the production log therefore means the production daemon.
+//
+// The production-safe property is proven, not assumed: the systemd unit
+// passes -db <production db>, which equals defaultDBPath(), so the derived
+// branch returns defaultLogPath() — the same path the flag default used to
+// carry (tests: resolveLogFile uses the same production pair).
+func resolveLogFile(dbPath, logFile string, explicitSet bool) string {
+	if explicitSet {
+		return logFile
+	}
+	prodDB, prodLog := defaultDBPath(), defaultLogPath()
+	if filepath.Clean(dbPath) == filepath.Clean(prodDB) {
+		return prodLog
+	}
+	return dbPath + ".log"
 }
 
 func printStatus(d *sql.DB) {
