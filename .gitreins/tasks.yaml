@@ -4449,3 +4449,51 @@ tasks:
   status: complete
   created_at: '2026-09-27T19:18:33.653458+00:00'
   completed_at: '2026-09-27T19:23:14.416542+00:00'
+- id: DOC-5
+  title: 'Env-var reference: docs/reference/env-vars.md'
+  criteria:
+  - docs/reference/env-vars.md exists with one row per env var from the Getenv grep
+    (name, effect, default, precedence vs flag/TOML), linked from docs/reference/flags.md
+    and README run section
+  status: complete
+  created_at: '2026-09-27T19:52:40.617037+00:00'
+  completed_at: '2026-09-27T20:12:50.344445+00:00'
+- id: SCHED-GAP-1650
+  title: 'Empty-lane instruction checker: no enabled lane may run with zero instructions'
+  criteria:
+  - A fleet checker reports every enabled lane whose own prompt is empty/short AND
+    whose namespace default_prompt is empty/short, and exits non-zero when that list
+    is non-empty; the live fleet yields an empty list after the auger fix.
+  status: complete
+  created_at: '2026-09-27T20:33:32.052959+00:00'
+  completed_at: '2026-09-27T21:11:09.944510+00:00'
+- id: README-4
+  title: README CI badge must name the workflow that actually gates main, and the
+    duplicate workflow file must be reported
+  criteria:
+  - The README badge points at the canonical gating workflow (or the duplicate workflow
+    file is retired after the worker reports which is canonical), and the report names
+    which of ci.yml/ci.yaml is canonical with evidence (gh run list, step lists).
+  status: complete
+  created_at: '2026-09-27T20:33:37.908793+00:00'
+  completed_at: '2026-09-27T21:09:04.145514+00:00'
+- id: SCHED-GAP-1647
+  title: schedulerd must not write the production log path from a scratch/test instance
+  criteria:
+  - A schedulerd instance started with a non-default -db or --listen writes its log
+    to a path derived from its own identity (or --log-file is explicit), and each
+    boot stamps instance identity (db + listen) so a report cannot attribute a scratch
+    shutdown to the production daemon.
+  status: complete
+  created_at: '2026-09-27T20:33:38.538519+00:00'
+  completed_at: '2026-09-27T21:29:27.086599+00:00'
+- id: SCHED-GAP-1624
+  title: Make GET /api/v1/projects honor limit
+  criteria:
+  - GET /api/v1/projects?limit=N returns at most N projects with correct total metadata;
+    sibling behavior matches events/ticks endpoints; tests added that fail without
+    the change; docs/api.md updated; go build + go test -short -p 1 ./... + golangci-lint
+    green
+  status: complete
+  created_at: '2026-09-27T21:49:31.869073+00:00'
+  completed_at: '2026-09-27T22:09:09.752559+00:00'
