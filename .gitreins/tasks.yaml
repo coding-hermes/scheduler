@@ -4438,3 +4438,14 @@ tasks:
   status: complete
   created_at: '2026-09-27T18:23:29.415239+00:00'
   completed_at: '2026-09-27T18:23:41.565021+00:00'
+- id: README-3
+  title: README Getting Started must document the operator credential for mutating
+    API calls
+  criteria:
+  - 'README.md section 7 mutating examples (POST /api/v1/projects, PUT enabled, POST
+    resume) each show an Authorization: Bearer header using SCHEDULER_OPERATOR_TOKEN,
+    a note explains the credential is required (503 fail-closed without one), and
+    the incorrect ''# 201'' comment is corrected'
+  status: complete
+  created_at: '2026-09-27T19:18:33.653458+00:00'
+  completed_at: '2026-09-27T19:23:14.416542+00:00'
