@@ -1976,8 +1976,16 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	st.stopHeartbeat = s.startHeartbeat(tickID)
 
 	// Snapshot the repo at spawn so the completion path can count commits and
-	// files the foreman added during this tick.
-	st.preHead, st.preCommits = gitBaseline(project.Workdir)
+	// files the foreman added during this tick. SCHED-GAP-1652: the baseline MUST
+	// be taken in the SAME directory the delta is measured in below — the old code
+	// baselined project.Workdir while measuring st.cmd.Dir, so any divergence
+	// (worktree, symlinked workdir, nested repo) compared two different checkouts
+	// and recorded the difference as a fact about the tick's work.
+	if st.cmd != nil && st.cmd.Dir != "" {
+		st.preHead, st.preCommits = gitBaseline(st.cmd.Dir)
+	} else {
+		st.preHead, st.preCommits = gitBaseline(project.Workdir)
+	}
 
 	// Tee stdout: scanner reads session_id from one side, buffer captures full output.
 	teeReader := io.TeeReader(stdoutRead, &st.Output)
@@ -2430,10 +2438,24 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		log.Printf("COST: project=%s tick=%s marginal_usd=%.6f sticker_usd=%.6f source=%s provider=%s model=%s",
 			st.Project, st.TickID, resolved.costUSD, resolved.stickerUSD, resolved.source, st.provider, st.model)
 		// Measure real git work the foreman produced this tick (exec path only —
-		// gateway spawns have no process/repo baseline). Best-effort: a non-git
-		// or unreadable workdir leaves commits/files at 0.
+		// gateway spawns have no process/repo baseline). A failed measurement is
+		// logged loudly and left as zeros, but it is NOT evidence that no work
+		// happened: SCHED-GAP-1652 measured 27% of zero-commit ticks provably
+		// committing, precisely because this path used to swallow the difference.
 		if st.preCommits >= 0 && st.cmd != nil && st.cmd.Dir != "" {
-			outcome.Commits, outcome.FilesChanged = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits)
+			var gerr error
+			outcome.Commits, outcome.FilesChanged, gerr = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits)
+			if gerr != nil {
+				log.Printf("WARN: tick %s git delta NOT measured: %v — commits/files recorded as 0 and are NOT evidence of no work",
+					st.TickID, gerr)
+			}
+		} else {
+			dir := ""
+			if st.cmd != nil {
+				dir = st.cmd.Dir
+			}
+			log.Printf("WARN: tick %s git delta NOT measured: no usable baseline (preCommits=%d, cmdDir=%q) — commits/files recorded as 0 and are NOT evidence of no work",
+				st.TickID, st.preCommits, dir)
 		}
 	}
 
