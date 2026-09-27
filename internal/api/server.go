@@ -468,6 +468,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if !obs.check(w, ctx) {
 		return
 	}
+	// SCHED-GAP-177: non-code family output rollup — the fleet-level view
+	// of the qa/pm/sync/dogfood counters (lanes, lifetime output ticks,
+	// worst zero-output streak, lanes at the alert threshold).
+	obs.enter("laneFamilyOutputTotals")
+	status["lane_output_families"] = laneFamilyOutputTotals(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
 	status["wave_depth_total"] = waveDepthTotal(waves)
 	obs.enter("waveWorkersCapConfigured")
 	status["wave_workers_cap_configured"] = waveWorkersCapConfigured(ctx, s.db)

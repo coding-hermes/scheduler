@@ -189,6 +189,7 @@ armed state (`gateway_health_gate`, SCHED-GAP-170).
 | `zero_select_consecutive` / `zero_select_eligible` / `zero_select_last_at` | int / int / string | Zero-select diagnostics (present when the loop is attached): consecutive evals that selected nothing despite eligible projects, eligible count at the last one, and its timestamp |
 | `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown) |
 | `duckbrain` | object | DuckBrain sync health `{base_url, consecutive_failures, interval, last_error, last_ok_at, reachable, spooled_pending}` (present when sync health reporting is configured) |
+| `lane_output_families` | object | SCHED-GAP-177 per-family rollup for the four non-code lane families — `{qa, pm, sync, dogfood}`, each `{lanes, output_ticks, max_zero_output_streak, lanes_at_alert_threshold}`. `lanes` counts ENABLED lanes only; `output_ticks` sums the family's lifetime output ticks (code OR board commits); `max_zero_output_streak` is the worst streak currently on any lane; `lanes_at_alert_threshold` counts lanes at/past the HIGH-event threshold (8). The `duckbrain-sync` namespace resolves as `sync` |
 
 **Errors:** 405 on non-GET. **504** when a DB step exceeds the request deadline
 (SCHED-GAP-1575-B): the handler runs its ~12 sequential calls on ONE serialized
@@ -274,6 +275,7 @@ Full Project model (response shape, snake_case):
 | `last_tick_started`, `last_tick_completed` | string | RFC3339; `""` when never |
 | `disabled_at`, `disabled_by`, `disabled_reason` | string | Disable provenance (GAP-044); empty while enabled/never disabled; `disabled_by` ∈ `api` \| `api-pause` \| `api-delete` \| `auto-disable` |
 | `consecutive_failures` | int | Internal spawn-failure counter (drives selection backoff; not user-editable) |
+| `qa_output_count`, `pm_output_count`, `sync_output_count`, `dogfood_output_count` | int | SCHED-GAP-177: lifetime output ticks (code OR board commits) recorded for the lane's non-code family (qa / pm / sync (the `duckbrain-sync` namespace) / dogfood); 0 for lanes outside the four families |
 
 ### GET /api/v1/projects
 

@@ -229,6 +229,12 @@ func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 		log.Printf("SYNC: tick lifecycle error: %v", err)
 	}
 
+	// SCHED-GAP-177: non-code family output rollup (same shape as the
+	// /api/v1/status lane_output_families block).
+	if err := d.syncLaneFamilyOutput(ctx); err != nil {
+		log.Printf("SYNC: lane family output error: %v", err)
+	}
+
 	// Flush buffered fallback state NOW, after all row iterations finished
 	// (the single DB connection is free again). Failed writes land in
 	// sync_spool for replay; alert/recovery events land in the event log.
@@ -570,6 +576,89 @@ func (d *DuckBrainSync) syncProjectStatuses(ctx context.Context) error {
 		}
 	}
 	return rows.Err()
+}
+
+// syncLaneFamilyOutput (SCHED-GAP-177) pushes the non-code families'
+// fleet rollup to DuckBrain — the same four-family view /api/v1/status
+// serves, so memory queries answer "are the qa/pm/sync/dogfood lanes
+// producing?" without reading the API. One scan over projects; the payload
+// mirrors the status block's shape (deliberately — one vocabulary across
+// surfaces). Best-effort like every other sync section: an error fails
+// only this section's POST, never the sync cycle.
+func (d *DuckBrainSync) syncLaneFamilyOutput(ctx context.Context) error {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT namespace_id, enabled,
+			COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0),
+			COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0),
+			COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0),
+			COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0)
+		FROM projects`)
+	if err != nil {
+		return fmt.Errorf("query lane family output: %w", err)
+	}
+	defer rows.Close()
+
+	type famTotals struct {
+		Lanes       int `json:"lanes"`
+		OutputTicks int `json:"output_ticks"`
+		MaxStreak   int `json:"max_zero_output_streak"`
+		AtThreshold int `json:"lanes_at_alert_threshold"`
+	}
+	fams := map[string]*famTotals{"qa": {}, "pm": {}, "sync": {}, "dogfood": {}}
+	familyOf := func(nsID string) string {
+		switch nsID {
+		case "qa":
+			return "qa"
+		case "pm":
+			return "pm"
+		case "dogfood":
+			return "dogfood"
+		case "sync", "duckbrain-sync":
+			return "sync"
+		}
+		return ""
+	}
+	for rows.Next() {
+		var nsID string
+		var enabled bool
+		var qaOut, qaSt, pmOut, pmSt, syOut, sySt, doOut, doSt int
+		if err := rows.Scan(&nsID, &enabled, &qaOut, &qaSt, &pmOut, &pmSt, &syOut, &sySt, &doOut, &doSt); err != nil {
+			continue
+		}
+		fam := familyOf(nsID)
+		if fam == "" {
+			continue
+		}
+		out, streak := qaOut, qaSt
+		switch fam {
+		case "pm":
+			out, streak = pmOut, pmSt
+		case "sync":
+			out, streak = syOut, sySt
+		case "dogfood":
+			out, streak = doOut, doSt
+		}
+		f := fams[fam]
+		if enabled {
+			f.Lanes++
+			f.OutputTicks += out
+			if streak > f.MaxStreak {
+				f.MaxStreak = streak
+			}
+			if streak >= 8 {
+				f.AtThreshold++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scan lane family output: %w", err)
+	}
+	payload := map[string]any{
+		"families":  fams,
+		"threshold": 8,
+		"synced_at": d.clock().Now().Format(time.RFC3339),
+	}
+	return d.postMemory(ctx, "/fleet/lane-output", "metrics", payload)
 }
 
 // postMemory POSTs a memory to the DuckBrain HTTP API. (rest of method unchanged)

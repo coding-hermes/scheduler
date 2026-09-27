@@ -151,6 +151,8 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 			if !adaptiveCooldown(s.db, outcome.Project, project.Workdir, outcome) {
 				autoSlowdown(s.db, outcome.Project, nil)
 			}
+			// SCHED-GAP-177: same post-tick hook as the real spawner.
+			recordLaneFamilyOutput(s.db, outcome.Project, outcome.TickID)
 		}
 	}()
 

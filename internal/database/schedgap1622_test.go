@@ -69,18 +69,25 @@ func TestInitDB_BusyTimeoutOnSecondConnection(t *testing.T) {
 // TestLatestMigration_SchedGap1622RunningIndex pins the migration ladder for
 // the SCHED-GAP-1622 partial running-ticks index.
 func TestLatestMigration_SchedGap1622RunningIndex(t *testing.T) {
-	if latestMigration != 46 {
-		t.Fatalf("latestMigration = %d, want 46 (SCHED-GAP-1622 partial index idx_ticks_status_running)", latestMigration)
+	if latestMigration < 46 {
+		t.Fatalf("latestMigration = %d, want >= 46 (SCHED-GAP-1622 partial index idx_ticks_status_running)", latestMigration)
 	}
-	m := migrations[len(migrations)-1]
-	if m.version != 46 {
-		t.Fatalf("last migration version = %d, want 46", m.version)
+	foundV46 := false
+	var v46 migration
+	for _, m := range migrations {
+		if m.version == 46 {
+			foundV46 = true
+			v46 = m
+		}
 	}
-	if !strings.Contains(m.stmt, "idx_ticks_status_running") {
-		t.Errorf("v46 stmt does not create idx_ticks_status_running: %s", m.stmt)
+	if !foundV46 {
+		t.Fatalf("migration v46 (SCHED-GAP-1622 partial running-ticks index) missing from the ladder")
 	}
-	if !strings.Contains(m.stmt, "WHERE status = 'running'") {
-		t.Errorf("v46 index is not the PARTIAL (status='running') form: %s", m.stmt)
+	if !strings.Contains(v46.stmt, "idx_ticks_status_running") {
+		t.Errorf("v46 stmt does not create idx_ticks_status_running: %s", v46.stmt)
+	}
+	if !strings.Contains(v46.stmt, "WHERE status = 'running'") {
+		t.Errorf("v46 index is not the PARTIAL (status='running') form: %s", v46.stmt)
 	}
 }
 

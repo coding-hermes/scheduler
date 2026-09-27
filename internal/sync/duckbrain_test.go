@@ -738,7 +738,7 @@ func TestSyncTicks_PostsTicks(t *testing.T) {
 	}
 }
 
-func TestSyncOnce_CallsAllSix(t *testing.T) {
+func TestSyncOnce_CallsAllSeven(t *testing.T) {
 	db, err := database.InitDB(":memory:")
 	if err != nil {
 		t.Fatalf("InitDB: %v", err)
@@ -773,9 +773,9 @@ func TestSyncOnce_CallsAllSix(t *testing.T) {
 	s.syncOnce(ctx)
 
 	// Fleet summary (1) + project status (1) + namespace summary (1) + namespace status (1)
-	// + SDLC events (1) + tick lifecycle (1) = 6
-	if callCount != 6 {
-		t.Errorf("callCount = %d, want 6", callCount)
+	// + SDLC events (1) + tick lifecycle (1) + lane-family output (SCHED-GAP-177, 1) = 7
+	if callCount != 7 {
+		t.Errorf("callCount = %d, want 7", callCount)
 	}
 }
 
@@ -786,7 +786,7 @@ func TestSyncOnce_ContinuesOnError(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Seed data so all 6 sync functions produce at least one POST.
+	// Seed data so all 7 sync functions produce at least one POST.
 	insertProject(t, db, "p1", "r1", "w1", 1)
 	if _, err := db.Exec(`INSERT INTO namespaces (id, weight, reserved, hard_cap, enabled) VALUES ('ns1', 10, 1, 100, 1)`); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -816,9 +816,10 @@ func TestSyncOnce_ContinuesOnError(t *testing.T) {
 	s.syncOnce(ctx)
 
 	// Fleet summary (1) + project status (1) + namespace summary (1) + namespace status (1)
-	// + SDLC events (1) + tick lifecycle (1) = 6
-	if callCount != 6 {
-		t.Errorf("callCount = %d, want 6", callCount)
+	// + SDLC events (1) + tick lifecycle (1) + lane-family output (SCHED-GAP-177, 1) = 7.
+	// Every section fails its POST here (500) — syncOnce must still reach all of them.
+	if callCount != 7 {
+		t.Errorf("callCount = %d, want 7", callCount)
 	}
 }
 
@@ -867,12 +868,13 @@ func TestRun_StartsAndStops(t *testing.T) {
 	}
 
 	// New contract (change-detection): the initial syncOnce posts fleet
-	// summary + 1 project status + namespace summary = 3; every later cycle
-	// finds the payloads unchanged (synced_at stripped from the hash) and
-	// posts nothing. Ticks firing is proven by Run returning promptly on
-	// cancel; the dedupe itself is covered by TestPostMemory_ChangeDetection.
-	if callCount != 3 {
-		t.Errorf("callCount = %d, want 3 (initial syncOnce; unchanged payloads dedupe on later cycles)", callCount)
+	// summary + 1 project status + namespace summary + lane-family output
+	// (SCHED-GAP-177) = 4; every later cycle finds the payloads unchanged
+	// (synced_at stripped from the hash) and posts nothing. Ticks firing is
+	// proven by Run returning promptly on cancel; the dedupe itself is
+	// covered by TestPostMemory_ChangeDetection.
+	if callCount != 4 {
+		t.Errorf("callCount = %d, want 4 (initial syncOnce; unchanged payloads dedupe on later cycles)", callCount)
 	}
 }
 

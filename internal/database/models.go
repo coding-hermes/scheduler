@@ -169,6 +169,26 @@ type Project struct {
 	// pass. Validated at write time.
 	BoardOwnership string `json:"board_ownership"`
 
+	// SCHED-GAP-177: non-code lane family output metrics. The four big
+	// satellite families (qa/pm/sync/dogfood — namespace_id) had no
+	// recorded output of ANY kind: their ticks write no product code, so
+	// code_commits read 0 forever and neither the board nor /api/v1 could
+	// distinguish "does work we don't measure" from "idle-spinning".
+	// Output for a completed tick = code_commits > 0 || board_commits > 0
+	// (falls open to the raw commit claim when measurement failed, the
+	// -1/-1 sentinel). Counters live on the project row; a lane with
+	// >= 8 consecutive zero-output ticks raises a HIGH lane-output event
+	// naming it. Streaks are internal state — serialized "-" (same
+	// convention as no_progress_ticks being read-only).
+	QAOutputCount           int `json:"qa_output_count"`
+	QAZeroOutputStreak      int `json:"-"`
+	PMOutputCount           int `json:"pm_output_count"`
+	PMZeroOutputStreak      int `json:"-"`
+	SyncOutputCount         int `json:"sync_output_count"`
+	SyncZeroOutputStreak    int `json:"-"`
+	DogfoodOutputCount      int `json:"dogfood_output_count"`
+	DogfoodZeroOutputStreak int `json:"-"`
+
 	// SCHED-GAP-219 cooldown pin provenance. The pin is a durable row
 	// attribute: the operator value the cooldown must never silently drop
 	// below. NULL (nil) = no pin — the cooldown is policy/discretion

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 46
+const latestMigration = 47
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -724,7 +724,57 @@ ON ticks(status)
 WHERE status = 'running';
 `,
 	},
+	{
+		// SCHED-GAP-177: non-code lane family output counters. Eight
+		// NOT NULL DEFAULT 0 columns — additive ALTERs, no rebuild: a
+		// live 634 MB database migrates in place and every existing
+		// row reads the 0 default (honest: no output recorded yet).
+		version: 47,
+		desc:    "SCHED-GAP-177: per-lane-family output counters (qa/pm/sync/dogfood × output_count/zero_output_streak) on projects so non-code lanes' output is finally recorded and an 8-tick zero-output streak can raise a HIGH lane-output event",
+		stmt: `
+ALTER TABLE projects ADD COLUMN qa_output_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN qa_zero_output_streak INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN pm_output_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN pm_zero_output_streak INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN sync_output_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN sync_zero_output_streak INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN dogfood_output_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN dogfood_zero_output_streak INTEGER NOT NULL DEFAULT 0;
+` + laneOutputBackfillStmt + "\n",
+	},
 }
+
+// laneOutputBackfillStmt initializes the four family output counts from tick
+// history in the SAME migration that adds the columns, so the counters are
+// truthful from the first deploy instead of reading 0 over years of recorded
+// output. The predicate (LaneOutputTickWhere) is the SQL twin of the Go
+// predicate in internal/scheduler/lane_output.go recordLaneFamilyOutput,
+// including the unmeasured -1/-1 fall-open to the raw commit claim, so
+// history and runtime can never disagree about what counts as output.
+// The per-family scoping uses the namespace CASE — the same mapping
+// laneFamily applies at runtime (sync lives under the duckbrain-sync slug).
+// Streaks are NOT backfilled: a streak is live state about the LAST N ticks
+// in order; recomputing it from unordered history would need a window
+// function over created_at (ties break the order). A fresh streak starts at
+// 0 and reaches the threshold in at most 8 live ticks — conservative: it
+// can only delay an alert, never fabricate one.
+const laneOutputBackfillStmt = `UPDATE projects SET
+	qa_output_count = (SELECT COUNT(*) FROM ticks WHERE project_name = projects.name AND projects.namespace_id = 'qa' ` + LaneOutputTickWhere + `),
+	pm_output_count = (SELECT COUNT(*) FROM ticks WHERE project_name = projects.name AND projects.namespace_id = 'pm' ` + LaneOutputTickWhere + `),
+	sync_output_count = (SELECT COUNT(*) FROM ticks WHERE project_name = projects.name AND projects.namespace_id IN ('sync','duckbrain-sync') ` + LaneOutputTickWhere + `),
+	dogfood_output_count = (SELECT COUNT(*) FROM ticks WHERE project_name = projects.name AND projects.namespace_id = 'dogfood' ` + LaneOutputTickWhere + `)`
+
+// LaneOutputTickWhere is the per-tick output predicate shared by the v47
+// backfill and any future repair tool: terminal ticks (completed | timeout —
+// deferred never ran a foreman turn) whose commit anatomy records output.
+// Exported so tests outside the package can execute the same SQL the
+// migration runs, pinning the counts against the runtime accounting.
+const LaneOutputTickWhere = `AND status IN ('completed','timeout')
+	AND (
+		COALESCE(code_commits, 0) > 0
+		OR COALESCE(board_commits, 0) > 0
+		OR (COALESCE(code_commits, 0) < 0 AND COALESCE(commits, 0) > 0)
+	)`
 
 // Migrate applies all pending migrations to db. Already-applied migrations
 // are skipped, so this is safe to call on every startup (including against

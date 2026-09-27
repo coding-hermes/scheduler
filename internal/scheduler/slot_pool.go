@@ -617,6 +617,10 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			if !adaptiveCooldown(db, outcome.Project, proj.Workdir, outcome) {
 				autoSlowdown(db, outcome.Project, &st.Output)
 			}
+			// SCHED-GAP-177: non-code family output accounting for this
+			// completed tick (qa/pm/sync/dogfood lanes). Reads the commit
+			// anatomy adaptiveCooldown just stamped; coding lanes no-op.
+			recordLaneFamilyOutput(db, outcome.Project, outcome.TickID)
 		}
 
 		// Timeout notification: log and alert, but do NOT back off.

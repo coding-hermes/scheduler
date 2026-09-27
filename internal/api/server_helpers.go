@@ -350,6 +350,104 @@ WHERE status = 'completed'
 	return n
 }
 
+// laneFamilyRow is one family's rollup accumulator (SCHED-GAP-177).
+type laneFamilyRow struct {
+	lanes, output int
+	maxStreak     int
+	atThreshold   int
+}
+
+// laneFamilyOutputTotals (SCHED-GAP-177) rolls the four non-code families'
+// output counters into one /api/v1/status block — the fleet-level answer to
+// "are the qa/pm/sync/dogfood lanes producing anything?" without paging
+// /api/v1/projects. One scan over projects: per family, the enabled-lane
+// count, the family's summed lifetime output ticks, the highest zero-output
+// streak currently on any lane in the family, and the lanes sitting AT or
+// past the HIGH-event threshold (8) right now. The streak views read live
+// counters — not the events table — so a lane that crossed before a restart
+// stays visible. Fail-soft: any query error returns the zero block (the
+// per-lane columns remain the source of truth).
+func laneFamilyOutputTotals(ctx context.Context, db *sql.DB) map[string]any {
+	fams := map[string]*laneFamilyRow{
+		"qa": {}, "pm": {}, "sync": {}, "dogfood": {},
+	}
+	rows, err := db.QueryContext(ctx, `SELECT namespace_id, enabled,
+		qa_output_count, qa_zero_output_streak,
+		pm_output_count, pm_zero_output_streak,
+		sync_output_count, sync_zero_output_streak,
+		dogfood_output_count, dogfood_zero_output_streak
+FROM projects`)
+	if err != nil {
+		return laneFamilyOutputBlock(fams)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nsID string
+		var enabled bool
+		var qaOut, qaSt, pmOut, pmSt, syOut, sySt, doOut, doSt int
+		if err := rows.Scan(&nsID, &enabled, &qaOut, &qaSt, &pmOut, &pmSt, &syOut, &sySt, &doOut, &doSt); err != nil {
+			continue
+		}
+		out, streak, fam := laneFamilySelection(nsID, qaOut, qaSt, pmOut, pmSt, syOut, sySt, doOut, doSt)
+		if fam == "" {
+			continue
+		}
+		f := fams[fam]
+		if enabled {
+			f.lanes++
+			f.output += out
+			if streak > f.maxStreak {
+				f.maxStreak = streak
+			}
+			if streak >= laneOutputAlertThreshold {
+				f.atThreshold++
+			}
+		}
+	}
+	return laneFamilyOutputBlock(fams)
+}
+
+// laneOutputAlertThreshold is the /api/v1/status rollup's copy of the
+// scheduler's laneOutputHighThreshold (8, from the SCHED-GAP-177 board row).
+// The API package cannot import internal/scheduler (import cycle), so the
+// value is duplicated here and pinned equal by test
+// (TestLaneFamilyOutputTotals threshold arm) — a drift changes the
+// at-threshold count, never the event itself.
+const laneOutputAlertThreshold = 8
+
+// laneFamilySelection resolves a project row's family, output count, and
+// streak from its namespace and the eight counter columns — the same
+// namespace mapping the runtime accounting and the v47 backfill use (sync
+// resolves from either slug). fam is "" for non-family namespaces.
+func laneFamilySelection(nsID string, qaOut, qaSt, pmOut, pmSt, syOut, sySt, doOut, doSt int) (out, streak int, fam string) {
+	switch nsID {
+	case "qa":
+		return qaOut, qaSt, "qa"
+	case "pm":
+		return pmOut, pmSt, "pm"
+	case "dogfood":
+		return doOut, doSt, "dogfood"
+	case "sync", "duckbrain-sync":
+		return syOut, sySt, "sync"
+	}
+	return 0, 0, ""
+}
+
+// laneFamilyOutputBlock renders the family rollup block; split out so the
+// query-error path returns the same shape as the populated one.
+func laneFamilyOutputBlock(fams map[string]*laneFamilyRow) map[string]any {
+	block := make(map[string]any, 4)
+	for fam, f := range fams {
+		block[fam] = map[string]any{
+			"lanes":                    f.lanes,
+			"output_ticks":             f.output,
+			"max_zero_output_streak":   f.maxStreak,
+			"lanes_at_alert_threshold": f.atThreshold,
+		}
+	}
+	return block
+}
+
 // ProjectFailureRate is the per-project failure-rate breakdown for a single
 // project over a window of recent ticks. It appears in /api/v1/status under
 // the "projects_failure_rates" key (SCHED-GAP-018).
@@ -802,7 +900,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Fleet overview",
         "responses": {
-          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart), gateway_health_gate (the gateway-health admission gate's armed state and cached verdict, SCHED-GAP-170)"}
+          "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart), gateway_health_gate (the gateway-health admission gate's armed state and cached verdict, SCHED-GAP-170), lane_output_families (SCHED-GAP-177 per-family rollup for qa/pm/sync/dogfood: lanes, output_ticks, max_zero_output_streak, lanes_at_alert_threshold)"}
         }
       }
     },
@@ -1319,7 +1417,11 @@ var openapiSpec = []byte(`{
           "cooldown_ceiling_s": {"type": "integer", "description": "Adaptive-cooldown ceiling — maximum slowed-down cooldown"},
           "no_progress_threshold": {"type": "integer", "description": "Consecutive no-progress ticks (0 commits AND no new board rows) before the adaptive slowdown begins"},
           "no_progress_ticks": {"type": "integer", "description": "Runtime state: current consecutive no-progress streak (internal scheduler state — not user-editable via ProjectUpdates)"},
-          "board_rows_seen": {"type": "integer", "description": "Runtime state: board row count seen at the last tick (internal scheduler state — not user-editable via ProjectUpdates)"}
+          "board_rows_seen": {"type": "integer", "description": "Runtime state: board row count seen at the last tick (internal scheduler state — not user-editable via ProjectUpdates)"},
+          "qa_output_count": {"type": "integer", "description": "SCHED-GAP-177: lifetime output ticks (code OR board commits) recorded for the qa lane family; 0 for lanes outside the four non-code families"},
+          "pm_output_count": {"type": "integer", "description": "SCHED-GAP-177: lifetime output ticks recorded for the pm lane family"},
+          "sync_output_count": {"type": "integer", "description": "SCHED-GAP-177: lifetime output ticks recorded for the sync (duckbrain-sync namespace) lane family"},
+          "dogfood_output_count": {"type": "integer", "description": "SCHED-GAP-177: lifetime output ticks recorded for the dogfood lane family"}
         }
       },
       "ProjectUpdates": {
