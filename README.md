@@ -668,6 +668,12 @@ removed in the same pass; everything else below is deliberate and must not be
   `9cb721e9`. The live database is `~/.hermes/coding-hermes/scheduler.db` (the
   `--db` default); no script or test reads a repo-root `scheduler.db`. Now
   ignored by a root-anchored `/scheduler.db` rule.
+- **`.coding-hermes/_worker_FEAT-API_prompt.txt` and
+  `_worker_FEAT-DASHBOARD_prompt.txt` — REMOVED.** One-shot worker dispatch
+  briefs for the long-finished FEAT-API / FEAT-DASHBOARD rows, swept into a
+  tick commit by a broad `git add` (`bf482a5a`); both carried stale
+  `file.go:line` references and nothing referenced them (board, docs, scripts,
+  tests all checked). Recover with `git show bf482a5a:<path>` if ever needed.
 - **`fleet.toml` (tracked)** is a curated *static mirror* of operator cooldown
   pins, NOT the live fleet config — the live file is `~/.hermes/fleet.toml`,
   written only by `~/.hermes/scripts/fleet-cooldown-policy.py`. The two are
