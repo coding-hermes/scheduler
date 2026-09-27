@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -85,17 +86,52 @@ func ValidateBoardVocab(boardPath string) ([]string, error) {
 		if line == "" {
 			continue
 		}
+		// Decode the FIRST object with a Decoder rather than json.Unmarshal:
+		// Unmarshal rejects trailing data, so a glued line (several objects on
+		// one physical line) would be skipped whole and its tail hidden. A
+		// Decoder stops cleanly after the first value, leaving the rest of the
+		// buffer for the glued-tail check below.
+		dec := json.NewDecoder(strings.NewReader(line))
 		var row map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
+		if err := dec.Decode(&row); err != nil {
 			continue // malformed line — a different gate's concern
 		}
 		if row == nil {
 			continue // decodes to nil for "null" / a non-object
 		}
+		id := boardRowID(row)
+
+		// Glued-tail detector (SCHED-GAP-1645): a physical line holding more
+		// than one JSON object is a writer bug — the first object is the only
+		// one the old reader ever saw, so the whole board tail was hidden from
+		// the vocabulary check. Count the objects greedily with the same
+		// decoder; if trailing non-whitespace cannot be decoded as a value the
+		// count is unknown (report it, but as "count unknown").
+		n := 1
+		exact := true
+		for {
+			var raw json.RawMessage
+			err := dec.Decode(&raw)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				exact = false
+				break
+			}
+			n++
+		}
+		switch {
+		case n > 1 && exact:
+			out = append(out, fmt.Sprintf("%s: glued line — %d JSON objects on one physical line", id, n))
+		case !exact:
+			out = append(out, fmt.Sprintf("%s: glued line (count unknown)", id))
+		}
+
 		if boardStatusAllowed(boardRowStatus(row)) {
 			continue
 		}
-		out = append(out, boardRowID(row)+": status="+boardRowStatus(row))
+		out = append(out, id+": status="+boardRowStatus(row))
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

@@ -158,6 +158,67 @@ func TestBoardVocabValidator_IsReadOnly(t *testing.T) {
 	}
 }
 
+// TestBoardVocabValidator_FlagsGluedTail pins the SCHED-GAP-1645 detector: a
+// physical line holding more than one JSON object must be reported, and a clean
+// single-object line must not. Two shapes are proven:
+//
+//   - objects glued by a literal `\n` two-char sequence (the tick #685 tail):
+//     the second value cannot be decoded, so the count is unknown but the line
+//     is still flagged;
+//   - objects glued by plain whitespace: both decode, so the count is exact.
+func TestBoardVocabValidator_FlagsGluedTail(t *testing.T) {
+	// Literal backslash-n two-char sequence between two compact rows.
+	gluedUnknown := `{"id":"GLUE-1","status":"pending"}` + `\n` + `{"id":"GLUE-2","status":"pending"}`
+	// Two objects separated by a space — both decode cleanly.
+	gluedExact := `{"id":"GLUE-3","status":"pending"} {"id":"GLUE-4","status":"pending"}`
+
+	path := writeVocabBoard(t,
+		`{"id":"OK-1","status":"pending"}`,
+		gluedUnknown,
+		gluedExact,
+		`{"id":"OK-2","status":"pending"}`,
+	)
+
+	got, err := ValidateBoardVocab(path)
+	if err != nil {
+		t.Fatalf("ValidateBoardVocab: %v", err)
+	}
+
+	want := []string{
+		"GLUE-1: glued line (count unknown)",
+		"GLUE-3: glued line — 2 JSON objects on one physical line",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d findings %v, want %d %v", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("finding[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+	// Clean single-object rows must never be flagged as glued.
+	for _, v := range got {
+		if strings.Contains(v, "OK-1") || strings.Contains(v, "OK-2") {
+			t.Fatalf("clean row must not be flagged: %q", v)
+		}
+	}
+}
+
+// TestBoardVocabValidator_CleanSingleObjectLineNotGlued is the negative pin: a
+// single valid object (here with an off-vocabulary status) produces exactly its
+// status finding and NO glued finding.
+func TestBoardVocabValidator_CleanSingleObjectLineNotGlued(t *testing.T) {
+	path := writeVocabBoard(t, `{"id":"OFF-1","status":"todo"}`)
+
+	got, err := ValidateBoardVocab(path)
+	if err != nil {
+		t.Fatalf("ValidateBoardVocab: %v", err)
+	}
+	if len(got) != 1 || got[0] != "OFF-1: status=todo" {
+		t.Fatalf("got %v, want exactly [\"OFF-1: status=todo\"]", got)
+	}
+}
+
 // TestBoardVocabValidator_AllowedSetMatchesPythonGate pins the Go/Python parity
 // the row requires: ops/check-fleet-invariants.py's BOARD_ALLOWED_STATUSES tuple
 // and BOARD_LEGACY_CLOSED_STATUSES tuple must name exactly the same statuses as

@@ -145,6 +145,73 @@ def append_line(path, obj):
         fh.write(prefix + payload.encode("utf-8"))
 
 
+def atomic_json_write(path, obj):
+    """Atomically write *obj* as JSON to *path* (SCHED-GAP-1645).
+
+    The old writer did ``open(path, "w")`` + ``json.dump`` with no trailing
+    newline and swallowed every error under ``except OSError: pass`` — a crash
+    or a serialisation bug mid-write could leave a truncated or glued tail with
+    no signal. This helper makes the write atomic (temp file in the same
+    directory + ``os.replace``), fsync'd, and round-trip verified, and reports
+    any failure loudly instead of hiding it.
+
+    Sequence: write to ``path + ".tmp"``; ``json.dump(..., indent=1)`` plus a
+    trailing newline; flush + ``os.fsync``; ``os.replace`` onto *path*; then
+    re-open and ``json.load`` to prove the bytes round-trip to the same value.
+    A ``.bak`` copy of the previous file is kept before the write and restored
+    if the sequence fails. Any exception exits non-zero with a stderr message —
+    never swallowed.
+    """
+    tmp = path + ".tmp"
+    bak = path + ".bak"
+    prev = None
+    try:
+        try:
+            with open(path, "rb") as fh:
+                prev = fh.read()
+        except FileNotFoundError:
+            prev = None
+        if prev is not None:
+            with open(bak, "wb") as fh:
+                fh.write(prev)
+                fh.flush()
+                os.fsync(fh.fileno())
+
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=1)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+
+        # Round-trip verify the renamed file parses back to the same value.
+        with open(path, "r", encoding="utf-8") as fh:
+            reloaded = json.load(fh)
+        if reloaded != obj:
+            raise ValueError("round-trip verification mismatch")
+    except Exception as exc:
+        # Restore the previous content from the .bak copy, if there was one.
+        if prev is not None:
+            try:
+                with open(bak, "rb") as fh:
+                    data = fh.read()
+                with open(path, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            except OSError:
+                pass
+        # Never leave a half-written temp file behind.
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        print("push_proposals.py: atomic ledger write failed for {}: {}: {}".format(
+            path, type(exc).__name__, exc), file=sys.stderr)
+        sys.exit(1)
+
+
 def next_event_id(events_path):
     """Next events.jsonl id: ``max(existing int ids >= 10^18) + 1``.
 
@@ -314,11 +381,7 @@ def push(board_path, events_path, scratch_path, ledger_path, target, apply, home
                 "origin": "dagger-stand-in"})
 
     if apply and ledger is not None:
-        try:
-            with open(ledger_path, "w", encoding="utf-8") as fh:
-                json.dump(ledger, fh, indent=1)
-        except OSError:
-            pass
+        atomic_json_write(ledger_path, ledger)
     print(json.dumps(result))
     return result
 

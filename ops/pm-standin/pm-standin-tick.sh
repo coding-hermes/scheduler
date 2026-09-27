@@ -24,6 +24,7 @@ PROJECT="${CODING_HERMES_PROJECT:-pm-standin}"
 TICK="${CODING_HERMES_TICK:-manual-$(date +%s)}"
 DAGGER_HOME="/home/kara/hermes-dagger"
 STANDIN="$HOME/.hermes/stand-in"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # PM_TARGET = row name minus the trailing "-pm" (helios-pm → helios).
 PM_TARGET="${CODING_HERMES_PROJECT:-pm-standin}"
