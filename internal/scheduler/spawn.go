@@ -1551,6 +1551,45 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					}, nil
 				}
 
+				// SCHED-GAP-1641: a COMPLETED response whose trace carries the
+				// one-shot instant-turn fingerprint (few events, tiny output,
+				// present usage) is NOT a healthy tick. Route it through the
+				// existing 079 failed-tick machinery: the error column carries
+				// the GatewayInstantTurnSentinel marker, failure_reason stamps
+				// instant_turn, and the WARN below is the operator signal —
+				// the 2026-09-25 burst served 241 such ticks in one hour while
+				// every healthy surface stayed green. The raw trace row is
+				// untouched (logPOSTTrace already persisted it above).
+				//
+				// Ordered AFTER the fail arms so real failures keep their own
+				// classes, and BEFORE consecutive_failures reset — an instant
+				// turn is not a demonstrated good tick.
+				if resp != nil && isInstantOneShotTurn(postTrace) {
+					errText := fmt.Sprintf("%s (events=%d, tokens_out=%d, tokens_in=%d): failed after %d event(s) — accounted non-healthy (SCHED-GAP-1641; burst evidence 2026-09-25)",
+						GatewayInstantTurnSentinel, postTrace.Events, postTrace.TokensOut, postTrace.TokensIn, postTrace.Events)
+					log.Printf("WARN: GATEWAY INSTANT TURN: %s tick=%s events=%d tokens_out=%d tokens_in=%d — recorded failed, not committed: %s",
+						project.Name, tickID, postTrace.Events, postTrace.TokensOut, postTrace.TokensIn, errText)
+					return &SpawnedTick{
+						TickID:      tickID,
+						Project:     project.Name,
+						SessionID:   tickID, // placeholder — the real session id stays on the intact trace row
+						Started:     reqStart,
+						Deliver:     project.Deliver,
+						DeliverMode: project.DeliverMode,
+						spawner:     s,
+						completed:   false,
+						completeAt:  now,
+						gwFailErr:   errText,
+						usage:       resp.Usage,
+						model:       model,
+						provider:    provider,
+						rate:        rate,
+						workdir:     project.Workdir,
+						reqStart:    reqStart,
+						Trigger:     "prompt",
+					}, nil
+				}
+
 				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
 				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
 				// removed in GAP-002 — it referenced non-existent columns
@@ -1560,8 +1599,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// backoff counter. SCHED-GAP-060: last_tick_started is NO longer
 				// written here — it was stamped at spawn time above (writing the
 				// completion moment here corrupted the API field).
-				_, _ = s.db.Exec(`UPDATE projects SET consecutive_failures = 0 WHERE name = ?`,
-					project.Name)
+				// SCHED-GAP-1641: an instant one-shot turn is not a demonstrated
+				// good tick — leave the backoff counter alone (same posture as
+				// failed/deferred ticks; the next REAL completion clears it).
+				if !isInstantOneShotTurn(postTrace) {
+					_, _ = s.db.Exec(`UPDATE projects SET consecutive_failures = 0 WHERE name = ?`,
+						project.Name)
+				}
 				// GAP-050: a successful gateway spawn resets the per-project
 				// consecutive-drop counter (the next drop restarts at 1).
 				s.resetGatewayDrops(project.Name)

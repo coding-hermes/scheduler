@@ -106,6 +106,54 @@ type GatewayPOSTTrace struct {
 	// Attempts counts the POSTs covered by this trace (the GAP-080 retry
 	// loop and chain hops each re-send under the same trace).
 	Attempts int `json:"attempts"`
+	// SCHED-GAP-1641: the OUTPUT side of the turn's usage, folded from the
+	// terminal response envelope. TokensOut == 0 means ABSENT (the legacy
+	// minimal traces never set it) — the instant-turn classifier keys on
+	// that zero and fails open, so pre-1641 traces keep accounting healthy.
+	TokensOut int `json:"tokens_out,omitempty"`
+	// TokensIn is the PROMPT side of the usage. Same absent-means-zero
+	// fail-open contract as TokensOut.
+	TokensIn int `json:"tokens_in,omitempty"`
+}
+
+// SCHED-GAP-1641 named thresholds — the ONE-SHOT instant-turn fingerprint.
+// Evidence (2026-09-25 burst): 241 ticks in one hour served single turns of
+// 62-181 output tokens against a byte-identical 44,469-token prompt, all
+// recorded committed. The floors deliberately sit ABOVE the burst's observed
+// maxima (10 events, 300 tokens_out) and two orders of magnitude BELOW a
+// productive tick (hundreds of events, thousands of output tokens), so a
+// normal short reply never trips the band.
+const (
+	// instantTurnMaxEvents: SSE events observed for the whole turn (deltas
+	// + tool items + terminal events; keepalives excluded). At or below 10.
+	instantTurnMaxEvents = 10
+	// instantTurnMaxTokensOut: output tokens billed for the turn. At or
+	// below 300.
+	instantTurnMaxTokensOut = 300
+	// GatewayInstantTurnSentinel is the error-column marker carried by a
+	// tick classified instant-turn. Listed in the HarnessFailure marker set
+	// (failureclass.go) so failureReasonClass stamps
+	// failure_reason=instant_turn and NO healthy-tick surface counts it.
+	GatewayInstantTurnSentinel = "instant one-shot gateway turn"
+)
+
+// isInstantOneShotTurn (SCHED-GAP-1641) reports whether a merged tick trace
+// carries the one-shot fingerprint: the usage fields are PRESENT (non-zero —
+// zero means the legacy trace never recorded them) AND both output-side
+// floors hold. The INPUT side is deliberately unconstrained: a huge prompt
+// with a tiny reply is exactly the burst shape. A trace with no usage fields
+// stays healthy — fail-open for legacy traces.
+func isInstantOneShotTurn(trace *GatewayPOSTTrace) bool {
+	if trace == nil {
+		return false
+	}
+	if trace.TokensOut == 0 && trace.TokensIn == 0 {
+		return false
+	}
+	if trace.Events <= instantTurnMaxEvents && trace.TokensOut <= instantTurnMaxTokensOut {
+		return true
+	}
+	return false
 }
 
 // mergePostTrace folds one attempt's trace into the accumulating tick trace
@@ -331,6 +379,9 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 		if trace.SessionID == "" && r.ID != "" {
 			trace.SessionID = r.ID
 		}
+		// SCHED-GAP-1641: fold the terminal envelope's usage into the trace
+		// so the instant-turn classifier can see the output side.
+		trace.TokensIn, trace.TokensOut = r.Usage.InputTokens, r.Usage.OutputTokens
 		trace.Classification = "completed"
 		return r, trace, nil
 	}
@@ -362,6 +413,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 	if trace.SessionID == "" && result.ID != "" {
 		trace.SessionID = result.ID
 	}
+	trace.TokensIn, trace.TokensOut = result.Usage.InputTokens, result.Usage.OutputTokens
 	trace.Classification = "completed"
 	return &result, trace, nil
 }

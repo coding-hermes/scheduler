@@ -477,9 +477,22 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 // FailureReasonGatewayTransport marks every other harness-side class
 // harnessFailure recognizes. An empty value is the safe default: the failure
 // is not transport-class (project-side), exactly like every legacy row.
+// SCHED-GAP-1641 adds FailureReasonInstantTurn: the SQL-auditable marker for
+// a failed tick whose gateway turn was a ONE-SHOT — a near-zero-output
+// instant response that pre-1641 accounted outcome=committed with a clean
+// deliver (2026-09-25: 241 such ticks fleet-wide in one hour, no state.db
+// sessions to contradict the healthy accounting).
 const (
 	FailureReasonGatewayDrain     = "gateway_drain"
 	FailureReasonGatewayTransport = "gateway_transport"
+	// FailureReasonInstantTurn (SCHED-GAP-1641) marks a failed tick whose
+	// gateway turn was a ONE-SHOT — a near-zero-output instant response
+	// (events ≤ instantTurnMaxEvents AND tokens_out ≤
+	// instantTurnMaxTokensOut against a huge prompt) that pre-1641
+	// accounted outcome=committed with a clean deliver. The 2026-09-25
+	// burst served 241 such instant ticks fleet-wide in one hour with no
+	// state.db sessions to contradict the healthy accounting.
+	FailureReasonInstantTurn = "instant_turn"
 )
 
 // failureReasonClass returns the canonical transport-class marker for a
@@ -490,6 +503,12 @@ const (
 func failureReasonClass(errText string) string {
 	if !harnessFailure(errText) {
 		return ""
+	}
+	// SCHED-GAP-1641: the instant-turn marker rides the same machine
+	// vocabulary — its sentinel text is in the harness marker list, so a
+	// failed tick carrying it stamps failure_reason=instant_turn.
+	if strings.Contains(errText, GatewayInstantTurnSentinel) {
+		return FailureReasonInstantTurn
 	}
 	if strings.Contains(strings.ToLower(errText), "draining") {
 		return FailureReasonGatewayDrain
