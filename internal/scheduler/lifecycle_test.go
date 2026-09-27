@@ -221,19 +221,10 @@ func TestLifecycle_CleanupStaleIgnoresRecent(t *testing.T) {
 	}
 }
 
-// TestLifecycle_ExportSession_Placeholder verifies the placeholder behavior.
-func TestLifecycle_ExportSession_Placeholder(t *testing.T) {
-	db := newTestDB(t)
-	lt := scheduler.NewLifecycleTracker(db)
-
-	stats, err := lt.ExportSession("nonexistent-session")
-	if err != nil {
-		t.Fatalf("ExportSession: %v", err)
-	}
-	if stats.SessionID != "nonexistent-session" {
-		t.Errorf("SessionID = %q, want placeholder echo", stats.SessionID)
-	}
-}
+// TestLifecycle_ExportSession_Placeholder was removed with ExportSession itself
+// (SCHED-GAP-1652): the method was a stub returning zeros, had no production
+// callers, and implied a commit/outcome source that does not exist. The outcome
+// contract it stood next to is now pinned by TestTerminalOutcomeFromArtifacts.
 
 // TestLifecycle_StartRunningMissingTick verifies StartRunning on unknown ID does not error
 // (UPDATE that matches no rows is not an error in SQLite).

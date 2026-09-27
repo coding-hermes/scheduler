@@ -2438,15 +2438,18 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		log.Printf("COST: project=%s tick=%s marginal_usd=%.6f sticker_usd=%.6f source=%s provider=%s model=%s",
 			st.Project, st.TickID, resolved.costUSD, resolved.stickerUSD, resolved.source, st.provider, st.model)
 		// Measure real git work the foreman produced this tick (exec path only —
-		// gateway spawns have no process/repo baseline). A failed measurement is
-		// logged loudly and left as zeros, but it is NOT evidence that no work
-		// happened: SCHED-GAP-1652 measured 27% of zero-commit ticks provably
-		// committing, precisely because this path used to swallow the difference.
+		// gateway spawns have no process/repo baseline). SCHED-GAP-1652: a failed
+		// measurement is stamped with the -1 sentinel, never 0 — 27% of ticks
+		// recorded as zero-commit had in fact committed, and a 0 that means "we
+		// could not tell" is how that stayed invisible. terminalOutcome() reads
+		// >0 as an artifact, so -1 leaves the outcome a dry_run while the data
+		// still says "unknown" rather than "nothing".
 		if st.preCommits >= 0 && st.cmd != nil && st.cmd.Dir != "" {
 			var gerr error
 			outcome.Commits, outcome.FilesChanged, gerr = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits)
 			if gerr != nil {
-				log.Printf("WARN: tick %s git delta NOT measured: %v — commits/files recorded as 0 and are NOT evidence of no work",
+				outcome.Commits, outcome.FilesChanged = -1, -1
+				log.Printf("WARN: tick %s git delta NOT measured: %v — commits/files stamped -1 (unknown), NOT evidence of no work",
 					st.TickID, gerr)
 			}
 		} else {
@@ -2454,7 +2457,8 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			if st.cmd != nil {
 				dir = st.cmd.Dir
 			}
-			log.Printf("WARN: tick %s git delta NOT measured: no usable baseline (preCommits=%d, cmdDir=%q) — commits/files recorded as 0 and are NOT evidence of no work",
+			outcome.Commits, outcome.FilesChanged = -1, -1
+			log.Printf("WARN: tick %s git delta NOT measured: no usable baseline (preCommits=%d, cmdDir=%q) — commits/files stamped -1 (unknown), NOT evidence of no work",
 				st.TickID, st.preCommits, dir)
 		}
 	}
