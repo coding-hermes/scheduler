@@ -1345,3 +1345,9 @@
 {"id": 1790516912357898404, "timestamp": "2026-09-27 15:09:08", "event_type": "task_created", "task_id": "SCHED-GAP-1647", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-1647\",\"status\":\"pending\"}"}
 
 {"id": 1790516912357898405, "timestamp": "2026-09-27 10:51:40", "event_type": "task_completed", "task_id": "SCHED-GAP-210", "actor": "foreman", "detail": "{\"tick\": \"coding-hermes-scheduler-2026-09-27-15-46-29\", \"type\": \"deploy verify + close\", \"live\": \"build_sha=de9c21e6 /api/v1/live=200 uptime 7h20m\", \"probes\": \"live/status/projects/namespaces/ticks/metrics/dashboard all 200; /healthz 404 expected\", \"note\": \"stale verifier /tmp/sched-postdeploy-verify.sh (target bbe80efc) bypassed; regenerate per-deploy\"}"}
+{"id": 1790516912357898406, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-001", "actor": "foreman", "detail": "{\"id\":\"REMOTE-001\",\"status\":\"pending\"}"}
+{"id": 1790516912357898407, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-002", "actor": "foreman", "detail": "{\"id\":\"REMOTE-002\",\"status\":\"pending\"}"}
+{"id": 1790516912357898408, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-003", "actor": "foreman", "detail": "{\"id\":\"REMOTE-003\",\"status\":\"pending\"}"}
+{"id": 1790516912357898409, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-004", "actor": "foreman", "detail": "{\"id\":\"REMOTE-004\",\"status\":\"pending\"}"}
+{"id": 1790516912357898410, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-005", "actor": "foreman", "detail": "{\"id\":\"REMOTE-005\",\"status\":\"pending\"}"}
+{"id": 1790516912357898411, "timestamp": "2026-09-27 19:16:37", "event_type": "task_created", "task_id": "REMOTE-006", "actor": "foreman", "detail": "{\"id\":\"REMOTE-006\",\"status\":\"pending\"}"}
