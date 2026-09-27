@@ -3922,7 +3922,7 @@ tasks:
     on the board; the running daemon''s last_commit matches HEAD.'
   status: complete
   created_at: '2026-09-22T20:07:17.829100+00:00'
-  completed_at: '2026-09-22T20:16:37.332367+00:00'
+  completed_at: '2026-09-27T14:14:10.676387+00:00'
 - id: SCHED-GAP-207
   title: Satellite lanes reuse a fixed board row id as a recurring slot without closing
     the previous row
