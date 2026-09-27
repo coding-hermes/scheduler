@@ -126,6 +126,40 @@ Checks
                        VIOLATION event-id-ascending 1090: id=1790080373408208 is
                        below the 19-digit floor 1000000000000000000 (event ids
                        must stay on the board's 19-digit scale)
+ 12. lane-instructions — every ENABLED lane carries instructions. The tick
+                     prompt is built from two CONFIG layers
+                     (internal/scheduler/spawn.go buildForemanPrompt): the
+                     namespace default_prompt, with the lane's own prompt
+                     appended — or REPLACED by it when prompt_mode=replace.
+                     Both layers ~empty means the lane dispatches on the
+                     generic built-in body and improvises. Measured
+                     2026-09-27: exactly two of 361 enabled lanes were
+                     uninstructed — the auger foreman (own prompt 0 chars,
+                     namespace 'auger' default_prompt 0 chars) and
+                     auger-releng (own 296 chars, no fallback); auger was the
+                     most expensive lane of that period (~$117 across five
+                     ticks). The defect is the CONJUNCTION — own prompt AND
+                     namespace fallback both under PROMPT_SHORT_CHARS (400) —
+                     never one side alone: qa/pm/dogfood lanes legitimately
+                     carry no own prompt over 2126-3372-char namespace
+                     defaults, and docs/readme lanes carry 1060-1230 chars of
+                     their own over empty ones. 400 sits ABOVE the 296-char
+                     auger-releng incident state (the sweep judged it
+                     uninstructed) and far BELOW the thinnest healthy own
+                     prompt (1060) and fallback (python-audit 777); the
+                     justification lives with the PROMPT_SHORT_CHARS constant.
+                     A prompt_mode=replace lane is judged on its own prompt
+                     alone (it IS the whole base). The owner fixed both
+                     incident lanes live (auger 0 -> 2678); the expected live
+                     result is an EMPTY list. Skips silently when the DB
+                     schema predates the prompt columns (fixture DBs), the
+                     same documented skip shape as board_ownership parity;
+                     rides the live-DB pass, so --board-only never runs it.
+                       VIOLATION lane-instructions auger: no usable
+                       instructions — own prompt 0 chars, namespace 'auger'
+                       default_prompt 0 chars (both under 400; the lane would
+                       dispatch on the generic built-in prompt and improvise,
+                       cf. auger 2026-09-27)
 
 Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
         python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
@@ -133,8 +167,8 @@ Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
 
 ``--board-only`` runs the environment-independent board checks (8-11) and
 nothing else, so it needs neither the live DB nor fleet.toml — that is the mode
-CI uses (a runner has no ~/.hermes state). The fleet checks (1-7 and 10) read
-the project rows and are no-ops there.
+CI uses (a runner has no ~/.hermes state). The fleet checks (1-7, 10 and 12)
+read the project rows and are no-ops there.
 """
 from __future__ import annotations
 
@@ -280,10 +314,41 @@ EVENT_ID_SCALE = 10 ** 18
 EVENT_ID_CLASS = "event-id-ascending"
 DEFAULT_EVENTS_NAME = "events.jsonl"
 
+# Lane instructions (check 12, class "lane-instructions", SCHED-GAP-1650).
+# The scheduler builds each tick prompt from two CONFIG layers
+# (internal/scheduler/spawn.go buildForemanPrompt): the namespace's
+# default_prompt, with the lane's own prompt appended — or SUBSTITUTED when
+# prompt_mode=replace; when both layers are ~empty the lane dispatches on the
+# generic built-in body alone and improvises. Measured 2026-09-27: of 361
+# enabled lanes exactly two had no instructions — the auger foreman (own 0
+# chars, namespace 'auger' default_prompt 0 chars) and auger-releng (own 296,
+# no fallback) — and auger was the most expensive lane of that period (~$117
+# across five ticks). The owner fixed both live (auger 0 -> 2678); this gate
+# is so it cannot recur.
+#
+# The defect is the CONJUNCTION, not either side alone. A per-lane prompt is
+# OPTIONAL by design: 38 healthy lanes carry none and inherit a large
+# namespace prompt (qa 2646, pm 3372, dogfood 2126 chars). A namespace
+# fallback is optional for lanes that carry their own (docs/readme lanes:
+# 1060-1230 chars over an empty namespace prompt). Both layers short is the
+# incident shape.
+#
+# PROMPT_SHORT_CHARS = 400, justified against the measured fleet:
+#   * ABOVE the 296-char auger-releng incident state, so the checker
+#     reproduces the incident that motivated it (the sweep judged 296 chars
+#     with no fallback "uninstructed");
+#   * far BELOW the thinnest healthy own prompt (docs/readme 1060) and the
+#     thinnest healthy namespace fallback (python-audit 777), so no healthy
+#     shape trips it — verified against the live fleet: zero enabled lanes
+#     have both sides under 500, and the fixed incident lanes sit at 2678/611.
+LANE_INSTRUCTIONS_CLASS = "lane-instructions"
+PROMPT_SHORT_CHARS = 400
+
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
-                 "board-id-slot", "sync-orientation", "event-id-ascending")
+                 "board-id-slot", "sync-orientation", "event-id-ascending",
+                 "lane-instructions")
 
 
 def find_board_path(start: str) -> str | None:
@@ -1091,6 +1156,63 @@ def main(argv: list[str] | None = None) -> int:
                      "detail": (f"{ev_stats['int_ids']} int id(s) scanned, scale anchor line {anchor}, "
                                 f"{ev_stats['legacy_prefix']} pre-scale legacy id(s) tolerated, "
                                 f"{ev_stats['duplicates']} duplicate id(s) tolerated, max id {peak}")})
+
+    # 12. lane instructions ----------------------------------------------------
+    # SCHED-GAP-1650. A dispatch with no instructions at all: buildForemanPrompt
+    # (internal/scheduler/spawn.go) resolves the tick prompt as the namespace
+    # default_prompt with the lane's own prompt appended — or the lane prompt
+    # ALONE when prompt_mode=replace — and both layers ~empty means the lane
+    # dispatches on the generic built-in body and improvises. Measured
+    # 2026-09-27: exactly two of 361 enabled lanes were uninstructed — the
+    # auger foreman (own 0 chars over an empty 'auger' namespace default) and
+    # auger-releng (own 296 chars, no fallback); auger was the period's most
+    # expensive lane (~$117 across five ticks). The owner fixed both by hand;
+    # the expected live result of this class is an EMPTY list.
+    #
+    # The defect is the CONJUNCTION (own short AND fallback short), never one
+    # side alone: qa/pm/dogfood lanes legitimately carry NO own prompt and
+    # inherit 2126-3372-char namespace defaults, while docs/readme lanes carry
+    # 1060-1230 chars of their own over empty namespace defaults. Threshold
+    # PROMPT_SHORT_CHARS is justified in the constant's comment above.
+    #
+    # prompt_mode=replace lanes are EXEMPT from the conjunction: their own
+    # prompt is the ENTIRE base (buildForemanPrompt substitutes it), so a
+    # short replace prompt is itself the incident shape and fires on its own
+    # length, no fallback consulted.
+    #
+    # SKIPS SILENTLY when the schema predates the prompt columns (fixture DBs
+    # and older schemas need no default_prompt/namespace_id at all) — the same
+    # documented skip shape as board_ownership parity, pinned by this module's
+    # pytest battery. Runs only in the live-DB mode: --board-only never reads
+    # the DB, so CI is unaffected.
+    if con is not None:
+        pcols = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
+        ncols = {r[1] for r in con.execute("PRAGMA table_info(namespaces)")}
+        if "prompt" not in pcols or "default_prompt" not in ncols:
+            info.append({"class": LANE_INSTRUCTIONS_CLASS, "subject": "schema",
+                         "detail": "skipped — projects.prompt / namespaces.default_prompt absent from this schema"})
+        else:
+            short = 0
+            for name, p in projects.items():
+                if not p.get("enabled"):
+                    continue
+                own = len((p.get("prompt") or "").strip())
+                mode = (p.get("prompt_mode") or "append").strip() if "prompt_mode" in pcols else "append"
+                ns_row = namespaces.get(p.get("namespace_id") or "")
+                fallback = len(((ns_row.get("default_prompt") if ns_row else None) or "").strip())
+                uninstructed = (own < PROMPT_SHORT_CHARS
+                                and (mode == "replace" or fallback < PROMPT_SHORT_CHARS))
+                if uninstructed:
+                    short += 1
+                    bad(LANE_INSTRUCTIONS_CLASS, name,
+                        f"no usable instructions — own prompt {own} chars, namespace "
+                        f"{(p.get('namespace_id') or '<none>')!r} default_prompt {fallback} chars "
+                        f"(both under {PROMPT_SHORT_CHARS}; the lane would dispatch on the "
+                        f"generic built-in prompt and improvise, cf. auger 2026-09-27)")
+            info.append({"class": LANE_INSTRUCTIONS_CLASS, "subject": "prompts",
+                         "detail": (f"{sum(1 for p in projects.values() if p.get('enabled'))} enabled lane(s) scanned, "
+                                    f"{short} lacking instructions "
+                                    f"(conjunction: own prompt AND namespace fallback under {PROMPT_SHORT_CHARS} chars)")})
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:
