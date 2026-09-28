@@ -32,6 +32,8 @@ range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
 ## [Unreleased] — 2026-09-28
+
+## [1.9.0] — 2026-09-28
 - Refuse lane shapes that arrived with the trouble onboarding (SCHED-GAP-138) — `f7aac278`.
 
 ## [1.8.0] — 2026-09-28
