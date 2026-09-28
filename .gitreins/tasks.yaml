@@ -4506,3 +4506,14 @@ tasks:
   status: complete
   created_at: '2026-09-27T22:24:40.554515+00:00'
   completed_at: '2026-09-27T22:27:22.757389+00:00'
+- id: SCHED-GAP-1652
+  title: Derive tick outcome from observed artifacts
+  criteria:
+  - Tick outcome 'committed' is derived from actual git delta (zero-commit completed
+    tick is not recorded 'committed'), git delta collection unconditional on completion
+    path, ExportSession implemented with real hermes sessions export parsing; new
+    regression tests RED on old code, go build/vet clean, go test -short -p 1 ./internal/scheduler/...
+    green
+  status: complete
+  created_at: '2026-09-28T00:54:58.582954+00:00'
+  completed_at: '2026-09-28T01:01:36.616590+00:00'
