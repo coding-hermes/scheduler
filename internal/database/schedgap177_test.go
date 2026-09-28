@@ -20,9 +20,10 @@ func TestMigrationV47LaneOutputCounters(t *testing.T) {
 	if v != latestMigration {
 		t.Fatalf("migration version = %d, want %d", v, latestMigration)
 	}
-	if latestMigration != 47 {
-		t.Fatalf("latestMigration = %d, want 47 (SCHED-GAP-177 lane-family output counters)", latestMigration)
-	}
+	// Do NOT pin latestMigration to a hardcoded version here: the ladder
+	// advances (v48 etc.), and a pin makes this fixture fail on every dev
+	// box the moment a newer migration lands (QA-CHS-177B). The version
+	// equality check above already asserts the ladder is fully applied.
 
 	var m47 *migration
 	for i := range migrations {
