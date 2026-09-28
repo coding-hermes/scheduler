@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-28
 
+## [1.8.0] — 2026-09-28
+
 ### New Features
 
 - Tick dispatch accountability (SCHED-GAP-1653) — `b764c5dd`.
