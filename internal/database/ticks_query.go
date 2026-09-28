@@ -67,7 +67,7 @@ func ListTicksFiltered(ctx context.Context, db *sql.DB, f TickFilter, limit, off
 		return nil, 0, fmt.Errorf("count filtered ticks: %w", err)
 	}
 
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(dispatch_outcome,''), COALESCE(dispatch_reason,'')
 FROM ticks` + where + ` ORDER BY created_at DESC, id DESC`
 	if limit > 0 {
 		q += ` LIMIT ?`
@@ -94,7 +94,8 @@ FROM ticks` + where + ` ORDER BY created_at DESC, id DESC`
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 			&t.Bump, &t.WorkerCount, &t.WaveRecovery,
-			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource); err != nil {
+			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource,
+			&t.DispatchOutcome, &t.DispatchReason); err != nil {
 			return nil, 0, fmt.Errorf("scan filtered tick row: %w", err)
 		}
 		t.Status = TickStatus(status)
@@ -111,7 +112,7 @@ FROM ticks` + where + ` ORDER BY created_at DESC, id DESC`
 // (SCHED-GAP-119 per-POST record; carries the real agent session id the
 // drill-down page resolves). ErrTickNotFound when the id is unknown.
 func GetTickWithTrace(ctx context.Context, db *sql.DB, id string) (*Tick, string, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(gateway_trace,'')
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(dispatch_outcome,''), COALESCE(dispatch_reason,''), COALESCE(gateway_trace,'')
 FROM ticks WHERE id = ?`
 	var (
 		t               Tick
@@ -124,7 +125,8 @@ FROM ticks WHERE id = ?`
 		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 		&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 		&t.Bump, &t.WorkerCount, &t.WaveRecovery,
-		&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource, &trace)
+		&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource,
+		&t.DispatchOutcome, &t.DispatchReason, &trace)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("%w: %s", ErrTickNotFound, id)
 	}

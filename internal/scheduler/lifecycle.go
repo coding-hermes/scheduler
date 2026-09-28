@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -122,6 +123,38 @@ type TickOutcome struct {
 	CostSource   string  // ADV-R09/G8: measured | gateway | estimated | simulated
 	Commits      int     // simulated or real
 	FilesChanged int     // simulated or real
+	// SCHED-GAP-1653 dispatch accountability, decided by the SPAWN PATH
+	// (the only code that knows whether a foreman was invoked) and
+	// persisted by lifecycle.Complete. DispatchDispatched=false with an
+	// empty DispatchReason reads as "the caller forgot" — Complete then
+	// records an UNREASONED stand-down (reason=blocked, evidence:none in
+	// the row comment) so the tick is never completed with a silent
+	// no-dispatch. Sim ticks and gateway-completed ticks set the flag;
+	// spawn-site refusals name a reason from the same closed vocabulary
+	// the DB layer validates (database.DispatchReasons).
+	DispatchDispatched bool
+	DispatchReason     string
+}
+
+// resolveDispatch resolves the dispatch accountability pair for one
+// terminal tick (SCHED-GAP-1653, criterion 1: every tick records
+// dispatch=yes|no plus a reason from the closed vocabulary). The spawn
+// path's decision wins when it set one; a no-dispatch outcome whose
+// caller forgot the reason (or contradicted it) degrades to blocked —
+// recorded as blocked with the evidence marker in the row comment —
+// rather than an empty pair, so a terminal tick can never carry a
+// SILENT stand-down: an operator reading dispatch_reason=” on a v48
+// row sees an unrecorded legacy tick, never an accountability hole
+// this build wrote.
+func (o TickOutcome) resolveDispatch() (string, string) {
+	if o.DispatchDispatched {
+		return database.DispatchYes, database.DispatchReasonDispatched
+	}
+	if database.DispatchReasonIsValid(o.DispatchReason) && o.DispatchReason != database.DispatchReasonDispatched {
+		return database.DispatchNo, o.DispatchReason
+	}
+	// Unreasoned (or contradictory) stand-down: still recorded, honestly.
+	return database.DispatchNo, database.DispatchReasonBlocked
 }
 
 // LifecycleTracker manages the tick state machine and outcome persistence.
@@ -187,15 +220,56 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if outcome.Status == TickFailed || outcome.Status == TickTimeout {
 		failureReason = failureReasonClass(outcome.Error)
 	}
+	// SCHED-GAP-1653: resolve this tick's dispatch accountability pair and
+	// apply criterion 3's gate — never book 'done' without a landed
+	// artifact, a verified worker commit, or a recorded reasoned
+	// stand-down. Kept in ONE finalization UPDATE (criterion 2's coverage
+	// guarantee: every row this method writes carries the pair — no
+	// second UPDATE that can silently miss). Criterion 3 is implemented
+	// as the RECORDED REASONED STAND-DOWN branch: a tick completing with
+	// zero measurable artifact and no dispatch keeps status=completed
+	// (the codebase-wide disruption test) but the row is honestly marked
+	// by the pair itself PLUS a tick-scoped event naming the stand-down,
+	// so no completion is ever silent. A dispatched-but-empty completion
+	// needs no stand-down event: its outcome column already reads
+	// dry_run via terminalOutcome() (SCHED-GAP-1652's honest mapping),
+	// which is exactly that statement.
+	dispatchOutcome, dispatchReason := outcome.resolveDispatch()
+	if outcome.Status == TickCompleted {
+		// Landed-artifact evidence the OUTCOME carries: the measured git
+		// delta (positive = artifact; -1 = unmeasured, never read as
+		// zero — the SCHED-GAP-1652 sentinel rule). The wave's per-worker
+		// rows are attributed AFTER this write by manifest ingest, and
+		// code/board commit anatomy is split later from the same raw
+		// count — neither carries evidence this method could read yet.
+		landed := outcome.Commits > 0 || outcome.FilesChanged > 0
+		if !landed && !outcome.DispatchDispatched {
+			log.Printf("STAND-DOWN: %s tick=%s completed with no landed artifact and no dispatch — recorded reason=%q (SCHED-GAP-1653)",
+				outcome.Project, outcome.TickID, dispatchReason)
+			// Best-effort observability: a failed event insert costs a
+			// log line, never the completion. context.Background() (not
+			// the component clock) matches the wave-ingest event path —
+			// created_at is a wall-clock stamp on an audit row, the same
+			// precedent slot_pool's ingest uses.
+			_ = database.LogEvent(context.Background(), lt.db, &database.Event{
+				Severity:  database.SeverityLow,
+				Component: "lifecycle",
+				Message:   fmt.Sprintf("stand-down: tick %s (%s) completed with no landed artifact — dispatch_reason=%s", outcome.TickID, outcome.Project, dispatchReason),
+				Details:   fmt.Sprintf(`{"tick_id":%q,"project":%q,"dispatch_reason":%q}`, outcome.TickID, outcome.Project, dispatchReason),
+			})
+		}
+	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
-			commits = ?, files_changed = ?, failure_reason = ?
+			commits = ?, files_changed = ?, failure_reason = ?,
+			dispatch_outcome = ?, dispatch_reason = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged, failureReason,
+		dispatchOutcome, dispatchReason,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)

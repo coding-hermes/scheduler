@@ -458,6 +458,13 @@ type ProjectDetailData struct {
 	// FleetPausedKnown renders as the "unknown" state (API read failed) —
 	// never a fabricated badge.
 	FleetPausedKnown bool
+	// SCHED-GAP-1653: this lane's tick split by dispatch reason — the
+	// operator reads declined-vs-absent without leaving the detail page.
+	// DispatchKnown=false renders the "not yet recorded" line (no
+	// terminal tick on this lane has the fields yet), never zeros that
+	// could read as "everything dispatched".
+	DispatchSplit database.DispatchCount
+	DispatchKnown bool
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.

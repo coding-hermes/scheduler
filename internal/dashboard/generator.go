@@ -374,6 +374,15 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.RecentTicks = ticks
 	}
 
+	// SCHED-GAP-1653: this lane's dispatch split — the declined-vs-absent
+	// read. Known only when the aggregate saw at least one terminal tick
+	// with the fields recorded (Total+Coverage > 0); otherwise the page
+	// renders the honest "not yet recorded" line.
+	if dc, err := database.CountProjectDispatchReasons(ctx, g.db, name); err == nil {
+		data.DispatchSplit = dc
+		data.DispatchKnown = dc.Total+dc.Coverage > 0
+	}
+
 	// SCHED-GAP-1601: the lane's control strip + paused badge.
 	data.Control = ControlData{Actions: laneControls(name)}
 	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()

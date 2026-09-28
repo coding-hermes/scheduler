@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 47
+const latestMigration = 48
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -741,6 +741,24 @@ ALTER TABLE projects ADD COLUMN sync_zero_output_streak INTEGER NOT NULL DEFAULT
 ALTER TABLE projects ADD COLUMN dogfood_output_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN dogfood_zero_output_streak INTEGER NOT NULL DEFAULT 0;
 ` + laneOutputBackfillStmt + "\n",
+	},
+	{
+		// SCHED-GAP-1653: tick-time dispatch accountability — two NOT NULL
+		// DEFAULT '' columns on ticks, additive ALTERs (no rebuild): a
+		// live database migrates in place and every existing row reads ''
+		// (honest: the tick predates accountability, never fabricated
+		// decisions). Written once at finalization by the tick completion
+		// paths; dispatch_outcome ∈ ('' | 'yes' | 'no'), dispatch_reason
+		// ∈ ('' | the SCHED-GAP-1653 closed vocabulary — see
+		// database.DispatchReasons). The CHECK constraint enforces the
+		// vocabulary at the storage layer so a drift bug fails loudly at
+		// write time instead of polluting the per-lane aggregate.
+		version: 48,
+		desc:    "SCHED-GAP-1653: dispatch accountability on ticks — dispatch_outcome (yes|no) + dispatch_reason (closed vocabulary) written at tick finalization so every terminal tick records whether a worker was dispatched and why not",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN dispatch_outcome TEXT NOT NULL DEFAULT '' CHECK(dispatch_outcome IN ('', 'yes', 'no'));
+ALTER TABLE ticks ADD COLUMN dispatch_reason TEXT NOT NULL DEFAULT '' CHECK(dispatch_reason IN ('', 'dispatched', 'no_work', 'blocked', 'verification_only', 'chose_not_to', 'unavailable'));
+`,
 	},
 }
 

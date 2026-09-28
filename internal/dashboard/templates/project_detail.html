@@ -26,6 +26,10 @@
 {{end}}
 </div>
 
+{{if .DispatchKnown}}
+<p class="meta">Dispatch accountability (SCHED-GAP-1653, all-time): {{.DispatchSplit.Dispatched}} dispatched · {{.DispatchSplit.NoDispatch}} no-dispatch ({{range $r, $n := .DispatchSplit.Reasons}}{{if $n}}{{$r}}×{{$n}} {{end}}{{end}}){{if .DispatchSplit.Coverage}} · {{.DispatchSplit.Coverage}} predating dispatch recording{{end}}</p>
+{{end}}
+
 {{if .BoardSteps}}
 <h2>Roadmap</h2>
 <p class="meta">{{.BoardDone}} of {{.BoardTotal}} steps done · {{.SuccessRate}}% success (last 10 ticks) · est. completion {{if .ETA}}{{.ETA}}{{else}}—{{end}}</p>
@@ -137,13 +141,14 @@
 {{if .RecentTicks}}
 <div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Work</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
+<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Dispatch</th><th>Duration</th><th>Spawned</th><th>Work</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
   <td class="mono"><a href="/ticks/{{.ID}}" title="open tick detail">{{.ID}}</a></td>
   <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="pill warn">{{.Status}}</span>{{end}}</td>
   <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
+  <td>{{if eq .Status "running"}}<span class="meta">—</span>{{else if eq .DispatchOutcome "yes"}}<span class="pill ok">dispatched</span>{{else if eq .DispatchOutcome "no"}}<span class="pill warn">{{.DispatchReason}}</span>{{else}}<span class="meta">—</span>{{end}}</td>
   <td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
   <td class="meta">{{.SpawnedAt}}</td>
   <td class="work">{{if index $.TickWork .ID}}{{index $.TickWork .ID}}{{else}}<span class="meta">—</span>{{end}}</td>

@@ -378,12 +378,67 @@ type Tick struct {
 	// on the tick row itself.
 	WorkerCount  int `json:"worker_count"`  // worker sessions the foreman dispatched inside this tick (0 = serial tick; sessions = 1 + worker_count)
 	WaveRecovery int `json:"wave_recovery"` // 1 = this tick ran the wave-recovery phase first (S12 §8.2)
+	// SCHED-GAP-1653 dispatch accountability. Written by the tick
+	// finalization path (lifecycle.Complete live, sim_spawn dry-runs),
+	// never at enqueue — a queued/running row carries both as the honest
+	// empty ("" = not terminal yet), and rows written before migration
+	// v48 read the same column defaults. DispatchOutcome answers DID the
+	// tick invoke a foreman; DispatchReason carries the closed-vocabulary
+	// why — "dispatched" when yes, one of the no-reasons otherwise:
+	// no_work (nothing admissible), blocked (a gate), verification_only
+	// (the tick's product is a check, not a dispatch), chose_not_to
+	// (the foreman stood down), unavailable (the executor was down).
+	DispatchOutcome string `json:"dispatch_outcome"` // yes | no | "" (legacy / pre-terminal)
+	DispatchReason  string `json:"dispatch_reason"`  // dispatched | no_work | blocked | verification_only | chose_not_to | unavailable | ""
 	// SCHED-GAP-157 lifecycle persistence. All three read as honest
 	// empties for legacy rows (the columns are NOT NULL DEFAULT 0/''),
 	// never a fabricated value: "" = not recorded for this row.
 	SlotWaitMs  int64  `json:"slot_wait_ms"` // ms between admission/queueing and the slot being acquired
 	AdmitReason string `json:"admit_reason"` // the admission decision that let the tick in (SCHED-GAP-155 vocabulary)
 	NudgeSource string `json:"nudge_source"` // why this tick row exists outside the packer: startup | manual | board_wake
+}
+
+// SCHED-GAP-1653 dispatch accountability: the closed vocabulary ticks
+// carry from the finalization path. DispatchYes/DispatchNo are the
+// dispatch_outcome values; the rest is the dispatch_reason vocabulary —
+// DispatchReasonDispatched pairs with yes, the five no-reasons with no.
+// An empty pair reads as legacy / not-terminal, never as a fabricated
+// decision. DispatchReasonIsValid is the shared admission check so a
+// second surface (API aggregate, dashboard) can never widen the set.
+const (
+	DispatchYes = "yes"
+	DispatchNo  = "no"
+
+	DispatchReasonDispatched       = "dispatched"
+	DispatchReasonNoWork           = "no_work"
+	DispatchReasonBlocked          = "blocked"
+	DispatchReasonVerificationOnly = "verification_only"
+	DispatchReasonChoseNotTo       = "chose_not_to"
+	DispatchReasonUnavailable      = "unavailable"
+)
+
+// DispatchReasons is the frozen dispatch_reason vocabulary in reporting
+// order (dispatched first, then the five no-reasons). Consumers that
+// must show every bucket — even zero-count ones — range over this.
+var DispatchReasons = []string{
+	DispatchReasonDispatched,
+	DispatchReasonNoWork,
+	DispatchReasonBlocked,
+	DispatchReasonVerificationOnly,
+	DispatchReasonChoseNotTo,
+	DispatchReasonUnavailable,
+}
+
+// DispatchReasonIsValid reports whether reason belongs to the frozen
+// vocabulary. The empty string is deliberately NOT valid: an unset
+// reason is represented by "" and checked with == "", not by this.
+func DispatchReasonIsValid(reason string) bool {
+	for _, r := range DispatchReasons {
+		if r == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // Terminal tick statuses for projects.last_tick_status (SCHED-GAP-214,

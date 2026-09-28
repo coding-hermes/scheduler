@@ -383,9 +383,23 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string)
 	if !obs.check(w, ctx) {
 		return
 	}
+	// SCHED-GAP-1653: the per-lane dispatch split rides the detail payload
+	// — the operator reads, for THIS lane, whether work is being declined
+	// (no_dispatch reasons) or merely absent (coverage = legacy/unrecorded
+	// rows). Best-effort: a failed aggregate logs and returns the
+	// zero-filled split rather than 500ing the detail surface.
+	obs.enter("CountProjectDispatchReasons")
+	dispatch, err := database.CountProjectDispatchReasons(ctx, s.db, name)
+	if !obs.check(w, ctx) {
+		return
+	}
+	if err != nil {
+		log.Printf("project detail: dispatch split for %s: %v", name, err)
+	}
 	writeJSON(w, 200, map[string]interface{}{
-		"project":     p,
-		"latest_tick": tick,
+		"project":        p,
+		"latest_tick":    tick,
+		"dispatch_split": dispatch,
 	})
 }
 

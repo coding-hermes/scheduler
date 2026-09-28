@@ -519,7 +519,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// makes its completion consume one bump tick.
 		markBumpTick(db, proj.Name, tickID)
 
-		// Spawn.
+		// SCHED-GAP-1653: no-dispatch decisions made at THIS spawn site.
+		// The Spawn-error branch (a refused spawn — auth rejection, max
+		// concurrency, nil gateway with exec fallback disabled) is the
+		// canonical "harness refused" unavailable stand-down; the
+		// wave-success branch is the one place a tick KNOWS workers were
+		// dispatched. Both ride the TickOutcome the existing
+		// lifecycle.Complete path persists.
 		st, err := p.spawner.Spawn(proj, tickID)
 		if err != nil {
 			// This branch is the PROJECT-SIDE / terminal-error completion
@@ -548,12 +554,26 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				// "exited cleanly".
 				ExitCode: -1,
 				Error:    err.Error(),
+				// SCHED-GAP-1653: the executor refused before any foreman
+				// ran — the unavailable branch of the closed vocabulary
+				// (auth/concurrency/nil-gateway are all executor-side
+				// refusals, not the lane declining work and not a
+				// harness-side transport blip, which defers instead).
+				DispatchDispatched: false,
+				DispatchReason:     database.DispatchReasonUnavailable,
 			})
 			return
 		}
 
 		// Wait for completion or timeout.
 		outcome := st.Wait()
+		// SCHED-GAP-1653: Spawn() succeeded, so the foreman session RAN —
+		// a serial tick dispatched its one session (worker_count stays 0:
+		// sessions = 1 + worker_count), a wave tick dispatched workers on
+		// top (the manifest ingest below attributes the per-worker rows).
+		// This flag is the tick-level "yes" that makes dispatch fields
+		// readable on every tick that actually ran a foreman.
+		outcome.DispatchDispatched = true
 		if err := p.lifecycle.Complete(outcome); err != nil {
 			log.Printf("SPAWN: complete %s: %v", tickID, err)
 		}

@@ -660,13 +660,16 @@ func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.T
 		       COALESCE(tokens_out,0) as tokens_out,
 		       COALESCE(cost_usd,0.0) as cost_usd,
 		       COALESCE(error,'') as error,
-		       created_at
+		       created_at,
+		       COALESCE(dispatch_outcome,'') as dispatch_outcome,
+		       COALESCE(dispatch_reason,'') as dispatch_reason
 		FROM ticks WHERE project_name = ? ORDER BY spawned_at DESC LIMIT 1
 	`, project)
 	var t database.Tick
 	err := row.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt)
+		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt,
+		&t.DispatchOutcome, &t.DispatchReason)
 	if err != nil {
 		return nil, err
 	}
@@ -688,14 +691,17 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 		       COALESCE(error,'') as error,
 		       created_at,
 		       COALESCE(worker_count,0) as worker_count,
-		       COALESCE(wave_recovery,0) as wave_recovery
+		       COALESCE(wave_recovery,0) as wave_recovery,
+		       COALESCE(dispatch_outcome,'') as dispatch_outcome,
+		       COALESCE(dispatch_reason,'') as dispatch_reason
 		FROM ticks WHERE id = ?
 	`, id)
 	var t database.Tick
 	err := row.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 		&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
 		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt,
-		&t.WorkerCount, &t.WaveRecovery)
+		&t.WorkerCount, &t.WaveRecovery,
+		&t.DispatchOutcome, &t.DispatchReason)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +709,7 @@ func getTick(ctx context.Context, db *sql.DB, id string) (*database.Tick, error)
 }
 
 func listTicks(ctx context.Context, db *sql.DB, project, status string, limit int) ([]database.Tick, error) {
-	q := "SELECT id, project_name, COALESCE(session_id,'') as session_id, status, COALESCE(outcome,'') as outcome, COALESCE(spawned_at,'') as spawned_at, COALESCE(completed_at,'') as completed_at, COALESCE(exit_code,0) as exit_code, COALESCE(commits,0) as commits, COALESCE(files_changed,0) as files_changed, COALESCE(tokens_in,0) as tokens_in, COALESCE(tokens_out,0) as tokens_out, COALESCE(cost_usd,0.0) as cost_usd, COALESCE(error,'') as error, created_at FROM ticks WHERE 1=1"
+	q := "SELECT id, project_name, COALESCE(session_id,'') as session_id, status, COALESCE(outcome,'') as outcome, COALESCE(spawned_at,'') as spawned_at, COALESCE(completed_at,'') as completed_at, COALESCE(exit_code,0) as exit_code, COALESCE(commits,0) as commits, COALESCE(files_changed,0) as files_changed, COALESCE(tokens_in,0) as tokens_in, COALESCE(tokens_out,0) as tokens_out, COALESCE(cost_usd,0.0) as cost_usd, COALESCE(error,'') as error, created_at, COALESCE(dispatch_outcome,'') as dispatch_outcome, COALESCE(dispatch_reason,'') as dispatch_reason FROM ticks WHERE 1=1"
 	var args []interface{}
 	if project != "" {
 		q += " AND project_name = ?"
@@ -727,7 +733,8 @@ func listTicks(ctx context.Context, db *sql.DB, project, status string, limit in
 		var t database.Tick
 		if err := rows.Scan(&t.ID, &t.ProjectName, &t.SessionID, &t.Status, &t.Outcome,
 			&t.SpawnedAt, &t.CompletedAt, &t.ExitCode, &t.Commits, &t.FilesChanged,
-			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt); err != nil {
+			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Error, &t.CreatedAt,
+			&t.DispatchOutcome, &t.DispatchReason); err != nil {
 			return nil, err
 		}
 		ticks = append(ticks, t)
@@ -947,10 +954,10 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}": {
       "get": {
-        "summary": "Get project detail with latest tick",
+        "summary": "Get project detail with latest tick and dispatch split",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
-          "200": {"description": "Project + latest_tick"}
+          "200": {"description": "Project + latest_tick + dispatch_split (SCHED-GAP-1653: per-lane ticks by dispatch reason)"}
         }
       },
       "put": {

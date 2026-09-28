@@ -440,19 +440,30 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
 ### GET /api/v1/projects/{name}
 
 **Purpose:** Single project detail wrapped under a `project` key alongside its
-latest tick.
+latest tick and the lane's dispatch-accountability split.
 
 **Path params:** `name` — exact project name (case-sensitive).
 
 **Response 200:**
 
 ```json
-{"project": {<Project>}, "latest_tick": {<Tick>}}
+{"project": {<Project>}, "latest_tick": {<Tick>}, "dispatch_split": {<DispatchCount>}}
 ```
 
 `latest_tick` is `null` when the project has never been ticked. Note: the
 wrapped shape differs from POST/PUT, which return the project flat — do not
 copy one parsing shape into the other.
+
+`dispatch_split` (SCHED-GAP-1653) aggregates the lane's TERMINAL ticks by
+dispatch reason so the operator reads declined-vs-absent per lane:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `total` | int | Terminal ticks with a dispatch decision recorded |
+| `dispatched` | int | Dispatched a foreman worker (`dispatch_reason=dispatched`) |
+| `no_dispatch` | int | No dispatch (sum of the five no-reasons below) |
+| `reasons` | object | Every vocabulary bucket, zero-filled: `dispatched`, `no_work`, `blocked`, `verification_only`, `chose_not_to`, `unavailable` |
+| `coverage` | int | Terminal ticks still carrying `""` — legacy rows, i.e. absence of MEASUREMENT, never absence of work |
 
 **Errors:** 404 `{"error":"project not found"}`; 405 on non-GET.
 
@@ -822,6 +833,8 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `tokens_in`, `tokens_out` | int | Token usage |
 | `cost_usd` | float | Dollar cost |
 | `error` | string | Error text on failure |
+| `dispatch_outcome` | string | `yes` \| `no` \| `""` — did this tick dispatch a foreman worker? `""` = legacy row (pre-migration-v48) or the tick is not yet terminal (SCHED-GAP-1653) |
+| `dispatch_reason` | string | `dispatched` (pairs with `yes`) \| `no_work` \| `blocked` \| `verification_only` \| `chose_not_to` \| `unavailable` (pair with `no`) \| `""` legacy — the closed-vocabulary why (SCHED-GAP-1653) |
 | `created_at` | string | RFC3339 |
 
 ### GET /api/v1/ticks

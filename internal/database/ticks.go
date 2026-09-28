@@ -234,7 +234,7 @@ WHERE id = ?`
 
 // GetTick loads a single tick by id.
 func GetTick(ctx context.Context, db *sql.DB, id string) (*Tick, error) {
-	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
+	const q = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(dispatch_outcome,''), COALESCE(dispatch_reason,'')
 FROM ticks WHERE id = ?`
 	var t Tick
 	var status, outcome string
@@ -244,7 +244,8 @@ FROM ticks WHERE id = ?`
 		&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 		&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 		&t.Bump, &t.WorkerCount, &t.WaveRecovery,
-		&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource)
+		&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource,
+		&t.DispatchOutcome, &t.DispatchReason)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrTickNotFound, id)
 	}
@@ -261,7 +262,7 @@ FROM ticks WHERE id = ?`
 // limit caps the result count; pass 0 for an unbounded query (the caller
 // should usually bound it).
 func ListTicks(ctx context.Context, db *sql.DB, projectName string, limit int) ([]Tick, error) {
-	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
+	q := `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(dispatch_outcome,''), COALESCE(dispatch_reason,'')
 FROM ticks`
 	args := []any{}
 	if projectName != "" {
@@ -290,7 +291,8 @@ FROM ticks`
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 			&t.Bump, &t.WorkerCount, &t.WaveRecovery,
-			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource); err != nil {
+			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource,
+			&t.DispatchOutcome, &t.DispatchReason); err != nil {
 			return nil, fmt.Errorf("scan tick row: %w", err)
 		}
 		t.Status = TickStatus(status)
@@ -306,7 +308,7 @@ FROM ticks`
 // ListAllTicks returns ticks across all projects, newest first, with offset
 // pagination. limit caps the result count; pass 0 for an unbounded query.
 func ListAllTicks(ctx context.Context, db *sql.DB, limit, offset int) ([]Tick, error) {
-	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,'')
+	const baseQuery = `SELECT id, project_name, COALESCE(session_id,''), status, COALESCE(outcome,''), COALESCE(spawned_at,''), COALESCE(completed_at,''), COALESCE(exit_code, 0), commits, files_changed, tokens_in, tokens_out, cost_usd, COALESCE(cost_source,''), COALESCE(error,''), created_at, COALESCE(code_commits,0), COALESCE(board_commits,0), COALESCE(bump,0), COALESCE(worker_count,0), COALESCE(wave_recovery,0), COALESCE(slot_wait_ms,0), COALESCE(admit_reason,''), COALESCE(nudge_source,''), COALESCE(dispatch_outcome,''), COALESCE(dispatch_reason,'')
 FROM ticks ORDER BY created_at DESC, id DESC`
 
 	q := baseQuery
@@ -338,7 +340,8 @@ FROM ticks ORDER BY created_at DESC, id DESC`
 			&t.TokensIn, &t.TokensOut, &t.CostUSD, &t.CostSource,
 			&t.Error, &t.CreatedAt, &t.CodeCommits, &t.BoardCommits,
 			&t.Bump, &t.WorkerCount, &t.WaveRecovery,
-			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource); err != nil {
+			&t.SlotWaitMs, &t.AdmitReason, &t.NudgeSource,
+			&t.DispatchOutcome, &t.DispatchReason); err != nil {
 			return nil, fmt.Errorf("scan all tick row: %w", err)
 		}
 		t.Status = TickStatus(status)

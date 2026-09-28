@@ -117,12 +117,21 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		finish := outcome.Finished.Format(time.RFC3339)
+		// SCHED-GAP-1653: the sim persistence mirrors lifecycle.Complete's
+		// dispatch stamp so dry-run dashboards carry the same accountability
+		// split as live. The no-dispatch stand-down event is deliberately
+		// NOT mirrored: a dry-run's outcome is inherently stand-down-shaped
+		// (nothing lands in a real repo), and the sim event log would flood
+		// with rows no operator reads — the persisted pair is the record.
+		dispatchOutcome, dispatchReason := outcome.resolveDispatch()
 		s.db.Exec(`
 			UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?,
-				tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?, commits = ?, files_changed = ?
+				tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?, commits = ?, files_changed = ?,
+				dispatch_outcome = ?, dispatch_reason = ?
 			WHERE id = ?
 		`, string(outcome.Status), finish, outcome.ExitCode, outcome.Error,
 			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource, outcome.Commits, outcome.FilesChanged,
+			dispatchOutcome, dispatchReason,
 			outcome.TickID)
 		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
 		// SCHED-GAP-214: last_tick_status rides the same write — the sim path
@@ -190,6 +199,12 @@ func (s *SimSpawned) Wait() TickOutcome {
 		outcome.TokensOut = 500 + rand.Intn(3000)
 		outcome.CostUSD = float64(outcome.TokensIn)*0.00001 + float64(outcome.TokensOut)*0.00003
 		outcome.CostSource = CostSourceSimulated // ADV-R09/G8: sim ticks never count as measured spend
+		// SCHED-GAP-1653: the dry-run "spawned a foreman" — every sim
+		// Spawn that reached Wait() dispatched its session, so the sim
+		// path exercises the same dispatch-accountability shapes the
+		// live path persists (dispatched on success/timeout, unavailable
+		// on the simulated failure below).
+		outcome.DispatchDispatched = true
 		// idleRate split: some "completed" ticks are idle foremen (zero
 		// commits, zero files) so the adaptive-cooldown slow-down path can
 		// be exercised in dry-runs (Bane 2026-09-06). Legacy default 0 keeps
@@ -204,10 +219,15 @@ func (s *SimSpawned) Wait() TickOutcome {
 	} else if roll < s.spawner.success+0.10 {
 		outcome.Status = TickTimeout
 		outcome.Error = "simulated timeout after 30m"
+		// SCHED-GAP-1653: the session ran before the (simulated) timeout.
+		outcome.DispatchDispatched = true
 	} else {
 		outcome.Status = TickFailed
 		outcome.ExitCode = 1
 		outcome.Error = "simulated build failure"
+		// SCHED-GAP-1653: the executor-side refusal vocabulary, exercised
+		// by dry-runs too — a failed sim tick did not dispatch.
+		outcome.DispatchReason = database.DispatchReasonUnavailable
 	}
 
 	return outcome
