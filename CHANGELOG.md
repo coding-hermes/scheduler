@@ -33,6 +33,12 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-28
 
+## [1.10.0] — 2026-09-28
+
+### New Features
+
+- Feature-usage surface + dead-feature reaper (SCHED-GAP-131) — `ae477ccf`, merged via `7032adc6`.
+
 ## [1.9.0] — 2026-09-28
 - Refuse lane shapes that arrived with the trouble onboarding (SCHED-GAP-138) — `f7aac278`.
 
