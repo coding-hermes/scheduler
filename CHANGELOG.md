@@ -31,7 +31,11 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-09-27
+## [Unreleased] — 2026-09-28
+
+### New Features
+
+- Tick dispatch accountability (SCHED-GAP-1653) — `b764c5dd`.
 
 ## [1.6.2] — 2026-09-27
 
