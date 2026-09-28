@@ -233,6 +233,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, retiredCommandError(p.Command))
 		return
 	}
+	// SCHED-GAP-138: onboarding shape gate. An off-convention workdir or an
+	// enabled satellite row with no pacing policy must never be registered —
+	// both arrived together with the retired command on the `trouble` family
+	// (2026-09-17) and nothing checked the shape at the write. Refused before
+	// any DB write, so a refused create leaves no row behind.
+	if err := validateLaneOnCreate(&p); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	// Fill S06 defaults for zero-valued fields so a minimal {name, repo_url,
 	// workdir} body satisfies the CHECK constraints. Enabled intentionally
 	// stays false — creating a project must not auto-enable it.
@@ -444,6 +453,28 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 400, retiredCommandError(cur.Command))
 		return
 	}
+	// SCHED-GAP-138: the onboarding shape gate on the update path. A workdir
+	// write must stay on the lane's convention, and a PUT must not install the
+	// enabled-but-unarmed shape. Both are evaluated against the EFFECTIVE
+	// post-update row (cur + this patch), so a body that enables a lane and
+	// pins its floor in one request passes; only a request whose result carries
+	// no pacing policy at all is refused.
+	if updates.Workdir != nil {
+		if err := validateLaneWorkdir(name, *updates.Workdir); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
+	if err := validateLaneUpdate(cur, updates); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	// SCHED-GAP-138: an ENABLE transition on an unarmed satellite lane is
+	// repaired in the same write (family pin on floor/ceiling) instead of
+	// refused — satellite-coverage-reconcile.py enables lanes with a bare
+	// {"enabled": true} and never reads the response status, so a refusal there
+	// would silently strip QA/pm/sync/dogfood coverage from a live foreman.
+	updates, laneArmed := laneAutoArm(cur, updates, name)
 	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "project not found")
@@ -477,6 +508,23 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	// SCHED-GAP-138: the enable-transition repair is auditable — an events row
+	// carries what the write installed, read back from the stored row rather
+	// than from the patch, so the trail matches the DB.
+	if laneArmed {
+		details, _ := json.Marshal(map[string]any{
+			"project":   name,
+			"floor_s":   p.CooldownFloorS,
+			"ceiling_s": p.CooldownCeilingS,
+			"via":       "PUT /projects/" + name,
+		})
+		_ = database.LogEvent(ctx, s.db, &database.Event{
+			Severity:  database.SeverityInfo,
+			Component: "api",
+			Message:   fmt.Sprintf("lane auto-armed on enable: %s (floor=%ds)", name, p.CooldownFloorS),
+			Details:   string(details),
+		})
 	}
 	// GAP-044: log a matching events-table entry when this PUT disabled
 	// a previously-enabled project.

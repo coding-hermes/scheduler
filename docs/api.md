@@ -421,10 +421,24 @@ stamped).
 |------|--------|------|
 | Malformed JSON | 400 | `{"error":"invalid JSON: <detail>"}` |
 | Missing `name`/`repo_url`/`workdir` | 400 | `{"error":"name, repo_url, workdir are required"}` |
+| `command` driving a retired driver script | 400 | `{"error":"command contains retired driver '<name>'; remove the custom command or use a supported executor"}` |
+| Satellite lane (`-qa`/`-pm`/`-sync`/`-dogfood`) with an off-convention `workdir` | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
+| `enabled: true` on a satellite lane that carries no pacing policy | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=43200 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight 1..100, priority 1..10, decay_rate > 0) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
 | Duplicate name (case-insensitive) | 409 | `{"error":"project already exists"}` |
 | Workdir (or name) already registered by an **enabled** project | 409 | `{"error":"create project ... already registered by enabled project ... (case-insensitive duplicate)"}` |
 | Wrong method | 405 | `{"error":"GET or POST only"}` |
+
+**Onboarding shape gate (SCHED-GAP-138):** a lane whose name carries a satellite
+suffix is held to the fleet's lane shape at the write. Its `workdir` must sit in
+the family's directory — `~/.hermes/sync-workdirs/<lane>` for `-sync`, and the
+primary's directory under `~/.hermes/stand-in/{pm,qa}/`, `{pm,pm-lane}/` or
+`dogfood/` for the other families — and an ENABLED satellite must carry a pacing
+policy (`adaptive_cooldown`, or an explicit `cooldown_floor_s`/`cooldown_ceiling_s`;
+the family pin is 43200 for `-qa`/`-sync`, 86400 for `-pm`, 259200 for
+`-dogfood`). A disabled lane may be registered unarmed. Primary/root lanes are
+unconstrained. The live backstop for the same invariants is
+`ops/check-fleet-invariants.py` (checks 5/5b/5e).
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
@@ -503,9 +517,21 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 |------|--------|------|
 | Malformed JSON | 400 | `{"error":"invalid JSON: <detail>"}` |
 | `decay_rate <= 0` | 400 | `{"error":"decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)"}` |
+| `workdir` off the lane convention for a satellite lane | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
+| A write that would leave an ENABLED satellite lane with no pacing policy (clearing the last `cooldown_floor_s`/`cooldown_ceiling_s`, or switching `adaptive_cooldown` off with no bound set) | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=43200 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight/priority ranges) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
 | Unknown project | 404 | `{"error":"project not found"}` |
 | Wrong method | 405 | `{"error":"GET, PUT, POST, or DELETE only"}` |
+
+**Onboarding shape gate (SCHED-GAP-138):** the same gate as POST — see §5. One
+path REPAIRS instead of refusing: re-enabling a satellite lane that carries no
+pacing policy applies the family pin in the same write (`cooldown_floor_s` = the
+family pin, `cooldown_ceiling_s` = 8 × that when the row has none) and records a
+`lane auto-armed on enable` events entry. That path is driven by machinery
+(`satellite-coverage-reconcile.py` enables lanes with a bare
+`{"enabled": true}`), so a refusal there would be a silent coverage loss. A
+pre-existing enabled-and-unarmed row can still take an unrelated write: the gate
+refuses the write that installs the shape, not every write to a legacy row.
 
 ```bash
 curl -s -X PUT http://127.0.0.1:9090/api/v1/projects/my-project \
