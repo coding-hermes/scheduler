@@ -163,8 +163,16 @@ func TestSCHEDGAP1641_InstantTurnNotCommitted(t *testing.T) {
 					t.Fatalf("ticks.status = %q, want %q — a productive tick (events=%d tokens_out=%d) must stay completed",
 						status, TickCompleted, tc.events, tc.usageOut)
 				}
-				if outcome != "committed" {
-					t.Errorf("ticks.outcome = %q, want committed", outcome)
+				// SCHED-GAP-1652: the outcome column no longer restates health —
+				// it reports an OBSERVED ARTIFACT. This fixture's workdir is not a
+				// git repo, so the tick can produce no commit and no changed file,
+				// and asserting "committed" here would be the exact false claim
+				// 1652 removed (2,533 rows read outcome='committed' with commits=0).
+				// What SCHED-GAP-1641 actually guarantees is that a productive tick
+				// is NOT the instant-turn FAILURE — carried by status and
+				// failure_reason, asserted above and below — not by this column.
+				if outcome == "failed" {
+					t.Errorf("ticks.outcome = %q — a productive tick must never read as the instant-turn failure", outcome)
 				}
 				if failureReason == FailureReasonInstantTurn {
 					t.Errorf("productive tick stamped failure_reason=%q — the classifier fired outside the band", FailureReasonInstantTurn)

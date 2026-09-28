@@ -57,8 +57,11 @@ func TestGitWorkDelta(t *testing.T) {
 		t.Fatalf("preTotal should be 1, got %d", preTotal)
 	}
 
-	// No work → zero delta.
-	c, f := gitWorkDelta(dir, preHead, preTotal)
+	// No work → zero delta, and the measurement is KNOWN GOOD (err nil).
+	c, f, err := gitWorkDelta(dir, preHead, preTotal)
+	if err != nil {
+		t.Fatalf("measured zero must not report an error, got %v", err)
+	}
 	if c != 0 || f != 0 {
 		t.Fatalf("no-work delta expected 0/0, got %d/%d", c, f)
 	}
@@ -73,11 +76,38 @@ func TestGitWorkDelta(t *testing.T) {
 	runGitTest(t, dir, "add", "a.txt", "b.txt")
 	runGitTest(t, dir, "commit", "-q", "-m", "second")
 
-	c, f = gitWorkDelta(dir, preHead, preTotal)
+	c, f, err = gitWorkDelta(dir, preHead, preTotal)
+	if err != nil {
+		t.Fatalf("measured delta must not report an error, got %v", err)
+	}
 	if c != 1 {
 		t.Fatalf("expected 1 commit, got %d", c)
 	}
 	if f != 2 {
 		t.Fatalf("expected 2 files changed, got %d", f)
+	}
+}
+
+// TestGitWorkDeltaReportsUnmeasured pins the SCHED-GAP-1652 contract: a delta
+// that could not be measured must be distinguishable from a measured zero,
+// because 27% of the ticks recorded as zero-commit had in fact committed.
+func TestGitWorkDeltaReportsUnmeasured(t *testing.T) {
+	// Unreadable repo → error, and the zeros must not be read as "no work".
+	c, f, err := gitWorkDelta(t.TempDir(), "", 0)
+	if err == nil {
+		t.Fatalf("non-git dir must report an error so zeros are not read as fact; got %d/%d", c, f)
+	}
+
+	// A real repo with NO spawn baseline: the commit count is a floor, not a
+	// total, so the caller must still be told the measurement is incomplete.
+	dir := initTempRepo(t)
+	if _, _, err := gitWorkDelta(dir, "", 0); err == nil {
+		t.Fatal("missing spawn baseline must report an incomplete measurement")
+	}
+
+	// And a complete baseline yields no error (the control).
+	head, total := gitBaseline(dir)
+	if _, _, err := gitWorkDelta(dir, head, total); err != nil {
+		t.Fatalf("complete baseline should measure cleanly, got %v", err)
 	}
 }

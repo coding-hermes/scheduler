@@ -1084,7 +1084,7 @@ daemon returns the full text):
 | `tick_duration_ms.window` | string | Always `"24h"` |
 | `tick_duration_ms.p50` / `.p90` / `.p99` | int \| null | Nearest-rank duration percentiles in ms; `null` when `count == 0` |
 | `gateway.drain_503` | int | Ticks whose `error` text matches the drain class (`%503%` or `%draining%`) in the window. The in-memory `gateway_errors` counter on `/api/v1/status` counts ALL transient gateway failures and cannot classify drains, so it is deliberately not the source |
-| `outcomes.zero_output_committed` | int | Ticks with `outcome='committed'` AND `commits=0` in the window — a `committed` outcome with nothing committed |
+| `outcomes.zero_output_committed` | int | Ticks with `outcome='committed'` AND `commits=0` in the window. NOT "a committed outcome with nothing committed": while `outcome` restates the tick status (SCHED-GAP-1652), this is the NORMAL row shape — 2,533 of 3,717 ticks in the 2026-09-20→27 window — and 27% of those had in fact committed. Read it as "commit count not a positive number", never as evidence of an empty tick |
 
 **Errors:** 405 `{"error":"GET only"}` on non-GET. A block whose query fails is
 reported in-band as `available:false` — the endpoint itself still answers 200,

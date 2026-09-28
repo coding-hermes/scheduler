@@ -72,6 +72,39 @@ func (s TickStatus) Outcome() string {
 	}
 }
 
+// terminalOutcome derives the outcome column from OBSERVED ARTIFACTS rather than
+// from the fact that the process exited cleanly (SCHED-GAP-1652 — Bane's fix
+// order, item 1: "a completed tick with no measurable artifact is dry_run, not
+// committed").
+//
+// Measured 2026-09-27 over 3,717 ticks: 2,533 carried outcome='committed' with
+// commits=0, and a quarter of those had in fact committed. The old mapping
+// returned the literal "committed" for every TickCompleted, so the column
+// claimed credit for empty ticks AND could not reveal the mis-measured ones.
+//
+// The vocabulary is deliberately unchanged — the schema CHECK constrains outcome
+// to ('committed','dry_run','failed','timeout','deferred') and the metrics
+// aggregator seeds exactly those keys, so a new value would need a migration and
+// would silently vanish from /api metrics. "Could not measure" is therefore
+// carried by a -1 sentinel in commits/files_changed, which is the convention
+// code_commits/board_commits already use and which every consumer already reads
+// as "not positive" (migrations.go: COALESCE(code_commits,0) > 0).
+//
+// A dry_run is NOT a failure and carries no penalty anywhere: consecutive_failures
+// only moves on failed/timeout, and satellite lanes whose product is a DuckBrain
+// write, a filed row or a battery verdict are tracked by their own per-family
+// counters (qa_output_count / pm_output_count / sync_output_count), never by this
+// column. Bane, explicitly: "the satellites don't always need to commit."
+func terminalOutcome(o TickOutcome) string {
+	if o.Status != TickCompleted {
+		return o.Status.Outcome()
+	}
+	if o.Commits > 0 || o.FilesChanged > 0 {
+		return "committed"
+	}
+	return "dry_run"
+}
+
 // TickOutcome holds the result of a completed tick.
 type TickOutcome struct {
 	TickID       string
@@ -159,7 +192,7 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
 			commits = ?, files_changed = ?, failure_reason = ?
 		WHERE id = ?
-	`, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
+	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged, failureReason,
@@ -220,22 +253,14 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	return nil
 }
 
-// ExportSession runs `hermes sessions export` for the given session and parses stats.
-func (lt *LifecycleTracker) ExportSession(sessionID string) (SessionStats, error) {
-	// Placeholder: actual session export requires CLI parsing.
-	return SessionStats{SessionID: sessionID}, nil
-}
-
-// SessionStats holds parsed session outcome data.
-type SessionStats struct {
-	SessionID    string
-	Commits      int
-	FilesChanged int
-	TokensIn     int
-	TokensOut    int
-	CostUSD      float64
-	Outcome      string // committed, dry_run, failed
-}
+// SCHED-GAP-1652 removed ExportSession. It was a stub that returned a zero-valued
+// SessionStats and parsed nothing, while specs/S05-spawn-engine-lifecycle.md
+// implied it supplied commits/files_changed/outcome from `hermes sessions export`.
+// It could not have: the export record carries 59 fields and none of them is a git
+// fact (they are input_tokens/output_tokens/cache_read_tokens/estimated_cost_usd/
+// message_count/tool_call_count/messages). Commit counts come from the git delta
+// in gitmetrics.go; there is deliberately no second, phantom source. It had no
+// production callers.
 
 // CleanupStale clears running ticks older than the given duration.
 func (lt *LifecycleTracker) CleanupStale(maxAge time.Duration) (int, error) {
