@@ -4517,3 +4517,20 @@ tasks:
   status: complete
   created_at: '2026-09-28T00:54:58.582954+00:00'
   completed_at: '2026-09-28T01:01:36.616590+00:00'
+- id: SCHED-GAP-1653
+  title: Tick-time foreman accountability
+  criteria:
+  - Every tick records dispatch=yes|no with a closed-vocabulary reason; tick_workers/worker_count
+    writes restored to >=95% of ticks; no 'completed' without landed artifact, verified
+    worker commit, or reasoned stand-down; dashboard/API expose the per-lane split
+  status: complete
+  created_at: '2026-09-28T01:12:37.152573+00:00'
+  completed_at: '2026-09-28T21:32:38.167421+00:00'
+- id: QA-CHS-177B
+  title: schedgap177 fixture pins latestMigration=47 vs ladder 48
+  criteria:
+  - No test in ./internal/database asserts a hardcoded migration version; go test
+    -run TestMigrationV47LaneOutputCounters passes at HEAD
+  status: complete
+  created_at: '2026-09-28T21:01:18.979234+00:00'
+  completed_at: '2026-09-28T21:02:04.329889+00:00'
