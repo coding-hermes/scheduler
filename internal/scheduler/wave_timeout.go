@@ -102,6 +102,10 @@ func (s *Spawner) effectiveTickTimeout(project PackedProject) time.Duration {
 	if !ok || !ns.waveEnabled {
 		return s.timeout
 	}
+	// SCHED-GAP-131: a tick is being dispatched into a wave-enabled namespace
+	// — record the wave-tick feature use (the ONE resolution site, so it fires
+	// exactly once per wave-enabled spawn).
+	database.RecordFeatureUse(database.FeatureWaveTicks)
 
 	// Layer 1: env override. Set → wins over the namespace value (operator
 	// knob for incident response). Unparseable → WARN + fall through to the

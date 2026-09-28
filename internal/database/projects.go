@@ -1127,6 +1127,9 @@ WHERE name = ? AND COALESCE(bump_active, 0) = 0`,
 		}
 		return nil, fmt.Errorf("bump project %q: a bump is already active — wait for it to expire or clear it first", name)
 	}
+	// SCHED-GAP-131: a bump was armed — record the feature use so the
+	// dead-feature surface can tell "adopted" from "shipped and never fired".
+	RecordFeatureUse(FeatureBumpArming)
 	return GetProject(ctx, db, name)
 }
 

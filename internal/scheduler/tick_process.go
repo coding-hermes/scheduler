@@ -352,6 +352,8 @@ func (l *Loop) evaluate() {
 // threshold) and adds the namespace the gate was consulted for — without it a
 // deferral cannot be attributed to the `load_gate='off'` opt-out decision.
 func (l *Loop) emitLoadGateDeferred(project, nsID, tickID string) {
+	// SCHED-GAP-131: the load gate deferred a spawn — record the feature use.
+	database.RecordFeatureUse(database.FeatureLoadGateDeferrals)
 	l1, _ := currentLoad1m()
 	threshold := loadGateThreshold()
 	if tickID == "" {

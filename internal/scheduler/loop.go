@@ -612,6 +612,16 @@ func (l *Loop) Run() {
 		case <-reaper.C:
 			l.reapZombies()
 		case <-healthTicker.C:
+			// SCHED-GAP-131: periodic flush of the in-memory feature-usage
+			// counters to the persisted table, so a long-running daemon's
+			// "last used" stamps survive a crash even if no features read
+			// happens in between. Best-effort and a no-op when nothing is
+			// pending (FlushFeatureUsage returns immediately).
+			if l.db != nil {
+				if err := database.FlushFeatureUsage(context.Background(), l.db); err != nil {
+					log.Printf("FEATURES: periodic flush: %v", err)
+				}
+			}
 			running := 0
 			if l.slotPool != nil {
 				running = l.slotPool.Running()
@@ -836,10 +846,12 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	// running/queued tick row (SCHED-GAP-030 — the eval loop merges both
 	// sources; mirror it here so the manual endpoint cannot double-spawn).
 	if l.slotPool != nil && l.slotPool.RunningSet()[project.Name] {
+		database.RecordFeatureUse(database.FeatureDedupeSuppress)
 		return "", ErrProjectRunning
 	}
 	var inFlight int
 	if err := l.db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_name = ? AND status IN ('queued','running')`, project.Name).Scan(&inFlight); err == nil && inFlight > 0 {
+		database.RecordFeatureUse(database.FeatureDedupeSuppress)
 		return "", ErrProjectRunning
 	}
 
@@ -1985,6 +1997,13 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) int64 {
 				d.Reason = AdmissionReasonLoadGate
 			} else {
 				d.Reason = AdmissionReasonOK
+				// SCHED-GAP-131: a tasks-mode lane was admitted via the
+				// SCHED-GAP-124 board-work waiver — record the admission_mode
+				// feature use (the admission decision is "yes", even if the
+				// load gate above defers the spawn a moment later).
+				if c.effectiveAdmissionMode() == database.AdmissionModeTasks {
+					database.RecordFeatureUse(database.FeatureAdmissionMode)
+				}
 			}
 		} else {
 			d.Reason, d.CooldownRemainingS, d.HasCooldownRem =
