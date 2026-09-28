@@ -1352,15 +1352,16 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		"namespaces_delete", "namespaces_projects", "namespaces_move",
 		"project_delete", "project_spawn", "project_bump", "project_unbump",
 		"tick_get", "config_get", "queue_get", "metrics_get",
+		"features_get", "features_prune_candidates",
 	}
 	for _, w := range want {
 		if !names[w] {
 			t.Errorf("expected tool %q in registry, missing", w)
 		}
 	}
-	// 18 fleet_* + 12 blocks/events + 15 CTL-003 parity tools.
-	if len(toolsList) != 45 {
-		t.Errorf("tool count = %d, want 45 (18 fleet_* + 12 blocks/events + 15 CTL-003)", len(toolsList))
+	// 18 fleet_* + 12 blocks/events + 17 CTL-003 parity tools.
+	if len(toolsList) != 47 {
+		t.Errorf("tool count = %d, want 49 (18 fleet_* + 12 blocks/events + 17 CTL-003 + 2 features_*)", len(toolsList))
 	}
 }
 

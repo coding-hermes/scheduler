@@ -1135,7 +1135,77 @@ curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.deferrals.by_reason | to_ent
 curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.sources'   # what backs each number
 ```
 
-## 11. Fleet-wide control
+## 11. Feature usage (SCHED-GAP-131)
+
+Two read-only endpoints make "which mechanisms actually fire" queryable instead
+of archaeology — the data behind the dead-feature reaper. Counters are kept
+in-memory and flushed to the `feature_usage` table on every read and on the
+30s health tick, so a feature used this process can never be reported "never
+used" and the stamps survive restarts.
+
+### GET /api/v1/features
+
+**Purpose:** Every tracked mechanism with its live use count and first/last
+used timestamps, plus the current admission-mode row gauge.
+
+**Response 200:**
+
+```json
+{
+  "features": [
+    {"feature": "bump_arming", "description": "SCHED-GAP-107 task bump armed (BumpProject set bump_active=1)", "use_count": 0, "first_used_at": "", "last_used_at": ""},
+    {"feature": "wave_ticks", "description": "a tick dispatched into a wave-enabled namespace (S12 wave scheduling)", "use_count": 0, "first_used_at": "", "last_used_at": ""},
+    {"feature": "admission_mode", "description": "a tasks-mode lane admitted via the SCHED-GAP-124 board-work waiver", "use_count": 0, "first_used_at": "", "last_used_at": ""},
+    {"feature": "load_gate_deferrals", "description": "the SCHED-GAP-125 load-average gate deferred a spawn", "use_count": 0, "first_used_at": "", "last_used_at": ""},
+    {"feature": "dedupe_suppressions", "description": "a duplicate spawn suppressed (SCHED-GAP-030/103)", "use_count": 0, "first_used_at": "", "last_used_at": ""}
+  ],
+  "admission_mode_rows": {"projects_tasks": 0, "namespaces_tasks": 0},
+  "prune_weeks": 8
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `features[]` | array | All five mechanisms, always present, in canonical order. `use_count` is the persisted total; `first_used_at`/`last_used_at` are RFC3339 UTC (`""` = never used) |
+| `features[].description` | string | What "use" means for that mechanism |
+| `admission_mode_rows.projects_tasks` | int | Projects currently configured with `admission_mode='tasks'` |
+| `admission_mode_rows.namespaces_tasks` | int | Namespaces currently configured with `admission_mode='tasks'` |
+| `prune_weeks` | int | The configured prune window (the default for `prune-candidates`) |
+
+### GET /api/v1/features/prune-candidates
+
+**Purpose:** The reaper's report — every mechanism whose last proven use is
+older than the window (or that never fired). **Flag only: nothing is
+auto-deleted.**
+
+**Query:** `?weeks=N` overrides the window (default `--feature-prune-weeks`,
+8; non-positive/unparseable values fall back to the default).
+
+**Response 200:**
+
+```json
+{
+  "prune_weeks": 8,
+  "cutoff": "2026-08-03T00:00:00Z",
+  "candidates": [
+    {"feature": "bump_arming", "use_count": 0, "first_used_at": "", "last_used_at": ""}
+  ]
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `cutoff` | string | RFC3339 UTC — a feature is listed when `last_used_at == ""` or `last_used_at < cutoff` |
+| `candidates[]` | array | The flagged features (empty `[]`, never `null`) |
+
+**Errors:** 405 `{"error":"GET only"}` on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/features | jq '.features | map({feature, use_count, last_used_at})'
+curl -s http://127.0.0.1:9090/api/v1/features/prune-candidates?weeks=8 | jq '.candidates'
+```
+
+## 12. Fleet-wide control
 
 All three take no body. They mutate the live loop — use with care (pausing
 stops the entire fleet; running ticks finish, new spawns stop).
@@ -1171,7 +1241,7 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/resume
 
 Verify the loop is back after resume: `curl -s http://127.0.0.1:9090/api/v1/health`.
 
-## 12. OpenAPI spec
+## 13. OpenAPI spec
 
 ### GET /api/v1/openapi.json
 

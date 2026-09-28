@@ -632,6 +632,18 @@ var tools = []ToolDefinition{
 		Description: "Fleet metrics in one read-only call (mirror of GET /api/v1/metrics): spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks by namespace, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s, zero-output committed ticks. Every block carries available=true|false — an absent source reports available=false with a reason instead of a zero. ticks.global_cap is not derivable over MCP and is listed in \"unavailable\".",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
+	{
+		Name:        "features_get",
+		Description: "Per-feature live usage counters (mirror of GET /api/v1/features, SCHED-GAP-131): every tracked mechanism (bump_arming, wave_ticks, admission_mode, load_gate_deferrals, dedupe_suppressions) with use_count + first/last-used timestamps, plus the admission_mode row gauge. 0 = never fired — the dead-feature reaper's data source.",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "features_prune_candidates",
+		Description: "Dead-feature reaper report (mirror of GET /api/v1/features/prune-candidates, SCHED-GAP-131): mechanisms never used or last used more than `weeks` ago (default 8). Flag only — nothing is auto-deleted.",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"weeks": map[string]interface{}{"type": "integer", "description": "Prune window in weeks (default 8)."},
+		}},
+	},
 }
 
 // handleMCP routes MCP protocol requests.
@@ -805,6 +817,10 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolQueueGet(ctx)
 	case "metrics_get":
 		return s.toolMetricsGet(ctx)
+	case "features_get":
+		return s.toolFeaturesGet(ctx)
+	case "features_prune_candidates":
+		return s.toolFeaturesPruneCandidates(ctx, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

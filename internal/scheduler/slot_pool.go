@@ -377,6 +377,9 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 	// instant the caller decides to spawn it.
 	if !p.tryReserve(proj.Name) {
 		log.Printf("DEDUP: skipping %s (tick %s) — already running or reserved", proj.Name, tickID)
+		// SCHED-GAP-131: a duplicate spawn was suppressed — record the dedupe
+		// feature use so the dead-feature surface counts real suppressions.
+		database.RecordFeatureUse(database.FeatureDedupeSuppress)
 		return
 	}
 

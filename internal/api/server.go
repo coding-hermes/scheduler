@@ -87,6 +87,12 @@ type Server struct {
 	// after SetBudgetSpendCacheTTL (zero value = package default), so the
 	// readers need no lock.
 	spendCacheTTL *time.Duration
+
+	// featurePruneWeeks is the default prune window (weeks) for the
+	// SCHED-GAP-131 dead-feature reaper (/api/v1/features/prune-candidates).
+	// Immutable after SetFeaturePruneWeeks; zero = package default
+	// (featurePruneWeeksDefault). The ?weeks= query overrides per request.
+	featurePruneWeeks int
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
@@ -213,6 +219,10 @@ func (s *Server) Handler() http.Handler {
 	// SCHED-GAP-156: the single read-only fleet-metrics endpoint (one request
 	// answers spawns/deferrals/nudges/ticks/durations/drains/outcomes).
 	mux.HandleFunc("/api/v1/metrics", s.metrics)
+	// SCHED-GAP-131: per-feature live usage counters + the dead-feature
+	// reaper's prune-candidate list (flag only, no auto-delete).
+	mux.HandleFunc("/api/v1/features", s.features)
+	mux.HandleFunc("/api/v1/features/prune-candidates", s.featurePruneCandidates)
 	return mux
 }
 

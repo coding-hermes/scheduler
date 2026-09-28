@@ -1628,6 +1628,71 @@ func (s *Server) toolMetricsGet(ctx context.Context) (string, error) {
 	}), nil
 }
 
+// toolFeaturesGet mirrors GET /api/v1/features (SCHED-GAP-131): the persisted
+// feature-usage counters, flushed first so a feature used THIS process is never
+// reported "never used", enriched with the canonical description.
+func (s *Server) toolFeaturesGet(ctx context.Context) (string, error) {
+	if err := database.FlushFeatureUsage(ctx, s.db); err != nil {
+		log.Printf("mcp features_get: flush: %v", err)
+	}
+	rows, err := database.LoadFeatureUsage(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	projectsTasks, namespacesTasks, err := database.AdmissionModeRowCounts(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	desc := map[string]string{}
+	for _, def := range database.FeatureDefinitions {
+		desc[def.Name] = def.Description
+	}
+	entries := make([]map[string]interface{}, 0, len(rows))
+	for _, fu := range rows {
+		entries = append(entries, map[string]interface{}{
+			"feature":       fu.Feature,
+			"description":   desc[fu.Feature],
+			"use_count":     fu.UseCount,
+			"first_used_at": fu.FirstUsedAt,
+			"last_used_at":  fu.LastUsedAt,
+		})
+	}
+	return jsonString(map[string]interface{}{
+		"features": entries,
+		"admission_mode_rows": map[string]int{
+			"projects_tasks":   projectsTasks,
+			"namespaces_tasks": namespacesTasks,
+		},
+	}), nil
+}
+
+// toolFeaturesPruneCandidates mirrors GET /api/v1/features/prune-candidates
+// (SCHED-GAP-131): mechanisms never used or last used more than `weeks` ago
+// (default 8). Flag only.
+func (s *Server) toolFeaturesPruneCandidates(ctx context.Context, args map[string]interface{}) (string, error) {
+	weeks := getIntArg(args, "weeks")
+	if weeks <= 0 {
+		weeks = 8
+	}
+	cutoff := s.clock().Now().UTC().Add(-time.Duration(weeks) * 7 * 24 * time.Hour).Format(time.RFC3339)
+	if err := database.FlushFeatureUsage(ctx, s.db); err != nil {
+		log.Printf("mcp features_prune_candidates: flush: %v", err)
+	}
+	rows, err := database.LoadFeatureUsage(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	candidates := database.FeaturePruneCandidates(rows, cutoff)
+	if candidates == nil {
+		candidates = []database.FeatureUsage{}
+	}
+	return jsonString(map[string]interface{}{
+		"prune_weeks": weeks,
+		"cutoff":      cutoff,
+		"candidates":  candidates,
+	}), nil
+}
+
 // metricsSpawns answers question 1: spawn volume per namespace and per outcome
 // over the window. An empty by_namespace map is written as {} (never null).
 func (s *Server) metricsSpawns(ctx context.Context, cutoff string) map[string]interface{} {

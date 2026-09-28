@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 48
+const latestMigration = 49
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -758,6 +758,25 @@ ALTER TABLE projects ADD COLUMN dogfood_zero_output_streak INTEGER NOT NULL DEFA
 		stmt: `
 ALTER TABLE ticks ADD COLUMN dispatch_outcome TEXT NOT NULL DEFAULT '' CHECK(dispatch_outcome IN ('', 'yes', 'no'));
 ALTER TABLE ticks ADD COLUMN dispatch_reason TEXT NOT NULL DEFAULT '' CHECK(dispatch_reason IN ('', 'dispatched', 'no_work', 'blocked', 'verification_only', 'chose_not_to', 'unavailable'));
+`,
+	},
+	{
+		// SCHED-GAP-131: the dead-feature reaper's durable store. One row per
+		// tracked mechanism with a monotonic use_count and first/last-used
+		// RFC3339 UTC stamps ('' = never). Backs GET /api/v1/features and
+		// /api/v1/features/prune-candidates. The in-memory counters in
+		// feature_usage.go flush into this table; it is a fresh table with no
+		// backfill — "never used" starts honest at 0 rather than being
+		// invented from tick history.
+		version: 49,
+		desc:    "SCHED-GAP-131: feature_usage table — per-mechanism live usage counters (use_count + first/last-used RFC3339) backing the /api/v1/features dead-feature surface",
+		stmt: `
+CREATE TABLE IF NOT EXISTS feature_usage (
+    feature       TEXT PRIMARY KEY,
+    use_count     INTEGER NOT NULL DEFAULT 0,
+    first_used_at TEXT NOT NULL DEFAULT '',
+    last_used_at  TEXT NOT NULL DEFAULT ''
+);
 `,
 	},
 }

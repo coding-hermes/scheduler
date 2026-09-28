@@ -247,7 +247,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (45 tools)            │
+│  /mcp      → MCP server (47 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -288,7 +288,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 45 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 47 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (a
 daemon built from this tree reports 45; an older deployed build reports
@@ -346,6 +346,8 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `config_get` | Resolved runtime config (honest subset: db_path, weight_budget, paused, version) |
 | `queue_get` | Scheduling queue: enabled projects by urgency, descending |
 | `metrics_get` | Fleet metrics in one read-only call (each block states `available=true\|false`) |
+| `features_get` | Per-feature live usage counters (SCHED-GAP-131) — every tracked mechanism's `use_count` + first/last-used, plus the `admission_mode_rows` gauge |
+| `features_prune_candidates` | Dead-feature reaper report (SCHED-GAP-131) — mechanisms never used or last used more than `weeks` ago (default 8); flag only |
 
 ---
 
@@ -471,6 +473,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |
 | `-groups-file` | (none) | JSONL file for deploy groups (default `<db dir>/groups.jsonl` when the blocks store is enabled; empty = default paths) |
 | `-load-gate-threshold` | `0` | Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); `0` = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via `load_gate='off'` |
+| `-feature-prune-weeks` | `8` | Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): `/api/v1/features/prune-candidates` flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted |
 | `-model-rates-file` | (none) | JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): `{as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}}` — refresh stickers without a rebuild |
 | `-reap-sessions` | `false` | Run one SCHED-GAP-089 reap pass against the agent state store (`~/.hermes/state.db`) and exit — DRY-RUN by default, writes nothing |
 | `-reap-sessions-apply` | `false` | With `--reap-sessions`: APPLY the pass — close selected sessions (`ended_at` + `end_reason='reaped'`). Without it the pass is a dry-run (SCHED-GAP-089) |
@@ -837,7 +840,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 45 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get` introspection reads:
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 47 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates` introspection reads:
 
 ```json
 // Example: List all projects via MCP

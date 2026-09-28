@@ -920,6 +920,24 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/features": {
+      "get": {
+        "summary": "Per-feature live usage counters (SCHED-GAP-131) — every tracked mechanism with use_count + first/last-used timestamps, plus the admission_mode row gauge",
+        "responses": {
+          "200": {"description": "features: [{feature, description, use_count, first_used_at, last_used_at}] (all five mechanisms always present, 0 = never used), admission_mode_rows: {projects_tasks, namespaces_tasks}, prune_weeks."},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/features/prune-candidates": {
+      "get": {
+        "summary": "Dead-feature reaper report (SCHED-GAP-131) — mechanisms never used or last used more than N weeks ago (?weeks=N, default 8). Flag only: nothing is auto-deleted.",
+        "responses": {
+          "200": {"description": "prune_weeks, cutoff (RFC3339), candidates: [{feature, use_count, first_used_at, last_used_at}] — a feature is listed when last_used_at is empty (never used) or predates the cutoff."},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/config": {
       "get": {
         "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",

@@ -23,6 +23,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/status` | Fleet status summary (JSON) — budget, spend tiers, failure rates, eval/zero-select diagnostics. Every DB step runs under a per-request deadline (default 5s, `--api-read-timeout`); a stalled step answers 504 `{"error":"deadline exceeded","helper":"<step>","detail":…}` naming it, and a request past 80% of the budget emits one slow-request WARN line (SCHED-GAP-1575-B) |
 | `/api/v1/config` | Resolved daemon config (JSON) — includes `api_read_timeout`, the ARMED heavy-read deadline (SCHED-GAP-1575-B) |
 | `/api/v1/metrics` | Read-only fleet metrics: spawns, deferrals, nudges, ticks, durations, drains and outcomes in one request (SCHED-GAP-156) |
+| `/api/v1/features` | Per-feature live usage counters — every tracked mechanism's `use_count` + `first_used_at`/`last_used_at`, plus the `admission_mode_rows` gauge (SCHED-GAP-131) |
+| `/api/v1/features/prune-candidates` | Dead-feature reaper report — mechanisms never used or last used more than `?weeks=N` ago (default 8); flag only, no auto-delete (SCHED-GAP-131) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |
 | `/api/v1/namespaces` | List namespaces |
@@ -43,4 +45,4 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/openapi.json` | OpenAPI schema (JSON) |
 | `/mcp` | MCP JSON-RPC endpoint |
 
-**MCP surface:** `POST /mcp` serves **45 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
+**MCP surface:** `POST /mcp` serves **47 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

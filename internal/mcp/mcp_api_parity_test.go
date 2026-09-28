@@ -79,21 +79,23 @@ var apiToolCoverage = map[string][]string{
 	// CTL-003: the namespace/pool control surface, project lifecycle
 	// (delete/spawn/bump/unbump), tick detail, and the read-only
 	// config/queue/metrics introspection routes.
-	"GET /api/v1/namespaces":               {"namespaces_list"},
-	"POST /api/v1/namespaces":              {"namespaces_create"},
-	"GET /api/v1/namespaces/{id}":          {"namespaces_get"},
-	"PUT /api/v1/namespaces/{id}":          {"namespaces_update"},
-	"DELETE /api/v1/namespaces/{id}":       {"namespaces_delete"},
-	"GET /api/v1/namespaces/{id}/projects": {"namespaces_projects"},
-	"POST /api/v1/namespaces/{id}/move":    {"namespaces_move"},
-	"DELETE /api/v1/projects/{name}":       {"project_delete"},
-	"POST /api/v1/projects/{name}/spawn":   {"project_spawn"},
-	"POST /api/v1/projects/{name}/bump":    {"project_bump"},
-	"POST /api/v1/projects/{name}/unbump":  {"project_unbump"},
-	"GET /api/v1/ticks/{id}":               {"tick_get"},
-	"GET /api/v1/config":                   {"config_get"},
-	"GET /api/v1/queue":                    {"queue_get"},
-	"GET /api/v1/metrics":                  {"metrics_get"},
+	"GET /api/v1/namespaces":                {"namespaces_list"},
+	"POST /api/v1/namespaces":               {"namespaces_create"},
+	"GET /api/v1/namespaces/{id}":           {"namespaces_get"},
+	"PUT /api/v1/namespaces/{id}":           {"namespaces_update"},
+	"DELETE /api/v1/namespaces/{id}":        {"namespaces_delete"},
+	"GET /api/v1/namespaces/{id}/projects":  {"namespaces_projects"},
+	"POST /api/v1/namespaces/{id}/move":     {"namespaces_move"},
+	"DELETE /api/v1/projects/{name}":        {"project_delete"},
+	"POST /api/v1/projects/{name}/spawn":    {"project_spawn"},
+	"POST /api/v1/projects/{name}/bump":     {"project_bump"},
+	"POST /api/v1/projects/{name}/unbump":   {"project_unbump"},
+	"GET /api/v1/ticks/{id}":                {"tick_get"},
+	"GET /api/v1/config":                    {"config_get"},
+	"GET /api/v1/queue":                     {"queue_get"},
+	"GET /api/v1/metrics":                   {"metrics_get"},
+	"GET /api/v1/features":                  {"features_get"},
+	"GET /api/v1/features/prune-candidates": {"features_prune_candidates"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.

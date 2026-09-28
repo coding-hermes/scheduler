@@ -66,6 +66,7 @@ func main() {
 	slotPatience := flag.Duration("slot-patience", 5*time.Minute, "How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3)")
 	tasksPacing := flag.Duration("tasks-pacing", 60*time.Second, "Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); 0 = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
+	featurePruneWeeks := flag.Int("feature-prune-weeks", 8, "Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): /api/v1/features/prune-candidates flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
@@ -758,6 +759,8 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// SCHED-GAP-131: the dead-feature reaper's prune window (weeks).
+	apiServer.SetFeaturePruneWeeks(*featurePruneWeeks)
 	// SCHED-GAP-1602: arm the operator-credential gate. Token mode wins when
 	// both credentials are configured; basic mode is the browser path. An
 	// EMPTY credential set leaves authOff, which is fail-closed — every
