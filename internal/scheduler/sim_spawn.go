@@ -3,6 +3,7 @@ package scheduler
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -113,6 +114,12 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 
 	go func() {
 		s.clock().Sleep(s.outcomeDelay())
+		// SCHED-GAP-1660: the sim row is stamped like every other tick row
+		// (best-effort — the insert above already succeeded, so the UPDATE
+		// has its target; a failure is logged and never fatal).
+		if _, err := s.db.Exec(`UPDATE ticks SET admit_reason = ? WHERE id = ?`, AdmissionReasonOK, tickID); err != nil {
+			log.Printf("SIM: stamp admit_reason on %s: %v", tickID, err)
+		}
 		outcome := spawned.Wait()
 		s.mu.Lock()
 		defer s.mu.Unlock()

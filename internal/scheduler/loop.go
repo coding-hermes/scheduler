@@ -272,7 +272,16 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// BoardWakeWatcher this process constructs stamps board_wake on THIS
 	// loop when one of its wakes fires (the daemon builds the watcher after
 	// the loop). Same process-wide pattern as the gateway-health gate.
-	boardWakeNudgeSource.Store(func() { l.SetNudgeSource(NudgeSourceBoardWake) })
+	// SCHED-GAP-1660: the raw stamp is wrapped in the ruling's admission
+	// hook — the stamp (and therefore any wake-driven admission) goes
+	// through ONLY when the wake can admit a tasks-admission lane; on a
+	// cooldown-only fleet the stamp is dropped, so no board write can act
+	// on a cooldown.
+	boardWakeNudgeSource.Store(boardWakeAdmissionHook(l, func() { l.SetNudgeSource(NudgeSourceBoardWake) }))
+	// SCHED-GAP-1660: a restart starts with an empty park registry — the
+	// park re-derives on the first evaluation pass, so a boot can never
+	// inherit a flip from the previous process.
+	clearParkedEmpty()
 	// SCHED-GAP-170 (observability): the gateway-health gate reports its
 	// ONE-per-episode transitions (unhealthy / recovered) through the same
 	// logger, so a fleet-wide gateway outage is visible in the events table
@@ -1895,8 +1904,17 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 			return AdmissionReasonBoardUnowned, 0, false
 		}
 		if open, ok := boardOpenRows(c.Workdir); !ok || open == 0 {
+			// SCHED-GAP-1660: record the park at the point the pass already
+			// knows it — a tasks-admission lane whose board holds no
+			// non-perpetual pending work is on a temporary cooldown, and a
+			// later wake MAY flip it back (the ruling's one allowed effect).
+			noteParkedEmpty(c.Name, true)
 			return AdmissionReasonTasksNoWork, 0, false
 		}
+		// Work exists (or the board read failed): not parked. Clearing here
+		// keeps the mark exactly as fresh as the last classification — a
+		// stale park can never outlive the work that disproves it.
+		noteParkedEmpty(c.Name, false)
 		// Waiver granted: the block (if any) is structural, the
 		// SCHED-GAP-133/136 floors downstream, or the SCHED-GAP-214
 		// post-failure stand-down (last tick FAILED → full effective

@@ -881,20 +881,40 @@ func TestSCHEDGAP157_SlotPoolStampsAdmitReasonForNudgeTicks(t *testing.T) {
 		}
 	}
 
-	// board_wake: the watcher's own hook (installed by NewLoop) must reach the
-	// row through the same path.
+	// board_wake (SCHED-GAP-1660): the watcher's own hook (installed by
+	// NewLoop) is wrapped by the ruling's admission gate — the stamp goes
+	// through ONLY when the wake can admit a tasks-admission lane. This
+	// fleet is cooldown-only so far, so the hook DROPS the stamp and the
+	// tick records an honest "ok" with no nudge source.
 	boardTick := spawnNudged(t, "157-pool-nudge-bw", func() {
 		if f, ok := boardWakeNudgeSource.Load().(func()); ok {
 			f()
 		} else {
-			t.Fatalf("boardWakeNudgeSource holds no hook after NewLoop — the board-wake nudge source cannot be stamped")
+			t.Fatalf("boardWakeNudgeSource holds no hook after NewLoop — the board-wake admission hook is not installed")
 		}
 	})
-	waitUntil(t, 10*time.Second, "the board_wake nudge tick to be stamped", func() bool {
+	waitUntil(t, 10*time.Second, "the board_wake tick to be stamped", func() bool {
 		return schedGap157TickStatus(t, db, boardTick) != "queued"
 	})
-	if _, reason, nudge := schedGap157Stamps(t, db, boardTick); nudge != NudgeSourceBoardWake || reason != "resume:"+NudgeSourceBoardWake {
-		t.Errorf("board_wake tick = admit_reason %q nudge_source %q, want %q/%q", reason, nudge, "resume:"+NudgeSourceBoardWake, NudgeSourceBoardWake)
+	if wait, reason, nudge := schedGap157Stamps(t, db, boardTick); nudge != "" || reason != AdmissionReasonOK {
+		t.Errorf("board_wake tick on a cooldown-only fleet = admit_reason %q nudge_source %q, want %q/\"\" (stamp dropped)", reason, nudge, AdmissionReasonOK)
+	} else if wait != 0 {
+		t.Errorf("board_wake tick slot_wait_ms = %d, want 0", wait)
+	}
+
+	// With a tasks-admission lane enabled, the same hook passes the stamp —
+	// the ruling's one allowed effect (the parked-empty flip) or the normal
+	// waiver — and the row records flip:board_empty.
+	capTestNamespace(t, db, "157-nudge-tasks", 4, "tasks")
+	admitInsertProject(t, db, admitProjectSpec{Name: "157-pool-tasks", NS: "157-nudge-tasks", CooldownS: 21600, AdmissionMode: "tasks"})
+	flipTick := spawnNudged(t, "157-pool-nudge-bw2", func() {
+		boardWakeNudgeSource.Load().(func())()
+	})
+	waitUntil(t, 10*time.Second, "the flip tick to be stamped", func() bool {
+		return schedGap157TickStatus(t, db, flipTick) != "queued"
+	})
+	if _, reason, nudge := schedGap157Stamps(t, db, flipTick); nudge != NudgeSourceBoardWake || reason != AdmissionReasonFlipBoardEmpty {
+		t.Errorf("wake tick with a tasks lane present = admit_reason %q nudge_source %q, want %q/%q (SCHED-GAP-1660 scoped stamp)", reason, nudge, AdmissionReasonFlipBoardEmpty, NudgeSourceBoardWake)
 	}
 
 	// The packer tick (no stamp at all) must record "ok" and leave the
