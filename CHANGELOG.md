@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.11.2] — 2026-09-29
+
 ### Fixed
 - metrics: count commits where they landed — all-refs window commit count (`dc94c8be`, SCHED-GAP-1659)
 
