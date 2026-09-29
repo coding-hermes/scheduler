@@ -1372,3 +1372,6 @@
 {"id":1790516912357898427,"task_id":"SCHED-GAP-1660","event":null,"timestamp":"2026-09-29T01:29:09Z","actor":"foreman","detail":"{\"status\":\"in_progress\"}","event_type":"task_updated"}
 {"id":1790516912357898428,"task_id":"SCHED-GAP-1674","event":null,"timestamp":"2026-09-29T01:31:10Z","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1674\",\"status\":\"pending\"}","event_type":"task_created"}
 {"id":"EVT-1660-close","task_id":"SCHED-GAP-1660","event":"close","timestamp":"2026-09-29T02:55:00Z","reason":"follow-up refinements committed 466ab138, tests green, CI green, pushed"}
+{"id":"EVT-WAVE-0929-1","ts":"2026-09-29T06:55:00+00:00","type":"close","task":"REV-002","detail":"wave: hermetic integration boot landed 817b9e63, guard PASS, gitreins PASS 4733acfd"}
+{"id":"EVT-WAVE-0929-2","ts":"2026-09-29T06:55:00+00:00","type":"close","task":"SCHED-GAP-1673","detail":"wave: permalink -> /ticks/<id> landed 3194c424, guard PASS, gitreins PASS 289d2af3; base-URL provisioning left open"}
+{"id":"EVT-WAVE-0929-3","ts":"2026-09-29T06:55:00+00:00","type":"rework","task":"SCHED-GAP-1662","detail":"worker killed 32min zero-diff (analysis paralysis); row reverted to pending for redispatch with forced-early-edit brief"}
