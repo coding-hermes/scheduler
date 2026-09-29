@@ -33,6 +33,12 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+### Fixed
+- metrics: count commits where they landed — all-refs window commit count (`dc94c8be`, SCHED-GAP-1659)
+
+### Board
+- INT-CI-168 fix: git identity passed via env in SCHED-GAP-1659 test helpers — CI runners have none (`b001c38d`)
+
 ## [1.11.1] — 2026-09-29
 
 ### Fixed
