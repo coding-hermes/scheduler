@@ -4581,13 +4581,42 @@ tasks:
   created_at: '2026-09-29T12:06:24.404841+00:00'
   completed_at: '2026-09-29T12:35:46.714265+00:00'
 - id: SCHED-GAP-1659
-  title: Count the commit where it LANDED
+  title: Count the commit where it LANDED (zero-commit ticks ancestry fix)
   criteria:
-  - gitWorkDelta counts commits that landed anywhere in the repo (all refs) so a worker
-    commit on a side branch from a worktree is measured; a failed/unmeasurable read
-    still returns a non-nil error and never reads as a measured zero; a repo with
-    no new commit still reports exactly 0 with nil error; the -1 no-git sentinel of
-    gitBaseline is unchanged; the SCHED-GAP-1652 measurement-honesty contract does
-    not regress; tests build real temp repos including the side-branch worktree shape.
-  status: in_progress
-  created_at: '2026-09-29T05:34:08.221717+00:00'
+  - 'Counter no longer uses a rev-list ancestry delta in the lane''s directory; commits
+    made in worker worktrees/branches are attributed to the tick that produced them
+    (probe: sampled worker-branch commits counted); existing tests pass -short -p
+    1'
+  status: complete
+  created_at: '2026-09-29T17:58:32.538022+00:00'
+  completed_at: '2026-09-29T18:51:22.684685+00:00'
+- id: SCHED-GAP-1670
+  title: 'Wake-residue detector: schedule read-only cooldown drift detector + pin-snap
+    on fleet.toml import'
+  criteria:
+  - "1) A scheduled read-only detector reports cooldown-residue lanes daily (independent\
+    \ of mutating --apply); 2) pin-snap proven to hold on fleet.toml import \u2014\
+    \ a lane whose file carries cooldown_s=604800 must not end live at 86400; 3) tests\
+    \ cover both; go build + go test -short pass."
+  status: complete
+  created_at: '2026-09-29T19:58:47.646078+00:00'
+  completed_at: '2026-09-29T20:25:02.413048+00:00'
+- id: SCHED-GAP-1661
+  title: Cooldown pin must outrank cooldown_s
+  criteria:
+  - effective-cooldown resolution is pin-first (pin set+positive wins; pin 0/absent
+    -> cooldown_s; both 0 -> never idle-tick), proven by unit tests per branch, plus
+    a fleet invariant that fails when observed median inter-tick gap < half the effective
+    cooldown
+  status: complete
+  created_at: '2026-09-29T21:02:59.763587+00:00'
+  completed_at: '2026-09-29T21:16:47.326907+00:00'
+- id: SCHED-GAP-1671
+  title: Derive the cooldown-policy REDUCE guard (role-lane convention)
+  criteria:
+  - fleet-cooldown-policy.py hard-skips REDUCE for any convention-role lane (-review/-perf/-dogfood/-releng/-readme/-docs/-sync/-pm/-qa)
+    whose live cooldown exceeds TARGET_IDLE; dry-run shows 0 reductions across 547
+    lanes; unit tests cover the truncation-residue regression
+  status: complete
+  created_at: '2026-09-29T22:02:43.346083+00:00'
+  completed_at: '2026-09-29T22:04:12.230941+00:00'
