@@ -501,8 +501,23 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 		}
 		if db != nil {
+			// SCHED-GAP-1660: admit_reason is non-empty on EVERY tick row
+			// (requirement (d) — 96 of 402 rows in the 7-day sample were
+			// blank). Three families:
+			//   ok                 — a packer tick.
+			//   resume:<source>    — a non-packer entry (startup resume scan,
+			//                        operator manual spawn, parked-empty flip).
+			//   flip:board_empty   — a board-wake flipped a parked-empty
+			//                        tasks-admission lane back to admission
+			//                        (the ruling's one allowed effect). The
+			//                        nudgeSource is board_wake exactly when
+			//                        the wake stamped the flip, so the scoped
+			//                        label rides the same condition.
 			admitReason := AdmissionReasonOK
-			if nudgeSource != "" {
+			switch {
+			case nudgeSource == NudgeSourceBoardWake:
+				admitReason = AdmissionReasonFlipBoardEmpty
+			case nudgeSource != "":
 				admitReason = "resume:" + nudgeSource
 			}
 			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight)
