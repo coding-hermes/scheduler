@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // runGit runs a git command in dir and returns stdout (trimmed).
@@ -58,7 +59,7 @@ func TestGitWorkDelta(t *testing.T) {
 	}
 
 	// No work → zero delta, and the measurement is KNOWN GOOD (err nil).
-	c, f, err := gitWorkDelta(dir, preHead, preTotal)
+	c, f, err := gitWorkDelta(dir, preHead, preTotal, time.Time{})
 	if err != nil {
 		t.Fatalf("measured zero must not report an error, got %v", err)
 	}
@@ -76,7 +77,7 @@ func TestGitWorkDelta(t *testing.T) {
 	runGitTest(t, dir, "add", "a.txt", "b.txt")
 	runGitTest(t, dir, "commit", "-q", "-m", "second")
 
-	c, f, err = gitWorkDelta(dir, preHead, preTotal)
+	c, f, err = gitWorkDelta(dir, preHead, preTotal, time.Time{})
 	if err != nil {
 		t.Fatalf("measured delta must not report an error, got %v", err)
 	}
@@ -93,7 +94,7 @@ func TestGitWorkDelta(t *testing.T) {
 // because 27% of the ticks recorded as zero-commit had in fact committed.
 func TestGitWorkDeltaReportsUnmeasured(t *testing.T) {
 	// Unreadable repo → error, and the zeros must not be read as "no work".
-	c, f, err := gitWorkDelta(t.TempDir(), "", 0)
+	c, f, err := gitWorkDelta(t.TempDir(), "", 0, time.Time{})
 	if err == nil {
 		t.Fatalf("non-git dir must report an error so zeros are not read as fact; got %d/%d", c, f)
 	}
@@ -101,13 +102,13 @@ func TestGitWorkDeltaReportsUnmeasured(t *testing.T) {
 	// A real repo with NO spawn baseline: the commit count is a floor, not a
 	// total, so the caller must still be told the measurement is incomplete.
 	dir := initTempRepo(t)
-	if _, _, err := gitWorkDelta(dir, "", 0); err == nil {
+	if _, _, err := gitWorkDelta(dir, "", 0, time.Time{}); err == nil {
 		t.Fatal("missing spawn baseline must report an incomplete measurement")
 	}
 
 	// And a complete baseline yields no error (the control).
 	head, total := gitBaseline(dir)
-	if _, _, err := gitWorkDelta(dir, head, total); err != nil {
+	if _, _, err := gitWorkDelta(dir, head, total, time.Time{}); err != nil {
 		t.Fatalf("complete baseline should measure cleanly, got %v", err)
 	}
 }
