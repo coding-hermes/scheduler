@@ -289,14 +289,16 @@ func (m *MultiPoolPacker) Pack(
 			// Cooldown check (ADV-R03/G5: shared effectiveCooldown —
 			// the bump value feeds cooldownS, so the bump, the
 			// S-GAP-001 failure backoff, and the blackout multiplier
-			// all apply in the one shared place).
+			// all apply in the one shared place; SCHED-GAP-1661: a
+			// set+positive cooldown_pin_s outranks the (bumped)
+			// cooldown base inside that shared predicate).
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cd := pu.Project.CooldownS
 				// SCHED-GAP-107: an active bump owns the effective cooldown.
 				if pu.BumpCooldownS > 0 {
 					cd = pu.BumpCooldownS
 				}
-				cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+				cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
 				if skipMode {
 					continue // skip mode
 				}
@@ -373,8 +375,10 @@ func (m *MultiPoolPacker) Pack(
 					}
 					// ADV-R03/G5: same shared predicate as the selection
 					// gate above — a project the packer would skip must
-					// not be queued either.
-					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+					// not be queued either. SCHED-GAP-1661: the pin rides
+					// in (pu.Project.CooldownPinS) so the queued check
+					// stays identical to the selection gate.
+					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
 					if skipMode {
 						continue // skip mode — not queued
 					}

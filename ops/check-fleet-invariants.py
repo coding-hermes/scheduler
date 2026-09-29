@@ -160,6 +160,37 @@ Checks
                        default_prompt 0 chars (both under 400; the lane would
                        dispatch on the generic built-in prompt and improvise,
                        cf. auger 2026-09-27)
+ 13. cooldown-pin-pacing — a lane's observed median inter-tick gap (completed
+                     ticks) must NOT sit under HALF of its effective
+                     cooldown, where the effective base mirrors the engine's
+                     pin-first resolution (cooldown_pin_s when set and
+                     positive, else cooldown_s — SCHED-GAP-1661). Under half
+                     means the lane re-ticked at least twice as fast as its
+                     own base promises: the shape the perf lanes showed
+                     while the pin was ignored (~25-30h gaps against a 7d
+                     floor). Scoped to COOLDOWN-MODE lanes: a tasks-admission
+                     lane's pending board work waives last-tick spacing by
+                     design (SCHED-GAP-124), so its timer is not what paces
+                     it. The window is ERA-AWARE: gaps are drawn from ticks
+                     no older than the lane's own updated_at (the fleet
+                     config sync re-stamps every row; ticks from before the
+                     last config write measure the previous era), capped at
+                     7 days. The backoff/blackout terms are excluded (a
+                     failing lane must not mask its pacing), and a
+                     cooldown_s=0 lane (dynamic interval, not observable
+                     from ticks) is skipped as unmeasurable, as is any lane
+                     with fewer than 3 in-era completed ticks (no median).
+                     Lanes in COOLDOWN_PIN_PACING_EXCEPTIONS at the top of
+                     this script are exempt — the four perf lanes carried a
+                     base BELOW their real cadence when the check landed.
+                     Skips silently when the schema predates the pin or
+                     timestamp columns (fixture DBs); rides the live-DB
+                     pass, so --board-only never runs it.
+                       VIOLATION cooldown-pin-pacing example-lane: median
+                       inter-tick gap 12.0h over the last 7d (current config
+                       era) is under HALF of the effective cooldown 24.0h —
+                       the lane re-ticks faster than its own base (pin set;
+                       9 gaps measured)
 
 Usage:  python3 ops/check-fleet-invariants.py [--db PATH] [--toml PATH] [--json]
         python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
@@ -344,11 +375,43 @@ DEFAULT_EVENTS_NAME = "events.jsonl"
 LANE_INSTRUCTIONS_CLASS = "lane-instructions"
 PROMPT_SHORT_CHARS = 400
 
+# Cooldown-pin pacing (check 13, class "cooldown-pin-pacing", SCHED-GAP-1661).
+# The scheduler's cooldown_pin_s is a *promise*: the lane must not re-tick
+# more often than the pin (pin-first effective cooldown). A pin that the
+# engine ignores, or that is set BELOW the lane's observed cadence, shows up
+# as an observed median inter-tick gap far under the effective cooldown.
+# The check FAILS when a lane's observed median gap over the window is under
+# HALF of its effective cooldown (base = cooldown_pin_s when set and
+# positive, else cooldown_s — mirroring the pin-first resolution order), i.e.
+# the lane re-ticked at least twice as often as the pin promises. Effective
+# cooldown uses the CONFIG base only (pin > cooldown_s): the failure-backoff
+# and blackout-multiplier terms are deliberately excluded (a busy lane's
+# failures must not mask a pacing violation), and the dynamic-interval
+# alternative is not observable from the ticks table alone, so a
+# cooldown_s=0 lane is skipped as unmeasurable (a NULL with a reason).
+# The half-of-cooldown threshold means ONE slow outlier cannot fire it; a
+# systematically faster lane does.
+#
+# NAMED EXCEPTIONS: lanes listed here are exempt from the class. The four
+# perf lanes carried a cooldown_s/pin value BELOW their real observed
+# cadence when this check landed (the pin was being honored live at ~7d
+# while the row said less), so they legitimately appear here until the rows
+# and the live behavior agree. Each entry maps lane name -> reason.
+COOLDOWN_PIN_PACING_EXCEPTIONS: dict[str, str] = {
+    "duckbrain-perf": "perf cadence set below the observed 7d median at check introduction",
+    "ai-plays-poke-perf": "perf cadence set below the observed 7d median at check introduction",
+    "bunker-perf": "perf cadence set below the observed 7d median at check introduction",
+    "coding-hermes-scheduler-perf": "perf cadence set below the observed 7d median at check introduction",
+    "warpfs-perf": "perf cadence set below the observed 7d median at check introduction",
+}
+COOLDOWN_PIN_PACING_WINDOW_DAYS = 7
+COOLDOWN_PIN_PACING_CLASS = "cooldown-pin-pacing"
+
 CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
                  "board-id-slot", "sync-orientation", "event-id-ascending",
-                 "lane-instructions")
+                 "lane-instructions", COOLDOWN_PIN_PACING_CLASS)
 
 
 def find_board_path(start: str) -> str | None:
@@ -1213,6 +1276,116 @@ def main(argv: list[str] | None = None) -> int:
                          "detail": (f"{sum(1 for p in projects.values() if p.get('enabled'))} enabled lane(s) scanned, "
                                     f"{short} lacking instructions "
                                     f"(conjunction: own prompt AND namespace fallback under {PROMPT_SHORT_CHARS} chars)")})
+
+    # 13. cooldown-pin pacing ------------------------------------------------
+    # SCHED-GAP-1661. cooldown_pin_s is a promise: the lane must not re-tick
+    # more often than the pin (the pin-first effective cooldown the engine
+    # now enforces). This check is the OBSERVED half of that promise: a
+    # lane's median inter-tick gap must not sit under HALF of its effective
+    # base (pin when set and positive, else cooldown_s). Under half means
+    # the lane re-ticked at least twice as fast as its own base promises —
+    # the shape the perf lanes showed while the pin was ignored (~25-30h
+    # gaps against what should have been a 7d floor).
+    #
+    # Scope and two anti-false-alarm rules, each with a measured reason:
+    #   * COOLDOWN-MODE LANES ONLY: a tasks-admission lane's pending board
+    #     work WAIVES last-tick spacing by design (SCHED-GAP-124 — the
+    #     semantics this very change must not touch), so its timer is not
+    #     the thing pacing it; measured live 2026-09-29: 63 of 381 enabled
+    #     lanes. They are skipped and counted in the census.
+    #   * ERA-AWARE WINDOW: the gap set is drawn from completed ticks no
+    #     older than the lane's own updated_at (the fleet-wide config sync
+    #     re-stamps every row on each policy run — measured 2026-09-29:
+    #     all 381 rows carried the same 02:12Z stamp from that morning),
+    #     capped at 7 days. Ticks from BEFORE the row's last config write
+    #     measure the PREVIOUS config era and must not be judged against
+    #     the current base; without this, the dogfood family's 09-29 raise
+    #     to 72h fired on its own 7h pre-raise cadence (47 false lanes).
+    #     A lane with no post-era history simply has no median yet — the
+    #     fewer-than-3 skip.
+    #   * The backoff/blackout terms are excluded from the base (a failing
+    #     lane must not mask its pacing), and a cooldown_s=0 lane (dynamic
+    #     interval, not observable from the ticks table) is skipped as
+    #     unmeasurable — a NULL with a reason, never a silent pass.
+    # Runs only in the live-DB mode; --board-only never reads the ticks
+    # table. Skips silently when the schema predates the pin or timestamp
+    # columns (fixture DBs).
+    if con is not None:
+        tcols = {r[1] for r in con.execute("PRAGMA table_info(ticks)")}
+        pcols13 = {r[1] for r in con.execute("PRAGMA table_info(projects)")}
+        need = {"cooldown_s", "cooldown_pin_s"} <= pcols13 and {"project_name", "spawned_at", "status"} <= tcols
+        if not need:
+            info.append({"class": COOLDOWN_PIN_PACING_CLASS, "subject": "schema",
+                         "detail": "skipped — projects/ticks schema predates cooldown_pin_s or tick timestamps"})
+        else:
+            have_updated = "updated_at" in pcols13
+            window_start = (dt.datetime.now(dt.timezone.utc)
+                            - dt.timedelta(days=COOLDOWN_PIN_PACING_WINDOW_DAYS))
+            scanned = excepted = tasks_skipped = 0
+            for name, p in projects.items():
+                if not p.get("enabled"):
+                    continue
+                if name in COOLDOWN_PIN_PACING_EXCEPTIONS:
+                    excepted += 1
+                    continue
+                ov = (p.get("admission_mode") or "").strip()
+                ns_row = namespaces.get(p.get("namespace_id") or "")
+                nsm = ((ns_row.get("admission_mode") or "") if isinstance(ns_row, dict) else "")
+                if (ov or str(nsm).strip() or "cooldown") == "tasks":
+                    tasks_skipped += 1  # SCHED-GAP-124 waiver: not timer-paced
+                    continue
+                pin = p.get("cooldown_pin_s")
+                base = pin if isinstance(pin, int) and pin > 0 else int(p.get("cooldown_s") or 0)
+                if base <= 0:
+                    info.append({"class": COOLDOWN_PIN_PACING_CLASS, "subject": name,
+                                 "detail": "no measurable base (cooldown_s=0, dynamic interval) — skipped"})
+                    continue
+                # Era-aware start: never judge pre-change ticks against the
+                # current base (the policy sync re-stamps every row).
+                start = window_start
+                if have_updated and p.get("updated_at"):
+                    try:
+                        t = dt.datetime.fromisoformat(str(p["updated_at"]).replace("Z", "+00:00"))
+                        if t > start:
+                            start = t
+                    except ValueError:
+                        pass
+                rows_ = con.execute(
+                    "SELECT spawned_at FROM ticks "
+                    "WHERE project_name=? AND status='completed' AND spawned_at >= ? "
+                    "ORDER BY spawned_at", (name, start.isoformat())).fetchall()
+                stamps = []
+                for (s_,) in rows_:
+                    try:
+                        stamps.append(dt.datetime.fromisoformat(str(s_).replace("Z", "+00:00")))
+                    except ValueError:
+                        continue
+                stamps.sort()
+                gaps = [round((b - a).total_seconds())
+                        for a, b in zip(stamps, stamps[1:]) if (b - a).total_seconds() > 0]
+                if len(gaps) < 2:
+                    continue  # no post-era median yet — silently not measurable
+                gaps.sort()
+                n = len(gaps)
+                # Gaps are quantized to whole seconds (the live table writes
+                # second-resolution timestamps) so the boundary comparison
+                # below is exact — float microsecond residue from parsed
+                # stamps must not flip a at-half median into under-half.
+                median = gaps[n // 2] if n % 2 else (gaps[n // 2 - 1] + gaps[n // 2]) / 2
+                scanned += 1
+                if median < base / 2.0:
+                    bad(COOLDOWN_PIN_PACING_CLASS, name,
+                        f"median inter-tick gap {median / 3600:.1f}h over the last "
+                        f"{COOLDOWN_PIN_PACING_WINDOW_DAYS}d (current config era) "
+                        f"is under HALF of the effective cooldown {base / 3600:.1f}h — the lane re-ticks faster "
+                        f"than its own base (pin {'set' if base == pin else 'not set'}; "
+                        f"{len(gaps)} gaps measured)")
+            info.append({"class": COOLDOWN_PIN_PACING_CLASS, "subject": "pacing",
+                         "detail": (f"{scanned} cooldown-mode lane(s) measured, "
+                                    f"{tasks_skipped} tasks-mode lane(s) skipped (waiver), "
+                                    f"{excepted} named exception(s), "
+                                    f"window: 7d or since the lane's config last changed; "
+                                    f"threshold: median gap >= base/2")})
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:
