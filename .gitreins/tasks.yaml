@@ -4573,17 +4573,13 @@ tasks:
   created_at: '2026-09-29T02:11:36.830274+00:00'
   completed_at: '2026-09-29T02:59:03.619873+00:00'
 - id: SCHED-GAP-1672
-  title: 'Duplicate delivery: a timed-out send is blind-retried'
+  title: Ambiguous Telegram timeout retries duplicate deliveries
   criteria:
-  - 'An ambiguous send timeout (bare ''Timed out'') is never blind-retried: exactly
-    one send attempt produces exactly one delivery record and zero duplicate posts;
-    explicit rejection classes (flood control, connection refused) still retry; an
-    idempotency key per (lane,tick_id,message-kind) suppresses duplicate retries;
-    a delivery ledger (attempted/confirmed/ambiguous/duplicates_suppressed) is visible
-    on GET /api/v1/status; a RED-first test reproduces a timeout-after-accept yielding
-    one attempt and zero duplicates; the final-attempt log no longer claims ''retrying''.'
-  status: in_progress
-  created_at: '2026-09-29T05:34:06.944719+00:00'
+  - Bare timeout after platform acceptance yields exactly one delivery; flood-control
+    still retries; last attempt never logs retrying
+  status: complete
+  created_at: '2026-09-29T12:06:24.404841+00:00'
+  completed_at: '2026-09-29T12:35:46.714265+00:00'
 - id: SCHED-GAP-1659
   title: Count the commit where it LANDED
   criteria:
