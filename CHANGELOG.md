@@ -33,11 +33,14 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.10.1] — 2026-09-29
+
 ### Bug Fixes
 
 - Park-empty tasks-admission lanes; board writes can no longer wake cooldown lanes (SCHED-GAP-1660) — `af6c8d3d`, merged via `d6cfab4d`.
 - SCHED-GAP-1660 follow-up — tighten park-empty flip + board-write isolation — `466ab138`.
 - Validate DuckBrain domain at the source — remap "metrics" (SCHED-GAP-1669) — `90063193`.
+
 ## [1.10.0] — 2026-09-28
 
 ### New Features
