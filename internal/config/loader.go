@@ -552,12 +552,27 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 // except for the GatewayKey-style conditional fields where the file key's
 // PRESENCE is the operator's signal (see the per-field blocks below).
 //
-// Cooldown pin import (SCHED-GAP-219): a fleet.toml entry that carries an
-// explicit positive cooldown_s on an EXISTING project records that value as
-// the row's operator pin (cooldown_pin_s, provenance fleet-toml-import)
-// WITHOUT overwriting the live cooldown_s — an API change made after the
-// toml was written must survive the restart. The pin is enforced, not the
-// file value: nothing may lower the live cooldown below the pin.
+// Cooldown pin import (SCHED-GAP-219, pin-snap SCHED-GAP-1670): a fleet.toml
+// entry that carries an explicit positive cooldown_s on an EXISTING project
+// records that value as the row's operator pin (cooldown_pin_s, provenance
+// fleet-toml-import) WITHOUT overwriting the live cooldown_s — an API change
+// made after the toml was written must survive the restart. The pin is
+// enforced, not the file value: nothing may lower the live cooldown below the
+// pin.
+//
+// The one exception is the SNAP: recording a pin that sits ABOVE the live
+// cooldown raises the live cooldown to the pin in the same write
+// (database.SetCooldownPin), because the pin arrives as operator intent and a
+// lane left below it is the wake-residue class (SCHED-GAP-1670: a lane whose
+// file declares a WEEKLY cadence must never stay live at a daily or 15-minute
+// one — the numeric fixtures are in internal/config/schedgap1670_pin_snap_test.go).
+// The snap only ever RAISES a live cooldown, so the SCHED-GAP-219 durability above
+// still holds for a row whose live value is at or above its pin.
+//
+// The complementary case — a live cooldown lowered AFTER its pin already
+// landed — is deliberately NOT rewritten at boot (the DB stays the authority
+// for API writes; SCHED-GAP-219), so that drift is instead caught by the
+// scheduled read-only detector (cmd/cooldown-residue, internal/cooldownaudit).
 //
 // Bump interaction (SCHED-GAP-107): while a bump is active the bump owns
 // cooldown_s; no pin import happens for that row until the bump expires.
@@ -732,10 +747,14 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 					// the file is the seed). An explicit clear via the API
 					// is the sanctioned path to a smaller pin.
 					if existing.CooldownPinS == nil || pd.CooldownS >= *existing.CooldownPinS {
-						if err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy); err != nil {
+						snappedFrom, err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy)
+						if err != nil {
 							return fmt.Errorf("import cooldown pin for %q: %w", pd.Name, err)
 						}
 						log.Printf("Config: imported cooldown pin %q = %ds (fleet-toml-import)", pd.Name, pd.CooldownS)
+						if snappedFrom > 0 {
+							log.Printf("Config: pin-snap (SCHED-GAP-1670) for %q: live cooldown %ds -> %ds (was below the imported pin)", pd.Name, snappedFrom, pd.CooldownS)
+						}
 					} else {
 						log.Printf("Config: fleet.toml cooldown %ds for %q is BELOW the operator pin %ds — pin kept (the DB is the cooldown authority)", pd.CooldownS, pd.Name, *existing.CooldownPinS)
 					}
@@ -848,9 +867,11 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 		}
 		// Stamp the operator pin at creation (SCHED-GAP-219): the seeded
 		// cooldown IS an operator-declared value, so it records as the pin
-		// from the first boot (provenance fleet-toml-import).
+		// from the first boot (provenance fleet-toml-import). The row was
+		// just created with cooldown_s = pd.CooldownS, so the SCHED-GAP-1670
+		// snap inside SetCooldownPin is a no-op here by construction.
 		if pd.CooldownS > 0 {
-			if err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy); err != nil {
+			if _, err := database.SetCooldownPin(ctx, db, pd.Name, pd.CooldownS, database.CooldownPinImportBy); err != nil {
 				return fmt.Errorf("import cooldown pin for %q: %w", pd.Name, err)
 			}
 		}

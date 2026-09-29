@@ -1013,33 +1013,61 @@ func boolToInt(b bool) int {
 // came from.
 const CooldownPinImportBy = "fleet-toml-import"
 
-// SetCooldownPin imports an operator pin onto the project row WITHOUT
-// touching the live cooldown_s (unlike the API PUT path, which snaps the
-// cooldown up). This is the loader/import path: the pin records the
-// operator intent discovered in fleet.toml; the cooldown the row already
-// carries IS that value in the common case, and when it differs the pin
-// still must not silently rewrite scheduling state at boot (the pin is a
-// floor, enforced at the next write). Returns the project's post-write pin.
+// SetCooldownPin imports an operator pin onto the project row and snaps the
+// live cooldown UP to the pin when it sits below it (SCHED-GAP-1670).
+//
+// The snap is the same semantic the API PUT path (UpdateProject) applies when
+// it writes a pin, and the import path needs it for the same reason: a pin
+// says "this lane must never run faster than X", so a lane left BELOW its pin
+// is the wake-residue class — a wake PUT, a stale floor, or a hand-edit that
+// the operator never intended, priced in ticks the fleet pays for (measured
+// 2026-09-28: python-audit-{lint,typing,security,complexity} at 900s against
+// an 86400s pin, ~25 zero-commit ticks each per day). It is one-directional:
+// a live cooldown at or above the pin is never lowered, so an API value the
+// file never carried survives (SCHED-GAP-219 — the DB is the authority; the
+// file seeds, it does not rewrite).
+//
+// The returned snappedFrom is the pre-write live cooldown when the snap
+// changed it, and 0 when it did not — the loader logs the transition instead
+// of reporting a silent scheduling change. The snap itself is applied by the
+// single UPDATE (CASE on the row's value at write time), so the returned
+// value is a report, never the mechanism.
+//
 // A pin <= 0 clears nothing — pass zero pins only from paths that already
 // validated.
-func SetCooldownPin(ctx context.Context, db *sql.DB, name string, pinS int, by string) error {
+func SetCooldownPin(ctx context.Context, db *sql.DB, name string, pinS int, by string) (snappedFrom int, err error) {
 	if pinS <= 0 {
-		return fmt.Errorf("cooldown pin for %q must be > 0 (got %d)", name, pinS)
+		return 0, fmt.Errorf("cooldown pin for %q must be > 0 (got %d)", name, pinS)
 	}
 	if by == "" {
 		by = CooldownPinImportBy
 	}
-	_, err := db.ExecContext(ctx, `
+	// Report-only pre-read: the UPDATE below decides against the row's own
+	// value, so a concurrent write here can at worst mis-report a log line.
+	var cur int
+	if err := db.QueryRowContext(ctx,
+		`SELECT cooldown_s FROM projects WHERE name = ?`, name).Scan(&cur); err == nil && cur < pinS {
+		snappedFrom = cur
+	}
+	res, err := db.ExecContext(ctx, `
 UPDATE projects SET
     cooldown_pin_s = ?,
     cooldown_pin_by = ?,
     cooldown_pin_at = ?,
+    cooldown_s = CASE WHEN cooldown_s < ? THEN ? ELSE cooldown_s END,
     updated_at = updated_at
-WHERE name = ?`, pinS, by, nowUTC(ctx), name)
+WHERE name = ?`, pinS, by, nowUTC(ctx), pinS, pinS, name)
 	if err != nil {
-		return fmt.Errorf("set cooldown pin %q: %w", name, err)
+		return 0, fmt.Errorf("set cooldown pin %q: %w", name, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return snappedFrom, fmt.Errorf("set cooldown pin %q: %w", name, err)
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+	}
+	return snappedFrom, nil
 }
 
 // BoolPtr returns a pointer to b — a convenience for ProjectUpdates callers.

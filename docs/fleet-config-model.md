@@ -414,8 +414,36 @@ Also note: `--verify` also prints `WARN … adaptive_cooldown: db=1` lines for a
 | `MISMATCH <p> cooldown_s: db=… toml=…` | Same, scoped to an operator pin | Same fix; re-run F4 |
 | `VIOLATION targets <sat>: target is DISABLED` | A satellite is pointed at a project that is not enabled | Either re-enable the primary or disable the satellite |
 | `WARN <p> adaptive_cooldown: db=1 … tasks-admission namespace` | An armed row in a `tasks` namespace — arming cannot pace a lane that spawns from board state | Disarm; do not change the expected-parity rule |
+| `ALERT: N enabled lane(s) live BELOW their own cooldown pin` (daily, from `cooldown-residue.service`) | Wake residue: the lane runs hotter than its own pin. Not a file-vs-DB disagreement, so neither gate above necessarily sees it (§6.4) | Read the lane list (name + delta + pin provenance); correct with the operator's `fleet-cooldown-policy.py --apply` run, then confirm the next daily run is clean |
 
 Triage order when a lane's cadence looks wrong: run F1 to see whether it is a named violation class at all; then §8's command list to compare all four sources (API, DB row, file block, code constant) for that one lane; then `docs/troubleshooting-scheduling-errors.md` for symptom-level diagnosis.
+
+### 6.4 The scheduled read-only residue detector (SCHED-GAP-1670)
+
+Both gates above are **pulled**: somebody decides to run them. That leaves one class unobserved between runs — a lane whose **live** cooldown sits below its **own operator pin** (the class §4.2 calls *wake residue*). It is not a file-vs-DB disagreement, so §6.2's tripwire sees only the subset of it that falls inside `ELEVATED_PINS`, and §6.1's `cooldown` class only fires below the 6 h floor — a lane at 86400 s against a 604800 s weekly pin is invisible to both. Measured 2026-09-28: eleven enabled lanes in the class, the worst four (`python-audit-{lint,typing,security,complexity}`) at 900 s against an 86400 s pin, ~25 zero-commit ticks each per day, while 78 % of the fleet's completed ticks produced no commit.
+
+The third surface closes that gap and is **pushed** — it runs daily on its own:
+
+| | Detector |
+|---|---|
+| **What** | `cmd/cooldown-residue` (classifier in `internal/cooldownaudit`): every ENABLED lane whose `cooldown_s` < its own pin, one line each with the delta and the pin's provenance (`db` or `fleet-toml`). |
+| **Sources** | The scheduler DB (`projects.cooldown_s`, `projects.cooldown_pin_s`), opened **`mode=ro`** via `database.OpenReadOnly` — same rows the API serves, without the pagination trap — plus the `[[projects]]` `cooldown_s` values in `~/.hermes/fleet.toml`. The DB pin wins when both exist; the file pin fills a lane whose row carries no pin. |
+| **Mutates** | **Nothing.** No PUT, no `--apply`, no migration, no DB write. The mutating remedy stays the operator's `fleet-cooldown-policy.py --apply` run, which is deliberately *not* scheduled. |
+| **Exit codes** | `0` clean · `1` residue found (the alarm) · `2` could not read state (missing DB, 0 rows — a wrong `--db` can never read as clean) · `3` wrapper could not build/locate the detector. |
+| **Schedule** | `deploy/cooldown-residue.timer` (daily, `systemd --user`) → `deploy/cooldown-residue.service` → `scripts/cooldown-residue-detector.sh`, which builds the binary once into `${HOME}/.hermes/bin/cooldown-residue` and passes the detector's exit code through. |
+
+A clean run prints a four-line summary (including the lane count it scanned, so "0 residue" is never confused with "nothing was read"); a residue run prints `ALERT: N enabled lane(s) live BELOW their own cooldown pin` and one line per lane, and ends with:
+
+```bash
+# R1 — the report, by hand (repo copy; build is cached)
+bash scripts/cooldown-residue-detector.sh; echo "exit=$?"
+# R2 — the schedule is installed and armed
+systemctl --user list-timers cooldown-residue.timer
+# R3 — the last daily report, including the exit-code result
+journalctl --user -u cooldown-residue.service -n 50
+```
+
+**What the detector is for, and what it is not.** It reports; it does not heal. Healing the class at the *pin-import* moment is the loader's job and now holds (`database.SetCooldownPin` snaps a live cooldown up to the pin it just recorded, so a lane whose file carries `cooldown_s = 604800` cannot stay live at 86400 — pinned by `internal/config/schedgap1670_pin_snap_test.go`). Healing a live cooldown lowered **after** its pin already landed is deliberately *not* done at boot: the DB stays the authority for API writes (SCHED-GAP-219), and an equal pin does not re-write the row. That case is what this detector is for — it names the lane within a day, and the operator's policy run corrects it.
 
 **This page is only as good as the commands in it.** If a command here no longer reproduces its stated output, the page has drifted — fix the page in the same commit that changed the behaviour. A config claim with no command behind it is not documentation, it is folklore, and folklore is exactly what this page exists to replace.
 
@@ -427,7 +455,7 @@ This page is a documentation change; live fleet config is out of scope. These ar
 
 | # | Finding | Command that shows it | Consequence |
 |---|---|---|---|
-| 1 | **`hermes-canopy` cooldown drift.** DB `900` vs `fleet.toml` `21600`, while `ELEVATED_PINS` says the canonical pin is `21600`. Both gates name it independently (`parity` violation + `MISMATCH`). | S1 / S2 · F1 · F4 | The lane runs 15 minutes instead of 6 hours until a restart re-pins it — i.e. the drift is also a *latent* behaviour change at the next boot. |
+| 1 | **`hermes-canopy` cooldown drift.** DB `900` vs `fleet.toml` `21600`, while `ELEVATED_PINS` says the canonical pin is `21600`. Both gates name it independently (`parity` violation + `MISMATCH`). | S1 / S2 · F1 · F4 | The lane runs 15 minutes instead of 6 hours. **Corrected 2026-09-29 (SCHED-GAP-1670):** the earlier wording here claimed a restart re-pins it — it does not. The loader *imports pins*; it rewrites a live cooldown only at the moment a pin ARRIVES by import (`database.SetCooldownPin` now snaps up then), and this row's pin already landed, so a restart leaves `900` alone. The class is residue: the daily read-only detector (§6.4) reports it, the operator's policy run corrects it. |
 | 2 | **`coding-hermes-tools` below the floor.** DB `cooldown_s = 900` against a 6 h law, and the project has **no `fleet.toml` block at all** — so the `parity` class structurally cannot see it; only the `cooldown` law class catches it. | D3 · F1 | Running 24× faster than the law, caught by exactly one of the two checks. Worth noting that "the two gates" are not redundant here. |
 | 3 | **51 `family-floor` violations.** `-qa` and `-sync` lanes sit on the 21600 default instead of the 43200 family pin, so their cadence cannot be read as a signal. | F1 · D1 | A satellite that should tick twice a day ticks up to four times. |
 | 4 | **The policy writer and the family pin disagree — the mirrored constant is absent.** `SATELLITE_FAMILY_PINS` exists in the repo gate and is checked for equality against the writer's copy, but the writer's working copy currently has **no** such constant (0 occurrences), while the repo test's own skip message records that a dirty working tree is the cause (SCHED-GAP-181 sibling-tick churn). The test therefore **skips** rather than failing. | `grep -c SATELLITE_FAMILY_PINS ~/.hermes/scripts/fleet-cooldown-policy.py` → `0` · `python3 -m pytest tests/test_check_fleet_invariants_coverage_and_family_floor.py -q` → `4 passed, 1 skipped` | The gate still fires on real drift (finding 3 proves the check works), but the writer-side mirror cannot be verified while the constant is missing — the cross-check is dormant. |
@@ -488,8 +516,11 @@ Every command in this page, with what it establishes. All were run on 2026-09-20
 | P2 | `python3 -m pytest tests/test_check_fleet_invariants_coverage_and_family_floor.py -q` | Whether the family-floor/coverage classes are fixture-tested (and whether the writer mirror is skipped) |
 | P3 | `sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT name, enabled FROM projects WHERE name LIKE 'hermes-dagger%' ORDER BY name;"` | The disabled primary behind the four `targets` violations (finding 5) |
 | P4 | `head -4 ~/.hermes/fleet.toml` | Which writer the restart pin's header names (finding 6) |
+| R1 | `bash scripts/cooldown-residue-detector.sh; echo "exit=$?"` | The residue report and its exit code: 0 clean / 1 residue / 2 unreadable / 3 build fault (§6.4) |
+| R2 | `systemctl --user list-timers cooldown-residue.timer` | That the daily detector is installed and armed |
+| R3 | `journalctl --user -u cooldown-residue.service -n 50` | The last daily report — the pushed surface's own record |
 
-**Requirements, stated plainly.** B1/B2/B3/C1/C4/D2/D3/E2/E3/E4/F1/F3/F4/S1–S4 need the live fleet: the daemon on `127.0.0.1:9090`, `~/.hermes/coding-hermes/scheduler.db`, and `~/.hermes/fleet.toml`. A/I/…/C2/C3/D1/E1/G1/G2 read the **repo only** and work in any checkout; F2 is the one fleet gate that runs without fleet state, which is why it is the CI shape. F4 requires `~/.hermes/scripts/fleet-cooldown-policy.py`, which lives outside this repo.
+**Requirements, stated plainly.** B1/B2/B3/C1/C4/D2/D3/E2/E3/E4/F1/F3/F4/S1–S4 need the live fleet: the daemon on `127.0.0.1:9090`, `~/.hermes/coding-hermes/scheduler.db`, and `~/.hermes/fleet.toml`. A/I/…/C2/C3/D1/E1/G1/G2 read the **repo only** and work in any checkout; F2 is the one fleet gate that runs without fleet state, which is why it is the CI shape. F4 requires `~/.hermes/scripts/fleet-cooldown-policy.py`, which lives outside this repo. R1 needs the repo *and* the live DB path (it builds `cmd/cooldown-residue` and reads the DB `mode=ro`); R2/R3 additionally need `deploy/cooldown-residue.{service,timer}` installed under `~/.config/systemd/user/` — the detector itself is repo-only and runs anywhere with a DB path.
 
 ---
 
