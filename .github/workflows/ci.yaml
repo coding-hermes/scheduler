@@ -65,7 +65,9 @@ jobs:
         run: go test ./... -count=1 -short -v -coverprofile=coverage.out
 
       - name: Race Detector
-        run: go test ./... -count=1 -short -race
+        run: go test ./... -count=1 -short -race -timeout=1200s
+        # INT-CI-168: api race suite measures ~465s green locally (fleet host);
+        # the Go default 10m bound has no headroom on a loaded runner. -timeout=1200s
 
       - name: Coverage Report
         uses: actions/upload-artifact@v4
