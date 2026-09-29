@@ -141,13 +141,30 @@ def test_cooldown_tier_lane_at_documented_value_is_exempt(tmp_path):
 
 
 def test_cooldown_tier_lane_drifted_off_value_fires(tmp_path):
-    """release-engineer moved off its documented 7d pin is still a violation."""
-    rc, out = _run_gate(tmp_path, [_clean_lane(tmp_path, name="release-engineer", cooldown_s=86400)])
+    """release-engineer moved off its documented daily tier is a violation.
+
+    SCHED-GAP-1675 (2026-09-29) re-aligned the lane 21600 -> 86400 and the tier
+    now sanctions the releng role's 259200 as well; 604800 is the RETIRED value
+    the old tier documented, so a lane still sitting there is drift."""
+    rc, out = _run_gate(tmp_path, [_clean_lane(tmp_path, name="release-engineer", cooldown_s=604800)])
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "cooldown") == [
-        "VIOLATION cooldown release-engineer: cooldown_s=86400 != documented tier 604800"], out
+        "VIOLATION cooldown release-engineer: cooldown_s=604800 != documented tier 86400 / 259200 "
+        "(one of the sanctioned values for this named lane)"], out
     assert _other_violations(out, "cooldown") == [], f"unexpected extra violations:\n{out}"
+
+
+def test_cooldown_release_engineer_at_either_sanctioned_value_is_exempt(tmp_path):
+    """The lane's OWN alignment value (daily 86400) and the releng role's
+    259200 are both sanctioned (SCHED-GAP-1675) — neither may fire."""
+    for value in (86400, 259200):
+        case = tmp_path / str(value)
+        case.mkdir()
+        rc, out = _run_gate(case, [_clean_lane(case, name="release-engineer",
+                                               cooldown_s=value)])
+        assert rc == 0, f"release-engineer at {value}: gate exited {rc} (stdout:\n{out})"
+        assert "VIOLATION" not in out, out
 
 
 def test_cooldown_disabled_lane_is_exempt(tmp_path):

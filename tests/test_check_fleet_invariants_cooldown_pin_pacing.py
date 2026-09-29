@@ -303,7 +303,10 @@ def test_exception_listed_lane_with_violating_shape_is_skipped(tmp_path):
     the exception list while their live behavior converges."""
     lane = PERF_EXCEPTION_LANES[0]
     rc, out = _run_gate(tmp_path, [
-        {"name": lane, "cooldown_s": 86400, "cooldown_pin_s": 604800},
+        # On the family canonical (perf 604800, SCHED-GAP-1675): this module
+        # tests check 13, so the row must not carry a family-floor violation —
+        # the violating shape here is the OBSERVED cadence vs the pin.
+        {"name": lane, "cooldown_s": 604800, "cooldown_pin_s": 604800},
     ], ticks=_completed_ticks(lane, [2, 4, 6]))
 
     assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"

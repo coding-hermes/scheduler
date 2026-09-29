@@ -81,6 +81,16 @@ def _load_gate():
 gate = _load_gate()
 
 
+def _fixture_cooldown(name: str) -> int:
+    """The CANONICAL family cadence for a satellite-shaped fixture lane, else
+    the 6h default. Without it the family-floor class (check 5e, SCHED-GAP-1675
+    — every family, not just qa/pm/sync/dogfood) flags the FIXTURE instead of
+    the class under test: a `*-sync` lane seeded at the retired 43200 is drift
+    against the canonical 21600."""
+    m = gate.SATELLITE_FAMILY_RE.match(name)
+    return gate.SATELLITE_FAMILY_PINS[m.group(2)] if m else 43200
+
+
 def _make_db(path: Path, rows: list[dict], workdirs: dict[str, Path]) -> Path:
     """Minimal fixture DB: exactly the columns the checker reads."""
     con = sqlite3.connect(path)
@@ -98,8 +108,8 @@ def _make_db(path: Path, rows: list[dict], workdirs: dict[str, Path]) -> Path:
         con.execute(
             "INSERT INTO projects (name, enabled, cooldown_s, cooldown_floor_s, adaptive_cooldown,"
             " command, prompt, workdir, namespace_id) VALUES (?, ?, ?, ?, 0, ?, '', ?, ?)",
-            (r["name"], r.get("enabled", 1), r.get("cooldown_s", 43200),
-             r.get("cooldown_floor_s", 43200), r.get("command", SUPPORTED_COMMAND),
+            (r["name"], r.get("enabled", 1), r.get("cooldown_s", _fixture_cooldown(r["name"])),
+             r.get("cooldown_floor_s", _fixture_cooldown(r["name"])), r.get("command", SUPPORTED_COMMAND),
              str(workdirs[r["name"]]), r.get("namespace_id", "fixture-ns")))
     con.commit()
     con.close()

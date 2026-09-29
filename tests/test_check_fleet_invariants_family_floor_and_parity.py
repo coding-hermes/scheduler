@@ -53,7 +53,7 @@ def _load_gate():
 gate = _load_gate()
 
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
-FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood
+FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood, releng, perf, review, readme, docs
 NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
 
 
@@ -201,24 +201,43 @@ def test_family_floor_drifted_cooldown_fires(tmp_path):
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "family-floor") == [
-        "VIOLATION family-floor fixture-primary-pm: cooldown_s=21600 / cooldown_floor_s=86400"
+        "VIOLATION family-floor fixture-primary-pm: cooldown_s=21600"
         " — satellite family expects 86400 for pm (see SATELLITE_FAMILY_PINS, also mirrored"
-        " in fleet-cooldown-policy.py)"], out
+        " in fleet-cooldown-policy.py as FAMILY_CANONICAL)"], out
     assert _other_violations(out, "family-floor") == [], f"unexpected extra violations:\n{out}"
 
 
-def test_family_floor_drifted_floor_only_fires(tmp_path):
-    """The floor ALONE drifting is enough — the pair is checked together."""
+def test_family_floor_drifted_floor_only_is_tolerated_and_reported(tmp_path):
+    """The FLOOR alone no longer fires (SCHED-GAP-1675, 2026-09-29): satellites
+    never arm adaptive cooldown (check 5b) and the policy aligns a family lane
+    BEFORE its REDUCE rules, so a legacy floor cannot change the cadence. It is
+    reported as INFO instead — the residue stays visible, it just is not a
+    violation. This is the arm that made 129 live lanes red for a config field
+    that has no effect."""
     rc, out = _run_gate(tmp_path, [
         {"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200},
         _sat("fixture-primary-dogfood", "dogfood", fl=21600),
     ])
 
+    assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"
+    assert _violations(out, "family-floor") == [], out
+    assert _other_violations(out) == [], f"unexpected extra violations:\n{out}"
+    assert ("INFO cooldown-legacy-floor satellites: 1 enabled satellite lane(s)") in out, out
+
+
+def test_family_floor_sub_floor_cooldown_floor_fires(tmp_path):
+    """A floor BELOW the 6h law is the one floor value that could ever speed a
+    satellite up — still a violation, and the cadence itself is on-pin."""
+    rc, out = _run_gate(tmp_path, [
+        {"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200},
+        _sat("fixture-primary-dogfood", "dogfood", fl=1800),
+    ])
+
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "family-floor") == [
-        "VIOLATION family-floor fixture-primary-dogfood: cooldown_s=259200 / cooldown_floor_s=21600"
-        " — satellite family expects 259200 for dogfood (see SATELLITE_FAMILY_PINS, also mirrored"
-        " in fleet-cooldown-policy.py)"], out
+        "VIOLATION family-floor fixture-primary-dogfood: cooldown_floor_s=1800 is below the"
+        " 21600s (6h) law — a satellite may not carry a sub-6h floor even though adaptive"
+        " cooldown is disarmed"], out
     assert _other_violations(out, "family-floor") == [], f"unexpected extra violations:\n{out}"
 
 
@@ -383,14 +402,16 @@ def test_passing_fleet_toml_drift_flips_it_red(tmp_path):
     stale toml pin must exit 1 — proving the green run above is the checker
     distinguishing, not the fixture being invisible to it."""
     projects = _passing_fleet()
+    # The db row carries the canonical -qa cadence (21600); the stale toml pin
+    # still says 43200 — the retired value the family table used to document.
     toml = """
 [[projects]]
 id = "fixture-primary-qa"
-cooldown_s = 21600
-cooldown_floor_s = 43200
+cooldown_s = 43200
+cooldown_floor_s = 21600
 """
     rc, out = _run_gate(tmp_path, projects, toml_text=toml)
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "parity") == [
-        "VIOLATION parity fixture-primary-qa: cooldown_s: db=43200 toml=21600 — a pin in one store is drift"], out
+        "VIOLATION parity fixture-primary-qa: cooldown_s: db=21600 toml=43200 — a pin in one store is drift"], out

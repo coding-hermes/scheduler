@@ -235,8 +235,8 @@ func TestSCHEDGAP138_CreateRejectsUnarmedEnabledSatellite(t *testing.T) {
 		name, workdir string
 		pin           int
 	}{
-		{"bare-sync", filepath.Join(home, "sync-workdirs", "bare-sync"), 43200},
-		{"bare-qa", filepath.Join(home, "stand-in", "pm", "bare"), 43200},
+		{"bare-sync", filepath.Join(home, "sync-workdirs", "bare-sync"), 21600},
+		{"bare-qa", filepath.Join(home, "stand-in", "pm", "bare"), 21600},
 		{"bare-pm", filepath.Join(home, "stand-in", "pm-lane", "bare"), 86400},
 		{"bare-dogfood", filepath.Join(home, "stand-in", "dogfood", "bare"), 259200},
 	} {
@@ -321,11 +321,11 @@ func TestSCHEDGAP138_UpdateEnableTransitionArmsSatellite(t *testing.T) {
 	if !got.Enabled {
 		t.Fatal("lane was not enabled")
 	}
-	if got.CooldownFloorS != 43200 {
-		t.Errorf("cooldown_floor_s = %d, want the -sync family pin 43200", got.CooldownFloorS)
+	if got.CooldownFloorS != 21600 {
+		t.Errorf("cooldown_floor_s = %d, want the -sync family pin 21600", got.CooldownFloorS)
 	}
-	if got.CooldownCeilingS != 8*43200 {
-		t.Errorf("cooldown_ceiling_s = %d, want the derived cap %d (8 × floor)", got.CooldownCeilingS, 8*43200)
+	if got.CooldownCeilingS != 8*21600 {
+		t.Errorf("cooldown_ceiling_s = %d, want the derived cap %d (8 × floor)", got.CooldownCeilingS, 8*21600)
 	}
 	if got.AdaptiveCooldown {
 		t.Error("auto-arm must not switch adaptive cooldown on — satellites are paced by their family floor")
@@ -532,11 +532,14 @@ func TestSCHEDGAP138_RetiredCommandRouteRefusedOnBothPaths(t *testing.T) {
 }
 
 // TestSCHEDGAP138_FamilyConstantsParity pins the two constants this gate shares
-// with the fleet: the family cadence pins must equal SATELLITE_FAMILY_PINS in
-// ops/check-fleet-invariants.py (check 5e, the live backstop), and the family
-// key sets of the pins and the workdir roots must cover the satellite suffix
-// vocabulary exactly — adding a suffix without its pin/roots would leave the
-// gate silently unarmed for that family.
+// with the fleet: for the four families this onboarding gate polices, the Go
+// family cadence pins must equal the matching entries of SATELLITE_FAMILY_PINS
+// in ops/check-fleet-invariants.py (check 5e, the live backstop — the canonical
+// matrix Bane ratified 2026-09-29, SCHED-GAP-1675, which carries five further
+// families this gate does not onboard), and the family key sets of the pins and
+// the workdir roots must cover the satellite suffix vocabulary exactly — adding
+// a suffix without its pin/roots would leave the gate silently unarmed for that
+// family.
 //
 // Parsed from source text on purpose: the Go vars are unexported and the Python
 // constants live in a script, so this is the assertion that fails when either
@@ -558,7 +561,7 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 
 	goPins := intMapIn(t, string(goSrc), `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
 	pyPins := intMapIn(t, string(pySrc), `(?s)SATELLITE_FAMILY_PINS\s*=\s*\{(.*?)\}`)
-	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 43200, "dogfood": 259200}
+	want := map[string]int{"qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200}
 
 	if len(goPins) != len(want) {
 		t.Fatalf("internal/api/lane_onboarding.go pins %d families (%v), want %d", len(goPins), goPins, len(want))

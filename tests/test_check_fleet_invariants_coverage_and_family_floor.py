@@ -4,15 +4,20 @@ Drives ``ops/check-fleet-invariants.py`` checks 5d (class ``coverage``) and
 5e (class ``family-floor``) in-process against a fixture scheduler DB, so the
 gates cannot silently degrade into a no-op pass:
 
-  * a fleet with ONE missing qa lane and ONE satellite whose
-    ``cooldown_floor_s`` is 21600 (the 6h floor, off-family) must exit 1 and
-    name BOTH classes on separate ``VIOLATION …`` lines;
+  * a fleet with ONE missing qa lane and ONE satellite whose ``cooldown_s``
+    has drifted off its family cadence must exit 1 and name BOTH classes on
+    separate ``VIOLATION …`` lines;
   * the same fleet with all satellites on their family pins and every
     coding-hermes primary carrying all 4 satellite lanes must exit 0 with
     no violation of either class;
-  * the ``SATELLITE_FAMILY_PINS`` constant agrees with the matching block in
+  * the ``SATELLITE_FAMILY_PINS`` constant agrees with ``FAMILY_CANONICAL`` in
     ``~/.hermes/scripts/fleet-cooldown-policy.py`` (the policy writer) so
     the gate and the policy can never drift apart silently.
+
+SCHED-GAP-1675 (2026-09-29) widened the constant from four families to the
+canonical nine and made ``cooldown_s`` the asserted field of check 5e (the
+floor is reported, not compared — see
+``tests/test_check_fleet_invariants_family_floor.py`` for that battery).
 
 The fixture is a minimal SQLite DB (only the columns the script reads); the
 ``--toml`` / ``--board`` paths point at files that do not exist, which is the
@@ -165,10 +170,16 @@ def _all_clean_satellites() -> dict[str, dict]:
 # ── AC1: SATELLITE_FAMILY_PINS is exactly the documented table ────────────
 
 def test_satellite_family_pins_table_values():
-    """The constant carries the four family pins Bane ratified 2026-09-19."""
+    """The constant carries the NINE-suffix canonical matrix (SCHED-GAP-1675,
+    Bane 2026-09-29). The four-family table it replaced held qa/sync at 43200
+    and knew nothing of releng/perf/review/readme/docs."""
     assert gate.SATELLITE_FAMILY_PINS == {
-        "qa": 43200, "pm": 86400, "sync": 43200, "dogfood": 259200,
+        "qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200,
+        "releng": 86400, "perf": 604800, "review": 604800,
+        "readme": 604800, "docs": 604800,
     }, gate.SATELLITE_FAMILY_PINS
+    assert gate.SATELLITE_FAMILY_ALSO_ALLOWED == {"releng": (259200,)}, \
+        gate.SATELLITE_FAMILY_ALSO_ALLOWED
 
 
 def test_check_classes_lists_coverage_and_family_floor():
@@ -178,21 +189,23 @@ def test_check_classes_lists_coverage_and_family_floor():
     assert "family-floor" in gate.CHECK_CLASSES, gate.CHECK_CLASSES
 
 
-# ── AC2: a fixture with one missing qa lane and one 21600-floor satellite
-#        must exit 1 with the expected two violation classes ────────────────
+# ── AC2: a fixture with one missing qa lane and one satellite off its family
+#        cadence must exit 1 with the expected two violation classes ───────
 
-def test_missing_qa_lane_and_21600_satellite_both_violate(tmp_path):
+def test_missing_qa_lane_and_drifted_dogfood_both_violate(tmp_path):
     """Sad path: the gate must name BOTH a missing-qa coverage violation AND a
-    21600-floor family-floor violation. Any one without the other means the
-    other class is silently passing — the exact failure mode the row fixes."""
+    family-floor violation. Any one without the other means the other class is
+    silently passing — the exact failure mode the row fixes."""
     satellites = _all_clean_satellites()
     # Drop the qa satellite for PRIMARY (forces a coverage violation on it)
     satellites.pop(f"{PRIMARY}-qa", None)
-    # Drop the family pin on the dogfood satellite for OTHER_PRIMARY (forces
-    # a family-floor violation: cooldown_floor_s=21600 instead of 259200)
-    other_dogfood = satellites[f"{OTHER_PRIMARY}-dogfood"]
-    other_dogfood["cooldown_floor_s"] = 21600
-    satellites[f"{OTHER_PRIMARY}-dogfood"] = other_dogfood
+    # Drift the dogfood satellite's CADENCE for OTHER_PRIMARY (forces a
+    # family-floor violation: 21600 instead of the canonical 259200).
+    # cooldown_floor_s is deliberately NOT the drift axis any more: SCHED-GAP-1675
+    # (2026-09-29) retired that half of the rule — a floor is inert on a lane
+    # that never arms adaptive cooldown — and its own arms live in
+    # tests/test_check_fleet_invariants_family_floor.py.
+    satellites[f"{OTHER_PRIMARY}-dogfood"]["cooldown_s"] = 21600
 
     rc, out = _run_gate(tmp_path, satellites)
 
@@ -200,7 +213,7 @@ def test_missing_qa_lane_and_21600_satellite_both_violate(tmp_path):
     assert f"VIOLATION coverage {PRIMARY}-qa: " in out, out
     assert f"VIOLATION family-floor {OTHER_PRIMARY}-dogfood: " in out, out
     assert "259200" in out, "family-floor violation must name the family pin"
-    assert "21600" in out, "family-floor violation must name the offending floor"
+    assert "21600" in out, "family-floor violation must name the offending cadence"
     assert "FAIL" in out, out
     # No surprise extra violations — the fixture is clean by construction.
     other = [l for l in out.splitlines()
@@ -227,63 +240,46 @@ def test_clean_fleet_passes_both_classes(tmp_path):
 # ── AC4: the constant in the policy script matches the gate so the two
 #        stores cannot drift silently ──────────────────────────────────────
 
-def test_policy_script_mirrors_satellite_family_pins():
+def test_policy_script_mirrors_the_canonical_matrix():
     """Both the gate (this repo) and the policy writer
-    (``~/.hermes/scripts/fleet-cooldown-policy.py``) must carry the same
-    family pins. A drift here means the gate fails the lane while the
-    policy still emits the old pin (or vice versa) — the silent-failure
-    class the row exists to prevent.
+    (``~/.hermes/scripts/fleet-cooldown-policy.py``) must carry the SAME family
+    matrix. Since the 2026-09-29 alignment the writer's constant is
+    ``FAMILY_CANONICAL`` (+ ``FAMILY_ALSO_ALLOWED``), spelled with dashed keys
+    ('-qa') — the historical ``SATELLITE_FAMILY_PINS`` name is gone from the
+    writer, which is why the old form of this test skipped. A drift here means
+    the gate fails a lane while the policy still emits the old cadence (or vice
+    versa) — the silent-failure class this row exists to prevent.
 
-    The policy script lives in the user-level /home/kara repo and is
-    routinely touched by sibling ticks (e.g. f460fea "satellite family
-    pins + 6h floor clamp" was rolled into HEAD, then a sibling tick
-    reverted the working tree while a new pass was being prepared). A
-    fresh CI runner or a runner mid-sibling-tick will legitimately lack
-    the constant. The test asserts the *honest* invariant: when the
-    constant is present, every family pin must match the gate; when it
-    is absent OR the file is dirty in a way that strips the constants,
-    skip with a printed reason so a true silent drift in a steady-state
-    policy script is the only failure mode this test exercises.
+    The policy script lives in the user-level /home/kara tree and is routinely
+    touched by sibling ticks, so a fresh CI runner legitimately lacks it. The
+    test asserts the *honest* invariant: when the file AND the constant are
+    present, the matrix must match EXACTLY; otherwise skip with a printed
+    reason, so a true silent drift in a steady-state policy script is the only
+    failure mode this test can produce.
     """
-    import subprocess
+    import re
+    import pytest
     policy_path = Path.home() / ".hermes" / "scripts" / "fleet-cooldown-policy.py"
     if not policy_path.is_file():
-        import pytest
         pytest.skip(f"policy script not present at {policy_path} (user-level file)")
     text = policy_path.read_text(encoding="utf-8", errors="replace")
-    # If the constant block is not present at all, the policy script is in a
-    # pre-f460fea (or sibling-tick-rolled-back) state — a legitimate gap
-    # this tick did not cause and cannot fix from this repo. Skip rather
-    # than fail; the gate-side check still fails real drift the moment
-    # a satellite goes off its family pin.
-    if "SATELLITE_FAMILY_PINS" not in text:
-        import pytest
-        # Distinguish a missing constant (skipped, legitimate) from a
-        # silent drift (impossible to detect when the constant is absent).
-        # Probe the git state to record the cause for the skip message.
-        try:
-            head_has = subprocess.run(
-                ["git", "-C", str(Path.home() / ".hermes"), "show", "HEAD:scripts/fleet-cooldown-policy.py"],
-                capture_output=True, text=True, timeout=5, check=False,
-            ).stdout
-        except Exception:
-            head_has = ""
-        if "SATELLITE_FAMILY_PINS" in head_has:
-            pytest.skip(
-                f"policy script at {policy_path} is dirty (working tree has "
-                f"reverted the SATELLITE_FAMILY_PINS block that HEAD has) — "
-                f"a sibling tick is in flight; the gate-side check still fires "
-                f"on a real satellite drift"
-            )
+    if "FAMILY_CANONICAL" not in text:
         pytest.skip(
-            f"policy script at {policy_path} lacks SATELLITE_FAMILY_PINS "
-            f"in both HEAD and working tree (pre-f460fea or test rig)"
+            f"policy script at {policy_path} carries no FAMILY_CANONICAL block "
+            f"(pre-2026-09-29 alignment or test rig) — the writer-side mirror "
+            f"cannot be verified here; the gate-side check still fails real "
+            f"satellite drift"
         )
-    for family, pin in gate.SATELLITE_FAMILY_PINS.items():
-        # The policy script's constant is the same shape (string key + int
-        # value) — assert the literal value is present so a stray typo would
-        # surface here rather than at 04:00 daily.
-        assert str(pin) in text, (
-            f"family {family!r} pin {pin} not found in {policy_path} — "
-            f"the policy script must mirror SATELLITE_FAMILY_PINS"
-        )
+    block = re.search(r"(?s)FAMILY_CANONICAL\s*=\s*\{(.*?)\}", text)
+    assert block is not None, "FAMILY_CANONICAL block does not parse"
+    got = {k.lstrip("-"): int(v)
+           for k, v in re.findall(r"'(-[a-z]+)'\s*:\s*(\d+)", block.group(1))}
+    assert got == gate.SATELLITE_FAMILY_PINS, (
+        f"policy FAMILY_CANONICAL={got} != gate SATELLITE_FAMILY_PINS="
+        f"{gate.SATELLITE_FAMILY_PINS} in {policy_path}")
+    also = re.search(r"(?s)FAMILY_ALSO_ALLOWED\s*=\s*\{(.*?)\}", text)
+    assert also is not None, "FAMILY_ALSO_ALLOWED block does not parse"
+    for suffix, values in gate.SATELLITE_FAMILY_ALSO_ALLOWED.items():
+        for value in values:
+            assert re.search(rf"'-{suffix}'\s*:\s*\{{\s*{value}\b", also.group(1)), (
+                f"policy FAMILY_ALSO_ALLOWED does not sanction -{suffix}={value}: {also.group(1)}")

@@ -64,6 +64,15 @@ def _load_gate():
 
 gate = _load_gate()
 
+
+def _fixture_cooldown(name: str) -> int:
+    """The CANONICAL family cadence for a satellite-shaped fixture lane, else
+    the 6h default. The family-floor class (check 5e, SCHED-GAP-1675) polices
+    ALL NINE families, so a `*-releng` fixture lane seeded at the old 43200
+    default would flag the fixture instead of the class under test."""
+    m = gate.SATELLITE_FAMILY_RE.match(name)
+    return gate.SATELLITE_FAMILY_PINS[m.group(2)] if m else 43200
+
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
 # The measured live namespace defaults (2026-09-27): the healthy fallbacks the
 # conjunction must never punish, reproduced at real size so a threshold drift
@@ -124,7 +133,8 @@ def _seed_db(path: Path, lanes: list[dict], ns_defaults: dict[str, int] | None =
         wd = path.parent / ln["name"]
         wd.mkdir(parents=True, exist_ok=True)
         con.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (ln["name"], ln.get("enabled", 1), ln.get("cooldown_s", 43200),
+                    (ln["name"], ln.get("enabled", 1),
+                     ln.get("cooldown_s", _fixture_cooldown(ln["name"])),
                      "", ln.get("prompt", ""), ln.get("prompt_mode", "append"),
                      str(wd), ln.get("namespace_id", "auger")))
     con.commit()

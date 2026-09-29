@@ -75,15 +75,24 @@ var satelliteWorkdirRoots = map[string][]string{
 }
 
 // satelliteFamilyPins is the per-family cadence pin an enabled satellite
-// carries (seconds). It MUST stay equal to SATELLITE_FAMILY_PINS in
-// ops/check-fleet-invariants.py (check 5e: cooldown_s AND cooldown_floor_s
-// equal the family value); TestSchedgap138_SatelliteFamilyPinsParity reads both
-// sources and fails the build the moment either side is edited alone. The
-// host-side reconciler carries the same four numbers as FAM_CD.
+// carries (seconds), for the four families this onboarding gate POLICES (its
+// workdir/arming vocabulary in satelliteLaneSuffixes). Every value here MUST
+// equal the matching entry of SATELLITE_FAMILY_PINS in
+// ops/check-fleet-invariants.py — the canonical cadence matrix (Bane's
+// 2026-09-29 alignment, SCHED-GAP-1675, mirrored as FAMILY_CANONICAL in
+// ~/.hermes/scripts/fleet-cooldown-policy.py) — which carries five further
+// families (releng/perf/review/readme/docs) this gate does not onboard.
+// TestSCHEDGAP138_FamilyConstantsParity reads both sources and fails the build
+// the moment either side is edited alone. The number is also the one the
+// refusal message hands an operator (unarmedLaneError) and the floor
+// laneAutoArm writes on an enable transition, so it must be the cadence the
+// fleet actually pins: qa/sync moved 43200 -> 21600 WITH the canonical matrix
+// (their 6h family cadence), and the derived ceiling follows at 8 x floor.
+// The host-side reconciler carries the same four numbers as FAM_CD.
 var satelliteFamilyPins = map[string]int{
-	"qa":      43200,
+	"qa":      21600,
 	"pm":      86400,
-	"sync":    43200,
+	"sync":    21600,
 	"dogfood": 259200,
 }
 

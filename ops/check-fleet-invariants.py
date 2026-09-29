@@ -23,11 +23,23 @@ Checks
                      Without ``--global-cap`` the comparison is skipped — the
                      checker cannot see the daemon's argv.
   2. admission     — tasks ONLY where real work lives; satellites on timers
-  3. cooldown law  — no enabled lane below the 6h floor without a documented tier
-  4. executors     — no enabled lane driving a retired driver script (the 5
+  3. cooldown law  — no enabled lane below the 6h floor without a documented
+                     exception: a named COOLDOWN_TIERS lane at one of its
+                     sanctioned values, or a SANCTIONED_SUBFLOOR_PINS operator
+                     pin sitting at exactly the value Bane designated
+ 4. executors     — no enabled lane driving a retired driver script (the 5
                      names in the RETIRED_DRIVERS tuple below; the Go enable
                      path rejects the same 5 — internal/api/retired_drivers.go)
-  5. workdirs      — every enabled lane's workdir exists
+  5. workdirs      — every enabled lane's workdir exists. The same project pass
+                     also carries coverage (every coding-hermes primary needs
+                     its four satellite lanes) and family-floor — every enabled
+                     satellite sits on its family's CANONICAL cooldown_s (nine
+                     suffixes; see SATELLITE_FAMILY_PINS, the matrix Bane
+                     ratified 2026-09-29 in SCHED-GAP-1675). family-floor
+                     asserts cooldown_s only: a satellite never arms adaptive
+                     cooldown and the policy aligns a family lane before its
+                     REDUCE rules, so a legacy cooldown_floor_s is inert and is
+                     REPORTED (INFO cooldown-legacy-floor) rather than failed.
   6. targets       — every satellite's target project exists and is enabled
   7. store parity  — DB and fleet.toml agree on the operator's pins
   8. board vocab   — every JSONL board row carries a dispatchable status.
@@ -241,13 +253,72 @@ SATELLITE_CAP_POLICY = {
     "doc-writer": 1,
 }
 COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
-# Enabled lanes legitimately paced slower than the floor (namespace cadence tiers).
-COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}
-# Satellite family cadence (SCHED-GAP-178, Bane 2026-09-19). MUST stay equal
-# to SATELLITE_FAMILY_PINS in ~/.hermes/scripts/fleet-cooldown-policy.py (the
-# policy writer); the family-floor check below fails any enabled satellite
-# whose cooldown_s / cooldown_floor_s drifts off its family's pin.
-SATELLITE_FAMILY_PINS = {"qa": 43200, "pm": 86400, "sync": 43200, "dogfood": 259200}
+# Enabled lanes legitimately paced slower than the floor, by NAME — a named
+# cadence TIER ("this project must sit at one of these values"), never a family.
+# Each entry carries every sanctioned value for that lane; a lane off the set
+# is drift, so a leftover value here can never mask a cadence change.
+#   qa-audit         86400  — the QA auditor's daily sweep.
+#   release-engineer 86400  — SCHED-GAP-1675 (aligned 2026-09-29). It is a
+#     PRIMARY lane in the `releases` namespace and does NOT carry a -releng
+#     suffix, so the family view never saw it: it sat at 21600 = 4 release
+#     sweeps/day, which is what piled a readiness row onto every board day
+#     after day. Bane's canonical matrix gives every releng-ROLE lane 86400,
+#     and 259200 (once per 3 days) is the role's second sanctioned value — both
+#     are accepted here. The old 604800 entry was stale: it flagged the lane's
+#     own daily alignment as drift.
+COOLDOWN_TIERS = {"qa-audit": (86400,), "release-engineer": (86400, 259200)}
+# Sanctioned SUB-FLOOR operator pins (SCHED-GAP-1675, 2026-09-29). The values
+# are duplicated from ~/.hermes/scripts/fleet-cooldown-policy.py — the policy
+# writer, which lives OUTSIDE this repo and is therefore not imported; this
+# comment is the provenance:
+#   hermes-dagger        900   — ELEVATED_PINS['hermes-dagger'] (Bane
+#                                2026-09-15: the dagger 15-minute speed ruling)
+#   coding-hermes-tools  3600  — the fast tier TARGET_ACTIVE (1h), which the
+#                                policy hard-skips as an operator fast pin
+# These are operator decisions, so the 6h floor must NOT flag them. The
+# sanctioned VALUE is still asserted: a lane that drifts off it (900 that
+# quietly becomes 600) is a different lane, not an operator pin.
+SANCTIONED_SUBFLOOR_PINS = {"hermes-dagger": 900, "coding-hermes-tools": 3600}
+# Satellite family cadence — ONE canonical time per family. MUST stay equal to
+# FAMILY_CANONICAL in ~/.hermes/scripts/fleet-cooldown-policy.py (the policy
+# writer; the parity is asserted by
+# tests/test_check_fleet_invariants_family_floor.py, and for the four families
+# the Go onboarding gate polices by TestSCHEDGAP138_FamilyConstantsParity).
+# Rewritten 2026-09-29 for the SCHED-GAP-1675 alignment: the matrix is Bane's
+# ruling, and it supersedes the old four-family table (qa/sync were 43200) and
+# the flat policy default — TARGET_IDLE held releng and pm at 21600 (4
+# ticks/day), which is what made the same release-readiness work appear on the
+# board day after day (~55 rows/day measured across the fleet).
+#   releng  : once per day (86400); 259200 also sanctioned (FAMILY_ALSO_ALLOWED)
+#   pm      : once per day (86400)
+#   qa      : every 6 hours (21600)
+#   sync    : every 6 hours (21600)
+#   perf    : weekly (604800)
+#   dogfood : once every 3 days (259200)
+#   docs / readme / review : weekly (604800)
+# Keys are the BARE suffixes here; the policy script spells them dashed ('-qa').
+SATELLITE_FAMILY_PINS = {
+    "qa": 21600,
+    "pm": 86400,
+    "sync": 21600,
+    "dogfood": 259200,
+    "releng": 86400,
+    "perf": 604800,
+    "review": 604800,
+    "readme": 604800,
+    "docs": 604800,
+}
+# releng may ALSO legitimately sit at 259200 (once per 3 days) — the policy's
+# FAMILY_ALSO_ALLOWED. A -releng satellite at EITHER value passes.
+SATELLITE_FAMILY_ALSO_ALLOWED = {"releng": (259200,)}
+# Name matcher for a satellite lane of ANY family (check 5e), DERIVED from the
+# pin table so a family can never be added to the pins and left unpoliceable.
+# That derivation is the fix for SCHED-GAP-1675's blind spot: the old
+# hardcoded `(qa|pm|dogfood|sync)` alternation silently ignored
+# releng/perf/review/readme/docs — 129 live family-floor violations were being
+# reported against 4 families while those 5 were never checked at all.
+SATELLITE_FAMILY_RE = re.compile(
+    r"^(.+)-(" + "|".join(re.escape(sfx) for sfx in SATELLITE_FAMILY_PINS) + r")$")
 # Coding-hermes foreman PRIMARIES are the projects in the `coding-hermes`
 # namespace whose name does NOT carry a satellite suffix (-qa / -pm / -sync /
 # -dogfood). Satellites live in their own family namespaces; the auditor and
@@ -858,10 +929,19 @@ def main(argv: list[str] | None = None) -> int:
         if not p.get("enabled"):
             continue
         cd = p.get("cooldown_s") or 0
-        if cd < COOLDOWN_FLOOR and name not in COOLDOWN_TIERS:
-            bad("cooldown", name, f"cooldown_s={cd} below the {COOLDOWN_FLOOR}s (6h) floor — sub-6h pins are retired")
-        if name in COOLDOWN_TIERS and cd != COOLDOWN_TIERS[name]:
-            bad("cooldown", name, f"cooldown_s={cd} != documented tier {COOLDOWN_TIERS[name]}")
+        sanctioned = SANCTIONED_SUBFLOOR_PINS.get(name)
+        if cd < COOLDOWN_FLOOR and name not in COOLDOWN_TIERS and cd != sanctioned:
+            detail = (f"cooldown_s={cd} below the {COOLDOWN_FLOOR}s (6h) floor — "
+                      f"sub-6h pins are retired")
+            if sanctioned is not None:
+                detail += (f"; {name} is a sanctioned sub-floor operator pin "
+                           f"(fleet-cooldown-policy.py) and must sit at {sanctioned}")
+            bad("cooldown", name, detail)
+        tiers = COOLDOWN_TIERS.get(name)
+        if tiers and cd not in tiers:
+            bad("cooldown", name,
+                f"cooldown_s={cd} != documented tier {' / '.join(str(v) for v in tiers)} "
+                f"(one of the sanctioned values for this named lane)")
 
     # 4. executors ------------------------------------------------------------
     for name, p in projects.items():
@@ -936,29 +1016,66 @@ def main(argv: list[str] | None = None) -> int:
                     f"(primary {name!r} lives in the {ns!r} namespace)")
 
     # 5e. family-floor --------------------------------------------------------
-    # Every enabled satellite sits on its family's cadence pin (qa 43200, pm
-    # 86400, sync 43200, dogfood 259200). Both cooldown_s AND cooldown_floor_s
-    # must equal the family value — a satellite reads the primary's board
-    # through a symlink and is therefore permanently 'has work', which the
-    # REDUCE rule in fleet-cooldown-policy.py would otherwise pull to the 6h
-    # floor on every run. The pair is checked together because either field
-    # alone is enough to make cadence unreadable.
+    # Every enabled satellite sits on its family's CANONICAL cadence — the
+    # matrix Bane ratified 2026-09-29 (SCHED-GAP-1675): qa/sync 21600 (6h),
+    # pm/releng 86400 (daily), dogfood 259200 (3d), perf/review/readme/docs
+    # 604800 (weekly); -releng is ALSO allowed at 259200. All nine families are
+    # policed (the old hardcoded four-suffix alternation ignored the other
+    # five — that blind spot IS the row).
+    #
+    # cooldown_s is THE asserted field. It is the spacing the scheduler
+    # enforces for a timer-paced (cooldown-admission) lane, and the family pin
+    # exists so a satellite's cadence stays readable — the flat policy default
+    # is what held releng and pm at 6h (4x/day) and piled the same
+    # release-readiness work onto every board day after day.
+    #
+    # cooldown_floor_s is deliberately NO LONGER compared for equality (it was,
+    # pre-2026-09-29). Three measured facts retired that half of the rule:
+    #   * satellites never arm adaptive cooldown (check 5b — "disarm, don't
+    #     debate"), and a non-adaptive lane ignores its floor entirely, so a
+    #     legacy floor cannot change the cadence or make it unreadable;
+    #   * fleet-cooldown-policy.py now runs its FAMILY CANONICAL ALIGNMENT
+    #     branch BEFORE the REDUCE/RAISE rules and hard-skips any lane already
+    #     on a sanctioned value, so the hazard the old rule guarded against —
+    #     REDUCE pulling a "permanently has work" satellite down to the 6h
+    #     default — cannot happen by construction;
+    #   * the alignment wrote cooldown_s (the policy's API PUT names cooldown_s
+    #     only), so ~140 satellites legitimately carry a pre-canonical floor.
+    # The residue is NOT hidden: a satellite whose floor is set but off its
+    # family value is counted and reported as INFO (class
+    # cooldown-legacy-floor), and a floor BELOW the 6h law is still a
+    # violation — the one floor value that could ever speed a satellite up.
+    legacy_floors = 0
     for name, p in projects.items():
         if not p.get("enabled"):
             continue
-        m = re.match(r"^(.+)-(qa|pm|dogfood|sync)$", name)
+        m = SATELLITE_FAMILY_RE.match(name)
         if not m:
             continue
         suffix = m.group(2)
         expected = SATELLITE_FAMILY_PINS.get(suffix)
         if expected is None:
             continue
+        allowed = (expected,) + SATELLITE_FAMILY_ALSO_ALLOWED.get(suffix, ())
         cd = int(p.get("cooldown_s") or 0)
         fl = int(p.get("cooldown_floor_s") or 0)
-        if cd != expected or fl != expected:
+        if cd not in allowed:
             bad("family-floor", name,
-                f"cooldown_s={cd} / cooldown_floor_s={fl} — satellite family expects {expected} for {suffix} "
-                f"(see SATELLITE_FAMILY_PINS, also mirrored in fleet-cooldown-policy.py)")
+                f"cooldown_s={cd} — satellite family expects "
+                f"{' or '.join(str(v) for v in allowed)} for {suffix} "
+                f"(see SATELLITE_FAMILY_PINS, also mirrored in fleet-cooldown-policy.py as FAMILY_CANONICAL)")
+        if 0 < fl < COOLDOWN_FLOOR:
+            bad("family-floor", name,
+                f"cooldown_floor_s={fl} is below the {COOLDOWN_FLOOR}s (6h) law — a satellite "
+                f"may not carry a sub-6h floor even though adaptive cooldown is disarmed")
+        elif fl and fl not in allowed:
+            legacy_floors += 1
+    if legacy_floors:
+        info.append({"class": "cooldown-legacy-floor", "subject": "satellites",
+                     "detail": (f"{legacy_floors} enabled satellite lane(s) carry a cooldown_floor_s that is "
+                                f"neither 0 nor their family's canonical value — legacy pin, cadence "
+                                f"unaffected (satellites never arm adaptive cooldown and the policy aligns a "
+                                f"family lane before its REDUCE rules); cooldown_s is the asserted field")})
 
     # 6. satellite targets ----------------------------------------------------
     # A sync lane may legitimately target a DuckBrain data source rather than a

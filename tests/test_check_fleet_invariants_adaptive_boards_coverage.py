@@ -45,8 +45,13 @@ def _load_gate():
 
 gate = _load_gate()
 
+# The canonical -qa family cadence (SCHED-GAP-1675, 2026-09-29). A satellite
+# fixture must sit on its family's canonical value or the family-floor class
+# (check 5e) fires on the FIXTURE instead of the class under test.
+QA_PIN = gate.SATELLITE_FAMILY_PINS["qa"]
+
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
-FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood
+FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood, releng, perf, review, readme, docs
 NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
 
 
@@ -140,7 +145,7 @@ def test_adaptive_armed_satellite_fires(tmp_path):
         tmp_path,
         [{"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200,
           "namespace_id": "fixture-ns"},  # ns outside coverage scope: this module tests 5b/5c
-         {"name": "fixture-primary-qa", "cooldown_s": 43200, "cooldown_floor_s": 43200,
+         {"name": "fixture-primary-qa", "cooldown_s": QA_PIN, "cooldown_floor_s": QA_PIN,
           "adaptive_cooldown": 1, "namespace_id": "qa"}],
         with_board_for=("fixture-primary-qa",),
     )
@@ -169,7 +174,7 @@ def test_adaptive_disarmed_satellite_passes(tmp_path):
         tmp_path,
         [{"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200,
           "namespace_id": "fixture-ns"},
-         {"name": "fixture-primary-qa", "cooldown_s": 43200, "cooldown_floor_s": 43200,
+         {"name": "fixture-primary-qa", "cooldown_s": QA_PIN, "cooldown_floor_s": QA_PIN,
           "adaptive_cooldown": 0, "namespace_id": "qa"}],
         with_board_for=("fixture-primary-qa",),
     )
@@ -186,7 +191,7 @@ def test_boards_missing_link_fires(tmp_path):
     rows = [
         {"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200,
          "namespace_id": "fixture-ns"},  # ns outside coverage scope: this module tests 5c
-        {"name": "fixture-primary-qa", "cooldown_s": 43200, "cooldown_floor_s": 43200,
+        {"name": "fixture-primary-qa", "cooldown_s": QA_PIN, "cooldown_floor_s": QA_PIN,
          "namespace_id": "qa"},
     ]
     # NB: no with_board_for — neither workdir has the board link, but only the
@@ -205,7 +210,7 @@ def test_boards_link_present_passes(tmp_path):
     rows = [
         {"name": "fixture-primary", "cooldown_s": 43200, "cooldown_floor_s": 43200,
          "namespace_id": "fixture-ns"},
-        {"name": "fixture-primary-qa", "cooldown_s": 43200, "cooldown_floor_s": 43200,
+        {"name": "fixture-primary-qa", "cooldown_s": QA_PIN, "cooldown_floor_s": QA_PIN,
          "namespace_id": "qa"},
     ]
 

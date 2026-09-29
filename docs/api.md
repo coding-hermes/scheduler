@@ -423,7 +423,7 @@ stamped).
 | Missing `name`/`repo_url`/`workdir` | 400 | `{"error":"name, repo_url, workdir are required"}` |
 | `command` driving a retired driver script | 400 | `{"error":"command contains retired driver '<name>'; remove the custom command or use a supported executor"}` |
 | Satellite lane (`-qa`/`-pm`/`-sync`/`-dogfood`) with an off-convention `workdir` | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
-| `enabled: true` on a satellite lane that carries no pacing policy | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=43200 (the -sync family pin) so the lane is paced instead of drifting"}` |
+| `enabled: true` on a satellite lane that carries no pacing policy | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=21600 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight 1..100, priority 1..10, decay_rate > 0) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
 | Duplicate name (case-insensitive) | 409 | `{"error":"project already exists"}` |
 | Workdir (or name) already registered by an **enabled** project | 409 | `{"error":"create project ... already registered by enabled project ... (case-insensitive duplicate)"}` |
@@ -518,7 +518,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 | Malformed JSON | 400 | `{"error":"invalid JSON: <detail>"}` |
 | `decay_rate <= 0` | 400 | `{"error":"decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)"}` |
 | `workdir` off the lane convention for a satellite lane | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
-| A write that would leave an ENABLED satellite lane with no pacing policy (clearing the last `cooldown_floor_s`/`cooldown_ceiling_s`, or switching `adaptive_cooldown` off with no bound set) | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=43200 (the -sync family pin) so the lane is paced instead of drifting"}` |
+| A write that would leave an ENABLED satellite lane with no pacing policy (clearing the last `cooldown_floor_s`/`cooldown_ceiling_s`, or switching `adaptive_cooldown` off with no bound set) | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=21600 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight/priority ranges) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
 | Unknown project | 404 | `{"error":"project not found"}` |
 | Wrong method | 405 | `{"error":"GET, PUT, POST, or DELETE only"}` |

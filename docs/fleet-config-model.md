@@ -181,31 +181,41 @@ The loader pins these only when `fleet.toml` explicitly sets them: an API-flippe
 
 ### 4.1 The floor — a uniform 6-hour minimum
 
-`cooldown_s` is the minimum spacing between a lane's terminal tick and its next admission. The fleet law is a **6 h floor (21600 s)** for every enabled lane, with two documented exceptions tracked as named tiers:
+`cooldown_s` is the minimum spacing between a lane's terminal tick and its next admission. The fleet law is a **6 h floor (21600 s)** for every enabled lane, with two kinds of documented exception: named **tiers** (one lane each, every sanctioned value listed) and the satellite **family matrix** (one cadence per suffix, all nine families).
 
-| Tier | Value | Where it lives |
+| Tier | Sanctioned value(s) | Where it lives |
 |---|---|---|
 | `qa-audit` | 86400 (24 h) | `COOLDOWN_TIERS` in `ops/check-fleet-invariants.py` |
-| `release-engineer` | 604800 (7 d) | `COOLDOWN_TIERS` in `ops/check-fleet-invariants.py` |
-| pm **family** | 86400 (24 h) | `SATELLITE_FAMILY_PINS` — applies to every `-pm` lane |
-| dogfood **family** | 259200 (72 h) | `SATELLITE_FAMILY_PINS` — applies to every `-dogfood` lane |
-| qa **family** | 43200 (12 h) | `SATELLITE_FAMILY_PINS` — applies to every `-qa` lane |
-| sync **family** | 43200 (12 h) | `SATELLITE_FAMILY_PINS` — applies to every `-sync` lane |
+| `release-engineer` | 86400 (24 h) or 259200 (72 h) | `COOLDOWN_TIERS` — re-aligned 2026-09-29 (SCHED-GAP-1675); it is a PRIMARY lane in the `releases` namespace with no `-releng` suffix, so the family view never saw it |
+| `hermes-dagger` | 900 (15 min) | `SANCTIONED_SUBFLOOR_PINS` — the 2026-09-15 dagger speed ruling, `ELEVATED_PINS` in the policy script |
+| `coding-hermes-tools` | 3600 (1 h) | `SANCTIONED_SUBFLOOR_PINS` — the fast tier (`TARGET_ACTIVE` in the policy script) |
 
-**Correction to the source row:** the row lists "qa-audit 24 h, release-engineer 7 d, dogfood 72 h, pm 24 h" as one set. They are **two different constants with different scopes and different enforcement**. `qa-audit` and `release-engineer` are *named projects* in `COOLDOWN_TIERS`, whose check is "this project must be exactly this value". `dogfood`/`pm` (and `qa`/`sync`) are *name-suffix families* in `SATELLITE_FAMILY_PINS`, whose check is "every enabled lane matching this suffix must have **both** `cooldown_s` and `cooldown_floor_s` equal to the family value". A project tier is one row; a family pin is a class of dozens of rows. The distinction matters the moment you change one.
+The **family matrix** is `SATELLITE_FAMILY_PINS` — Bane's canonical cadence, aligned fleet-wide on 2026-09-29 (SCHED-GAP-1675) and mirrored as `FAMILY_CANONICAL` / `FAMILY_ALSO_ALLOWED` in `~/.hermes/scripts/fleet-cooldown-policy.py` (the policy writer, which lives outside this repo — the parity is asserted by `tests/test_check_fleet_invariants_family_floor.py`):
 
-**Why both fields are checked for a family:** a satellite reads its primary's board through the symlink — permanently "has work" — so the policy's REDUCE rule would pull it to the 6 h default on every run. Pinning the family is what keeps a satellite's cadence readable. `cooldown_floor_s` is checked alongside because either field alone is enough to make the cadence unreadable (§4.3).
+| Family | Canonical cadence | Scope |
+|---|---|---|
+| `qa` | 21600 (6 h) | every enabled `-qa` lane |
+| `sync` | 21600 (6 h) | every enabled `-sync` lane |
+| `pm` | 86400 (24 h) | every enabled `-pm` lane |
+| `releng` | 86400 (24 h) **or** 259200 (72 h) | every enabled `-releng` lane (`SATELLITE_FAMILY_ALSO_ALLOWED`) |
+| `dogfood` | 259200 (72 h) | every enabled `-dogfood` lane |
+| `perf` / `review` / `readme` / `docs` | 604800 (7 d) | every enabled lane of those four families |
+
+**Correction to the source row:** the row lists "qa-audit 24 h, release-engineer 7 d, dogfood 72 h, pm 24 h" as one set. They are **two different constants with different scopes and different enforcement**. `qa-audit` and `release-engineer` are *named projects* in `COOLDOWN_TIERS`, whose check is "this project must sit at one of these values". Every other entry above is a *name-suffix family* in `SATELLITE_FAMILY_PINS`, whose check is "every enabled lane matching this suffix must have this `cooldown_s` (or the family's sanctioned alternate)". A project tier is one row; a family pin is a class of dozens of rows. The distinction matters the moment you change one.
+
+**Why `cooldown_s` alone is the asserted field (and `cooldown_floor_s` is not):** a satellite reads its primary's board through the symlink — permanently "has work" — so the policy's REDUCE rule would pull it to the 6 h default on every run. Pinning `cooldown_s` per family is what keeps a satellite's cadence readable, and the policy now runs its family-canonical alignment *before* REDUCE/RAISE and hard-skips a lane already on a sanctioned value, so that hazard is closed by construction. The gate used to compare `cooldown_floor_s` as well and **no longer does** (2026-09-29): satellites never arm adaptive cooldown (§3.2), a non-adaptive lane ignores its floor entirely, and the alignment wrote only `cooldown_s`, so ~81 lanes legitimately carry a pre-canonical floor. That residue is counted and printed as `INFO cooldown-legacy-floor …` instead of failing the fleet; the one floor value that *is* still a violation is a floor below the 6 h law.
 
 ```bash
-# D1 — the floor and both tier tables, straight from the gate
-grep -n 'COOLDOWN_FLOOR = \|COOLDOWN_TIERS = \|SATELLITE_FAMILY_PINS = ' ops/check-fleet-invariants.py
+# D1 — the floor, both tier tables and the sanctioned sub-floor pins, straight
+#      from the gate
+grep -n 'COOLDOWN_FLOOR = \|COOLDOWN_TIERS = \|SANCTIONED_SUBFLOOR_PINS = \|SATELLITE_FAMILY_PINS = ' ops/check-fleet-invariants.py
 # D2 — every enabled lane's cooldown, as a histogram
 sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT cooldown_s, count(*) FROM projects WHERE enabled=1 GROUP BY cooldown_s ORDER BY cooldown_s;"
-# D3 — any enabled lane below the 6h floor (should be an empty set)
+# D3 — any enabled lane below the 6h floor (should be exactly the sanctioned pins)
 sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT name, cooldown_s, cooldown_floor_s FROM projects WHERE enabled=1 AND cooldown_s < 21600;"
 ```
 
-D1 → `71: COOLDOWN_FLOOR = 21600`, `73: COOLDOWN_TIERS = {"qa-audit": 86400, "release-engineer": 604800}`, `78: SATELLITE_FAMILY_PINS = {"qa": 43200, "pm": 86400, "sync": 43200, "dogfood": 259200}`.
+D1 (2026-09-29) → `243: COOLDOWN_FLOOR = 21600`, `257: COOLDOWN_TIERS = {"qa-audit": (86400,), "release-engineer": (86400, 259200)}`, `269: SANCTIONED_SUBFLOOR_PINS = {"hermes-dagger": 900, "coding-hermes-tools": 3600}`, `288: SATELLITE_FAMILY_PINS = {` (nine lines, qa 21600 → docs 604800).
 
 D2 (2026-09-20, 156 enabled lanes):
 
@@ -213,7 +223,7 @@ D2 (2026-09-20, 156 enabled lanes):
 900|2        21600|90      43200|13      86400|26      259200|24      604800|1
 ```
 
-D3 → `hermes-canopy|900|21600` and `coding-hermes-tools|900|21600` — **two live exceptions**, not an empty set. See §7; both are filed as findings, not fixed here.
+D3 (2026-09-29) → `hermes-dagger|900|900` and `coding-hermes-tools|3600|3600` — **two sanctioned sub-floor operator pins**, not an empty set, and no longer violations (SCHED-GAP-1675 added them to `SANCTIONED_SUBFLOOR_PINS`; the 2026-09-20 snapshot of this page showed `hermes-canopy|900` instead, since re-pinned to 21600). See §7; the historical findings stay filed, not fixed here.
 
 ### 4.2 The anti-snap rule — speeding up needs a dated ruling, slowing down does not
 
@@ -408,8 +418,8 @@ Also note: `--verify` also prints `WARN … adaptive_cooldown: db=1` lines for a
 |---|---|---|
 | `VIOLATION caps <ns>: max_concurrent=… expected 9` (or the policy value) | A satellite family sits off the SCHED-GAP-215 cap policy (below it = the serialization bottleneck returns; above it = a family can hold too many of the global slots) | Re-read `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py`, `PUT /api/v1/namespaces/{ns}` `{"max_concurrent": <policy>}`, mirror into `~/.hermes/fleet.toml`, re-run F1 |
 | `VIOLATION admission <ns>: mode=…` | A satellite namespace is `tasks`, or the foremen namespace is not | See §3.2; for a satellite, `cooldown` is the only correct answer |
-| `VIOLATION cooldown <p>: cooldown_s=… below the 21600s (6h) floor` | A lane is running faster than the law, or a wake value never got reverted | Decide intent; if it is intentional, it needs a dated `ELEVATED_PINS` entry (§4.2), otherwise raise it |
-| `VIOLATION family-floor <p>` | A satellite is off its family cadence — usually the REDUCE rule pulled it to the 6 h default | Restore **both** `cooldown_s` and `cooldown_floor_s` to the family value |
+| `VIOLATION cooldown <p>: cooldown_s=… below the 21600s (6h) floor` | A lane is running faster than the law, or a wake value never got reverted. Two named lanes are exempt while their pin matches `SANCTIONED_SUBFLOOR_PINS` (hermes-dagger 900, coding-hermes-tools 3600) — a DRIFT off either value still fires | Decide intent; if it is intentional, it needs a dated `ELEVATED_PINS` entry (§4.2) or a `SANCTIONED_SUBFLOOR_PINS` entry, otherwise raise it |
+| `VIOLATION family-floor <p>` | A satellite's `cooldown_s` is off its family cadence (§4.1) — usually the REDUCE rule pulled it to the 6 h default | Put `cooldown_s` back on the family's canonical value (releng accepts 86400 or 259200); `cooldown_floor_s` is no longer compared. `INFO cooldown-legacy-floor` is the same residue reported, not a violation |
 | `VIOLATION parity <p> <field>: db=… toml=…` | **The durability law is broken right now** | Fix the DB (API) *and* the file through its writer, then re-run F1 **and** F4 |
 | `MISMATCH <p> cooldown_s: db=… toml=…` | Same, scoped to an operator pin | Same fix; re-run F4 |
 | `VIOLATION targets <sat>: target is DISABLED` | A satellite is pointed at a project that is not enabled | Either re-enable the primary or disable the satellite |
@@ -429,8 +439,8 @@ This page is a documentation change; live fleet config is out of scope. These ar
 |---|---|---|---|
 | 1 | **`hermes-canopy` cooldown drift.** DB `900` vs `fleet.toml` `21600`, while `ELEVATED_PINS` says the canonical pin is `21600`. Both gates name it independently (`parity` violation + `MISMATCH`). | S1 / S2 · F1 · F4 | The lane runs 15 minutes instead of 6 hours until a restart re-pins it — i.e. the drift is also a *latent* behaviour change at the next boot. |
 | 2 | **`coding-hermes-tools` below the floor.** DB `cooldown_s = 900` against a 6 h law, and the project has **no `fleet.toml` block at all** — so the `parity` class structurally cannot see it; only the `cooldown` law class catches it. | D3 · F1 | Running 24× faster than the law, caught by exactly one of the two checks. Worth noting that "the two gates" are not redundant here. |
-| 3 | **51 `family-floor` violations.** `-qa` and `-sync` lanes sit on the 21600 default instead of the 43200 family pin, so their cadence cannot be read as a signal. | F1 · D1 | A satellite that should tick twice a day ticks up to four times. |
-| 4 | **The policy writer and the family pin disagree — the mirrored constant is absent.** `SATELLITE_FAMILY_PINS` exists in the repo gate and is checked for equality against the writer's copy, but the writer's working copy currently has **no** such constant (0 occurrences), while the repo test's own skip message records that a dirty working tree is the cause (SCHED-GAP-181 sibling-tick churn). The test therefore **skips** rather than failing. | `grep -c SATELLITE_FAMILY_PINS ~/.hermes/scripts/fleet-cooldown-policy.py` → `0` · `python3 -m pytest tests/test_check_fleet_invariants_coverage_and_family_floor.py -q` → `4 passed, 1 skipped` | The gate still fires on real drift (finding 3 proves the check works), but the writer-side mirror cannot be verified while the constant is missing — the cross-check is dormant. |
+| 3 | **51 `family-floor` violations (2026-09-20 snapshot) — RESOLVED 2026-09-29.** `-qa` and `-sync` lanes sat on the 21600 default against a 43200 family pin. The canonical matrix (SCHED-GAP-1675) moved both families to 21600 (their measured, intended cadence) and the 2026-09-29 alignment brought all nine families onto the matrix: the live `family-floor` count is now **0**, and the check polices releng/perf/review/readme/docs too — 129 of the pre-fix violations were the stale 43200 expectation itself. | F1 · D1 | Historically: a satellite that should tick twice a day ticked up to four times. Now: any family drifting off the matrix fails the gate. |
+| 4 | **The policy writer and the family pin disagree (2026-09-20) — superseded 2026-09-29.** The writer's copy of `SATELLITE_FAMILY_PINS` had vanished (SCHED-GAP-181 sibling-tick churn), so the repo-side mirror test skipped. The alignment replaced that name in the writer with `FAMILY_CANONICAL` + `FAMILY_ALSO_ALLOWED`, and BOTH mirror tests now parse it (`tests/test_check_fleet_invariants_family_floor.py`, `tests/test_check_fleet_invariants_coverage_and_family_floor.py`) and assert exact equality — the cross-check is armed again, and still SKIPS (with a printed reason) on a runner that has no user-level policy script. | `grep -c FAMILY_CANONICAL ~/.hermes/scripts/fleet-cooldown-policy.py` → `1` · `python3 -m pytest tests/test_check_fleet_invariants_family_floor.py -q` | None outstanding; the writer-side mirror is verified whenever the policy script is present. |
 | 5 | **Four `targets` violations:** the `hermes-dagger-{pm,qa,sync,dogfood}` satellites are enabled while `hermes-dagger` is disabled. | `sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT name, enabled FROM projects WHERE name LIKE 'hermes-dagger%' ORDER BY name;"` → `hermes-dagger\|0`, four satellites `\|1` · F1 | Those lanes burn clean-machine batteries against an unenabled primary. |
 | 6 | **Two writers, one header.** `~/.hermes/fleet.toml`'s header names `fleet-cooldown-policy.py --apply` as its generator, while `~/.hermes/scripts/fleet-sync.py` documents itself as that path's superseding decision-free DB→file mirror. The file's current content proves the mirror did **not** write it (S2 vs S3), so an operator reading the header and an operator running the mirror would take different actions. | S2 / S3 / S4 · `head -4 ~/.hermes/fleet.toml` | Ambiguity about which writer governs the restart pin — precisely the class of confusion SCHED-GAP-121 came from. |
 

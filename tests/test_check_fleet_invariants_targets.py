@@ -61,6 +61,15 @@ def _load_gate():
 
 gate = _load_gate()
 
+
+def _fixture_cooldown(name: str) -> int:
+    """The CANONICAL family cadence for a satellite-shaped fixture lane, else
+    the 6h default — the family-floor class (check 5e, SCHED-GAP-1675: all nine
+    families) must stay quiet so these fixtures isolate check 6."""
+    m = gate.SATELLITE_FAMILY_RE.match(name)
+    return gate.SATELLITE_FAMILY_PINS[m.group(2)] if m else 43200
+
+
 # Premise of the module: the chosen base name is portable — no candidate path exists.
 for cand in (f"/home/kara/{PRIMARY}", f"/home/kara/{PRIMARY.replace('-', '_')}",
              str(Path.home() / ".hermes" / PRIMARY)):
@@ -97,11 +106,14 @@ def _make_db(path: Path, primary: dict | None, rows: list[dict],
         # The satellite's workdir MUST carry the .coding-hermes/board link or
         # check 5c (boards) cross-fires — this module tests check 6 only.
         (swd / ".coding-hermes" / "board").mkdir(parents=True, exist_ok=True)
+        # The satellite must also sit on its FAMILY's canonical cadence, or the
+        # family-floor class (check 5e, SCHED-GAP-1675) cross-fires instead.
+        cd = r.get("cooldown_s", _fixture_cooldown(r["name"]))
         con.execute(
             "INSERT INTO projects (name, enabled, cooldown_s, cooldown_floor_s, command, prompt,"
-            " workdir, namespace_id) VALUES (?, ?, 43200, 43200, ?, '', ?, ?)",
-            (r["name"], r.get("enabled", 1), SUPPORTED_COMMAND, str(swd),
-             r.get("namespace_id", "dogfood")))
+            " workdir, namespace_id) VALUES (?, ?, ?, ?, ?, '', ?, ?)",
+            (r["name"], r.get("enabled", 1), cd, r.get("cooldown_floor_s", cd), SUPPORTED_COMMAND,
+             str(swd), r.get("namespace_id", "dogfood")))
         for spawned_at, status in (sat_ticks or []):
             con.execute("INSERT INTO ticks (project_name, spawned_at, status) VALUES (?, ?, ?)",
                         (r["name"], spawned_at, status))
