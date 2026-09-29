@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.11.3] — 2026-09-29
+
 ### Fixed
 - scheduler: pin-first effective cooldown — `cooldown_pin_s` outranks `cooldown_s` (`344bbfdc`, SCHED-GAP-1661)
 
