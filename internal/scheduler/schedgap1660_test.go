@@ -117,6 +117,21 @@ func gap1660SetLastCompleted(t *testing.T, db *sql.DB, name string, age time.Dur
 	}
 }
 
+// gap1660TickTerminal reports whether the nth (1-based, id-ordered) tick row
+// of a project has SETTLED. The slot pool reserves a lane for the life of its
+// tick, so a test that needs the lane admissible again must wait for the tick
+// to leave queued/running — otherwise the next admission is dedupe-suppressed
+// rather than recorded, and the assertion reads an empty table.
+func gap1660TickTerminal(t *testing.T, db *sql.DB, project string, n int) bool {
+	t.Helper()
+	var status string
+	if err := db.QueryRow(`SELECT status FROM ticks WHERE project_name = ? ORDER BY id LIMIT 1 OFFSET ?`,
+		project, n-1).Scan(&status); err != nil {
+		return false
+	}
+	return status != "queued" && status != "running"
+}
+
 // insertGap1660Project seeds one enabled project row with the given
 // admission mode (database.AdmissionModeCooldown / database.AdmissionModeTasks).
 func insertGap1660Project(t *testing.T, db *sql.DB, name, workdir string, cooldownS int, mode string) {
@@ -256,9 +271,115 @@ func TestSCHEDGAP1660_TasksLaneParkAndFlip(t *testing.T) {
 	}
 }
 
+// TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip is the SCOPING guard
+// (deliverable (a)): a tasks-admission lane whose board ALREADY holds
+// non-perpetual work never parked, so a board write that wakes it must not
+// be recorded as the sanctioned park-flip. The board-wake stamp is
+// process-wide — one fired wake stamps it and whichever lane spawns next
+// consumes it — so a flip label keyed off the stamp alone marks every
+// wake-driven admission on the fleet as a park-flip and makes the flip
+// unmeasurable. RED before the park mark is consumed by the stamp site.
+func TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip(t *testing.T) {
+	db := newTestDB(t)
+	const live1 = `{"id":"LIVE-1","status":"pending","title":"already queued"}`
+	wd, board := gap1660BoardDir(t, live1)
+	const proj = "gap1660-live-tasks"
+
+	insertGap1660Project(t, db, proj, wd, 720*3600, database.AdmissionModeTasks)
+	gap1660SetLastCompleted(t, db, proj, 24*time.Hour)
+	l, w := gap1660WallLoopAndWatcher(t, db)
+	defer l.Stop()
+	defer w.Stop()
+
+	// Baseline: the board already holds non-perpetual work, so the pass
+	// ADMITS the lane — the park mark is only ever set by a pass that
+	// DEFERS the lane on an empty board.
+	l.evaluate()
+	waitFor1660(t, 10*time.Second, func() bool {
+		rows := gap1660TickReasons(t, db, proj)
+		return len(rows) == 1 && rows[0] != ""
+	})
+	waitFor1660(t, 10*time.Second, func() bool { return gap1660TickTerminal(t, db, proj, 1) })
+	if isParkedEmpty(proj) {
+		t.Fatal("precondition: a tasks lane whose board holds non-perpetual work was recorded parked-empty")
+	}
+	// A tick id is <project>-<second> (see the pool's tickID), so an
+	// admission inside the SAME wall second as the previous tick collides on
+	// the primary key and the enqueue is dropped — not the path under test.
+	// Cross the second boundary before waking the lane again.
+	time.Sleep(1100 * time.Millisecond)
+
+	// The board write (adding a second non-perpetual row) plus the wake it
+	// fires: this admission IS board-wake sourced, but the lane never
+	// parked — the label must therefore stay in the ordinary nudge family.
+	gap1660WriteBoard(t, board, live1, `{"id":"LIVE-2","status":"pending","title":"second"}`)
+	gap1660WakeNow(t, w, proj, wd, board)
+	waitFor1660(t, 10*time.Second, func() bool { return len(gap1660TickReasons(t, db, proj)) > 1 })
+
+	reasons := gap1660TickReasons(t, db, proj)
+	seenWake := false
+	for i, r := range reasons {
+		if r == AdmissionReasonFlipBoardEmpty {
+			t.Fatalf("tick #%d on a never-parked tasks lane is stamped %q — flip:board_empty belongs ONLY to a lane that parked on an empty board (deliverable (a)); all reasons=%v",
+				i, r, reasons)
+		}
+		if r == "resume:"+NudgeSourceBoardWake {
+			seenWake = true
+		}
+	}
+	// Non-vacuity: the wake really was the entry point for the second tick,
+	// so the assertion above ran against a live board-wake admission.
+	if !seenWake {
+		t.Fatalf("no tick carries %q — the wake path was not exercised, so the no-flip assertion is vacuous; all reasons=%v",
+			"resume:"+NudgeSourceBoardWake, reasons)
+	}
+}
+
+// TestSCHEDGAP1660_CooldownLaneImmuneOnMixedFleet is requirement (c) in the
+// FLEET shape: a pinned cooldown lane whose board even HAD pending work, next
+// to a tasks lane whose writes keep the board-wake stamp flowing. The
+// SCHED-GAP-1660 hook cannot protect this case (wakeAdmitsAnyLane is true
+// whenever a tasks lane is enabled, which is the real fleet), so the immunity
+// has to be structural: the packer's wall-clock gate refuses the cooldown
+// lane however the pass was triggered. The tasks lane must tick (non-vacuity:
+// the stamp really was live).
+func TestSCHEDGAP1660_CooldownLaneImmuneOnMixedFleet(t *testing.T) {
+	db := newTestDB(t)
+	coolRow := `{"id":"C1","status":"pending","title":"cool lane work"}`
+	taskRow := `{"id":"T1","status":"pending","title":"tasks lane work"}`
+	coolWD, coolBoard := gap1660BoardDir(t, coolRow)
+	taskWD, taskBoard := gap1660BoardDir(t, taskRow)
+	const cool, task = "gap1660-mixed-cool", "gap1660-mixed-task"
+
+	insertGap1660Project(t, db, cool, coolWD, 720*3600, database.AdmissionModeCooldown)
+	gap1660SetLastCompleted(t, db, cool, time.Hour) // inside the 30-day pin
+	insertGap1660Project(t, db, task, taskWD, 720*3600, database.AdmissionModeTasks)
+	gap1660SetLastCompleted(t, db, task, 24*time.Hour)
+
+	l, w := gap1660WallLoopAndWatcher(t, db)
+	defer l.Stop()
+	defer w.Stop()
+
+	for i := 0; i < 4; i++ {
+		gap1660WriteBoard(t, taskBoard, taskRow,
+			fmt.Sprintf(`{"id":"T%d","status":"pending","title":"more %d"}`, i, i))
+		gap1660WakeNow(t, w, task, taskWD, taskBoard)
+		gap1660WriteBoard(t, coolBoard, coolRow,
+			fmt.Sprintf(`{"id":"C%d","status":"pending","title":"wake %d"}`, i, i))
+		gap1660WakeNow(t, w, cool, coolWD, coolBoard)
+	}
+
+	waitFor1660(t, 10*time.Second, func() bool { return len(gap1660TickReasons(t, db, task)) > 0 })
+	if rows := gap1660TickReasons(t, db, cool); len(rows) != 0 {
+		t.Fatalf("a cooldown lane pinned at 30 days took %d tick(s) while a tasks lane kept the board-wake stamp live: %v — the pin is the sole authority for a cooldown lane",
+			len(rows), rows)
+	}
+}
+
 // TestSCHEDGAP1660_RestartDoesNotAdmitInsideCooldown is RED test 3: after a
-// restart (fresh Loop + cleared park registry), a lane whose cooldown has
-// not expired is not admitted — a board write included.
+// restart (the boot scan resumeOrphansAtStartup runs against a live gateway,
+// then the park registry is cleared exactly as a fresh NewLoop does), a lane
+// whose cooldown has not expired is not admitted — a board write included.
 func TestSCHEDGAP1660_RestartDoesNotAdmitInsideCooldown(t *testing.T) {
 	db := newTestDB(t)
 	wd, board := gap1660BoardDir(t, `{"id":"S1","status":"pending","title":"work"}`)
@@ -268,9 +389,14 @@ func TestSCHEDGAP1660_RestartDoesNotAdmitInsideCooldown(t *testing.T) {
 	defer l.Stop()
 	defer w.Stop()
 
-	// The restart: clear the in-memory park registry exactly as NewLoop does,
-	// then wake the lane through a fresh board write.
+	// The restart: the boot orphan scan (SCHED-GAP-101 / the criterion's
+	// named entry point) then the fresh-process park registry, then a board
+	// write wakes the lane.
+	l.resumeOrphansAtStartup()
 	clearParkedEmpty()
+	if rows := gap1660TickReasons(t, db, proj); len(rows) != 0 {
+		t.Fatalf("resumeOrphansAtStartup admitted a lane inside its cooldown: %v", rows)
+	}
 	gap1660WriteBoard(t, board,
 		`{"id":"S1","status":"pending","title":"work"}`,
 		`{"id":"S2","status":"pending","title":"more"}`)

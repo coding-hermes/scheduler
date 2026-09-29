@@ -506,16 +506,31 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			// blank). Three families:
 			//   ok                 — a packer tick.
 			//   resume:<source>    — a non-packer entry (startup resume scan,
-			//                        operator manual spawn, parked-empty flip).
-			//   flip:board_empty   — a board-wake flipped a parked-empty
+			//                        operator manual spawn, ordinary
+			//                        board-wake nudge).
+			//   flip:board_empty   — a board wake flipped a PARKED-EMPTY
 			//                        tasks-admission lane back to admission
-			//                        (the ruling's one allowed effect). The
-			//                        nudgeSource is board_wake exactly when
-			//                        the wake stamped the flip, so the scoped
-			//                        label rides the same condition.
+			//                        (the ruling's one allowed effect).
+			//
+			// SCHED-GAP-1660 deliverable (a): the flip label is SCOPED by
+			// consuming the lane's park mark, not by the nudge source. The
+			// board-wake stamp is process-wide — one fired wake stamps it
+			// and whichever lane spawns next consumes it — so keying the
+			// flip off nudgeSource alone labelled every wake-driven
+			// admission on the fleet (including lanes whose board was never
+			// empty) as a park-flip, which made the flip unmeasurable. The
+			// mark is present only for a lane that was deferred on an empty
+			// board since its last admission, so it is exactly the lane the
+			// ruling allows a board write to flip.
+			//
+			// The mark is consumed on EVERY spawn, the packer path
+			// included: an admission that ends a park is the only admission
+			// entitled to carry the mark, and consuming it here is what
+			// stops a stale mark from labelling a later wake as a flip.
+			wasParkedEmpty := consumeParkedEmpty(proj.Name)
 			admitReason := AdmissionReasonOK
 			switch {
-			case nudgeSource == NudgeSourceBoardWake:
+			case nudgeSource == NudgeSourceBoardWake && wasParkedEmpty:
 				admitReason = AdmissionReasonFlipBoardEmpty
 			case nudgeSource != "":
 				admitReason = "resume:" + nudgeSource

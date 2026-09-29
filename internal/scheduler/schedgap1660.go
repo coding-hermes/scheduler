@@ -32,9 +32,17 @@ package scheduler
 //     parked-empty lane, the flip-back is allowed: the stamp goes through,
 //     the packer waives the pin now that the board holds work, and the
 //     resulting tick is stamped admit_reason=flip:board_empty by the slot
-//     pool. A perpetual-only write parks the lane again instead of flipping
-//     (the board still holds no admissible work), so the packer's unchanged
-//     GAP-124/106 gate refuses it.
+//     pool — WHICH CONSUMES THE PARK MARK to decide it. That consumption is
+//     the scoping: only the lane that parked (and is therefore still
+//     carrying the mark when its next admission is recorded) can be
+//     labelled a flip. A lane that merely received the board-wake stamp —
+//     any tasks lane on the fleet, since the stamp is process-wide and set
+//     once per fired wake — is admitted as an ordinary nudge and keeps
+//     resume:board_wake, so the flip count measures park-flips instead of
+//     "a board write happened somewhere recently". A perpetual-only write
+//     parks the lane again instead of flipping (the board still holds no
+//     admissible work), so the packer's unchanged GAP-124/106 gate refuses
+//     it.
 //
 //     The flipped tick still rides the rest of the gate stack: failure
 //     backoff (GAP-133), post-tick pacing floor (GAP-136), the failed-tick
@@ -91,6 +99,35 @@ func isParkedEmpty(project string) bool {
 	parkedMu.Lock()
 	defer parkedMu.Unlock()
 	return parkedEmptySet[project]
+}
+
+// consumeParkedEmpty reads AND CLEARS the lane's park mark, reporting whether
+// it was set. This is the registry's one production reader: the slot pool
+// calls it for every spawn of a lane and uses the answer to decide whether
+// the admission it is recording IS the sanctioned park-flip (mark present)
+// or an ordinary entry (mark absent — the board-wake stamp alone never
+// authorises the flip label; SCHED-GAP-1660 deliverable (a)).
+//
+// Consuming rather than reading is what keeps the label one admission wide.
+// The mark is set by a pass that DEFERS a tasks-admission lane on an empty
+// board and cleared by noteParkedEmpty only when a later classification pass
+// sees work — but an ADMITTED candidate is never classified (emitAdmissionPass
+// classifies the candidates the packers did not select), so a lane that is
+// admitted keeps a set mark. A read-only consumer would therefore stamp the
+// lane's NEXT board-wake admission — long after the park ended — as a flip
+// that never happened. Clearing at the first spawn bounds the mark to the
+// exactly one admission that ended the park.
+//
+// A spawn that returns early (namespace cap, slot patience, load gate) never
+// reaches the caller, so those paths leave the mark intact for the retry.
+func consumeParkedEmpty(project string) bool {
+	parkedMu.Lock()
+	defer parkedMu.Unlock()
+	parked, ok := parkedEmptySet[project]
+	if ok {
+		delete(parkedEmptySet, project)
+	}
+	return parked
 }
 
 // clearParkedEmpty removes every park mark. Boot hygiene: a restart must not

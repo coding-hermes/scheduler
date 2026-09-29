@@ -903,18 +903,27 @@ func TestSCHEDGAP157_SlotPoolStampsAdmitReasonForNudgeTicks(t *testing.T) {
 	}
 
 	// With a tasks-admission lane enabled, the same hook passes the stamp —
-	// the ruling's one allowed effect (the parked-empty flip) or the normal
-	// waiver — and the row records flip:board_empty.
+	// a board write may then admit a tasks lane, and the row records the
+	// board_wake entry point. This tick's lane never parked (it is a
+	// cooldown-mode fixture handed a queued row directly, with no board),
+	// so the honest label is the ordinary nudge family, resume:board_wake.
+	// The scoped park-flip (flip:board_empty) belongs ONLY to a
+	// tasks-admission lane that parked on an empty board and is flipped back
+	// by the write — covered end to end by
+	// TestSCHEDGAP1660_TasksLaneParkAndFlip (the flip) and
+	// TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip (this exact
+	// never-parked case).
 	capTestNamespace(t, db, "157-nudge-tasks", 4, "tasks")
 	admitInsertProject(t, db, admitProjectSpec{Name: "157-pool-tasks", NS: "157-nudge-tasks", CooldownS: 21600, AdmissionMode: "tasks"})
-	flipTick := spawnNudged(t, "157-pool-nudge-bw2", func() {
+	wakeTick := spawnNudged(t, "157-pool-nudge-bw2", func() {
 		boardWakeNudgeSource.Load().(func())()
 	})
-	waitUntil(t, 10*time.Second, "the flip tick to be stamped", func() bool {
-		return schedGap157TickStatus(t, db, flipTick) != "queued"
+	waitUntil(t, 10*time.Second, "the wake tick to be stamped", func() bool {
+		return schedGap157TickStatus(t, db, wakeTick) != "queued"
 	})
-	if _, reason, nudge := schedGap157Stamps(t, db, flipTick); nudge != NudgeSourceBoardWake || reason != AdmissionReasonFlipBoardEmpty {
-		t.Errorf("wake tick with a tasks lane present = admit_reason %q nudge_source %q, want %q/%q (SCHED-GAP-1660 scoped stamp)", reason, nudge, AdmissionReasonFlipBoardEmpty, NudgeSourceBoardWake)
+	if _, reason, nudge := schedGap157Stamps(t, db, wakeTick); nudge != NudgeSourceBoardWake || reason != "resume:"+NudgeSourceBoardWake {
+		t.Errorf("wake tick on a never-parked lane = admit_reason %q nudge_source %q, want %q/%q (SCHED-GAP-1660 scoped stamp: the flip label requires the park mark)",
+			reason, nudge, "resume:"+NudgeSourceBoardWake, NudgeSourceBoardWake)
 	}
 
 	// The packer tick (no stamp at all) must record "ok" and leave the
