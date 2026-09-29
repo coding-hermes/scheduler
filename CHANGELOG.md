@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.11.0] — 2026-09-29
+
 ### Added — scheduling engine
 
 - **Builder no-artifact guard** — BUILDER-class workers with many recon calls and zero writes are nudged at the first observation window and aborted with an honest `no_artifact` verdict at the second; signals (`no_artifact_window`, `no_artifact_recon_floor`, `reporter_class`) are fleet.toml config, not name heuristics (`f1f5f5da`, SCHED-GAP-1674)
