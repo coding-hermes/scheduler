@@ -440,7 +440,8 @@ bash scripts/cooldown-residue-detector.sh; echo "exit=$?"
 # R2 — the schedule is installed and armed
 systemctl --user list-timers cooldown-residue.timer
 # R3 — the last daily report, including the exit-code result
-journalctl --user -u cooldown-residue.service -n 50
+systemctl --user status cooldown-residue.service
+journalctl --user-unit cooldown-residue.service -n 50
 ```
 
 **What the detector is for, and what it is not.** It reports; it does not heal. Healing the class at the *pin-import* moment is the loader's job and now holds (`database.SetCooldownPin` snaps a live cooldown up to the pin it just recorded, so a lane whose file carries `cooldown_s = 604800` cannot stay live at 86400 — pinned by `internal/config/schedgap1670_pin_snap_test.go`). Healing a live cooldown lowered **after** its pin already landed is deliberately *not* done at boot: the DB stays the authority for API writes (SCHED-GAP-219), and an equal pin does not re-write the row. That case is what this detector is for — it names the lane within a day, and the operator's policy run corrects it.
@@ -518,7 +519,7 @@ Every command in this page, with what it establishes. All were run on 2026-09-20
 | P4 | `head -4 ~/.hermes/fleet.toml` | Which writer the restart pin's header names (finding 6) |
 | R1 | `bash scripts/cooldown-residue-detector.sh; echo "exit=$?"` | The residue report and its exit code: 0 clean / 1 residue / 2 unreadable / 3 build fault (§6.4) |
 | R2 | `systemctl --user list-timers cooldown-residue.timer` | That the daily detector is installed and armed |
-| R3 | `journalctl --user -u cooldown-residue.service -n 50` | The last daily report — the pushed surface's own record |
+| R3 | `systemctl --user status cooldown-residue.service` (or `journalctl --user-unit cooldown-residue.service -n 50`) | The last daily report — the pushed surface's own record |
 
 **Requirements, stated plainly.** B1/B2/B3/C1/C4/D2/D3/E2/E3/E4/F1/F3/F4/S1–S4 need the live fleet: the daemon on `127.0.0.1:9090`, `~/.hermes/coding-hermes/scheduler.db`, and `~/.hermes/fleet.toml`. A/I/…/C2/C3/D1/E1/G1/G2 read the **repo only** and work in any checkout; F2 is the one fleet gate that runs without fleet state, which is why it is the CI shape. F4 requires `~/.hermes/scripts/fleet-cooldown-policy.py`, which lives outside this repo. R1 needs the repo *and* the live DB path (it builds `cmd/cooldown-residue` and reads the DB `mode=ro`); R2/R3 additionally need `deploy/cooldown-residue.{service,timer}` installed under `~/.config/systemd/user/` — the detector itself is repo-only and runs anywhere with a DB path.
 
