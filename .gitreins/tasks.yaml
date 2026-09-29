@@ -4534,10 +4534,40 @@ tasks:
   status: complete
   created_at: '2026-09-28T21:01:18.979234+00:00'
   completed_at: '2026-09-28T21:02:04.329889+00:00'
-- id: SCHED-GAP-138
-  title: Onboarding validation check
+- id: SCHED-GAP-131
+  title: Feature-usage surface + dead-feature reaper
   criteria:
-  - Reject retired command routes, validate sync-lane workdirs, arm satellite lanes
-    on register/update; tests cover all three; guard 4/4
+  - 'Expose per-feature live usage counters (arming count, wave ticks, admission_mode
+    rows, load-gate deferrals, dedupe suppressions) in /api/v1/status or /api/v1/features.
+    Add a prune pass: any mechanism with zero proven uses for N weeks gets flagged
+    for review. Acceptance: a queryable endpoint shows usage per feature; a prune
+    candidate list is generated; no features are auto-deleted (flag only).'
+  status: complete
+  created_at: '2026-09-28T22:20:55.326426+00:00'
+  completed_at: '2026-09-28T22:51:46.963662+00:00'
+- id: SCHED-GAP-1669
+  title: Fix DuckBrain sync domain 'metrics' VALIDATION_ERROR
+  criteria:
+  - 'Daemon''s DuckBrain sync emits domain=''metrics'' which causes VALIDATION_ERROR
+    (88 events spooled). Remap to valid domain + validate at the source so invalid
+    domains never reach DuckBrain. PASS: no VALIDATION_ERROR for domain=''metrics''
+    in scheduler logs over 5 min; DuckBrain sync audit shows 0 validation errors for
+    scheduler namespace.'
+  status: complete
+  created_at: '2026-09-29T00:32:01.672685+00:00'
+  completed_at: '2026-09-29T00:59:28.159596+00:00'
+- id: SCHED-GAP-1660
+  title: Cooldown must not be affected by a board write; one sanctioned flip (parked-empty
+    tasks lane)
+  criteria:
+  - 'A cooldown-mode lane is structurally unable to be admitted by a board write:
+    zero board_wake-sourced admit_reason rows from board writes on cooldown lanes'
+  - A tasks-admission lane whose board holds only perpetual rows parks on its cooldown
+    pin; adding one non-perpetual row flips it back to admission stamped admit_reason=flip:board_empty;
+    a perpetual-only write does not flip
+  - A restart (resumeOrphansAtStartup) does not admit a lane whose cooldown has not
+    expired
+  - admit_reason is non-empty on every tick row produced by any path (packer, nudge,
+    flip, sim spawn)
   status: in_progress
-  created_at: '2026-09-28T21:46:53.772516+00:00'
+  created_at: '2026-09-29T02:11:36.830274+00:00'
