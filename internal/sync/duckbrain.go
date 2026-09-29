@@ -401,11 +401,28 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 		if d.rateLimited() {
 			break
 		}
+		// Domain validation (SCHED-GAP-1669): rows spooled before the call
+		// sites were fixed can carry a domain DuckBrain rejects. Remap a known
+		// alias so the backlog drains; for anything else do NOT post it — bump
+		// the attempt counter so the existing 50-strike prune reaps the row.
+		// (Posting it would 400 forever; leaving it untouched would park a
+		// permanently-unpostable write in the batch head indefinitely.)
+		sendDomain, ok := resolveDomain(e.Domain)
+		if !ok {
+			log.Printf("SYNC: skipping spooled %s — domain %q is not accepted by DuckBrain (allowed: %s)",
+				e.MemKey, e.Domain, allowedDomains())
+			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID,
+				fmt.Sprintf("%v: %q", ErrDuckBrainDomainRejected, e.Domain))
+			continue
+		}
+		if sendDomain != e.Domain {
+			log.Printf("SYNC: replay remapped domain %q -> %q for %s", e.Domain, sendDomain, e.MemKey)
+		}
 		// Parse the original content JSON back into raw bytes for posting.
 		contentJSON := []byte(e.Content)
 		body := map[string]any{
 			"key":        e.MemKey,
-			"domain":     e.Domain,
+			"domain":     sendDomain,
 			"content":    string(contentJSON),
 			"attributes": map[string]any{},
 		}
@@ -658,7 +675,11 @@ func (d *DuckBrainSync) syncLaneFamilyOutput(ctx context.Context) error {
 		"threshold": 8,
 		"synced_at": d.clock().Now().Format(time.RFC3339),
 	}
-	return d.postMemory(ctx, "/fleet/lane-output", "metrics", payload)
+	// Domain "config": /fleet/lane-output is a periodic aggregate STATE
+	// snapshot with change detection, like /fleet/summary and
+	// /fleet/namespaces. DuckBrain has no "metrics" domain and rejected the
+	// previous value with 400 VALIDATION_ERROR on every cycle (SCHED-GAP-1669).
+	return d.postMemory(ctx, "/fleet/lane-output", "config", payload)
 }
 
 // postMemory POSTs a memory to the DuckBrain HTTP API. (rest of method unchanged)
@@ -877,6 +898,21 @@ func canonicalPayloadHash(content any) (string, error) {
 }
 
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {
+	// Domain validation (SCHED-GAP-1669): DuckBrain rejects a domain outside
+	// its enum with 400 VALIDATION_ERROR. Resolve it BEFORE anything else —
+	// remap a known alias, and for an unknown domain skip the write loudly
+	// instead of spooling a duplicate every cycle and flipping health to
+	// "unreachable" (the generic failure path) for a defect retrying cannot fix.
+	sendDomain, ok := resolveDomain(domain)
+	if !ok {
+		log.Printf("SYNC: SKIP %s — domain %q is not accepted by DuckBrain (allowed: %s); not sent, not spooled",
+			key, domain, allowedDomains())
+		return fmt.Errorf("%w: %q for key %s", ErrDuckBrainDomainRejected, domain, key)
+	}
+	if sendDomain != domain {
+		log.Printf("SYNC: remapped domain %q -> %q for %s", domain, sendDomain, key)
+	}
+
 	payload, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("marshal content: %w", err)
@@ -897,7 +933,7 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 
 	body := map[string]any{
 		"key":        key,
-		"domain":     domain,
+		"domain":     sendDomain,
 		"content":    string(payload),
 		"attributes": map[string]any{},
 	}
