@@ -1371,3 +1371,4 @@
 {"id":1790516912357898426,"task_id":"SCHED-GAP-1669","event":null,"timestamp":"2026-09-29T00:21:15Z","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1669\",\"status\":\"pending\"}","event_type":"task_created"}
 {"id":1790516912357898427,"task_id":"SCHED-GAP-1660","event":null,"timestamp":"2026-09-29T01:29:09Z","actor":"foreman","detail":"{\"status\":\"in_progress\"}","event_type":"task_updated"}
 {"id":1790516912357898428,"task_id":"SCHED-GAP-1674","event":null,"timestamp":"2026-09-29T01:31:10Z","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1674\",\"status\":\"pending\"}","event_type":"task_created"}
+{"id":"EVT-1660-close","task_id":"SCHED-GAP-1660","event":"close","timestamp":"2026-09-29T02:55:00Z","reason":"follow-up refinements committed 466ab138, tests green, CI green, pushed"}
