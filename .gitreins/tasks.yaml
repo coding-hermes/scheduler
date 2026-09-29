@@ -4569,5 +4569,29 @@ tasks:
     expired
   - admit_reason is non-empty on every tick row produced by any path (packer, nudge,
     flip, sim spawn)
-  status: in_progress
+  status: complete
   created_at: '2026-09-29T02:11:36.830274+00:00'
+  completed_at: '2026-09-29T02:59:03.619873+00:00'
+- id: SCHED-GAP-1672
+  title: 'Duplicate delivery: a timed-out send is blind-retried'
+  criteria:
+  - 'An ambiguous send timeout (bare ''Timed out'') is never blind-retried: exactly
+    one send attempt produces exactly one delivery record and zero duplicate posts;
+    explicit rejection classes (flood control, connection refused) still retry; an
+    idempotency key per (lane,tick_id,message-kind) suppresses duplicate retries;
+    a delivery ledger (attempted/confirmed/ambiguous/duplicates_suppressed) is visible
+    on GET /api/v1/status; a RED-first test reproduces a timeout-after-accept yielding
+    one attempt and zero duplicates; the final-attempt log no longer claims ''retrying''.'
+  status: in_progress
+  created_at: '2026-09-29T05:34:06.944719+00:00'
+- id: SCHED-GAP-1659
+  title: Count the commit where it LANDED
+  criteria:
+  - gitWorkDelta counts commits that landed anywhere in the repo (all refs) so a worker
+    commit on a side branch from a worktree is measured; a failed/unmeasurable read
+    still returns a non-nil error and never reads as a measured zero; a repo with
+    no new commit still reports exactly 0 with nil error; the -1 no-git sentinel of
+    gitBaseline is unchanged; the SCHED-GAP-1652 measurement-honesty contract does
+    not regress; tests build real temp repos including the side-branch worktree shape.
+  status: in_progress
+  created_at: '2026-09-29T05:34:08.221717+00:00'
