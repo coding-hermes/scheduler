@@ -4620,3 +4620,15 @@ tasks:
   status: complete
   created_at: '2026-09-29T22:02:43.346083+00:00'
   completed_at: '2026-09-29T22:04:12.230941+00:00'
+- id: SCHED-GAP-1675
+  title: 'Satellite cadence alignment checker half: mirror FAMILY_CANONICAL into ops/check-fleet-invariants.py'
+  criteria:
+  - ops/check-fleet-invariants.py family-floor check covers all 9 satellite suffixes
+    with the canonical values (qa 21600, sync 21600, pm 86400, dogfood 259200, releng
+    86400, perf 604800, review 604800, readme 60400... docs 604800) mirrored from
+    fleet-cooldown-policy.py FAMILY_CANONICAL; release-engineer tier updated to 86400
+    with 259200 also allowed; hermes-dagger 900 and coding-hermes-tools 3600 sanctioned
+    as operator pins; zero family-floor violations on the live fleet; new/updated
+    python tests pass
+  status: in_progress
+  created_at: '2026-09-29T23:18:18.070581+00:00'
