@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.11.1] — 2026-09-29
+
 ### Fixed
 - deliver: never auto-resend an ambiguous (timed-out) send — duplicate-suppression on Hermes-delivered ticks (`31cc5d73`)
 
