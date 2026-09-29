@@ -33,6 +33,12 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+### Fixed
+- deliver: never auto-resend an ambiguous (timed-out) send — duplicate-suppression on Hermes-delivered ticks (`31cc5d73`)
+
+### Board
+- INT-CI-168 filed: CI Pipeline flake `TestLoop_ForceEvaluate_Drain_BoundsEvaluates` on `31cc5d73` (green locally x3, race-detector timeout on rerun)
+
 ## [1.11.0] — 2026-09-29
 
 ### Added — scheduling engine
