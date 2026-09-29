@@ -83,10 +83,10 @@ func (s TickStatus) Outcome() string {
 // returned the literal "committed" for every TickCompleted, so the column
 // claimed credit for empty ticks AND could not reveal the mis-measured ones.
 //
-// The vocabulary is deliberately unchanged — the schema CHECK constrains outcome
-// to ('committed','dry_run','failed','timeout','deferred') and the metrics
-// aggregator seeds exactly those keys, so a new value would need a migration and
-// would silently vanish from /api metrics. "Could not measure" is therefore
+// The vocabulary is deliberately unchanged by the completed path — the schema
+// CHECK constrains outcome to ('committed','dry_run','failed','timeout',
+// 'deferred') (plus 'aborted:no_artifact' since v50) and the metrics
+// aggregator seeds those keys. "Could not measure" is therefore
 // carried by a -1 sentinel in commits/files_changed, which is the convention
 // code_commits/board_commits already use and which every consumer already reads
 // as "not positive" (migrations.go: COALESCE(code_commits,0) > 0).
@@ -96,7 +96,20 @@ func (s TickStatus) Outcome() string {
 // write, a filed row or a battery verdict are tracked by their own per-family
 // counters (qa_output_count / pm_output_count / sync_output_count), never by this
 // column. Bane, explicitly: "the satellites don't always need to commit."
+//
+// SCHED-GAP-1674: a GUARD-ABORTED tick carries its own verdict through the
+// status-agnostic path — the guard sets GuardAbort on the TickOutcome, and
+// this mapping returns 'aborted:no_artifact' regardless of Status. That
+// verdict is only legal for a status=failed row (an aborted session did not
+// complete), so any other status keeps its own Outcome() mapping — the
+// guard's outcome can never ride a completed or deferred row.
 func terminalOutcome(o TickOutcome) string {
+	if o.GuardAbort {
+		if o.Status == TickFailed {
+			return AbortOutcomeValue
+		}
+		return o.Status.Outcome()
+	}
 	if o.Status != TickCompleted {
 		return o.Status.Outcome()
 	}
@@ -134,6 +147,12 @@ type TickOutcome struct {
 	// the DB layer validates (database.DispatchReasons).
 	DispatchDispatched bool
 	DispatchReason     string
+	// GuardAbort (SCHED-GAP-1674): the builder no-artifact guard cancelled
+	// this tick's session. terminalOutcome maps the row to
+	// outcome='aborted:no_artifact' (legal only with Status=failed); the
+	// status/outcome pair therefore records the guard's verdict on every
+	// surface without any second marker column.
+	GuardAbort bool
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one

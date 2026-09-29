@@ -620,6 +620,13 @@ func (l *Loop) Run() {
 			// next pause/resume pair (DOGFOOD-020).
 		case <-reaper.C:
 			l.reapZombies()
+			// SCHED-GAP-1674: the builder no-artifact guard rides the same
+			// 60s reaper pass, after the zombie reap. Best-effort by
+			// contract: every failure inside the pass is logged there and
+			// can never touch the reaper's own semantics.
+			if nudgeN, abortN := l.builderGuardPass(); nudgeN+abortN > 0 {
+				log.Printf("BUILDER-GUARD: pass complete — %d nudged, %d aborted", nudgeN, abortN)
+			}
 		case <-healthTicker.C:
 			// SCHED-GAP-131: periodic flush of the in-memory feature-usage
 			// counters to the persisted table, so a long-running daemon's

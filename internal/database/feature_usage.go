@@ -35,6 +35,9 @@ const (
 	FeatureAdmissionMode     = "admission_mode"
 	FeatureLoadGateDeferrals = "load_gate_deferrals"
 	FeatureDedupeSuppress    = "dedupe_suppressions"
+	// FeatureBuilderGuard (SCHED-GAP-1674): the builder no-artifact guard
+	// fired (nudged or aborted) at least one running tick.
+	FeatureBuilderGuard = "builder_guard"
 )
 
 // FeatureDefinition names one tracked mechanism and what "use" means for it.
@@ -52,6 +55,7 @@ var FeatureDefinitions = []FeatureDefinition{
 	{FeatureAdmissionMode, "a tasks-mode lane admitted via the SCHED-GAP-124 board-work waiver"},
 	{FeatureLoadGateDeferrals, "the SCHED-GAP-125 load-average gate deferred a spawn"},
 	{FeatureDedupeSuppress, "a duplicate spawn suppressed (SCHED-GAP-030/103)"},
+	{FeatureBuilderGuard, "the SCHED-GAP-1674 builder no-artifact guard nudged or aborted a running tick"},
 }
 
 // FeatureUsage is one feature-usage row as served to the API. FirstUsedAt and

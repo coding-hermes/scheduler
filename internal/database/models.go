@@ -322,6 +322,16 @@ const (
 	OutcomeDryRun    TickOutcome = "dry_run"
 	OutcomeFailed    TickOutcome = "failed"
 	OutcomeTimeout   TickOutcome = "timeout"
+	// OutcomeAbortedNoArtifact (SCHED-GAP-1674) is the builder no-artifact
+	// guard's terminal verdict: the tick was running, the guard proved
+	// elapsed >= window with zero write-class artifacts AND >= the
+	// recon-message floor, nudged it once, and the condition persisted for
+	// another full window — so the session was cancelled and the row closed
+	// with this outcome. It is deliberately NOT 'dry_run' (that verdict
+	// means a tick FINISHED with nothing to show; this one was ABORTED
+	// mid-run by the harness) and never 'committed' (the 2026-09-28/29
+	// measurement found 383 zero-commit ticks recorded committed).
+	OutcomeAbortedNoArtifact TickOutcome = "aborted:no_artifact"
 )
 
 // Tick is a single scheduler run: one spawned agent invocation against one
@@ -503,9 +513,18 @@ type Namespace struct {
 	AdmissionMode string `json:"admission_mode"` // "cooldown" | "tasks"
 	// SCHED-GAP-125: load-gate opt-out. "" = gate applies when globally
 	// enabled; "off" = this namespace's spawns never defer on load.
-	LoadGate  string `json:"load_gate"`  // "" | "off"
-	CreatedAt string `json:"created_at"` // RFC3339
-	UpdatedAt string `json:"updated_at"` // RFC3339
+	LoadGate string `json:"load_gate"` // "" | "off"
+	// SCHED-GAP-1674: builder no-artifact guard config.
+	// ReporterClass "reporter" exempts the namespace's lanes from the guard
+	// (their declared product is a report/DuckBrain key, not a commit);
+	// "" = builder-class (guarded). NoArtifactWindow is the T duration
+	// string ("" = 20m default); NoArtifactReconFloor is the N interaction
+	// floor as a string ("" = 25 default).
+	ReporterClass        string `json:"reporter_class"`          // "" | "reporter"
+	NoArtifactWindow     string `json:"no_artifact_window"`      // duration string; "" = 20m
+	NoArtifactReconFloor string `json:"no_artifact_recon_floor"` // string int; "" = 25
+	CreatedAt            string `json:"created_at"`              // RFC3339
+	UpdatedAt            string `json:"updated_at"`              // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
@@ -529,6 +548,11 @@ type NamespacePatch struct {
 	// SCHED-GAP-125: load-gate opt-out; must be "off" when non-nil
 	// (validated by UpdateNamespace). Nil/empty = gate applies.
 	LoadGate *string `json:"load_gate,omitempty"`
+	// SCHED-GAP-1674: builder no-artifact guard config, applied only when
+	// non-nil like every field above.
+	ReporterClass        *string `json:"reporter_class,omitempty"`          // "" | "reporter"
+	NoArtifactWindow     *string `json:"no_artifact_window,omitempty"`      // duration string; "" = default
+	NoArtifactReconFloor *string `json:"no_artifact_recon_floor,omitempty"` // string int; "" = default
 }
 
 // TickWorker is one dispatched worker inside a wave tick (S12 §9.2,

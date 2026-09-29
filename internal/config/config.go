@@ -334,4 +334,16 @@ type NamespaceDef struct {
 	// (always-on infra lanes). Empty = gate applies when enabled globally.
 	// Pins via the namespace upsert at load time.
 	LoadGate string `toml:"load_gate"`
+	// SCHED-GAP-1674: builder no-artifact guard config, pinned via the
+	// namespace upsert at load time when the keys are present.
+	// reporter_class = "reporter" exempts this namespace's lanes (their
+	// declared product is a report/DuckBrain key, not a commit — the
+	// satellite -sync/-qa/-pm/-dogfood/-review families).
+	ReporterClass string `toml:"reporter_class"`
+	// NoArtifactWindow overrides T (the zero-write window before the guard
+	// nudges / aborts) for this namespace. Duration string; "" = 20m default.
+	NoArtifactWindow string `toml:"no_artifact_window"`
+	// NoArtifactReconFloor overrides N (the minimum interaction floor) for
+	// this namespace. Integer as string; "" = 25 default.
+	NoArtifactReconFloor string `toml:"no_artifact_recon_floor"`
 }

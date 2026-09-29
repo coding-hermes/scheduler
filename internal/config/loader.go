@@ -399,6 +399,10 @@ func (r *RootConfig) Validate() error {
 		if err := validateWaveTickTimeout(n.ID, n.WaveTickTimeout); err != nil {
 			errs = append(errs, err)
 		}
+		// SCHED-GAP-1674: same guard-knob contract as LoadFleetConfig.
+		if err := validateNoArtifactKnobs(n.ID, n); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	return errors.Join(errs...)
@@ -446,6 +450,43 @@ func validateWaveTickTimeout(nsID, raw string) error {
 	return nil
 }
 
+// validateNoArtifactKnobs enforces the SCHED-GAP-1674 contract on one
+// namespace definition's guard knobs (errors are field-named after the TOML
+// path so an operator can find the line):
+//
+//   - reporter_class: "" (builder, the default) or "reporter" (exempt);
+//   - no_artifact_window: "" (20m default) or a parseable positive duration;
+//   - no_artifact_recon_floor: "" (25 default) or a positive integer.
+//
+// Invalid values are rejected at load — never silently normalized — so a
+// typo cannot pin a namespace into an unexpected guard posture.
+func validateNoArtifactKnobs(nsID string, nd NamespaceDef) error {
+	switch nd.ReporterClass {
+	case "", "reporter":
+	default:
+		return fmt.Errorf("namespaces[%s].reporter_class: %q (want \"reporter\" or \"\")", nsID, nd.ReporterClass)
+	}
+	if nd.NoArtifactWindow != "" {
+		d, err := time.ParseDuration(nd.NoArtifactWindow)
+		if err != nil {
+			return fmt.Errorf("namespaces[%s].no_artifact_window: parse duration %q: %w", nsID, nd.NoArtifactWindow, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("namespaces[%s].no_artifact_window: %s must be positive", nsID, d)
+		}
+	}
+	if nd.NoArtifactReconFloor != "" {
+		n, err := strconv.Atoi(nd.NoArtifactReconFloor)
+		if err != nil {
+			return fmt.Errorf("namespaces[%s].no_artifact_recon_floor: parse int %q: %w", nsID, nd.NoArtifactReconFloor, err)
+		}
+		if n <= 0 {
+			return fmt.Errorf("namespaces[%s].no_artifact_recon_floor: %d must be positive", nsID, n)
+		}
+	}
+	return nil
+}
+
 // LoadFleetConfig reads and decodes the TOML file at path into a FleetConfig.
 // It validates that every project has a Name and every namespace has an ID,
 // returning an error aggregating all violations so operators can fix the file
@@ -473,6 +514,11 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 		// S12 §4.3 (SCHED-GAP-111): wave_tick_timeout must parse and stay
 		// <= 4h — field-named rejection, never a silent clamp.
 		if err := validateWaveTickTimeout(n.ID, n.WaveTickTimeout); err != nil {
+			errs = append(errs, err)
+		}
+		// SCHED-GAP-1674: builder-guard knobs must parse (reporter_class
+		// vocabulary, positive window duration, positive floor int).
+		if err := validateNoArtifactKnobs(n.ID, n); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -598,6 +644,46 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 					return fmt.Errorf("update namespace %q max_concurrent: %w", nd.ID, err)
 				}
 				log.Printf("Config: pinned namespace %q max_concurrent=%d", nd.ID, v)
+			}
+			// SCHED-GAP-1674: builder no-artifact guard config pins when
+			// explicitly set in fleet.toml (GatewayKey-conditional: a
+			// keyless entry leaves the live row untouched, so an API change
+			// survives a restart). reporter_class "" (the Go zero value)
+			// means "key absent" for the TOML plain string, so only the
+			// explicit "reporter" value ever pins — clearing an exemption
+			// back to builder is an API/SQL operation, never a restart
+			// side effect. Window/floor pin whenever non-empty.
+			if nd.ReporterClass != "" {
+				switch nd.ReporterClass {
+				case "reporter":
+					v := nd.ReporterClass
+					if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+						ReporterClass: &v,
+					}); err != nil {
+						return fmt.Errorf("update namespace %q reporter_class: %w", nd.ID, err)
+					}
+					log.Printf("Config: pinned namespace %q reporter_class=%s", nd.ID, v)
+				default:
+					log.Printf("Config: namespace %q has invalid reporter_class %q — skipped (want \"reporter\")", nd.ID, nd.ReporterClass)
+				}
+			}
+			if nd.NoArtifactWindow != "" {
+				v := nd.NoArtifactWindow
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					NoArtifactWindow: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q no_artifact_window: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q no_artifact_window=%s", nd.ID, v)
+			}
+			if nd.NoArtifactReconFloor != "" {
+				v := nd.NoArtifactReconFloor
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					NoArtifactReconFloor: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q no_artifact_recon_floor: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q no_artifact_recon_floor=%s", nd.ID, v)
 			}
 			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
@@ -929,6 +1015,12 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		WaveTickTimeout: nd.WaveTickTimeout,
 		WaveWorkersCap:  waveWorkersCap,
 		AdmissionMode:   nsAdmissionMode(nd),
+		// SCHED-GAP-1674: guard config flows through on CREATE; validation
+		// (validateNoArtifactKnobs) already ran at load, so invalid values
+		// never reach here from a file.
+		ReporterClass:        nd.ReporterClass,
+		NoArtifactWindow:     nd.NoArtifactWindow,
+		NoArtifactReconFloor: nd.NoArtifactReconFloor,
 	}
 }
 

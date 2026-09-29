@@ -439,6 +439,10 @@ var outcomeVocabulary = []string{
 	string(database.OutcomeDryRun),
 	string(database.OutcomeFailed),
 	string(database.OutcomeTimeout),
+	// SCHED-GAP-1674: the builder no-artifact guard's verdict is filterable
+	// like the other outcomes. 'deferred' stays absent — the dashboard
+	// vocabulary predates it and this change does not widen that decision.
+	string(database.OutcomeAbortedNoArtifact),
 }
 
 // tickHistoryFilter validates a raw filter against the known vocabularies.

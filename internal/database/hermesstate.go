@@ -249,3 +249,33 @@ func validateHermesSessionsSchema(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
+// OpenHermesStateReadOnly opens the agent state database READ-ONLY for the
+// SCHED-GAP-1674 builder no-artifact guard's session telemetry. The guard
+// only ever READS the live agent's state.db (sessions + messages), so the
+// connection is mode=ro — it can never take a write lock from the live
+// agent, never create a database, and never mutate a row. A busy timeout
+// still applies (readers queue behind a checkpointing writer), bounded by
+// the same 5s budget the reaper uses. A missing file is an error, never a
+// fresh database.
+func OpenHermesStateReadOnly(path string) (*sql.DB, error) {
+	if path == "" {
+		path = DefaultHermesSessionDBPath()
+	}
+	if path == "" {
+		return nil, errors.New("no state database path (home directory unresolved)")
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("state database %s not accessible: %w", path, err)
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)", path, hermesBusyTimeoutMS)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open state database read-only %s: %w", path, err)
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open state database read-only %s: %w", path, err)
+	}
+	return db, nil
+}

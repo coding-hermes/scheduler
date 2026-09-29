@@ -222,10 +222,12 @@ ORDER BY ns`, cutoff)
 	}
 	rows.Close()
 
-	// The four values the ticks.outcome CHECK constraint allows are always
+	// The values the ticks.outcome CHECK constraint allows are always
 	// present (0 = the query found none), so a consumer can read
-	// by_outcome.committed without a presence check.
-	byOutcome := map[string]int{"committed": 0, "dry_run": 0, "failed": 0, "timeout": 0}
+	// by_outcome.committed without a presence check. SCHED-GAP-1674: the
+	// builder no-artifact guard's verdict is seeded too, so
+	// by_outcome["aborted:no_artifact"] reads without a presence check.
+	byOutcome := map[string]int{"committed": 0, "dry_run": 0, "failed": 0, "timeout": 0, "aborted:no_artifact": 0}
 	orows, err := s.db.QueryContext(ctx, `
 SELECT outcome, COUNT(*)
 FROM ticks

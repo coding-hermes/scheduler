@@ -164,6 +164,20 @@ type Spawner struct {
 	// rejections (ErrGatewayKeyRejected) NEVER touch this map — they stay
 	// terminal on the GAP-035 path. Guarded by s.mu.
 	consecutiveGatewayDrops map[string]int
+
+	// tickSessionCancels (SCHED-GAP-1674) is the per-tick session-context
+	// cancel registry for RUNNING gateway ticks: tickID -> the cancel of the
+	// session ctx created in Spawn(). The builder no-artifact guard cancels
+	// a session through here — the identical mechanism the session deadline
+	// uses — so the in-flight POST aborts and the spawn path's existing
+	// completion handling closes the row. Entries are removed on every
+	// return path (defer in the gateway block). Guarded by s.mu.
+	tickSessionCancels map[string]context.CancelFunc
+
+	// guardAbortedTicks (SCHED-GAP-1674) marks ticks whose session the
+	// builder no-artifact guard cancelled, consumed exactly once by the
+	// spawn path to classify the outcome. Guarded by s.mu.
+	guardAbortedTicks map[string]bool
 }
 
 // sendTurn (SCHED-GAP-119) is the single dispatch seam for one gateway
@@ -633,6 +647,74 @@ func (s *Spawner) RunningSet() map[string]bool {
 // HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
 func (s *Spawner) SetGatewayClient(client *GatewayClient) {
 	s.gateway = client
+}
+
+// RegisterTickSessionContext arms the SCHED-GAP-1674 cancel registry for one
+// running gateway tick: the session context whose cancellation aborts the
+// in-flight /v1/responses POST (the same handle the session deadline and the
+// per-turn deadline cancel through). Called from Spawn() right after the
+// session ctx is created; the entry is removed by UnregisterTickSessionContext
+// on every return path, so the map only ever holds LIVE sessions.
+func (s *Spawner) RegisterTickSessionContext(tickID string, cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tickSessionCancels == nil {
+		s.tickSessionCancels = make(map[string]context.CancelFunc)
+	}
+	s.tickSessionCancels[tickID] = cancel
+}
+
+// UnregisterTickSessionContext drops the registry entry for a finished tick.
+// No-op when the tick never registered (exec spawns, already-aborted ticks).
+func (s *Spawner) UnregisterTickSessionContext(tickID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tickSessionCancels, tickID)
+}
+
+// CancelTickSession cancels the session context of a RUNNING gateway tick
+// (SCHED-GAP-1674). This is the abort mechanism the builder no-artifact
+// guard uses — the same cancellation the session deadline fires, so the
+// in-flight POST aborts and the spawn path's existing completion handling
+// (the gwFailErr branch keyed on the guard outcome) closes the row. Returns
+// false when the tick has no live registered session (exec tick, already
+// finished, or not spawned by this process) — the caller records that in the
+// guard event rather than treating it as an error.
+func (s *Spawner) CancelTickSession(tickID string) bool {
+	// Mark the tick guard-aborted BEFORE cancelling, so the spawn path
+	// classifies the resulting POST error as the guard's abort (never a
+	// transport drop, never an exec fallback) the moment it observes it.
+	// Marker + lookup + unregister happen under one lock hold; the cancel
+	// itself fires after the lock is released (the spawn goroutine does not
+	// take s.mu on its abort path, but a cancel must never run under the
+	// spawner's lock — it synchronously unwinds the session).
+	s.mu.Lock()
+	cancel, ok := s.tickSessionCancels[tickID]
+	if ok {
+		delete(s.tickSessionCancels, tickID)
+		if s.guardAbortedTicks == nil {
+			s.guardAbortedTicks = make(map[string]bool)
+		}
+		s.guardAbortedTicks[tickID] = true
+	}
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// guardAborted reports (and clears) whether the builder no-artifact guard
+// cancelled this tick's session. The spawn path consumes the flag exactly
+// once — the first observation of the aborted POST — so the marker cannot
+// leak into a later retry of the same tick id.
+func (s *Spawner) guardAborted(tickID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.guardAbortedTicks[tickID]
+	delete(s.guardAbortedTicks, tickID)
+	return v
 }
 
 // SetNoExecFallback disables the exec.Command fallback when gateway spawns fail.
@@ -1193,6 +1275,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// effectiveTickTimeout (env > namespace > --tick-timeout).
 			ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
 
+			// SCHED-GAP-1674: arm the guard's cancel registry for this tick
+			// and drop the entry on every return path (the same scope the
+			// session ctx itself lives in). The builder no-artifact guard
+			// cancels the session through Spawner.CancelTickSession; an
+			// entry that outlived its tick would let a stale cancel fire.
+			s.RegisterTickSessionContext(tickID, cancel)
+			defer s.UnregisterTickSessionContext(tickID)
+
 			// SCHED-GAP-117: the per-turn deadline. turnCtx is a CHILD of
 			// the session ctx and bounds ONLY the gateway /v1/responses
 			// POST (+ its bounded GAP-080 retry loop), NOT the exec kill
@@ -1442,6 +1532,45 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
 			// outcome (completed, aborted-by-turn-deadline, transport-error).
 			s.logPOSTTrace(tickID, postTrace)
+			// SCHED-GAP-1674: the builder no-artifact guard cancelled this
+			// session. Consume the marker exactly once; act on it only when
+			// the POST did not complete (a cancel that races a finished turn
+			// leaves the tick its own honest outcome). The guard's terminal
+			// verdict rides SpawnedTick.guardAbort into Wait() — never the
+			// exec fallback (the session is dead by our own decision), never
+			// a transport-class failure (the harness aborted it, not the
+			// gateway), and the row closes outcome='aborted:no_artifact'
+			// through lifecycle.Complete.
+			guardFired := s.guardAborted(tickID)
+			if guardFired && (gwErr != nil || resp == nil) {
+				log.Printf("BUILDER-GUARD: %s tick=%s session cancelled — recording outcome %s",
+					project.Name, tickID, AbortOutcomeValue)
+				// Pre-count git work in the tick window (SCHED-GAP-119
+				// rule): a cancelled turn may have committed mid-window,
+				// and the guard-aborted row must keep those commits instead
+				// of zero-accounting them.
+				gCommits, gFiles := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+				return &SpawnedTick{
+					TickID:        tickID,
+					Project:       project.Name,
+					SessionID:     tickID,
+					Started:       reqStart,
+					Deliver:       project.Deliver,
+					DeliverMode:   project.DeliverMode,
+					spawner:       s,
+					completed:     false,
+					completeAt:    s.clock().Now(),
+					guardAbort:    true,
+					workdir:       project.Workdir,
+					reqStart:      reqStart,
+					Trigger:       "prompt",
+					gwFailCommits: gCommits,
+					gwFailFiles:   gFiles,
+				}, nil
+			}
+			if guardFired {
+				log.Printf("BUILDER-GUARD: %s tick=%s cancel raced a completed turn — tick keeps its own outcome", project.Name, tickID)
+			}
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
@@ -2150,6 +2279,16 @@ type SpawnedTick struct {
 	gwDeferred    bool
 	gwDeferReason string
 
+	// guardAbort (SCHED-GAP-1674) marks a tick whose gateway session the
+	// builder no-artifact guard cancelled: the tick ran past two full
+	// no-write windows with zero write-class artifacts and an interaction
+	// count above the floor. Wait() yields a TickOutcome carrying
+	// GuardAbort so lifecycle.Complete persists status=failed with
+	// outcome='aborted:no_artifact' — the guard's own verdict, never
+	// dry_run and never committed. Set by the spawn path's guard
+	// classification branch ONLY (Spawner.guardAborted consumed it there).
+	guardAbort bool
+
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
 	// spawns (gateway or hermes-chat exec fallback). Carried into the
@@ -2187,6 +2326,55 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// SCHED-GAP-1674: a GUARD-ABORTED tick (the builder no-artifact guard
+	// cancelled the session after two full no-write windows) yields a
+	// TickOutcome with GuardAbort set, so slot_pool's lifecycle.Complete
+	// persists status=failed / outcome='aborted:no_artifact' — the guard's
+	// own verdict, never dry_run (this tick did not FINISH empty; the
+	// harness stopped it) and never committed (the 2026-09-28/29
+	// measurement found 383 zero-commit ticks recorded committed). Checked
+	// FIRST: the guard abort is the terminal statement about this tick, and
+	// neither the deferral branch nor the gateway-fail branch below may
+	// reclassify it. A cancelled POST's error text
+	// ("gateway POST: … context canceled") is harness-caused by definition,
+	// so it is deliberately NOT classified through gatewayTransientBlip and
+	// never reaches the deferral path; the explicit branch here runs before
+	// any of that machinery anyway.
+	if st.guardAbort {
+		dur := st.completeAt.Sub(st.Started)
+		log.Printf("TICK: %s %s → %s (%v): builder no-artifact guard abort (outcome %s)",
+			st.Project, st.TickID, TickFailed, dur.Round(time.Second), AbortOutcomeValue)
+		return TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickFailed,
+			// -1 → exit_code NULL: no process exit status exists (the
+			// session was cancelled, not a process that exited).
+			ExitCode: -1,
+			// The error names the mechanism, not the raw ctx-cancel text —
+			// the operator reading ticks.error wants the guard, not wire
+			// noise. failure_reason stays "" (Complete's transport-class
+			// stamp is for gateway-side failures; this is a scheduler-side
+			// verdict and the outcome column already names it).
+			Error:      "builder no-artifact guard: read-only session aborted after two guard windows (outcome " + AbortOutcomeValue + ")",
+			Duration:   dur,
+			CostSource: CostSourceGateway,
+			// The guard verdict rides the outcome into terminalOutcome —
+			// the persistence layer maps it to outcome='aborted:no_artifact'
+			// (legal only on this failed status).
+			GuardAbort: true,
+			// Git artifacts are pre-counted at the abort site when present,
+			// mirroring the SCHED-GAP-119 rule: a cancelled turn may have
+			// committed mid-window, and zero-accounting real work is the
+			// exact silent loss the row exists to prevent.
+			Commits:      st.gwFailCommits,
+			FilesChanged: st.gwFailFiles,
+		}
+	}
 
 	// SCHED-GAP-203: a DEFERRED tick (spawn path hit ErrGatewayTransient with
 	// exec fallback disabled) yields TickDeferred so slot_pool's EXISTING

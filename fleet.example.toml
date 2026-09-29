@@ -54,3 +54,7 @@ enabled = true                            # false = entire namespace paused
 # wave_enabled = true                     # false/absent = waves off; scheduling byte-identical to pre-v27
 # wave_tick_timeout = "3h"                # duration; ""/absent = inherit scheduler tick_timeout (recommended 3h = 1.5x base; HARD CEILING 4h — larger values are rejected at config validation, never clamped; S12 §4.3). Env override at spawn: SCHEDULER_WAVE_TICK_TIMEOUT
 # wave_workers_cap = 3                    # max concurrent worker processes across running ticks in this namespace; 0/absent = unlimited
+# ── Builder no-artifact guard (SCHED-GAP-1674, optional) ────────────────
+#reporter_class = "reporter"              # ""/absent = builder-class lanes (GUARDED — a running tick with zero write-class artifacts past the window is nudged then aborted). "reporter" EXEMPTS this namespace: its declared product is a report/DuckBrain key, not a commit (set this on satellite -sync/-qa/-pm/-dogfood/-review/-report families)
+#no_artifact_window = "20m"              # duration; ""/absent = 20m default (T: elapsed zero-write time before the guard nudges, and again before it aborts)
+#no_artifact_recon_floor = "25"          # integer as string; ""/absent = 25 default (N: minimum session interactions before the guard acts on a no-write tick)

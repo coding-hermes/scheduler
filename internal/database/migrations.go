@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 49
+const latestMigration = 52
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS ticks (
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
     status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -777,6 +777,144 @@ CREATE TABLE IF NOT EXISTS feature_usage (
     first_used_at TEXT NOT NULL DEFAULT '',
     last_used_at  TEXT NOT NULL DEFAULT ''
 );
+`,
+	},
+	{
+		// SCHED-GAP-1674: the builder no-artifact guard's honest terminal
+		// outcome. A running tick that reads without ever writing (measured
+		// 2026-09-28/29: a BUILDER-class worker burned 56.7 minutes / 72
+		// messages / 40 recon calls with zero writes; 990 sessions fleet-wide
+		// in 7 days match the signature, and 383 of the 520 zero-commit ticks
+		// joined to them were still recorded outcome=committed) must be
+		// abortable with a verdict that is NEITHER 'dry_run' (which reads as
+		// a completed-but-empty tick, an honest statement about a tick that
+		// FINISHED) nor 'committed' (false credit). The guard aborts the
+		// session the way a timeout kill does and records its own verdict.
+		//
+		// WHY A REBUILD AND NOT AN ALTER: the outcome vocabulary lives in the
+		// column's CHECK constraint and SQLite cannot modify a CHECK in
+		// place — the same reasoning as v37, which widened this exact
+		// constraint for 'deferred'. The rebuild procedure is v37's, carried
+		// forward: ownTx (PRAGMA toggling is a no-op inside a transaction),
+		// foreign_keys OFF so the tick_workers cascade cannot eat
+		// attribution rows while the parent is dropped, BEGIN/COMMIT so a
+		// crash mid-rebuild simply re-runs at next boot, DROP TABLE IF
+		// EXISTS for idempotence.
+		//
+		// COLUMN LIST: verbatim from the v37 rebuild's list plus the two v48
+		// dispatch columns (dispatch_outcome, dispatch_reason), same types,
+		// NULL/NOT NULL and defaults — the copy is positional-safe only
+		// because both sides list every column by name in the same order.
+		// NOTE the pre-existing v1 CHECK on status allowed 'bogus' via the
+		// v37 rebuild too; both CHECKs here carry the EXACT v37 vocabularies
+		// plus the one new outcome token ('aborted:no_artifact') — nothing
+		// else widens.
+		version: 50,
+		desc:    "SCHED-GAP-1674: aborted:no_artifact outcome vocabulary — rebuild the ticks table (v37's procedure) widening the outcome CHECK so the builder no-artifact guard can record its own terminal verdict instead of laundering an aborted read-only session through 'dry_run' or 'committed'",
+		ownTx:   true,
+		stmt: `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+DROP TABLE IF EXISTS ticks_1674;
+CREATE TABLE ticks_1674 (
+    id            TEXT PRIMARY KEY,
+    project_name  TEXT NOT NULL REFERENCES projects(name),
+    session_id    TEXT,
+    pid           INTEGER DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact')),
+    spawned_at    TEXT,
+    completed_at  TEXT,
+    exit_code     INTEGER,
+    commits       INTEGER DEFAULT 0,
+    files_changed INTEGER DEFAULT 0,
+    tokens_in     INTEGER DEFAULT 0,
+    tokens_out    INTEGER DEFAULT 0,
+    cost_usd      REAL DEFAULT 0.0,
+    urgency       REAL DEFAULT 0.0,
+    weight_used   INTEGER DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    heartbeat_at  TEXT,
+    orphaned_at   TEXT,
+    orphan_reason TEXT,
+    nudge_count   INTEGER NOT NULL DEFAULT 0,
+    code_commits  INTEGER NOT NULL DEFAULT 0,
+    board_commits INTEGER NOT NULL DEFAULT 0,
+    bump          INTEGER NOT NULL DEFAULT 0,
+    worker_count  INTEGER NOT NULL DEFAULT 0,
+    wave_recovery INTEGER NOT NULL DEFAULT 0,
+    gateway_trace TEXT NOT NULL DEFAULT '',
+    cost_source   TEXT NOT NULL DEFAULT '',
+    failure_reason TEXT NOT NULL DEFAULT '',
+    slot_wait_ms  INTEGER NOT NULL DEFAULT 0,
+    admit_reason  TEXT NOT NULL DEFAULT '',
+    nudge_source  TEXT NOT NULL DEFAULT '',
+    dispatch_outcome TEXT NOT NULL DEFAULT '' CHECK(dispatch_outcome IN ('', 'yes', 'no')),
+    dispatch_reason TEXT NOT NULL DEFAULT '' CHECK(dispatch_reason IN ('', 'dispatched', 'no_work', 'blocked', 'verification_only', 'chose_not_to', 'unavailable'))
+);
+INSERT INTO ticks_1674 (
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason
+)
+SELECT
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason
+FROM ticks;
+DROP TABLE ticks;
+ALTER TABLE ticks_1674 RENAME TO ticks;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned ON ticks(project_name, spawned_at);
+CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_running ON ticks(status) WHERE status = 'running';
+COMMIT;
+PRAGMA foreign_keys=ON;
+`,
+	},
+	{
+		// SCHED-GAP-1674: the guard's per-namespace configuration — a
+		// reporter_class flag and the two knobs (T window, N floor), stored
+		// as ADD COLUMN ALTERs (no rebuild: the namespaces table carries no
+		// CHECK on these, and every existing row reads the honest default).
+		//   reporter_class       — 'reporter' exempts the namespace (its
+		//                          declared product is a report/DuckBrain
+		//                          key, not a commit; the satellite
+		//                          -sync/-qa/-pm/-dogfood/-review families
+		//                          set this in fleet.toml). '' = builder.
+		//   no_artifact_window   — duration string; '' = 20m default.
+		//   no_artifact_recon_floor — TEXT int; '' = 25 default (TEXT so an
+		//                          operator value and the int default live
+		//                          in one column without a NOT NULL flip).
+		// The scheduler-side resolver (builder_guard.go) treats unknown
+		// values as the defaults — a hand-edited row can never disable or
+		// immortalize the guard.
+		version: 51,
+		desc:    "SCHED-GAP-1674: builder no-artifact guard config on namespaces — reporter_class ('' builder | 'reporter' exempt), no_artifact_window ('' = 20m) and no_artifact_recon_floor ('' = 25)",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN reporter_class TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN no_artifact_window TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN no_artifact_recon_floor TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SCHED-GAP-1674: the RFC3339 instant the guard's first-window nudge
+		// fired on a running tick ('' = never nudged). The abort window is
+		// measured from the NUDGE, not the spawn, so the operator-visible
+		// contract is exactly "one full window after the nudge". Additive
+		// ALTER, same shape as every other ticks stamp column.
+		version: 52,
+		desc:    "SCHED-GAP-1674: guard_nudged_at on ticks — RFC3339 instant of the builder guard's first-window nudge ('' = never); the guard's abort window measures from this stamp",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN guard_nudged_at TEXT NOT NULL DEFAULT '';
 `,
 	},
 }
