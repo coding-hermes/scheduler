@@ -206,13 +206,23 @@ func stickerCostUSD(provider, model string, tokensIn, tokensOut int) float64 {
 		float64(tokensOut)/1e6*unknownModelFallbackRate.outPerM
 }
 
-// gitCommitCountInWindow returns the number of commits in workdir between [since, until].
-// Returns 0 for repos without .git or on any git error — it must never block
-// the tick completion path. (Named distinctly from gitmetrics.gitCommitCount —
-// the spawn-time baseline counter — after the upstream merge.)
+// gitCommitCountInWindow returns the number of commits committer-dated within
+// [since, until] across ALL refs of workdir — branches, remote-tracking refs
+// and other worktrees' checked-out branches, not just the local HEAD
+// (SCHED-GAP-1659: lane workdirs sit on a stable main checkout while the
+// tick's workers commit on wt/<task> worktree branches, so a HEAD-only sweep
+// read zero for ticks that had in fact committed). Returns 0 for repos without
+// .git or on any git error — it must never block the tick completion path.
+// (Named distinctly from gitmetrics.gitCommitCount — the spawn-time baseline
+// counter — after the upstream merge.)
+//
+// Known limitation (accepted over-approximation): sibling ticks running
+// concurrently in the same repo share the ref space, so a shared commit may be
+// attributed by every concurrent tick's window. Commits are never lost; they
+// may be counted more than once.
 func gitCommitCountInWindow(ctx context.Context, workdir, since, until string) int {
-	out, err := runGit(ctx, workdir, "rev-list", "--count",
-		"--since="+since, "--until="+until, "HEAD")
+	out, err := runGit(ctx, workdir, "rev-list", "--all", "--count",
+		"--since="+since, "--until="+until)
 	if err != nil {
 		return 0
 	}
@@ -225,17 +235,20 @@ func gitCommitCountInWindow(ctx context.Context, workdir, since, until string) i
 
 // gitFilesChanged returns the number of unique files changed by commits in
 // workdir between [since, until]. It diffs the first commit's parent in the
-// window against the last commit. Returns 0 for repos without .git, windows
-// with zero commits, or any git error.
+// window against the last commit. Since SCHED-GAP-1659 the window's commits
+// are discovered across ALL refs (same visibility as gitCommitCountInWindow);
+// the returned figure is the tree delta between the window's oldest and newest
+// commit, whichever branches they live on. Returns 0 for repos without .git,
+// windows with zero commits, or any git error.
 func gitFilesChanged(ctx context.Context, workdir, since, until string) int {
 	// List commits in the window (oldest first).
 	oldest := runGitFirst(ctx, workdir, "rev-list",
-		"--reverse", "--since="+since, "--until="+until, "HEAD")
+		"--all", "--reverse", "--since="+since, "--until="+until, "HEAD")
 	if oldest == "" {
 		return 0 // zero commits in window
 	}
 	newest := runGitFirst(ctx, workdir, "rev-list",
-		"--since="+since, "--until="+until, "HEAD")
+		"--all", "--since="+since, "--until="+until, "HEAD")
 	if newest == "" || newest == oldest {
 		// Single commit: diff against its parent.
 		out, err := runGit(ctx, workdir, "diff-tree", "--no-commit-id",

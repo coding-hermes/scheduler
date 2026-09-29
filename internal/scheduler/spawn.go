@@ -2112,6 +2112,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	// and recorded the difference as a fact about the tick's work.
 	if st.cmd != nil && st.cmd.Dir != "" {
 		st.preHead, st.preCommits = gitBaseline(st.cmd.Dir)
+		// SCHED-GAP-1659: window anchor for the all-refs commit sweep —
+		// captured ONLY when the ancestry baseline is usable, so the two
+		// metrics stay comparable. One clock read through the seam.
+		if st.preCommits >= 0 {
+			st.gitWindowStart = s.clock().Now()
+		}
 	} else {
 		st.preHead, st.preCommits = gitBaseline(project.Workdir)
 	}
@@ -2232,6 +2238,13 @@ type SpawnedTick struct {
 	// means the workdir was not a usable git repo at spawn.
 	preHead    string
 	preCommits int
+
+	// gitWindowStart (SCHED-GAP-1659) anchors the all-refs commit-window
+	// sweep in gitWorkDelta at the spawn moment: a commit committer-dated at
+	// or after spawn on ANY ref counts, even when the lane's checked-out HEAD
+	// never moves. Zero (gateway path, or spawn-time baseline failed) keeps
+	// the ancestry-only behavior.
+	gitWindowStart time.Time
 
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
@@ -2634,7 +2647,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		// still says "unknown" rather than "nothing".
 		if st.preCommits >= 0 && st.cmd != nil && st.cmd.Dir != "" {
 			var gerr error
-			outcome.Commits, outcome.FilesChanged, gerr = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits)
+			// SCHED-GAP-1659: pass the spawn-anchored window so the all-refs
+			// sweep counts commits that landed on worker branches/worktrees
+			// the checked-out HEAD cannot see.
+			outcome.Commits, outcome.FilesChanged, gerr = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits, st.gitWindowStart)
 			if gerr != nil {
 				outcome.Commits, outcome.FilesChanged = -1, -1
 				log.Printf("WARN: tick %s git delta NOT measured: %v — commits/files stamped -1 (unknown), NOT evidence of no work",

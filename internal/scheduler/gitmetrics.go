@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // gitMetrics captures the git delta a foreman produced during its tick. Every
@@ -44,14 +45,58 @@ func gitCommitCount(dir string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
 
+// gitAllRefsCommitCountSince counts commits with a committer date at or after
+// since, across ALL refs of the repo at dir — branches, remote-tracking refs
+// and any other worktree's checked-out branch, not just this worktree's HEAD
+// (SCHED-GAP-1659: lane workdirs sit on a stable main checkout while the tick's
+// workers commit on wt/<task> worktree branches, so a HEAD-only sweep read
+// zero). There is deliberately no --until: the window's upper edge is the
+// moment of measurement, so a commit landing between the ancestry read and
+// this one is counted rather than lost.
+//
+// git's --since filters on committer date and is inclusive at whole-second
+// granularity, so a sub-second `since` widens the window to the start of its
+// own wall-second: at most one pre-spawn commit can sneak in, and only when
+// the ancestry delta is zero (otherwise max() below hides it). Over-counting
+// by that edge is the accepted direction — commits are never lost.
+//
+// Known limitation (accepted over-approximation): sibling ticks running
+// concurrently in the same repo share the ref space, so a shared commit may be
+// attributed by every concurrent tick's window. Commits are never lost; they
+// may be counted more than once.
+func gitAllRefsCommitCountSince(dir string, since time.Time) (int, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-list", "--all", "--count",
+		"--since="+since.UTC().Format(time.RFC3339)).Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
 // gitWorkDelta returns (commits, filesChanged) added to the repo since the
 // spawn-time baseline, plus an error that is non-nil whenever the measurement is
 // incomplete or impossible.
 //
-// commits is the growth in total commit count (robust to branch moves);
+// commits is the growth in total commit count (robust to branch moves), raised
+// — never lowered — to the number of commits committer-dated within
+// [windowStart, now] across ALL refs (SCHED-GAP-1659). windowStart is captured
+// at spawn time by the caller; a zero windowStart skips the all-refs sweep and
+// preserves the pre-1659 ancestry-only behavior. The window count anchors at
+// spawn time (not at preHead's commit date) so a lane's backlog of old
+// unmerged worker-branch commits never inflates a fresh tick.
+//
+// Known limitation (accepted over-approximation): concurrent sibling ticks in
+// the same repo may each attribute a shared commit, because all refs are
+// visible to every tick's window. Commits are never lost; they may be counted
+// more than once. A window read failure is silently ignored — the ancestry
+// delta still stands and the measurement stays honest.
+//
 // filesChanged is the number of files whose content differs between preHead and
-// current HEAD (tree diff — does not require linear ancestry, so it is robust to
-// resets/merges), plus anything staged but uncommitted.
+// current HEAD (tree diff — does not require linear ancestry, so it is robust
+// to resets/merges), plus anything staged but uncommitted. It deliberately
+// stays a HEAD-tree diff: commits landing on other refs are counted by the
+// commit metric above but not folded into this tree comparison, which would
+// over-count across divergent branch tips.
 //
 // A non-nil error means the returned numbers must NOT be read as "the tick did
 // nothing". Two shapes produce it:
@@ -61,7 +106,7 @@ func gitCommitCount(dir string) (int, error) {
 //     counted and the commit count is a floor, not a total.
 //
 // The caller logs the error; the tick lifecycle is never blocked by it.
-func gitWorkDelta(dir, preHead string, preTotal int) (commits, files int, err error) {
+func gitWorkDelta(dir, preHead string, preTotal int, windowStart time.Time) (commits, files int, err error) {
 	curTotal, cerr := gitCommitCount(dir)
 	if cerr != nil {
 		return 0, 0, fmt.Errorf("repo unreadable at %s: %w", dir, cerr)
@@ -69,6 +114,11 @@ func gitWorkDelta(dir, preHead string, preTotal int) (commits, files int, err er
 	commits = curTotal - preTotal
 	if commits < 0 {
 		commits = 0
+	}
+	if !windowStart.IsZero() {
+		if wn, werr := gitAllRefsCommitCountSince(dir, windowStart); werr == nil && wn > commits {
+			commits = wn
+		}
 	}
 	if preHead == "" {
 		// No baseline — can't diff HEAD, but still count staged work.
