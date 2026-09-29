@@ -227,8 +227,8 @@ func TestSCHEDGAP1607_DeliverModes_Table(t *testing.T) {
 					t.Errorf("link mode must not pass --subject")
 				}
 				msg := args[len(args)-1]
-				wantURL := tickPermalink("https://sched.example.com", "modetest", "tick-1607")
-				if !strings.HasPrefix(wantURL, "https://sched.example.com/projects/modetest") {
+				wantURL := tickPermalink("https://sched.example.com", "tick-1607")
+				if !strings.HasPrefix(wantURL, "https://sched.example.com/ticks/") {
 					t.Fatalf("permalink not absolute against base: %q", wantURL)
 				}
 				if !strings.Contains(msg, wantURL) {
@@ -324,29 +324,40 @@ func TestSCHEDGAP1607_FileModeFallbackOnWriterFailure(t *testing.T) {
 }
 
 // TestSCHEDGAP1607_TickPermalink pins URL construction behind the one helper:
-// absolute, LANE-scoped (the lane page lists that lane's recent ticks, which is
-// where a just-delivered tick is actually findable), tolerating a trailing slash
-// on the base. A lane-less call falls back to the tick-history page, the only
-// other surface that lists ticks.
+// absolute against the base, tolerating a trailing slash on the base, and
+// targeting the per-tick route (GET /ticks/{id}, SCHED-GAP-1593) with NO
+// fragment — the pre-1593 lane-page shape carried a #tick- anchor no lane
+// page ever rendered, so the fragment was inert (SCHED-GAP-1673).
 func TestSCHEDGAP1607_TickPermalink(t *testing.T) {
 	cases := []struct {
-		base, lane, tick, wantPrefix string
+		base, tick, want string
 	}{
-		{"https://sched.example.com", "trouble", "2026-09-24-101530", "https://sched.example.com/projects/trouble"},
-		{"https://sched.example.com/", "trouble", "2026-09-24-101530", "https://sched.example.com/projects/trouble"},
-		{"http://127.0.0.1:9090", "", "2026-09-24-101530", "http://127.0.0.1:9090/ticks"},
+		{"https://sched.example.com", "2026-09-24-101530", "https://sched.example.com/ticks/2026-09-24-101530"},
+		{"https://sched.example.com/", "2026-09-24-101530", "https://sched.example.com/ticks/2026-09-24-101530"},
+		{"http://127.0.0.1:9090", "tick-1607", "http://127.0.0.1:9090/ticks/tick-1607"},
 	}
 	for _, c := range cases {
-		got := tickPermalink(c.base, c.lane, c.tick)
-		if !strings.HasPrefix(got, c.wantPrefix) {
-			t.Errorf("tickPermalink(%q,%q,%q) = %q, want prefix %q", c.base, c.lane, c.tick, got, c.wantPrefix)
+		got := tickPermalink(c.base, c.tick)
+		if got != c.want {
+			t.Errorf("tickPermalink(%q,%q) = %q, want %q", c.base, c.tick, got, c.want)
 		}
-		if c.lane != "" && !strings.Contains(got, "#tick-"+c.lane+"-"+c.tick) {
-			t.Errorf("permalink missing lane-tick fragment: %q", got)
+		if strings.Contains(got, "#") {
+			t.Errorf("permalink must not carry a fragment (no lane-page anchors exist): %q", got)
 		}
-		if c.lane == "" && strings.Contains(got, "#") {
-			t.Errorf("lane-less permalink must not carry a fragment: %q", got)
-		}
+	}
+}
+
+// TestSCHEDGAP1673_TickPermalinkTargetsTickRoute is the acceptance test: the
+// permalink must be exactly <base>/ticks/<tickID> — the live GET /ticks/{id}
+// route that renders the tick report — and must contain no '#' fragment.
+func TestSCHEDGAP1673_TickPermalinkTargetsTickRoute(t *testing.T) {
+	got := tickPermalink("https://sched.example.com", "tick-1673")
+	want := "https://sched.example.com/ticks/tick-1673"
+	if got != want {
+		t.Errorf("tickPermalink = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "#") {
+		t.Errorf("permalink contains a '#' fragment: %q", got)
 	}
 }
 

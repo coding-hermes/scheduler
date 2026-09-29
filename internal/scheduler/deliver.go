@@ -39,21 +39,13 @@ func SetPublicBaseURL(u string) { publicBaseURL = strings.TrimRight(u, "/") }
 // tickPermalink builds the absolute dashboard URL for one tick's report — the
 // SINGLE place link-mode URLs are composed.
 //
-// There is no per-tick route yet (SCHED-GAP-1593 adds one), so the link targets
-// the LANE page, which lists that lane's recent ticks — the one surface where a
-// just-delivered tick is actually findable. It deliberately does NOT point at
-// /ticks with a ?tick= parameter: the tick rows carry no anchors and the /ticks
-// handler reads only `page`, so that parameter would be inert while LOOKING
-// targeted. The fragment names the anchor SCHED-GAP-1593 will put on each tick
-// row; until then it is inert too and the link simply opens the lane's list.
-// When 1593 lands, only THIS function changes.
-func tickPermalink(baseURL, lane, tickID string) string {
+// The link targets the per-tick route GET /ticks/{id} (SCHED-GAP-1593), which
+// renders that tick's full report. It deliberately carries NO fragment: the
+// pre-1593 shape targeted the lane page with a #tick- anchor no lane page
+// ever rendered, so the fragment was inert (SCHED-GAP-1673).
+func tickPermalink(baseURL, tickID string) string {
 	base := strings.TrimRight(baseURL, "/")
-	if lane == "" {
-		// No lane to scope to: tick history is the only surface listing ticks.
-		return base + "/ticks"
-	}
-	return base + "/projects/" + url.PathEscape(lane) + "#tick-" + url.PathEscape(lane+"-"+tickID)
+	return base + "/ticks/" + url.PathEscape(tickID)
 }
 
 // resolveDeliverMode maps a stored deliver_mode value to a mode constant.
@@ -198,7 +190,7 @@ func deliverOutputWithMode(clk clock.Clock, project, tickID, deliver, trigger st
 	}
 
 	// DeliverModeLink.
-	link := tickPermalink(publicBaseURL, project, tickID)
+	link := tickPermalink(publicBaseURL, tickID)
 	msg := fmt.Sprintf("%s\n\nReport: %s", short, link)
 	sendShort(clk, project, tickID, deliver, msg)
 }
