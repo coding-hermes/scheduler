@@ -105,6 +105,7 @@ type scored struct {
 	urgency             float64
 	decayRate           float64
 	cooldownS           int
+	cooldownPinS        *int // SCHED-GAP-1661: operator pin (nil / <=0 = no pin) — outranks cooldownS as the effective-cooldown base
 	consecutiveFailures int
 	// SCHED-GAP-214: projects.last_tick_status — the terminal status of the
 	// most recent tick ("" = never ticked | completed | failed | timeout |
@@ -151,6 +152,7 @@ type scored struct {
 func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedProject, error) {
 	rows, err := p.db.Query(`
 		SELECT p.name, p.weight, p.priority, p.decay_rate, p.enabled, p.cooldown_s,
+		       COALESCE(p.cooldown_pin_s, 0),
 		       p.last_tick_completed,
 		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''), COALESCE(p.deliver_mode, ''),
@@ -178,8 +180,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var createdAtStr string
 		var enabled bool
 		var lastStatus string
+		var pinS int
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
-			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
+			&pinS, &lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver, &s.deliverMode,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
@@ -187,6 +190,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
+		}
+		// SCHED-GAP-1661: the operator pin rides the row into the shared
+		// effectiveCooldown (a NULL / <=0 pin scans as 0 = no pin).
+		if pinS > 0 {
+			v := pinS
+			s.cooldownPinS = &v
 		}
 		// SCHED-GAP-214: after a FAILED tick the tasks-mode waiver stands down.
 		s.lastTickStatusFailed = lastTickStatusFailed(lastStatus)
@@ -381,7 +390,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			// keeps the original tasks-mode semantics: pending work waives
 			// the cooldown pin entirely.
 			if s.consecutiveFailures > 1 {
-				backoffCD, skipMode := effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator)
+				backoffCD, skipMode := effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator, s.cooldownPinS)
 				if skipMode {
 					totalSkippedCooldown++
 					continue
@@ -418,43 +427,67 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 // effectiveCooldown is the SINGLE SOURCE of TRUTH (ADV-R03 / G5) for the
 // composed-cooldown arithmetic every eligibility site must agree on:
 //
-//	cooldownDur = cooldownS seconds, OR the priority-derived dynamic
-//	              interval via calc.ComputeInterval when cooldownS == 0
-//	if consecutiveFailures > 0: cooldownDur = FailureBackoff(...)
+//	base       = cooldown_pin_s when set AND positive (SCHED-GAP-1661
+//	             pin-first — the pin outranks cooldown_s, the priority-
+//	             derived dynamic interval AND the bump), else cooldownS
+//	             seconds, else the priority-derived dynamic interval via
+//	             calc.ComputeInterval when both are 0
+//	if consecutiveFailures > 0: base → FailureBackoff(base, ...)
 //	if inBlackout: mult <= 0 → skipMode (never eligible); mult > 1.0 →
-//	              cooldownDur *= mult
+//	               base *= mult
+//
+// The pin changes the BASE only; the failure backoff and the blackout
+// multiplier still compose on top of it — a pinned lane that keeps failing
+// still backs off (a pin must not immunize a failing lane), and a pinned
+// lane inside a peak window is still slowed.
 //
 // skipMode = true means the caller must NEVER count the project as
 // eligible. Consumers: packer.go's greedy pack and isOverdue (via the
 // *Packer.effectiveCooldownDur wrapper), packer_select.go's two
-// namespace-path gates, multipool_packer.go's packFlat, and loop.go's
-// countEligibleProjects watchdog mirror — the GAP-050 drift site this
+// namespace-path gates, multipool_packer.go's packFlat, loop.go's
+// countEligibleProjects watchdog mirror, and loop.go's cooldownVerdict
+// (the SCHED-GAP-144 admission countdown) — the GAP-050 drift site this
 // consolidation exists to kill.
 //
 // priority is float64 because the dynamic-interval path feeds it straight
 // into calc.ComputeInterval(priority float64); the integer-priority call
 // sites convert losslessly with float64(...).
 //
-// ⚠️ INTENTIONAL SEMANTIC ALIGNMENT (cooldown_s == 0): the dynamic-interval
-// branch is part of this authority BY DESIGN — the G5 filing names it among
-// the terms to single-source. Before this consolidation only packer.go's
-// method carried it; packer_select.go's two gates, multipool_packer.go's
-// packFlat and loop.go's watchdog went straight from cooldownS*second to the
-// failure backoff, so a cooldown_s==0 project was "always eligible" there
-// while the greedy pack treated it as a full priority interval (the same
-// packer-vs-watchdog disagreement GAP-050 produced). All consumers now apply
-// the identical branch, which is a deliberate behavior change at those four
-// sites rather than a no-op refactor: cooldown_s==0 + a recent completion is
-// no longer instantly eligible anywhere. No live project uses cooldown_s==0
-// (0/256 at the time of the change), and the semantics are pinned by
+// ⚠️ INTENTIONAL SEMANTIC ALIGNMENT (cooldown_s == 0, unpinned): the
+// dynamic-interval branch is part of this authority BY DESIGN — the G5
+// filing names it among the terms to single-source. Before this
+// consolidation only packer.go's method carried it; packer_select.go's two
+// gates, multipool_packer.go's packFlat and loop.go's watchdog went straight
+// from cooldownS*second to the failure backoff, so a cooldown_s==0 project
+// was "always eligible" there while the greedy pack treated it as a full
+// priority interval (the same packer-vs-watchdog disagreement GAP-050
+// produced). All consumers now apply the identical branch, which is a
+// deliberate behavior change at those four sites rather than a no-op
+// refactor: cooldown_s==0 + a recent completion is no longer instantly
+// eligible anywhere. No live project uses cooldown_s==0 (0/256 at the time
+// of the change), and the semantics are pinned by
 // TestEligibilityEquivalence_BumpBackoffBlackout's projE row — do NOT
 // "restore" the old per-site behavior without re-opening G5.
-func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int, blackoutWindows []config.BlackoutWindow, now time.Time, calc *UrgencyCalculator) (cooldownDur time.Duration, skipMode bool) {
-	cooldownDur = time.Duration(cooldownS) * time.Second
-	if cooldownS == 0 {
-		// Dynamic: derive from priority via the urgency calculator.
-		if calc != nil {
-			cooldownDur = calc.ComputeInterval(priority)
+//
+// SCHED-GAP-1661 pin-first: cooldownPinS > 0 wins over EVERY other base —
+// cooldown_s, the dynamic interval, and the bump (Pick folds
+// bump_cooldown_s into cooldownS, so the pin outranking cooldownS outranks
+// the bump by construction; the SQL-side substitution sites pass the same
+// bumped value). When the pin is absent (nil) or non-positive the
+// resolution falls through to cooldownS exactly as before this change.
+func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int, blackoutWindows []config.BlackoutWindow, now time.Time, calc *UrgencyCalculator, cooldownPinS *int) (cooldownDur time.Duration, skipMode bool) {
+	// Pin-first (SCHED-GAP-1661): the operator pin outranks cooldown_s
+	// (and any bump folded into it) and the dynamic interval. A nil or
+	// non-positive pin falls through to the legacy resolution.
+	if cooldownPinS != nil && *cooldownPinS > 0 {
+		cooldownDur = time.Duration(*cooldownPinS) * time.Second
+	} else {
+		cooldownDur = time.Duration(cooldownS) * time.Second
+		if cooldownS == 0 {
+			// Dynamic: derive from priority via the urgency calculator.
+			if calc != nil {
+				cooldownDur = calc.ComputeInterval(priority)
+			}
 		}
 	}
 	// S-GAP-001: consecutive spawn failures back off exponentially.
@@ -482,7 +515,7 @@ func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int,
 // which is why loop.go's watchdog feeds its own SQL-side bump value into
 // the same package-level function instead.
 func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time.Duration, skipMode bool) {
-	return effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator)
+	return effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator, s.cooldownPinS)
 }
 
 // isOverdue reports whether an enabled, not-running project is due under the

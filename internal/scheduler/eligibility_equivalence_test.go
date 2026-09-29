@@ -105,10 +105,10 @@ func TestEligibilityEquivalence_BumpBackoffBlackout(t *testing.T) {
 	calc := NewUrgencyCalculator(30*time.Second, 24*time.Hour, 10)
 
 	// Pinned premises — the backoff arithmetic the fixture relies on.
-	if d, skip := effectiveCooldown(60, 5, 2, nil, time.Now(), calc); skip || d != 120*time.Second {
+	if d, skip := effectiveCooldown(60, 5, 2, nil, time.Now(), calc, nil); skip || d != 120*time.Second {
 		t.Fatalf("effectiveCooldown(60s,2 failures) = %v skip=%v, want 120s (60<<1)", d, skip)
 	}
-	if d, skip := effectiveCooldown(60, 5, 5, nil, time.Now(), calc); skip || d != 960*time.Second {
+	if d, skip := effectiveCooldown(60, 5, 5, nil, time.Now(), calc, nil); skip || d != 960*time.Second {
 		t.Fatalf("effectiveCooldown(60s,5 failures) = %v skip=%v, want 960s (60<<4)", d, skip)
 	}
 	// G5 pinned semantics: cooldown_s == 0 means the priority-derived dynamic
@@ -116,7 +116,7 @@ func TestEligibilityEquivalence_BumpBackoffBlackout(t *testing.T) {
 	// deliberately propagated to the four sites that previously treated 0 as
 	// "always eligible"; assert it here so a future re-inlining cannot quietly
 	// restore the old divergence (see projE below).
-	dyn, skip := effectiveCooldown(0, 5, 0, nil, time.Now(), calc)
+	dyn, skip := effectiveCooldown(0, 5, 0, nil, time.Now(), calc, nil)
 	if skip || dyn <= 0 {
 		t.Fatalf("effectiveCooldown(cooldown_s=0) = %v skip=%v, want a positive dynamic interval", dyn, skip)
 	}
@@ -151,7 +151,7 @@ func TestEligibilityEquivalence_BumpBackoffBlackout(t *testing.T) {
 
 	// Direct value pin: a 0.5 multiplier must NOT shrink the cooldown —
 	// only mult > 1.0 applies — so projA's composed cooldown stays 60s.
-	if d, skip := effectiveCooldown(60, 5, 0, windows, now2, l2.calculator); skip || d != 60*time.Second {
+	if d, skip := effectiveCooldown(60, 5, 0, windows, now2, l2.calculator, nil); skip || d != 60*time.Second {
 		t.Fatalf("blackout 0.5: effectiveCooldown = %v skip=%v, want 60s (sub-1.0 multipliers are no-ops)", d, skip)
 	}
 
