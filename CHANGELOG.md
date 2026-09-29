@@ -33,7 +33,10 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+## [1.10.2] — 2026-09-29
+
 - Permalink targets on the dashboard now resolve against the `/ticks/<id>` route — `3194c424`.
+
 ## [1.10.1] — 2026-09-29
 
 ### Bug Fixes
