@@ -23,6 +23,11 @@ const testPort = ":9199"
 // daemon has no flag layer for credentials (GAP-038) — env only.
 const testOperatorToken = "integration-operator-token"
 
+// testDuckbrainURL (REV-002) points at TCP port 9 (discard) — nothing
+// listens there, so the daemon's DuckBrain sync can never reach a real
+// service, even on a host with one live on the daemon's default port.
+const testDuckbrainURL = "http://127.0.0.1:9"
+
 var testDB string
 
 func TestMain(m *testing.M) {
@@ -51,13 +56,32 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// integrationEnv builds the child env with any ambient DUCKBRAIN_API_KEY
+// stripped (REV-002): an inherited valid key would re-arm the sync's auth
+// header and — on a host with a live DuckBrain on the default port — let a
+// test boot push fleet state into the real scheduler namespace. With the
+// key absent the sync runs pre-auth (no X-API-Key header), and with the URL
+// pinned to the dead port its writes fail closed against nothing.
+func integrationEnv() []string {
+	const key = "DUCKBRAIN_API_KEY"
+	env := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		if kv == key || strings.HasPrefix(kv, key+"=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
 func TestIntegrationAllLayers(t *testing.T) {
 	// Start the scheduler.
 	cmd := exec.Command("/tmp/schedulerd-test",
 		"-listen", "127.0.0.1"+testPort,
 		"-db", testDB,
+		"-duckbrain-url", testDuckbrainURL,
 	)
-	cmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
+	cmd.Env = append(integrationEnv(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -96,9 +120,11 @@ func restartScheduler(t *testing.T, old *exec.Cmd, envVars []string) *exec.Cmd {
 	newCmd := exec.Command("/tmp/schedulerd-test",
 		"-listen", "127.0.0.1"+testPort,
 		"-db", testDB,
+		"-duckbrain-url", testDuckbrainURL,
 	)
 	// SCHED-GAP-1602: keep the operator credential armed across restarts.
-	newCmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
+	// REV-002: scrub the ambient DuckBrain key for the same hermeticity.
+	newCmd.Env = append(integrationEnv(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
 	newCmd.Env = append(newCmd.Env, envVars...)
 	newCmd.Stdout = os.Stdout
 	newCmd.Stderr = os.Stderr
@@ -123,9 +149,11 @@ func restartSchedulerWithDB(t *testing.T, old *exec.Cmd, dbPath string, envVars 
 	newCmd := exec.Command("/tmp/schedulerd-test",
 		"-listen", "127.0.0.1"+testPort,
 		"-db", dbPath,
+		"-duckbrain-url", testDuckbrainURL,
 	)
 	// SCHED-GAP-1602: keep the operator credential armed across restarts.
-	newCmd.Env = append(os.Environ(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
+	// REV-002: scrub the ambient DuckBrain key for the same hermeticity.
+	newCmd.Env = append(integrationEnv(), "SCHEDULER_OPERATOR_TOKEN="+testOperatorToken)
 	newCmd.Env = append(newCmd.Env, envVars...)
 	newCmd.Stdout = os.Stdout
 	newCmd.Stderr = os.Stderr
