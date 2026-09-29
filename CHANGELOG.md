@@ -33,6 +33,9 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-29
 
+### Fixed
+- ops: mirror the canonical satellite cadence matrix into the invariant checker, so cadence drift between fleet.toml and the checker fails the fixture battery instead of surfacing silently (SCHED-GAP-1675) — `c4c5fc46`.
+
 ## [1.11.3] — 2026-09-29
 
 ### Fixed
