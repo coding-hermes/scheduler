@@ -67,7 +67,11 @@ func gitCommitFileAt(t *testing.T, dir, filename, content string, when time.Time
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_DATE="+when.UTC().Format(time.RFC3339),
-			"GIT_COMMITTER_DATE="+when.UTC().Format(time.RFC3339))
+			"GIT_COMMITTER_DATE="+when.UTC().Format(time.RFC3339),
+			// CI runners have no git identity configured; clones do not
+			// inherit repo-local user.* config, so pass it via env.
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
