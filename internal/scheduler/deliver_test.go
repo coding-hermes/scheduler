@@ -3,10 +3,12 @@ package scheduler
 import (
 	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 )
@@ -465,25 +467,222 @@ func TestTrimToolNoise_MixedNoise(t *testing.T) {
 	}
 }
 
-func TestIsRetryableSendError(t *testing.T) {
+func TestClassifySendFailure(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
 		out  string
-		want bool
+		want sendFailClass
 	}{
-		{"telegram timed out", errors.New("exit status 1"), "hermes send: Telegram send failed: Timed out", true},
-		{"connection reset", errors.New("exit status 1"), "connection reset by peer", true},
-		{"503 backend", errors.New("exit status 1"), "503 Service Unavailable", true},
-		{"429 rate limited", errors.New("exit status 1"), "HTTP 429", true},
-		{"i/o timeout", errors.New("exit status 1"), "i/o timeout", true},
-		{"unknown platform", errors.New("exit status 2"), "unknown platform: foo", false},
-		{"missing --to", errors.New("exit status 2"), "--to PLATFORM is required", false},
-		{"parse error", errors.New("exit status 2"), "invalid argument", false},
+		{"telegram timed out", errors.New("exit status 1"), "hermes send: Telegram send failed: Timed out", sendFailAmbiguous},
+		{"i/o timeout", errors.New("exit status 1"), "dial tcp 149.154.167.220:443: i/o timeout", sendFailAmbiguous},
+		{"request timeout", errors.New("exit status 1"), "Telegram send failed: Request timeout", sendFailAmbiguous},
+		{"deadline exceeded", errors.New("exit status 1"), "context deadline exceeded", sendFailAmbiguous},
+		{"connection reset mid-flight", errors.New("exit status 1"), "read tcp: connection reset by peer", sendFailAmbiguous},
+		{"504 gateway timeout", errors.New("exit status 1"), "504 Gateway Timeout", sendFailAmbiguous},
+		{"flood control", errors.New("exit status 1"), "Telegram send failed: Flood control exceeded. Retry in 18.00 seconds", sendFailRejected},
+		{"flood control lowercase", errors.New("exit status 1"), "flood control exceeded, retry in 5 seconds", sendFailRejected},
+		{"too many requests", errors.New("exit status 1"), "Too Many Requests: retry after 30", sendFailRejected},
+		{"429 rate limited", errors.New("exit status 1"), "HTTP 429", sendFailRejected},
+		{"503 backend", errors.New("exit status 1"), "503 Service Unavailable", sendFailRejected},
+		{"connection refused", errors.New("exit status 1"), "dial tcp: connect: connection refused", sendFailRejected},
+		{"unknown platform", errors.New("exit status 2"), "unknown platform: foo", sendFailFatal},
+		{"missing --to", errors.New("exit status 2"), "--to PLATFORM is required", sendFailFatal},
+		{"parse error", errors.New("exit status 2"), "invalid argument", sendFailFatal},
+		// Tie-break: a timeout signal anywhere outranks an HTTP-status marker,
+		// because the outcome is unknowable whenever the client stopped
+		// waiting without confirmation.
+		{"flood control then timeout", errors.New("exit status 1"), "Flood control exceeded. Retry in 5 (request timed out)", sendFailAmbiguous},
 	}
 	for _, c := range cases {
-		if got := isRetryableSendError(c.err, c.out); got != c.want {
-			t.Errorf("%s: isRetryableSendError = %v, want %v", c.name, got, c.want)
+		if got := classifySendFailure(c.err, c.out); got != c.want {
+			t.Errorf("%s: classifySendFailure = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// =============================================================================
+// SCHED-GAP-1672 — an ambiguous (timed-out) send must never be auto-resent
+// =============================================================================
+
+// setupFakeHermesAttempts installs a fake `hermes` binary that appends its argv
+// to a per-test attempts ledger (one line per invocation) and then fails with
+// failText on stderr. It models the measured SCHED-GAP-1672 shape: the platform
+// accepted the request, but the client never learned the outcome. Returns the
+// ledger path.
+func setupFakeHermesAttempts(t *testing.T, failText string) string {
+	t.Helper()
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "attempts.txt")
+
+	script := `#!/bin/bash
+echo "$@" >> "$HERMES_ATTEMPTS_FILE"
+echo "$HERMES_FAIL_TEXT" >&2
+exit 1
+`
+	scriptPath := filepath.Join(dir, "hermes")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake hermes: %v", err)
+	}
+
+	t.Setenv("HERMES_ATTEMPTS_FILE", ledger)
+	t.Setenv("HERMES_FAIL_TEXT", failText)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	return ledger
+}
+
+// hermesAttempts counts the delivery attempts that actually reached the
+// platform: one fake-hermes invocation (one recorded argv line) == one attempt.
+func hermesAttempts(t *testing.T, ledger string) int {
+	t.Helper()
+	data, err := os.ReadFile(ledger)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read attempts ledger: %v", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
+}
+
+// captureDeliverLog captures the package logger's output for one test.
+func captureDeliverLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// attemptLogLines returns the "DELIVER: attempt N/4 failed:" lines, in order.
+func attemptLogLines(logOut string) []string {
+	var out []string
+	for _, line := range strings.Split(logOut, "\n") {
+		if strings.Contains(line, "attempt ") && strings.Contains(line, " failed:") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// tickBody is a report body long enough to survive trimToolNoise untouched.
+func tickBody() *bytes.Buffer {
+	var buf bytes.Buffer
+	buf.WriteString("foreman tick summary: one report, delivered to the shared thread once")
+	return &buf
+}
+
+// TestSCHEDGAP1672_TimeoutAfterAcceptIsNotResent is the regression for the
+// measured duplicate (coding-hermes-tools-sync, 2026-09-29 00:23:35Z — the same
+// report posted to one Telegram thread four times): the platform accepted the
+// message, and the client timed out waiting for the response. A timeout is
+// AMBIGUOUS, so exactly ONE delivery attempt may reach the platform, and the
+// greppable ambiguous line must say so.
+func TestSCHEDGAP1672_TimeoutAfterAcceptIsNotResent(t *testing.T) {
+	ledger := setupFakeHermesAttempts(t, "hermes send: Telegram send failed: Timed out")
+	logs := captureDeliverLog(t)
+
+	deliverOutputWithMode(clock.NewSimClockAt(1000, time.Now()),
+		"coding-hermes-tools-sync", "tick-1672a", "telegram:-1004305778724", "command", tickBody(), "")
+
+	if got := hermesAttempts(t, ledger); got != 1 {
+		t.Errorf("delivery attempts = %d, want exactly 1 — a timeout is ambiguous and must not be auto-resent", got)
+	}
+	if !strings.Contains(logs.String(), "AMBIGUOUS send failure (timeout): message may have been delivered, NOT resending (duplicate-suppression)") {
+		t.Errorf("missing the greppable ambiguous-failure line; log was:\n%s", logs.String())
+	}
+}
+
+// TestSCHEDGAP1672_FloodControlStillRetries: an explicit REJECTION proves
+// nothing was posted, so it must still consume every attempt — the retry
+// behaviour this project relies on for Telegram flood control.
+func TestSCHEDGAP1672_FloodControlStillRetries(t *testing.T) {
+	ledger := setupFakeHermesAttempts(t,
+		"hermes send: Telegram send failed: Flood control exceeded. Retry in 18.00 seconds")
+
+	deliverOutputWithMode(clock.NewSimClockAt(1000, time.Now()),
+		"coding-hermes-tools-sync", "tick-1672b", "telegram:-1004305778724", "command", tickBody(), "")
+
+	if got := hermesAttempts(t, ledger); got != 4 {
+		t.Errorf("delivery attempts = %d, want 4 — a flood-control rejection proves nothing was posted, so it stays retryable", got)
+	}
+}
+
+// TestSCHEDGAP1672_LastAttemptLogNeverSaysRetrying: "— retrying" may only
+// appear when another attempt will actually run. The last attempt (4/4) must
+// not claim a retry that never happens.
+func TestSCHEDGAP1672_LastAttemptLogNeverSaysRetrying(t *testing.T) {
+	ledger := setupFakeHermesAttempts(t,
+		"hermes send: Telegram send failed: Flood control exceeded. Retry in 18.00 seconds")
+	logs := captureDeliverLog(t)
+
+	deliverOutputWithMode(clock.NewSimClockAt(1000, time.Now()),
+		"coding-hermes-tools-sync", "tick-1672c", "telegram:-1004305778724", "command", tickBody(), "")
+
+	if got := hermesAttempts(t, ledger); got != 4 {
+		t.Fatalf("delivery attempts = %d, want 4 (log-shape test needs the full retry run)", got)
+	}
+	lines := attemptLogLines(logs.String())
+	if len(lines) != 4 {
+		t.Fatalf("attempt log lines = %d, want 4; log was:\n%s", len(lines), logs.String())
+	}
+	for i, line := range lines[:len(lines)-1] {
+		if !strings.Contains(line, " — retrying") {
+			t.Errorf("attempt line %d = %q, want the retrying suffix (another attempt follows)", i+1, line)
+		}
+	}
+	if last := lines[len(lines)-1]; strings.Contains(last, "retrying") {
+		t.Errorf("last attempt line claims a retry that never runs: %q", last)
+	}
+}
+
+// TestSCHEDGAP1672_AmbiguousAttemptLogNeverSaysRetrying covers the same
+// cosmetic bug on the ambiguous path: its single attempt is also the last one,
+// so it must not claim a retry either.
+func TestSCHEDGAP1672_AmbiguousAttemptLogNeverSaysRetrying(t *testing.T) {
+	ledger := setupFakeHermesAttempts(t, "hermes send: Telegram send failed: Timed out")
+	logs := captureDeliverLog(t)
+
+	deliverOutputWithMode(clock.NewSimClockAt(1000, time.Now()),
+		"coding-hermes-tools-sync", "tick-1672d", "telegram:-1004305778724", "command", tickBody(), "")
+
+	if got := hermesAttempts(t, ledger); got != 1 {
+		t.Fatalf("delivery attempts = %d, want 1", got)
+	}
+	lines := attemptLogLines(logs.String())
+	if len(lines) != 1 {
+		t.Fatalf("attempt log lines = %d, want 1; log was:\n%s", len(lines), logs.String())
+	}
+	if strings.Contains(lines[0], "retrying") {
+		t.Errorf("the last (and only) attempt line claims a retry that never runs: %q", lines[0])
+	}
+}
+
+// TestSCHEDGAP1672_TimeoutSpellingsAreNeverResent: every timeout spelling the
+// client can emit — including a 504 Gateway Timeout and a mid-flight reset,
+// whose outcomes are equally unknowable — must stop after one attempt.
+func TestSCHEDGAP1672_TimeoutSpellingsAreNeverResent(t *testing.T) {
+	for _, text := range []string{
+		"hermes send: Telegram send failed: Timed out",
+		"hermes send: Telegram send failed: Request timeout",
+		"hermes send: Telegram send failed: dial tcp 149.154.167.220:443: i/o timeout",
+		"hermes send: Telegram send failed: 504 Gateway Timeout",
+		"hermes send: Telegram send failed: read tcp: connection reset by peer",
+		"hermes send: Telegram send failed: context deadline exceeded",
+	} {
+		t.Run(text, func(t *testing.T) {
+			ledger := setupFakeHermesAttempts(t, text)
+
+			deliverOutputWithMode(clock.NewSimClockAt(1000, time.Now()),
+				"timeoutproj", "tick-1672e", "telegram:1", "prompt", tickBody(), "")
+
+			if got := hermesAttempts(t, ledger); got != 1 {
+				t.Errorf("failure %q: delivery attempts = %d, want 1 (ambiguous — never auto-resent)", text, got)
+			}
+		})
 	}
 }

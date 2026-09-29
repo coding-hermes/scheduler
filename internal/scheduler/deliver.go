@@ -62,52 +62,154 @@ func resolveDeliverMode(mode string) string {
 	}
 }
 
-// sendWithRetry runs `hermes send` with the given args, retrying transient
-// failures (timeout, connection reset, 429/5xx, "Timed out") with exponential
-// backoff. Telegram backend latency spikes are transient — a retry with backoff
-// turns a lost delivery into a delivered one. Non-retryable config/usage errors
-// (bad --to, unknown platform) fail immediately. Returns the trimmed output of
-// the last attempt and whether the send eventually succeeded.
-func sendWithRetry(clk clock.Clock, args ...string) ([]byte, bool) {
+// sendFailClass classifies a failed `hermes send` run by whether a RESEND is
+// safe (SCHED-GAP-1672).
+//
+// Retrying a failure whose outcome is unknown is what posted one tick report
+// to the same Telegram thread four times (2026-09-29): the platform accepted
+// the message, the client timed out waiting for the response, and the old
+// retry policy — which treated every "Timed out" as transient — resent it.
+// Sending is not idempotent: only a failure that PROVES nothing was posted may
+// be retried.
+type sendFailClass int
+
+const (
+	// sendFailNone is the zero value: the send did not fail.
+	sendFailNone sendFailClass = iota
+	// sendFailRejected — an explicit rejection: the platform or transport
+	// REFUSED the request, so nothing was posted and a resend cannot
+	// duplicate anything (flood control / rate limit, connection refused
+	// before the request left, HTTP 429/5xx with no timeout signal).
+	sendFailRejected
+	// sendFailAmbiguous — a timeout or a mid-flight connection abort. The
+	// request may have reached the platform and been delivered before our
+	// client gave up, so an automatic resend CAN duplicate the post. Never
+	// auto-resent.
+	sendFailAmbiguous
+	// sendFailFatal — a config/usage error (bad --to, unknown platform,
+	// invalid argument). Retrying cannot help.
+	sendFailFatal
+)
+
+// sendRejectionMarkers are lowercased substrings that prove the request was
+// refused before it was accepted — safe to retry.
+//
+// The flood/rate-limit vocabulary mirrors the gateway's own send-error
+// classifier (gateway/platforms/base.py classify_send_error), so the two
+// layers agree on what a Telegram rejection looks like.
+var sendRejectionMarkers = []string{
+	"flood",             // "Flood control exceeded. Retry in 18.00 seconds"
+	"too many requests", // the same rejection, other spelling
+	"retry after",
+	"rate limit",
+	"429",
+	"502",
+	"503",
+	"connection refused",
+	"econnrefused",
+	"temporary", // "temporary failure in name resolution" — never dialled
+	"network",   // "network is unreachable" — never dialled
+	"gateway",   // "Bad Gateway" spelled out instead of the status code
+	"backend",
+}
+
+// sendAmbiguityMarkers are lowercased substrings that mean the client stopped
+// waiting without learning the outcome. The message may already be posted.
+var sendAmbiguityMarkers = []string{
+	"timed out",
+	"timeout",
+	"deadline exceeded",
+	"connection reset",
+	"econnreset",
+	"broken pipe",
+	"unexpected eof",
+}
+
+// classifySendFailure maps a `hermes send` failure to its resend class.
+//
+// AMBIGUITY WINS: the timeout markers are tested FIRST, so a failure carrying
+// any timeout signal is never auto-resent even when an HTTP status marker is
+// also present. That is deliberate — "504 Gateway Timeout" is 5xx but it means
+// the upstream never confirmed the request, which is exactly the unknowable
+// outcome that duplicated the post. A bare rejection ("Flood control
+// exceeded", HTTP 429/503, connection refused) carries no timeout signal and
+// still retries.
+func classifySendFailure(err error, output string) sendFailClass {
+	msg := strings.ToLower(err.Error() + " " + output)
+	for _, m := range sendAmbiguityMarkers {
+		if strings.Contains(msg, m) {
+			return sendFailAmbiguous
+		}
+	}
+	for _, m := range sendRejectionMarkers {
+		if strings.Contains(msg, m) {
+			return sendFailRejected
+		}
+	}
+	return sendFailFatal
+}
+
+// sendResult is the terminal outcome of one sendWithRetry sequence.
+type sendResult struct {
+	sent     bool          // true when an attempt succeeded
+	class    sendFailClass // failure class (sendFailNone when sent)
+	attempts int           // delivery attempts actually made
+}
+
+// sendWithRetry runs `hermes send` with the given args. A REJECTION (see
+// sendFailRejected) is retried with exponential backoff — the platform refused
+// the request, so another attempt can still land the report. An AMBIGUOUS
+// failure (a bare timeout) is terminal on the FIRST attempt: the message may
+// already be posted, and re-sending is what duplicates it (SCHED-GAP-1672).
+// Config/usage errors fail immediately. Returns the trimmed output of the last
+// attempt and the terminal result.
+func sendWithRetry(clk clock.Clock, args ...string) ([]byte, sendResult) {
 	const maxAttempts = 4
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
 
 	var lastOut []byte
+	res := sendResult{}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		cmd := exec.Command("hermes", append([]string{"send"}, args...)...)
 		out, err := cmd.CombinedOutput()
 		lastOut = out
+		res.attempts = attempt + 1
 		if err == nil {
-			return out, true
+			res.class = sendFailNone
+			res.sent = true
+			return out, res
 		}
-		msg := string(out)
-		retryable := isRetryableSendError(err, msg)
+		class := classifySendFailure(err, string(out))
+		res.class = class
+		// "— retrying" may only appear when another attempt will actually
+		// run: it is derived from the retry decision, never from the class.
+		willRetry := class == sendFailRejected && attempt < maxAttempts-1
+		suffix := ""
+		if willRetry {
+			suffix = " — retrying"
+		}
 		log.Printf("DELIVER: attempt %d/%d failed: %v (%s)%s",
-			attempt+1, maxAttempts, err, strings.TrimSpace(msg),
-			map[bool]string{true: " — retrying", false: ""}[retryable])
-		if !retryable || attempt == maxAttempts-1 {
-			return out, false
+			attempt+1, maxAttempts, err, strings.TrimSpace(string(out)), suffix)
+		if !willRetry {
+			return out, res
 		}
 		clk.Sleep(backoff[attempt])
 	}
-	return lastOut, false
+	return lastOut, res
 }
 
-// isRetryableSendError reports whether a hermes-send failure is a transient
-// backend/network error worth retrying, vs a permanent config/usage error.
-func isRetryableSendError(err error, output string) bool {
-	msg := strings.ToLower(err.Error() + " " + output)
-	transient := []string{
-		"timed out", "timeout", "connection reset", "connection refused",
-		"temporary", "econnreset", "econnrefused", "i/o timeout",
-		"429", "502", "503", "504", "gateway", "backend", "network",
+// logSendFailure emits the terminal line for a failed send. An ambiguous
+// (possibly-already-delivered) failure gets its own distinct, greppable line
+// and states that it is deliberately NOT resent; anything else reports how
+// many attempts were made.
+func logSendFailure(prefix, project, tickID string, out []byte, res sendResult) {
+	if res.class == sendFailAmbiguous {
+		log.Printf("%s: %s tick=%s — AMBIGUOUS send failure (timeout): message may have been delivered, NOT resending (duplicate-suppression)",
+			prefix, project, tickID)
+		return
 	}
-	for _, t := range transient {
-		if strings.Contains(msg, t) {
-			return true
-		}
-	}
-	return false
+	log.Printf("%s: %s tick=%s — hermes send failed after %d attempt(s) (%s)",
+		prefix, project, tickID, res.attempts, bytes.TrimSpace(out))
 }
 
 // deliverOutput sends tick output to the configured delivery target via Hermes' gateway.
@@ -244,9 +346,9 @@ func sendReportBody(clk clock.Clock, project, tickID, deliver, subject, body, te
 	}
 	f.Close()
 
-	out, ok := sendWithRetry(clk, "--to", deliver, "--subject", subject, "--file", f.Name())
-	if !ok {
-		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
+	out, res := sendWithRetry(clk, "--to", deliver, "--subject", subject, "--file", f.Name())
+	if !res.sent {
+		logSendFailure("DELIVER", project, tickID, out, res)
 		return
 	}
 	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)
@@ -256,9 +358,9 @@ func sendReportBody(clk clock.Clock, project, tickID, deliver, subject, body, te
 // message's first line, so no --subject flag is passed (the header stays the
 // visible header; the whole short text lives in the body).
 func sendShort(clk clock.Clock, project, tickID, deliver, msg string) {
-	out, ok := sendWithRetry(clk, "--to", deliver, msg)
-	if !ok {
-		log.Printf("DELIVER: %s tick=%s — hermes send failed after retries (%s)", project, tickID, bytes.TrimSpace(out))
+	out, res := sendWithRetry(clk, "--to", deliver, msg)
+	if !res.sent {
+		logSendFailure("DELIVER", project, tickID, out, res)
 		return
 	}
 	log.Printf("DELIVER: %s tick=%s → %s", project, tickID, deliver)
@@ -285,9 +387,9 @@ func deliverAlertWith(clk clock.Clock, deliver, project, tickID, reason string) 
 	defer f.Close()
 	_, _ = f.WriteString(msg)
 	f.Close()
-	out, ok := sendWithRetry(clk, "--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
-	if !ok {
-		log.Printf("ALERT: send failed after retries (%s)", bytes.TrimSpace(out))
+	out, res := sendWithRetry(clk, "--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
+	if !res.sent {
+		logSendFailure("ALERT", project, tickID, out, res)
 		return
 	}
 	log.Printf("ALERT: %s tick=%s → %s", project, tickID, deliver)
