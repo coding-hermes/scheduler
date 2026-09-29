@@ -1317,7 +1317,7 @@ func (l *Loop) resetZeroSelect() {
 // the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0), COALESCE(admission_mode, ''), COALESCE((SELECT admission_mode FROM namespaces WHERE id = projects.namespace_id), ''), COALESCE(workdir, ''), COALESCE(board_ownership, ''), COALESCE(last_tick_status, '') FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, COALESCE(cooldown_pin_s, 0), priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0), COALESCE(admission_mode, ''), COALESCE((SELECT admission_mode FROM namespaces WHERE id = projects.namespace_id), ''), COALESCE(workdir, ''), COALESCE(board_ownership, ''), COALESCE(last_tick_status, '') FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -1327,12 +1327,13 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 	for rows.Next() {
 		var name string
 		var cooldown int
+		var pinS int
 		var priority int
 		var lastComp string
 		var consecFailures int
 		var bumpActive, bumpCD int
 		var projMode, nsMode, workdir, boardOwnership, lastStatus string
-		if err := rows.Scan(&name, &cooldown, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD,
+		if err := rows.Scan(&name, &cooldown, &pinS, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD,
 			&projMode, &nsMode, &workdir, &boardOwnership, &lastStatus); err != nil {
 			continue
 		}
@@ -1349,6 +1350,14 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		if bumpActive == 1 && bumpCD > 0 {
 			cooldown = bumpCD
 		}
+		// SCHED-GAP-1661: the pin rides into the same shared predicate
+		// (pin-first outranks the bumped cooldown value above). SQL-side
+		// normalization mirrors packer.go's Pick scan: NULL / <=0 = no pin.
+		var pinPtr *int
+		if pinS > 0 {
+			pin := pinS
+			pinPtr = &pin
+		}
 		if lastComp == "" {
 			eligible++
 			continue
@@ -1363,7 +1372,7 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		// is 0, S-GAP-001 failure backoff, blackout multiplier +
 		// skip-mode). The loop's calculator matches the packer's (both
 		// are built from the same minI/maxI/numLevels in NewLoop).
-		cooldownDur, skipMode := effectiveCooldown(cooldown, float64(priority), consecFailures, l.packer.blackoutWindows, now, l.calculator)
+		cooldownDur, skipMode := effectiveCooldown(cooldown, float64(priority), consecFailures, l.packer.blackoutWindows, now, l.calculator, pinPtr)
 		if skipMode {
 			continue // skip-mode blackout: packer skips this project
 		}
@@ -1565,7 +1574,11 @@ type admissionCandidate struct {
 	AdmissionMode          string // project override ('' = inherit)
 	NamespaceAdmissionMode string // namespace default ('' = cooldown)
 	BoardOwnership         string // '' = auto, 'owner', 'shared' (SCHED-GAP-141)
-	LastCompleted          *time.Time
+	// SCHED-GAP-1661: the operator cooldown pin (nil / <=0 = no pin).
+	// Feeds the shared effectiveCooldown's pin-first term so the admission
+	// countdown names the cooldown the packer will actually enforce.
+	CooldownPinS  *int
+	LastCompleted *time.Time
 	// SCHED-GAP-214: terminal status of the most recent tick ("" = never).
 	// Drives the failed_cooldown admission reason for tasks-mode lanes.
 	LastTickStatus  string
@@ -1750,6 +1763,7 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 func (l *Loop) admissionCandidates(ctx context.Context) ([]admissionCandidate, error) {
 	rows, err := l.db.QueryContext(ctx, `
 SELECT p.name, COALESCE(p.namespace_id, ''), COALESCE(p.weight, 0), COALESCE(p.cooldown_s, 0),
+       COALESCE(p.cooldown_pin_s, 0),
        COALESCE(p.priority, 0), COALESCE(p.consecutive_failures, 0),
        COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0),
        COALESCE(p.workdir, ''), COALESCE(p.admission_mode, ''),
@@ -1769,7 +1783,9 @@ ORDER BY p.name`)
 	for rows.Next() {
 		var c admissionCandidate
 		var lastStr string
+		var pinS int
 		if err := rows.Scan(&c.Name, &c.NS, &c.Weight, &c.CooldownS,
+			&pinS,
 			&c.Priority, &c.ConsecutiveFailures,
 			&c.BumpActive, &c.BumpCooldownS,
 			&c.Workdir, &c.AdmissionMode,
@@ -1778,6 +1794,13 @@ ORDER BY p.name`)
 			&c.DailyBudgetUSD, &c.WeeklyBudgetUSD, &c.FinalBudgetUSD); err != nil {
 			log.Printf("ADMIT: scan candidate row: %v", err)
 			continue
+		}
+		// SCHED-GAP-1661: SQL-side pin normalization, mirroring the
+		// watchdog scan — NULL / <=0 stays nil (no pin). The pin rides
+		// into cooldownVerdict's shared effectiveCooldown call.
+		if pinS > 0 {
+			pin := pinS
+			c.CooldownPinS = &pin
 		}
 		if lastStr != "" {
 			if t, err := time.Parse(time.RFC3339, lastStr); err == nil {
@@ -1832,7 +1855,10 @@ func (l *Loop) admissionNamespaceQueued(nsID string) int {
 // SCHED-GAP-107 bump substitution for an active bump, a skip-mode blackout
 // reported as deferred with no countdown (it never elapses), and a project
 // that never completed treated as not cooldown-blocked (mirror of
-// countEligibleProjects).
+// countEligibleProjects). SCHED-GAP-1661: the pin rides in on the
+// candidate — a set+positive CooldownPinS outranks the (bumped) cooldown
+// inside the shared predicate, so the ADMIT countdown names the pin the
+// packer will actually enforce.
 func (l *Loop) cooldownVerdict(c admissionCandidate, now time.Time) (deferred bool, remainingS float64, hasRemaining bool) {
 	if c.LastCompleted == nil {
 		return false, 0, false
@@ -1845,7 +1871,7 @@ func (l *Loop) cooldownVerdict(c admissionCandidate, now time.Time) (deferred bo
 	if c.BumpActive && c.BumpCooldownS > 0 {
 		cd = c.BumpCooldownS
 	}
-	cooldownDur, skipMode := effectiveCooldown(cd, c.Priority, c.ConsecutiveFailures, windows, now, l.calculator)
+	cooldownDur, skipMode := effectiveCooldown(cd, c.Priority, c.ConsecutiveFailures, windows, now, l.calculator, c.CooldownPinS)
 	if skipMode {
 		return true, 0, false // skip-mode blackout: never eligible, no countdown
 	}

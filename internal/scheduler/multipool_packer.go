@@ -351,7 +351,9 @@ func (m *MultiPoolPacker) packFlat(
 		// Cooldown check (ADV-R03/G5: shared effectiveCooldown — the
 		// bump value feeds cooldownS, so the bump, the S-GAP-001
 		// failure backoff, and the blackout multiplier all apply in
-		// the one shared place).
+		// the one shared place; SCHED-GAP-1661: a set+positive
+		// cooldown_pin_s outranks the (bumped) cooldown base inside
+		// that shared predicate).
 		if s.lastTick != nil {
 			cd := s.proj.CooldownS
 			// SCHED-GAP-107: an active bump owns the effective cooldown —
@@ -359,7 +361,7 @@ func (m *MultiPoolPacker) packFlat(
 			if s.bumpCooldownS > 0 {
 				cd = s.bumpCooldownS
 			}
-			cooldownDur, skipMode := effectiveCooldown(cd, float64(s.proj.Priority), s.proj.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc)
+			cooldownDur, skipMode := effectiveCooldown(cd, float64(s.proj.Priority), s.proj.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, s.proj.CooldownPinS)
 			if skipMode {
 				continue
 			}
