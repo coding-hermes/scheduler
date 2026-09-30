@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 52
+const latestMigration = 53
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -915,6 +915,19 @@ ALTER TABLE namespaces ADD COLUMN no_artifact_recon_floor TEXT NOT NULL DEFAULT 
 		desc:    "SCHED-GAP-1674: guard_nudged_at on ticks — RFC3339 instant of the builder guard's first-window nudge ('' = never); the guard's abort window measures from this stamp",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN guard_nudged_at TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SOL-CADENCE / SCHED-GAP-1668: the optional per-lane cadence target
+		// the ordering half reads. NULL (no override) derives the target from
+		// the durable cooldown pin at read time; 0 explicitly means "no
+		// cadence opinion" and preserves legacy ordering; a positive value
+		// overrides. Additive ALTER — a live database migrates in place and
+		// every existing row reads NULL (derived), never a fabricated target.
+		version: 53,
+		desc:    "SOL-CADENCE: optional per-lane target_runs_per_day override (NULL derives from cooldown pin, 0 opts out, positive overrides) for measurable cadence ordering and reporting",
+		stmt: `
+ALTER TABLE projects ADD COLUMN target_runs_per_day REAL CHECK(target_runs_per_day >= 0);
 `,
 	},
 }

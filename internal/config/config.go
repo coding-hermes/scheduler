@@ -318,6 +318,14 @@ type ProjectDef struct {
 	// lane reads a foreign board — always cooldown-paced). Pins only
 	// when explicitly set (GatewayKey-style conditional pin).
 	BoardOwnership string `toml:"board_ownership"`
+
+	// SOL-CADENCE: the optional per-lane cadence target. nil leaves the row's
+	// value untouched (NULL on the row → the target derives from the durable
+	// cooldown pin), a pointer-to-zero is an explicit "no cadence opinion"
+	// opt-out, and a positive value overrides the derived target. Pins only
+	// when explicitly set (GatewayKey-style conditional pin), and drives
+	// ORDERING ONLY — no admission gate reads it.
+	TargetRunsPerDay *float64 `toml:"target_runs_per_day"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are

@@ -26,6 +26,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/features` | Per-feature live usage counters — every tracked mechanism's `use_count` + `first_used_at`/`last_used_at`, plus the `admission_mode_rows` gauge (SCHED-GAP-131) |
 | `/api/v1/features/prune-candidates` | Dead-feature reaper report — mechanisms never used or last used more than `?weeks=N` ago (default 8); flag only, no auto-delete (SCHED-GAP-131) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
+| `/api/v1/cadence` | Configured vs achieved starts/day per lane over the trailing seven-day window; target source is explicit override, durable cooldown pin, disabled, or none (GET) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |
 | `/api/v1/namespaces` | List namespaces |
 | `/api/v1/namespaces/{id}` | Namespace detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true` soft-deletes: enabled=false, member projects unassigned, row retained; `?confirm=true&purge=true` hard-deletes the row permanently, SCHED-GAP-097) |

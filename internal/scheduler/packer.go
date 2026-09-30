@@ -65,6 +65,10 @@ type Packer struct {
 	// selection (SCHED-GAP-066). Installed per evaluation cycle by the loop;
 	// nil = no budget enforcement (tests, spend-query failure fail-open).
 	budgetGate BudgetGate
+	// cadenceRates is the trailing-window achieved runs/day snapshot keyed
+	// by lane for ONE evaluation (SOL-CADENCE). nil/absent entries read as
+	// zero; only lanes with a configured effective target consume it.
+	cadenceRates map[string]float64
 }
 
 // NewPacker creates a packer with the given budget and concurrency cap. The
@@ -95,6 +99,11 @@ func (p *Packer) SetPendingCounter(c *PendingTaskCounter) {
 // to disable budget enforcement.
 func (p *Packer) SetBudgetGate(g BudgetGate) {
 	p.budgetGate = g
+}
+
+// SetCadenceRates installs the achieved runs/day snapshot for one evaluation.
+func (p *Packer) SetCadenceRates(rates map[string]float64) {
+	p.cadenceRates = rates
 }
 
 // scored is a project with its computed urgency.
@@ -146,6 +155,13 @@ type scored struct {
 	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
 	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
 	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+
+	// targetRunsPerDay (SOL-CADENCE) is the per-lane cadence target read from
+	// the project row: nil derives the target from the durable cooldown pin, a
+	// pointer-to-zero means "no cadence opinion", and a positive value
+	// overrides. Consumed for ORDERING only — every admission gate is
+	// untouched by it.
+	targetRunsPerDay *float64
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -159,7 +175,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
-		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, '')
+		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, ''),
+		       p.target_runs_per_day
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
 		WHERE p.enabled = 1
@@ -181,13 +198,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		var lastStatus string
 		var pinS int
+		var targetRunsPerDay sql.NullFloat64
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&pinS, &lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver, &s.deliverMode,
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
-			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership); err != nil {
+			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership,
+			&targetRunsPerDay); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -196,6 +215,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if pinS > 0 {
 			v := pinS
 			s.cooldownPinS = &v
+		}
+		// SOL-CADENCE: NULL stays nil (derive from the pin); an explicit 0
+		// stays a pointer-to-zero ("no cadence opinion").
+		if targetRunsPerDay.Valid {
+			v := targetRunsPerDay.Float64
+			s.targetRunsPerDay = &v
 		}
 		// SCHED-GAP-214: after a FAILED tick the tasks-mode waiver stands down.
 		s.lastTickStatusFailed = lastTickStatusFailed(lastStatus)
@@ -250,6 +275,13 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if s.bumpActive && s.urgency < bumpBoostUrgency {
 			s.urgency = bumpBoostUrgency
 		}
+		// SOL-CADENCE: a lane below its effective cadence target outranks a
+		// lane meeting it. ORDERING ONLY — the cooldown, namespace, budget,
+		// load and concurrency gates below are untouched and still decide
+		// whether this lane is admitted at all.
+		s.urgency = cadenceAdjustedUrgency(s.urgency, database.Project{
+			Name: s.name, TargetRunsPerDay: s.targetRunsPerDay, CooldownPinS: s.cooldownPinS,
+		}, p.cadenceRates[s.name])
 		s.lastTickAt = lastCompleted
 		list = append(list, s)
 	}

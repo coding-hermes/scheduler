@@ -103,6 +103,21 @@ func (l *Loop) evaluate() {
 	if l.multiPoolPacker != nil {
 		l.multiPoolPacker.SetWaveShedDB(l.db)
 	}
+	if l.multiPoolPacker != nil || l.packer != nil {
+		cadenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rates, err := database.LoadCadenceRates(cadenceCtx, l.db, now, CadenceWindow)
+		cancel()
+		if err != nil {
+			log.Printf("cadence target: achieved-rate query failed open: %v", err)
+		} else {
+			if l.multiPoolPacker != nil {
+				l.multiPoolPacker.SetCadenceRates(rates)
+			}
+			if l.packer != nil {
+				l.packer.SetCadenceRates(rates)
+			}
+		}
+	}
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
