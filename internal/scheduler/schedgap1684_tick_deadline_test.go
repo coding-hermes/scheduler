@@ -82,7 +82,7 @@ func TestSchedGap1684TickDeadlineBooksTimeoutNotDeferred(t *testing.T) {
 	spawner := NewSpawner(db, 4)
 	spawner.SetGatewayClient(NewGatewayClient(srv.URL, "***", 5*time.Second))
 	spawner.SetNoExecFallback(true)
-	spawner.timeout = 1 * time.Second                // the TICK wall under test
+	spawner.timeout = 1 * time.Second                         // the TICK wall under test
 	spawner.SetGatewayResponseTimeout(400 * time.Millisecond) // arms the supervised (streaming) POST; idle watch resets on every 50ms event, so only the wall can end it
 
 	beforeDeferrals := gap170Deferrals()
@@ -167,7 +167,7 @@ func TestSchedGap1684GenuineDropStillDeferred(t *testing.T) {
 	spawner := NewSpawner(db, 4)
 	spawner.SetGatewayClient(NewGatewayClient(srv.URL, "***", 5*time.Second))
 	spawner.SetNoExecFallback(true)
-	spawner.timeout = 30 * time.Second                // tick deadline stays ALIVE
+	spawner.timeout = 30 * time.Second                 // tick deadline stays ALIVE
 	spawner.SetGatewayResponseTimeout(2 * time.Second) // arms the supervised POST; the stream EOFs long before any deadline
 
 	beforeDeferrals := gap170Deferrals()
