@@ -33,6 +33,9 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-30
 
+### Fixed
+- scheduler: cadence-target ordering (rebased onto main) — admission now sorts by cadence-target urgency so a lane's next-due tick is ordered against the packer correctly (SCHED-GAP-1668, SOL-CADENCE) — `a6c00862`.
+
 ## [1.11.5] — 2026-09-30
 
 ### Fixed
