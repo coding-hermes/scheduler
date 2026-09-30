@@ -4633,3 +4633,13 @@ tasks:
   status: complete
   created_at: '2026-09-29T23:18:18.070581+00:00'
   completed_at: '2026-09-29T23:37:44.875088+00:00'
+- id: SCHED-GAP-1668
+  title: Re-base cadence-target half of wt/SOL-CADENCE onto main, WITHOUT the satellite
+    tasks-waiver widening
+  criteria:
+  - go build + go vet + go test -short -p 1 green on rebased tree; diff contains NO
+    change to laneOwnsBoard/boardOwnership; test proves cooldown-mode lane admission
+    unchanged by cadence boost
+  status: complete
+  created_at: '2026-09-30T03:42:42.290429+00:00'
+  completed_at: '2026-09-30T04:24:24.615410+00:00'
