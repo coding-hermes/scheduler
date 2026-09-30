@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 53
+const latestMigration = 54
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -928,6 +928,28 @@ ALTER TABLE ticks ADD COLUMN guard_nudged_at TEXT NOT NULL DEFAULT '';
 		desc:    "SOL-CADENCE: optional per-lane target_runs_per_day override (NULL derives from cooldown pin, 0 opts out, positive overrides) for measurable cadence ordering and reporting",
 		stmt: `
 ALTER TABLE projects ADD COLUMN target_runs_per_day REAL CHECK(target_runs_per_day >= 0);
+`,
+	},
+	{
+		// DOGFOOD-024: the dashboard's batchCompletedSamples windows over the
+		// last ≤20 completed ticks PER PROJECT (ROW_NUMBER PARTITION BY
+		// project_name ORDER BY spawned_at DESC) and batchTickHealth windows
+		// over the last ≤10 ticks of any status per project. At 78k+ tick
+		// rows the first sorted the FULL completed set (idx_ticks_status
+		// search + temp B-tree, measured 125ms) and the second sorted the
+		// FULL history through idx_ticks_project_spawned's per-partition
+		// temp B-tree (measured 284ms) — both on the single serialized
+		// connection every render. This covering partial index lets the
+		// completed-window query run index-only over completed rows, and
+		// reuses idx_ticks_project_spawned (already prefix-complete) for the
+		// any-status window. Idempotent IF NOT EXISTS, additive — no query
+		// loses its old plan.
+		version: 54,
+		desc:    "DOGFOOD-024: covering partial index idx_ticks_completed_project_spawned (project_name, spawned_at, completed_at, cost_usd) WHERE status='completed' so the dashboard's per-project completed-tick window scans the index instead of the full 78k-row ticks table",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_completed_project_spawned
+ON ticks(project_name, spawned_at, completed_at, cost_usd)
+WHERE status = 'completed';
 `,
 	},
 }
