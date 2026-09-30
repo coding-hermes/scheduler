@@ -548,6 +548,17 @@ func readSSEResponse(body io.Reader, watch *turnWatch) (*Response, error) {
 						return nil, werr
 					}
 				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					// SCHED-GAP-1684: the READ ended because the SESSION
+					// context hit its deadline — the tick's own wall (the
+					// per-turn abort is the TurnDeadlineError above). WE tore
+					// the stream down; the gateway did not. Wrap the deadline
+					// itself so the spawn path can book a self-timeout
+					// instead of charging our wall to the gateway as a
+					// transient blip (30 of 41 deferred ticks in the
+					// 2026-09-30 sample died at exactly 120/180 min).
+					return nil, fmt.Errorf("%w: session context deadline expired during sse stream", ErrTickDeadlineExceeded)
+				}
 				return nil, fmt.Errorf("%w: sse stream ended without a terminal event", ErrGatewayTransient)
 			}
 			if watch != nil {

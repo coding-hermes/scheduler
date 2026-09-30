@@ -59,6 +59,16 @@ func HarnessFailure(errText string) bool {
 		// ErrGatewayTransient text and the SSE reader's own terminal phrase.
 		"gateway transient error",
 		"sse stream ended without a terminal event",
+		// SCHED-GAP-1684: a tick whose OWN session deadline tore down the
+		// gateway POST carries "tick-timeout wall <d>: … tick deadline
+		// exceeded: …" (Spawner.tickDeadlineTimeout, status=timeout). The
+		// wall fired inside a gateway POST, so the shared classifier must
+		// read the harness-side class like every other gateway-wall timeout
+		// (failure_reason=gateway_transport on the TickTimeout row). The
+		// phrase is deliberately distinct from TurnDeadlineError's "gateway
+		// turn deadline exceeded" — that abort is a stalled FAILURE with
+		// its own text, never a self-timeout.
+		"tick deadline exceeded",
 		// SCHED-GAP-1641: an instant one-shot gateway turn is a HARNESS
 		// verdict, not a project failure — a completed response that did a
 		// near-zero-output single turn must not count in any healthy-tick

@@ -216,6 +216,13 @@ func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, 
 				(*tickTrace).Classification = "aborted-by-turn-deadline"
 				(*tickTrace).IdleFired = true
 			}
+		} else if errors.Is(err, ErrTickDeadlineExceeded) {
+			// SCHED-GAP-1684: the TICK wall (session ctx) tore the POST
+			// down — name it in the trace so gateway_trace audits a
+			// self-timeout instead of a generic transport error.
+			if *tickTrace != nil {
+				(*tickTrace).Classification = "aborted-by-tick-deadline"
+			}
 		}
 		return r, err
 	}
@@ -503,6 +510,59 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 		// deferral must be auditable, not silent (the row's acceptance asks
 		// for "the gateway reason recorded").
 		gwDeferReason: gwErr.Error(),
+		model:         model,
+		provider:      provider,
+		rate:          rate,
+		workdir:       project.Workdir,
+		reqStart:      reqStart,
+		Trigger:       "prompt",
+		gwFailCounted: true,
+		gwFailCommits: commits,
+		gwFailFiles:   files,
+	}
+}
+
+// tickDeadlineTimeout (SCHED-GAP-1684) books a tick whose OWN session deadline
+// tore down the in-flight gateway POST as TickTimeout instead of a
+// SCHED-GAP-203 deferral: the SSE reader reports that shape as
+// ErrTickDeadlineExceeded (the stream "ended" because WE cancelled it), and
+// booking it deferred charged the gateway for our wall — 30 of 41 deferred
+// ticks in the 2026-09-30 sample died at exactly 120/180 min while outcome
+// `timeout` was used only 9x in 7 days. The runaway foreman a 2-3h wall exists
+// to catch becomes visible in the status vocabulary the ledger already has
+// ("no timeout backoff" keeps governing: the cooldown chain is untouched).
+//
+// Mirrors transientGatewayDeferral's contract everywhere the deferral is
+// load-bearing, except the terminal class:
+//   - git work is pre-counted at the classification site (a turn that ran
+//     for hours may have committed before the wall hit);
+//   - no noteSpawnFailure / recordGatewayDrop (Wait()'s timeout branch
+//     neither resets nor increments consecutive_failures — lifecycle.go);
+//   - the deferral counter does NOT move (this is not a blip).
+//
+// gwFailErr carries "tick-timeout wall <effectiveTimeout>: <gateway error>" —
+// the row's acceptance asks for the wall in the reason. lifecycle.Complete
+// stamps failure_reason=gateway_transport via failureReasonClass (the
+// deadline fired inside a gateway POST), and the status/outcome columns carry
+// timeout/timeout through TickTimeout.Outcome().
+func (s *Spawner) tickDeadlineTimeout(project PackedProject, tickID string, gwErr error, reqStart time.Time,
+	wall time.Duration, model, provider string, rate routerRate) *SpawnedTick {
+	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+	reason := fmt.Sprintf("tick-timeout wall %s: %v", wall, gwErr)
+	log.Printf("TIMEOUT: %s tick=%s session deadline expired during gateway POST — booking timeout (NOT a gateway blip): %v",
+		project.Name, tickID, gwErr)
+	return &SpawnedTick{
+		TickID:        tickID,
+		Project:       project.Name,
+		SessionID:     tickID, // placeholder — no terminal event, no gateway session persisted
+		Started:       reqStart,
+		Deliver:       project.Deliver,
+		DeliverMode:   project.DeliverMode,
+		spawner:       s,
+		completed:     false,
+		completeAt:    s.clock().Now(),
+		gwFailErr:     reason,
+		gwTickTimeout: true,
 		model:         model,
 		provider:      provider,
 		rate:          rate,
@@ -1930,6 +1990,21 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// is NOT wrapped in ErrGatewayTransient, while our own
 				// deadline expiries and HTTP 5xx refusals ARE in the retryable
 				// set but are not blips. See its doc for the full split.
+				// SCHED-GAP-1684: a self-timeout must not read as a gateway
+				// blip. When the TICK's session deadline expired, the POST
+				// was torn down BY US — the SSE reader reports that shape as
+				// ErrTickDeadlineExceeded, and the session ctx is visibly
+				// DeadlineExceeded here while the classification runs (same
+				// capture-early trap the GAP-117 fold above documents). Book
+				// TickTimeout with the wall named in the reason; everything
+				// else keeps the SCHED-GAP-203 deferral byte-for-byte. The
+				// ctx re-check is deliberately an AND with the error class:
+				// a DeadlineExceeded that raced a genuine transport failure
+				// still defers — this row reclassifies OUR wall, not every
+				// error that happens to share a deadline with a drop.
+				if errors.Is(gwErr, ErrTickDeadlineExceeded) && ctx.Err() == context.DeadlineExceeded {
+					return s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate), nil
+				}
 				if gatewayTransientBlip(gwErr) {
 					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
 				}
@@ -2269,7 +2344,9 @@ type SpawnedTick struct {
 	// or empty-output-AND-empty-session. Wait() yields TickFailed with
 	// this text so slot_pool's lifecycle.Complete records status=failed,
 	// outcome=failed and the gateway's error text in the error column —
-	// never completed/committed.
+	// never completed/committed. SCHED-GAP-1684 also stores a tick-timeout
+	// reason here (session deadline tore down the POST); Wait() branches on
+	// gwTickTimeout BEFORE this gate and yields TickTimeout.
 	gwFailErr string
 	// gwFailCounted/gwFailCommits/gwFailFiles (SCHED-GAP-119): git work
 	// pre-counted at the failure site for ticks that failed AFTER doing
@@ -2298,6 +2375,16 @@ type SpawnedTick struct {
 	// (GAP-035) and keeps failing loudly.
 	gwDeferred    bool
 	gwDeferReason string
+
+	// gwTickTimeout (SCHED-GAP-1684) marks a tick whose OWN session deadline
+	// tore down the in-flight gateway POST (ErrTickDeadlineExceeded at the
+	// deferral site). Wait() yields TickTimeout carrying gwFailErr so
+	// lifecycle.Complete persists status=timeout / outcome=timeout with the
+	// "tick-timeout wall …" text in ticks.error — never status=deferred,
+	// which booked our wall as a gateway blip (30 of 41 deferred ticks in the
+	// 2026-09-30 sample died at exactly 120/180 min). Set by
+	// Spawner.tickDeadlineTimeout ONLY.
+	gwTickTimeout bool
 
 	// guardAbort (SCHED-GAP-1674) marks a tick whose gateway session the
 	// builder no-artifact guard cancelled: the tick ran past two full
@@ -2418,6 +2505,39 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	// only) and are NOT considered by the orphan-resume scan, which selects
 	// status IN ('failed','timeout') rows — a blip the harness absorbed is not
 	// a lost session to continue.
+	//
+	// SCHED-GAP-1684: a tick whose OWN session deadline tore down the gateway
+	// POST is a TIMEOUT, not a deferral — the deferral charged the gateway
+	// for our wall (see tickDeadlineTimeout). Checked before the deferral:
+	// the timeout is the terminal statement about the tick, and the deferred
+	// branch below must never reclassify it. Complete persists
+	// status=timeout / outcome=timeout (TickTimeout.Outcome()) with
+	// failure_reason=gateway_transport — the existing classifier path for
+	// TickTimeout rows — and leaves consecutive_failures alone, like every
+	// other gateway-wall timeout.
+	if st.gwTickTimeout {
+		dur := st.completeAt.Sub(st.Started)
+		log.Printf("TICK: %s %s → %s (%v): %s",
+			st.Project, st.TickID, TickTimeout, dur.Round(time.Second), st.gwFailErr)
+		return TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickTimeout,
+			ExitCode:  -1,
+			Error:     st.gwFailErr,
+			Duration:  dur,
+			// No gateway usage exists (no terminal event arrived); the
+			// source is still stamped gateway-sourced, matching the deferral.
+			CostSource: CostSourceGateway,
+			// Pre-counted at the classification site: a turn that ran into
+			// the wall may have committed mid-window.
+			Commits:      st.gwFailCommits,
+			FilesChanged: st.gwFailFiles,
+		}
+	}
 	if st.gwDeferred {
 		dur := st.completeAt.Sub(st.Started)
 		log.Printf("TICK: %s %s → %s (%v): %s",

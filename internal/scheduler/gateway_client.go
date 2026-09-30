@@ -33,6 +33,15 @@ var ErrGatewayKeyRejected = errors.New("gateway key rejected")
 // those stay ErrGatewayKeyRejected (terminal, GAP-035, no retry flood).
 var ErrGatewayTransient = errors.New("gateway transient error")
 
+// ErrTickDeadlineExceeded (SCHED-GAP-1684) wraps context.DeadlineExceeded when
+// the TICK's own session deadline — not the per-turn watch and not the
+// gateway — tore down an in-flight POST. Spawn's deferral site checks for it
+// BEFORE gatewayTransientBlip: our own wall is TickTimeout semantics, never a
+// transient blip to defer. Deliberately NOT transient (IsTransientGatewayErr
+// is false): a wall-dead POST must not re-enter the SCHED-GAP-080 retry loop,
+// and it must not read as a mid-run blip if the deadline raced a real drop.
+var ErrTickDeadlineExceeded = errors.New("tick deadline exceeded")
+
 // GatewayStatusError carries the HTTP status code of a non-2xx, non-auth
 // gateway response (SCHED-GAP-080). The message is byte-identical to the
 // legacy plain-error text ("gateway POST: HTTP <code>: <detail>") so
