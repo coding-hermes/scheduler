@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -60,6 +61,79 @@ func resolveDeliverMode(mode string) string {
 	default:
 		return DeliverModeFull
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Unconfigured delivery target guard (SCHED-GAP-1679)
+// ---------------------------------------------------------------------------
+
+// localPlatformName is Hermes' reserved non-messaging platform
+// (gateway Platform.LOCAL). No deployment configures it as a delivery target,
+// so a target naming it can never resolve.
+const localPlatformName = "local"
+
+// deliverWarn gates the once-per-lane-per-day skip warning. IN MEMORY ONLY —
+// deliberately not persisted: the warning exists to keep an operator informed
+// without filling the tick log, and re-arming it on a daemon restart is the
+// cheap direction of the trade (the alternative measured 40 failed deliveries
+// per 12h). Keyed by project name → last UTC date warned.
+var (
+	deliverWarnMu  sync.Mutex
+	deliverWarnDay = map[string]string{}
+)
+
+// isDeliverableTarget reports whether deliver names a platform-qualified
+// delivery target the gateway can resolve.
+//
+// The grammar is "<platform>:<chat_id>[:<thread_id>]" — stated by this
+// codebase itself (internal/database/models.go, docs/api.md) and carried by
+// every one of the live fleet's configured rows
+// ("telegram:-1003310984808:118900").
+//
+// A target with no platform qualifier cannot resolve: the gateway answers
+// "Platform '<x>' is not configured" in ~0ms, so sendWithRetry burned all 4
+// attempts and 2s/5s/15s of backoff on a certain failure — ~1 min of tick slot
+// and one recorded failed delivery per report, every report (SCHED-GAP-1679:
+// 40 failures/12h from 10 lanes carrying the bare value "local", which IS a
+// Hermes Platform enum member but is never a configured messaging platform).
+//
+// Deliberately NOT stricter than the shape: the platform prefix is not
+// validated against a hardcoded name list, because plugin platforms register
+// dynamically at runtime and a stale list would silently drop a legitimate
+// delivery — the same failure class this guard exists to remove.
+func isDeliverableTarget(deliver string) bool {
+	platform, chatID, ok := strings.Cut(deliver, ":")
+	if !ok || platform == "" || chatID == "" {
+		return false
+	}
+	return platform != localPlatformName
+}
+
+// warnUnconfiguredTargetOnce logs the skip line for an unconfigured delivery
+// target at most once per project per UTC day, and reports whether this call
+// emitted it. Subsequent skips for the same lane in the same UTC day are
+// silent — the tick no longer spends a retry sequence, so one line a day is
+// enough to keep the misconfiguration visible.
+//
+// The day is read from clk (the daemon's single time choke point, SCHED-GAP-169)
+// so the gate is deterministic under a fixed/sim clock.
+func warnUnconfiguredTargetOnce(prefix string, clk clock.Clock, project, tickID, deliver string) bool {
+	day := clk.Now().UTC().Format("2006-01-02")
+
+	deliverWarnMu.Lock()
+	prev, seen := deliverWarnDay[project]
+	alreadyWarnedToday := seen && prev == day
+	if !alreadyWarnedToday {
+		deliverWarnDay[project] = day
+	}
+	deliverWarnMu.Unlock()
+
+	if alreadyWarnedToday {
+		return false
+	}
+	log.Printf("%s: %s tick=%s — target '%s' is not a configured platform; skipping (logged once/day)",
+		prefix, project, tickID, deliver)
+	return true
 }
 
 // sendFailClass classifies a failed `hermes send` run by whether a RESEND is
@@ -249,6 +323,14 @@ func deliverOutputWithMode(clk clock.Clock, project, tickID, deliver, trigger st
 		return
 	}
 
+	// SCHED-GAP-1679: never spend a retry sequence on a target the gateway
+	// cannot resolve — see isDeliverableTarget. Checked BEFORE any mode
+	// resolution or temp-file work so a misconfigured lane costs nothing.
+	if !isDeliverableTarget(deliver) {
+		warnUnconfiguredTargetOnce("DELIVER", clk, project, tickID, deliver)
+		return
+	}
+
 	resolved := resolveDeliverMode(mode)
 	if mode != "" && mode != resolved {
 		log.Printf("DELIVER: %s tick=%s — unknown deliver_mode %q, falling back to full", project, tickID, mode)
@@ -376,6 +458,12 @@ func deliverAlert(deliver, project, tickID, reason string) {
 func deliverAlertWith(clk clock.Clock, deliver, project, tickID, reason string) {
 	if deliver == "" {
 		log.Printf("ALERT: %s tick=%s — %s (no delivery target configured)", project, tickID, reason)
+		return
+	}
+	// SCHED-GAP-1679: the alert path shares sendWithRetry, so it shares the
+	// unconfigured-target guard (and the once-per-day gate, keyed by lane).
+	if !isDeliverableTarget(deliver) {
+		warnUnconfiguredTargetOnce("ALERT", clk, project, tickID, deliver)
 		return
 	}
 	msg := fmt.Sprintf("⚠️ %s timed out — %s\nTick: %s", project, reason, tickID)
