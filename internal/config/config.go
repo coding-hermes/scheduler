@@ -159,12 +159,24 @@ func ActiveMultiplier(windows []BlackoutWindow, now time.Time) (float64, bool) {
 		}
 		startH, startM := parseHM(w.Start)
 		endH, endM := parseHM(w.End)
-		start := time.Date(now.Year(), now.Month(), now.Day(), startH, startM, 0, 0, time.UTC)
-		end := time.Date(now.Year(), now.Month(), now.Day(), endH, endM, 0, 0, time.UTC)
-		if end.Before(start) || end.Equal(start) {
-			end = end.Add(24 * time.Hour) // overnight window
+		// INT-CI-169: evaluate the window anchored on now's UTC day AND the
+		// previous UTC day. Same-day anchoring alone never matches the
+		// early-morning side of an overnight window (e.g. 23:00-02:00 at
+		// 00:30 UTC), and it mis-places a start that fell on the previous
+		// calendar day.
+		inWindow := false
+		for _, base := range []time.Time{now.UTC(), now.UTC().AddDate(0, 0, -1)} {
+			start := time.Date(base.Year(), base.Month(), base.Day(), startH, startM, 0, 0, time.UTC)
+			end := time.Date(base.Year(), base.Month(), base.Day(), endH, endM, 0, 0, time.UTC)
+			if end.Before(start) || end.Equal(start) {
+				end = end.Add(24 * time.Hour) // overnight window
+			}
+			if (now.After(start) || now.Equal(start)) && now.Before(end) {
+				inWindow = true
+				break
+			}
 		}
-		if (now.After(start) || now.Equal(start)) && now.Before(end) {
+		if inWindow {
 			if w.Multiplier <= 0 {
 				return 0, true // in blackout — skip entirely
 			}
