@@ -1408,3 +1408,4 @@
 {"lane":null,"type":null,"ts":null,"actor":"foreman","summary":null,"id":1790516912357898454,"timestamp":"2026-09-30T09:43:02.024149+00:00","event_type":"task_completed","task_id":"SCHED-GAP-1614","detail":"{\"status\":\"complete\"}"}
 {"lane":null,"type":null,"ts":null,"actor":"foreman","summary":null,"id":1790516912357898455,"timestamp":"2026-09-30T09:47:40.48881+00:00","event_type":"task_created","task_id":"SCHED-GAP-1685","detail":"{\"id\":\"SCHED-GAP-1685\",\"status\":\"pending\"}"}
 {"lane":null,"type":null,"ts":null,"actor":"foreman","summary":null,"id":1790516912357898456,"timestamp":"2026-09-30T09:48:49.233117+00:00","event_type":"task_created","task_id":"SCHED-GAP-1686","detail":"{\"id\":\"SCHED-GAP-1686\",\"status\":\"pending\"}"}
+{"ts":"2026-09-30T11:35:00Z","type":"close","task_id":"INT-CI-169","detail":"CI verify fix landed 00ac0211; judge PASS 80b83b6d; test-verify 3 exits 0 (5/5)."}
