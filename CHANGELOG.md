@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-30
 
+## [1.11.5] — 2026-09-30
+
 ### Fixed
 - config: overnight blackout windows now match on their early-morning side — a configured 23:00-02:00 window never matched when evaluated after midnight UTC, silently skipping peak pricing/skip-mode enforcement (INT-CI-169) — `0bc0e329`.
 
