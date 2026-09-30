@@ -33,6 +33,9 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-09-30
 
+### Performance
+- scheduler: cut dashboard render 3.9s and /health 1.58s hot-path cost (DOGFOOD-024) — `61e21d9c`.
+
 ## [1.11.6] — 2026-09-30
 
 ### Fixed
