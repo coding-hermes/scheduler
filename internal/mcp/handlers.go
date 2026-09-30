@@ -1693,6 +1693,25 @@ func (s *Server) toolFeaturesPruneCandidates(ctx context.Context, args map[strin
 	}), nil
 }
 
+// toolCooldownResidue mirrors GET /api/v1/cooldown/residue (SCHED-GAP-1670):
+// the ENABLED lanes whose live cooldown_s sits strictly below their own
+// stored operator pin. Read-only — detection only, reconciliation stays on
+// the pin write paths (fleet.toml import / API PUT cooldown_pin_s, both of
+// which snap the live value up).
+func (s *Server) toolCooldownResidue(ctx context.Context) (string, error) {
+	residue, err := database.ListCooldownResidue(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	if residue == nil {
+		residue = []database.CooldownResidue{}
+	}
+	return jsonString(map[string]interface{}{
+		"residue": residue,
+		"count":   len(residue),
+	}), nil
+}
+
 // metricsSpawns answers question 1: spawn volume per namespace and per outcome
 // over the window. An empty by_namespace map is written as {} (never null).
 func (s *Server) metricsSpawns(ctx context.Context, cutoff string) map[string]interface{} {

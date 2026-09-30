@@ -223,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 	// reaper's prune-candidate list (flag only, no auto-delete).
 	mux.HandleFunc("/api/v1/features", s.features)
 	mux.HandleFunc("/api/v1/features/prune-candidates", s.featurePruneCandidates)
+	// SCHED-GAP-1670: read-only cooldown-pin residue detector — enabled
+	// lanes whose live cooldown_s sits strictly BELOW their own pin.
+	mux.HandleFunc("/api/v1/cooldown/residue", s.cooldownResidue)
 	return mux
 }
 

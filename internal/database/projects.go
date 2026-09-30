@@ -1013,15 +1013,28 @@ func boolToInt(b bool) int {
 // came from.
 const CooldownPinImportBy = "fleet-toml-import"
 
-// SetCooldownPin imports an operator pin onto the project row WITHOUT
-// touching the live cooldown_s (unlike the API PUT path, which snaps the
-// cooldown up). This is the loader/import path: the pin records the
-// operator intent discovered in fleet.toml; the cooldown the row already
-// carries IS that value in the common case, and when it differs the pin
-// still must not silently rewrite scheduling state at boot (the pin is a
-// floor, enforced at the next write). Returns the project's post-write pin.
+// SetCooldownPin imports an operator pin onto the project row. The pin and
+// the live cooldown move in ONE atomic UPDATE: when the live cooldown_s sits
+// below the imported pin it is snapped UP to the pin in the same statement
+// (SCHED-GAP-1670) — the API PUT path snaps on set, and the import must hold
+// the same invariant, or a fleet.toml entry carrying a WEEKLY cooldown can
+// leave the row live at 900 with no write path that ever reconciles it (the
+// equal-or-higher guard at the loader skips the re-import on the next boot,
+// so the residue is durable). A pin below the live cooldown is a floor, not
+// a forced slowdown: live stays untouched in that direction.
+//
+// This is the loader/import path (provenance stamped by the caller — the API
+// PUT path goes through UpdateProject's CooldownPinS arm, which snaps up the
+// same way). The pin never silently LOWERS an existing pin — the loader's
+// equal-or-higher guard is the caller-side check; this function re-checks
+// and refuses a lowering pin, so a direct caller cannot corrupt the floor.
 // A pin <= 0 clears nothing — pass zero pins only from paths that already
 // validated.
+//
+// Bump interaction (SCHED-GAP-107): the snap targets cooldown_s, the BASE —
+// while a bump is active the bump owns the effective cooldown and the
+// post-bump revert restores this base, so the snap cannot leak into an
+// active bump's value.
 func SetCooldownPin(ctx context.Context, db *sql.DB, name string, pinS int, by string) error {
 	if pinS <= 0 {
 		return fmt.Errorf("cooldown pin for %q must be > 0 (got %d)", name, pinS)
@@ -1029,15 +1042,48 @@ func SetCooldownPin(ctx context.Context, db *sql.DB, name string, pinS int, by s
 	if by == "" {
 		by = CooldownPinImportBy
 	}
-	_, err := db.ExecContext(ctx, `
+	// One statement, so the pin stamp and the snap cannot land in different
+	// processes (a concurrent API PUT between two writes would otherwise be
+	// silently overwritten). The WHERE clause re-checks the raising guard:
+	// a pin may land only where none exists yet or it does not lower one.
+	res, err := db.ExecContext(ctx, `
 UPDATE projects SET
     cooldown_pin_s = ?,
     cooldown_pin_by = ?,
     cooldown_pin_at = ?,
-    updated_at = updated_at
-WHERE name = ?`, pinS, by, nowUTC(ctx), name)
+    cooldown_s = CASE WHEN COALESCE(cooldown_s, 0) < ? THEN ? ELSE cooldown_s END,
+    updated_at = ?
+WHERE name = ?
+  AND (cooldown_pin_s IS NULL OR cooldown_pin_s <= ?)`,
+		pinS, by, nowUTC(ctx), pinS, pinS, nowUTC(ctx), name, pinS)
 	if err != nil {
 		return fmt.Errorf("set cooldown pin %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set cooldown pin %q: rows affected: %w", name, err)
+	}
+	if n == 0 {
+		// The raising-guard WHERE filtered the row out: an equal-or-lower
+		// pin already exists (or the project is gone). Distinguish for the
+		// caller's error mapping.
+		var exists int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM projects WHERE name = ?`, name).Scan(&exists); err != nil {
+			return fmt.Errorf("set cooldown pin %q: read-back: %w", name, err)
+		}
+		if exists == 0 {
+			return fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+		}
+		var curPin sql.NullInt64
+		if err := db.QueryRowContext(ctx,
+			`SELECT cooldown_pin_s FROM projects WHERE name = ?`, name).Scan(&curPin); err != nil {
+			return fmt.Errorf("set cooldown pin %q: read-back pin: %w", name, err)
+		}
+		if curPin.Valid && int(curPin.Int64) > pinS {
+			return fmt.Errorf("cooldown pin %d would LOWER the existing pin %d for project %q — clear the pin (clear_cooldown_pin=true) first if the lower value is intended", pinS, int(curPin.Int64), name)
+		}
+		return fmt.Errorf("cooldown pin for %q did not move (current pin equals %d)", name, pinS)
 	}
 	return nil
 }

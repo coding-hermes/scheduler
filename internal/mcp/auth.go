@@ -106,6 +106,7 @@ var readOnlyTools = map[string]bool{
 	"metrics_get":               true,
 	"features_get":              true,
 	"features_prune_candidates": true,
+	"cooldown_residue":          true,
 }
 
 // MutatingToolNames returns the mutating tool set sorted — the classification

@@ -1205,6 +1205,41 @@ curl -s http://127.0.0.1:9090/api/v1/features | jq '.features | map({feature, us
 curl -s http://127.0.0.1:9090/api/v1/features/prune-candidates?weeks=8 | jq '.candidates'
 ```
 
+### GET /api/v1/cooldown/residue
+
+**Purpose:** The cooldown-pin residue detector (SCHED-GAP-1670) — every
+ENABLED lane whose live `cooldown_s` sits strictly BELOW its own stored
+operator pin (`cooldown_pin_s`): the "wake residue, NOT intent" class.
+**Read-only by contract: this endpoint never mutates.** Reconciliation
+happens on the pin write paths (a fleet.toml import with an equal-or-higher
+value, or the API PUT `cooldown_pin_s`, both of which snap the live value up
+to the pin); the mutating `fleet-cooldown-policy.py --apply` stays outside
+the scheduler on purpose. The loop's daily residue report (event component
+`cooldown-residue`) reads the same data.
+
+**Response 200:**
+
+```json
+{
+  "residue": [
+    {"name": "python-audit-lint", "cooldown_s": 900, "pin_s": 86400, "pin_by": "fleet-toml-import"}
+  ],
+  "count": 1
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `residue[]` | array | Lanes with `cooldown_pin_s > cooldown_s`, ordered by name (empty `[]`, never `null`) |
+| `residue[].pin_by` | string | Pin provenance — `fleet-toml-import` or `api` |
+| `count` | int | Number of residue lanes |
+
+**Errors:** 405 `{"error":"GET only"}` on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/cooldown/residue | jq '.residue'
+```
+
 ## 12. Fleet-wide control
 
 All three take no body. They mutate the live loop — use with care (pausing

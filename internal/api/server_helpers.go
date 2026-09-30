@@ -938,6 +938,15 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/cooldown/residue": {
+      "get": {
+        "summary": "Cooldown-pin residue detector (SCHED-GAP-1670) — ENABLED lanes whose live cooldown_s sits strictly BELOW their own stored operator pin (cooldown_pin_s). Read-only: never mutates; reconciliation happens on the pin write paths (fleet.toml import / API PUT), not here.",
+        "responses": {
+          "200": {"description": "residue: [{name, cooldown_s, pin_s, pin_by}], count — an empty residue serializes as [] with count 0."},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/config": {
       "get": {
         "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",

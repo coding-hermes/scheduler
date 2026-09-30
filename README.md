@@ -247,7 +247,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (47 tools)            │
+│  /mcp      → MCP server (48 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -288,10 +288,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 47 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 48 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (a
-daemon built from this tree reports 45; an older deployed build reports
+daemon built from this tree reports 48; an older deployed build reports
 fewer):
 
 ```sh
@@ -348,6 +348,7 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `metrics_get` | Fleet metrics in one read-only call (each block states `available=true\|false`) |
 | `features_get` | Per-feature live usage counters (SCHED-GAP-131) — every tracked mechanism's `use_count` + first/last-used, plus the `admission_mode_rows` gauge |
 | `features_prune_candidates` | Dead-feature reaper report (SCHED-GAP-131) — mechanisms never used or last used more than `weeks` ago (default 8); flag only |
+| `cooldown_residue` | Cooldown-pin residue detector (SCHED-GAP-1670) — ENABLED lanes whose live `cooldown_s` sits strictly BELOW their own pin; read-only, never mutates |
 
 ---
 
@@ -840,7 +841,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 47 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates` introspection reads:
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 48 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads:
 
 ```json
 // Example: List all projects via MCP

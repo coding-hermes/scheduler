@@ -1110,6 +1110,7 @@ var documentedPaths = []string{
 	"/api/v1/metrics",
 	"/api/v1/features",
 	"/api/v1/features/prune-candidates",
+	"/api/v1/cooldown/residue",
 	"/api/v1/evaluate",
 	"/api/v1/pause",
 	"/api/v1/resume",

@@ -644,6 +644,11 @@ var tools = []ToolDefinition{
 			"weeks": map[string]interface{}{"type": "integer", "description": "Prune window in weeks (default 8)."},
 		}},
 	},
+	{
+		Name:        "cooldown_residue",
+		Description: "Cooldown-pin residue detector (mirror of GET /api/v1/cooldown/residue, SCHED-GAP-1670): ENABLED lanes whose live cooldown_s sits strictly BELOW their own stored operator pin — the 'wake residue, NOT intent' class. Read-only: never mutates; reconciliation happens on the pin write paths (fleet.toml import / API PUT cooldown_pin_s), not here.",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
 }
 
 // handleMCP routes MCP protocol requests.
@@ -821,6 +826,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFeaturesGet(ctx)
 	case "features_prune_candidates":
 		return s.toolFeaturesPruneCandidates(ctx, args)
+	case "cooldown_residue":
+		return s.toolCooldownResidue(ctx)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

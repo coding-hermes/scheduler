@@ -84,6 +84,11 @@ type Loop struct {
 	paused   atomic.Bool
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval time.Time
+	// SCHED-GAP-1670: daily cooldown-pin residue report gate — the last
+	// timestamp a daily residue report ran. Guarded by dailyMu; advanced
+	// by the health pass when the 24h cadence turns over.
+	lastDailyResidueReport time.Time
+	dailyMu                sync.Mutex
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
 	// HIGH/MEDIUM stall event (zero = never). Guards the stall-event
 	// throttle shared by both severities (SCHED-GAP-061).
@@ -638,6 +643,12 @@ func (l *Loop) Run() {
 					log.Printf("FEATURES: periodic flush: %v", err)
 				}
 			}
+			// SCHED-GAP-1670: the read-only cooldown-pin residue report
+			// rides the same 30s health pass; the 24h cadence is gated
+			// inside dailyCooldownResidueCheck (lastDailyResidueReport),
+			// so the daily census is one extra indexed count query on 364
+			// of the passes and the report itself on the 365th.
+			l.dailyCooldownResidueCheck(l.nowLocked())
 			running := 0
 			if l.slotPool != nil {
 				running = l.slotPool.Running()
