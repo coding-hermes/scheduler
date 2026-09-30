@@ -403,6 +403,16 @@ func (m *MultiPoolPacker) packFlat(
 					continue
 				}
 			} else {
+				// SCHED-GAP-1655: the flat-fallback mirror of the
+				// namespace gate (packer_select.go) — a cooldown-mode
+				// BUILDER lane with no dispatchable board row is
+				// deferred, not dispatched blind. Reporter lanes keep
+				// their timer cadence.
+				if mode == database.AdmissionModeCooldown &&
+					builderAdmissionBlocked(s.proj.Name, s.proj.Workdir, database.AdmissionModeCooldown, "") {
+					noteBuilderNoWorkDeferral(s.proj.Name, s.proj.Workdir)
+					continue
+				}
 				if now.Sub(*s.lastTick) < cooldownDur {
 					continue
 				}

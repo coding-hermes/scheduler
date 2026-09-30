@@ -367,6 +367,18 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		// consume the weight budget (the gate's jurisdiction is the greedy
 		// pack below) but DO occupy concurrency slots.
 		if p.isOverdue(s, now) {
+			// SCHED-GAP-1655: the overdue rescue force-selects a lane the
+			// gates passed over — but a cooldown-mode BUILDER lane with
+			// no dispatchable board row is not being starved, it has
+			// nothing to do. Force-selecting it would re-create the
+			// zero-tool tick this row closes through the one path built
+			// to bypass every gate. The same conjunction as the greedy
+			// gate decides; reporter lanes keep their cadence.
+			if admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode}) == database.AdmissionModeCooldown &&
+				builderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeCooldown, "") {
+				noteBuilderNoWorkDeferral(s.name, s.workdir)
+				continue
+			}
 			if currRunning >= p.maxConcurrent {
 				log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
 				break
@@ -438,6 +450,19 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				continue
 			}
 		} else {
+			// SCHED-GAP-1655: the legacy-path mirror of the namespace and
+			// flat-fallback gates — a cooldown-mode BUILDER lane with no
+			// dispatchable board row is deferred, not dispatched blind.
+			// Reporter lanes keep their timer cadence BY DESIGN. The
+			// skip counter names the board (the operator-facing "why did
+			// nothing pack" aggregate already counts cooldown skips the
+			// same way; a no-work skip is the waste-shaped cousin).
+			if mode == database.AdmissionModeCooldown &&
+				builderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeCooldown, "") {
+				noteBuilderNoWorkDeferral(s.name, s.workdir)
+				totalSkippedCooldown++
+				continue
+			}
 			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 				totalSkippedCooldown++
 				continue

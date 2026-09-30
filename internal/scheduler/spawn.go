@@ -1785,6 +1785,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					reqStart: reqStart,
 					// Gateway spawns are always prompt-based (Bane 2026-08-27).
 					Trigger: "prompt",
+					// SCHED-GAP-1655: zero-tool-call detection at the ONE
+					// site where the terminal envelope and the merged SSE
+					// trace are both in scope. A completed session with no
+					// tool-call item and no observed tool event is the
+					// "lane had nothing to do" signature; Wait()'s
+					// completed branch turns this into outcome='no_work'.
+					zeroTools: zeroToolSession(resp, postTrace),
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
@@ -2302,6 +2309,18 @@ type SpawnedTick struct {
 	// classification branch ONLY (Spawner.guardAborted consumed it there).
 	guardAbort bool
 
+	// zeroTools (SCHED-GAP-1655) marks a COMPLETED gateway tick whose
+	// session ran ZERO tool calls — the response envelope carried no
+	// tool-call output item and the SSE trace never saw a tool event.
+	// Wait()'s completed branch carries it into TickOutcome.NoTools so
+	// terminalOutcome records outcome='no_work' (migration v55's verdict)
+	// instead of 'dry_run': the fleet's measured dominant waste class
+	// (261 zero-tool sessions/week) is only measurable when it has its
+	// own verdict. Set at the gateway success-return site ONLY, where
+	// both the envelope and the merged trace are in scope; exec ticks
+	// and every non-completed path leave it false (no signal, no claim).
+	zeroTools bool
+
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
 	// spawns (gateway or hermes-chat exec fallback). Carried into the
@@ -2524,6 +2543,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			st.Project, st.TickID, TickCompleted,
 			st.completeAt.Sub(st.Started).Round(time.Second),
 			formatCostSummary(st.provider, st.model, tokensIn, tokensOut, cost, commits, files))
+		// SCHED-GAP-1655: the no-work verdict is recorded (not just
+		// derived) — the operator watching the TICK lines sees the
+		// zero-tool verdict at the tick's completion, the same way the
+		// guard-abort line names its verdict.
+		if st.zeroTools {
+			log.Printf("%s", noWorkTickLine(st.Project, st.TickID))
+		}
 		return TickOutcome{
 			TickID:    st.TickID,
 			Project:   st.Project,
@@ -2544,6 +2570,12 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			CostSource:   CostSourceGateway,
 			Commits:      commits,
 			FilesChanged: files,
+			// SCHED-GAP-1655: carried into terminalOutcome — a zero-tool
+			// completed tick records outcome='no_work', never dry_run.
+			// Artifacts still outrank it (terminalOutcome checks
+			// commits/files first): a tick that landed work the transcript
+			// misses keeps 'committed'.
+			NoTools: st.zeroTools,
 		}
 	}
 

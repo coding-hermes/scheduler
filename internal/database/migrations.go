@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 54
+const latestMigration = 55
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -950,6 +950,92 @@ ALTER TABLE projects ADD COLUMN target_runs_per_day REAL CHECK(target_runs_per_d
 CREATE INDEX IF NOT EXISTS idx_ticks_completed_project_spawned
 ON ticks(project_name, spawned_at, completed_at, cost_usd)
 WHERE status = 'completed';
+`,
+	},
+	{
+		// SCHED-GAP-1655: the no_work outcome vocabulary. A tick whose
+		// session ran ZERO tool calls is the fleet's measured dominant waste
+		// class (261 zero-tool sessions/week); recording it 'dry_run' — the
+		// verdict that already means "ran tools, landed no artifact" — made
+		// the two classes indistinguishable and the waste unmeasurable.
+		// SQLite cannot alter a CHECK in place, so the ticks table is
+		// REBUILT with the widened outcome CHECK: v50's procedure verbatim
+		// (own-transaction, PRAGMA foreign_keys=OFF around the DROP so the
+		// tick_workers child rows survive, full column copy, rename, index
+		// restoration). latestMigration is bumped to 55 with this entry.
+		version: 55,
+		desc:    "SCHED-GAP-1655: no_work outcome vocabulary — rebuild the ticks table (v50's procedure) widening the outcome CHECK so a zero-tool-call tick records its own terminal verdict instead of collapsing into 'dry_run'",
+		ownTx:   true,
+		stmt: `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+DROP TABLE IF EXISTS ticks_1655;
+CREATE TABLE ticks_1655 (
+    id            TEXT PRIMARY KEY,
+    project_name  TEXT NOT NULL REFERENCES projects(name),
+    session_id    TEXT,
+    pid           INTEGER DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact','no_work')),
+    spawned_at    TEXT,
+    completed_at  TEXT,
+    exit_code     INTEGER,
+    commits       INTEGER DEFAULT 0,
+    files_changed INTEGER DEFAULT 0,
+    tokens_in     INTEGER DEFAULT 0,
+    tokens_out    INTEGER DEFAULT 0,
+    cost_usd      REAL DEFAULT 0.0,
+    urgency       REAL DEFAULT 0.0,
+    weight_used   INTEGER DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    heartbeat_at  TEXT,
+    orphaned_at   TEXT,
+    orphan_reason TEXT,
+    nudge_count   INTEGER NOT NULL DEFAULT 0,
+    code_commits  INTEGER NOT NULL DEFAULT 0,
+    board_commits INTEGER NOT NULL DEFAULT 0,
+    bump          INTEGER NOT NULL DEFAULT 0,
+    worker_count  INTEGER NOT NULL DEFAULT 0,
+    wave_recovery INTEGER NOT NULL DEFAULT 0,
+    gateway_trace TEXT NOT NULL DEFAULT '',
+    cost_source   TEXT NOT NULL DEFAULT '',
+    failure_reason TEXT NOT NULL DEFAULT '',
+    slot_wait_ms  INTEGER NOT NULL DEFAULT 0,
+    admit_reason  TEXT NOT NULL DEFAULT '',
+    nudge_source  TEXT NOT NULL DEFAULT '',
+    dispatch_outcome TEXT NOT NULL DEFAULT '' CHECK(dispatch_outcome IN ('', 'yes', 'no')),
+    dispatch_reason TEXT NOT NULL DEFAULT '' CHECK(dispatch_reason IN ('', 'dispatched', 'no_work', 'blocked', 'verification_only', 'chose_not_to', 'unavailable')),
+    guard_nudged_at TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO ticks_1655 (
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason, guard_nudged_at
+)
+SELECT
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason, guard_nudged_at
+FROM ticks;
+DROP TABLE ticks;
+ALTER TABLE ticks_1655 RENAME TO ticks;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned ON ticks(project_name, spawned_at);
+CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_running ON ticks(status) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_ticks_completed_project_spawned
+ON ticks(project_name, spawned_at, completed_at, cost_usd)
+WHERE status = 'completed';
+COMMIT;
+PRAGMA foreign_keys=ON;
 `,
 	},
 }

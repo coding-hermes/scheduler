@@ -335,6 +335,27 @@ func (m *MultiPoolPacker) Pack(
 						continue
 					}
 				} else {
+					// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose
+					// board holds no dispatchable row is deferred BEFORE
+					// its pin is even consulted — the measured 261
+					// zero-tool sessions/week this gate closes. The lane
+					// keeps its selection (defer, not drop: no cooldown
+					// consumed, no row, no session) and the next
+					// evaluation re-checks the board. Reporter-class
+					// lanes and tasks lanes are untouched (the deliverable
+					// 3 exemption; the tasks branch above).
+					//
+					// Gate ordering note: the cooldown check below still
+					// runs for gate-transparent lanes. For a gated lane
+					// the board decision is the FIRST answer — "no work"
+					// is true even when the pin has elapsed, so the lane
+					// must not fall through to the pack. Logging is at
+					// the same site as the decision (one board walk).
+					if mode == database.AdmissionModeCooldown &&
+						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
+						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
+						continue
+					}
 					if now.Sub(lt) < cooldownDur {
 						continue
 					}
@@ -383,6 +404,17 @@ func (m *MultiPoolPacker) Pack(
 					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
 					if skipMode {
 						continue // skip mode — not queued
+					}
+					// SCHED-GAP-1655: a cooldown-mode BUILDER lane the
+					// selection gate deferred on its empty board is not
+					// queued for borrowing either — borrowed budget must
+					// not re-admit a lane the board said has no work.
+					// Same conjunction as the selection gate: the tasks
+					// branch above never queues here untouched, and a
+					// reporter-class lane is exempt by the gate itself.
+					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeCooldown &&
+						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
+						continue // no-work skip — not queued
 					}
 					if now.Sub(lt) < cooldownDur {
 						continue // cooldown-skip, not queued

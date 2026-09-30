@@ -461,7 +461,7 @@ latest tick and the lane's dispatch-accountability split.
 **Response 200:**
 
 ```json
-{"project": {<Project>}, "latest_tick": {<Tick>}, "dispatch_split": {<DispatchCount>}}
+{"project": {<Project>}, "latest_tick": {<Tick>}, "dispatch_split": {<DispatchCount>}, "outcome_split": {<OutcomeSplit>}}
 ```
 
 `latest_tick` is `null` when the project has never been ticked. Note: the
@@ -478,6 +478,16 @@ dispatch reason so the operator reads declined-vs-absent per lane:
 | `no_dispatch` | int | No dispatch (sum of the five no-reasons below) |
 | `reasons` | object | Every vocabulary bucket, zero-filled: `dispatched`, `no_work`, `blocked`, `verification_only`, `chose_not_to`, `unavailable` |
 | `coverage` | int | Terminal ticks still carrying `""` — legacy rows, i.e. absence of MEASUREMENT, never absence of work |
+
+`outcome_split` (SCHED-GAP-1655) aggregates the lane's TERMINAL ticks by
+outcome so the zero-tool-call waste is measurable per lane:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `total` | int | Terminal ticks with an outcome recorded |
+| `no_work` | int | Ticks whose session ran ZERO tool calls (`outcome='no_work'`) — the waste count |
+| `unset` | int | Terminal ticks with a NULL outcome — unmeasured rows, never a zero |
+| `buckets` | object | Every outcome vocabulary value, zero-filled: `committed`, `dry_run`, `failed`, `timeout`, `deferred`, `aborted:no_artifact`, `no_work` |
 
 **Errors:** 404 `{"error":"project not found"}`; 405 on non-GET.
 

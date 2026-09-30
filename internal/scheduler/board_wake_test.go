@@ -474,7 +474,13 @@ func TestBoardWake_FreshnessCheckedPendingIsOrderingOnly(t *testing.T) {
 // a spawn. (b) BEHAVIORAL: a project with ZERO pending board work still
 // spawns when its cooldown has elapsed (board state never vetoes).
 func TestBoardWake_NoSpawnSkippedSolelyOnBoardState(t *testing.T) {
-	// (b) behavioral: eligible project, empty board → still spawns.
+	// (b) behavioral: eligible project, board WITH work → still spawns.
+	// SCHED-GAP-1655 note: the FRESHNESS SEAM is the thing under test —
+	// even a "verifiably idle" seam answer must never veto a spawn. The
+	// board itself carries a pending row so the 1655 no-work gate (a
+	// READ, proven-empty board defers a cooldown builder) stays
+	// transparent here: with work present, only the seam could veto, and
+	// the assertion is that it does not.
 	fixedNow := fixedEvalNow()
 	db := newTestDB(t)
 	workdir := t.TempDir()
@@ -482,10 +488,8 @@ func TestBoardWake_NoSpawnSkippedSolelyOnBoardState(t *testing.T) {
 	if err := os.MkdirAll(boardDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Empty board (zero pending) — and a verifiably IDLE one via the
-	// stubbed seam so even a fully-verified idle board cannot veto.
 	boardPath := filepath.Join(boardDir, "tasks.jsonl")
-	if err := os.WriteFile(boardPath, []byte(""), 0o644); err != nil {
+	if err := os.WriteFile(boardPath, []byte(`{"id":"NB-1","status":"pending","title":"work"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	insertEligibilityProject(t, db, "noboost", 60, 5, 0, fixedNow.Add(-90*time.Second), 0, 0)

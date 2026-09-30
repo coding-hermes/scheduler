@@ -414,7 +414,12 @@ func TestSCHEDGAP1660_AdmitReasonAlwaysStamped(t *testing.T) {
 	db := newTestDB(t)
 
 	// (1) Packer path: a lane admitted by evaluate() carries "ok".
-	wd, _ := gap1660BoardDir(t)
+	// SCHED-GAP-1655 note: the board carries a pending row — the test's
+	// subject is the admit_reason STAMP (requirement d), not the board;
+	// under the 1655 policy a cooldown builder on a proven-drained board
+	// is deferred (reason no_work) and would never produce the tick this
+	// test reads.
+	wd, _ := gap1660BoardDir(t, `{"id":"S0","status":"pending","title":"work"}`)
 	const proj = "gap1660-stamp-packer"
 	insertGap1660Project(t, db, proj, wd, 21600, database.AdmissionModeCooldown)
 	gap1660SetLastCompleted(t, db, proj, 24*time.Hour) // pin long elapsed
@@ -431,8 +436,10 @@ func TestSCHEDGAP1660_AdmitReasonAlwaysStamped(t *testing.T) {
 	}
 
 	// (2) Sim-spawn path: the row the SimSpawner inserts itself (the path
-	// that never had a stamp before SCHED-GAP-1660).
-	wd2, _ := gap1660BoardDir(t)
+	// that never had a stamp before SCHED-GAP-1660). The board carries a
+	// pending row — same SCHED-GAP-1655 note as arm (1): the subject is
+	// the stamp, not the board.
+	wd2, _ := gap1660BoardDir(t, `{"id":"S0","status":"pending","title":"work"}`)
 	const simProj = "gap1660-stamp-sim"
 	insertGap1660Project(t, db, simProj, wd2, 21600, database.AdmissionModeCooldown)
 	l.SetSimulation(1.0)

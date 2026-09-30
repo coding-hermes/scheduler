@@ -405,10 +405,23 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string)
 	if err != nil {
 		log.Printf("project detail: dispatch split for %s: %v", name, err)
 	}
+	// SCHED-GAP-1655: the lane's outcome split rides the detail payload —
+	// no_work is the zero-tool-call waste count, per lane, next to the
+	// dispatch split. Same zero-filled-vocabulary pattern; a failed
+	// aggregate logs and returns the zero-filled shape rather than 500ing.
+	obs.enter("CountProjectOutcomes")
+	outcomes, err := database.CountProjectOutcomes(ctx, s.db, name)
+	if !obs.check(w, ctx) {
+		return
+	}
+	if err != nil {
+		log.Printf("project detail: outcome split for %s: %v", name, err)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"project":        p,
 		"latest_tick":    tick,
 		"dispatch_split": dispatch,
+		"outcome_split":  outcomes,
 	})
 }
 

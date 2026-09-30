@@ -103,6 +103,17 @@ func (s TickStatus) Outcome() string {
 // verdict is only legal for a status=failed row (an aborted session did not
 // complete), so any other status keeps its own Outcome() mapping — the
 // guard's outcome can never ride a completed or deferred row.
+//
+// SCHED-GAP-1655: a COMPLETED tick whose session ran ZERO tool calls
+// (NoTools set by the gateway success path — envelope has no tool-call
+// item and the SSE trace saw no tool event) records outcome='no_work',
+// the migration-v55 verdict for "the lane had nothing to do". Ordering
+// inside the completed branch is load-bearing: the artifact check runs
+// FIRST, so a tick that somehow landed a commit without a tool item
+// (countGitChanges measures the repo, not the transcript) still records
+// 'committed' — artifacts outrank the transcript, the SCHED-GAP-1652
+// doctrine. no_work is therefore unreachable for an artifact-bearing row
+// by construction, not by discipline.
 func terminalOutcome(o TickOutcome) string {
 	if o.GuardAbort {
 		if o.Status == TickFailed {
@@ -115,6 +126,9 @@ func terminalOutcome(o TickOutcome) string {
 	}
 	if o.Commits > 0 || o.FilesChanged > 0 {
 		return "committed"
+	}
+	if o.NoTools {
+		return string(database.OutcomeNoWork)
 	}
 	return "dry_run"
 }
@@ -153,6 +167,15 @@ type TickOutcome struct {
 	// status/outcome pair therefore records the guard's verdict on every
 	// surface without any second marker column.
 	GuardAbort bool
+	// NoTools (SCHED-GAP-1655): the completed gateway session ran ZERO
+	// tool calls — the response envelope carried no tool-call output item
+	// and the SSE trace never observed a tool event. terminalOutcome maps
+	// the row to outcome='no_work' (migration v55), the honest verdict
+	// for "the lane had nothing to do": distinct from dry_run (ran tools,
+	// landed no artifact) so the measured waste class is queryable. Only
+	// consulted on Status=completed — a failed/deferred/aborted row keeps
+	// its own verdict regardless.
+	NoTools bool
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one

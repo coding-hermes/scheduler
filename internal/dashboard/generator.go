@@ -383,6 +383,15 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.DispatchKnown = dc.Total+dc.Coverage > 0
 	}
 
+	// SCHED-GAP-1655: the lane's outcome split — no_work is the
+	// zero-tool-call waste count. Known only when the aggregate saw at
+	// least one terminal tick with an outcome recorded; otherwise the
+	// page renders the honest "not yet recorded" line.
+	if os, err := database.CountProjectOutcomes(ctx, g.db, name); err == nil {
+		data.OutcomeSplit = os
+		data.OutcomeKnown = os.Total+os.Unset > 0
+	}
+
 	// SCHED-GAP-1601: the lane's control strip + paused badge.
 	data.Control = ControlData{Actions: laneControls(name)}
 	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()

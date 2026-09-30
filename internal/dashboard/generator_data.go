@@ -465,6 +465,12 @@ type ProjectDetailData struct {
 	// could read as "everything dispatched".
 	DispatchSplit database.DispatchCount
 	DispatchKnown bool
+	// SCHED-GAP-1655: this lane's terminal ticks split by outcome —
+	// OutcomeSplit.NoWork is the zero-tool-call waste count. Known=false
+	// renders the "not yet recorded" line (no terminal tick with an
+	// outcome yet), never a zero that could read as "no waste ever".
+	OutcomeSplit database.OutcomeSplit
+	OutcomeKnown bool
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.

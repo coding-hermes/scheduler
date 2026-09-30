@@ -339,6 +339,15 @@ const (
 	// mid-run by the harness) and never 'committed' (the 2026-09-28/29
 	// measurement found 383 zero-commit ticks recorded committed).
 	OutcomeAbortedNoArtifact TickOutcome = "aborted:no_artifact"
+	// OutcomeNoWork (SCHED-GAP-1655) is the terminal verdict for a tick whose
+	// session ran ZERO tool calls: the lane had nothing to do and the session
+	// proves it. Deliberately distinct from OutcomeDryRun (a tick that DID
+	// run tools but landed no measurable artifact) — the fleet's measured
+	// waste (261 zero-tool sessions/week) is only visible as waste when the
+	// two verdicts do not collapse into one bucket. Stored in ticks.outcome
+	// under the CHECK constraint widened by migration v55 (v50's rebuild
+	// procedure — SQLite cannot alter a CHECK in place).
+	OutcomeNoWork TickOutcome = "no_work"
 )
 
 // Tick is a single scheduler run: one spawned agent invocation against one

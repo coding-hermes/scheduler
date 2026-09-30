@@ -1396,6 +1396,17 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			lastTickStatusFailed(lastStatus) && now.Sub(comp) < cooldownDur {
 			continue
 		}
+		// SCHED-GAP-1655 mirror: a cooldown-mode BUILDER lane with no
+		// dispatchable board row is deferred by the packers' no-work gate,
+		// so it is not eligible either — a fleet of drained builder boards
+		// must read as "nothing eligible", never fire the GAP-043
+		// zero-select anomaly alarm over work that does not exist.
+		// Reporter-class lanes keep counting (their timer cadence is the
+		// design; an empty board does not stop their next tick).
+		if mode == database.AdmissionModeCooldown &&
+			builderAdmissionBlocked(name, workdir, database.AdmissionModeCooldown, "") {
+			continue
+		}
 		if now.Sub(comp) >= cooldownDur {
 			eligible++
 		}
@@ -1507,6 +1518,18 @@ func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
 //	                consecutive_failures 1, or the SCHED-GAP-136 post-tick
 //	                pacing floor with jitter). This is also the residual for
 //	                a tasks-mode project that failed every other check.
+//	no_work         COOLDOWN-mode BUILDER lane (SCHED-GAP-1655) whose board
+//	                holds no dispatchable row — the deliverable-1 gate
+//	                consults the lane's board with the SAME machinery the
+//	                tasks_no_work waiver uses (findBoardFile walk +
+//	                boardOpenRows open vocabulary), but the admission MODE
+//	                differs: this is a timer lane made board-aware, not a
+//	                tasks lane parked. Reporter-class lanes (the
+//	                -sync/-pm/-qa/... suffixes or a namespace
+//	                reporter_class="reporter" pin) never carry this reason
+//	                — their timer cadence is BY DESIGN (deliverable 3).
+//	                Carries no cooldown_remaining_s (board-caused, not
+//	                pin-caused).
 //
 // The classification is a POST-HOC reconstruction from the same DB state
 // the packer read (one SELECT over enabled projects + the per-namespace
@@ -1527,6 +1550,19 @@ const (
 	AdmissionReasonBoardUnowned  = "board_unowned"
 	AdmissionReasonBudget        = "budget"
 	AdmissionReasonTasksDeferred = "tasks_deferred"
+	// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose board holds no
+	// dispatchable row (no pending/in_progress row unblocked by depends_on
+	// — the boardOpenRows open vocabulary) was deferred BEFORE its pin was
+	// consulted: the tick it would have run is the measured zero-tool
+	// session waste this reason names. Reuses the tasks_no_work gate
+	// machinery (same board resolution, same open-row scanner); the
+	// separate word exists because the ADMISSION MODE differs — this is
+	// the cooldown-timer lane the gate newly makes board-aware, and an
+	// operator counting "tasks lanes parked on empty boards" (tasks_no_work)
+	// must not have "cooldown builders gated" (no_work) folded into it.
+	// Carries no cooldown_remaining_s — the deferral is board-caused, not
+	// pin-caused.
+	AdmissionReasonNoWork = "no_work"
 	// SCHED-GAP-214: a tasks-mode project whose last tick FAILED — the
 	// SCHED-GAP-124 waiver stood down and the lane is pacing on its full
 	// effective cooldown (the measured 91-ticks-in-90s retry storm this
@@ -1546,6 +1582,7 @@ var admissionReasonVocabulary = []string{
 	AdmissionReasonBoardUnowned,
 	AdmissionReasonBudget,
 	AdmissionReasonTasksDeferred,
+	AdmissionReasonNoWork,
 	AdmissionReasonFailedCooldown,
 }
 
@@ -1581,7 +1618,12 @@ type admissionCandidate struct {
 	LastCompleted *time.Time
 	// SCHED-GAP-214: terminal status of the most recent tick ("" = never).
 	// Drives the failed_cooldown admission reason for tasks-mode lanes.
-	LastTickStatus  string
+	LastTickStatus string
+	// SCHED-GAP-1655: the namespace reporter_class column ('' = builder
+	// default, "reporter" = exempt) — feeds laneClass so the admission
+	// log classifies a lane the same way the packer's no-work gate does
+	// (a namespace-pinned reporter never carries no_work).
+	ReporterClass   string
 	DailyBudgetUSD  float64
 	WeeklyBudgetUSD float64
 	FinalBudgetUSD  float64
@@ -1769,6 +1811,7 @@ SELECT p.name, COALESCE(p.namespace_id, ''), COALESCE(p.weight, 0), COALESCE(p.c
        COALESCE(p.workdir, ''), COALESCE(p.admission_mode, ''),
        COALESCE(ns.admission_mode, ''), COALESCE(p.board_ownership, ''),
        COALESCE(p.last_tick_completed, ''), COALESCE(p.last_tick_status, ''),
+       COALESCE(ns.reporter_class, ''),
        COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0)
 FROM projects p
 LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -1791,6 +1834,7 @@ ORDER BY p.name`)
 			&c.Workdir, &c.AdmissionMode,
 			&c.NamespaceAdmissionMode, &c.BoardOwnership,
 			&lastStr, &c.LastTickStatus,
+			&c.ReporterClass,
 			&c.DailyBudgetUSD, &c.WeeklyBudgetUSD, &c.FinalBudgetUSD); err != nil {
 			log.Printf("ADMIT: scan candidate row: %v", err)
 			continue
@@ -1967,6 +2011,21 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 	// consults, so report it first.
 	if deferred, rem, hasRem := l.cooldownVerdict(c, now); deferred {
 		return AdmissionReasonCooldown, rem, hasRem
+	}
+	// SCHED-GAP-1655 deliverable (1): a cooldown-mode BUILDER lane whose
+	// board holds no dispatchable row is deferred with reason no_work —
+	// the same board resolution + dispatchability logic the tasks-mode
+	// waiver uses (builderAdmissionBlocked → boardOpenRows), no second
+	// parser. AFTER the pin check (a lane inside its pin is plain
+	// "cooldown" — the pin is the older, still-true answer) and BEFORE the
+	// structural gates (an empty board makes cap/budget moot: the waste
+	// question is "why did it not run", and "nothing to run" outranks
+	// "no room to run it in"). Reporter-class lanes — the -sync/-pm/...
+	// suffix families or a namespace reporter_class="reporter" pin — are
+	// exempt by laneClass inside the gate: their timer cadence is BY
+	// DESIGN (deliverable 3), so an empty board never blocks them.
+	if builderAdmissionBlocked(c.Name, c.Workdir, database.AdmissionModeCooldown, c.ReporterClass) {
+		return AdmissionReasonNoWork, 0, false
 	}
 	if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
 		return r, 0, false
