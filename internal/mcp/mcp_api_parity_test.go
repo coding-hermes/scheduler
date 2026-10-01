@@ -96,6 +96,9 @@ var apiToolCoverage = map[string][]string{
 	"GET /api/v1/metrics":                   {"metrics_get"},
 	"GET /api/v1/features":                  {"features_get"},
 	"GET /api/v1/features/prune-candidates": {"features_prune_candidates"},
+	"GET /api/v1/peers":                     {"peers_list"},
+	"POST /api/v1/peers":                    {"peers_register"},
+	"POST /api/v1/peers/{id}/heartbeat":     {"peers_heartbeat"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.

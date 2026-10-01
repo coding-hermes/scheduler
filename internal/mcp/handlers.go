@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
@@ -2022,4 +2023,66 @@ WHERE julianday(spawned_at) >= julianday(?)
 		"zero_output_committed": zeroOutput,
 		"window":                mcpMetricsWindowLabel,
 	}
+}
+
+// toolPeersList mirrors GET /api/v1/peers: every registered peer rendered
+// through the freshness predicate (stale against the configured window).
+func (s *Server) toolPeersList(ctx context.Context) (string, error) {
+	peers, err := database.ListPeers(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	nowFn := clock.Real().Now
+	window := database.PeerFreshnessWindowDefault
+	out := make([]map[string]interface{}, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, map[string]interface{}{
+			"id":           p.ID,
+			"url":          p.URL,
+			"version":      p.Version,
+			"capabilities": p.Capabilities,
+			"last_contact": p.LastContact,
+			"stale":        database.IsPeerStale(p.LastContact, window, nowFn),
+		})
+	}
+	return jsonString(map[string]interface{}{"peers": out, "count": len(out)}), nil
+}
+
+// toolPeersRegister mirrors POST /api/v1/peers: register or refresh peer
+// identity. Registration is NOT liveness — last_contact is untouched.
+func (s *Server) toolPeersRegister(ctx context.Context, args map[string]interface{}) (string, error) {
+	id := getStringArg(args, "id")
+	url := getStringArg(args, "url")
+	if id == "" || url == "" {
+		return "", fmt.Errorf("id and url are required")
+	}
+	p := &database.Peer{
+		ID:           id,
+		URL:          url,
+		Version:      getStringArg(args, "version"),
+		Capabilities: getStringArg(args, "capabilities"),
+	}
+	if existing, err := database.GetPeer(ctx, s.db, p.ID); err == nil {
+		p.LastContact = existing.LastContact
+	}
+	if err := database.UpsertPeer(ctx, s.db, p); err != nil {
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"status": "registered", "id": p.ID, "url": p.URL, "version": p.Version}), nil
+}
+
+// toolPeersHeartbeat mirrors POST /api/v1/peers/{id}/heartbeat: stamp a
+// registered peer's last_contact. Unknown ids are a not-found error.
+func (s *Server) toolPeersHeartbeat(ctx context.Context, args map[string]interface{}) (string, error) {
+	id := getStringArg(args, "id")
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	if err := database.PeerHeartbeat(ctx, s.db, id); err != nil {
+		if errors.Is(err, database.ErrPeerNotFound) {
+			return "", fmt.Errorf("peer %q not found — heartbeat does not auto-register", id)
+		}
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"status": "heartbeat", "id": id}), nil
 }

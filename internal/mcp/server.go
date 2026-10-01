@@ -455,6 +455,36 @@ var tools = []ToolDefinition{
 			},
 		},
 	},
+	{
+		Name:        "peers_list",
+		Description: "List federation peers with freshness (stale flag computed against the peer freshness window)",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "peers_register",
+		Description: "Register or refresh a federation peer (identity only — does not refresh liveness)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":           map[string]interface{}{"type": "string", "description": "Stable peer identity"},
+				"url":          map[string]interface{}{"type": "string", "description": "Peer base URL"},
+				"version":      map[string]interface{}{"type": "string", "description": "Peer version string"},
+				"capabilities": map[string]interface{}{"type": "string", "description": "Free-form capability string (e.g. control,query)"},
+			},
+			"required": []string{"id", "url"},
+		},
+	},
+	{
+		Name:        "peers_heartbeat",
+		Description: "Stamp a registered peer's last_contact to now (liveness; does NOT auto-register)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Registered peer id"},
+			},
+			"required": []string{"id"},
+		},
+	},
 	// ── CTL-003: parity with the remaining /api/v1 control + read routes ──
 	// One tool per uncovered openapi operation (namespaces CRUD/projects/move,
 	// project delete/spawn/bump/unbump, tick detail, config, queue, metrics).
@@ -787,6 +817,12 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolGroupsDeploy(ctx, args)
 	case "events_list":
 		return s.toolEventsList(ctx, args)
+	case "peers_list":
+		return s.toolPeersList(ctx)
+	case "peers_register":
+		return s.toolPeersRegister(ctx, args)
+	case "peers_heartbeat":
+		return s.toolPeersHeartbeat(ctx, args)
 	case "namespaces_list":
 		return s.toolNamespacesList(ctx)
 	case "namespaces_get":
