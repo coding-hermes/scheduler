@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"io"
 	"net/http"
 	"os"
@@ -133,6 +134,10 @@ type Client struct {
 	// process (same counter value is impossible, but ids must also be
 	// unique across restarts) never collide in a merged log.
 	randID func() string
+
+	// clk is the component's time source (SCHED-GAP-169): zero value reads
+	// as the wall clock, a test may install a simulator via SetClock.
+	clk clock.Seam
 }
 
 // Option customizes a Client at construction.
@@ -269,9 +274,9 @@ func (c *Client) Control(ctx context.Context, peerID, project, command string, b
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	start := time.Now()
+	start := c.clk.Get().Now()
 	resp, err := c.httpClient.Do(req)
-	res.LatencyMS = time.Since(start).Milliseconds()
+	res.LatencyMS = c.clk.Get().Since(start).Milliseconds()
 	if err != nil {
 		res.Error = fmt.Sprintf("unreachable: %v", err)
 		res.Unreachable = true

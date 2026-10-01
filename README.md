@@ -471,6 +471,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 | `-duckbrain-interval` | `5m0s` | DuckBrain sync interval (spool replay cadence) |
 | `-gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |
+| `-peer-freshness-window` | `180` | Peer freshness window in seconds for the federation peer registry (REMOTE-003): a peer whose last `POST /api/v1/peers/{id}/heartbeat` is older renders `stale:true` (with its `last_contact`, never a "down" state) on `GET /api/v1/peers`. Env: `SCHEDULER_PEER_FRESHNESS_WINDOW` |
 | `-groups-file` | (none) | JSONL file for deploy groups (default `<db dir>/groups.jsonl` when the blocks store is enabled; empty = default paths) |
 | `-load-gate-threshold` | `0` | Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); `0` = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via `load_gate='off'` |
 | `-feature-prune-weeks` | `8` | Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): `/api/v1/features/prune-candidates` flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted |
