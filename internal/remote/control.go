@@ -41,13 +41,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/coding-hermes/scheduler/internal/clock"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Command vocabulary (docs/remote-spec.md §3 control flow). The verbs map
