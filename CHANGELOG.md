@@ -31,8 +31,15 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-09-30
+## [Unreleased] — 2026-10-01
 
+### Features
+- scheduler: no-work policy — board gate for cooldown builders + no_work outcome (SCHED-GAP-1655) — `957045d4`.
+
+### Fixes
+- scheduler: a tick killed by its own tick-timeout is booked status=timeout, not a deferred gateway blip (SCHED-GAP-1684) — `8b6713e8`.
+- scheduler: skip sends to unconfigured platform targets with once-per-day warn (SCHED-GAP-1679) — `6fbb2595`.
+- verify first-cycle window computed with truncated layout, not RFC3339 (INT-CI-169) — `15d342c0`.
 ## [1.11.7] — 2026-09-30
 
 ### Performance
