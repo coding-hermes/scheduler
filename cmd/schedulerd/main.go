@@ -67,6 +67,9 @@ func main() {
 	tasksPacing := flag.Duration("tasks-pacing", 60*time.Second, "Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); 0 = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
 	featurePruneWeeks := flag.Int("feature-prune-weeks", 8, "Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): /api/v1/features/prune-candidates flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted")
+	// REMOTE-003 (§2): peer freshness window — a peer whose last heartbeat is
+	// older than this renders stale=true (never "down") on GET /api/v1/peers.
+	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
@@ -428,6 +431,31 @@ func main() {
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
 
+	// ── REMOTE-003 (§1): the scheduler identity ──
+	// Resolved ONCE at boot: SCHEDULER_ID env > [scheduler] id TOML > the
+	// short hostname. Assigned to the daemon for its whole lifetime (stable
+	// across restarts — never derived per-tick), stamped on every
+	// projects/ticks/events row it writes, and the id peers address it by.
+	// There is deliberately no CLI flag: identity is per-deployment.
+	schedID := strings.TrimSpace(os.Getenv("SCHEDULER_ID"))
+	if schedID == "" && *configFile != "" {
+		if rootCfg, cfgErr := config.LoadRootConfig(*configFile); cfgErr == nil {
+			schedID = strings.TrimSpace(rootCfg.Scheduler.ID)
+		}
+	}
+	if schedID == "" {
+		schedID = database.ResolveDefaultSchedulerID()
+	}
+	database.SetSchedulerID(schedID)
+	log.Printf("SCHEDULER: id=%s", schedID)
+	// Backfill (spec §1: "backfilled with the local id at first boot"):
+	// claim every pre-identity row ('' scheduler_id) in projects/ticks/
+	// events for THIS scheduler — the rows live in its own database, so the
+	// ownership law (§4) makes it their writer of record.
+	if bfErr := database.BackfillSchedulerID(context.Background(), db, schedID); bfErr != nil {
+		log.Printf("WARN: scheduler_id backfill: %v", bfErr)
+	}
+
 	// Declarative fleet seeding: if a fleet.toml was supplied, load and
 	// apply it before any other subsystem touches the DB. Already-existing
 	// rows are skipped (idempotent startup; create-only, never overwrite).
@@ -645,6 +673,14 @@ func main() {
 			}
 		}
 	}
+	// REMOTE-003 (§2): env layer for the peer freshness window (same shape
+	// as the flag's env-echo convention; the flag's default IS the named
+	// database constant, so an env-set path surfaces in the resolved value).
+	if v := os.Getenv("SCHEDULER_PEER_FRESHNESS_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && *peerWindow == database.PeerFreshnessWindowDefault {
+			*peerWindow = n
+		}
+	}
 	// SCHED-GAP-127: arm the budget reader only after every config layer has
 	// resolved. The dedicated foreman HERMES_HOME is the fleet cash ledger;
 	// default false keeps the historical ticks.cost_usd query unchanged.
@@ -759,6 +795,9 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// REMOTE-003 (§2): the peer freshness window for the /api/v1/peers
+	// surfaces (rendering law: stale + last_contact, never "down").
+	apiServer.SetPeerFreshnessWindow(*peerWindow)
 	// SCHED-GAP-131: the dead-feature reaper's prune window (weeks).
 	apiServer.SetFeaturePruneWeeks(*featurePruneWeeks)
 	// SCHED-GAP-1602: arm the operator-credential gate. Token mode wins when

@@ -406,6 +406,11 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 	if len(doc.Components.SecuritySchemes) == 0 {
 		t.Error("components.securitySchemes missing — the served spec must declare the credential")
 	}
+	// REMOTE-003 (§2): the peers GET is deliberately token-gated (fleet
+	// topology is not public read material) — it is the ONE named exception
+	// to the reads-stay-open posture, pinned here so the exception cannot
+	// grow silently in either direction.
+	gatedReads := map[string]bool{"/api/v1/peers": true}
 	mutating, missing := 0, []string{}
 	readWithSec := 0
 	for path, ops := range doc.Paths {
@@ -429,18 +434,21 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 				_ = json.Unmarshal(raw, &op)
 				if len(op.Security) > 0 {
 					readWithSec++
+					if !gatedReads[path] {
+						missing = append(missing, "gated-read-without-allowlist "+method+" "+path)
+					}
 				}
 			}
 		}
 	}
-	if mutating != 22 {
-		t.Errorf("mutating operations in spec = %d, want 22", mutating)
+	if mutating != 24 {
+		t.Errorf("mutating operations in spec = %d, want 24 (22 pre-REMOTE-003 + the two peers POSTs)", mutating)
 	}
 	if len(missing) > 0 {
 		t.Errorf("mutating operations without security: %v", missing)
 	}
-	if readWithSec != 0 {
-		t.Errorf("%d read operations carry security — reads must stay open", readWithSec)
+	if readWithSec != 1 {
+		t.Errorf("%d read operations carry security, want exactly 1 (GET /api/v1/peers — the REMOTE-003 gated read)", readWithSec)
 	}
 }
 

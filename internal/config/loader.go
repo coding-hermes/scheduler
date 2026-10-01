@@ -278,6 +278,13 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_DUCK_BRAIN_URL"); v != "" {
 		cfg.DuckBrain.URL = v
 	}
+
+	// REMOTE-003 (§1): scheduler identity env override — the highest layer
+	// below a future CLI flag (there is none by design: identity is
+	// per-deployment). An unset SCHEDULER_ID leaves the TOML/default value.
+	if v := os.Getenv("SCHEDULER_ID"); v != "" {
+		cfg.Scheduler.ID = v
+	}
 }
 
 // Validate sanity-checks the resolved RootConfig. It verifies that

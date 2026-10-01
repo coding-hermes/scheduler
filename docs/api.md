@@ -117,6 +117,8 @@ groups/templates routes are listed in the OpenAPI spec at
 | POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/pause` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
+| GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
+| POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
 
 ## 2. Wire format
 
@@ -1262,4 +1264,63 @@ Verify the loop is back after resume: `curl -s http://127.0.0.1:9090/api/v1/heal
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/openapi.json | jq '.info, (.paths | keys)'
+```
+
+## 14. Federation peer registry (REMOTE-003)
+
+The per-scheduler LOCAL registry of federation peers (docs/remote-spec.md §2):
+one row per peer in this scheduler's own database — no shared store, no
+broker. **Every route in this section is operator-token gated** (the same
+SCHED-GAP-1602 gate as every mutating route; the GET is gated too — the peer
+list is fleet topology, not public read material). With no credential
+configured the surface fails CLOSED: 503.
+
+**Rendering law:** a peer with no heartbeat within the freshness window
+(`--peer-freshness-window`, default 180s; env
+`SCHEDULER_PEER_FRESHNESS_WINDOW`) is **STALE with its `last_contact`
+timestamp — never "down"**. `stale` is a boolean; `last_contact` is always
+present (`""` = never heartbeated). There is no "down" state anywhere in this
+surface.
+
+### POST /api/v1/peers
+
+**Purpose:** register or refresh a peer (upsert keyed by `id`). A
+re-registration refreshes identity only — it never fabricates liveness;
+only a heartbeat stamps `last_contact`.
+
+**Request body:** `{"id": "...", "url": "...", "version": "...", "capabilities": "..."}`
+(`id` required; the rest may be empty).
+
+**Response 200:** `{"status": "registered", "id": ..., "url": ..., "version": ...}`.
+**Errors:** 400 invalid body / missing id · 401 bad credential · 503 no credential.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/peers \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"kara","url":"http://kara:9090","version":"v1.3.0","capabilities":"control,query"}'
+```
+
+### GET /api/v1/peers
+
+**Purpose:** list every registered peer with freshness computed at read time.
+
+**Response 200:** `{"peers": [{"id","url","last_contact","stale","version"}, ...], "count": N}`.
+**Errors:** 401 bad credential · 503 no credential.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/peers -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```
+
+### POST /api/v1/peers/{id}/heartbeat
+
+**Purpose:** liveness ping — stamps the peer's `last_contact` to now.
+
+**Response 200:** `{"status": "heartbeat", "id": ...}`.
+**Errors:** 404 unknown peer (heartbeat does NOT auto-register) · 401 bad
+credential · 503 no credential.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/peers/kara/heartbeat \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
 ```

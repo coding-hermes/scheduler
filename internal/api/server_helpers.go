@@ -1381,6 +1381,48 @@ var openapiSpec = []byte(`{
           "200": {"description": "Array of queue items sorted by urgency descending"}
         }
       }
+    },
+    "/api/v1/peers": {
+      "get": {
+        "security": [{"operatorToken": []}],
+        "summary": "List registered federation peers with freshness (REMOTE-003)",
+        "description": "Every peer renders {id, url, last_contact, stale, version}. Rendering law: a peer past the freshness window is STALE with its last_contact timestamp — never \"down\"; last_contact is always present (empty string = never heartbeated).",
+        "responses": {
+          "200": {"description": "Peer list with per-peer stale flags"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      },
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Register or refresh a federation peer (upsert, REMOTE-003)",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PeerUpsert"}}}
+        },
+        "responses": {
+          "200": {"description": "Peer registered"},
+          "400": {"description": "Invalid body or missing id"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/peers/{id}/heartbeat": {
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Peer liveness ping — stamps last_contact (REMOTE-003)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
+        "responses": {
+          "200": {"description": "Heartbeat stamped"},
+          "404": {"description": "Unknown peer (heartbeat does not auto-register)"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
     }
   },
   "components": {
@@ -1592,6 +1634,29 @@ var openapiSpec = []byte(`{
         "type": "object",
         "additionalProperties": false,
         "description": "This endpoint accepts no body fields — send an empty JSON object {} or no body."
+      },
+      "PeerUpsert": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "description": "The peer's scheduler identity (REMOTE-003 §1) — the join key for the whole federation."},
+          "url": {"type": "string", "description": "Base URL of the peer's HTTP API (its existing operator-token-gated surface)."},
+          "version": {"type": "string", "description": "The peer's reported version string."},
+          "capabilities": {"type": "string", "description": "Free-form capability string (e.g. \"control,query\")."}
+        },
+        "description": "POST /api/v1/peers body (REMOTE-003 §2). Upsert keyed by id; a re-registration refreshes identity but never fabricates liveness — only a heartbeat stamps last_contact."
+      },
+      "PeerView": {
+        "type": "object",
+        "required": ["id", "url", "last_contact", "stale", "version"],
+        "properties": {
+          "id": {"type": "string"},
+          "url": {"type": "string"},
+          "last_contact": {"type": "string", "description": "RFC3339 instant of the peer's most recent heartbeat; empty string = never heartbeated. ALWAYS present — never omitted."},
+          "stale": {"type": "boolean", "description": "True when the peer has no heartbeat within the freshness window (--peer-freshness-window, default 180s). THE rendering law: stale + last_contact, never a \"down\" state."},
+          "version": {"type": "string"}
+        },
+        "description": "One GET /api/v1/peers list entry (REMOTE-003 §2). There is no \"down\" field anywhere in this surface."
       }
     }
   }

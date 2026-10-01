@@ -17,11 +17,14 @@ func LogEvent(ctx context.Context, db *sql.DB, e *Event) error {
 	if e.CreatedAt == "" {
 		e.CreatedAt = nowUTC(ctx)
 	}
-	const q = `INSERT INTO events (severity, component, message, details, created_at)
-VALUES (?,?,?,?,?)`
+	// REMOTE-003 (§1): every event the daemon writes carries its
+	// scheduler_id — the writer-attribution join key for federation.
+	sid := stampSchedulerID()
+	const q = `INSERT INTO events (severity, component, message, details, created_at, scheduler_id)
+VALUES (?,?,?,?,?,?)`
 	res, err := db.ExecContext(ctx, q,
 		string(e.Severity), e.Component,
-		e.Message, e.Details, e.CreatedAt)
+		e.Message, e.Details, e.CreatedAt, sid)
 	if err != nil {
 		return fmt.Errorf("log event: %w", err)
 	}

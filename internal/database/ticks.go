@@ -24,16 +24,19 @@ func CreateTick(ctx context.Context, db *sql.DB, t *Tick) error {
 	if t.Status == "" {
 		t.Status = StatusQueued
 	}
+	// REMOTE-003 (§1): every tick the daemon writes carries its
+	// scheduler_id — the writer-attribution join key for federation.
+	sid := stampSchedulerID()
 	const q = `INSERT INTO ticks
-(id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, cost_source, urgency, weight_used, error, created_at, bump, worker_count, wave_recovery)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, cost_source, urgency, weight_used, error, created_at, bump, worker_count, wave_recovery, scheduler_id)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	_, err := db.ExecContext(ctx, q,
 		t.ID, t.ProjectName, nullableString(t.SessionID), string(t.Status),
 		nullableString(string(t.Outcome)),
 		nullableString(t.SpawnedAt), nullableString(t.CompletedAt),
 		t.ExitCode, t.Commits, t.FilesChanged, t.TokensIn, t.TokensOut,
 		t.CostUSD, t.CostSource, t.Urgency, t.WeightUsed, nullableString(t.Error), t.CreatedAt,
-		t.Bump, t.WorkerCount, t.WaveRecovery)
+		t.Bump, t.WorkerCount, t.WaveRecovery, sid)
 	if err != nil {
 		return fmt.Errorf("create tick %q: %w", t.ID, err)
 	}

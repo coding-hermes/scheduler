@@ -93,6 +93,12 @@ type Server struct {
 	// Immutable after SetFeaturePruneWeeks; zero = package default
 	// (featurePruneWeeksDefault). The ?weeks= query overrides per request.
 	featurePruneWeeks int
+
+	// peerWindow (REMOTE-003 §2) is the peer-freshness window in seconds for
+	// the /api/v1/peers surfaces. Immutable after SetPeerFreshnessWindow;
+	// zero = database.PeerFreshnessWindowDefault (5m). A peer whose last
+	// heartbeat is older renders stale=true — never "down".
+	peerWindow int
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
@@ -224,6 +230,11 @@ func (s *Server) Handler() http.Handler {
 	// reaper's prune-candidate list (flag only, no auto-delete).
 	mux.HandleFunc("/api/v1/features", s.features)
 	mux.HandleFunc("/api/v1/features/prune-candidates", s.featurePruneCandidates)
+	// REMOTE-003 (§2): the federation peer registry — operator-token gated
+	// like every other mutating surface (see server_peers.go for the
+	// rendering law: stale + last_contact, never "down").
+	mux.HandleFunc("/api/v1/peers", s.handlePeers)
+	mux.HandleFunc("/api/v1/peers/", s.handlePeerByID)
 	return mux
 }
 

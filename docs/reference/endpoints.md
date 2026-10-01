@@ -44,6 +44,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/resume` | Resume scheduling (POST) |
 | `/api/v1/queue` | Global queue (JSON) |
 | `/api/v1/openapi.json` | OpenAPI schema (JSON) |
+| `/api/v1/peers` | Federation peer registry (REMOTE-003, operator-token gated): GET lists every registered peer `{id, url, last_contact, stale, version}` — a peer past the freshness window renders `stale:true` with its `last_contact`, never a "down" state; POST upserts `{id, url, version, capabilities}` → 200 |
+| `/api/v1/peers/{id}/heartbeat` | POST: liveness ping — stamps the peer's `last_contact`; unknown id → 404 (heartbeat does not auto-register) |
 | `/mcp` | MCP JSON-RPC endpoint |
 
 **MCP surface:** `POST /mcp` serves **47 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

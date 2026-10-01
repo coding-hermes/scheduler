@@ -128,6 +128,14 @@ type SchedulerConfig struct {
 	// auto-disable window so the dashboard can stay readable even when
 	// auto-disable is off.
 	FailureWindow int `toml:"failure_window"`
+
+	// ID (REMOTE-003, §1) is this scheduler's federation identity — the
+	// value stamped on every projects/ticks/events row it writes and the
+	// id peers use to address it. Empty = the host-derived default (the
+	// short hostname, resolved by ResolveDefaultSchedulerID in main.go).
+	// Precedence: TOML [scheduler] id < SCHEDULER_ID env. There is no CLI
+	// flag layer: identity is per-deployment, not per-invocation.
+	ID string `toml:"id"`
 }
 
 // BlackoutWindow defines a peak-pricing window during which the scheduler

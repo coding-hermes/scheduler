@@ -48,7 +48,8 @@ func printSchema() {
         "auto_disable_failure_rate": { "type": "number", "default": 0.0, "minimum": 0.0, "maximum": 1.0, "description": "Per-project failure-rate threshold (0 = off). SCHED-GAP-018.", "env": "SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "cli": "--auto-disable-failure-rate" },
         "auto_disable_window":       { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project over which auto-disable failure rate is computed.", "env": "SCHEDULER_AUTO_DISABLE_WINDOW", "cli": "--auto-disable-window" },
         "auto_disable_min_ticks":    { "type": "integer", "default": 50, "minimum": 1, "description": "Minimum ticks in window before auto-disable can fire.", "env": "SCHEDULER_AUTO_DISABLE_MIN_TICKS", "cli": "--auto-disable-min-ticks" },
-        "failure_window":            { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project for /api/v1/status per-project failure-rate breakdown.", "env": "SCHEDULER_FAILURE_WINDOW", "cli": "--failure-window" }
+        "failure_window":            { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project for /api/v1/status per-project failure-rate breakdown.", "env": "SCHEDULER_FAILURE_WINDOW", "cli": "--failure-window" },
+        "id": { "type": "string", "default": "<short hostname>", "description": "REMOTE-003 (§1): this scheduler's federation identity — stamped on every projects/ticks/events row it writes and the id peers address it by. Resolved ONCE at boot, logged as 'SCHEDULER: id=<id>'. Default = the short hostname; empty = the host-derived default applies. There is no CLI flag: identity is per-deployment.", "env": "SCHEDULER_ID" }
       }
     },
     "gateway": {

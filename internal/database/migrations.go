@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 55
+const latestMigration = 57
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1036,6 +1036,50 @@ ON ticks(project_name, spawned_at, completed_at, cost_usd)
 WHERE status = 'completed';
 COMMIT;
 PRAGMA foreign_keys=ON;
+`,
+	},
+	{
+		// REMOTE-003 (§1 scheduler identity): every row the daemon writes
+		// carries the scheduler_id of the scheduler that wrote it — the join
+		// key for the whole federation (docs/remote-spec.md §1). Additive
+		// ALTERs, no rebuild: a live database migrates in place and every
+		// existing row reads '' (honest: written before identity existed).
+		//
+		// THE BACKFILL runs at BOOT, not here: this migration has no access
+		// to the resolved scheduler identity (it lives in the config/env
+		// layer, not the schema), and a migration statement is fixed SQL.
+		// main.go calls BackfillSchedulerID right after InitDB, claiming the
+		// '' rows for the booting scheduler — spec §1: "backfilled with the
+		// local id at first boot".
+		version: 56,
+		desc:    "REMOTE-003: scheduler_id identity column on projects, ticks and events — the writer-attribution join key for federation (docs/remote-spec.md §1)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_events_scheduler ON events(scheduler_id, created_at DESC);
+`,
+	},
+	{
+		// REMOTE-003 (§2 peer registry): the per-scheduler LOCAL registry of
+		// federation peers — one row per peer keyed by its scheduler id, in
+		// THIS scheduler's own database (no shared store; spec §2). Freshness
+		// is computed at READ time (IsPeerStale) and rendered as a boolean
+		// next to the raw last_contact — never a "down" state. Fresh table,
+		// no backfill: there are no peers until one registers.
+		version: 57,
+		desc:    "REMOTE-003: peers table — the per-scheduler local federation peer registry (id, url, version, capabilities, last_contact) backing /api/v1/peers + heartbeat (docs/remote-spec.md §2)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS peers (
+    id            TEXT PRIMARY KEY,
+    url           TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    capabilities  TEXT NOT NULL DEFAULT '',
+    last_contact  TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 `,
 	},
 }
