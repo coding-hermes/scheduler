@@ -58,6 +58,20 @@ namespace = "coding-hermes"
 # DuckBrain HTTP server URL
 url = "http://localhost:3000"
 
+# ── Crier — federation visibility bus (REMOTE-004) ──────────────────────────
+# Publishes tick-terminal and lane-state events to the scheduler's topic
+# (sched.tick.<scheduler_id>) and subscribes to peer events. OFF by default:
+# enabled=false is a pure no-op (no connection is ever opened), and a
+# disabled or unreachable bus NEVER blocks or fails a tick — publishes are
+# best-effort, failures are logged and dropped (the autonomy law).
+# The token may also come from the CRIER_AUTH_TOKEN environment variable
+# (env wins over this value; credentials never live in argv).
+# [crier]
+# url = "http://127.0.0.1:8767"
+# token = ""                       # opt-in relay bearer (Crier CR_AUTH_TOKEN)
+# enabled = false
+# topics = ["sched.tick.>"]        # subscriber wildcard patterns
+
 # ── Fleet — Declarative Project Definitions ─────────────────────────────────
 # Projects are seeded at startup (create-only upsert — existing rows survive).
 # Uncomment and edit the examples below for your fleet.

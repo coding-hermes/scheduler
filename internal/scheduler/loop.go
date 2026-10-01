@@ -164,6 +164,13 @@ type Loop struct {
 	// once per spawn so concurrent spawns cannot observe a previous
 	// caller's value (see schedgap157.go).
 	nudgeSource atomic.Value // string
+
+	// schedulerBus (REMOTE-004, §3 visibility flow) is the process's single
+	// bus publisher, installed once at boot via SetSchedulerBus. nil = the
+	// disabled/no-op bus: every publish path checks Enabled() and does
+	// nothing — the autonomy law (a Crier failure never blocks or fails a
+	// tick) is structural, not a caller discipline.
+	schedulerBus *SchedulerBus
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -782,6 +789,14 @@ func (l *Loop) abortInFlightTicks() {
 	if len(stuck) > 0 {
 		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain timed out — marking %d in-flight ticks failed", len(stuck)), map[string]any{"tick_ids": ids})
 	}
+}
+
+// PublishLaneState is the loop-level lane-state hook (REMOTE-004, §3):
+// every lane state change — pause/resume via the API, auto-disable —
+// publishes a lane.state event through the process bus. The disabled/no-op
+// bus makes this a structurally-free call.
+func (l *Loop) PublishLaneState(ctx context.Context, project, state string) {
+	l.Bus().PublishLaneState(ctx, project, state)
 }
 
 // ForceEvaluate triggers an immediate evaluation.

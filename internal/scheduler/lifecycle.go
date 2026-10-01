@@ -207,11 +207,28 @@ type LifecycleTracker struct {
 	// not just evaluate().
 	clk clockSeam
 	db  *sql.DB
+	// schedulerBus (REMOTE-004, §3 visibility flow) publishes the terminal
+	// transition to the federation bus. nil = disabled: the Complete path
+	// checks Enabled() and behaves byte-identically to pre-REMOTE-004.
+	// A bus failure can never fail Complete — PublishTickTerminal is
+	// contractually cannot-error (the autonomy law).
+	schedulerBus *SchedulerBus
 }
 
 // NewLifecycleTracker creates a lifecycle tracker.
 func NewLifecycleTracker(db *sql.DB) *LifecycleTracker {
 	return &LifecycleTracker{db: db}
+}
+
+// SetSchedulerBus installs the visibility publisher (REMOTE-004). nil or a
+// disabled bus leaves the tracker silent. Loop.SetSchedulerBus propagates
+// here, matching the SetClock propagation convention.
+func (lt *LifecycleTracker) SetSchedulerBus(b *SchedulerBus) {
+	if b == nil || !b.Enabled() {
+		lt.schedulerBus = nil
+		return
+	}
+	lt.schedulerBus = b
 }
 
 // Enqueue creates a queued tick entry for the project.
@@ -315,6 +332,19 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
+	}
+
+	// REMOTE-004 (§3 visibility flow): the tick just reached a TERMINAL
+	// state — publish the transition to the federation bus. The event's
+	// status is the row's lifecycle verdict (completed / failed / deferred
+	// / timeout), deliberately NOT the outcome column's artifact verdict.
+	// BEST-EFFORT by construction: PublishTickTerminal cannot error and
+	// cannot block beyond the client's own 5s deadline — a down, refused
+	// or timed-out relay is logged and dropped inside, so this call can
+	// never change Complete's result (the autonomy law, proven by
+	// TestRemote004_PublishFailureDoesNotFailTick).
+	if lt.schedulerBus != nil && lt.schedulerBus.Enabled() {
+		lt.schedulerBus.PublishTickTerminal(context.Background(), outcome.Project, outcome.TickID, string(outcome.Status))
 	}
 
 	// Update project's last_tick_completed for ALL outcomes (completed, failed, timeout).

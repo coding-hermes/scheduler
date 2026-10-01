@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/agentlog"
 	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
@@ -535,6 +537,86 @@ func main() {
 			loop.SetBlackoutWindows(rootCfg.Scheduler.BlackoutWindows)
 			log.Printf("Blackout: loaded %d windows", len(rootCfg.Scheduler.BlackoutWindows))
 		}
+	}
+
+	// ── REMOTE-004 (§3 visibility flow): the Crier bus ──
+	// Config resolution follows the REMOTE-003 identity precedent: TOML
+	// [crier] is the base layer, CRIER_* env vars override (env > TOML),
+	// and there is deliberately NO CLI flag layer — the token is a
+	// credential and credentials never live in argv (GAP-038). Defaults:
+	// url http://127.0.0.1:8767, enabled=false (off is a pure no-op — no
+	// connection is ever opened), subscriber topics sched.tick.>.
+	crierCfg := config.CrierConfig{}
+	if *configFile != "" {
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			crierCfg = rootCfg.Crier
+		}
+	}
+	if v := os.Getenv("CRIER_URL"); v != "" {
+		crierCfg.URL = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("CRIER_AUTH_TOKEN"); v != "" {
+		crierCfg.Token = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("CRIER_ENABLED"); v != "" {
+		if b, perr := strconv.ParseBool(strings.TrimSpace(v)); perr == nil {
+			crierCfg.Enabled = b
+		} else {
+			log.Printf("WARN: CRIER_ENABLED=%q not a bool — ignoring", v)
+		}
+	}
+	crierClient := bus.NewClient(crierCfg.Enabled, crierCfg.URL, crierCfg.Token, schedID)
+	if len(crierCfg.Topics) > 0 {
+		crierClient.SetSubscribeTopics(crierCfg.Topics)
+	}
+	loop.SetSchedulerBus(scheduler.NewSchedulerBus(crierClient))
+	if crierClient.Enabled() {
+		log.Printf("CRIER: bus enabled — url=%s topic=%s subscribe=%v",
+			crierCfg.URL, crierClient.Topic(), strings.Join(crierClient.Topics(), ","))
+	} else {
+		log.Printf("CRIER: bus disabled (no-op)")
+	}
+	// The subscriber runs one long-lived connection per topic pattern.
+	// The autonomy law covers it too: a down relay is a backoff-and-retry
+	// loop inside Run, never an error; a disabled client never dials.
+	crierSubscriber := bus.NewSubscriber(crierClient)
+	if crierClient.Enabled() {
+		go crierSubscriber.Run(context.Background())
+		// REMOTE-004 deliverable 3: ingest = store. Each valid,
+		// deduped peer event is persisted as a local bus audit row
+		// (component "bus") so it is visible on /api/v1/events — the
+		// merged/federated view and the durable replay dedupe remain
+		// REMOTE-006's job (§4: foreign rows are read-only, displayed,
+		// never mutated). A failed insert costs a log line, never the
+		// receive path (autonomy law). The goroutine exits when Close
+		// closes the channel during shutdown.
+		go func() {
+			for ev := range crierSubscriber.Events() {
+				details, merr := json.Marshal(map[string]string{
+					"scheduler_id": ev.SchedulerID,
+					"event_id":     ev.EventID,
+					"kind":         ev.Kind,
+					"project":      ev.Project,
+					"tick_id":      ev.TickID,
+					"status":       ev.Status,
+					"topic":        ev.Topic,
+					"pattern":      ev.Pattern,
+					"ts":           ev.TS,
+				})
+				if merr != nil {
+					details = []byte(`{}`)
+				}
+				if err := database.LogEvent(context.Background(), db, &database.Event{
+					Severity:  database.SeverityLow,
+					Component: "bus",
+					Message: fmt.Sprintf("peer %s: %s/%s project=%s tick=%s status=%s",
+						ev.Kind, ev.SchedulerID, ev.EventID, ev.Project, ev.TickID, ev.Status),
+					Details: string(details),
+				}); err != nil {
+					log.Printf("CRIER: peer event store dropped: %v", err)
+				}
+			}
+		}()
 	}
 
 	// SCHED-GAP-018: auto-disable + failure-rate window. Apply TOML values
@@ -1176,6 +1258,10 @@ func main() {
 
 	// ADV-R07: stop the board watcher before the loop drains.
 	boardWatcher.Stop()
+
+	// REMOTE-004: stop the bus subscriber before the loop drains — Close
+	// tears the connections down and joins the loops (no-op when disabled).
+	crierSubscriber.Close()
 
 	loop.Stop()
 	// Wait for in-flight ticks to complete (with a generous timeout).

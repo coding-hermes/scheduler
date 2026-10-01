@@ -213,6 +213,25 @@ type GatewayConfig struct {
 	ForemanHome string `toml:"foreman_home"`
 }
 
+// CrierConfig (REMOTE-004, §3 visibility flow) covers the Crier bus client —
+// the transport that publishes tick-terminal and lane-state events to the
+// federation topic and subscribes to peer events. `enabled` defaults to
+// FALSE: off is a pure no-op (no connections are ever opened), and a
+// disabled or unreachable bus must never block or fail a tick (the
+// autonomy law — publish is best-effort, failures are logged and dropped).
+// `token` is the opt-in relay bearer credential (Crier CR_AUTH_TOKEN);
+// it may also come from the CRIER_AUTH_TOKEN environment variable, which
+// wins over the TOML value (credentials never live in argv, GAP-038).
+// `topics` is the subscriber's wildcard topic list (default
+// `sched.tick.>` — every scheduler's tick topic); an empty list disables
+// subscription while publishing stays armed.
+type CrierConfig struct {
+	URL     string   `toml:"url"`
+	Token   string   `toml:"token"`
+	Enabled bool     `toml:"enabled"`
+	Topics  []string `toml:"topics"`
+}
+
 // DuckBrainConfig covers the DuckBrain memory sync subsystem.
 type DuckBrainConfig struct {
 	Namespace string `toml:"namespace"`
@@ -232,6 +251,7 @@ type RootConfig struct {
 	Gateway    GatewayConfig   `toml:"gateway"`
 	DuckBrain  DuckBrainConfig `toml:"duckbrain"`
 	API        APIConfig       `toml:"api"`
+	Crier      CrierConfig     `toml:"crier"`
 	Projects   []ProjectDef    `toml:"projects"`
 	Namespaces []NamespaceDef  `toml:"namespaces"`
 }

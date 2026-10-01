@@ -336,12 +336,17 @@ func (l *Loop) evaluate() {
 		// after the pack — a lane in it escalates as "held by budget",
 		// not "starved".
 		holdViews := l.budgetHoldViews
+		// REMOTE-004: the lane-state publisher rides the same snapshot —
+		// the escalator this pass constructs publishes auto-disable
+		// transitions through the process bus (nil = disabled, a no-op).
+		passBus := l.schedulerBus
 		l.mu.RUnlock()
 		escalator := NewAlertEscalator(l.db, l.events, policy)
 		// SCHED-GAP-169: the escalator reads/writes timestamps and throttle
 		// windows, so it follows the loop's clock like every other component.
 		escalator.SetClock(l.clock())
 		escalator.SetBudgetHolds(holdViews)
+		escalator.SetSchedulerBus(passBus)
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}
