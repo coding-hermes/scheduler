@@ -44,7 +44,12 @@ func setupTestDB(t *testing.T) *sql.DB {
 			component TEXT,
 			message TEXT,
 			details TEXT,
-			created_at TEXT
+			created_at TEXT,
+			-- REMOTE-003: LogEvent stamps the writer identity on every
+			-- row (INSERT ... scheduler_id); this hand-rolled fixture
+			-- schema was missed by that migration and every escalator
+			-- event write failed with "no column named scheduler_id".
+			scheduler_id TEXT NOT NULL DEFAULT ''
 		);
 	`)
 	if err != nil {
