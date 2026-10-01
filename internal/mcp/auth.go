@@ -80,6 +80,8 @@ var mutatingTools = map[string]bool{
 	"project_spawn":          true,
 	"project_bump":           true,
 	"project_unbump":         true,
+	"peers_register":         true,
+	"peers_heartbeat":        true,
 }
 
 // readOnlyTools is the complement: everything not listed here but in the
@@ -106,6 +108,7 @@ var readOnlyTools = map[string]bool{
 	"metrics_get":               true,
 	"features_get":              true,
 	"features_prune_candidates": true,
+	"peers_list":                true,
 }
 
 // MutatingToolNames returns the mutating tool set sorted — the classification

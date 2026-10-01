@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -121,9 +122,14 @@ func (s *IngestStore) ReplayEvent(ctx context.Context, e database.RemoteEvent) (
 			Status:      e.Status,
 			TS:          e.TS,
 		},
-		Topic:      e.Topic,
-		Pattern:    e.Pattern,
-		IngestedAt: time.Now().UTC(),
+		Topic:   e.Topic,
+		Pattern: e.Pattern,
+		// REMOTE-006 fallback stamp: the replayed event's own IngestedAt
+		// (parsed below when present) takes precedence — this only fires
+		// when the stored event carries no ingest stamp. MASK/STAMP
+		// entropy, not scheduling time, so clock.Real() here is the
+		// wall-clock read the guard permits via the seam.
+		IngestedAt: clock.Real().Now().UTC(),
 	}
 	if e.IngestedAt != "" {
 		if t, err := time.Parse(time.RFC3339Nano, e.IngestedAt); err == nil {
