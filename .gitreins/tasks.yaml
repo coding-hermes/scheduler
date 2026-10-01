@@ -4654,3 +4654,86 @@ tasks:
   status: complete
   created_at: '2026-09-30T07:39:40.378137+00:00'
   completed_at: '2026-09-30T09:27:30.645621+00:00'
+- id: SCHED-GAP-1678
+  title: Gate LLM spawn when board unchanged since previous tick
+  criteria:
+  - Lane whose board has not changed since its previous tick does not spawn a full
+    LLM tick; skip logged with reason; skip counted separately in /api/v1/status;
+    regression tests prove board-unchanged -> zero spawns, board-changed -> one spawn
+  status: in_progress
+  created_at: '2026-09-30T14:20:31.570732+00:00'
+- id: REMOTE-002
+  title: 'Author the federation implementation SPEC (docs/remote-spec.md): identity,
+    peer registry, three flows, ownership law, partition contract'
+  criteria:
+  - docs/remote-spec.md exists and covers all 7 numbered sections (identity+scheduler_id
+    migration, peer registry + stale-not-down, three flows, ownership law single-writer,
+    partition contract idempotent on (scheduler_id,event_id), out-of-scope list, task-chain
+    map)
+  - No Go/SQL/config code changed (docs only)
+  - Cites the anchors (internal/api, internal/mcp parity test, internal/sync outbox,
+    migrations.go, crier mesh-protocol) and inherits docs/remote-scope.md decisions
+  status: in_progress
+  created_at: '2026-09-30T18:10:34.427782+00:00'
+- id: REMOTE-003
+  title: Implement scheduler identity ([scheduler] id + scheduler_id migration/backfill)
+    + peer registry (POST/GET /api/v1/peers + heartbeat, stale-never-down)
+  criteria:
+  - Migration adds scheduler_id to projects/ticks/events and backfills; new rows stamped
+  - Config [scheduler] id default=hostname, SCHEDULER_ID overrides; tested
+  - Three peer routes, operator-token fail-closed; past-window peer renders stale:true
+    + last_contact, never down
+  - go build+vet clean; go test -short green on config/database/api
+  status: in_progress
+  created_at: '2026-10-01T00:39:58.543703+00:00'
+- id: REMOTE-004
+  title: Tick-lifecycle event publisher + subscriber over Crier (spec 3 visibility
+    flow)
+  criteria:
+  - 'Crier HTTP bus client: Publish(topic,envelope)+Subscribe(topic); [crier] url/token/enabled
+    config; disabled or down = no-op'
+  - Publisher fires on every tick terminal transition + lane state change with envelope
+    {scheduler_id,event_id,kind,project,tick_id,status,ts}; one per scheduler
+  - 'Autonomy law: a Crier failure never blocks/fails the tick (test proves a stub
+    error leaves the tick outcome unchanged)'
+  - event_id monotonic per scheduler; subscriber drops duplicate (scheduler_id,event_id);
+    build+vet clean; -short green on touched packages
+  status: in_progress
+  created_at: '2026-10-01T11:44:45.765915+00:00'
+- id: QA-CHS-181
+  title: 'QA gate: peers routes need MCP tools + README flag parity (main is RED)'
+  criteria:
+  - Add MCP tools covering GET/POST /api/v1/peers + POST /api/v1/peers/{id}/heartbeat;
+    classify in auth.go; update the coverage map + README tools table
+  - 'Add --peer-freshness-window row to the README ### Flags table'
+  - go test -short -run 'Parity|MCPAPIParity|ReadmeFlag|CTL003' ./internal/mcp/ ./cmd/schedulerd/
+    GREEN; build+vet clean
+  status: complete
+  created_at: '2026-10-01T21:24:08.425350+00:00'
+  completed_at: '2026-10-01T23:12:45.883809+00:00'
+- id: REMOTE-007
+  title: "SPEC: federation query + access contract \u2014 one transport-agnostic read\
+    \ contract with many transports"
+  criteria:
+  - Define the Query/Response envelope, the read catalogue, correlation + idempotency,
+    freshness/staleness and the error/degradation model
+  - Define the four transports (HTTP /api/v1/federation/*, Crier bus request/reply,
+    MCP tools, CLI query verb) as thin adapters of the ONE contract
+  - 'Define the access model: read-access policy, per-peer scoping, cross-box read
+    audit'
+  - Define aggregation (fan-out/merge/per-peer degradation) + the conformance battery
+    (same answer across every transport)
+  status: in_progress
+  created_at: '2026-10-01T23:12:53.741040+00:00'
+- id: REMOTE-008
+  title: "BUILD: HTTP query surface \u2014 /api/v1/federation/* read endpoints (baseline\
+    \ access type)"
+  criteria:
+  - POST /api/v1/federation/query (body = the spec envelope) + GET /api/v1/federation/catalogue
+  - Implement the 6 catalogue ops (peer.status, fleet.status, projects.list, queue.get,
+    ticks.list, events.list) reusing each peer's OWN read path (no new aggregation)
+  - 'Enforce the response invariants: peer/as_of/age_ms/status-stale vs error, []/{}
+    never null, corr_id echo + idempotent replay window'
+  - Operator-token fail-closed; build+vet clean; tests green (-short on touched packages)
+  status: in_progress
+  created_at: '2026-10-01T23:13:30.488110+00:00'
