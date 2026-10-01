@@ -47,8 +47,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // Command vocabulary (docs/remote-spec.md §3 control flow). The verbs map
@@ -135,10 +133,6 @@ type Client struct {
 	// process (same counter value is impossible, but ids must also be
 	// unique across restarts) never collide in a merged log.
 	randID func() string
-
-	// clk is the component's time source (SCHED-GAP-169): zero value reads
-	// as the wall clock, a test may install a simulator via SetClock.
-	clk clock.Seam
 }
 
 // Option customizes a Client at construction.
@@ -275,9 +269,9 @@ func (c *Client) Control(ctx context.Context, peerID, project, command string, b
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	start := c.clk.Get().Now()
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
-	res.LatencyMS = c.clk.Get().Since(start).Milliseconds()
+	res.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
 		res.Error = fmt.Sprintf("unreachable: %v", err)
 		res.Unreachable = true

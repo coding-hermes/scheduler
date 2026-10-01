@@ -62,6 +62,7 @@ type Generator struct {
 	healthTmpl        *template.Template // full page: /health
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
 	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
+	remoteTmpl        *template.Template // full page: /remote (REMOTE-006)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -98,6 +99,10 @@ type Generator struct {
 	// fleetPausedFn (SCHED-GAP-1601) reads the loop's authoritative paused
 	// flag for the console badge. Nil = unknown state, never fabricated.
 	fleetPausedFn func() bool
+	// peerFreshnessWindow (REMOTE-006) is the staleness window the Remote
+	// section applies at read time; zero reads as RemoteFreshnessWindowDefault
+	// (the registry's own default), so the two surfaces share one semantics.
+	peerFreshnessWindow int
 }
 
 // SetAgentStateDB wires the reader the tick drill-down uses to resolve
@@ -151,6 +156,8 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.tapeTmpl = g.tmpl.Lookup("tape")
 	// SCHED-GAP-1601: the operator console pages.
 	g.blocksTmpl = g.tmpl.Lookup("blocks_console")
+	// REMOTE-006: the Remote section — peers + last-seen events + freshness.
+	g.remoteTmpl = g.tmpl.Lookup("remote")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -160,6 +167,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 		"health":         g.healthTmpl,
 		"tape":           g.tapeTmpl,
 		"blocks_console": g.blocksTmpl,
+		"remote":         g.remoteTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")

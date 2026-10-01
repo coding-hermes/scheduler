@@ -590,8 +590,20 @@ func main() {
 		// never mutated). A failed insert costs a log line, never the
 		// receive path (autonomy law). The goroutine exits when Close
 		// closes the channel during shutdown.
+		// REMOTE-006 deliverable 1: the durable idempotent ingest. Each
+		// valid, deduped peer event is persisted into remote_events keyed by
+		// (scheduler_id, event_id) — a duplicate is a COUNTED dedupe drop,
+		// never an error. The bus audit row (component "bus") is kept so the
+		// event stream stays visible; the durable store is what replay and
+		// the Remote section read.
+		remoteIngest := bus.NewIngestStore(db)
 		go func() {
 			for ev := range crierSubscriber.Events() {
+				res, err := remoteIngest.IngestEvent(context.Background(), ev, database.RemoteSourceLive)
+				if err != nil {
+					continue // logged inside the store wrapper (autonomy law)
+				}
+				_ = res // Stored / DedupeDrop are surfaced via remote_events_stats
 				details, merr := json.Marshal(map[string]string{
 					"scheduler_id": ev.SchedulerID,
 					"event_id":     ev.EventID,
@@ -613,7 +625,7 @@ func main() {
 						ev.Kind, ev.SchedulerID, ev.EventID, ev.Project, ev.TickID, ev.Status),
 					Details: string(details),
 				}); err != nil {
-					log.Printf("CRIER: peer event store dropped: %v", err)
+					log.Printf("CRIER: peer event audit dropped: %v", err)
 				}
 			}
 		}()
@@ -1005,6 +1017,9 @@ func main() {
 	dashGen.SetControlAPIHandler(apiServer.Handler())
 	dashGen.SetFleetPaused(loop.IsPaused)
 	dashGen.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// REMOTE-006: the dashboard's Remote section reads the SAME freshness
+	// window the API's peer surfaces resolve, so "stale" means one thing.
+	dashGen.SetPeerFreshnessWindow(*peerWindow)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -1139,6 +1154,29 @@ func main() {
 			err = dashGen.GenerateHealth(w)
 		}
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// REMOTE-006: the Remote section — every registered peer with its
+	// last-seen event + staleness (the registry's window; stale ≠ down).
+	// htmx polls return the peer-rows fragment only (HX-Request) — the same
+	// contract as /health and /ticks.
+	mux.HandleFunc("GET /remote", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateRemoteRows(w)
+		} else {
+			err = dashGen.GenerateRemote(w)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("GET /remote/partial", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateRemoteRows(w); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

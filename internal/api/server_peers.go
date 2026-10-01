@@ -18,6 +18,7 @@ package api
 // peer never heartbeat). There is no "down" state anywhere in this surface.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -156,7 +157,68 @@ func (s *Server) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		s.peerHeartbeat(w, r)
 		return
 	}
+	// REMOTE-006: the durable per-peer event slice — the last-seen event,
+	// the replay high-water mark, and the counted dedupe drops.
+	if rest == "events" || strings.HasSuffix(rest, "/events") {
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "GET only")
+			return
+		}
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
+		s.peerEvents(w, r, strings.TrimSuffix(rest, "/events"))
+		return
+	}
 	writeError(w, 404, "unknown peers sub-route")
+}
+
+// peerEvents serves GET /api/v1/peers/events (every scheduler) and
+// GET /api/v1/peers/{id}/events (one scheduler): the durable per-peer
+// event slice — last-seen event, replay high-water mark, counted dedupe
+// drops. Read-only federation state; never mutates a peer (§4).
+func (s *Server) peerEvents(w http.ResponseWriter, r *http.Request, peerID string) {
+	ctx := r.Context()
+	if peerID != "" {
+		if _, err := database.GetPeer(ctx, s.db, peerID); err != nil {
+			if errors.Is(err, database.ErrPeerNotFound) {
+				writeError(w, 404, "unknown peer: "+peerID)
+				return
+			}
+			writeError(w, 500, err.Error())
+			return
+		}
+	}
+	var last *database.RemoteEvent
+	if ev, err := database.RemoteLastEvent(ctx, s.db, peerID); err == nil {
+		last = ev
+	} else if peerID != "" && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, err.Error())
+		return
+	} else if peerID == "" && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 500, err.Error())
+		return
+	}
+	mark, err := database.RemoteLastEventID(ctx, s.db, peerID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	drops, err := database.CountRemoteEventDedupeDrops(ctx, s.db, peerID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	out := map[string]interface{}{
+		"scheduler_id":  peerID,
+		"last_event":    last,
+		"last_event_id": mark,
+		"dedupe_drops":  drops,
+	}
+	if peerID == "" {
+		out["scheduler_id"] = "*"
+	}
+	writeJSON(w, 200, out)
 }
 
 // peerHeartbeat implements POST /api/v1/peers/{id}/heartbeat — stamps

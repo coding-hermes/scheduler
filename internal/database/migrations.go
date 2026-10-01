@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 57
+const latestMigration = 58
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1079,6 +1079,44 @@ CREATE TABLE IF NOT EXISTS peers (
     last_contact  TEXT NOT NULL DEFAULT '',
     registered_at TEXT NOT NULL,
     updated_at    TEXT NOT NULL
+);
+`,
+	},
+	{
+		// REMOTE-006 (§5 partition contract): the durable idempotency store for
+		// inbound federation events. (scheduler_id, event_id) is the spec's
+		// idempotency key; the composite PK makes a duplicate insert physically
+		// impossible — the writer's `ON CONFLICT DO NOTHING` turns a replayed
+		// or re-delivered envelope into a counted no-op (REMOTE-006's dedupe
+		// drop), never an error. Fresh table, no backfill: only events received
+		// after this lands are dedupe-protected (REMOTE-004's memory window
+		// covered the pre-v58 traffic; its pruned ids can resurface as fresh
+		// rows, which is the honest store boundary).
+		version: 58,
+		desc:    "REMOTE-006: remote_events table — the durable idempotency store for inbound peer events keyed by (scheduler_id, event_id), plus per-scheduler last_event high-water marks for replay ordering (docs/remote-spec.md §5)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS remote_events (
+    scheduler_id  TEXT NOT NULL,
+    event_id      TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT '',
+    project       TEXT NOT NULL DEFAULT '',
+    tick_id       TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT '',
+    ts            TEXT NOT NULL DEFAULT '',
+    topic         TEXT NOT NULL DEFAULT '',
+    pattern       TEXT NOT NULL DEFAULT '',
+    ingested_at   TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'live' CHECK(source IN ('live','replay','replayed-live')),
+    PRIMARY KEY (scheduler_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_events_ingested
+ON remote_events(scheduler_id, ingested_at DESC);
+
+CREATE TABLE IF NOT EXISTS remote_events_stats (
+    scheduler_id  TEXT PRIMARY KEY,
+    last_event_id TEXT NOT NULL DEFAULT '',
+    dedupe_drops  INTEGER NOT NULL DEFAULT 0
 );
 `,
 	},

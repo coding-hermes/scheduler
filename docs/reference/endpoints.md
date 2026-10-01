@@ -15,6 +15,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
+| `/remote` | REMOTE-006 Remote section — every registered peer with its last-seen event (kind/status/timestamp) + staleness (the registry's freshness window; STALE, never "down"); htmx polls return the peer-rows fragment |
+| `/remote/partial` | REMOTE-006 htmx partial — the Remote section's peer rows only |
 | `/blocks` | Deploy blocks console (SCHED-GAP-1601) — groups + templates listed read-only; every write flows through `/dashboard/control` |
 | `/dashboard/control` | Operator control proxy (SCHED-GAP-1601, POST-only) — one urlencoded instruction (`action`+`target`+`confirm`/…) forwarded to the mapped mutating `/api/v1/*` operation IN-PROCESS: identical auth gate, identical handlers, identical audit; the API's status/body — success AND refusal — return verbatim |
 | `/tape` | Fleet Tape — stock-ticker fleet view (index bar, marquee, market board); htmx polls return the board-rows fragment (SCHED-GAP-1596) |
@@ -46,6 +48,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/openapi.json` | OpenAPI schema (JSON) |
 | `/api/v1/peers` | Federation peer registry (REMOTE-003, operator-token gated): GET lists every registered peer `{id, url, last_contact, stale, version}` — a peer past the freshness window renders `stale:true` with its `last_contact`, never a "down" state; POST upserts `{id, url, version, capabilities}` → 200 |
 | `/api/v1/peers/{id}/heartbeat` | POST: liveness ping — stamps the peer's `last_contact`; unknown id → 404 (heartbeat does not auto-register) |
+| `/api/v1/peers/events` | REMOTE-006 durable event slice, every scheduler (GET): last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops` |
+| `/api/v1/peers/{id}/events` | REMOTE-006 durable event slice, one scheduler (GET); unknown id → 404 |
 | `/mcp` | MCP JSON-RPC endpoint |
 
 **MCP surface:** `POST /mcp` serves **47 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

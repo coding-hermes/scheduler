@@ -79,9 +79,7 @@ var wsMaskCounter atomic.Uint64
 
 func wsNextMaskKey() [4]byte {
 	var key [4]byte
-	// MASK ENTROPY only (defeats cache poisoning) — not scheduling time;
-	// routed through the clock seam per SCHED-GAP-169.
-	h := sha256.Sum256([]byte(fmt.Sprintf("%d:%d", wsMaskCounter.Add(1), clock.Real().Now().UnixNano())))
+	h := sha256.Sum256([]byte(fmt.Sprintf("%d:%d", wsMaskCounter.Add(1), time.Now().UnixNano())))
 	copy(key[:], h[:4])
 	return key
 }
@@ -498,15 +496,14 @@ func (s *Subscriber) Run(ctx context.Context) {
 func (s *Subscriber) runOne(ctx context.Context, pattern string) {
 	defer s.wg.Done()
 	backoff := time.Second
-	now := s.now
 	for ctx.Err() == nil {
-		started := now()
+		started := time.Now()
 		err := s.Subscribe(ctx, pattern)
 		if errors.Is(err, ErrClosed) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return
 		}
 		log.Printf("CRIER: subscribe %s dropped: %v (retrying)", pattern, err)
-		if now().Sub(started) > maxBackoff {
+		if time.Since(started) > maxBackoff {
 			backoff = time.Second // the session was healthy — reset the ladder
 		}
 		if !s.wait(ctx, backoff) {

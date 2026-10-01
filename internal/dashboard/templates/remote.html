@@ -1,0 +1,41 @@
+{{define "remote"}}{{template "head" .}}
+{{template "sidebar" "remote"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Remote</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> live</span></div>
+</div>
+<div class="meta">Generated {{.GeneratedAt}} · {{len .Peers}} peer(s) · {{.DedupeDrops}} dedupe drop(s) (replayed + re-delivered events dropped by key)</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Peer</th><th>Version</th><th>Freshness</th><th>Last Heartbeat</th><th>Last Event</th><th>Last Event At</th><th>Events</th></tr></thead>
+<tbody id="remote-peers"
+hx-get="/remote/partial"
+hx-trigger="autorefresh from:body"
+hx-swap="innerHTML">
+{{if .DataError}}
+<tr><td colspan="7" class="meta status-fail">Remote section unavailable: {{.DataError}}</td></tr>
+{{else}}
+{{template "remote_rows" .}}
+{{end}}
+</tbody>
+</table>
+</div>
+</div>
+{{template "ready_js"}}
+</body>
+</html>{{end}}
+{{define "remote_rows"}}{{range .Peers}}
+<tr>
+<td><span class="mono">{{.Peer.ID}}</span>{{if .Peer.URL}} <span class="meta">{{.Peer.URL}}</span>{{end}}</td>
+<td class="meta">{{if .Peer.Version}}{{.Peer.Version}}{{else}}—{{end}}</td>
+<td>{{if .Stale}}<span class="pill warn">STALE</span>{{else}}<span class="pill ok">fresh</span>{{end}}</td>
+<td>{{if .Peer.LastContact}}{{localtime .Peer.LastContact}}{{else}}<span class="meta">never</span>{{end}}</td>
+<td>{{if .LastEvent}}<span class="pill {{peerStatusClass .LastEvent.Status}}">{{.LastEvent.Kind}}</span> <span class="mono">{{.LastEvent.Project}}</span> <span class="meta">{{.LastEvent.Status}}</span>{{else}}<span class="meta">no events yet</span>{{end}}</td>
+<td>{{if .LastEvent}}{{localtime .LastEvent.IngestedAt}}{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{.EventCount}}</td>
+</tr>
+{{else}}
+<tr><td colspan="7" class="meta">No peers registered. Peers appear here after they register via POST /api/v1/peers (docs/remote-spec.md §2).</td></tr>
+{{end}}{{end}}
