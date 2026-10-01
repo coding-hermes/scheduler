@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -85,6 +86,7 @@ func readFull(conn net.Conn, buf []byte) (int, error) {
 type wsTestServer struct {
 	t          *testing.T
 	srv        *httptest.Server
+	mu         sync.Mutex
 	gotPath    string
 	gotUpgrade string
 	gotKey     string
@@ -93,15 +95,39 @@ type wsTestServer struct {
 	frame      func(conn net.Conn) // the server-side frame script
 }
 
+// capture records the request headers from the server goroutine. The
+// fields are written inside the HTTP handler and read later from the
+// test goroutine, so every access must hold ws.mu (race detector
+// verified, INT-CI-172).
+func (ws *wsTestServer) capture(r *http.Request) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.gotPath = r.URL.EscapedPath()
+	ws.gotUpgrade = r.Header.Get("Upgrade")
+	ws.gotKey = r.Header.Get("Sec-WebSocket-Key")
+	ws.gotAuth = r.Header.Get("Authorization")
+	ws.gotAgent = r.Header.Get("X-Agent-ID")
+}
+
+// headerKeyLocked returns the captured Sec-WebSocket-Key. Caller must
+// hold ws.mu.
+func (ws *wsTestServer) headerKeyLocked() string {
+	return ws.gotKey
+}
+
+// snapshot returns a consistent copy of the captured handshake data,
+// safe to call from the test goroutine.
+func (ws *wsTestServer) snapshot() (path, upgrade, key, auth, agent string) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	return ws.gotPath, ws.gotUpgrade, ws.gotKey, ws.gotAuth, ws.gotAgent
+}
+
 func newWSTestServer(t *testing.T, script func(conn net.Conn)) *wsTestServer {
 	ws := &wsTestServer{t: t, frame: script}
 	ready := make(chan struct{})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws.gotPath = r.URL.EscapedPath()
-		ws.gotUpgrade = r.Header.Get("Upgrade")
-		ws.gotKey = r.Header.Get("Sec-WebSocket-Key")
-		ws.gotAuth = r.Header.Get("Authorization")
-		ws.gotAgent = r.Header.Get("X-Agent-ID")
+		ws.capture(r)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "no hijack", 500)
@@ -113,7 +139,7 @@ func newWSTestServer(t *testing.T, script func(conn net.Conn)) *wsTestServer {
 		}
 		defer conn.Close()
 		h := sha1.New()
-		h.Write([]byte(ws.gotKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		h.Write([]byte(ws.headerKeyLocked() + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 		accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 		fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
 		// Drain client frames (pong/close) in the background so the
@@ -198,11 +224,12 @@ func TestSubscribe_ReceivesDocumentedFramesEndToEnd(t *testing.T) {
 		t.Errorf("a beta event must not read as self/known on alpha: %+v", e)
 	}
 	// The handshake was the documented upgrade.
-	if !strings.HasSuffix(ws.gotPath, "/relay/subscribe/sched.tick.%3E") {
-		t.Errorf("upgrade path = %q", ws.gotPath)
+	gotPath, gotUpgrade, gotKey, _, _ := ws.snapshot()
+	if !strings.HasSuffix(gotPath, "/relay/subscribe/sched.tick.%3E") {
+		t.Errorf("upgrade path = %q", gotPath)
 	}
-	if ws.gotUpgrade != "websocket" || ws.gotKey == "" {
-		t.Errorf("upgrade headers missing: upgrade=%q key=%q", ws.gotUpgrade, ws.gotKey)
+	if gotUpgrade != "websocket" || gotKey == "" {
+		t.Errorf("upgrade headers missing: upgrade=%q key=%q", gotUpgrade, gotKey)
 	}
 }
 
@@ -216,11 +243,12 @@ func TestSubscribe_AuthHeadersPassThrough(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Subscribe(context.Background(), "sched.tick.>") }()
 	time.Sleep(100 * time.Millisecond)
-	if ws.gotAuth != "Bearer relay-token" {
-		t.Errorf("Authorization = %q, want Bearer relay-token", ws.gotAuth)
+	_, _, _, auth, agent := ws.snapshot()
+	if auth != "Bearer relay-token" {
+		t.Errorf("Authorization = %q, want Bearer relay-token", auth)
 	}
-	if ws.gotAgent != "scheduler-alpha" {
-		t.Errorf("X-Agent-ID = %q", ws.gotAgent)
+	if agent != "scheduler-alpha" {
+		t.Errorf("X-Agent-ID = %q", agent)
 	}
 	s.Close()
 	<-done
