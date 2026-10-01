@@ -264,8 +264,14 @@ func TestSCHEDGAP1607_FullModeArgsUnchanged(t *testing.T) {
 			t.Fatalf("argv[%d] = %q, want %q", i, args[i], w)
 		}
 	}
-	if !strings.HasPrefix(args[len(args)-1], "/tmp/chtick-tick-1608-") {
-		t.Errorf("body path = %q, want a chtick temp file", args[len(args)-1])
+	// The body path is os.CreateTemp("", "chtick-tick-1608-*.txt") — it
+	// honors TMPDIR, so pin the FILENAME pattern, never a literal /tmp
+	// directory (this assertion failed on any host whose TMPDIR is not
+	// /tmp, e.g. /mnt/bulk/scratch).
+	bodyPath := args[len(args)-1]
+	bodyBase := filepath.Base(bodyPath)
+	if !strings.HasPrefix(bodyBase, "chtick-tick-1608-") || !strings.HasSuffix(bodyBase, ".txt") {
+		t.Errorf("body path = %q, want a chtick temp file", bodyPath)
 	}
 }
 
