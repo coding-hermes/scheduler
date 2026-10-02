@@ -188,8 +188,13 @@ func TestSCHEDGAP080_Persistent500FailsAfterRetries(t *testing.T) {
 		t.Errorf("consecutive_failures = %d, want 1 (noteSpawnFailure fired once on the exhausted-failure path)", failures)
 	}
 	logs := buf.String()
-	if !strings.Contains(logs, "GATEWAY FAIL") {
-		t.Errorf("logs missing 'GATEWAY FAIL' for the exhausted-failure path:\n%s", logs)
+	// SCHED-GAP-1687: with exec fallback disabled this path NEVER execs, so
+	// the wording must name the real outcome (the drop). The old
+	// pre-classification "GATEWAY FAIL … falling back to exec.Command" line
+	// fired here too, claiming a fallback the flag had disabled — the drop's
+	// SKIPPED line now carries the gateway error text itself.
+	if !strings.Contains(logs, "SKIPPED: "+projectName+" tick="+tickID+" exec fallback disabled, dropping tick") {
+		t.Errorf("logs missing the real-outcome drop line 'SKIPPED: %s tick=%s exec fallback disabled, dropping tick':\n%s", projectName, tickID, logs)
 	}
 	if !strings.Contains(logs, "SKIPPED") {
 		t.Errorf("logs missing 'SKIPPED' (exec fallback disabled, dropping tick):\n%s", logs)

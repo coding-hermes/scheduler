@@ -1886,7 +1886,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					zeroTools: zeroToolSession(resp, postTrace),
 				}, nil
 			}
-			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			// SCHED-GAP-1687: the pre-classification "GATEWAY FAIL … falling
+			// back to exec.Command" line that used to sit here is GONE — it
+			// fired on EVERY gateway failure before the branches below chose
+			// the real outcome, naming an exec fallback this deployment never
+			// takes (--no-exec-fallback DEFAULT true) and one the SCHED-GAP-117
+			// early return below never reaches even with the flag off (15 live
+			// occurrences on 2026-09-30, every one followed by FAIL, 9 by
+			// DEFERRED, not one exec). Each branch now logs its own truth:
+			// GATEWAY STALLED / GATEWAY KEY REJECTED / TIMEOUT / DEFERRED /
+			// the SKIPPED drop; the "falling back to exec" wording lives ONLY
+			// at the exec.Command call site below, where it is true.
+			// sgap1687_gatewayfail_wording_test.go pins all four arms.
 			// SCHED-GAP-117: the per-turn deadline tripped while the tick
 			// deadline is still alive — the gateway POST made zero progress
 			// for gatewayResponseTimeout (the measured hang: a wedged
@@ -1904,8 +1915,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// the pair's circuit breaker gets its cooldown from
 			// recordCircuitFailure below.
 			if turnStalled {
-				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure",
-					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout)
+				// SCHED-GAP-1687: this line is the branch's OWN announcement —
+				// the pre-classification "falling back to exec" line is gone,
+				// and this early return never execs (see the SKIPPED-block
+				// comment below for the double-run rationale), so the wording
+				// names the real outcome (stalled failure) and carries the
+				// gateway error text the old FAIL line used to relay.
+				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure: %v",
+					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout, gwErr)
 				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
 					s.gatewayResponseTimeout, effectiveTimeout)
 				// SCHED-GAP-119: preserve the REAL gateway session id on the
@@ -2040,7 +2057,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if gatewayTransientBlip(gwErr) {
 					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
 				}
-				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
+				// SCHED-GAP-1687: this SKIPPED line is the drop's OWN
+				// announcement now — the pre-classification "GATEWAY FAIL …
+				// falling back to exec" line above this block is gone, so the
+				// drop wording carries the gateway error text it used to relay.
+				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick: %v", project.Name, tickID, gwErr)
 				// SCHED-GAP-143: classify against the GATEWAY error itself,
 				// never the wrapper text below — the wrapper ("gateway
 				// unreachable and exec fallback disabled: ...") would make
@@ -2067,6 +2088,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						"error":   gwErr.Error(),
 					})
 			}
+			// SCHED-GAP-1687: the REAL exec fallback. This is the only path
+			// that runs exec.Command, so this is the only place the "falling
+			// back to exec.Command" wording may appear — the old
+			// pre-classification line above the branchy outcomes fired it on
+			// every gateway failure. Reached only when fallback is enabled
+			// and no classified branch (stalled / key-rejected / deadline /
+			// transient blip / drop) already returned.
+			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
 		}
 
 		// SCHED-GAP-074: the exec fallback cannot carry the tick id as a
