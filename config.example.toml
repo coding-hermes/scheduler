@@ -72,6 +72,18 @@ url = "http://localhost:3000"
 # enabled = false
 # topics = ["sched.tick.>"]        # subscriber wildcard patterns
 
+# ── Federation — per-caller read policy (REMOTE-013) ────────────────────────
+# Controls WHICH caller may read WHICH op of this scheduler's federation
+# query surface (docs/federation-query-spec.md §4: reads are scoped, not
+# open). Absent/commented = DENY-ALL: every federation read — HTTP, bus,
+# MCP, CLI — is refused `op_not_allowed` until you publish ops. The key is
+# the caller identity as it appears in the audit rows ("*" = the default
+# every caller inherits; a specific caller's own row wins over "*").
+# [federation.allow."*"]
+# ops = ["fleet.status", "queue.get"]
+# [federation.allow."primary-01"]
+# ops = ["fleet.status"]
+
 # ── Fleet — Declarative Project Definitions ─────────────────────────────────
 # Projects are seeded at startup (create-only upsert — existing rows survive).
 # Uncomment and edit the examples below for your fleet.

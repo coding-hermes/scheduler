@@ -1437,6 +1437,7 @@ var openapiSpec = []byte(`{
           "200": {"description": "Response envelope (status ok|partial|stale)"},
           "400": {"description": "Error envelope: unknown_op | missing_op | missing_corr_id | bad_request"},
           "401": {"description": "Missing or wrong operator credential"},
+          "403": {"description": "Error envelope: op_not_allowed (REMOTE-013 read policy — the op is not published for the caller in the [federation] allow config; deny-all by default; the refusal is audited)"},
           "405": {"description": "Non-POST method"},
           "503": {"description": "No operator credential configured (fail-closed)"},
           "504": {"description": "Error envelope: deadline_exceeded (read blew the caller-clamped budget)"}

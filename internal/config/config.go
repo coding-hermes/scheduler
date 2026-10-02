@@ -238,6 +238,38 @@ type DuckBrainConfig struct {
 	URL       string `toml:"url"`
 }
 
+// FederationAllowConfig is one caller's published read-allow list
+// (REMOTE-013, federation-query-spec §4: "Read is scoped, not open"). The
+// key is the CALLER identity as it appears in the federation audit rows —
+// "*" names the fleet-wide default every caller inherits; a specific
+// caller's own row wins over "*" in both directions. `ops` is the set of
+// §2.3 catalogue op ids the caller may read ("peer.status", "queue.get",
+// …). Blank ops are dropped at resolve time (a blank allow is unset, never
+// a grant). There is deliberately NO [federation] allow = [...] scalar
+// form in the wire schema: the table form is the per-peer scoping the spec
+// names, and a bare list would silently widen every caller.
+type FederationAllowConfig struct {
+	Ops []string `toml:"ops"`
+}
+
+// FederationConfig (REMOTE-013, federation-query-spec §4) configures the
+// per-caller read policy for THIS scheduler's federation query surface.
+// Empty = the deny-all policy (fail-closed): every federation read — on
+// every transport — is refused with op_not_allowed until the operator
+// explicitly publishes ops. Resolved once at boot into
+// api.ResolveFederationReadPolicy and armed via
+// api.Server.SetFederationReadPolicy (main.go).
+type FederationConfig struct {
+	// Allow maps caller identity → published op set. TOML key: the caller
+	// id, or "*" for the fleet-wide default:
+	//
+	//   [federation.allow."*"]
+	//   ops = ["fleet.status", "queue.get"]
+	//   [federation.allow."primary-01"]
+	//   ops = ["fleet.status"]
+	Allow map[string]FederationAllowConfig `toml:"allow"`
+}
+
 // RootConfig is the top-level structure decoded from a schedulerd.toml
 // (the FEAT-005 unified config file). It wraps the daemon/scheduler/
 // gateway/duckbrain/api sections plus the existing fleet definitions, which
@@ -254,6 +286,11 @@ type RootConfig struct {
 	Crier      CrierConfig     `toml:"crier"`
 	Projects   []ProjectDef    `toml:"projects"`
 	Namespaces []NamespaceDef  `toml:"namespaces"`
+
+	// Federation (REMOTE-013) is the per-caller read-policy layer; kept as
+	// its own alignment group so adding it does not reflow the accepted
+	// field block above.
+	Federation FederationConfig `toml:"federation"`
 }
 
 // APIConfig covers the HTTP API surface knobs (SCHED-GAP-1575-B).

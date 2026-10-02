@@ -60,6 +60,17 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 	// behave like the real (credentialed) operator's; the do helper below
 	// sends the credential on every request.
 	srv.SetAuthConfig(api.ResolveAuthConfig(testOperatorToken, "", ""))
+	// REMOTE-013: arm the allow-all federation read policy so the shared
+	// stack's federation cells (REMOTE-008/012) keep answering — the
+	// deny-all default would refuse every read. The access policy itself
+	// (refusals, per-caller scoping) is proven in the REMOTE-013 battery,
+	// which builds its own deny-all servers.
+	srv.SetFederationReadPolicy(api.ResolveFederationReadPolicy([]api.FederationReadGrant{
+		{Caller: api.FederationAllowAll, Ops: []string{
+			"peer.status", "fleet.status", "projects.list",
+			"queue.get", "ticks.list", "events.list", "fleet.aggregate",
+		}},
+	}))
 	// Wire a temp-dir JSONL groups/templates store so the new
 	// /api/v1/groups* + /api/v1/templates* routes are live in every test.
 	storeDir := t.TempDir()

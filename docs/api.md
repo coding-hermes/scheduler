@@ -1368,7 +1368,14 @@ minutes — a retried query returns the IDENTICAL body (as_of included).
 **Errors (HTTP 400, envelope `status="error"`):** `unknown_op` (message
 names the supported ops) · `missing_op` · `missing_corr_id` ·
 `bad_request`. **504:** `deadline_exceeded` inside the same envelope when
-the read blows the caller-clamped budget.
+the read blows the caller-clamped budget. **403 (REMOTE-013 read policy,
+spec §4):** `op_not_allowed` inside the same envelope when the op is not
+published for the caller — reads are scoped, not open: the per-caller
+allow-list lives in the `[federation]` config layer
+(`[federation.allow."*"] ops = [...]`, plus one row per specific caller
+id; a caller's own row wins over `*`; empty/absent = deny-all, every read
+refused until the operator publishes ops), and the refusal — like every
+answered query — writes an `api.federation` audit row.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
