@@ -2663,6 +2663,20 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			st.Project, st.TickID, TickCompleted,
 			st.completeAt.Sub(st.Started).Round(time.Second),
 			formatCostSummary(st.provider, st.model, tokensIn, tokensOut, cost, commits, files))
+		// SCHED-GAP-1694: push at tick exit. The prompt asks the lane to push
+		// after every commit, but a lane that commits and forgets strands the
+		// work locally — the 30-min fleet-strand-push cron is only a backstop.
+		// The spawner pushes here the moment a tick lands commits, so no lane
+		// depends on the model remembering. Best-effort: a push failure never
+		// fails the tick (the cron re-covers it), but it IS logged at the tick
+		// line so a strand is visible now, not 30 minutes later.
+		if commits > 0 {
+			if ok, detail := pushTickWork(st.workdir); ok {
+				log.Printf("TICK: %s %s → push %s", st.Project, st.TickID, detail)
+			} else {
+				log.Printf("TICK: %s %s → push STRANDED (%s)", st.Project, st.TickID, detail)
+			}
+		}
 		// SCHED-GAP-1655: the no-work verdict is recorded (not just
 		// derived) — the operator watching the TICK lines sees the
 		// zero-tool verdict at the tick's completion, the same way the
