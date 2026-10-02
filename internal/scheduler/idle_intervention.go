@@ -51,3 +51,24 @@ func idleInterventionPrompt(lane, tickID, workdir string) string {
 		" --tick " + tickID + " --kind noop. " +
 		"A record explaining an idle tick is a GOOD outcome; a silent one is not."
 }
+
+// resolveIdleIntervention (SCHED-GAP-1688 AC5) resolves the end-of-tick hook's
+// switch for one lane: the lane's own setting wins, else its namespace's, else
+// the global (env) default. Tri-state at each level: -1 = inherit, 0 = off,
+// 1 = on. An explicit OFF anywhere above the global default is honoured — a
+// namespace can hold a whole family dark even when the global default is on.
+func (s *Spawner) resolveIdleIntervention(p PackedProject) bool {
+	if p.IdleIntervention == 0 {
+		return false
+	}
+	if p.IdleIntervention == 1 {
+		return true
+	}
+	if p.NamespaceIdleIntervention == 0 {
+		return false
+	}
+	if p.NamespaceIdleIntervention == 1 {
+		return true
+	}
+	return s.idleIntervention
+}

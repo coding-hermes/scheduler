@@ -43,6 +43,11 @@ type PackedProject struct {
 	// tick deadline for wave-enabled namespaces (S12 §4.3). Empty = no
 	// namespace → base --tick-timeout, no lookup (byte-identical serial path).
 	NamespaceID string
+	// SCHED-GAP-1688 AC5: the end-of-tick hook's switch, at the lane and at
+	// the namespace. Tri-state (-1 inherit | 0 off | 1 on); Spawn() resolves
+	// lane > namespace > the global (env) default.
+	IdleIntervention          int
+	NamespaceIdleIntervention int
 	// WaveSerial (SCHED-GAP-113, S12 §6.2 admission layer): set by the
 	// packer when the project's namespace has wave_workers_cap > 0 AND a
 	// live wave (running tick with worker_count > 0) was in flight at pack
@@ -155,6 +160,11 @@ type scored struct {
 	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
 	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
 	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+	// SCHED-GAP-1688 AC5: the end-of-tick hook's tri-state switch, lane then
+	// namespace (-1 inherit | 0 off | 1 on); the global (env) default is the
+	// last resort at spawn time.
+	idleIntervention   int
+	nsIdleIntervention int
 
 	// targetRunsPerDay (SOL-CADENCE) is the per-lane cadence target read from
 	// the project row: nil derives the target from the durable cooldown pin, a
@@ -176,6 +186,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
 		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, ''),
+		       COALESCE(p.idle_intervention, -1), COALESCE(ns.idle_intervention, -1),
 		       p.target_runs_per_day
 		FROM projects p
 		LEFT JOIN namespaces ns ON ns.id = p.namespace_id
@@ -206,6 +217,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
 			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership,
+			&s.idleIntervention, &s.nsIdleIntervention,
 			&targetRunsPerDay); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
@@ -629,6 +641,10 @@ func (s scored) packed() PackedProject {
 		NamespacePrompt:  s.namespaceDefaultPmt,
 		NamespaceChain:   s.namespaceChain,
 		NamespaceID:      s.namespaceID,
+		// SCHED-GAP-1688 AC5: the hook's lane + namespace switches ride the
+		// row to Spawn(), which resolves lane > namespace > global env.
+		IdleIntervention:          s.idleIntervention,
+		NamespaceIdleIntervention: s.nsIdleIntervention,
 	}
 }
 

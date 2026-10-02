@@ -106,8 +106,8 @@ type Spawner struct {
 	// the tick's outcome is still decided by the artifacts re-measured after
 	// it, so an explained idle tick stays an idle tick.
 	idleIntervention bool
-	model                  string
-	provider               string
+	model            string
+	provider         string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
 	// chain. Applied AFTER the project's primary and fallback tiers; skipped
 	// entirely when a project sets NoGlobalFallback.
@@ -1797,7 +1797,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// extra turn is never counted as work — the tick's outcome is
 				// still decided by the artifacts re-measured after it in
 				// Wait(), so an explained idle tick stays an idle tick.
-				if s.idleIntervention && s.gateway != nil {
+				if s.resolveIdleIntervention(project) && s.gateway != nil {
 					if c0, f0 := countGitChanges(project.Workdir, reqStart, s.clock().Now()); c0 == 0 && f0 == 0 {
 						log.Printf("IDLE-INTERVENTION: %s tick=%s zero artifacts — firing ONE bounded in-session turn", project.Name, tickID)
 						ivCtx, ivCancel := context.WithTimeout(ctx, idleInterventionTimeout)

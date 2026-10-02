@@ -44,3 +44,37 @@ func TestSCHEDGAP1688_PromptNamesLaneAndStores(t *testing.T) {
 		}
 	}
 }
+
+// TestSCHEDGAP1688_ResolutionChain pins AC5: lane > namespace > global, with an
+// explicit OFF at any level honoured and an explicit ON able to arm a family
+// while the global default is still OFF.
+func TestSCHEDGAP1688_ResolutionChain(t *testing.T) {
+	on := &Spawner{idleIntervention: true}
+	for _, c := range []struct {
+		lane, ns int
+		want     bool
+	}{
+		{-1, -1, true},  // both inherit -> the global default
+		{0, -1, false},  // lane OFF beats global ON
+		{1, 0, true},    // lane ON beats namespace OFF
+		{-1, 0, false},  // namespace OFF beats global ON
+		{-1, 1, true},   // namespace ON
+		{0, 1, false},   // lane OFF beats namespace ON
+	} {
+		got := on.resolveIdleIntervention(PackedProject{IdleIntervention: c.lane, NamespaceIdleIntervention: c.ns})
+		if got != c.want {
+			t.Errorf("global ON: resolve(lane=%d ns=%d) = %v, want %v", c.lane, c.ns, got, c.want)
+		}
+	}
+
+	off := &Spawner{idleIntervention: false}
+	if off.resolveIdleIntervention(PackedProject{IdleIntervention: -1, NamespaceIdleIntervention: -1}) {
+		t.Error("global OFF + all inherit must stay OFF")
+	}
+	if !off.resolveIdleIntervention(PackedProject{IdleIntervention: 1, NamespaceIdleIntervention: -1}) {
+		t.Error("lane ON must arm the hook even when the global default is OFF")
+	}
+	if !off.resolveIdleIntervention(PackedProject{IdleIntervention: -1, NamespaceIdleIntervention: 1}) {
+		t.Error("namespace ON must arm the hook even when the global default is OFF")
+	}
+}

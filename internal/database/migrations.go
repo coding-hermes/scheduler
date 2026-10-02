@@ -1136,6 +1136,21 @@ CREATE TABLE IF NOT EXISTS remote_events_stats (
 ALTER TABLE ticks ADD COLUMN cooldown_remaining_s REAL NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// SCHED-GAP-1688 AC5: the end-of-tick hook's switch, resolvable at the
+		// LANE and the NAMESPACE, over a global default (the env knob). Tri-
+		// state: -1 = inherit (from the namespace, then the global default),
+		// 0 = off, 1 = on. Shipping at -1 everywhere means the hook stays
+		// exactly as dark as the env default until a family is opted in, which
+		// is the row's "default OFF until proven on one family" with the
+		// no-op rate measurable before and after. Additive ALTERs, no rebuild.
+		version: 60,
+		desc:    "SCHED-GAP-1688: idle_intervention switch on projects + namespaces (-1 inherit | 0 off | 1 on) — the per-lane and per-namespace resolution over the global env default",
+		stmt: `
+ALTER TABLE projects ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE namespaces ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
+`,
+	},
 }
 
 // laneOutputBackfillStmt initializes the four family output counts from tick
