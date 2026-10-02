@@ -24,11 +24,11 @@ func TestLaneClass_Derivation(t *testing.T) {
 		owns         bool
 		want         string
 	}{
-		{"auger-qa", "auger", true, LaneClassSatellite},              // role suffix wins
+		{"auger-qa", "auger", true, LaneClassSatellite}, // role suffix wins
 		{"coding-hermes-scheduler-dogfood", "coding-hermes-scheduler", true, LaneClassSatellite},
-		{"auger", "", true, LaneClassForeman},                        // owner, no suffix
-		{"solo-primary", "", false, LaneClassForeman},                // solo primary
-		{"h3-shim", "h3", false, LaneClassSatellite},                 // parented, ownerless
+		{"auger", "", true, LaneClassForeman},         // owner, no suffix
+		{"solo-primary", "", false, LaneClassForeman}, // solo primary
+		{"h3-shim", "h3", false, LaneClassSatellite},  // parented, ownerless
 		// OWNERSHIP EDGE: a parented lane that OWNS satellites is a foreman.
 		{"release-engineer", "coding-hermes-scheduler", true, LaneClassForeman},
 		{"logsey", "h3", true, LaneClassForeman},
@@ -53,8 +53,8 @@ func TestExpectedAdmission(t *testing.T) {
 // satellite=cooldown).
 func TestAdmissionLawViolations_CleanReadsZero(t *testing.T) {
 	projects := []database.Project{
-		mkLane("auger", "", "tasks", "coding-hermes", true),        // foreman, tasks, tasks ns
-		mkLane("auger-qa", "auger", "cooldown", "qa", true),        // satellite, cooldown
+		mkLane("auger", "", "tasks", "coding-hermes", true), // foreman, tasks, tasks ns
+		mkLane("auger-qa", "auger", "cooldown", "qa", true), // satellite, cooldown
 		mkLane("auger-pm", "auger", "cooldown", "pm", true),
 	}
 	nsAdm := map[string]string{"coding-hermes": "tasks", "qa": "cooldown", "pm": "cooldown"}
