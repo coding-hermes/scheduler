@@ -17,6 +17,7 @@ Exit codes:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import urllib.request
@@ -34,18 +35,26 @@ def token():
     return os.environ.get("DUCKBRAIN_API_KEY", "")
 
 
-def noop_tick_ids(timeout=30):
-    """The tick id (`<lane>-<ts>`) tail of every /noop/<date>/<lane>/<tick>."""
+def noop_records(timeout=30):
+    """The tick-id tails + the verdict of every /noop/<date>/<lane>/<tick>.
+
+    AC4 (SCHED-GAP-1688): each record carries verdict=correctly-idle |
+    wrongly-idle, so the fleet can finally separate "no work existed" from "the
+    lane missed work" — the split is reported, not just the coverage count.
+    """
     url = f"{DUCK}/api/memories?namespace={NS}&prefix=/noop/&limit=5000"
     req = urllib.request.Request(url, headers={"x-api-key": token()})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.load(r)
-    out = set()
+    ids, verdicts = set(), {}
     for m in data.get("items", []):
         parts = (m.get("key") or "").split("/")
         if len(parts) >= 5 and parts[1] == "noop":
-            out.add(parts[-1])
-    return out
+            tick = parts[-1]
+            ids.add(tick)
+            mm = re.search(r'"verdict"\s*:\s*"([^"]*)"', m.get("content") or "")
+            verdicts[tick] = (mm.group(1) if mm else "").strip()
+    return ids, verdicts
 
 
 def zero_artifact_ticks(hours):
@@ -76,13 +85,26 @@ def main():
         print(f"scan: scheduler DB unreadable ({e}) -- cannot prove coverage", file=sys.stderr)
         return 2
     try:
-        recorded = noop_tick_ids()
+        recorded, verdicts = noop_records()
     except Exception as e:  # noqa: BLE001
         print(f"scan: DuckBrain unreachable ({e}) -- cannot prove coverage", file=sys.stderr)
         return 2
 
     total = len(ticks)
     uncovered = sorted((t for t in ticks if t["id"] not in recorded), key=lambda t: t["id"])
+
+    # AC4 (SCHED-GAP-1688): the split that separates "no work existed" from
+    # "the lane missed work". Every verdict the summariser can emit gets its own
+    # bucket; an unrecognised or absent one is counted as unstated, never
+    # quietly folded into a pass.
+    KNOWN = ("correctly-idle", "wrongly-idle", "work-done", "blocked")
+    split = dict.fromkeys(KNOWN, 0)
+    split["unstated"] = 0
+    for t in ticks:
+        if t["id"] in recorded:
+            v = verdicts.get(t["id"], "")
+            split[v if v in KNOWN else "unstated"] += 1
+
     armed = hook_armed()
     report = {
         "window_hours": a.hours,
@@ -90,6 +112,7 @@ def main():
         "zero_artifact_ticks": total,
         "with_noop_record": total - len(uncovered),
         "without_record": len(uncovered),
+        "verdict_split": split,
         "uncovered": [{"id": t["id"], "lane": t["project_name"], "outcome": t["outcome"]} for t in uncovered[:50]],
     }
     if a.json:
@@ -99,6 +122,7 @@ def main():
         print(f"  zero-artifact ticks : {total}")
         print(f"  with a /noop/ record: {total - len(uncovered)}")
         print(f"  WITHOUT a record    : {len(uncovered)}   <-- must be 0 once the hook is proven")
+        print("  verdict split       : " + "  ".join(f"{k}={v}" for k, v in split.items()))
         for t in report["uncovered"][:10]:
             print(f"    - {t['lane']:24s} {t['id']}  outcome={t['outcome'] or '-'}")
         if not armed:
