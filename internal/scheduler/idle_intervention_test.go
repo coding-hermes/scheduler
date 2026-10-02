@@ -54,12 +54,12 @@ func TestSCHEDGAP1688_ResolutionChain(t *testing.T) {
 		lane, ns int
 		want     bool
 	}{
-		{-1, -1, true},  // both inherit -> the global default
-		{0, -1, false},  // lane OFF beats global ON
-		{1, 0, true},    // lane ON beats namespace OFF
-		{-1, 0, false},  // namespace OFF beats global ON
-		{-1, 1, true},   // namespace ON
-		{0, 1, false},   // lane OFF beats namespace ON
+		{-1, -1, true}, // both inherit -> the global default
+		{0, -1, false}, // lane OFF beats global ON
+		{1, 0, true},   // lane ON beats namespace OFF
+		{-1, 0, false}, // namespace OFF beats global ON
+		{-1, 1, true},  // namespace ON
+		{0, 1, false},  // lane OFF beats namespace ON
 	} {
 		got := on.resolveIdleIntervention(PackedProject{IdleIntervention: c.lane, NamespaceIdleIntervention: c.ns})
 		if got != c.want {

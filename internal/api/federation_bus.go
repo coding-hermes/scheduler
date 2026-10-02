@@ -218,22 +218,6 @@ func (s *Server) FederationQueryHandler(q bus.QueryEnvelope, caller string) bus.
 	return s.federationBusResponse(&env, resp)
 }
 
-// federationBusError renders the status="error" variant of the §2.2
-// envelope for the bus (the fedWriteError twin, minus the HTTP writer).
-func (s *Server) federationBusError(q bus.QueryEnvelope, code, message string) bus.ResponseEnvelope {
-	return bus.ResponseEnvelope{
-		CorrID: q.CorrID,
-		Op:     q.Op,
-		Peer:   database.SchedulerID(),
-		Status: fedStatusError,
-		Gaps:   []bus.FederationGap{},
-		Error:  &bus.FederationError{Code: code, Message: message},
-		// The §2.6 contract version — fed from the HTTP surface's
-		// constant so the two transports can never disagree.
-		Contract: federationContractVersion,
-	}
-}
-
 // federationBusResponse transcribes the transport-independent §2.2 envelope
 // into the bus shape, member-for-member (the gap TYPE differs across
 // packages; the JSON member set is the same §2.2 set). The freshness/stale
@@ -314,23 +298,3 @@ func (d *requestDeadline) checkBus(ctx context.Context) bool {
 // bearer"; the answering side does not re-authenticate the requesting
 // scheduler per query).
 const FederationBusCaller = "bus:transport"
-
-// federationBusAudit writes the spec §4 cross-box read audit row for a bus
-// answer — the same events mechanism the HTTP surface audits through, with
-// the transport named. Best-effort (an audit failure never fails an answer;
-// the deadline context is NOT used so an answered query is audited even
-// when its budget was tight).
-func (s *Server) federationBusAudit(caller, corrID, op, outcome string) {
-	msg := "federation.query: " + outcome + " op=" + op + " corr_id=" + corrID + " caller=" + caller
-	e := &database.Event{
-		Severity:  database.SeverityInfo,
-		Component: "api.federation",
-		Message:   msg,
-		Details:   "{\"caller\":\"" + caller + "\",\"corr_id\":\"" + corrID + "\",\"op\":\"" + op + "\",\"outcome\":\"" + outcome + "\",\"path\":\"bus:fed.query\"}",
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := database.LogEvent(ctx, s.db, e); err != nil {
-		log.Printf("FEDERATION BUS AUDIT WRITE FAILED: msg=%q err=%v", msg, err)
-	}
-}

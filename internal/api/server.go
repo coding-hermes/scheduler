@@ -490,9 +490,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// (foreman=tasks, everything else=cooldown) + foremen outside a
 		// tasks-mode namespace. Reads 0 on a clean fleet.
 		"admission_law_violations": admissionLawViolations,
-		"projects_failure_rates":    failureRates,
-		"failure_window":            s.failureWindow,
-		"last_evaluation":           lastEval,
+		"projects_failure_rates":   failureRates,
+		"failure_window":           s.failureWindow,
+		"last_evaluation":          lastEval,
 		// ADV-R09/G8 — budget authority chain. budget_total was a literal
 		// 100 at this spot (coincidentally equal to the --budget flag
 		// DEFAULT, which is what a hardcoded surface pretends to report);
