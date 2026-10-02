@@ -4737,3 +4737,11 @@ tasks:
   - Operator-token fail-closed; build+vet clean; tests green (-short on touched packages)
   status: in_progress
   created_at: '2026-10-01T23:13:30.488110+00:00'
+- id: INT-CI-172
+  title: Race in wsTestServer header capture breaks CI Test (Go 1.26) run 36939604545
+  criteria:
+  - go test -race -count=1 ./internal/bus/ is green at HEAD and CI Test job passes
+    on the fix commit
+  status: complete
+  created_at: '2026-10-01T23:37:08.782037+00:00'
+  completed_at: '2026-10-02T00:01:54.392641+00:00'
