@@ -17,7 +17,7 @@ Status vocabulary:
 **R1.1 — A foreman is `admission_mode=tasks`; every other lane is `cooldown`.**
 *Ruled 2026-10-01.* Board-driven by design: a foreman is *supposed* to run faster than
 its cooldown pin when its board has work. A satellite is paced by its cooldown alone.
-Enforced (config). Verified: 36 foremen on `tasks`, 344 satellites on `cooldown`, 0 mismatches.
+Enforced (config). Verified 2026-10-02: **37 foremen on `tasks`, 352 satellites on `cooldown`, 0 mismatches.**
 
 **R1.2 — A lane that OWNS satellites is a foreman, even when it carries a `parent`.**
 *Ruled 2026-10-01.* `parent` is org nesting, not class. logsey/pulse/lore/digest under
@@ -47,6 +47,16 @@ heuristic. Enforced (64 real project lanes renamed; parents, tick history and
 **R1.6 — The role suffixes are exactly:** `-qa -pm -sync -dogfood -perf -releng
 -review -docs -readme`. A lane carrying one is a satellite. No other suffix confers
 satellite status.
+
+**R1.7 — There are NO per-project namespaces.** Every project's lanes live in the shared
+role namespaces; a namespace never belongs to one project. *Ruled 2026-10-02 ("tatara
+should be in the existing namespaces not a dedicated one just like all projects").*
+`tatara` was the last outlier — 5 of its 9 lanes sat in their own namespace while the
+other 4 were already shared; the 5 were moved to `qa`/`pm`/`dogfood`/`releases`/
+`duckbrain-sync` and the namespace soft-deleted (`enabled=false`, so a boot cannot
+resurrect it). A side effect worth stating: those 5 lanes had **no namespace prompt at
+all** before the move, so they were running without their role instructions.
+Enforced (config). Verified 2026-10-02: 0 enabled lanes in a per-project namespace.
 
 ---
 
@@ -184,7 +194,81 @@ computed at display time.
 
 ---
 
-## 8. Where each rule is checked
+## 8. Prompt loading — what a lane is actually told
+
+**R8.1 — The namespace `default_prompt` is the base of every spawned lane prompt.**
+`packer_select.go` reads it live at selection time and `spawn.go:989` (`base :=
+project.NamespacePrompt`) puts it at the head of the prompt; the lane's own `prompt` is
+appended unless that lane is `prompt_mode=replace`. A namespace change therefore reaches
+every lane in it on its next tick — no rebuild, no restart. Verified 2026-10-02: 20 of 20
+sessions spawned after the change carried the block as their first message.
+
+**R8.2 — For namespace prompts the DURABLE layer is `fleet.toml`, not the DB.** A
+`default_prompt` written only through the API is re-pinned from the toml at boot
+(SCHED-GAP-149). Write both: `PUT /api/v1/namespaces/{id}`, then the policy regen.
+
+**R8.3 — `PUT` on a namespace is a PARTIAL update** — only the supplied fields are
+applied. Sending one field is safe and leaves caps, admission mode and load gate alone.
+Verified 2026-10-02: the slot law was unchanged after 11 prompt writes.
+
+**R8.4 — A worker never sees a namespace prompt.** A worker is a fresh `hermes chat -q`
+session, not a scheduler-spawned lane. Anything a worker must obey rides the brief the
+foreman compiles; anything that must bind foreman AND worker needs both the namespace
+prompt and the brief.
+
+---
+
+## 9. Verification surfaces — how to check a rule is actually true
+
+**R9.1 — `ticks.session_id` is NOT the hermes session id.** It holds the gateway
+response id (`resp_…`) or the tick slug (`<lane>-<date>-<time>`). Resolving it against
+`state.db.messages` returns nothing and reads exactly like "the prompt never loaded".
+Lane sessions are found by **content + time window**, never by the tick's id.
+
+**R9.2 — `state.db.messages.timestamp` is an epoch float**, never ISO. Comparing it to
+an ISO string matches nothing and looks like an idle fleet.
+
+**R9.3 — Prove a prompt load from the sessions, then split the window explicitly.**
+Count the ticks spawned after the change, check each session's first `role='user'`
+message, and report the split — pre-change ticks not carrying the block is expected, not
+a partial failure (2026-10-02: 20/20 post-change, 8 pre-change).
+
+**R9.4 — An id-space mismatch is not absence.** A lookup that finds nothing is only
+evidence once you have shown the lookup addresses the right table.
+
+**R9.5 — Measure before concluding a stall.** "No spawns in the window" and "the load
+gate is holding" are claims about two different counters; read both
+(`/api/v1/status` shows `gateway_health_gate.deferrals_total`) before reporting either.
+
+---
+
+## 10. Host load and capacity
+
+**R10.1 — The load gate is a ceiling, never a floor.** When 1-minute load sits above the
+threshold (12 on this box) admissions defer and the fleet *looks* quiet. Read the load
+and the deferral counter before calling anything stalled.
+
+**R10.2 — Attribute the load before throttling a cadence.** Load comes from build/test
+binaries run inside tick sessions plus always-on services — not from tick count.
+Measured 2026-10-02: the top consumers were a `go test` binary, a `pytest` run and a
+`cargo` build, alongside gateway / duckbrain-http / pulse / rsyslog / schedulerd and a
+**stray `htop` at 17h**. Per class, `-qa` was **32% of foreman slot-hours for 6% of their
+commits**, `-sync` 851 ticks but only 6.3 min each.
+
+**R10.3 — Builds and tests belong off the shared box.** The offload KPI is zero local
+CPU for builds/tests; a lane running a test battery in-session is host load at *any*
+cadence, so a cadence cut buys less than the offload does.
+
+**R10.4 — A tick that runs to a fixed wall is not working — find the wall.** Every qa
+timeout on 2026-10-02 landed on almost exactly 2h (one on 3h): that is a wall, not
+variance. Filed: SCHED-GAP-1698.
+
+**R10.5 — Sweep for strays.** A forgotten interactive process is indistinguishable from
+fleet load in the load average.
+
+---
+
+## 11. Where each rule is checked
 
 | check | what it covers |
 | --- | --- |
@@ -193,11 +277,18 @@ computed at display time.
 | `~/.hermes/scripts/stabilize_satellites.py` | satellite floors/ceilings/adaptive (R4.1). |
 | `~/.hermes/scripts/pause_python_audit.py` | the pause-with-reason pattern (R4.3). |
 | board rows SCHED-GAP-1693/1694/1695/1696/1697/1698/1700 | the rules whose enforcement is still a code change. |
+| `~/.hermes/scripts/npd_proof.py` | proves a namespace prompt reaches live lane sessions (content + time window, R8.1/R9.3). |
+| `~/.hermes/scripts/load_attribute.py` | per-class footprint (slot-hours, workers, commits, cost) + the top CPU consumers with ancestry (R10.2). |
+| `~/.hermes/scripts/backfill_scan.py` | sizes the recoverable history edges — commit→row (id in message) and row→commit (sha in row). |
+| `~/.hermes/scripts/ns_prompt_doctrine.py` / `tatara_ns_retire.py` | the reversible writers behind TR-253 and R1.7 (snapshot + `--revert`). |
 
-## 9. The one-line summary
+## 12. The one-line summary
 
 > Foremen are board-driven, named `<project>-foreman`, all in one tasks namespace, with 8
 > reserved slots and a cap of 16. Satellites are metronomes — one per namespace, fixed
-> cadence, never woken, no floors. The global budget is 20. A tick ends when its work is
-> done and always pushes. Nothing adjusts a satellite's speed, and no rule is enforced by
-> a display heuristic.
+> cadence, never woken, no floors, and never a namespace of their own project. The global
+> budget is 20. A lane's prompt is its namespace `default_prompt` (mirrored in
+> `fleet.toml`) plus its own; a worker only hears what the brief says. A tick ends when
+> its work is done and always pushes. Nothing adjusts a satellite's speed, no rule is
+> enforced by a display heuristic, and no claim is verified by an id from another table.
+> Load is attributed before any cadence is cut — builds belong off the box.
