@@ -50,6 +50,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/peers/{id}/heartbeat` | POST: liveness ping — stamps the peer's `last_contact`; unknown id → 404 (heartbeat does not auto-register) |
 | `/api/v1/peers/events` | REMOTE-006 durable event slice, every scheduler (GET): last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops` |
 | `/api/v1/peers/{id}/events` | REMOTE-006 durable event slice, one scheduler (GET); unknown id → 404 |
+| `/api/v1/federation/query` | REMOTE-008 federation query (POST, operator-token gated): the query envelope `{op, args, corr_id, budget_ms, want}` in, the response envelope `{corr_id, op, peer, status, as_of, age_ms, data, gaps, error, contract}` out (docs/federation-query-spec.md §2) — one contract, six read ops, replay window keyed (caller, corr_id, op); unknown op → `status="error" code="unknown_op"` |
+| `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 
 **MCP surface:** `POST /mcp` serves **50 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

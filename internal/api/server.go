@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
@@ -99,6 +100,15 @@ type Server struct {
 	// zero = database.PeerFreshnessWindowDefault (5m). A peer whose last
 	// heartbeat is older renders stale=true — never "down".
 	peerWindow int
+
+	// fedReplay (REMOTE-008 §2.5) is the federation query replay window:
+	// (caller, corr_id, op) → the reply already produced, so a retried
+	// query returns the identical answer instead of re-reading. Built
+	// lazily on the first federation query (it needs the clock seam, which
+	// SetClock can install after construction); fedReplayOnce guards the
+	// build.
+	fedReplay     *federationReplay
+	fedReplayOnce sync.Once
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
@@ -235,6 +245,12 @@ func (s *Server) Handler() http.Handler {
 	// rendering law: stale + last_contact, never "down").
 	mux.HandleFunc("/api/v1/peers", s.handlePeers)
 	mux.HandleFunc("/api/v1/peers/", s.handlePeerByID)
+	// REMOTE-008 (federation-query-spec §2 + §3 HTTP row): the read half of
+	// federation — one envelope, one internal entry point, every transport
+	// an adapter. Operator-gated (spec §4: fail-closed, no credential
+	// configured = 503); every answered query writes an audit row.
+	mux.HandleFunc("/api/v1/federation/query", s.handleFederationQuery)
+	mux.HandleFunc("/api/v1/federation/catalogue", s.handleFederationCatalogue)
 	return mux
 }
 

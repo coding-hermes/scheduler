@@ -1324,3 +1324,66 @@ credential · 503 no credential.
 curl -s -X POST http://127.0.0.1:9090/api/v1/peers/kara/heartbeat \
   -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
 ```
+
+## 15. Federation query (REMOTE-008)
+
+The READ half of federation (docs/federation-query-spec.md §2 + §3 HTTP row):
+another scheduler asks this one a question and gets an answer identical in
+shape no matter how the question travelled. **Every route in this section is
+operator-token gated** (the same SCHED-GAP-1602 gate as the peers registry;
+spec §4 auth posture). With no credential configured the surface fails
+CLOSED: 503. Every answered query — allowed AND refused — writes one local
+audit row (`component=api.federation`): reads are observable, not silently
+free.
+
+The six ops (§2.3) reuse the daemon's OWN read paths — a federation query
+never invents an aggregation the peer could not answer about itself:
+
+| op | args | reuses |
+|---|---|---|
+| `peer.status` | — | `/api/v1/health` payload fields |
+| `fleet.status` | — | `/api/v1/status` summary + peer registry count |
+| `projects.list` | `filter` | `GET /api/v1/projects` (database.ListProjects) |
+| `queue.get` | — | `GET /api/v1/queue` (GAP-054 urgency ordering) |
+| `ticks.list` | `since`, `limit` | `GET /api/v1/ticks` (listTicks) |
+| `events.list` | `since`, `limit`, `severity` | `GET /api/v1/events` (listEvents) |
+
+### POST /api/v1/federation/query
+
+**Request body (§2.1):** `{"op": "...", "args": {...}, "corr_id": "...",
+"budget_ms": 10000, "want": "answer"}` — `op` and `corr_id` REQUIRED
+(named refusals `missing_op`/`missing_corr_id` otherwise); `budget_ms`
+absent = peer default (clamped to a 30s cap); `want` absent = `"answer"`.
+
+**Response 200 (§2.2):** `{"corr_id": echoed, "op": echoed, "peer": "<this
+scheduler_id>", "status": "ok|partial|stale", "as_of": "<RFC3339 UTC>",
+"age_ms": 0, "data": {...}, "gaps": [], "error": null, "contract":
+"1.0.0"}`. Invariants: `peer` always names THIS scheduler; empty `data` is
+`[]`/`{}` — never null; `status="stale"` is a first-class answer (the
+peer's own last self-observation older than its freshness window), never
+conflated with `error`.
+
+**Idempotent replay (§2.5):** `(caller, corr_id, op)` → the reply for 5
+minutes — a retried query returns the IDENTICAL body (as_of included).
+**Errors (HTTP 400, envelope `status="error"`):** `unknown_op` (message
+names the supported ops) · `missing_op` · `missing_corr_id` ·
+`bad_request`. **504:** `deadline_exceeded` inside the same envelope when
+the read blows the caller-clamped budget.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"op":"queue.get","corr_id":"q-42","want":"answer"}'
+```
+
+### GET /api/v1/federation/catalogue
+
+**Response 200:** `{"peer": "<this scheduler_id>", "contract": "1.0.0",
+"ops": [{"op", "args", "description", "owner"}, ...], "count": 6}`.
+**Errors:** 401 bad credential · 503 no credential.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/federation/catalogue \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```

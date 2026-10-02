@@ -109,10 +109,18 @@ var apiToolCoverage = map[string][]string{
 // enforces this mechanically so the escape hatch cannot be widened by
 // convenience.
 var paritySkipList = map[string]string{
-	"/api/v1/health":       "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
-	"/api/v1/live":         "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
-	"/api/v1/openapi.json": "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
-	"/mcp":                 "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
+	// REMOTE-008: the federation query surface is ONE transport adapter over
+	// the ONE internal query entry point (federation-query-spec §3) — the
+	// envelope route IS the generic escape hatch, and its per-op MCP tools
+	// (fed_queue_get, fed_status, …) are REMOTE-010's row per the same §3
+	// table. Exempted until that row lands; the hygiene guard keeps the
+	// exemption from widening.
+	"/api/v1/federation/query":     "REMOTE-008 federation query envelope — the generic transport adapter; per-op MCP tools are REMOTE-010's row (fed_query et al)",
+	"/api/v1/federation/catalogue": "REMOTE-008 read catalogue — documents the ops REMOTE-010 will map one-tool-per-op",
+	"/api/v1/health":               "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
+	"/api/v1/live":                 "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
+	"/api/v1/openapi.json":         "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
+	"/mcp":                         "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
 	"/api/v1/events/stream": "SSE push stream (CTL-002) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
 		"events_list already covers the same data with the incremental since-cursor for polling clients",
 }
@@ -128,7 +136,11 @@ func allowedSkipKey(key string) bool {
 		// push stream, which is a transport shape MCP (request/response
 		// tools) cannot express. Listed explicitly rather than by prefix so
 		// this exemption can never widen to sibling routes.
-		"/api/v1/events/stream":
+		"/api/v1/events/stream",
+		// REMOTE-008: the federation query transport adapter + its catalogue
+		// (federation-query-spec §3 HTTP row) — the per-op MCP tools are
+		// REMOTE-010's row. Same discipline: named routes, never a prefix.
+		"/api/v1/federation/query", "/api/v1/federation/catalogue":
 		return true
 	}
 	for _, prefix := range []string{"/projects/", "/namespaces/", "/dashboard/"} {

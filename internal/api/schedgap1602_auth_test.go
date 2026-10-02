@@ -407,10 +407,18 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 		t.Error("components.securitySchemes missing — the served spec must declare the credential")
 	}
 	// REMOTE-003 (§2): the peers GET is deliberately token-gated (fleet
-	// topology is not public read material) — it is the ONE named exception
-	// to the reads-stay-open posture, pinned here so the exception cannot
-	// grow silently in either direction.
-	gatedReads := map[string]bool{"/api/v1/peers": true}
+	// topology is not public read material) — named exceptions to the
+	// reads-stay-open posture, pinned here so the exception cannot grow
+	// silently in either direction. REMOTE-008 (§4 of
+	// docs/federation-query-spec.md) adds the federation query surface: a
+	// federation read exposes how to ask this scheduler questions (the
+	// catalogue) and the answers themselves (the query), so both routes are
+	// operator-gated like the peers registry.
+	gatedReads := map[string]bool{
+		"/api/v1/peers":                true,
+		"/api/v1/federation/query":     true,
+		"/api/v1/federation/catalogue": true,
+	}
 	mutating, missing := 0, []string{}
 	readWithSec := 0
 	for path, ops := range doc.Paths {
@@ -441,14 +449,19 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 			}
 		}
 	}
-	if mutating != 24 {
-		t.Errorf("mutating operations in spec = %d, want 24 (22 pre-REMOTE-003 + the two peers POSTs)", mutating)
+	// REMOTE-008 added one mutating-shape operation (POST federation/query)
+	// on top of REMOTE-003's two peers POSTs.
+	if mutating != 25 {
+		t.Errorf("mutating operations in spec = %d, want 25 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query)", mutating)
 	}
 	if len(missing) > 0 {
 		t.Errorf("mutating operations without security: %v", missing)
 	}
-	if readWithSec != 1 {
-		t.Errorf("%d read operations carry security, want exactly 1 (GET /api/v1/peers — the REMOTE-003 gated read)", readWithSec)
+	// GET /api/v1/peers (REMOTE-003) + GET /api/v1/federation/catalogue
+	// (REMOTE-008 §4) — the exact gated-read allowlist above. (The query is
+	// a POST: counted in the mutating total, not here.)
+	if readWithSec != 2 {
+		t.Errorf("%d read operations carry security, want exactly 2 (GET /api/v1/peers — REMOTE-003; GET /api/v1/federation/catalogue — REMOTE-008 §4)", readWithSec)
 	}
 }
 

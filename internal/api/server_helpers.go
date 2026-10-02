@@ -1423,6 +1423,37 @@ var openapiSpec = []byte(`{
           "503": {"description": "No operator credential configured (fail-closed)"}
         }
       }
+    },
+    "/api/v1/federation/query": {
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Federation query (REMOTE-008) — the query envelope in, the response envelope out (docs/federation-query-spec.md §2)",
+        "description": "One contract over six read ops (peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list), each reusing the daemon's own read path. Replay window keyed (caller, corr_id, op): a retried query returns the identical body. peer always names THIS scheduler; data is []/{} never null; status=stale is a first-class answer, never conflated with error.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FederationQuery"}}}
+        },
+        "responses": {
+          "200": {"description": "Response envelope (status ok|partial|stale)"},
+          "400": {"description": "Error envelope: unknown_op | missing_op | missing_corr_id | bad_request"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "405": {"description": "Non-POST method"},
+          "503": {"description": "No operator credential configured (fail-closed)"},
+          "504": {"description": "Error envelope: deadline_exceeded (read blew the caller-clamped budget)"}
+        }
+      }
+    },
+    "/api/v1/federation/catalogue": {
+      "get": {
+        "security": [{"operatorToken": []}],
+        "summary": "Federation read catalogue (REMOTE-008) — the supported ops with their arg shapes",
+        "responses": {
+          "200": {"description": "{peer, contract, ops: [{op, args, description, owner}], count}"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
     }
   },
   "components": {
@@ -1629,6 +1660,18 @@ var openapiSpec = []byte(`{
           "cooldown": {"type": "integer", "minimum": 7200, "default": 7200, "description": "Bump cooldown in seconds — the 6h cooldown law floor applies"},
           "reason": {"type": "string", "description": "REQUIRED. Why the bump was issued (auditable)"}
         }
+      },
+      "FederationQuery": {
+        "type": "object",
+        "required": ["op", "corr_id"],
+        "properties": {
+          "op": {"type": "string", "description": "Catalogue op id — peer.status | fleet.status | projects.list | queue.get | ticks.list | events.list. REQUIRED; anything else answers status=error code=unknown_op naming the supported ops."},
+          "args": {"type": "object", "description": "Op-specific args, all optional: filter (projects.list), since/limit (ticks.list, events.list), severity (events.list)."},
+          "corr_id": {"type": "string", "description": "Caller-assigned idempotency key (unique per caller+minute, spec §2.1). REQUIRED. The replay window keys on (caller, corr_id, op) for 5 minutes."},
+          "budget_ms": {"type": "integer", "description": "Per-peer wall budget; the peer clamps to its own cap (30s). Absent = peer default."},
+          "want": {"type": "string", "enum": ["answer", "partial"], "description": "answer = all-or-error; partial = best-effort with named gaps. Absent = answer."}
+        },
+        "description": "The federation Query envelope (federation-query-spec.md §2.1), carried verbatim by every transport."
       },
       "EmptyBody": {
         "type": "object",
