@@ -4764,3 +4764,23 @@ tasks:
   status: complete
   created_at: '2026-10-02T14:41:49.355014+00:00'
   completed_at: '2026-10-02T14:41:50.469112+00:00'
+- id: SCHED-GAP-1697
+  title: Namespace allocator floors away the global budget
+  criteria:
+  - 'Allocate() never returns a total below the budget when a namespace has runnable
+    work: largest-remainder re-distribution; satellites with weight>0 and reserved=0
+    get >=1 slot when budget exceeds reserved floors; foreman floor exact and unscaled;
+    exact-map unit tests for both shapes'
+  status: complete
+  created_at: '2026-10-02T15:08:28.314386+00:00'
+  completed_at: '2026-10-02T16:15:28.084570+00:00'
+- id: INT-CI-175
+  title: 'Fix CI lint job: gofmt 3 files + drop 2 unused federation helpers'
+  criteria:
+  - golangci-lint run reports zero issues on internal/api/server.go, internal/scheduler/idle_intervention_test.go,
+    internal/scheduler/lane_class_test.go (gofmt) and internal/api/federation_bus.go
+    (unused funcs federationBusError/federationBusAudit removed); go build ./... green;
+    diff limited to those 4 files
+  status: complete
+  created_at: '2026-10-02T17:57:11.744895+00:00'
+  completed_at: '2026-10-02T19:42:37.878731+00:00'
