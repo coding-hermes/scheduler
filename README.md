@@ -667,7 +667,8 @@ Full tracked layout — every top-level entry, verified against `git ls-files`
 (2026-09-26, CLN-1):
 
 ```
-cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe
+cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe,
+                # scheduler-query (federation read), scheduler-dispatch (work dispatch)
 internal/       # api, dashboard, database, blocks, clock, config, mcp, scheduler,
                 # sync, version, agentlog
 ops/            # fleet invariant checker (check-fleet-invariants.py) + testdata,
