@@ -382,13 +382,19 @@ func TestNamespaceAllocator_LiveRemainderShape(t *testing.T) {
 	// satellite 0.53→0, each weight-5 satellite 0.27→0. Floors total 5; the 7
 	// leftovers go to the largest remainders — the ten .53 satellites — and
 	// the tie-break (equal reserved, equal weight, lexicographically smaller
-	// ID) gives them to sat-01..sat-07.
+	// ID) gives them to sat-01..sat-08: foreman extra=4, sat-01..08 extra=1.
+	//
+	// The minimum-one upgrade then transfers (never mints) 4 slots from the
+	// largest surplus holder to the four zeros sat-09..sat-12: the foreman
+	// keeps EXACTLY its 8-slot reserved floor, the twelve weight-10-class
+	// satellites hold 1 each, and sat-13..15 (weight 5, smallest fractional
+	// remainders) legitimately receive 0 — only 12 remainder slots exist.
 	want := map[string]int{
-		"coding-hermes": 13,
+		"coding-hermes": 8,
 		"sat-01":        1, "sat-02": 1, "sat-03": 1, "sat-04": 1,
-		"sat-05": 1, "sat-06": 1, "sat-07": 1,
-		"sat-08": 0, "sat-09": 0, "sat-10": 0,
-		"sat-11": 0, "sat-12": 0, "sat-13": 0, "sat-14": 0, "sat-15": 0,
+		"sat-05": 1, "sat-06": 1, "sat-07": 1, "sat-08": 1,
+		"sat-09": 1, "sat-10": 1, "sat-11": 1, "sat-12": 1,
+		"sat-13": 0, "sat-14": 0, "sat-15": 0,
 	}
 	assertAllocation(t, got, want, 20)
 }
@@ -410,10 +416,12 @@ func TestNamespaceAllocator_MinimumOneForZeroReserved(t *testing.T) {
 
 	got := a.Allocate(namespaces)
 
-	// remainder = 12. Each of the 3 satellites is seeded 1 slot (12 >= 3),
-	// leaving 9: floor(9*100/103)=8 to the foreman, floor(9*1/103)=0 to each
-	// satellite, and the one leftover slot goes to the largest remainder
-	// (foreman .74 vs satellite .09). Foreman: 8+8+1=17; satellites 1 each.
+	// remainder = 12. Exact shares by weight (sum 103): floor(12*100/103)=11
+	// to the foreman, 0 to each satellite; the one leftover goes to the
+	// foreman (.74 vs .09), so foreman extra=12. The minimum-one upgrade
+	// then transfers 3 slots from that surplus (12 extra against an 8-slot
+	// reserved floor, so its total never drops below 8) to sat-a/b/c:
+	// foreman 8+9=17, each satellite 1.
 	for _, id := range []string{"sat-a", "sat-b", "sat-c"} {
 		if got[id] < 1 {
 			t.Errorf("%s allocation = %d, want >= 1 (weight>0, reserved=0, slots remain)", id, got[id])
@@ -474,9 +482,11 @@ func TestNamespaceAllocator_ReservedFloorNotScaledUnderBudget(t *testing.T) {
 	if got["coding-hermes"] < 8 {
 		t.Errorf("coding-hermes allocation = %d, want >= 8 (floor must not be scaled when budget >= rTotal)", got["coding-hermes"])
 	}
-	// remainder = 22; sat-x is seeded 1, leaving 21: floor(21*100/101)=20 to
-	// the foreman, floor(21/101)=0 to sat-x, and the leftover goes to the
-	// foreman (.79 vs .20). Foreman: 8+20+1=29.
+	// remainder = 22; exact shares by weight (sum 101): floor(22*100/101)=21
+	// to the foreman, 0 to sat-x; the leftover goes to the foreman (.79 vs
+	// .20), so foreman extra=22. The minimum-one upgrade transfers 1 slot
+	// from that surplus (22 extra against an 8-slot reserved floor):
+	// foreman 8+21=29, sat-x 1.
 	assertAllocation(t, got, map[string]int{"coding-hermes": 29, "sat-x": 1}, 30)
 }
 
