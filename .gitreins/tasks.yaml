@@ -4745,3 +4745,22 @@ tasks:
   status: complete
   created_at: '2026-10-01T23:37:08.782037+00:00'
   completed_at: '2026-10-02T00:01:54.392641+00:00'
+- id: INT-CI-174
+  title: 'CI red on main: latestMigration stale at 58 + errcheck lint in cmd/scheduler-query'
+  criteria:
+  - internal/database/migrations.go declares latestMigration=60; go build ./... clean;
+    golangci-lint run ./cmd/... reports 0 issues; go test -short -count=1 -p 1 ./internal/database/
+    green (GOTMPDIR=/dev/shm); commit d5fc69bd touches only migrations.go + cmd/scheduler-query/{help,main,query}.go
+  status: complete
+  created_at: '2026-10-02T14:38:42.317256+00:00'
+  completed_at: '2026-10-02T14:38:55.056414+00:00'
+- id: SCHED-GAP-1687
+  title: spawn.go gateway-failure log names the real outcome (defer/stall), not a
+    phantom exec fallback
+  criteria:
+  - grep 'falling back to exec' in internal/scheduler matches only genuine exec.Command
+    call sites; sgap1687_gatewayfail_wording_test.go tests assert noExecFallback=true
+    wording differs; landed as 98dfdc29 (rebased onto origin/main this tick)
+  status: complete
+  created_at: '2026-10-02T14:41:49.355014+00:00'
+  completed_at: '2026-10-02T14:41:50.469112+00:00'
