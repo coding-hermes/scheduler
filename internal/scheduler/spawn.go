@@ -97,6 +97,15 @@ type Spawner struct {
 	// classifies the tick as a stalled failure instead of waiting for the 2h
 	// backstop.
 	gatewayResponseTimeout time.Duration
+	// idleIntervention (SCHED-GAP-1688) arms the end-of-tick hook: when true,
+	// a tick that completes with ZERO artifacts (no commits AND no new board
+	// rows in the tick window) gets ONE extra bounded turn fired into the SAME
+	// live gateway session before it closes — do the work now, or write WHY
+	// not (persisted in DuckBrain). Global, default OFF (env
+	// SCHEDULER_IDLE_INTERVENTION). The extra turn is never counted as work:
+	// the tick's outcome is still decided by the artifacts re-measured after
+	// it, so an explained idle tick stays an idle tick.
+	idleIntervention bool
 	model                  string
 	provider               string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
@@ -287,6 +296,7 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		active:                 make(map[string]*exec.Cmd),
 		timeout:                to,
 		gatewayResponseTimeout: gatewayResponseTimeoutFromEnv(),
+		idleIntervention:       idleInterventionFromEnv(),
 		model:                  getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
 		provider:               getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
 		fallbackModel:          getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
@@ -1779,6 +1789,28 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					}, nil
 				}
 
+				// SCHED-GAP-1688: end-of-tick hook. A completed turn that
+				// landed ZERO artifacts (no commits, no changed files in the
+				// tick window) gets ONE bounded follow-up turn fired into
+				// THIS SAME live session (ctx is still alive): do the work
+				// now, or leave a written, stored reason. Off by default. The
+				// extra turn is never counted as work — the tick's outcome is
+				// still decided by the artifacts re-measured after it in
+				// Wait(), so an explained idle tick stays an idle tick.
+				if s.idleIntervention && s.gateway != nil {
+					if c0, f0 := countGitChanges(project.Workdir, reqStart, s.clock().Now()); c0 == 0 && f0 == 0 {
+						log.Printf("IDLE-INTERVENTION: %s tick=%s zero artifacts — firing ONE bounded in-session turn", project.Name, tickID)
+						ivCtx, ivCancel := context.WithTimeout(ctx, idleInterventionTimeout)
+						_, _, ierr := s.gateway.SendResponseStream(ivCtx,
+							idleInterventionPrompt(project.Name, tickID, project.Workdir),
+							model, provider, project.GatewayKey, tickID, idleInterventionTimeout)
+						ivCancel()
+						if ierr != nil {
+							log.Printf("IDLE-INTERVENTION: %s tick=%s follow-up turn error (ignored; tick outcome unchanged): %v",
+								project.Name, tickID, ierr)
+						}
+					}
+				}
 				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
 				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
 				// removed in GAP-002 — it referenced non-existent columns
