@@ -38,9 +38,9 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/coding-hermes/scheduler/internal/bus"
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // defaultRelayURL matches the daemon's [crier] default and
@@ -145,7 +145,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	// nothing was attempted (exit 2) — and the correlation id minted here is
 	// the one the real request carries, so the dry run is byte-identical to
 	// the wire body.
-	endpoint, body, corr, err := bus.BuildDispatch(url, sfid, agent, item, time.Now())
+	endpoint, body, corr, err := bus.BuildDispatch(url, sfid, agent, item, clock.Real().Now())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: %v\n", err)
 		return 2
