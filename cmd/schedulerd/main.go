@@ -473,6 +473,11 @@ func main() {
 			len(cfg.Projects), len(cfg.Namespaces), *configFile)
 	}
 
+	// SCHED-GAP-1696: boot-time admission-law correction. A lane whose
+	// LANE-LEVEL admission_mode contradicts its class is corrected to the class
+	// value; a clean fleet logs nothing.
+	applyAdmissionLaw(context.Background(), db)
+
 	// ── Create the evaluation loop.
 	// ADV-R09/G8: price-sticker refresh path. Applied BEFORE the loop is
 	// created so every cost computation from the first tick uses the

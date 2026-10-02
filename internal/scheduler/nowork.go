@@ -53,10 +53,7 @@ const (
 // on top: a namespace pinned reporter exempts ALL its lanes regardless of
 // their names, and one pinned builder (the "" default) keeps name-derived
 // reporter lanes governed anyway (the config wins in both directions).
-var reporterLaneSuffixes = []string{
-	"-sync", "-pm", "-qa", "-dogfood", "-releng",
-	"-review", "-docs", "-readme", "-perf",
-}
+var reporterLaneSuffixes = LaneRoleSuffixes()
 
 // laneClass classifies a lane as builder or reporter (SCHED-GAP-1655
 // deliverable 3) — the ONE function every no-work decision consults, so the

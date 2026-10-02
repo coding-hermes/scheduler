@@ -487,6 +487,26 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	// refused — satellite-coverage-reconcile.py enables lanes with a bare
 	// {"enabled": true} and never reads the response status, so a refusal there
 	// would silently strip QA/pm/sync/dogfood coverage from a live foreman.
+	// SCHED-GAP-1696: the ADMISSION LAW at the boundary. A lane-level
+	// admission_mode that contradicts the lane's class — a satellite carrying
+	// tasks, or a foreman carrying cooldown — is refused here (400) BEFORE the
+	// DB write, so the row can never be left in the contradicting state.
+	if updates.AdmissionMode != nil {
+		all := map[string]bool{}
+		if ps, perr := database.ListProjects(ctx, s.db, false); perr == nil {
+			for _, pp := range ps {
+				all[pp.Name] = true
+			}
+		}
+		cls := scheduler.LaneClass(cur.Name, cur.Parent, scheduler.LaneOwnsSatellite(cur.Name, all))
+		want := scheduler.ExpectedAdmission(cls)
+		if *updates.AdmissionMode != want {
+			writeError(w, 400, fmt.Sprintf(
+				"admission law (SCHED-GAP-1696): a %s lane must carry admission_mode=%q (every foreman is tasks, every other lane is cooldown); %q is refused",
+				cls, want, *updates.AdmissionMode))
+			return
+		}
+	}
 	updates, laneArmed := laneAutoArm(cur, updates, name)
 	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -610,7 +630,7 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 // cascade recognizes (SCHED-GAP-180). Name suffix is the sanctioned detection
 // for this row; board-ownership/symlink detection is SCHED-GAP-141's concern
 // and is deliberately NOT walked here.
-var satelliteLaneSuffixes = []string{"-qa", "-pm", "-sync", "-dogfood"}
+var satelliteLaneSuffixes = scheduler.LaneRoleSuffixes()
 
 // cascadeMarker is the disabled_by value stamped on satellites disabled by
 // the pause/resume cascade (distinct from "api-pause" / "api" / "api-delete"

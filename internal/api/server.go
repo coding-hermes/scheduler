@@ -443,6 +443,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// ADV-R09/G8: the effective budget from the budget authority chain —
 	// the Loop the resolved --budget/SCHEDULER_BUDGET/TOML value built.
 	budgetTotal := s.effectiveBudget()
+	// SCHED-GAP-1696: the admission-law violation count — the operator-visible
+	// number that must read 0 (enabled foremen all tasks, enabled satellites
+	// all cooldown, every enabled foreman in a tasks-mode namespace).
+	nsAdmission := map[string]string{}
+	if nss, nerr := database.ListNamespaces(ctx, s.db, false); nerr == nil {
+		for _, ns := range nss {
+			nsAdmission[ns.ID] = ns.AdmissionMode
+		}
+	}
+	admissionLawViolations := len(scheduler.AdmissionLawViolations(projects, nsAdmission))
 	status := map[string]interface{}{
 		// SCHED-GAP-148: build identity on the fleet-overview endpoint too.
 		// version is the operator-facing summary; build_sha is the field the
@@ -461,6 +471,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// false-green shape the tightened completion gate now fails at
 		// spawn time — watch it drain to 0 to verify the live fix.
 		"zero_output_committed_24h": zeroOutputCommitted24h,
+		// SCHED-GAP-1696: enabled lanes whose admission contradicts their class
+		// (foreman=tasks, everything else=cooldown) + foremen outside a
+		// tasks-mode namespace. Reads 0 on a clean fleet.
+		"admission_law_violations": admissionLawViolations,
 		"projects_failure_rates":    failureRates,
 		"failure_window":            s.failureWindow,
 		"last_evaluation":           lastEval,
