@@ -37,6 +37,14 @@ import (
 // family as missing_op/missing_corr_id: a named answer, never a guess.
 const fedErrUnknownCaller = "unknown_caller"
 
+// fedErrOpNotAllowed is the REMOTE-013 read-policy refusal code (spec §4:
+// "anything else is status=\"error\" code=\"op_not_allowed\" — a named
+// refusal, never an empty answer"): the caller is authenticated but the op
+// is not published for it in the per-caller read policy
+// (FederationReadPolicy / the [federation] allow config). Stable vocabulary:
+// remoting callers branch on this string.
+const fedErrOpNotAllowed = "op_not_allowed"
+
 // federationExecQuery is the ONE transport-agnostic query entry point (spec
 // §3: "Every adapter: parses its surface → builds the envelope → calls the
 // SAME internal query entry point → returns the SAME response"). It holds
@@ -53,8 +61,52 @@ const fedErrUnknownCaller = "unknown_caller"
 func (s *Server) federationExecQuery(q *queryEnvelope, caller string) (resp responseEnvelope) {
 	// Spec §4: every answered query — allowed OR refused — writes one
 	// local audit row ("reads are observable, not silently free"). The
-	// named-return audit runs on EVERY arm below.
-	defer func() { s.federationExecAudit(caller, q.CorrID, q.Op, resp.Status) }()
+	// named-return audit runs on EVERY arm below. The outcome stamped is
+	// the error CODE when the envelope carries one (a REMOTE-013 policy
+	// refusal is audited as op_not_allowed, a timeout as
+	// deadline_exceeded — the refusal is the interesting event, and the
+	// row names the outcome the way the HTTP surface's rows do); plain
+	// ok/partial/stale answers stamp the status word.
+	defer func() {
+		outcome := resp.Status
+		if resp.Error != nil && resp.Error.Code != "" {
+			outcome = resp.Error.Code
+		}
+		s.federationExecAudit(caller, q.CorrID, q.Op, outcome)
+	}()
+
+	// REMOTE-013 (spec §4, "Read is scoped, not open"): the read-policy
+	// gate — the ONE shared check handleFederationQuery runs on the HTTP
+	// surface, so bus, MCP and CLI (the callers of
+	// FederationQueryHandler → federationExecQuery) are covered by the
+	// same decision the HTTP wire answers with. Absence of an allow is a
+	// REFUSAL (op_not_allowed), never a default-yes; the refusal renders
+	// as a normal §2.2 error envelope (named, never silence) and the
+	// deferred audit above records it. Checked BEFORE want/unknown-op so
+	// an unpublished op is indistinguishable from a nonexistent one to an
+	// unauthorized caller (the refusal does not disclose the catalogue).
+	if fedErrPolicy := s.federationCheckRead(caller, q.Op); fedErrPolicy != nil {
+		return s.federationEnvelopeError(q, fedErrOpNotAllowed, fedErrPolicy.Message)
+	}
+
+	// REMOTE-013 (spec §4, "Read is scoped, not open"): the read-policy
+	// gate — the ONE shared check handleFederationQuery runs on the HTTP
+	// surface, so bus, MCP and CLI (the callers of
+	// FederationQueryHandler → federationExecQuery) are covered by the
+	// same decision the HTTP wire answers with. Absence of an allow is a
+	// REFUSAL (op_not_allowed), never a default-yes; the refusal renders
+	// as a normal §2.2 error envelope (named, never silence) and the
+	// deferred audit above records it. The caller identity comes FIRST
+	// (an unknown caller is refused before authorization — the auth
+	// ladder's order); the catalogue-unknown op passes through to the
+	// unknown_op refusal below (the policy governs real reads, it does
+	// not reclassify typos).
+	if strings.TrimSpace(caller) == "" {
+		return s.federationEnvelopeError(q, fedErrUnknownCaller, "caller identity is required")
+	}
+	if fedErrPolicy := s.federationCheckRead(caller, q.Op); fedErrPolicy != nil {
+		return s.federationEnvelopeError(q, fedErrOpNotAllowed, fedErrPolicy.Message)
+	}
 
 	// want vocabulary (spec §2.1) — same named refusal as HTTP.
 	want := strings.TrimSpace(q.Want)
@@ -75,9 +127,6 @@ func (s *Server) federationExecQuery(q *queryEnvelope, caller string) (resp resp
 		}
 		return s.federationEnvelopeError(q, fedErrUnknownOp,
 			"unknown op "+q.Op+" — supported: "+strings.Join(names, ", "))
-	}
-	if strings.TrimSpace(caller) == "" {
-		return s.federationEnvelopeError(q, fedErrUnknownCaller, "caller identity is required")
 	}
 
 	// The read deadline: the caller's budget_ms (peer default when 0 or
@@ -159,7 +208,10 @@ func (s *Server) FederationBusHandler(q bus.QueryEnvelope) bus.ResponseEnvelope 
 // (the bus uses FederationBusCaller; MCP names its resolved auth mode) —
 // it keys the shared replay window and the audit row, and an empty caller
 // is a named unknown_caller refusal (fail-closed, never a guessed
-// identity).
+// identity). It also keys the REMOTE-013 read policy (spec §4 per-peer
+// scoping): a caller may read only the ops published for it in the
+// [federation] allow config; anything else is the named op_not_allowed
+// refusal, audited like every answer.
 func (s *Server) FederationQueryHandler(q bus.QueryEnvelope, caller string) bus.ResponseEnvelope {
 	env := queryEnvelope{Op: q.Op, Args: q.Args, CorrID: q.CorrID, BudgetMS: q.BudgetMS, Want: q.Want}
 	resp := s.federationExecQuery(&env, caller)

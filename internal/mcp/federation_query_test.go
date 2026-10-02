@@ -47,6 +47,16 @@ func newFedMCPStack(t *testing.T) (*mcpTestServer, *api.Server) {
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
 	loop.SetNoExecFallback(true)
 	apiSrv := api.NewServer(db, loop)
+	// REMOTE-013: the MCP cells prove envelope parity + audit over real
+	// answers — arm the allow-all read policy (the api package's
+	// REMOTE-013 battery owns the policy behavior; the mcp:auth-off caller
+	// here is covered by the "*" default).
+	apiSrv.SetFederationReadPolicy(api.ResolveFederationReadPolicy([]api.FederationReadGrant{
+		{Caller: api.FederationAllowAll, Ops: []string{
+			"peer.status", "fleet.status", "projects.list",
+			"queue.get", "ticks.list", "events.list",
+		}},
+	}))
 	mcpSrv := mcpserver.NewServer(db, loop)
 	mcpSrv.SetFederationQueryHandler(apiSrv.FederationQueryHandler)
 	ts := httptest.NewServer(mcpSrv.Handler())

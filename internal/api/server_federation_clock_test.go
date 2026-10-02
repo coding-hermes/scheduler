@@ -48,6 +48,10 @@ func newFedSimStack(t *testing.T) (loop *scheduler.Loop, srv *Server, sim *clock
 	loop.SetClock(sim)
 	srv = NewServer(db, loop)
 	srv.SetAuthConfig(ResolveAuthConfig(fedToken, "", ""))
+	// REMOTE-013: the freshness cells prove the stale law over real
+	// answers — arm the allow-all read policy (the REMOTE-013 battery
+	// owns the policy behavior).
+	srv.SetFederationReadPolicy(ResolveFederationReadPolicy([]FederationReadGrant{fedGrantAllOps()}))
 	dir := t.TempDir()
 	srv.SetBlocksStore(blocks.NewStore(
 		filepath.Join(dir, "groups.jsonl"),

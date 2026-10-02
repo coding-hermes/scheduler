@@ -116,6 +116,14 @@ type Server struct {
 	// documented posture: every leg renders as a named
 	// transport_unavailable row and the aggregate still answers.
 	aggTransport AggregateTransport
+
+	// fedPolicy (REMOTE-013, federation-query-spec §4) is the per-caller
+	// read policy for the federation query surface. Immutable after
+	// SetFederationReadPolicy; the ZERO value is the deny-all policy —
+	// every read refused with op_not_allowed — so a Server without an
+	// armed policy is safe by construction (fail-closed, the SCHED-GAP-1602
+	// posture carried to the read path).
+	fedPolicy FederationReadPolicy
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
