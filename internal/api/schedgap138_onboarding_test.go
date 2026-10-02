@@ -585,14 +585,50 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 		t.Errorf("satelliteWorkdirRoots covers %d families, want %d", len(roots), len(want))
 	}
 
-	suffixes := quotedNamesIn(t, string(suffixSrc), `(?s)satelliteLaneSuffixes\s*=\s*\[\]string\{(.*?)\}`)
-	if len(suffixes) != len(want) {
-		t.Fatalf("satelliteLaneSuffixes carries %d suffixes (%v), want %d", len(suffixes), suffixes, len(want))
+	// Since SCHED-GAP-1696 server_projects.go no longer holds a literal: it
+	// derives the cascade vocabulary via scheduler.LaneRoleSuffixes(). Assert
+	// the derivation is intact AND parse the canonical suffix list from
+	// internal/scheduler/lane_class.go, which is the single shared table the
+	// admission law and the cascade must both use.
+	if !strings.Contains(string(suffixSrc), "satelliteLaneSuffixes = scheduler.LaneRoleSuffixes()") {
+		t.Errorf("server_projects.go no longer derives satelliteLaneSuffixes from scheduler.LaneRoleSuffixes() — the cascade and the admission law would read different vocabularies")
+	}
+	classSrc, err := os.ReadFile(filepath.Join(schedulerRepoRoot, "internal", "scheduler", "lane_class.go"))
+	if err != nil {
+		t.Fatalf("read lane_class.go: %v", err)
+	}
+	suffixes := quotedNamesIn(t, string(classSrc), `(?s)laneRoleSuffixes\s*=\s*\[\]string\{(.*?)\n\}`)
+	// SUBSET semantics (INT-CI-173): the canonical vocabulary (SCHED-GAP-1675
+	// matrix) is a SUPERSET of the four families this gate polices. The
+	// invariant that matters is directional: every policed family must have a
+	// suffix (the gate must stay armed); extra suffixes for families the gate
+	// does not onboard are expected, not an error.
+	if len(suffixes) < len(want) {
+		t.Fatalf("laneRoleSuffixes carries %d suffixes (%v), cannot cover the %d policed families", len(suffixes), suffixes, len(want))
+	}
+	// Directional coverage (INT-CI-173): every POLICED family must appear in
+	// the canonical suffix table. Suffixes beyond the policed four (perf,
+	// releng, review, docs, readme — SCHED-GAP-1675 matrix) belong to families
+	// this gate does not onboard and are expected here without pins/roots.
+	policed := map[string]bool{}
+	for family := range want {
+		policed["-"+family] = true
+	}
+	seen := map[string]bool{}
+	for _, suffix := range suffixes {
+		seen[suffix] = true
+	}
+	for family := range want {
+		if !seen["-"+family] {
+			t.Errorf("canonical laneRoleSuffixes has no \"-%s\" entry — the onboarding gate would be unarmed for policed family %q", family, family)
+		}
 	}
 	for _, suffix := range suffixes {
-		family := strings.TrimPrefix(suffix, "-")
-		if _, ok := want[family]; !ok {
-			t.Errorf("suffix %q has no pin/roots entry — the onboarding gate would be unarmed for that family", suffix)
+		if policed[suffix] {
+			continue
+		}
+		if roots[strings.TrimPrefix(suffix, "-")] {
+			t.Errorf("suffix %q is outside the policed families but satelliteWorkdirRoots carries an entry for it — extend the gate or drop the roots entry", suffix)
 		}
 	}
 }
