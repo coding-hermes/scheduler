@@ -216,43 +216,64 @@ func (a *NamespaceAllocator) Allocate(namespaces []database.Namespace) map[strin
 		}
 	}
 
-	bonus := make([]int, len(enabled))
 	extra := make([]int, len(enabled))
 	if remainder > 0 {
-		// SCHED-GAP-1697 minimum-one guarantee (owner ruling R3.4: "anytime
-		// there is a slot open a foreman is running" — satellites take only
-		// the remainder, but a remainder slot must actually be usable). A
-		// namespace with weight > 0 and no reserved floor would otherwise be
-		// floored below 1 slot whenever a heavy foreman dominates the weight
-		// sum, and the packer skips any namespace allocated 0. Seed one slot
-		// each when the remainder can cover them, then apportion the rest by
-		// weight; when it cannot, largest-remainder decides who runs.
-		eligible := 0
-		for i := range enabled {
-			if reserved[i] == 0 && weights[i] > 0 {
-				eligible++
-			}
+		// SCHED-GAP-1697: the remainder is apportioned by weight with the
+		// same largest-remainder method as Phase 1, so shares that fall
+		// below 1 no longer floor to an unrunnable 0 while nobody's share
+		// is shifted by a pre-seed.
+		shares := make([]float64, len(enabled))
+		for i := range shares {
+			shares[i] = float64(weights[i])
 		}
-		seatsLeft := remainder
-		if eligible > 0 && seatsLeft >= eligible {
-			for i := range enabled {
-				if reserved[i] == 0 && weights[i] > 0 {
-					bonus[i] = 1
-					seatsLeft--
+		extra = apportionSeats(shares, remainder, order)
+	}
+
+	// SCHED-GAP-1697 minimum-one guarantee (owner ruling R3.4: "anytime
+	// there is a slot open a foreman is running" — satellites take only
+	// the remainder, but a remainder slot must actually be usable): any
+	// weight>0 namespace that apportioned to 0 overall is upgraded to 1.
+	// The upgrade is a TRANSFER, never a mint: each slot comes from the
+	// largest surplus holder (extra > 1, or any extra when a reserved
+	// floor keeps the donor's total >= 1), so the total stays exactly at
+	// budget, no namespace's total ever drops below its reserved floor or
+	// below 1 once held, and the loop runs to a fixpoint so an early
+	// recipient can never be drained back to 0 by a later one. If no
+	// eligible donor remains, the remaining zeros stand: the allocator
+	// cannot invent capacity, and a hard-capped namespace at 0 is an
+	// explicit operator decision rather than a floor artifact.
+	for {
+		upgraded := false
+		for i := range enabled {
+			if weights[i] <= 0 || reserved[i]+extra[i] > 0 {
+				continue
+			}
+			donor := -1
+			for j := range enabled {
+				if j == i {
+					continue
+				}
+				surplus := extra[j] > 1 || (reserved[j] > 0 && extra[j] > 0)
+				if !surplus {
+					continue
+				}
+				if donor == -1 || extra[j] > extra[donor] {
+					donor = j
 				}
 			}
-		}
-		if seatsLeft > 0 {
-			shares := make([]float64, len(enabled))
-			for i := range shares {
-				shares[i] = float64(weights[i])
+			if donor >= 0 {
+				extra[i]++
+				extra[donor]--
+				upgraded = true
 			}
-			extra = apportionSeats(shares, seatsLeft, order)
+		}
+		if !upgraded {
+			break
 		}
 	}
 
 	for i, ns := range enabled {
-		allocation := reserved[i] + bonus[i] + extra[i]
+		allocation := reserved[i] + extra[i]
 
 		// Apply hard cap (0 means no cap).
 		if ns.HardCap > 0 && allocation > ns.HardCap {
