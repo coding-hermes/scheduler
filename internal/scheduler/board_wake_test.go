@@ -59,8 +59,8 @@ func newWakeFix(t *testing.T) *wakeFix {
 	// completion stamp is pinned relative to a fixed now (below).
 	if _, err := db.Exec(`INSERT INTO projects
 		(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
-		 model, provider, enabled, created_at, updated_at)
-		VALUES ('wakeproj', 'https://example.com/w', ?, 10, 5, 3600, 1.0, 'm', 'p', 1,
+		 model, provider, enabled, admission_mode, created_at, updated_at)
+		VALUES ('wakeproj', 'https://example.com/w', ?, 10, 5, 3600, 1.0, 'm', 'p', 1, 'tasks',
 		 datetime('now'), datetime('now'))`, workdir); err != nil {
 		t.Fatal(err)
 	}
@@ -182,12 +182,13 @@ func TestBoardWake_WriteWithinWindowDoesNotFireEarly(t *testing.T) {
 	}
 }
 
-// TestBoardWake_CooldownStillGates is AC1 second half, end-to-end: a
-// pending row lands on a cooldown-LOCKED project, the watcher wakes,
-// evaluate runs on the R04 clock seam — and NOTHING spawns (no tick
-// rows). Cooldown is the sole admission authority; the wake only adds a
-// trigger.
-func TestBoardWake_CooldownStillGates(t *testing.T) {
+// TestBoardWake_CooldownLaneNeverWoken is the SCHED-GAP-1695 WAKE LAW,
+// end-to-end: board_wake is a TASK-MODE privilege, so a cooldown-mode lane is
+// NOT a wake target at all. A board write arms NOTHING and ForceEvaluate is
+// never called — the cooldown lane is not merely gated at admission, it is
+// never woken (the earlier shape woke it and relied on the gate; 580 such
+// wakes leaked cooldown ticks in 7d).
+func TestBoardWake_CooldownLaneNeverWoken(t *testing.T) {
 	fixedNow := fixedEvalNow()
 	db := newTestDB(t)
 	workdir := t.TempDir()
@@ -199,16 +200,12 @@ func TestBoardWake_CooldownStillGates(t *testing.T) {
 	if err := os.WriteFile(boardPath, []byte("{\"id\":\"W-1\",\"status\":\"pending\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Cooldown-locked at fixedNow: completed 60s ago, cooldown 3600s.
-	// (insertEligibilityProject mirrors the packer row shape.)
+	// A cooldown-mode lane: insertEligibilityProject leaves admission_mode ''
+	// → resolved cooldown. It must NEVER be a board_wake target.
 	insertEligibilityProject(t, db, "wakelocked", 3600, 5, 0, fixedNow.Add(-60*time.Second), 0, 0)
 	if _, err := db.Exec(`UPDATE projects SET workdir = ? WHERE name = 'wakelocked'`, workdir); err != nil {
 		t.Fatal(err)
 	}
-
-	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
-	l.SetSimulation(1.0)
-	l.SetClock(clock.NewFixed(fixedNow))
 
 	var evals int64
 	var mu sync.Mutex
@@ -216,39 +213,29 @@ func TestBoardWake_CooldownStillGates(t *testing.T) {
 		mu.Lock()
 		evals++
 		mu.Unlock()
-		l.ForceEvaluate()
 	})
 
 	t0 := time.Now()
 	w.pollOnce(t0) // baseline
-
-	// File the pending row (a genuine board write, mtime guaranteed).
 	rewriteBoard(t, boardPath,
 		`{"id":"W-1","status":"pending"}`,
 		`{"id":"W-9","status":"pending"}`)
-
-	t1 := t0.Add(time.Second)
-	w.pollOnce(t1) // arms
-	w.pollOnce(t1.Add(boardWakeDebounce + time.Second))
+	w.pollOnce(t0.Add(time.Second))                       // would arm IF a target
+	w.pollOnce(t0.Add(boardWakeDebounce + 2*time.Second)) // would fire IF armed
 
 	mu.Lock()
-	if evals == 0 {
-		t.Fatal("watcher never fired ForceEvaluate — premise broken")
-	}
+	got := evals
 	mu.Unlock()
-
-	// ForceEvaluate is async: wait for the sim tick table to settle,
-	// then assert the invariant — nothing spawned for the locked project.
-	time.Sleep(200 * time.Millisecond)
-	var ticks int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&ticks); err != nil {
-		t.Fatalf("count ticks: %v", err)
+	if got != 0 {
+		t.Fatalf("cooldown lane woken %d time(s) — WAKE LAW violated (board_wake is task-mode only)", got)
 	}
-	if ticks != 0 {
-		t.Fatalf("cooldown-locked project with a pending board row spawned %d tick(s) — cooldown MUST gate the wake", ticks)
+	// And it is absent from the enumeration entirely.
+	targets, err := w.listBoardsFromDB(context.Background())
+	if err != nil {
+		t.Fatalf("listBoardsFromDB: %v", err)
 	}
-	if got := simSelectedProjects(t, db); len(got) != 0 {
-		t.Fatalf("evaluate selected %v on a cooldown-locked project, want empty", got)
+	if _, ok := targets["wakelocked"]; ok {
+		t.Fatalf("cooldown lane 'wakelocked' appeared as a board_wake target — must be excluded at enumeration")
 	}
 }
 
@@ -278,8 +265,8 @@ func TestBoardWake_NewBoardAfterBaselineArms(t *testing.T) {
 	boardPath := filepath.Join(boardDir, "tasks.jsonl")
 	if _, err := db.Exec(`INSERT INTO projects
 		(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
-		 model, provider, enabled, created_at, updated_at)
-		VALUES ('newboard', 'https://example.com/n', ?, 10, 5, 60, 1.0, 'm', 'p', 1,
+		 model, provider, enabled, admission_mode, created_at, updated_at)
+		VALUES ('newboard', 'https://example.com/n', ?, 10, 5, 60, 1.0, 'm', 'p', 1, 'tasks',
 		 datetime('now'), datetime('now'))`, workdir); err != nil {
 		t.Fatal(err)
 	}
@@ -395,8 +382,8 @@ func TestBoardWake_EventCarriesRowIDAndVerdict(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO projects
 		(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate,
-		 model, provider, enabled, created_at, updated_at)
-		VALUES ('verdictproj', 'https://example.com/v', ?, 10, 5, 60, 1.0, 'm', 'p', 1,
+		 model, provider, enabled, admission_mode, created_at, updated_at)
+		VALUES ('verdictproj', 'https://example.com/v', ?, 10, 5, 60, 1.0, 'm', 'p', 1, 'tasks',
 		 datetime('now'), datetime('now'))`, fx.dir); err != nil {
 		t.Fatal(err)
 	}
@@ -559,10 +546,12 @@ func TestBoardWake_WatchdogQuietWhileBeating(t *testing.T) {
 }
 
 // TestBoardWake_IntegrationRealLoop drives the REAL watcher goroutines
-// (Start/Stop) with real but fast intervals against a real board write:
-// within poll+debounce the wake fires, the event lands, and the loop
-// (Run in sim mode, clock seam pinned) evaluates. Cooldown-locked at the
-// pinned instant ⇒ no spawn (AC1 end-to-end over the live wiring).
+// (Start/Stop) with real but fast intervals against a real board write, and
+// pins the SCHED-GAP-1695 WAKE LAW end-to-end: a COOLDOWN-mode lane is never
+// a wake target, so a board write produces NO board_wake event and no forced
+// evaluation — it simply waits its cooldown. (The complementary arm — a
+// task-mode lane IS woken and runs — is covered by TestSCHEDGAP1660_* and the
+// unit suite above.)
 func TestBoardWake_IntegrationRealLoop(t *testing.T) {
 	fixedNow := fixedEvalNow()
 	db := newTestDB(t)
@@ -575,6 +564,8 @@ func TestBoardWake_IntegrationRealLoop(t *testing.T) {
 	if err := os.WriteFile(boardPath, []byte("{\"id\":\"I-1\",\"status\":\"pending\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Cooldown-mode lane (admission_mode '' → resolved cooldown): NOT a wake
+	// target under the law, even with a fresh board write.
 	insertEligibilityProject(t, db, "integ", 3600, 5, 0, fixedNow.Add(-60*time.Second), 0, 0)
 	if _, err := db.Exec(`UPDATE projects SET workdir = ? WHERE name = 'integ'`, workdir); err != nil {
 		t.Fatal(err)
@@ -589,22 +580,26 @@ func TestBoardWake_IntegrationRealLoop(t *testing.T) {
 	w.Start()
 	defer w.Stop()
 
-	// Let the baseline land, then write.
+	// Let the baseline land, then write — then give the live poll loop several
+	// poll+debounce cycles, more than enough for a wake had the lane qualified.
 	time.Sleep(150 * time.Millisecond)
 	rewriteBoard(t, boardPath,
 		`{"id":"I-1","status":"pending"}`,
 		`{"id":"I-2","status":"pending"}`)
+	time.Sleep(900 * time.Millisecond)
 
-	waitFor(t, 5*time.Second, func() bool {
-		return len(wakeEvents(t, db)) > 0 && !l.LastEvalTime().IsZero()
-	})
-
+	if got := wakeEvents(t, db); len(got) != 0 {
+		t.Fatalf("cooldown lane woken through the live watcher (%d event(s)) — WAKE LAW violated", len(got))
+	}
+	if !l.LastEvalTime().IsZero() {
+		t.Fatalf("cooldown lane forced an evaluation — WAKE LAW violated")
+	}
 	var ticks int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks`).Scan(&ticks); err != nil {
 		t.Fatalf("count ticks: %v", err)
 	}
 	if ticks != 0 {
-		t.Fatalf("cooldown-locked project spawned %d tick(s) through the live watcher, want 0", ticks)
+		t.Fatalf("cooldown lane spawned %d tick(s) through the live watcher, want 0", ticks)
 	}
 }
 

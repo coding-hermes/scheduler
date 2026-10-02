@@ -170,8 +170,19 @@ func (w *BoardWakeWatcher) SetIntervals(poll, debounce, heartbeat time.Duration)
 // board file. Projects without boards are simply absent — absence is an
 // ordinary condition, never an error (fail-open).
 func (w *BoardWakeWatcher) listBoardsFromDB(ctx context.Context) (map[string]boardWakeTarget, error) {
+	// SCHED-GAP-1695 WAKE LAW: board_wake is a TASK-MODE privilege. A
+	// cooldown-mode lane — every role-suffix satellite, every parented
+	// ownerless lane — is gated by its COOLDOWN ALONE and must never be a
+	// board_wake target. The gate lives HERE, at target enumeration, so a
+	// cooldown satellite can never be armed, woken, or stamped board_wake
+	// (the earlier shape filtered too late and let 580 cooldown ticks through
+	// in 7d). Resolved mode = project override → namespace default → cooldown.
 	rows, err := w.db.QueryContext(ctx,
-		`SELECT name, COALESCE(workdir, '') FROM projects WHERE enabled = 1`)
+		`SELECT p.name, COALESCE(p.workdir, '')
+		   FROM projects p
+		   LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+		  WHERE p.enabled = 1
+		    AND COALESCE(NULLIF(p.admission_mode, ''), ns.admission_mode, 'cooldown') = 'tasks'`)
 	if err != nil {
 		return nil, err
 	}
