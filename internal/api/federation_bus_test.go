@@ -38,6 +38,11 @@ import (
 // newRemote009Server builds a Server on a fresh temp-file SQLite database
 // (the gap1575 construction: a non-running loop, budget=0 so no real spawn
 // can ever fire — a test must not touch the host).
+//
+// REMOTE-013: the cells here prove envelope/replay/deadline behavior, not
+// the access policy (the REMOTE-013 battery owns that), so the helper arms
+// the allow-all read policy — every Server that must ANSWER federation
+// reads needs a policy since the deny-all default landed.
 func newRemote009Server(t *testing.T) *Server {
 	t.Helper()
 	db, err := database.InitDB(filepath.Join(t.TempDir(), "scheduler.db"))
@@ -47,7 +52,9 @@ func newRemote009Server(t *testing.T) *Server {
 	t.Cleanup(func() { _ = db.Close() })
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
 	loop.SetNoExecFallback(true)
-	return NewServer(db, loop)
+	s := NewServer(db, loop)
+	s.SetFederationReadPolicy(ResolveFederationReadPolicy([]FederationReadGrant{fedGrantAllOps()}))
+	return s
 }
 
 // mustCreateRemote009Project inserts one deterministic project row.

@@ -50,7 +50,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/peers/{id}/heartbeat` | POST: liveness ping — stamps the peer's `last_contact`; unknown id → 404 (heartbeat does not auto-register) |
 | `/api/v1/peers/events` | REMOTE-006 durable event slice, every scheduler (GET): last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops` |
 | `/api/v1/peers/{id}/events` | REMOTE-006 durable event slice, one scheduler (GET); unknown id → 404 |
-| `/api/v1/federation/query` | REMOTE-008 federation query (POST, operator-token gated): the query envelope `{op, args, corr_id, budget_ms, want}` in, the response envelope `{corr_id, op, peer, status, as_of, age_ms, data, gaps, error, contract}` out (docs/federation-query-spec.md §2) — one contract, six read ops, replay window keyed (caller, corr_id, op); unknown op → `status="error" code="unknown_op"` |
+| `/api/v1/federation/query` | REMOTE-008 federation query (POST, operator-token gated): the query envelope `{op, args, corr_id, budget_ms, want}` in, the response envelope `{corr_id, op, peer, status, as_of, age_ms, data, gaps, error, contract}` out (docs/federation-query-spec.md §2) — one contract, six read ops, replay window keyed (caller, corr_id, op); unknown op → `status="error" code="unknown_op"`; REMOTE-013 read policy: an op not published for the caller ([federation] allow config, deny-all by default) → `status="error" code="op_not_allowed"` (HTTP 403, audited) |
 | `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 

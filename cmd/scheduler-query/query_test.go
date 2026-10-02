@@ -57,6 +57,16 @@ func newOracleStack(t *testing.T) *api.Server {
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
 	loop.SetNoExecFallback(true)
 	apiSrv := api.NewServer(db, loop)
+	// REMOTE-013: the CLI cells prove the transport over real answers —
+	// arm the allow-all read policy on the oracle stack (the api
+	// package's REMOTE-013 battery owns the policy behavior; the
+	// test-oracle / bus:transport callers here are covered by "*").
+	apiSrv.SetFederationReadPolicy(api.ResolveFederationReadPolicy([]api.FederationReadGrant{
+		{Caller: api.FederationAllowAll, Ops: []string{
+			"peer.status", "fleet.status", "projects.list",
+			"queue.get", "ticks.list", "events.list",
+		}},
+	}))
 	if err := database.CreateProject(context.Background(), db, &database.Project{
 		Name:     "alpha011",
 		RepoURL:  "https://example.com/alpha011",

@@ -905,6 +905,21 @@ func main() {
 	// mutating route answers 503 until the operator configures one. Reads
 	// are never gated.
 	apiServer.SetAuthConfig(api.ResolveAuthConfig(operatorToken, operatorUser, operatorPassword))
+	// REMOTE-013 (federation-query-spec §4): arm the per-caller READ policy
+	// from the [federation] layer of the same root config. Empty/absent =
+	// the deny-all policy — every federation read on every transport is
+	// refused op_not_allowed until the operator publishes ops. Resolved
+	// once at boot, immutable after arming (the auth-config shape).
+	if rootFed, err := config.LoadRootConfig(*configFile); err == nil {
+		grants := make([]api.FederationReadGrant, 0, len(rootFed.Federation.Allow))
+		for caller, g := range rootFed.Federation.Allow {
+			grants = append(grants, api.FederationReadGrant{Caller: caller, Ops: g.Ops})
+		}
+		apiServer.SetFederationReadPolicy(api.ResolveFederationReadPolicy(grants))
+		log.Printf("FEDERATION: read policy armed (%d caller grant(s))", len(grants))
+	} else {
+		log.Printf("FEDERATION: read policy DENY-ALL ([federation] config not loadable: %v)", err)
+	}
 	// SCHED-GAP-1575-B: arm the heavy-read request deadline BEFORE the
 	// resolved-config snapshot below, so the deadline actually enforced and
 	// the value GET /api/v1/config reports are one number (both write

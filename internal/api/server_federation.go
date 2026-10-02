@@ -24,9 +24,14 @@ package api
 // Access model (spec §4): this surface is a federation read — it fails
 // CLOSED behind the SAME operator gate as every other control route
 // (requireOperator; 503 with no credential configured, 401 on a bad
-// credential). Every answered query also writes one local audit row via the
-// shared mutation-audit mechanism ("reads are observable, not silently
-// free"), including refusals.
+// credential). REMOTE-013: behind the credential sits the per-caller READ
+// POLICY (FederationReadPolicy, armed by SetFederationReadPolicy from the
+// [federation] allow config) — an authenticated caller reads only the ops
+// published for it; anything else is status="error" code="op_not_allowed"
+// (403), audited through the same §4 row an answered query writes. Every
+// answered query also writes one local audit row via the shared
+// mutation-audit mechanism ("reads are observable, not silently free"),
+// including refusals.
 //
 // Envelope invariants (spec §2.2), enforced by responseEnvelope:
 //   - peer = THIS scheduler's own id (database.SchedulerID() — never a peer
@@ -269,6 +274,20 @@ func (s *Server) handleFederationQuery(w http.ResponseWriter, r *http.Request) {
 	replay := s.federationReplayWindow()
 	if hit, ok := replay.lookup(caller, q.CorrID, q.Op); ok {
 		writeJSON(w, hit.status, json.RawMessage(hit.body))
+		return
+	}
+
+	// REMOTE-013 (spec §4, "Read is scoped, not open"): the read-policy
+	// gate — the ONE shared check federationExecQuery runs too, so every
+	// transport is covered by construction. The aggregate op is gated with
+	// the same key. Absence of an allow is a REFUSAL (op_not_allowed),
+	// never a default-yes, and the refusal is audited through the SAME §4
+	// audit row an answered query writes (the refusal is the interesting
+	// event). Checked AFTER the replay lookup so a replayed answer is the
+	// first answer, and BEFORE any read/parse work.
+	if fedErrPolicy := s.federationCheckRead(caller, q.Op); fedErrPolicy != nil {
+		s.federationAudit(r, caller, q.CorrID, q.Op, fedErrOpNotAllowed, fedErrPolicy.Message)
+		fedWriteError(w, q, fedErrOpNotAllowed, fedErrPolicy.Message, http.StatusForbidden)
 		return
 	}
 
@@ -620,11 +639,14 @@ func fedWriteError(w http.ResponseWriter, q queryEnvelope, code, message string,
 
 // httpStatus maps a stable error code to its HTTP status — the transport's
 // view of the same refusal (the envelope stays the contract): bad input is
-// 400, a blown budget is 504, everything else is 500.
+// 400, a blown budget is 504, an op the caller may not read (REMOTE-013
+// read policy) is 403, everything else is 500.
 func (e *federationError) httpStatus() int {
 	switch e.Code {
 	case fedErrBadRequest, fedErrMissingOp, fedErrMissingCorrID, fedErrUnknownOp:
 		return http.StatusBadRequest
+	case fedErrOpNotAllowed:
+		return http.StatusForbidden
 	case fedErrDeadlineExceed:
 		return http.StatusGatewayTimeout
 	default:
