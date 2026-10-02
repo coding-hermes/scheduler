@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
@@ -38,6 +39,14 @@ type Server struct {
 	// SetOperatorAuth). Nil = authOff fail-closed: every mutating tools/call
 	// is refused, reads stay open.
 	auth OperatorAuth
+	// federationQuery is the REMOTE-010 shared query entry point —
+	// api.Server.FederationQueryHandler, installed by main.go via
+	// SetFederationQueryHandler so the fed_* tools compute their answers
+	// through the ONE internal query entry point the HTTP surface runs
+	// (spec §3: an adapter that computes an answer itself is a bug). Nil =
+	// not wired: the fed_* tools fail closed with a configuration error
+	// instead of answering anything themselves.
+	federationQuery federationQueryEntry
 }
 
 // NewServer creates an MCP server.
@@ -64,6 +73,19 @@ func (s *Server) clock() clock.Clock { return s.clk.Get() }
 // overrides) so MCP and the REST API read and write the SAME JSONL files.
 func (s *Server) SetBlocksStore(st *blocks.Store) {
 	s.blocksStore = st
+}
+
+// SetFederationQueryHandler installs the REMOTE-010 shared query entry
+// point — the daemon's ONE api.Server's FederationQueryHandler — so the
+// fed_* tools answer through the SAME internal query entry point the HTTP
+// surface runs (spec §3: every adapter "calls the SAME internal query
+// entry point"). Wiring the live server means MCP shares the HTTP
+// surface's replay window (§2.5), freshness/stale clock (§2.2) and the §4
+// cross-box read audit row; a nil call (or no call) leaves the fail-closed
+// arm: the fed_* tools answer a configuration error, never a locally
+// computed answer.
+func (s *Server) SetFederationQueryHandler(fn func(q bus.QueryEnvelope, caller string) bus.ResponseEnvelope) {
+	s.federationQuery = fn
 }
 
 // Handler returns HTTP handler for MCP endpoints.
@@ -674,7 +696,18 @@ var tools = []ToolDefinition{
 			"weeks": map[string]interface{}{"type": "integer", "description": "Prune window in weeks (default 8)."},
 		}},
 	},
+	// ── REMOTE-010: federation query tools (federation-query-spec §3, the
+	// "MCP" row) — `fed_query` (the generic escape hatch) + one tool per
+	// §2.3 read-catalogue op. Every fed_* tool routes to the SAME internal
+	// query entry point the HTTP surface runs (the ONE contract); the
+	// definitions live in federationTools()/federation_query.go so the
+	// catalogue stays one generated list. All reads.
 }
+
+// Register the REMOTE-010 federation tools additively — the registry stays
+// one list clients enumerate via tools/list (the README/endpoints parity
+// guards count it).
+var _ = func() struct{} { tools = append(tools, federationTools()...); return struct{}{} }()
 
 // handleMCP routes MCP protocol requests.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -857,6 +890,11 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFeaturesGet(ctx)
 	case "features_prune_candidates":
 		return s.toolFeaturesPruneCandidates(ctx, args)
+	case "fed_query":
+		return s.toolFedQuery(ctx, args)
+	case "fed_peer_status", "fed_fleet_status", "fed_projects_list",
+		"fed_queue_get", "fed_ticks_list", "fed_events_list":
+		return s.toolFedOpQuery(ctx, name, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

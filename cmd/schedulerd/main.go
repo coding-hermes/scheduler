@@ -1000,6 +1000,11 @@ func main() {
 	// MCP serves the SAME JSONL block stores as the REST API (CTL-001):
 	// both transports read/write one groups.jsonl + templates.jsonl.
 	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// REMOTE-010: the fed_* MCP tools route through the ONE internal query
+	// entry point the HTTP surface runs (apiServer's
+	// FederationQueryHandler) — one replay window, one freshness clock,
+	// one audit row shared by every transport (federation-query-spec §3).
+	mcpServer.SetFederationQueryHandler(apiServer.FederationQueryHandler)
 	// SCHED-GAP-174: /queue and /api/v1/queue must answer with ONE urgency.
 	// The dashboard ranks with the same calculator the API server builds from
 	// the resolved interval range (SetResolvedConfig →

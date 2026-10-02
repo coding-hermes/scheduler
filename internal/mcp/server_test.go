@@ -1354,15 +1354,21 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		"tick_get", "config_get", "queue_get", "metrics_get",
 		"features_get", "features_prune_candidates",
 		"peers_list", "peers_register", "peers_heartbeat",
+		// REMOTE-010: the federation query tools (federation-query-spec §3
+		// MCP row) — the generic envelope tool + one per read-catalogue op.
+		"fed_query",
+		"fed_peer_status", "fed_fleet_status", "fed_projects_list",
+		"fed_queue_get", "fed_ticks_list", "fed_events_list",
 	}
 	for _, w := range want {
 		if !names[w] {
 			t.Errorf("expected tool %q in registry, missing", w)
 		}
 	}
-	// 18 fleet_* + 12 blocks/events + 17 CTL-003 parity tools + 3 peers.
-	if len(toolsList) != 50 {
-		t.Errorf("tool count = %d, want 50 (18 fleet_* + 12 blocks/events + 17 CTL-003 + 2 features_* + 3 peers)", len(toolsList))
+	// 18 fleet_* + 12 blocks/events + 17 CTL-003 parity tools + 3 peers
+	// + 7 REMOTE-010 federation tools (fed_query + 6 catalogue ops).
+	if len(toolsList) != 57 {
+		t.Errorf("tool count = %d, want 57 (18 fleet_* + 12 blocks/events + 17 CTL-003 + 2 features_* + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
 	}
 }
 

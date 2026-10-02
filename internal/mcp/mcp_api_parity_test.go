@@ -99,6 +99,12 @@ var apiToolCoverage = map[string][]string{
 	"GET /api/v1/peers":                     {"peers_list"},
 	"POST /api/v1/peers":                    {"peers_register"},
 	"POST /api/v1/peers/{id}/heartbeat":     {"peers_heartbeat"},
+	// REMOTE-010 (federation-query-spec §3 MCP row): the query envelope
+	// route IS the generic transport adapter, and fed_query is its MCP
+	// tool — the per-catalogue-op tools (fed_peer_status …) cover the same
+	// ops one tool per op. (A POST route carrying a READ — do not add
+	// fed_* to any mutation cross-check.)
+	"POST /api/v1/federation/query": {"fed_query"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.
@@ -109,14 +115,11 @@ var apiToolCoverage = map[string][]string{
 // enforces this mechanically so the escape hatch cannot be widened by
 // convenience.
 var paritySkipList = map[string]string{
-	// REMOTE-008: the federation query surface is ONE transport adapter over
-	// the ONE internal query entry point (federation-query-spec §3) — the
-	// envelope route IS the generic escape hatch, and its per-op MCP tools
-	// (fed_queue_get, fed_status, …) are REMOTE-010's row per the same §3
-	// table. Exempted until that row lands; the hygiene guard keeps the
-	// exemption from widening.
-	"/api/v1/federation/query":     "REMOTE-008 federation query envelope — the generic transport adapter; per-op MCP tools are REMOTE-010's row (fed_query et al)",
-	"/api/v1/federation/catalogue": "REMOTE-008 read catalogue — documents the ops REMOTE-010 will map one-tool-per-op",
+	// REMOTE-010 landed: the per-op MCP tools (fed_peer_status …) + the
+	// fed_query escape hatch now cover the query route (it sits in
+	// apiToolCoverage above), so only the catalogue remains exempt here —
+	// it DOCUMENTS the ops (a metadata surface, not an operation).
+	"/api/v1/federation/catalogue": "REMOTE-008 read catalogue — documents the ops the fed_* MCP tools (REMOTE-010) serve one-tool-per-op; a metadata surface, not a fleet operation",
 	"/api/v1/health":               "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
 	"/api/v1/live":                 "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
 	"/api/v1/openapi.json":         "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
@@ -137,10 +140,12 @@ func allowedSkipKey(key string) bool {
 		// tools) cannot express. Listed explicitly rather than by prefix so
 		// this exemption can never widen to sibling routes.
 		"/api/v1/events/stream",
-		// REMOTE-008: the federation query transport adapter + its catalogue
-		// (federation-query-spec §3 HTTP row) — the per-op MCP tools are
-		// REMOTE-010's row. Same discipline: named routes, never a prefix.
-		"/api/v1/federation/query", "/api/v1/federation/catalogue":
+		// REMOTE-008's catalogue route: it DOCUMENTS the ops the fed_* MCP
+		// tools (REMOTE-010) serve one-tool-per-op — a metadata surface,
+		// not an operation. The query route itself moved UP into
+		// apiToolCoverage (covered by fed_query) when REMOTE-010 landed;
+		// this exemption can never grow back over it.
+		"/api/v1/federation/catalogue":
 		return true
 	}
 	for _, prefix := range []string{"/projects/", "/namespaces/", "/dashboard/"} {

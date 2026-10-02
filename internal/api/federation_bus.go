@@ -31,20 +31,38 @@ import (
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
-// FederationBusHandler answers one bus query envelope by running the SAME
-// internal query entry point POST /api/v1/federation/query runs: the want
-// validation → replay window → the op's read under a budget_ms-derived
-// deadline → the §2.2 envelope. NO HTTP objects are touched; the answer is
-// the plain envelope the bus responder publishes back on the correlated
-// reply topic.
-func (s *Server) FederationBusHandler(q bus.QueryEnvelope) bus.ResponseEnvelope {
+// fedErrUnknownCaller is the envelope-level refusal for a query that
+// arrives without a caller identity (the MCP transport derives its caller
+// from the resolved auth mode — "off" has no caller name). Same refusal
+// family as missing_op/missing_corr_id: a named answer, never a guess.
+const fedErrUnknownCaller = "unknown_caller"
+
+// federationExecQuery is the ONE transport-agnostic query entry point (spec
+// §3: "Every adapter: parses its surface → builds the envelope → calls the
+// SAME internal query entry point → returns the SAME response"). It holds
+// the adapter-independent core every transport shares — want validation →
+// unknown-op refusal (catalogue inline) → budget-clamped read deadline →
+// the op's read → ok/partial downgrade → replay store. The envelope is the
+// contract; the transport-specific parts (rendering, auditing with a named
+// caller, the HTTP writer) stay in the adapters.
+//
+// Returns the transport-independent §2.2 envelope (status possibly "stale"
+// via federationResponse's freshness law) or, on the refusal/deadline arms,
+// a status="error" envelope built by federationEnvelopeError — the two
+// adapters then transcribe/render it into their own wire shapes.
+func (s *Server) federationExecQuery(q *queryEnvelope, caller string) (resp responseEnvelope) {
+	// Spec §4: every answered query — allowed OR refused — writes one
+	// local audit row ("reads are observable, not silently free"). The
+	// named-return audit runs on EVERY arm below.
+	defer func() { s.federationExecAudit(caller, q.CorrID, q.Op, resp.Status) }()
+
 	// want vocabulary (spec §2.1) — same named refusal as HTTP.
 	want := strings.TrimSpace(q.Want)
 	if want == "" {
 		want = fedWantAnswer
 	}
 	if want != fedWantAnswer && want != fedWantPartial {
-		return s.federationBusError(q, fedErrBadRequest,
+		return s.federationEnvelopeError(q, fedErrBadRequest,
 			"want must be \""+fedWantAnswer+"\" or \""+fedWantPartial+"\"")
 	}
 	// Unknown op: a NAMED refusal with the catalogue inline (spec §2.2),
@@ -55,55 +73,97 @@ func (s *Server) FederationBusHandler(q bus.QueryEnvelope) bus.ResponseEnvelope 
 		for _, e := range federationCatalogue {
 			names = append(names, e.Op)
 		}
-		return s.federationBusError(q, fedErrUnknownOp,
+		return s.federationEnvelopeError(q, fedErrUnknownOp,
 			"unknown op "+q.Op+" — supported: "+strings.Join(names, ", "))
+	}
+	if strings.TrimSpace(caller) == "" {
+		return s.federationEnvelopeError(q, fedErrUnknownCaller, "caller identity is required")
 	}
 
 	// The read deadline: the caller's budget_ms (peer default when 0 or
 	// absent), clamped exactly like the HTTP surface clamps it (spec §2.1
 	// "the peer clamps to its own cap").
-	env := queryEnvelope{Op: q.Op, Args: q.Args, CorrID: q.CorrID, BudgetMS: q.BudgetMS, Want: want}
-	ctx, obs := s.federationRequestDeadline(context.Background(), env.budgetMS())
+	ctx, obs := s.federationRequestDeadline(context.Background(), q.budgetMS())
 	defer obs.finish()
 
-	// Replay window FIRST (spec §2.5): a bus redelivery of the same
+	// Replay window FIRST (spec §2.5): a redelivery of the same
 	// (caller, corr_id, op) returns the FIRST answer — the identical
 	// stored bytes, as_of included — instead of re-reading.
-	caller := FederationBusCaller
 	replay := s.federationReplayWindow()
 	if hit, ok := replay.lookup(caller, q.CorrID, q.Op); ok {
-		var prior bus.ResponseEnvelope
+		var prior responseEnvelope
 		if err := json.Unmarshal(hit.body, &prior); err == nil {
 			return prior
 		}
 		// A stored body that no longer decodes must never surface as a
 		// wrong answer — fall through and answer fresh (a second store
 		// under the same key is a no-op, so the FIRST answer stays).
-		log.Printf("FEDERATION BUS: replay body undecodable (corr %s) — answering fresh", q.CorrID)
+		log.Printf("FEDERATION: replay body undecodable (corr %s) — answering fresh", q.CorrID)
 	}
 
-	data, gaps, fedErr := fn(ctx, s, &env)
+	data, gaps, fedErr := fn(ctx, s, q)
 	if !obs.checkBus(ctx) {
-		return s.federationBusError(q, fedErrDeadlineExceed,
+		return s.federationEnvelopeError(q, fedErrDeadlineExceed,
 			"read budget exhausted ("+ctx.Err().Error()+")")
 	}
 	if fedErr != nil {
-		return s.federationBusError(q, fedErr.Code, fedErr.Message)
+		return s.federationEnvelopeError(q, fedErr.Code, fedErr.Message)
 	}
 	status := fedStatusOK
 	if len(gaps) > 0 {
 		// A gap in the answer downgrades ok → partial (spec §2.2/§5 law).
 		status = fedStatusPartial
 	}
-	resp := s.federationBusResponse(&env, status, data, gaps)
+	resp = s.federationResponse(q, status, data, gaps)
 	// Store BEFORE returning (the HTTP handler's discipline): an answer
-	// lost in transit is still replayable. The store takes the HTTP-shaped
-	// envelope (the window is shared with the HTTP surface), and the bus
-	// shapes marshal member-for-member identically, so a replayed bus
-	// answer decodes back into bus.ResponseEnvelope unchanged.
-	replay.store(caller, q.CorrID, q.Op, http.StatusOK, s.federationResponse(&env, status, data, gaps))
-	s.federationBusAudit(caller, q.CorrID, q.Op, status)
+	// lost in transit is still replayable.
+	replay.store(caller, q.CorrID, q.Op, http.StatusOK, resp)
 	return resp
+}
+
+// federationEnvelopeError renders the status="error" variant of the §2.2
+// envelope (the fedWriteError twin, minus the HTTP writer) — the refusal
+// shape the bus and MCP adapters share verbatim, and the shape
+// federationExecQuery answers its refusal arms with.
+func (s *Server) federationEnvelopeError(q *queryEnvelope, code, message string) responseEnvelope {
+	return responseEnvelope{
+		CorrID:   q.CorrID,
+		Op:       q.Op,
+		Peer:     database.SchedulerID(),
+		Status:   fedStatusError,
+		Gaps:     make([]federationGap, 0),
+		Error:    &federationError{Code: code, Message: message},
+		Contract: federationContractVersion,
+	}
+}
+
+// FederationBusHandler answers one bus query envelope by running the SAME
+// internal query entry point POST /api/v1/federation/query runs: the want
+// validation → replay window → the op's read under a budget_ms-derived
+// deadline → the §2.2 envelope. NO HTTP objects are touched; the answer is
+// the plain envelope the bus responder publishes back on the correlated
+// reply topic.
+func (s *Server) FederationBusHandler(q bus.QueryEnvelope) bus.ResponseEnvelope {
+	return s.FederationQueryHandler(q, FederationBusCaller)
+}
+
+// FederationQueryHandler is THE internal query entry point for the
+// non-HTTP transport adapters (spec §3: every adapter "builds the envelope
+// → calls the SAME internal query entry point → returns the SAME
+// response"). The bus adapter and the MCP adapter (REMOTE-010) both route
+// here; the envelope members are the spec §2.1 contract carried verbatim,
+// and the answer is the §2.2 envelope in the bus wire shape — the exact
+// member set every transport serves (the §6 conformance duty).
+//
+// caller is the spec §4 audit/replay identity of the requesting transport
+// (the bus uses FederationBusCaller; MCP names its resolved auth mode) —
+// it keys the shared replay window and the audit row, and an empty caller
+// is a named unknown_caller refusal (fail-closed, never a guessed
+// identity).
+func (s *Server) FederationQueryHandler(q bus.QueryEnvelope, caller string) bus.ResponseEnvelope {
+	env := queryEnvelope{Op: q.Op, Args: q.Args, CorrID: q.CorrID, BudgetMS: q.BudgetMS, Want: q.Want}
+	resp := s.federationExecQuery(&env, caller)
+	return s.federationBusResponse(&env, resp)
 }
 
 // federationBusError renders the status="error" variant of the §2.2
@@ -122,23 +182,22 @@ func (s *Server) federationBusError(q bus.QueryEnvelope, code, message string) b
 	}
 }
 
-// federationBusResponse renders the §2.2 envelope for the bus, sharing the
-// freshness/stale law with the HTTP path (federationResponse) and
-// transcribing member-for-member into the bus shape (the gap TYPE differs
-// across packages; the JSON member set is the same §2.2 set).
-func (s *Server) federationBusResponse(q *queryEnvelope, status string, data any, gaps []federationGap) bus.ResponseEnvelope {
-	httpShaped := s.federationResponse(q, status, data, gaps)
+// federationBusResponse transcribes the transport-independent §2.2 envelope
+// into the bus shape, member-for-member (the gap TYPE differs across
+// packages; the JSON member set is the same §2.2 set). The freshness/stale
+// law was already applied upstream in federationResponse.
+func (s *Server) federationBusResponse(q *queryEnvelope, resp responseEnvelope) bus.ResponseEnvelope {
 	return bus.ResponseEnvelope{
-		CorrID:   httpShaped.CorrID,
-		Op:       httpShaped.Op,
-		Peer:     httpShaped.Peer,
-		Status:   httpShaped.Status,
-		AsOf:     httpShaped.AsOf,
-		AgeMS:    httpShaped.AgeMS,
-		Data:     httpShaped.Data,
-		Gaps:     busGapsFrom(httpShaped.Gaps),
-		Error:    nil,
-		Contract: httpShaped.Contract,
+		CorrID:   resp.CorrID,
+		Op:       resp.Op,
+		Peer:     resp.Peer,
+		Status:   resp.Status,
+		AsOf:     resp.AsOf,
+		AgeMS:    resp.AgeMS,
+		Data:     resp.Data,
+		Gaps:     busGapsFrom(resp.Gaps),
+		Error:    busErrorFrom(resp.Error),
+		Contract: resp.Contract,
 	}
 }
 
@@ -149,6 +208,40 @@ func busGapsFrom(gaps []federationGap) []bus.FederationGap {
 		out = append(out, bus.FederationGap{What: g.What, Why: g.Why})
 	}
 	return out
+}
+
+// busErrorFrom transcribes the api error object into the bus shape (nil
+// stays nil — a successful envelope carries no error member).
+func busErrorFrom(e *federationError) *bus.FederationError {
+	if e == nil {
+		return nil
+	}
+	return &bus.FederationError{Code: e.Code, Message: e.Message}
+}
+
+// federationExecAudit writes the spec §4 cross-box read audit row for an
+// answer produced by the shared transport-agnostic entry point
+// (federationExecQuery) — the same events mechanism the HTTP surface
+// audits through, with the requesting transport NAMED in the caller
+// identity ("bus:transport", "mcp:auth-<mode>", …). Runs for allowed AND
+// refused answers (the refusal is the interesting event). Best-effort: an
+// audit failure never fails an answer, and the read deadline is NOT used
+// so an answered query is audited even when its budget was tight. The
+// deadline context is not threaded here (the entry point's ctx may already
+// be cancelled by the time a 504 renders).
+func (s *Server) federationExecAudit(caller, corrID, op, outcome string) {
+	msg := "federation.query: " + outcome + " op=" + op + " corr_id=" + corrID + " caller=" + caller
+	e := &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "api.federation",
+		Message:   msg,
+		Details:   "{\"caller\":\"" + caller + "\",\"corr_id\":\"" + corrID + "\",\"op\":\"" + op + "\",\"outcome\":\"" + outcome + "\",\"path\":\"fed.shared\"}",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := database.LogEvent(ctx, s.db, e); err != nil {
+		log.Printf("FEDERATION AUDIT WRITE FAILED: msg=%q err=%v", msg, err)
+	}
 }
 
 // checkBus is the bus-shaped deadline arm of the request observer: the same

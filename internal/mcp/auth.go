@@ -109,6 +109,17 @@ var readOnlyTools = map[string]bool{
 	"features_get":              true,
 	"features_prune_candidates": true,
 	"peers_list":                true,
+	// REMOTE-010: the federation query tools are READS — the transport
+	// carries a peer's/read-path answer, it never mutates state (spec §7:
+	// queries are read-only by construction). Same open-reads doctrine as
+	// every other read tool above.
+	"fed_query":         true,
+	"fed_peer_status":   true,
+	"fed_fleet_status":  true,
+	"fed_projects_list": true,
+	"fed_queue_get":     true,
+	"fed_ticks_list":    true,
+	"fed_events_list":   true,
 }
 
 // MutatingToolNames returns the mutating tool set sorted — the classification
