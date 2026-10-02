@@ -118,9 +118,20 @@ never woken. Verified: 0 satellites with `adaptive_cooldown` set, 0 with a floor
 differing from their cadence. (The floor's only reader is `adaptiveCooldown()`, which
 returns early when adaptive is off — the columns were dead, and are now uniform too.)
 
-**R4.2 — The family cadence matrix** (one canonical speed per satellite role):
-`-qa` 6h · `-sync` 6h · `-pm` 24h · `-releng` 24h · `-dogfood` 72h ·
+**R4.2 — The family cadence matrix** (one canonical speed per satellite role; the numbers
+live in `FAMILY_CANONICAL` in `fleet-cooldown-policy.py`, canonical source
+`task-router/scripts/`):
+`-qa` **12h** · `-sync` 6h · `-pm` 24h · `-releng` 24h · `-dogfood` 72h ·
 `-perf` / `-review` / `-docs` / `-readme` weekly.
+*qa ruled 2026-10-02: halved from 6h because it was 369.7 slot-hours a week — **32% of the
+foremen's, for 6% of their commits** — and the goal right now is to give the foremen the
+capacity; the owner flagged once-a-day as the likely next step.*
+
+**R4.2a — Changing a cadence means changing the MATRIX, never a live `cooldown_s` PUT.**
+The policy reads a live value that disagrees with the matrix as drift and corrects it back
+(measured 2026-10-02: 37 qa lanes set to 12h were reduced to 6h within the same run). Do it
+in the canonical repo copy, then `--update-canonical` the live one, then `--apply` — the
+apply both aligns the lanes and regenerates `fleet.toml`.
 
 **R4.3 — Pause ≠ delete.** A paused lane keeps its row, board, prompt and history, and
 carries a `disabled_reason` saying who paused it and that nobody may silently re-enable
@@ -191,6 +202,15 @@ existing pins and hard-skips them.
 *Ruled 2026-10-02.* If a value must always be true, the boundary enforces it (loader,
 `PUT`, test). Identity that a reader needs is carried in the data (the name), not
 computed at display time.
+
+**R7.4 — A runtime script's canonical source is the REPO; `~/.hermes/scripts/` is a copy.**
+Editing the deployed copy alone does not stick — the next `sync_runtime.sh` overwrites it —
+and the policy additionally carries a canonical-hash sidecar (SCHED-PERF-006) that refuses a
+diverged overwrite and requires `--update-canonical` to accept an intentional change.
+Measured 2026-10-02: the deployed policy and the `task-router/scripts/` copy had drifted in
+**both directions** at once (the repo held TR-205 bounded pagination; the deployed copy held
+the admission-law report block), so reconcile by patching the specific lines, never by
+copying one file over the other.
 
 ---
 
