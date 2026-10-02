@@ -33,9 +33,14 @@ const maxBackoff = 30 * time.Second
 
 // frame is the documented subscribe frame: one text frame per published
 // event, `{"topic": "<literal>", "event": {...}}` (openapi 101 response).
+// reply_topic is the REMOTE-009 bus-query transport hint: the requester's
+// correlated reply topic carried OUTSIDE the envelope on the request
+// publish (the relay itself ignores unknown body members; a visibility
+// frame simply never sets it).
 type frame struct {
-	Topic string          `json:"topic"`
-	Event json.RawMessage `json:"event"`
+	Topic      string          `json:"topic"`
+	Event      json.RawMessage `json:"event"`
+	ReplyTopic string          `json:"reply_topic,omitempty"`
 }
 
 // Publisher is the minimal client surface the subscriber needs: mint

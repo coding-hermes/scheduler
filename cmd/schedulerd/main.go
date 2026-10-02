@@ -910,6 +910,19 @@ func main() {
 	// the value GET /api/v1/config reports are one number (both write
 	// api_read_timeout from the same resolved *apiReadTimeout).
 	apiServer.SetReadTimeout(*apiReadTimeout)
+
+	// ── REMOTE-009 (federation-query-spec §3, bus row): the query ANSWER side ──
+	// The responder subscribes to fed.query.<self> and answers every
+	// envelope through the SAME internal query entry point the HTTP
+	// surface uses (api.Server.FederationBusHandler → federationOps +
+	// the shared replay window), so a bus answer is the HTTP answer's
+	// sibling by construction. Autonomy law: a disabled bus yields a nil
+	// responder (a logged no-op — nothing ever dials); every runtime
+	// failure inside Run is log-and-retry; neither boot nor a tick can
+	// block on it. Closed with the subscriber at shutdown.
+	federationResponder := federationQueryResponder(crierClient, apiServer)
+	startFederationQueryResponder(federationResponder)
+
 	// Deploy blocks (groups/templates) JSONL store: default paths next to the
 	// DB when either flag is unset, overridable via --groups-file/--templates-file.
 	// Deploy blocks store: resolve default JSONL paths next to the DB when flags are empty.
@@ -1304,6 +1317,9 @@ func main() {
 
 	// REMOTE-004: stop the bus subscriber before the loop drains — Close
 	// tears the connections down and joins the loops (no-op when disabled).
+	// REMOTE-009: the query responder (same no-op-when-disabled law) is
+	// torn down alongside it.
+	federationResponder.Close()
 	crierSubscriber.Close()
 
 	loop.Stop()
