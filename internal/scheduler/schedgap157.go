@@ -118,10 +118,10 @@ func (l *Loop) recordDeferral(project, reason string, passID int64, detail strin
 // (when non-empty) the non-packer entry point. Called by SlotPool.spawn at the
 // admit → start boundary and by tests. Best-effort: the stamp is
 // observability — a failed write is logged and never blocks the spawn.
-func stampTickAdmission(db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int) {
+func stampTickAdmission(db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int, cooldownRemainingS float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := database.RecordTickAdmission(ctx, db, id, slotWait, admitReason, nudgeSource, urgency, weightUsed); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, id, slotWait, admitReason, nudgeSource, urgency, weightUsed, cooldownRemainingS); err != nil {
 		log.Printf("ADMIT: record admission stamp tick %s: %v", id, err)
 	}
 }

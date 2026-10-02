@@ -535,7 +535,27 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			case nudgeSource != "":
 				admitReason = "resume:" + nudgeSource
 			}
-			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight)
+			// SCHED-GAP-1695 req 3 (STAMP): how early did this tick run? 'ok'
+			// means "on schedule", so an admission AHEAD of the lane's
+			// cooldown must name its own reason — the invariant (no row with
+			// cooldown_remaining_s > 0 AND admit_reason='ok') then holds by
+			// construction, not by luck. The wake/manual families above carry
+			// their precise names already; this catches the residual.
+			cdRemainingS := admissionCooldownRemainingS(db, proj.Name, p.clock().Now())
+			if cdRemainingS > 0 && admitReason == AdmissionReasonOK {
+				admitReason = AdmissionReasonEarly
+			}
+			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight, cdRemainingS)
+			// SCHED-GAP-1695 req 4: the human ADMIT line names WHY this tick
+			// was let in, so an operator reading the log never has to guess
+			// whether a tick ran on schedule or ahead of its cooldown.
+			if cdRemainingS > 0 {
+				log.Printf("ADMIT: %s tick=%s reason=%s nudge=%s cooldown_remaining=%.0fs (EARLY)",
+					proj.Name, tickID, admitReason, nudgeSource, cdRemainingS)
+			} else {
+				log.Printf("ADMIT: %s tick=%s reason=%s nudge=%s",
+					proj.Name, tickID, admitReason, nudgeSource)
+			}
 		}
 
 		// Start.

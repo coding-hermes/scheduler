@@ -201,7 +201,7 @@ func TestQueuePage_WhyWaitingColumn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateTick: %v", err)
 	}
-	if err := database.RecordTickAdmission(ctx, db, "lane-running-tick", 1234*time.Millisecond, "ok", "", 500, 10); err != nil {
+	if err := database.RecordTickAdmission(ctx, db, "lane-running-tick", 1234*time.Millisecond, "ok", "", 500, 10, 0); err != nil {
 		t.Fatalf("RecordTickAdmission: %v", err)
 	}
 

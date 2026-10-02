@@ -1120,6 +1120,22 @@ CREATE TABLE IF NOT EXISTS remote_events_stats (
 );
 `,
 	},
+	{
+		// SCHED-GAP-1695 requirement 3 (STAMP): record HOW EARLY an admitted
+		// tick ran. cooldown_remaining_s is the lane's cooldown left at the
+		// moment of admission — 0 for a packer tick that ran on schedule, > 0
+		// for a tick admitted ahead of its cooldown (a board wake, an
+		// operator manual spawn). It makes the law's invariant MEASURABLE
+		// with one query: no row may carry admit_reason='ok' AND
+		// cooldown_remaining_s > 0 — 'ok' means "on schedule", so an early
+		// row must name its own reason. Additive ALTER, no rebuild; existing
+		// rows read 0 (honest: written before the column existed).
+		version: 59,
+		desc:    "SCHED-GAP-1695: ticks.cooldown_remaining_s — seconds of cooldown left at admission (0 = ran on schedule); the audit column that makes 'no early tick carries admit_reason=ok' a one-query check",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN cooldown_remaining_s REAL NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // laneOutputBackfillStmt initializes the four family output counts from tick

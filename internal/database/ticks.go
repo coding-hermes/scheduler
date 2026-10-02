@@ -63,9 +63,9 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // Best-effort by contract: the stamp is observability, never a gate — an
 // unknown id or a write error is returned and logged by the caller, and can
 // never change the tick's scheduling outcome.
-func RecordTickAdmission(ctx context.Context, db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int) error {
-	q := `UPDATE ticks SET slot_wait_ms = ?, admit_reason = ?, urgency = ?, weight_used = ?`
-	args := []any{slotWait.Milliseconds(), admitReason, urgency, weightUsed}
+func RecordTickAdmission(ctx context.Context, db *sql.DB, id string, slotWait time.Duration, admitReason, nudgeSource string, urgency float64, weightUsed int, cooldownRemainingS float64) error {
+	q := `UPDATE ticks SET slot_wait_ms = ?, admit_reason = ?, urgency = ?, weight_used = ?, cooldown_remaining_s = ?`
+	args := []any{slotWait.Milliseconds(), admitReason, urgency, weightUsed, cooldownRemainingS}
 	if nudgeSource != "" {
 		q += `, nudge_source = ?`
 		args = append(args, nudgeSource)
