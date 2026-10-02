@@ -272,6 +272,25 @@ func (s *Server) handleFederationQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// REMOTE-012 (§5): the aggregate rides the same surface, after the
+	// replay lookup (a replayed aggregate returns its first answer above,
+	// exactly like any other op). It stores the answer BEFORE writing (the
+	// surface's discipline) and writes the §4 audit row too — reads are
+	// observable, not silently free, and a federated read most of all.
+	// Refusal arms (missing/unknown args.op) map through the SAME
+	// httpStatus ladder every other error envelope on this surface uses.
+	if q.Op == fedOpAggregate {
+		resp := s.federationAggregateRun(&q, r.Context())
+		httpStatus := http.StatusOK
+		if resp.Status == fedStatusError && resp.Error != nil {
+			httpStatus = resp.Error.httpStatus()
+		}
+		replay.store(caller, q.CorrID, q.Op, httpStatus, resp)
+		s.federationAudit(r, caller, q.CorrID, q.Op, resp.Status, "")
+		writeJSON(w, httpStatus, resp)
+		return
+	}
+
 	// Unknown op: a NAMED refusal with the catalogue inline (spec §2.2 —
 	// an error answer, not an empty one). Audited: the refusal is the
 	// interesting event (spec §4).

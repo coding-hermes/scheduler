@@ -85,11 +85,13 @@ func main() {
 	// turn every trailing flag into a bogus positional.
 	positional, argv := splitPositionals(os.Args[1:])
 	queryArgs := argMap{}
-	allPeers := flag.Bool("all", false, "Query EVERY peer in the local peer registry (interim thin fan-out; the authoritative aggregate is REMOTE-012)")
+	allPeers := flag.Bool("all", false, "Query EVERY peer via the daemon's authoritative aggregate (REMOTE-012, docs/federation-query-spec.md §5)")
+	legacyAll := flag.Bool("legacy-all", false, "Interim LOCAL fan-out over the registered peers (bus only; no merge) — kept as fallback for a daemon without the aggregate; --all is the authoritative form")
 	want := flag.String("want", "", `Response mode: "answer" (default, all-or-error) or "partial" (best-effort with named gaps)`)
 	budgetMS := flag.Int("budget-ms", 0, "Per-peer read budget in ms (0 = peer default; the CLI never waits past the budget)")
 	corrID := flag.String("corr-id", "", "Correlation/idempotency id (spec §2.5; default: minted unique per query)")
-	jsonOut := flag.Bool("json", false, "Print the raw §2.2 response envelope(s) only — scripts parse this (--all prints one envelope per line)")
+	jsonOut := flag.Bool("json", false, "Print the raw §2.2 response envelope(s) only — scripts parse this (--all prints the aggregate envelope)")
+	daemonURL := flag.String("daemon-url", "", "Scheduler daemon base URL for --all (env SCHEDULER_URL; default "+cliDefaultDaemonURL+")")
 	relayURL := flag.String("url", "", "Crier relay base URL (env CRIER_URL; default "+cliDefaultRelayURL+")")
 	dbPath := flag.String("db", "", "Scheduler database holding the peer registry (default "+defaultDBPath()+")")
 	flag.Var(queryArgs, "arg", "Op argument k=v, repeatable (e.g. --arg filter=alpha --arg limit=5)")
@@ -104,6 +106,11 @@ func main() {
 			usageExit("--all takes exactly one positional: <op>")
 		}
 		op = rest[0]
+	case *legacyAll:
+		if len(rest) != 1 {
+			usageExit("--legacy-all takes exactly one positional: <op>")
+		}
+		op = rest[0]
 	default:
 		if len(rest) != 2 {
 			usageExit("expected: scheduler-query <peer> <op> [flags]  (or --all <op>)")
@@ -113,7 +120,7 @@ func main() {
 	if strings.TrimSpace(op) == "" {
 		usageExit("op is required (catalogue: peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list)")
 	}
-	if !*allPeers && strings.TrimSpace(peer) == "" {
+	if !*allPeers && !*legacyAll && strings.TrimSpace(peer) == "" {
 		usageExit("peer id is required (or pass --all)")
 	}
 	if w := strings.TrimSpace(*want); w != "" && w != "answer" && w != "partial" {
@@ -139,23 +146,32 @@ func main() {
 	if effectiveDB == "" {
 		effectiveDB = defaultDBPath()
 	}
+	effectiveDaemon := *daemonURL
+	if effectiveDaemon == "" {
+		effectiveDaemon = strings.TrimSpace(os.Getenv("SCHEDULER_URL"))
+	}
+	if effectiveDaemon == "" {
+		effectiveDaemon = cliDefaultDaemonURL
+	}
 	if effectiveURL == "" {
 		fmt.Fprintln(os.Stderr, "scheduler-query: no relay URL configured (--url or CRIER_URL) — nothing to query")
 		os.Exit(exitHard)
 	}
 
 	cfg := queryConfig{
-		peer:     peer,
-		allPeers: *allPeers,
-		op:       op,
-		args:     queryArgs,
-		want:     strings.TrimSpace(*want),
-		budgetMS: *budgetMS,
-		corrID:   strings.TrimSpace(*corrID),
-		jsonOut:  *jsonOut,
-		dbPath:   effectiveDB,
-		stdout:   os.Stdout,
-		stderr:   os.Stderr,
+		peer:      peer,
+		allPeers:  *allPeers,
+		legacyAll: *legacyAll,
+		op:        op,
+		args:      queryArgs,
+		want:      strings.TrimSpace(*want),
+		budgetMS:  *budgetMS,
+		corrID:    strings.TrimSpace(*corrID),
+		jsonOut:   *jsonOut,
+		dbPath:    effectiveDB,
+		daemonURL: effectiveDaemon,
+		stdout:    os.Stdout,
+		stderr:    os.Stderr,
 	}
 	// The ONE transport entry: bus.Client.Query (REMOTE-009's ask side) —
 	// the same library entry the REMOTE-012 aggregate consumes.

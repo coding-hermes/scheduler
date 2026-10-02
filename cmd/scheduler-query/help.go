@@ -19,7 +19,14 @@ const usageText = `scheduler-query — federation query client (REMOTE-011, docs
 
 Usage:
   scheduler-query <peer> <op> [flags]     ask ONE peer
-  scheduler-query --all <op> [flags]      interim thin fan-out over the registered peers
+  scheduler-query --all <op> [flags]      the AUTHORITATIVE aggregate (REMOTE-012,
+                                          docs/federation-query-spec.md §5) — delegates
+                                          to the daemon's fan-out+merge and prints the
+                                          merged §2.2 envelope (every peer's own status;
+                                          a silent peer is a named row, never "down")
+  scheduler-query --legacy-all <op>       the interim LOCAL bus fan-out, unmerged —
+                                          kept as fallback for a daemon without the
+                                          aggregate
 
 Positionals:
   <peer>    the answering scheduler's id (as registered in the local peer registry)
@@ -33,22 +40,28 @@ Positionals:
                               args: since=<RFC3339> limit=<int>
               events.list     event rows, newest first
                               args: since=<RFC3339> limit=<int> severity=<string>
+            (--all fans the chosen op out over every registered peer)
 
 Flags:
   --arg k=v        op argument, repeatable (e.g. --arg filter=alpha --arg limit=5)
   --want MODE      "answer" (default, all-or-error) or "partial" (best-effort with named gaps)
   --budget-ms N    per-peer read budget in ms (0 = peer default; the CLI never waits past the budget)
   --corr-id ID     correlation/idempotency id (default: minted unique per query)
-  --all            query EVERY peer in the local peer registry (interim thin fan-out —
-                   the authoritative aggregate is REMOTE-012)
+  --all            the authoritative aggregate (REMOTE-012) via the daemon's
+                   /api/v1/federation/query surface
+  --legacy-all     the interim local fan-out over the registered peers (no merge)
+  --daemon-url URL scheduler daemon base URL for --all (env SCHEDULER_URL;
+                   default http://127.0.0.1:9090)
   --json           print the raw §2.2 response envelope(s) only, one compact JSON object
-                   per peer per line (scripts parse this)
+                   per line (scripts parse this; --all prints the aggregate envelope)
   --url URL        Crier relay base URL (env CRIER_URL; default http://127.0.0.1:8767)
   --db PATH        scheduler database holding the peer registry
                    (default $HOME/.hermes/coding-hermes/scheduler.db)
   -h, --help       show this help
 
 Environment:
+  SCHEDULER_URL      daemon base URL for --all (overridden by --daemon-url)
+  SCHEDULER_OPERATOR_TOKEN  operator credential the daemon's gate requires for --all
   CRIER_URL          relay base URL (overridden by --url)
   CRIER_AUTH_TOKEN   relay bearer token (no flag on purpose — credentials never live in argv)
   SCHEDULER_ID       this caller's scheduler id (default: derived from the hostname)
@@ -56,13 +69,15 @@ Environment:
 Degradation (spec §5): a peer that does not answer inside the budget renders a
 status="error" envelope (code "timeout" for a silent peer) with the peer's
 last-contact time from the local registry. A silent peer is never rendered as
-"down" and never hangs the query past the budget.
+"down" and never hangs the query past the budget. The aggregate carries the
+same law per peer: every known peer appears with its own status and the named
+gaps say which peers were silent and why.
 
 Exit codes:
   0   every answer ok
   1   degraded — at least one peer answered stale/partial/error
   2   hard error — the query could not be attempted (usage, no relay URL,
-      no peers registered for --all)
+      no peers registered for --legacy-all, or the --all daemon refused)
 `
 
 func printUsage(w io.Writer) {

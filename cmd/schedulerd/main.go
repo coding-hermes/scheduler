@@ -1005,6 +1005,12 @@ func main() {
 	// FederationQueryHandler) — one replay window, one freshness clock,
 	// one audit row shared by every transport (federation-query-spec §3).
 	mcpServer.SetFederationQueryHandler(apiServer.FederationQueryHandler)
+	// REMOTE-012 (federation-query-spec §5): the aggregate's ask-side
+	// transport is the bus client's Query — the SAME library entry the
+	// CLI consumes. A disabled bus never dials: every aggregate leg then
+	// degrades to a named transport-level error row and the aggregate
+	// still answers (the §5 law — the primary answers with what it has).
+	apiServer.SetAggregateTransport(crierClient.Query)
 	// SCHED-GAP-174: /queue and /api/v1/queue must answer with ONE urgency.
 	// The dashboard ranks with the same calculator the API server builds from
 	// the resolved interval range (SetResolvedConfig →

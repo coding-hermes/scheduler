@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,12 +108,12 @@ func TestREMOTE011_CLIAnswerEqualsInternalAnswer(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := queryConfig{
-		peer:   "peer-under-test",
-		op:     "queue.get",
-		corrID: "cli-q1",
+		peer:    "peer-under-test",
+		op:      "queue.get",
+		corrID:  "cli-q1",
 		jsonOut: true,
-		stdout: &stdout,
-		stderr: &stderr,
+		stdout:  &stdout,
+		stderr:  &stderr,
 	}
 	client := bus.NewClient(true, relay.srv.URL, "", "cli-self")
 	code := runQuery(context.Background(), cfg, client)
@@ -227,19 +228,40 @@ func TestREMOTE011_FanoutRendersEveryPeer(t *testing.T) {
 	dbPath := setupFanoutRegistry(t)
 	// No relay at all: every leg degrades to code=timeout. The point is
 	// the rendering contract, not the answers.
+	// A blackhole listener (accepts, never answers): each leg waits out its
+	// OWN budget (200ms) instead of failing at connect — under a loaded
+	// host a connection-refused dial can burn the bus client's full
+	// subDialTimeout (10s) before the budget wins the race and escape the
+	// bound below. The blackhole makes the wall cost deterministic.
+	bh, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("blackhole listener: %v", err)
+	}
+	t.Cleanup(func() { _ = bh.Close() })
+	go func() {
+		for {
+			c, aerr := bh.Accept()
+			if aerr != nil {
+				return
+			}
+			// Hold the conn open, answer nothing — the budget cuts it.
+			_ = c
+		}
+	}()
+
 	var stdout, stderr bytes.Buffer
 	cfg := queryConfig{
-		allPeers: true,
-		op:       "peer.status",
-		corrID:   "cli-all-1",
-		budgetMS: 200,
-		jsonOut:  true,
-		dbPath:   dbPath,
-		stdout:   &stdout,
-		stderr:   &stderr,
+		legacyAll: true,
+		op:        "peer.status",
+		corrID:    "cli-all-1",
+		budgetMS:  200,
+		jsonOut:   true,
+		dbPath:    dbPath,
+		stdout:    &stdout,
+		stderr:    &stderr,
 	}
 	start := time.Now()
-	code := runQuery(context.Background(), cfg, bus.NewClient(true, "http://127.0.0.1:1", "", "cli-self"))
+	code := runQuery(context.Background(), cfg, bus.NewClient(true, "http://"+bh.Addr().String(), "", "cli-self"))
 	elapsed := time.Since(start)
 
 	if code != exitDegraded {
@@ -309,14 +331,14 @@ func TestREMOTE011_FanoutOKExitZero(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := queryConfig{
-		allPeers: true,
-		op:       "queue.get",
-		corrID:   "cli-all-2",
-		budgetMS: 5000,
-		jsonOut:  true,
-		dbPath:   dbPath,
-		stdout:   &stdout,
-		stderr:   &stderr,
+		legacyAll: true,
+		op:        "queue.get",
+		corrID:    "cli-all-2",
+		budgetMS:  5000,
+		jsonOut:   true,
+		dbPath:    dbPath,
+		stdout:    &stdout,
+		stderr:    &stderr,
 	}
 	code := runQuery(context.Background(), cfg, bus.NewClient(true, relay.srv.URL, "", "cli-self"))
 	if code != exitOK {
@@ -363,12 +385,12 @@ func TestREMOTE011_ExitCodesAndUsage(t *testing.T) {
 	calls := 0
 	tr := &countingTransport{calls: &calls}
 	cfg := queryConfig{
-		allPeers: true,
-		op:       "peer.status",
-		dbPath:   filepath.Join(t.TempDir(), "does-not-exist.db"),
-		jsonOut:  true,
-		stdout:   &stdout,
-		stderr:   &bytes.Buffer{},
+		legacyAll: true,
+		op:        "peer.status",
+		dbPath:    filepath.Join(t.TempDir(), "does-not-exist.db"),
+		jsonOut:   true,
+		stdout:    &stdout,
+		stderr:    &bytes.Buffer{},
 	}
 	if code := runQuery(context.Background(), cfg, tr); code != exitHard {
 		t.Errorf("missing registry exit = %d, want %d", code, exitHard)

@@ -121,6 +121,16 @@ func wsDial(ctx context.Context, rawURL, token, agentID string) (*wsConn, error)
 	if err != nil {
 		return nil, fmt.Errorf("bus: dial %s: %w", host, err)
 	}
+	// THE CEILING COVERS THE HANDSHAKE (REMOTE-012 discipline, exercised by
+	// its aggregate + CLI batteries): the upgrade exchange below is a plain
+	// blocking socket read — http.ReadResponse never observes ctx — so a
+	// relay that accepts TCP but never answers the upgrade would hang the
+	// dial past any budget and leak the socket. Arming a hard read deadline
+	// from the context (when one is armed) makes the ceiling structural:
+	// the read fails with a net timeout the moment the context expires.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 	// The nonce is exactly 16 base64 bytes (RFC 6455 §4.1).
 	nonce := make([]byte, 12)
 	if _, err := rand.Read(nonce); err != nil {

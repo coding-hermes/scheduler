@@ -109,6 +109,13 @@ type Server struct {
 	// build.
 	fedReplay     *federationReplay
 	fedReplayOnce sync.Once
+
+	// aggTransport (REMOTE-012 §5) is the aggregate's ask-side seam — the
+	// per-peer transport the fan-out dials. Installed by main.go via
+	// SetAggregateTransport (the bus client's Query, REMOTE-009); nil is a
+	// documented posture: every leg renders as a named
+	// transport_unavailable row and the aggregate still answers.
+	aggTransport AggregateTransport
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration

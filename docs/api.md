@@ -1377,6 +1377,31 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
   -d '{"op":"queue.get","corr_id":"q-42","want":"answer"}'
 ```
 
+**The aggregate (`op: "fleet.aggregate"`, REMOTE-012, spec §5):** the
+primary's fan-out of the SAME envelope over every peer in the local
+registry, merged by the §5 rules — ok blocks merge per peer; any
+`partial`/`error`/timeout becomes a named gap and the aggregate's status
+drops to `partial`; every known peer appears as a row with its OWN status
+(a silent peer is `status:"error" code:"timeout"` with `stale` +
+`last_contact`, never an omitted row, never "down"; the primary's own
+answer is the `self:true` row). Address it through this same route with
+`args.op` naming the read op to fan out — the remaining `args` members
+pass through to every leg verbatim. Bounded fan-out (8 legs in flight,
+per-peer deadlines under `budget_ms`); one hanging peer can never hold the
+answer past its budget. An all-peers-silent fleet STILL answers (every row
+degraded, gaps named) — an empty aggregate is a bug. Replayed like any op
+(`(caller, corr_id, op)`); refusal arms (`bad_request` for a missing
+`args.op`, `unknown_op` for one outside the catalogue) map to the same
+HTTP ladder. The catalogue stays the six §2.3 ops: a PEER is never asked
+to aggregate (spec §7) — `scheduler-query --all` delegates here.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"op":"fleet.aggregate","corr_id":"agg-7","args":{"op":"queue.get"}}'
+```
+
 ### GET /api/v1/federation/catalogue
 
 **Response 200:** `{"peer": "<this scheduler_id>", "contract": "1.0.0",

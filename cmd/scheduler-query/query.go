@@ -1,20 +1,49 @@
 package main
 
-// REMOTE-011 query core (docs/federation-query-spec.md §3, the "CLI" row):
-// the thin-adapter machinery. Everything here serves the §3 law — parse the
-// surface → build the §2.1 envelope → call the SAME transport entry the
-// other surfaces consume → render the §2.2 envelope verbatim — and the §5
-// degradation model: a peer that does not answer is a rendered envelope
-// with a stable code and a last-contact time, never a hang, never a panic,
-// never a locally-computed answer to the op itself.
+// REMOTE-011 (docs/federation-query-spec.md §3, the "CLI" row):
+// scheduler-query — the federation query client.
+//
+//	scheduler-query <peer> <op> [flags]   ask ONE peer (the default)
+//	scheduler-query --all <op> [flags]    the AUTHORITATIVE aggregate (REMOTE-012)
+//	scheduler-query --legacy-all <op>     the interim LOCAL fan-out (fallback)
+//
+// THE ONE CONTRACT (spec §2/§3): this binary is a THIN adapter. It parses
+// its surface, builds the §2.1 Query envelope, hands it to the SAME
+// transport entry the other surfaces consume, and renders the §2.2
+// Response envelope VERBATIM plus a human summary. No answer is ever
+// computed here — an adapter that computes an answer itself is a bug
+// (spec §3; REMOTE-014's battery diffs this surface against the internal
+// entry point, the oracle).
+//
+// DEGRADATION, HONESTLY (spec §5 + the REMOTE-003 rendering law): a peer
+// that never answers inside budget_ms renders as a status="error"
+// envelope with a stable code ("timeout" for a silent peer) and the peer's
+// last-contact time from the local peer registry. The rendering vocabulary
+// for such a peer is stale/error with a last-contact time — the CLI never
+// claims a peer is gone. Exit codes: 0 every answer ok; 1 degraded (at
+// least one peer stale/partial/error); 2 hard error (the query could not
+// be attempted: usage, no relay URL, no peer registry to fan out over).
+//
+// --all is the AUTHORITATIVE aggregate (deliverable 5, REMOTE-012): it
+// DELEGATES to the daemon's aggregate on /api/v1/federation/query (the §5
+// fan-out+merge behind the operator gate, replay window and read audit)
+// and renders the §2.2 envelope verbatim — the merge is never duplicated
+// here (spec §3: an adapter that computes an answer itself is a bug). A
+// daemon that cannot be reached or refuses the credential is a named hard
+// error (exit 2). --legacy-all keeps the interim local bus fan-out as the
+// fallback for the window where no aggregate-capable daemon is up; its
+// output still names the aggregate as authoritative.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +114,7 @@ type queryTransport interface {
 type queryConfig struct {
 	peer         string
 	allPeers     bool
+	legacyAll    bool
 	op           string
 	args         map[string]any
 	want         string
@@ -92,6 +122,7 @@ type queryConfig struct {
 	corrID       string
 	jsonOut      bool
 	dbPath       string
+	daemonURL    string
 	lastContacts map[string]string
 	stdout       io.Writer
 	stderr       io.Writer
@@ -99,7 +130,8 @@ type queryConfig struct {
 
 // runQuery executes one CLI invocation and returns the process exit code.
 // It never panics and never outlives the budgets: every wait is bounded by
-// the transport's budget_ms (bus.Query) or, for --all, the fan-out ceiling.
+// the transport's budget_ms (bus.Query) or, for --all, the daemon's own
+// aggregate ceiling.
 func runQuery(ctx context.Context, cfg queryConfig, tr queryTransport) int {
 	if cfg.corrID == "" {
 		// The §2.1 required member: caller-assigned, unique per
@@ -109,6 +141,9 @@ func runQuery(ctx context.Context, cfg queryConfig, tr queryTransport) int {
 		cfg.corrID = tr.NextCorrID()
 	}
 	if cfg.allPeers {
+		return runAggregate(ctx, cfg)
+	}
+	if cfg.legacyAll {
 		return runFanout(ctx, cfg, tr)
 	}
 	return runSingle(ctx, cfg, tr, cfg.peer)
@@ -157,7 +192,7 @@ func runFanout(ctx context.Context, cfg queryConfig, tr queryTransport) int {
 	if hadRegistry {
 		cfg.lastContacts = contacts
 	}
-	fmt.Fprintf(cfg.stderr, "scheduler-query: interim thin fan-out over %d registered peer(s); the authoritative aggregate is REMOTE-012 (docs/federation-query-spec.md §5)\n", len(peers))
+	fmt.Fprintf(cfg.stderr, "scheduler-query: interim LOCAL fan-out over %d registered peer(s); the authoritative aggregate is the daemon's fleet.aggregate (REMOTE-012, docs/federation-query-spec.md §5) — use --all to delegate to it\n", len(peers))
 
 	budget := cfg.budgetMS
 	if budget <= 0 {
@@ -220,6 +255,129 @@ func buildEnvelope(cfg queryConfig) bus.QueryEnvelope {
 		q.BudgetMS = &b
 	}
 	return q
+}
+
+// cliDefaultDaemonURL matches the daemon's --listen default (main.go) —
+// where the aggregate (REMOTE-012) lives when the operator changed nothing.
+const cliDefaultDaemonURL = "http://127.0.0.1:9090"
+
+// runAggregate is the AUTHORITATIVE --all (deliverable 5, REMOTE-012): it
+// DELEGATES to the daemon's aggregate on /api/v1/federation/query — the
+// §5 fan-out+merge behind the operator gate, replay window and read audit —
+// and renders the §2.2 envelope verbatim. The merge is never duplicated in
+// this binary (spec §3: an adapter that computes an answer itself is a
+// bug). A degraded aggregate renders the same way a degraded peer does
+// (exit 1); a daemon that cannot be reached or refuses is a named hard
+// error (exit 2 — the query could not be attempted).
+func runAggregate(ctx context.Context, cfg queryConfig) int {
+	daemon := strings.TrimRight(cfg.daemonURL, "/")
+	corrID := cfg.corrID
+	if corrID == "" {
+		corrID = "cli-agg-1"
+	}
+	// The envelope: op=fleet.aggregate + args.op (the read op), the §2.1
+	// member set — nothing the surface would not accept from any caller.
+	aggArgs := make(map[string]any, len(cfg.args)+1)
+	for k, v := range cfg.args {
+		aggArgs[k] = v
+	}
+	aggArgs["op"] = cfg.op
+	envelope := map[string]any{
+		"op":      "fleet.aggregate",
+		"args":    aggArgs,
+		"corr_id": corrID,
+	}
+	if cfg.want != "" {
+		envelope["want"] = cfg.want
+	}
+	if cfg.budgetMS > 0 {
+		envelope["budget_ms"] = cfg.budgetMS
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: marshal aggregate envelope: %v\n", err)
+		return exitHard
+	}
+
+	budget := cfg.budgetMS
+	if budget <= 0 {
+		budget = cliDefaultBudgetMS
+	}
+	// The ceiling mirrors the surface's own budget+slack discipline; a
+	// wedged daemon holds this client no longer than it holds the answer.
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(budget+fanoutSlackMS)*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, daemon+"/api/v1/federation/query", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: build aggregate request: %v\n", err)
+		return exitHard
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Operator-Token", os.Getenv("SCHEDULER_OPERATOR_TOKEN"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s unreachable: %v — start the daemon or pass --daemon-url\n", daemon, err)
+		return exitHard
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: read aggregate answer: %v\n", err)
+		return exitHard
+	}
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s refused (HTTP %d) — set SCHEDULER_OPERATOR_TOKEN; body: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return exitHard
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s answered HTTP %d: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return exitHard
+	}
+	var env bus.ResponseEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate answer is not a §2.2 envelope: %v\n", err)
+		return exitHard
+	}
+	renderAggregate(cfg, env)
+	if env.Status != respStatusOK {
+		return exitDegraded
+	}
+	return exitOK
+}
+
+// renderAggregate prints the authoritative aggregate: the §2.2 envelope
+// verbatim (the contract members), plus in human mode the per-peer summary
+// lines the --legacy-all view rendered — same vocabulary (stale/error,
+// never "down"), one authoritative answer instead of N unmerged ones.
+func renderAggregate(cfg queryConfig, env bus.ResponseEnvelope) {
+	if cfg.jsonOut {
+		writeEnvelopeJSON(cfg.stdout, env)
+		return
+	}
+	fmt.Fprintf(cfg.stdout, "scheduler-query: authoritative aggregate (REMOTE-012) op=%s status=%s as_of=%s\n", env.Op, env.Status, env.AsOf)
+	if data, ok := env.Data.(map[string]any); ok {
+		if rows, ok := data["peers"].([]any); ok {
+			for _, r := range rows {
+				row, ok := r.(map[string]any)
+				if !ok {
+					continue
+				}
+				peer, _ := row["peer"].(string)
+				status, _ := row["status"].(string)
+				stale, _ := row["stale"].(bool)
+				line := fmt.Sprintf("  peer=%s status=%s stale=%t", peer, status, stale)
+				if lc, ok := row["last_contact"].(string); ok && lc != "" {
+					line += " last_contact=" + lc
+				}
+				if errObj, ok := row["error"].(map[string]any); ok {
+					code, _ := errObj["code"].(string)
+					line += " code=" + code
+				}
+				fmt.Fprintln(cfg.stdout, line)
+			}
+		}
+	}
+	writeEnvelopeIndent(cfg.stdout, env)
 }
 
 // degradedEnvelope renders the status="error" envelope for a peer that
