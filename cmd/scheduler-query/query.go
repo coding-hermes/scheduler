@@ -192,7 +192,7 @@ func runFanout(ctx context.Context, cfg queryConfig, tr queryTransport) int {
 	if hadRegistry {
 		cfg.lastContacts = contacts
 	}
-	fmt.Fprintf(cfg.stderr, "scheduler-query: interim LOCAL fan-out over %d registered peer(s); the authoritative aggregate is the daemon's fleet.aggregate (REMOTE-012, docs/federation-query-spec.md §5) — use --all to delegate to it\n", len(peers))
+	_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: interim LOCAL fan-out over %d registered peer(s); the authoritative aggregate is the daemon's fleet.aggregate (REMOTE-012, docs/federation-query-spec.md §5) — use --all to delegate to it\n", len(peers))
 
 	budget := cfg.budgetMS
 	if budget <= 0 {
@@ -295,7 +295,7 @@ func runAggregate(ctx context.Context, cfg queryConfig) int {
 	}
 	body, err := json.Marshal(envelope)
 	if err != nil {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: marshal aggregate envelope: %v\n", err)
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: marshal aggregate envelope: %v\n", err)
 		return exitHard
 	}
 
@@ -309,33 +309,33 @@ func runAggregate(ctx context.Context, cfg queryConfig) int {
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, daemon+"/api/v1/federation/query", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: build aggregate request: %v\n", err)
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: build aggregate request: %v\n", err)
 		return exitHard
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Operator-Token", os.Getenv("SCHEDULER_OPERATOR_TOKEN"))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s unreachable: %v — start the daemon or pass --daemon-url\n", daemon, err)
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s unreachable: %v — start the daemon or pass --daemon-url\n", daemon, err)
 		return exitHard
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: read aggregate answer: %v\n", err)
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: read aggregate answer: %v\n", err)
 		return exitHard
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s refused (HTTP %d) — set SCHEDULER_OPERATOR_TOKEN; body: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s refused (HTTP %d) — set SCHEDULER_OPERATOR_TOKEN; body: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
 		return exitHard
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s answered HTTP %d: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate at %s answered HTTP %d: %s\n", daemon, resp.StatusCode, strings.TrimSpace(string(raw)))
 		return exitHard
 	}
 	var env bus.ResponseEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate answer is not a §2.2 envelope: %v\n", err)
+		_, _ = fmt.Fprintf(cfg.stderr, "scheduler-query: aggregate answer is not a §2.2 envelope: %v\n", err)
 		return exitHard
 	}
 	renderAggregate(cfg, env)
@@ -354,7 +354,7 @@ func renderAggregate(cfg queryConfig, env bus.ResponseEnvelope) {
 		writeEnvelopeJSON(cfg.stdout, env)
 		return
 	}
-	fmt.Fprintf(cfg.stdout, "scheduler-query: authoritative aggregate (REMOTE-012) op=%s status=%s as_of=%s\n", env.Op, env.Status, env.AsOf)
+	_, _ = fmt.Fprintf(cfg.stdout, "scheduler-query: authoritative aggregate (REMOTE-012) op=%s status=%s as_of=%s\n", env.Op, env.Status, env.AsOf)
 	if data, ok := env.Data.(map[string]any); ok {
 		if rows, ok := data["peers"].([]any); ok {
 			for _, r := range rows {
@@ -373,7 +373,7 @@ func renderAggregate(cfg queryConfig, env bus.ResponseEnvelope) {
 					code, _ := errObj["code"].(string)
 					line += " code=" + code
 				}
-				fmt.Fprintln(cfg.stdout, line)
+				_, _ = fmt.Fprintln(cfg.stdout, line)
 			}
 		}
 	}
@@ -424,7 +424,7 @@ func renderPeer(cfg queryConfig, peer string, resp bus.ResponseEnvelope) {
 		// stale/error — the summary never claims the peer is gone.
 		line += fmt.Sprintf(" code=%s last_contact=%s", resp.Error.Code, lastContactFor(cfg, peer))
 	}
-	fmt.Fprintln(cfg.stdout, line)
+	_, _ = fmt.Fprintln(cfg.stdout, line)
 	writeEnvelopeIndent(cfg.stdout, resp)
 }
 
@@ -435,10 +435,10 @@ func writeEnvelopeJSON(w io.Writer, resp bus.ResponseEnvelope) {
 	if err != nil {
 		// The envelope came off the wire as JSON; a re-marshal cannot
 		// fail in practice. Fail loud rather than print a lie.
-		fmt.Fprintf(w, "{\"status\":\"error\",\"error\":{\"code\":\"internal\",\"message\":%q}}\n", err.Error())
+		_, _ = fmt.Fprintf(w, "{\"status\":\"error\",\"error\":{\"code\":\"internal\",\"message\":%q}}\n", err.Error())
 		return
 	}
-	w.Write(append(b, '\n'))
+	_, _ = w.Write(append(b, '\n'))
 }
 
 // writeEnvelopeIndent writes the §2.2 envelope verbatim, indented (the
@@ -446,10 +446,10 @@ func writeEnvelopeJSON(w io.Writer, resp bus.ResponseEnvelope) {
 func writeEnvelopeIndent(w io.Writer, resp bus.ResponseEnvelope) {
 	b, err := json.MarshalIndent(resp, "", "  ")
 	if err != nil {
-		fmt.Fprintf(w, "{\"status\":\"error\",\"error\":{\"code\":\"internal\",\"message\":%q}}\n", err.Error())
+		_, _ = fmt.Fprintf(w, "{\"status\":\"error\",\"error\":{\"code\":\"internal\",\"message\":%q}}\n", err.Error())
 		return
 	}
-	w.Write(append(b, '\n'))
+	_, _ = w.Write(append(b, '\n'))
 }
 
 // registryPeers resolves the --all target set: the peers registered in the
@@ -459,22 +459,22 @@ func writeEnvelopeIndent(w io.Writer, resp bus.ResponseEnvelope) {
 // be a fabricated answer.
 func registryPeers(ctx context.Context, dbPath string, errw io.Writer) ([]string, int) {
 	if _, err := os.Stat(dbPath); err != nil {
-		fmt.Fprintf(errw, "scheduler-query: no peer registry at %s — --all reads the local registry; register peers or target one peer\n", dbPath)
+		_, _ = fmt.Fprintf(errw, "scheduler-query: no peer registry at %s — --all reads the local registry; register peers or target one peer\n", dbPath)
 		return nil, exitHard
 	}
 	db, err := database.InitDB(dbPath)
 	if err != nil {
-		fmt.Fprintf(errw, "scheduler-query: open peer registry %s: %v\n", dbPath, err)
+		_, _ = fmt.Fprintf(errw, "scheduler-query: open peer registry %s: %v\n", dbPath, err)
 		return nil, exitHard
 	}
 	defer func() { _ = db.Close() }()
 	peers, err := database.ListPeers(ctx, db)
 	if err != nil {
-		fmt.Fprintf(errw, "scheduler-query: read peer registry: %v\n", err)
+		_, _ = fmt.Fprintf(errw, "scheduler-query: read peer registry: %v\n", err)
 		return nil, exitHard
 	}
 	if len(peers) == 0 {
-		fmt.Fprintf(errw, "scheduler-query: no peers registered in %s — the aggregate has nothing to fan out over\n", dbPath)
+		_, _ = fmt.Fprintf(errw, "scheduler-query: no peers registered in %s — the aggregate has nothing to fan out over\n", dbPath)
 		return nil, exitHard
 	}
 	ids := make([]string, 0, len(peers))

@@ -81,5 +81,5 @@ Exit codes:
 `
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, usageText)
+	_, _ = fmt.Fprint(w, usageText)
 }

@@ -211,12 +211,11 @@ func splitPositionals(argv []string) (positional, rest []string) {
 		case strings.HasPrefix(a, "-"):
 			rest = append(rest, a)
 			name := strings.TrimLeft(a, "-")
-			if eq := strings.Index(name, "="); eq >= 0 {
-				name = name[:eq]
-			} else if valueFlags[name] && i+1 < len(argv) {
+			if !strings.Contains(name, "=") && valueFlags[name] && i+1 < len(argv) {
 				// Go's flag consumes the next token as the value
 				// unconditionally — mirror that so the token never
-				// leaks into the positional list.
+				// leaks into the positional list. A `--flag=v` token
+				// binds its own value; no lookahead for those.
 				i++
 				rest = append(rest, argv[i])
 			}

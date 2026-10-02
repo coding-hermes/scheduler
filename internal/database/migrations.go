@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 58
+const latestMigration = 60
 
 // migration describes a single forward-only schema change.
 type migration struct {
