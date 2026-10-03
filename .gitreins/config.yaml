@@ -3,6 +3,10 @@ guards:
   lint: false
   tests: false
   test_mode: full
+  # TRUST-001 (gitreins 0.15.0): board-only qa-cron commits stage no Go files,
+  # so every substantive gate skips -> DEGRADED PASS -> rc=2 refusal. Accept
+  # skips so board/annotation commits land; product commits still grade full.
+  allow_skips: true
   # The full suite is the whole module (the scheduler package alone runs ~115s at
   # idle). 180s was below that under fleet load — with judge jobs running, the
   # suite exceeds it and the hook blocks EVERY commit, code or not. 900s covers
