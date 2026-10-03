@@ -131,8 +131,15 @@ func wsDial(ctx context.Context, rawURL, token, agentID string) (*wsConn, error)
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	// The nonce is exactly 16 base64 bytes (RFC 6455 §4.1).
-	nonce := make([]byte, 12)
+	// The nonce is exactly 16 RANDOM bytes; base64 encodes them to the
+	// 24-character value RFC 6455 §4.1 requires. The LENGTH is load-bearing:
+	// the relay's gorilla upgrader validates the DECODED length (websocket
+	// @v1.5.3 isValidChallengeKey: "must be Base64 encoded value of 16-byte
+	// in length") and answers 400 to anything shorter — a 12-byte nonce
+	// becomes a 16-character key that decodes to 12 bytes and is refused,
+	// which is what made every subscribe handshake fail (SCHED-GAP-1711).
+	// Do not shorten it.
+	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("bus: handshake nonce: %w", err)
@@ -189,6 +196,14 @@ func wsDial(ctx context.Context, rawURL, token, agentID string) (*wsConn, error)
 
 	// Bytes the HTTP response parse left buffered belong to the WebSocket
 	// stream — wrap the conn so the first frame is never lost.
+	//
+	// The dial deadline above is a HANDSHAKE CEILING, never a stream
+	// deadline (see subDialTimeout): the read that follows is long-lived, so
+	// the deadline must be cleared the moment the upgrade is validated.
+	// Left armed, every healthy subscription died at the dial budget with
+	// "read tcp …: i/o timeout" — connect, then a drop-and-retry loop that
+	// never stopped (SCHED-GAP-1711, found right after the 400 fix).
+	_ = conn.SetDeadline(time.Time{})
 	return &wsConn{conn: &wsBufferedConn{br: br, Conn: conn}, clientKey: key}, nil
 }
 
@@ -321,6 +336,11 @@ type Subscriber struct {
 	events chan IngestedEvent
 	now    func() time.Time
 
+	// dialBudget overrides subDialTimeout for one subscriber's handshake.
+	// Zero (the production value) uses the constant; tests shrink it so they
+	// can prove the dial deadline is cleared once the stream is open.
+	dialBudget time.Duration
+
 	wg   sync.WaitGroup
 	done chan struct{}
 }
@@ -372,7 +392,11 @@ func (s *Subscriber) Subscribe(ctx context.Context, pattern string) error {
 	if s == nil || s.pub == nil {
 		return ErrDisabled
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, subDialTimeout)
+	budget := s.dialBudget
+	if budget <= 0 {
+		budget = subDialTimeout
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, budget)
 	conn, err := s.dial(dialCtx, pattern)
 	cancel()
 	if err != nil {

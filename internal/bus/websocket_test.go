@@ -123,11 +123,32 @@ func (ws *wsTestServer) snapshot() (path, upgrade, key, auth, agent string) {
 	return ws.gotPath, ws.gotUpgrade, ws.gotKey, ws.gotAuth, ws.gotAgent
 }
 
+// validChallengeKey mirrors gorilla/websocket's isValidChallengeKey
+// (v1.5.3 util.go): an RFC 6455 §4.1 key must base64-decode to exactly 16
+// bytes. The relay's real upgrader enforces this and answers 400; the stub
+// below enforces it too, so a nonce regression fails here instead of
+// silently passing a handshake the live relay refuses (SCHED-GAP-1711).
+func validChallengeKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	return err == nil && len(decoded) == 16
+}
+
 func newWSTestServer(t *testing.T, script func(conn net.Conn)) *wsTestServer {
 	ws := &wsTestServer{t: t, frame: script}
 	ready := make(chan struct{})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws.capture(r)
+		// Mirror the relay's upgrader: a Sec-WebSocket-Key that does not
+		// decode to 16 bytes is refused with the same 400 the live relay
+		// sends, so the suite cannot bless a handshake the relay rejects.
+		if !validChallengeKey(ws.headerKeyLocked()) {
+			w.Header().Set("Sec-Websocket-Version", "13")
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "no hijack", 500)
@@ -199,6 +220,11 @@ func TestSubscribe_ReceivesDocumentedFramesEndToEnd(t *testing.T) {
 				t.Fatal("events channel closed before the first event")
 			}
 			got = append(got, ev)
+		case err := <-subDone:
+			// A refused handshake surfaces here (e.g. the relay's 400 for a
+			// Sec-WebSocket-Key that does not decode to 16 bytes) instead of
+			// as a bare timeout, so the regression names its cause.
+			t.Fatalf("subscribe returned before the first event: %v", err)
 		case <-deadline:
 			t.Fatalf("timed out; got %d events", len(got))
 		}
@@ -231,6 +257,13 @@ func TestSubscribe_ReceivesDocumentedFramesEndToEnd(t *testing.T) {
 	if gotUpgrade != "websocket" || gotKey == "" {
 		t.Errorf("upgrade headers missing: upgrade=%q key=%q", gotUpgrade, gotKey)
 	}
+	// RFC 6455 §4.1 + the relay's gorilla upgrader: the key must
+	// base64-decode to 16 bytes. A shorter nonce is refused 400 by the live
+	// relay even though the handshake looks well-formed (SCHED-GAP-1711).
+	if decoded, err := base64.StdEncoding.DecodeString(gotKey); err != nil || len(decoded) != 16 {
+		t.Errorf("Sec-WebSocket-Key %q decodes to %d bytes (err %v); RFC 6455 §4.1 requires 16",
+			gotKey, len(decoded), err)
+	}
 }
 
 func TestSubscribe_AuthHeadersPassThrough(t *testing.T) {
@@ -250,6 +283,30 @@ func TestSubscribe_AuthHeadersPassThrough(t *testing.T) {
 	if agent != "scheduler-alpha" {
 		t.Errorf("X-Agent-ID = %q", agent)
 	}
+	s.Close()
+	<-done
+}
+
+func TestSubscribe_OutlivesTheHandshakeBudget(t *testing.T) {
+	release := make(chan struct{})
+	ws := newWSTestServer(t, func(conn net.Conn) { <-release })
+	c := NewClient(true, ws.srv.URL, "", "alpha")
+	s := NewSubscriber(c)
+	// Shrink the handshake ceiling: this test proves the deadline is a
+	// HANDSHAKE bound only. Before the fix it stayed armed on the socket, so
+	// every healthy subscription died at the budget with "read tcp …: i/o
+	// timeout" and the retry loop never stopped (SCHED-GAP-1711).
+	s.dialBudget = 100 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- s.Subscribe(context.Background(), "sched.tick.>") }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Subscribe returned %v well after the upgrade — the dial deadline must not outlive the handshake", err)
+	case <-time.After(1500 * time.Millisecond):
+		// Still streaming: exactly what a long-lived subscription must do.
+	}
+	close(release)
 	s.Close()
 	<-done
 }
