@@ -295,15 +295,19 @@ func TestSubscribe_OutlivesTheHandshakeBudget(t *testing.T) {
 	// Shrink the handshake ceiling: this test proves the deadline is a
 	// HANDSHAKE bound only. Before the fix it stayed armed on the socket, so
 	// every healthy subscription died at the budget with "read tcp …: i/o
-	// timeout" and the retry loop never stopped (SCHED-GAP-1711).
-	s.dialBudget = 100 * time.Millisecond
+	// timeout" and the retry loop never stopped (SCHED-GAP-1711). The budget
+	// is 500ms (not 50ms) and the wait window 6x it: the handshake is a
+	// loopback round trip, and a loaded host must not make a 50ms ceiling
+	// expire during the handshake itself — that would be a load-sensitive
+	// false failure, the class QA-CHS-182 already had to relax elsewhere.
+	s.dialBudget = 500 * time.Millisecond
 	done := make(chan error, 1)
 	go func() { done <- s.Subscribe(context.Background(), "sched.tick.>") }()
 
 	select {
 	case err := <-done:
 		t.Fatalf("Subscribe returned %v well after the upgrade — the dial deadline must not outlive the handshake", err)
-	case <-time.After(1500 * time.Millisecond):
+	case <-time.After(3 * time.Second):
 		// Still streaming: exactly what a long-lived subscription must do.
 	}
 	close(release)
