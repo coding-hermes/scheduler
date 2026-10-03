@@ -48,12 +48,38 @@ func applyGap060Pragmas(t *testing.T, db *sql.DB) {
 	for _, p := range []string{
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
-		"PRAGMA synchronous=NORMAL",
+		// QA-CHS-182: synchronous=OFF is the test-only fsync bypass. NORMAL
+		// still fsyncs on every WAL autocheckpoint (wal_autocheckpoint=200),
+		// and under host load each checkpoint sync measured ~150ms — that
+		// alone pushed TestEventsHub_FullBufferDropsInsteadOfBlocking (50
+		// commits) to 7.9s and the package past its 300s budget. OFF is
+		// correctness-neutral for a running process (atomicity and writer
+		// serialization are unchanged; only power-loss durability is given
+		// up, which no unit test can observe). Production connections keep
+		// InitDB's synchronous=NORMAL — schema.go is untouched.
+		"PRAGMA synchronous=OFF",
 		"PRAGMA wal_autocheckpoint=200",
 	} {
 		if _, err := db.Exec(p); err != nil {
 			t.Fatalf("pragma %q on copied test db: %v", p, err)
 		}
+	}
+}
+
+// applyTestDurabilityOff is the test-only fsync bypass for tests that open a
+// raw *sql.DB themselves (QA-CHS-182): migration tests deliberately bypass
+// InitDB, which leaves them on SQLite's default synchronous=FULL — every DDL
+// step of the ladder takes a full fsync, and under host load one sync
+// measured ~150ms (a v27 rewind+re-run wedged >4min in raw SYS_FSYNC on a
+// checkpoint storm day). synchronous=OFF is correctness-neutral for a running
+// process: transaction atomicity and writer serialization are unchanged, only
+// power-loss durability is given up, which no unit test can observe.
+// Production InitDB connections keep synchronous=NORMAL — schema.go is
+// untouched.
+func applyTestDurabilityOff(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if _, err := db.Exec(`PRAGMA synchronous=OFF`); err != nil {
+		t.Fatalf("pragma synchronous=OFF: %v", err)
 	}
 }
 

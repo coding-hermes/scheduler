@@ -34,6 +34,7 @@ func schedGap1674V49DB(t *testing.T) *sql.DB {
 		t.Fatalf("open sqlite %s: %v", dbPath, err)
 	}
 	t.Cleanup(func() { db.Close() })
+	applyTestDurabilityOff(t, db) // QA-CHS-182: test-only fsync bypass
 	ctx := context.Background()
 
 	if _, err := db.ExecContext(ctx, `
