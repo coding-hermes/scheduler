@@ -1152,6 +1152,36 @@ ALTER TABLE namespaces ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
 `,
 	},
 	{
+		// SCHED-GAP-1712: per-lane and per-namespace gateway endpoints. The
+		// daemon resolved ONE gateway URL for every project (GatewayConfig
+		// carries a single url), so lanes could be DISTINGUISHED by key but
+		// never ADDRESSED by endpoint: one Hermes gateway served ~90
+		// projects. These columns add the two missing tiers — the lane's own
+		// endpoint and its namespace's — leaving [gateway].url as the global
+		// fallback. Resolution is lane > namespace > global, applied per tick
+		// at dispatch time; both defaults are '' = inherit, so a fleet that
+		// sets nothing behaves exactly as before.
+		//
+		// ticks.* records the RESOLVED endpoint on the ticket row so a
+		// dispatch can be audited after the fact: gateway_url is the
+		// endpoint the POST went to ('' = no HTTP dispatch: exec spawn, or a
+		// row written before this migration), gateway_source names which
+		// tier supplied the URL, gateway_key_source which tier supplied the
+		// credential. The credential ITSELF is never persisted — the source
+		// is the auditable fact, not the secret. Sources are the closed set
+		// "lane" | "namespace" | "global" ("" pairs with an empty URL).
+		version: 61,
+		desc:    "SCHED-GAP-1712: per-lane/per-namespace gateway endpoints (projects.gateway_url, namespaces.gateway_url|gateway_key) and the resolved endpoint recorded per tick (ticks.gateway_url|gateway_source|gateway_key_source)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN gateway_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_key_source TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
 		// SCHED-GAP-1710 (the dispatch leg's receive half): the durable record
 		// of the work a tick HANDED OUT over the Crier bus.
 		//

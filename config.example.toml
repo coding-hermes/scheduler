@@ -44,6 +44,10 @@ namespace_mode = true
 [gateway]
 # Hermes gateway HTTP API URL. Empty string falls back to exec.Command.
 # Supports ${VAR} env-var interpolation (e.g. ${API_SERVER_KEY}).
+# SCHED-GAP-1712: this is the GLOBAL tier. A lane (projects.gateway_url) or
+# its namespace (namespaces.gateway_url) may override it per tick — resolution
+# is lane > namespace > global, and a fleet that sets neither behaves exactly
+# as before.
 url = "http://127.0.0.1:8642"
 # API key for Hermes gateway. Supports ${VAR} interpolation.
 # Leave empty if using exec.Command spawn (no gateway).

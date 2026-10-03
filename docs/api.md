@@ -334,6 +334,7 @@ Full Project model (response shape, snake_case):
 | `model`, `provider` | string | LLM model/provider passed to the spawned agent |
 | `worker_model`, `worker_provider` | string | Optional suggested worker model/provider |
 | `gateway_key` | string | Per-foreman Hermes gateway key; empty = daemon's shared key |
+| `gateway_url` | string | SCHED-GAP-1712: per-LANE gateway endpoint; empty = inherit the namespace's `gateway_url`, then `[gateway].url`. The resolved endpoint is stamped per tick as `gateway_url`/`gateway_source` |
 | `command` | string | Optional custom spawn command |
 | `namespace_id` | string \| null | FK → namespaces.id; null = unscheduled in namespace mode |
 | `deliver` | string | Delivery target `platform:chat_id:thread_id` |
@@ -412,7 +413,7 @@ resume them explicitly before expecting ticks.
 | `cooldown_s` | no | 900 |
 | `decay_rate` | no | 1.0 |
 | `enabled` | no | **false** (creating never auto-enables) |
-| `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `command`, `namespace_id`, `deliver` | no | zero value / null |
+| `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command`, `namespace_id`, `deliver` | no | zero value / null |
 
 **Response 201:** the created project object (flat, with `created_at`/`updated_at`
 stamped).
@@ -512,7 +513,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 
 | Field | Notes |
 |-------|-------|
-| `repo_url`, `workdir`, `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `command` | String fields; `gateway_key` `""` clears back to the shared key |
+| `repo_url`, `workdir`, `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command` | String fields; `gateway_key` `""` clears back to the shared key, `gateway_url` `""` clears back to the namespace endpoint, then the global gateway (SCHED-GAP-1712) |
 | `weight` | 1..100 |
 | `priority` | 1..10 |
 | `cooldown_s` | Seconds |
@@ -698,6 +699,8 @@ hard cap (S07). Namespace model:
 | `load_gate` | string | `off` opts the namespace out of the daemon-wide load gate (SCHED-GAP-125) |
 | `default_prompt` | string | Base prompt every project in the namespace inherits (project `prompt` appends to it, or replaces it per `prompt_mode`) |
 | `model_chain` | string | Optional per-namespace chain override (JSON) |
+| `gateway_url` | string | SCHED-GAP-1712: namespace gateway endpoint, inherited by member lanes with no `gateway_url` of their own, over `[gateway].url`; `""` = inherit |
+| `gateway_key` | string | SCHED-GAP-1712: namespace gateway key, inherited by member lanes with no `gateway_key` of their own, over the shared `--gateway-key`; `""` = inherit |
 | `enabled` | bool | Disabled namespaces get zero allocation |
 | `description` | string | Human-readable label |
 | `created_at`, `updated_at` | string | RFC3339 |
@@ -873,6 +876,9 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `error` | string | Error text on failure |
 | `dispatch_outcome` | string | `yes` \| `no` \| `""` — did this tick dispatch a foreman worker? `""` = legacy row (pre-migration-v48) or the tick is not yet terminal (SCHED-GAP-1653) |
 | `dispatch_reason` | string | `dispatched` (pairs with `yes`) \| `no_work` \| `blocked` \| `verification_only` \| `chose_not_to` \| `unavailable` (pair with `no`) \| `""` legacy — the closed-vocabulary why (SCHED-GAP-1653) |
+| `gateway_url` | string | SCHED-GAP-1712: the RESOLVED gateway endpoint this tick's dispatch was addressed to; `""` = no HTTP dispatch (exec spawn, or a row written before migration v61) |
+| `gateway_source` | string | `lane` \| `namespace` \| `global` \| `""` — which tier supplied `gateway_url` (`""` pairs with an empty URL) |
+| `gateway_key_source` | string | `lane` \| `namespace` \| `global` \| `""` — which tier supplied the credential. The key ITSELF is never stored |
 | `created_at` | string | RFC3339 |
 
 ### GET /api/v1/ticks

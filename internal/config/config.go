@@ -352,12 +352,18 @@ type ProjectDef struct {
 	WeeklyBudgetUSD  *float64 `toml:"weekly_budget_usd"`  // SCHED-GAP-066: per-UTC-week spend cap (Monday 00:00 UTC reset); nil or <= 0 = unlimited
 	FinalBudgetUSD   *float64 `toml:"final_budget_usd"`   // SCHED-GAP-066: one-time lifetime spend cap, never resets; nil or <= 0 = unlimited
 	GatewayKey       string   `toml:"gateway_key"`        // per-foreman Hermes gateway key; empty = shared --gateway-key
-	Command          string   `toml:"command"`
-	Prompt           string   `toml:"prompt"`       // Bane 2026-08-27: extra foreman prompt; appended to namespace default_prompt unless prompt_mode="replace"
-	PromptMode       string   `toml:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
-	NamespaceID      string   `toml:"namespace_id"` // optional FK → namespaces.id
-	Deliver          string   `toml:"deliver"`
-	Enabled          *bool    `toml:"enabled"` // default true if nil
+	// SCHED-GAP-1712: the per-LANE gateway endpoint. Empty = inherit the
+	// lane's namespace gateway_url, then the daemon's [gateway].url — the
+	// three-level resolution (lane > namespace > global) the dispatch path
+	// applies per tick. Additive: a fleet that never sets it behaves exactly
+	// as before this key existed.
+	GatewayURL  string `toml:"gateway_url"`
+	Command     string `toml:"command"`
+	Prompt      string `toml:"prompt"`       // Bane 2026-08-27: extra foreman prompt; appended to namespace default_prompt unless prompt_mode="replace"
+	PromptMode  string `toml:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
+	NamespaceID string `toml:"namespace_id"` // optional FK → namespaces.id
+	Deliver     string `toml:"deliver"`
+	Enabled     *bool  `toml:"enabled"` // default true if nil
 	// Adaptive cooldown (auto slow-down / speed-up) — OPT-IN per project.
 	// adaptive_cooldown = true arms the no-progress streak escalator:
 	// no_progress_threshold consecutive ticks with 0 commits AND no new
@@ -405,6 +411,13 @@ type NamespaceDef struct {
 	Description   string   `toml:"description"`
 	DefaultPrompt string   `toml:"default_prompt"` // Bane 2026-08-27: foreman prompt default for all projects in this namespace; empty = built-in
 	ModelChain    []string `toml:"model_chain"`    // Bane 2026-08-27: namespace-level model chain ("model@provider" hops); tier between project chain and router
+	// SCHED-GAP-1712: the namespace's gateway endpoint and credential — the
+	// MIDDLE tier of the three-level resolution. A member lane with no
+	// gateway_url of its own inherits GatewayURL; its gateway_key resolves
+	// lane > namespace > shared --gateway-key the same way. Empty = inherit
+	// from below (global), so an unset namespace changes nothing.
+	GatewayURL string `toml:"gateway_url"`
+	GatewayKey string `toml:"gateway_key"`
 	// S12 concurrent wave scheduling (SCHED-GAP-109), all default-off:
 	// wave_enabled = false leaves namespace behavior byte-identical.
 	WaveEnabled     *bool  `toml:"wave_enabled"`      // optional; default false (waves off)
