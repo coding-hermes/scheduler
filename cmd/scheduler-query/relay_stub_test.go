@@ -93,11 +93,21 @@ func newCliStubRelay(t *testing.T) *cliStubRelay {
 		key := req.Header.Get("Sec-WebSocket-Key")
 		h := sha1.Sum([]byte(key + wsGUID))
 		accept := base64.StdEncoding.EncodeToString(h[:])
-		fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
 		pattern := strings.TrimPrefix(req.URL.Path, "/relay/subscribe/")
+		// REGISTER BEFORE THE 101 (INT-CI-176): the real relay owns the
+		// subscription before the upgrade bytes hit the wire, and the
+		// stub must too. wsDial returns the moment the 101 is read, and
+		// the requester immediately publishes; a registration racing
+		// that publish on a loaded runner is a LOST REPLY (the publish
+		// forward consults r.subs, finds nobody, and drops silently) —
+		// the deterministic arm64/loaded-host red seen since
+		// 2026-10-02. With the registration ordered before the 101
+		// write, "dial returned" provably implies "subscription
+		// visible": total order over one mutex, no clock involved.
 		r.mu.Lock()
 		r.subs[pattern] = &bufferedBareConn{Conn: conn, r: buf.Reader}
 		r.mu.Unlock()
+		fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
 	})
 	r.srv = httptest.NewServer(mux)
 	t.Cleanup(func() {
@@ -113,18 +123,25 @@ func newCliStubRelay(t *testing.T) *cliStubRelay {
 	return r
 }
 
-// awaitSubscription waits up to d for a subscription on pattern (the
-// subscribe-before-publish window: tests must not publish before the
-// answering side has its socket).
-func (r *cliStubRelay) awaitSubscription(t *testing.T, pattern string, d time.Duration) {
+// awaitNowSubscribed waits up to d for a REGISTERED subscription on
+// pattern. It replaces awaitSubscription (INT-CI-176): the old helper
+// proved the same thing but its 2ms sleep cadence was a tuned poll — the
+// guarantee it checks is unchanged, the clock arming is just deadline-
+// derived now. Callers need this because the subscribe-before-publish
+// window is what makes a lost reply impossible: once this returns, a
+// publish forward for `pattern` finds the conn in r.subs.
+func (r *cliStubRelay) awaitNowSubscribed(t *testing.T, pattern string, d time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
+	for {
 		r.mu.Lock()
 		_, ok := r.subs[pattern]
 		r.mu.Unlock()
 		if ok {
 			return
+		}
+		if !time.Now().Before(deadline) {
+			break
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

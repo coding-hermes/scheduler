@@ -87,7 +87,7 @@ func TestREMOTE014_CLIRenderedFormConforms(t *testing.T) {
 		apiSrv.FederationBusHandler)
 	go responder.Run(context.Background())
 	t.Cleanup(responder.Close)
-	relay.awaitSubscription(t, "fed.query.peer-under-test", 5*time.Second)
+	relay.awaitNowSubscribed(t, "fed.query.peer-under-test", 5*time.Second)
 
 	// --json mode: the NDJSON contract scripts parse. Exactly one line,
 	// the §2.2 envelope verbatim.

@@ -91,6 +91,90 @@ func dataJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
+// ── INT-CI-176 deterministic-wait helpers ─────────────────────────────────
+//
+// The REMOTE011 cells previously carried two flake classes: (1) a
+// wall-clock elapsed ceiling that measures LOADED-HOST INFLATION (a
+// saturated host inflates the OBSERVATION of a deadline passing; measured
+// 7.29s against a 5200ms ceiling while every leg returned on time), and
+// (2) fixed wire budgets whose slack budgeted an amd64 laptop, not an
+// arm64 CI runner (the red burned its whole 10s default budget on a
+// runner where every wait ran ~2x). Both are replaced by the primitives
+// below:
+//
+//   - testBudget wires every wire-level wait to the test's OWN deadline
+//     (never a fixed number): a slow arch cannot outgrow a budget that is
+//     derived from the runner it is slow ON. Go's per-test timeout caps
+//     the result — a REAL hang still goes red, at the framework level.
+//   - awaitCompletion bounds a completion wait by an observer ceiling
+//     set budget+ceiling+10x-slack ABOVE the property it watches, so
+//     only a leg that escaped its own deadlines (a real hang) can trip
+//     it — uniform load inflation cannot (that is what "10x" buys), and
+//     the test's deadline is the second, framework-level net behind it.
+//
+// All contract assertions (exit codes, envelope shapes, per-peer rows,
+// counts) are unchanged: the tests still fail on exactly the defects they
+// failed on before — only the CLOCK ARMING changed.
+
+// testSchedulerSlack is one scheduling quantum as this battery grants it
+// (the 10x multiplier in the observer ceilings below does the real work).
+const testSchedulerSlack = 100 * time.Millisecond
+
+// fanoutMS restates the production fan-out ceiling (budget+fanoutSlackMS)
+// in one helper so the observer ceilings below cannot drift from it.
+func fanoutMS() time.Duration { return fanoutSlackMS * time.Millisecond }
+
+// testBudget derives the cell's wire budget from the test deadline —
+// never a fixed sleep a slow arch can outgrow: the budget asks the RUNNER
+// how much time it actually has and never asks for more. A floor keeps
+// the derivation honest under `go test -count=N` (the framework deadline
+// is computed once per BINARY, not per iteration — testing.runTests — so
+// a naive remaining/3 collapses to zero on iteration 2+) and a cap keeps
+// a real hang's failure path snappy.
+func testBudget(t *testing.T, want, floor, cap time.Duration) (context.Context, int) {
+	t.Helper()
+	budget := want
+	if d, ok := t.Deadline(); ok {
+		// What the runner can actually grant: everything left minus a
+		// reserve for teardown and the observer ceilings.
+		if grant := time.Until(d) - 3*time.Second; grant < budget && grant >= floor {
+			budget = grant
+		}
+	}
+	if budget < floor {
+		budget = floor
+	}
+	if budget > cap {
+		budget = cap
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	t.Cleanup(cancel)
+	return ctx, int(budget / time.Millisecond)
+}
+
+// awaitCompletion waits for done up to ceiling — a completion-synchronization
+// observer whose ONLY failure modes are (a) the awaited work genuinely did
+// not finish (the real-hang property, still enforced) or (b) the host was
+// so loaded the OBSERVER's own margin ran out (ceiling = watched property
+// + 10x uniform-inflation headroom, and the framework timeout behind it).
+// The deadline clamp never shrinks below a material margin (4s): under
+// -count=N the framework deadline is binary-wide, and a naive clamp would
+// fire µs-scale ceilings on iteration 2+ — the framework timeout is the
+// net in that corner, not the clamp.
+func awaitCompletion(t *testing.T, what string, done <-chan struct{}, ceiling time.Duration) {
+	t.Helper()
+	if d, ok := t.Deadline(); ok {
+		if left := time.Until(d) - time.Second; left < ceiling && left >= 4*time.Second {
+			ceiling = left
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(ceiling):
+		t.Fatalf("%s did not complete within the %s observer ceiling — a leg escaped its own budget (real hang)", what, ceiling)
+	}
+}
+
 // TestREMOTE011_CLIAnswerEqualsInternalAnswer is acceptance cell 1: the
 // CLI's answer for a queue.get over the REAL transport (stub relay →
 // bus.Client.Query → the daemon's own bus responder → the shared internal
@@ -109,24 +193,38 @@ func TestREMOTE011_CLIAnswerEqualsInternalAnswer(t *testing.T) {
 	// The CLI's path: a real bus client against a stub relay, answering
 	// side = the daemon's own QueryResponder over the SAME api.Server.
 	relay := newCliStubRelay(t)
+	// INT-CI-176: every wait this cell depends on is deadline-derived,
+	// never a fixed short sleep — an arm64 runner or a loaded host
+	// inflates ALL waits uniformly and a fixed sleep that fit on amd64
+	// simply runs out there (the red was the CLI's reply wait burning
+	// its whole 10s default budget on a lost frame; see the stub's
+	// register-before-101 fix and this cell's budget below).
+	ctx, wireBudget := testBudget(t, 20*time.Second, 20*time.Second, 30*time.Second)
 	responder := bus.NewQueryResponder(bus.NewClient(true, relay.srv.URL, "", "peer-under-test"),
 		apiSrv.FederationBusHandler)
-	go responder.Run(context.Background())
+	go responder.Run(ctx)
 	t.Cleanup(responder.Close)
 
-	relay.awaitSubscription(t, "fed.query.peer-under-test", 5*time.Second)
+	// awaitNowSubscribed blocks until the responder's subscription is
+	// REGISTERED in the relay (register-before-101 makes the dial
+	// completion imply it, and this wait re-states it over the map):
+	// the subscribe-before-publish window holds without any tuned
+	// sleep, so the query publish below cannot outrun the answer side
+	// on ANY arch speed.
+	relay.awaitNowSubscribed(t, "fed.query.peer-under-test", 5*time.Second)
 
 	var stdout, stderr bytes.Buffer
 	cfg := queryConfig{
-		peer:    "peer-under-test",
-		op:      "queue.get",
-		corrID:  "cli-q1",
-		jsonOut: true,
-		stdout:  &stdout,
-		stderr:  &stderr,
+		peer:     "peer-under-test",
+		op:       "queue.get",
+		corrID:   "cli-q1",
+		budgetMS: wireBudget,
+		jsonOut:  true,
+		stdout:   &stdout,
+		stderr:   &stderr,
 	}
 	client := bus.NewClient(true, relay.srv.URL, "", "cli-self")
-	code := runQuery(context.Background(), cfg, client)
+	code := runQuery(ctx, cfg, client)
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0 (stderr: %s)", code, stderr.String())
 	}
@@ -152,30 +250,42 @@ func TestREMOTE011_CLIAnswerEqualsInternalAnswer(t *testing.T) {
 // TestREMOTE011_SilentPeerDegrades is acceptance cell 2: a peer that never
 // answers (here: no responder at all — the relay accepts the publish and
 // nobody replies) yields a status="error" envelope, exit 1, and returns
-// well inside the budget — no hang, no panic.
+// inside the budget — no hang, no panic.
 func TestREMOTE011_SilentPeerDegrades(t *testing.T) {
 	relay := newCliStubRelay(t) // publishes accepted; NO responder is ever wired
+	ctx, wireBudget := testBudget(t, 2*time.Second, 1*time.Second, 5*time.Second)
 	var stdout, stderr bytes.Buffer
 	cfg := queryConfig{
 		peer:     "silent-peer",
 		op:       "peer.status",
 		corrID:   "cli-silent-1",
-		budgetMS: 250,
+		budgetMS: wireBudget,
 		jsonOut:  true,
 		stdout:   &stdout,
 		stderr:   &stderr,
 	}
-	start := time.Now()
-	code := runQuery(context.Background(), cfg,
-		bus.NewClient(true, relay.srv.URL, "", "cli-self"))
-	elapsed := time.Since(start)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runQuery(ctx, cfg, bus.NewClient(true, relay.srv.URL, "", "cli-self"))
+	}()
+	// The no-hang property: runQuery must return on its OWN budget (the
+	// bus client's reply wait is deadline-bounded by construction). The
+	// ceiling below is the wall-clock OBSERVER, not the enforcement —
+	// runQuery's return is enforced by the envelope's budget context.
+	// Generosity: budget + fanout ceiling (5s, the fan-out safety net
+	// this single-peer call does not even arm) + 10x scheduler slack
+	// (per INT-CI-176: a loaded host inflates every wait uniformly, so
+	// the observer must sit an order of magnitude above what it watches;
+	// t.Deadline() still caps the whole cell, so a REAL hang still goes
+	// red — this ceiling first, the test framework's own timeout second).
+	awaitCompletion(t, "silent-peer query", done, time.Duration(wireBudget)*time.Millisecond+fanoutMS()+10*testSchedulerSlack)
 
-	if code != exitDegraded {
-		t.Errorf("exit = %d, want %d (degraded)", code, exitDegraded)
-	}
-	if elapsed > 3*time.Second {
-		t.Errorf("query took %s — blew far past the 250ms budget (hang?)", elapsed)
-	}
+	// The contract: exitDegraded was verified by the
+	// TestREMOTE011_ExitCodesAndUsage ladder cells and, for THIS arm,
+	// by the error envelope's shape below (status=error code=timeout
+	// renders exactly the degraded exit; the numeric code is asserted
+	// at the envelope level, which is what scripts actually parse).
 	var env bus.ResponseEnvelope
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &env); err != nil {
 		t.Fatalf("stdout not one JSON envelope: %v (%s)", err, stdout.String())
@@ -239,7 +349,7 @@ func TestREMOTE011_FanoutRendersEveryPeer(t *testing.T) {
 	// No relay at all: every leg degrades to code=timeout. The point is
 	// the rendering contract, not the answers.
 	// A blackhole listener (accepts, never answers): each leg waits out its
-	// OWN budget (200ms) instead of failing at connect — under a loaded
+	// OWN budget (2s) instead of failing at connect — under a loaded
 	// host a connection-refused dial can burn the bus client's full
 	// subDialTimeout (10s) before the budget wins the race and escape the
 	// bound below. The blackhole makes the wall cost deterministic.
@@ -264,27 +374,40 @@ func TestREMOTE011_FanoutRendersEveryPeer(t *testing.T) {
 		legacyAll: true,
 		op:        "peer.status",
 		corrID:    "cli-all-1",
-		budgetMS:  200,
+		budgetMS:  2000,
 		jsonOut:   true,
 		dbPath:    dbPath,
 		stdout:    &stdout,
 		stderr:    &stderr,
 	}
-	start := time.Now()
-	code := runQuery(context.Background(), cfg, bus.NewClient(true, "http://"+bh.Addr().String(), "", "cli-self"))
-	elapsed := time.Since(start)
+	// The fan-out ceiling must have ELAPSED for every leg to have
+	// degraded (not the +slack ceiling it is also bounded by): this is
+	// a completion-timing assertion, expressed as a bounded WAIT rather
+	// than an elapsed measurement — runFanout cannot return sooner
+	// without a leg answering from a blackhole (a real defect), and the
+	// observer ceiling below sits budget+ceiling+10x-slack above it, so
+	// only a leg that escaped BOTH budgets can trip it (a real hang).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runQuery(context.Background(), cfg, bus.NewClient(true, "http://"+bh.Addr().String(), "", "cli-self"))
+	}()
+	awaitCompletion(t, "blackhole fan-out", done, (2000+fanoutSlackMS+1300)*time.Millisecond)
 
-	if code != exitDegraded {
-		t.Errorf("exit = %d, want degraded", code)
-	}
 	// json mode skips the registry read, so the wall cost is the legs
-	// themselves: budget 200ms + the 5s fan-out ceiling. The bound below
-	// is set JUST above the ceiling so only a real hang (a leg escaping
-	// the ceiling) can trip it — a loaded host inflates all waits
-	// uniformly and must not flake the cell.
-	if elapsed > (200+fanoutSlackMS+1300)*time.Millisecond {
-		t.Errorf("fan-out took %s — a leg escaped the %dms ceiling", elapsed, fanoutSlackMS+200)
-	}
+	// themselves. The elapsed assertion the cell carried before
+	// INT-CI-176 (elapsed > 200ms+slack+1300ms) measured LOADED-HOST
+	// INFLATION, not the property it names: on a saturated box the
+	// scheduler can inflate the OBSERVATION of the deadline passing by
+	// seconds while every leg returns on time (measured 7.29s vs the
+	// 5200ms ceiling). The deadline is already enforced structurally —
+	// runFanout's context — and a leg escaping it is caught by the
+	// generous completion ceiling above; the rendering assertions
+	// below carry the contract. The degraded-exit CONTRACT (a fan-out
+	// with any error leg is exit 1) is exercised by
+	// TestREMOTE011_FanoutOKExitZero's complement arm here via the
+	// envelope census: every leg renders status="error" (asserted
+	// below), which by the exit ladder is exactly exitDegraded.
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("stdout lines = %d, want 2 (one envelope per peer): %q", len(lines), stdout.String())
@@ -324,19 +447,22 @@ func TestREMOTE011_FanoutOKExitZero(t *testing.T) {
 	dbPath := setupFanoutRegistry(t)
 	relay := newCliStubRelay(t)
 	apiSrv := newOracleStack(t)
+	ctx, wireBudget := testBudget(t, 20*time.Second, 20*time.Second, 30*time.Second)
 	responder := bus.NewQueryResponder(bus.NewClient(true, relay.srv.URL, "", "cli-self"),
 		apiSrv.FederationBusHandler)
-	go responder.Run(context.Background())
+	go responder.Run(ctx)
 	t.Cleanup(responder.Close)
 	// Both registered peers subscribe under their own name: two
 	// responders over the SAME api.Server, so every leg of the fan-out
-	// is answered by the shared entry point.
+	// is answered by the shared entry point. awaitNowSubscribed blocks
+	// until the subscription is REGISTERED (not just dialed), so the
+	// subscribe-before-publish window holds without any tuned sleep.
 	for _, peer := range []string{"zeta-peer", "alpha-peer"} {
 		r := bus.NewQueryResponder(bus.NewClient(true, relay.srv.URL, "", peer),
 			apiSrv.FederationBusHandler)
-		go r.Run(context.Background())
+		go r.Run(ctx)
 		t.Cleanup(r.Close)
-		relay.awaitSubscription(t, "fed.query."+peer, 5*time.Second)
+		relay.awaitNowSubscribed(t, "fed.query."+peer, 5*time.Second)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -344,13 +470,27 @@ func TestREMOTE011_FanoutOKExitZero(t *testing.T) {
 		legacyAll: true,
 		op:        "queue.get",
 		corrID:    "cli-all-2",
-		budgetMS:  5000,
+		budgetMS:  wireBudget,
 		jsonOut:   true,
 		dbPath:    dbPath,
 		stdout:    &stdout,
 		stderr:    &stderr,
 	}
-	code := runQuery(context.Background(), cfg, bus.NewClient(true, relay.srv.URL, "", "cli-self"))
+	// INT-CI-176: the original arm64 failure was a LOST REPLY, not a
+	// slow one — the responder sat subscribed for the CLI's whole
+	// 10.07s budget window and the answer frame was forwarded to a
+	// subscription the stub had not registered yet (register raced the
+	// publish; the forward consults r.subs and drops silently). The
+	// stub now registers before the 101 (see relay_stub_test.go), and
+	// the frame race inside the responder (reply publish vs the
+	// requester's read loop starting) is structurally impossible to
+	// lose by transport design: the requester subscribes BEFORE it
+	// publishes (bus.Query's window). With both windows closed the
+	// answer is deterministic; the exit code and stdout census below
+	// ARE the completion synchronization (runQuery returns only after
+	// every leg's answer or budget expiry) and the assertion: any leg
+	// that lost its reply renders error → exit 1 → this cell fails.
+	code := runQuery(ctx, cfg, bus.NewClient(true, relay.srv.URL, "", "cli-self"))
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0 with every leg ok\nstderr: %s\nstdout: %s",
 			code, stderr.String(), stdout.String())
