@@ -36,6 +36,7 @@ range cited under its heading. The rollover itself is done by
 ### Features
 - scheduler: **dispatch from the tick path** (SCHED-GAP-1710) — a tick now HANDS ITS WORK to a named agent over the Crier bus instead of only announcing that it ran. A lane declares its execution target in `dispatch-targets.jsonl` (`SCHEDULER_DISPATCH_TARGETS`); the leg hands over one unit carrying the lane + a board/workdir reference + a correlation id (never a task id), records the receipt against the tick (`tick_dispatch`, migration 62), and correlates the agent's answer back to the originating tick through the scheduler's own relay inbox (`CRIER_AGENT_ID` + `CRIER_AGENT_KEY_FILE`). An unreachable or refusing target fails the tick loudly with NO fallback to the shared gateway, and a lane with no declared target behaves exactly as before.
 - bus: the agent-scoped inbox receive leg (`internal/bus/inbox.go`) — signed retrieve/ack implemented in Go, so the scheduler can read and acknowledge its own mailbox without a second runtime.
+- scheduler: per-lane and per-namespace gateway endpoints — the tick path resolves its endpoint at dispatch time through lane > namespace > global (independently for URL and key), records the RESOLVED endpoint and the tier that supplied it on the tick row (`gateway_url` / `gateway_source` / `gateway_key_source`, migration v61), and derives one `GatewayClient` per non-global endpoint so an unreachable lane fails alone instead of degrading the fleet (SCHED-GAP-1712) — `da2143df`.
 
 ## [1.12.0] — 2026-10-01
 
