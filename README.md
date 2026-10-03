@@ -504,6 +504,68 @@ Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.tom
 
 When `DUCKBRAIN_API_KEY` is set, every sync request carries it as the `X-API-Key` header — the daemon validates the key once at startup with a side-effect-free probe, and a rejected key (HTTP 401/403) fails fast with a distinct HIGH `DuckBrain API key REJECTED` event instead of spooling every failed write. A 429 from the DuckBrain daemon is treated as backpressure rather than an error: the current burst stops, the remaining writes spool, and they replay on the next `-duckbrain-interval` tick. With the env var unset or empty the daemon stays in pre-auth compatibility mode — no probe is made and no `X-API-Key` header is sent (deliberate, not a bug).
 
+### Per-lane and per-namespace gateway endpoints (SCHED-GAP-1712)
+
+The daemon used to resolve **one** Hermes gateway URL for the whole fleet:
+`[gateway].url`. Lanes could be *distinguished* (each project may carry its own
+`gateway_key`) but never *addressed* — one endpoint served every project. The
+tick path now resolves an endpoint per tick through three tiers, applied
+**independently to the URL and the key**:
+
+| tier | URL | key |
+| --- | --- | --- |
+| lane | `projects.gateway_url` | `projects.gateway_key` |
+| namespace | `namespaces.gateway_url` | `namespaces.gateway_key` |
+| global | `[gateway].url` / `--gateway-url` | `[gateway].key` / `--gateway-key` |
+
+Resolution is **lane > namespace > global**, and a tier that is empty (or
+whitespace) inherits from the tier below, so a fleet that sets nothing
+resolves to the global endpoint on every tick — byte-for-byte the pre-1712
+behavior (`internal/scheduler/gateway_endpoint.go`,
+`ResolveGatewayEndpoint`).
+
+```toml
+# global fallback for the whole daemon
+[gateway]
+url = "http://127.0.0.1:8642"
+
+# a namespace may point its members at their own Hermes
+[[namespaces]]
+id = "remote-family"
+#gateway_url = "http://10.0.0.7:8642"
+#gateway_key = "fk-remote-family"
+
+# a single lane may be addressed on its own, without moving the fleet
+[[projects]]
+name = "remote-lane"
+#gateway_url = "http://10.0.0.9:8642"
+#gateway_key = "fk-remote-lane"
+```
+
+**Auditability (no unexplained blanks):** the RESOLVED endpoint is stamped on
+the tick row at dispatch time — `ticks.gateway_url` (the endpoint the POST was
+addressed to), `ticks.gateway_source` and `ticks.gateway_key_source` (which
+tier supplied each; `lane` / `namespace` / `global`). A blank URL always pairs
+with a blank source and means "no HTTP dispatch" (an exec spawn, or a row
+written before migration v61). The credential itself is never stored — the
+source is the auditable fact, not the secret.
+
+**Durability:** `gateway_url` / `gateway_key` follow the GatewayKey-conditional
+pin law — the *presence* of the key in fleet.toml re-pins the row on every
+boot, and an entry that omits it never clears an endpoint assigned through the
+API. Clear an endpoint back to inheritance with `PUT /api/v1/projects/{name}`
+(`{"gateway_url": ""}`) or `PUT /api/v1/namespaces/{id}`.
+
+**Failure isolation:** a lane whose own endpoint is unreachable fails ITS
+tick (transient blip → bounded retry → drop, or a terminal auth rejection on
+401/403 when it carries its own key); no other lane is affected, because each
+non-global endpoint gets its own `GatewayClient` (derived lazily, cached for
+the daemon's lifetime, and deliberately never handed the daemon's shared key
+implicitly). One boundary is deliberate: the daemon-wide gateway HEALTH GATE
+(SCHED-GAP-170) still admits or defers spawns on the GLOBAL gateway's health —
+per-lane endpoints do not bypass admission. A lane addressed at its own
+gateway therefore still waits when the daemon's own gateway is down.
+
 ### Model chains, per-namespace caps, and foreman prompts (fleet.toml)
 
 Every spawn resolves its model/provider by walking an ordered fallback chain

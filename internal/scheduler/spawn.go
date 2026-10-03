@@ -143,6 +143,22 @@ type Spawner struct {
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
+	// SCHED-GAP-1712: the GLOBAL tier of the endpoint resolution — captured
+	// from the client SetGatewayClient installed, so the resolver can name
+	// the global source without re-deriving it. Empty means this daemon has
+	// no global endpoint at all (exec-fallback shape).
+	gatewayURL string
+	gatewayKey string
+	// gatewayEndpoints caches the derived per-endpoint clients: one
+	// GatewayClient per non-global resolved URL, created on first use and
+	// kept for the daemon's lifetime (same timeout + clock as the daemon
+	// client, empty implicit key — the resolved key is passed per request).
+	// Guarded by gwMu, deliberately NOT s.mu: the dispatch path must never
+	// contend on the active-tick lock to read an endpoint. nil until the
+	// first non-global endpoint is seen.
+	gatewayEndpoints map[string]*GatewayClient
+	gwMu             sync.Mutex
+
 	// events is an optional EventLogger. When set, terminal gateway-key
 	// rejections (GAP-035) emit a HIGH event so a key regression is
 	// immediately visible instead of producing thousands of silent failed
@@ -199,14 +215,14 @@ type Spawner struct {
 //
 // Every attempt (primary + GAP-080 retry + chain hops) merges its
 // GatewayPOSTTrace into *tickTrace; logPOSTTrace persists + logs it (AC 1).
-func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
+func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
 	prompt, model, provider, key, tickID, project string, tickTrace **GatewayPOSTTrace, stall *bool) (*Response, error) {
 	if supervise {
 		deadline := s.gatewayResponseTimeout
 		if deadline > effectiveTimeout {
 			deadline = effectiveTimeout
 		}
-		r, trace, err := s.gateway.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
+		r, trace, err := gw.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
 		trace.Model, trace.Provider = model, provider
 		trace.TickID, trace.Project = tickID, project
 		mergePostTrace(tickTrace, trace)
@@ -235,7 +251,7 @@ func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, 
 		}
 		return r, err
 	}
-	r, err := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
+	r, err := gw.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
 	if err == nil {
 		// Legacy path carries no per-POST supervision, but AC 1 still wants
 		// the trace: record a minimal completed/wall entry for the attempt.
@@ -717,6 +733,13 @@ func (s *Spawner) RunningSet() map[string]bool {
 // HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
 func (s *Spawner) SetGatewayClient(client *GatewayClient) {
 	s.gateway = client
+	// SCHED-GAP-1712: capture the daemon's own endpoint as the GLOBAL tier of
+	// the resolution. A nil client clears both (exec-fallback shape).
+	if client == nil {
+		s.gatewayURL, s.gatewayKey = "", ""
+		return
+	}
+	s.gatewayURL, s.gatewayKey = client.baseURL, client.apiKey
 }
 
 // RegisterTickSessionContext arms the SCHED-GAP-1674 cancel registry for one
@@ -1349,6 +1372,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// effectiveTickTimeout (env > namespace > --tick-timeout).
 			ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
 
+			// SCHED-GAP-1712: resolve THIS tick's gateway endpoint at
+			// dispatch time — lane (projects.gateway_url) > namespace
+			// (namespaces.gateway_url) > global ([gateway].url) — and
+			// stamp the RESOLVED fact on the tick row before the first
+			// POST, so a dispatch can be audited after the fact. With no
+			// per-lane/per-namespace endpoint configured the resolution
+			// yields the daemon client and the global key: the
+			// pre-1712 behavior, byte for byte.
+			endpoint := s.resolveTickEndpoint(ctx, project.Name, project.GatewayKey)
+			gwClient := s.endpointClient(endpoint.URL)
+			s.recordTickEndpoint(ctx, tickID, endpoint)
+			log.Printf("GATEWAY ENDPOINT: %s tick=%s url=%s url_source=%s key_source=%s",
+				project.Name, tickID, endpoint.URL, endpoint.URLSource, endpoint.KeySource)
+
 			// SCHED-GAP-1674: arm the guard's cancel registry for this tick
 			// and drop the entry on every return path (the same scope the
 			// session ctx itself lives in). The builder no-artifact guard
@@ -1406,9 +1443,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// event. Non-auth probe errors (network blip, slow gateway) are
 			// non-terminal: dispatch proceeds and the SendResponse 401
 			// classification backstops.
-			if project.GatewayKey != "" {
+			// SCHED-GAP-1712: probe the LANE/NAMESPACE tier credential
+			// (never the global shared key — that one is validated at boot
+			// by the daemon Ping, and probing it per tick would add a
+			// /health round-trip to every lane in the fleet). An empty key
+			// or a key that resolved from the global tier keeps the legacy
+			// no-probe behavior.
+			if endpoint.Key != "" && endpoint.KeySource != gatewaySourceGlobal {
 				vctx, vcancel := context.WithTimeout(ctx, gatewayKeyProbeTimeout)
-				verr := s.gateway.ValidateKey(vctx, project.GatewayKey)
+				verr := gwClient.ValidateKey(vctx, endpoint.Key)
 				vcancel()
 				if errors.Is(verr, ErrGatewayKeyRejected) {
 					cancel()
@@ -1500,7 +1543,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// POST when the knob is armed, else the legacy non-streaming
 				// POST under turnCtx — one seam for every attempt below.
 				send := func(m, p string) (*Response, error) {
-					return s.sendTurn(ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, project.GatewayKey, tickID, project.Name, &postTrace, &turnStalled)
+					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
 				}
 				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
@@ -1805,9 +1848,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					if c0, f0 := countGitChanges(project.Workdir, reqStart, s.clock().Now()); c0 == 0 && f0 == 0 {
 						log.Printf("IDLE-INTERVENTION: %s tick=%s zero artifacts — firing ONE bounded in-session turn", project.Name, tickID)
 						ivCtx, ivCancel := context.WithTimeout(ctx, idleInterventionTimeout)
-						_, _, ierr := s.gateway.SendResponseStream(ivCtx,
+						_, _, ierr := gwClient.SendResponseStream(ivCtx,
 							idleInterventionPrompt(project.Name, tickID, project.Workdir),
-							model, provider, project.GatewayKey, tickID, idleInterventionTimeout)
+							model, provider, endpoint.Key, tickID, idleInterventionTimeout)
 						ivCancel()
 						if ierr != nil {
 							log.Printf("IDLE-INTERVENTION: %s tick=%s follow-up turn error (ignored; tick outcome unchanged): %v",
@@ -2493,6 +2536,14 @@ type SpawnedTick struct {
 	rate     routerRate
 	workdir  string    // project workdir for git commit/file counting
 	reqStart time.Time // request start time (before SendResponse) for git window
+
+	// remoteOutcome (SCHED-GAP-1710) is set for a tick whose work was HANDED
+	// TO A NAMED AGENT over the bus (internal/scheduler/dispatch_leg.go).
+	// Such a tick has no process, no pipes and no gateway session — the leg
+	// waits for the agent's correlated answer itself and hands Wait() the
+	// verdict it built, so the whole completion/delivery/accounting tail in
+	// slot_pool reuses the ordinary path. Nil for every local spawn.
+	remoteOutcome *TickOutcome
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -2510,6 +2561,17 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// SCHED-GAP-1710: a REMOTE-DISPATCHED tick already has its verdict — the
+	// dispatch leg waited for the agent's correlated answer (or its absence)
+	// and built the outcome. There is no process to reap and no gateway
+	// session to gate: return the leg's verdict verbatim.
+	if st.remoteOutcome != nil {
+		out := *st.remoteOutcome
+		log.Printf("TICK: %s %s → %s (%v): remote dispatch to %s", st.Project, st.TickID, out.Status,
+			out.Duration.Round(time.Second), out.SessionID)
+		return out
+	}
 
 	// SCHED-GAP-1674: a GUARD-ABORTED tick (the builder no-artifact guard
 	// cancelled the session after two full no-write windows) yields a

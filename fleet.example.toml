@@ -21,6 +21,8 @@ fallback_model = "deepseek-v4-pro"        # optional: fallback model tier (chain
 fallback_provider = "deepseek-foreman"    # optional: fallback provider tier (chain tier 2)
 no_global_fallback = false                # true = STOP the chain here: never fall back to the spawner-level env defaults (SCHEDULER_FOREMAN_MODEL/_PROVIDER/_FALLBACK_*)
 #model_chain = ["deepseek-v4-flash@deepseek-foreman", "deepseek-v4-pro@deepseek-foreman"]  # optional (SCHED-GAP-075): full ordered chain as "model@provider" hops — REPLACES the model/provider + fallback_* fields above as the project tier when set. Hops are tried left-to-right (first non-empty model and provider win per field)
+#gateway_url = "http://127.0.0.1:8642"    # optional (SCHED-GAP-1712): this LANE's Hermes gateway endpoint. Resolution per tick is lane > namespace > [gateway].url; empty/absent = inherit. Set THIS to address one lane at its own gateway without moving the rest of the fleet. Pinned from this file on every boot when set; "" via the API clears back to inheritance
+#gateway_key = "fk-..."                   # optional (GAP-035): this LANE's gateway key, resolved over the namespace key and then the shared --gateway-key
 #prompt = "Extra standing instructions appended to every tick prompt."  # optional (Bane 2026-08-27): extra foreman prompt text; APPENDED to the namespace default_prompt unless prompt_mode="replace"
 #prompt_mode = "append"                   # "append" (default) | "replace" — replace swaps the namespace default_prompt out entirely (the scheduler always adds its tick-id prefix and workdir/worker-model footer on top)
 idle_model = "deepseek-v4-flash"          # optional (SCHED-GAP-065): idle-tick chain tier — used when the project board has ZERO pending tasks; falls through to the regular chain when empty
@@ -50,6 +52,9 @@ enabled = true                            # false = entire namespace paused
 #default_prompt = "You are the foreman for this namespace."  # base foreman prompt for EVERY project here; empty/absent = built-in prompt. A project prompt appends to it (or replaces it per prompt_mode). Re-pinned from this file on every boot when set
 #model_chain = ["kimi-k3@kimi-for-coding", "deepseek-v4-flash@deepseek-foreman"]  # namespace chain tier: "model@provider" hops appended AFTER the project chain, BEFORE the router/global defaults. Applied when the namespace is CREATED from this file; for an existing namespace edit via PUT /api/v1/namespaces/{id}
 #max_concurrent = 1                       # max ticks running at once in this namespace; 0/absent = unlimited (the global --max-concurrent still applies). Serialized lanes set 1 (e.g. duckbrain-sync). Positive values re-pin on every boot; a 0/absent entry leaves the live cap untouched
+# ── Gateway endpoint tier (SCHED-GAP-1712, optional) ────────────────────
+#gateway_url = "http://127.0.0.1:8642"    # this NAMESPACE's Hermes gateway endpoint, inherited by every member lane with no gateway_url of its own, over [gateway].url. Re-pinned from this file on every boot when set; "" via the API clears back to the global gateway
+#gateway_key = "fk-..."                   # this namespace's gateway key (same inheritance); resolved over the shared --gateway-key
 # ── S12 concurrent wave scheduling (optional, default-off) ─────────────
 # wave_enabled = true                     # false/absent = waves off; scheduling byte-identical to pre-v27
 # wave_tick_timeout = "3h"                # duration; ""/absent = inherit scheduler tick_timeout (recommended 3h = 1.5x base; HARD CEILING 4h — larger values are rejected at config validation, never clamped; S12 §4.3). Env override at spawn: SCHEDULER_WAVE_TICK_TIMEOUT

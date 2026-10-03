@@ -75,11 +75,14 @@ type Project struct {
 	WorkerModel      string  `json:"worker_model"`       // optional: suggested worker model (foreman can override)
 	WorkerProvider   string  `json:"worker_provider"`    // optional: suggested worker provider (foreman can override)
 	GatewayKey       string  `json:"gateway_key"`        // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
-	Command          string  `json:"command"`            // optional: custom spawn command (overrides default hermes chat)
-	Prompt           string  `json:"prompt"`             // optional: extra foreman prompt text; appended to the namespace default_prompt unless PromptMode=replace (Bane 2026-08-27)
-	PromptMode       string  `json:"prompt_mode"`        // "append" (default): project prompt appends to namespace default; "replace": project prompt replaces it entirely
-	NamespaceID      *string `json:"namespace_id"`       // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
-	Deliver          string  `json:"deliver"`            // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
+	// SCHED-GAP-1712: the LANE tier of the gateway endpoint resolution.
+	// Empty = inherit the lane's namespace, then the daemon's global URL.
+	GatewayURL  string  `json:"gateway_url"`
+	Command     string  `json:"command"`      // optional: custom spawn command (overrides default hermes chat)
+	Prompt      string  `json:"prompt"`       // optional: extra foreman prompt text; appended to the namespace default_prompt unless PromptMode=replace (Bane 2026-08-27)
+	PromptMode  string  `json:"prompt_mode"`  // "append" (default): project prompt appends to namespace default; "replace": project prompt replaces it entirely
+	NamespaceID *string `json:"namespace_id"` // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
+	Deliver     string  `json:"deliver"`      // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
 	// SCHED-GAP-1607: tick-report delivery mode — full (default) | file | link.
 	// '' and unknown values resolve to full, so pre-1607 rows are unchanged.
 	DeliverMode string `json:"deliver_mode"` // see scheduler.DeliverMode* constants
@@ -274,6 +277,7 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	setString("WorkerModel", &p.WorkerModel)
 	setString("WorkerProvider", &p.WorkerProvider)
 	setString("GatewayKey", &p.GatewayKey)
+	setString("GatewayURL", &p.GatewayURL)
 	setString("Command", &p.Command)
 	if p.NamespaceID == nil {
 		if raw, ok := legacy["NamespaceID"]; ok {
@@ -422,7 +426,31 @@ type Tick struct {
 	SlotWaitMs  int64  `json:"slot_wait_ms"` // ms between admission/queueing and the slot being acquired
 	AdmitReason string `json:"admit_reason"` // the admission decision that let the tick in (SCHED-GAP-155 vocabulary)
 	NudgeSource string `json:"nudge_source"` // why this tick row exists outside the packer: startup | manual | board_wake
+	// SCHED-GAP-1712 endpoint audit: the gateway endpoint this tick's
+	// dispatch was ADDRESSED to, recorded at dispatch time so a later audit
+	// can answer "which Hermes did this tick go to?" without replaying
+	// config. GatewayURL is the resolved URL ("" = no HTTP dispatch: an exec
+	// spawn, or a row written before migration v61); GatewaySource names the
+	// tier that supplied the URL and GatewayKeySource the tier that supplied
+	// the credential — the closed set "lane" | "namespace" | "global", or ""
+	// when there is no endpoint at all. The key ITSELF is never stored: the
+	// source is the auditable fact, not the secret.
+	GatewayURL       string `json:"gateway_url"`
+	GatewaySource    string `json:"gateway_source"`
+	GatewayKeySource string `json:"gateway_key_source"`
 }
+
+// SCHED-GAP-1712 gateway endpoint tiers. These are the values recorded in
+// ticks.gateway_source / ticks.gateway_key_source: which level of the
+// lane > namespace > global resolution supplied the endpoint or credential.
+// The empty string is deliberately NOT a tier — it pairs with an empty URL
+// and means "no endpoint configured at any level" (never a fabricated
+// "global" label for a daemon that has no [gateway].url).
+const (
+	GatewaySourceLane      = "lane"
+	GatewaySourceNamespace = "namespace"
+	GatewaySourceGlobal    = "global"
+)
 
 // SCHED-GAP-1653 dispatch accountability: the closed vocabulary ticks
 // carry from the finalization path. DispatchYes/DispatchNo are the
@@ -514,6 +542,12 @@ type Namespace struct {
 	Description   string `json:"description"`    // human-readable label
 	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
 	ModelChain    string `json:"model_chain"`    // ordered "model@provider" hops (JSON array); namespace tier between project and router (Bane 2026-08-27)
+	// SCHED-GAP-1712: the namespace tier of the gateway endpoint resolution
+	// (lane > namespace > global). GatewayURL is inherited by every member
+	// lane that has no gateway_url of its own; GatewayKey is inherited the
+	// same way, over the daemon's shared --gateway-key. "" = inherit.
+	GatewayURL string `json:"gateway_url"`
+	GatewayKey string `json:"gateway_key"`
 	// S12 concurrent wave scheduling (SCHED-GAP-109): namespace-level wave
 	// config, all default-off. WaveEnabled=false leaves scheduling
 	// byte-identical to pre-v27 behavior.
@@ -553,6 +587,12 @@ type NamespacePatch struct {
 	Description   *string `json:"description,omitempty"`
 	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
 	ModelChain    *string `json:"model_chain,omitempty"`    // namespace model chain (JSON array string)
+	// SCHED-GAP-1712: the namespace tier of the gateway endpoint
+	// resolution — inherited by member lanes with no endpoint of their
+	// own, over the daemon's global URL / shared --gateway-key.
+	// "" clears back to the global tier.
+	GatewayURL *string `json:"gateway_url,omitempty"`
+	GatewayKey *string `json:"gateway_key,omitempty"`
 	// S12 wave config (SCHED-GAP-109): applied only when non-nil, same as
 	// every other field above.
 	WaveEnabled     *bool   `json:"wave_enabled,omitempty"`      // namespace wave switch (default off)

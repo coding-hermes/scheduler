@@ -1497,6 +1497,7 @@ var openapiSpec = []byte(`{
           "worker_model": {"type": "string"},
           "worker_provider": {"type": "string"},
           "gateway_key": {"type": "string"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: per-LANE Hermes gateway endpoint; empty = inherit the namespace's gateway_url, then the daemon's [gateway].url"},
           "command": {"type": "string"},
           "prompt": {"type": "string", "description": "Optional: extra foreman prompt text; appended to the namespace default_prompt unless prompt_mode is \"replace\""},
           "prompt_mode": {"type": "string", "enum": ["append", "replace"], "description": "\"append\" (default): project prompt appends to the namespace default; \"replace\": project prompt replaces it entirely"},
@@ -1546,6 +1547,7 @@ var openapiSpec = []byte(`{
           "worker_model": {"type": "string"},
           "worker_provider": {"type": "string"},
           "gateway_key": {"type": "string", "description": "Per-foreman gateway key; \"\" clears back to the daemon's shared key"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: per-LANE gateway endpoint; \"\" clears back to the namespace's endpoint, then the daemon's global URL"},
           "command": {"type": "string"},
           "prompt": {"type": "string", "description": "Extra foreman prompt; \"\" clears back to namespace default only"},
           "prompt_mode": {"type": "string", "enum": ["append", "replace"], "description": "\"append\" (default): project prompt appends to the namespace default; \"replace\": project prompt replaces it entirely"},
@@ -1582,7 +1584,9 @@ var openapiSpec = []byte(`{
           "reserved": {"type": "integer", "minimum": 0},
           "hard_cap": {"type": "integer", "minimum": 0},
           "enabled": {"type": "boolean"},
-          "description": {"type": "string"}
+          "description": {"type": "string"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: namespace gateway endpoint, inherited by member lanes with no endpoint of their own; \"\" clears back to the daemon's global URL"},
+          "gateway_key": {"type": "string", "description": "SCHED-GAP-1712: namespace gateway key, inherited by member lanes with no gateway_key of their own; \"\" clears back to the daemon's shared key"}
         }
       },
       "NamespaceMoveRequest": {

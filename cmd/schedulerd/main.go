@@ -575,6 +575,18 @@ func main() {
 		crierClient.SetSubscribeTopics(crierCfg.Topics)
 	}
 	loop.SetSchedulerBus(scheduler.NewSchedulerBus(crierClient))
+	// SCHED-GAP-1710: arm the scheduler's own bus inbox so a tick dispatched
+	// to a named agent can receive the correlated ANSWER. Optional by design —
+	// without CRIER_AGENT_ID + CRIER_AGENT_KEY_FILE the receive leg stays
+	// unarmed, and a lane that declares a remote target then fails loudly at
+	// dispatch time rather than handing out work whose answer could never be
+	// matched. The failure is reported here, at boot, so it is not a surprise
+	// in the tick log.
+	if err := scheduler.SetDispatchIdentityFromEnv(crierClient); err != nil {
+		log.Printf("CRIER: inbox identity NOT armed — %v (remote dispatch will refuse until this is fixed)", err)
+	} else if id := crierClient.InboxAgentID(); id != "" {
+		log.Printf("CRIER: inbox identity armed — agent=%s (dispatch replies are correlated here)", id)
+	}
 	if crierClient.Enabled() {
 		log.Printf("CRIER: bus enabled — url=%s topic=%s subscribe=%v",
 			crierCfg.URL, crierClient.Topic(), strings.Join(crierClient.Topics(), ","))
@@ -1322,6 +1334,17 @@ func main() {
 		duckbrain.Run(context.Background())
 	}()
 
+	// Wait for the shutdown signal — armed BEFORE the "ready" line below so
+	// that line is a true "handlers installed" barrier. The subprocess test
+	// (cmd/schedulerd/instance_identity_subproc_test.go) and any supervisor
+	// that greps the log FILE for "schedulerd ready" may then deliver SIGTERM
+	// with no window in which the default disposition kills the daemon
+	// mid-boot instead of running this graceful path. Registering it after
+	// printStatus() left such a window (wider under CI/host load) and was the
+	// INT-CI-178 flake: the child died with no "Shutdown complete".
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// SCHED-GAP-148: the startup announcement carries the build identity, so
 	// one grep of the boot log answers "which commit is this daemon running?"
 	// — the same sha this daemon serves as /api/v1/status build_sha, which
@@ -1332,9 +1355,6 @@ func main() {
 		version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
 	printStatus(db)
 
-	// Wait for signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("Received %v, shutting down...", sig)
 

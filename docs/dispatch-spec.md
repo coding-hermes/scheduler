@@ -120,11 +120,50 @@ CRIER_LIVE_URL=http://127.0.0.1:8767 CRIER_LIVE_TOKEN=<relay bearer> \
 Hermetic unit proof (`go test ./internal/bus/`) pins the wire shape, the no-task-member law, the
 refusal paths, the loud-failure paths and the retry idempotency without a socket.
 
-## 7 · Out of scope (the remaining half of SCHED-GAP-1665)
+## 7 · The remaining half of SCHED-GAP-1665 — IMPLEMENTED (SCHED-GAP-1710)
 
-- **Lane → target resolution.** A lane naming its execution target (agent id / bus address) and the
-  scheduler resolving it at dispatch time, with an unset target keeping today's behaviour.
-- **Spawn-path wiring.** Recording in the tick row the target *actually used* (never the configured
-  one), and the recording of failed attempts.
-- **Reply ingestion.** Reading the agent's reply over the bus and folding it back into the tick —
-  the foreman/agent leg.
+The three items below were out of scope when the verb shipped. They are now
+implemented from the TICK PATH (SCHED-GAP-1710), and this section states where
+each lives:
+
+- **Lane → target resolution.** A lane declares its execution target in
+  `dispatch-targets.jsonl` (`$SCHEDULER_DISPATCH_TARGETS`, default
+  `<home>/.hermes/coding-hermes/dispatch-targets.jsonl`):
+  `{"lane":"helix","agent":"helix","board":"…","workdir":"…"}`. It is a LANE
+  property, not a router decision — per-project pins outrank the router, so a
+  target chosen by the router could contradict them. A lane with no row (and a
+  missing file) keeps today's behaviour exactly: the change is additive. A row
+  with `enabled=false` parks a target; a row with no agent, or a second row that
+  re-targets a lane, is REFUSED on read and reported (never silently dropped).
+- **Spawn-path wiring.** `internal/scheduler/dispatch_leg.go` runs the hand-out
+  where the tick is spawned (`SlotPool.spawn`): the receipt is written to
+  `tick_dispatch` (migration 62) with the agent the relay ACCEPTED (never the
+  configured one), the correlation id, the relay message id and the transport.
+  An unreachable, unknown or refusing target **fails the tick** with the named
+  error and the attempt recorded — there is deliberately no fallback to the
+  shared gateway anywhere in the path.
+- **Reply ingestion.** The scheduler holds its own bus identity
+  (`CRIER_AGENT_ID` + `CRIER_AGENT_KEY_FILE`, PKCS#8 PEM) and polls its durable
+  relay inbox (`internal/bus/inbox.go`: signed retrieve/ack). A message is an
+  answer **only** if it names a hand-out this scheduler made — the relay message
+  id it replies to (`in_reply_to`) or the correlation id it echoes (including
+  inside the original payload the fleet dispatcher hands back as `task`).
+  Anything else is left strictly alone: not acked, never allowed to close a
+  tick. A remote lane with no reply identity REFUSES to dispatch at all, because
+  a hand-out whose answer can never be correlated is the silent-failure shape
+  this verb exists to remove.
+
+Hermetic proof: `internal/scheduler/dispatch_leg_test.go` (ready → hand-out →
+agent answers → tick completes with no request ever reaching the gateway;
+unknown target → tick fails loudly; no identity → nothing is sent) and
+`internal/scheduler/dispatch_targets_test.go`. Live proof:
+
+```sh
+CRIER_LIVE_URL=http://127.0.0.1:8767 CRIER_LIVE_TOKEN=<relay bearer> \
+  go test ./internal/scheduler/ -run TestLiveDispatchLeg -v -count=1
+```
+
+which registers two throwaway agents on a running relay, hands one a unit of
+work, reads it back out of that agent's own inbox, has it answer into the
+scheduler's inbox and asserts the SHIPPED receive leg correlates the answer back
+to the hand-out and releases the lease by ack.

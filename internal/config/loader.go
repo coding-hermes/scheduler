@@ -692,7 +692,30 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				}
 				log.Printf("Config: pinned namespace %q no_artifact_recon_floor=%s", nd.ID, v)
 			}
-			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 {
+			// SCHED-GAP-1712: the namespace gateway endpoint + credential
+			// pin the GatewayKey-conditional way — only an explicitly set
+			// key rewrites the row, so an API-assigned namespace endpoint
+			// survives a restart with a keyless fleet.toml entry.
+			if nd.GatewayURL != "" {
+				v := nd.GatewayURL
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					GatewayURL: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q gateway_url: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q gateway_url=%s", nd.ID, v)
+			}
+			if nd.GatewayKey != "" {
+				v := nd.GatewayKey
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					GatewayKey: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q gateway_key: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q gateway_key (value redacted)", nd.ID)
+			}
+			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 &&
+				nd.GatewayURL == "" && nd.GatewayKey == "" {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
 			}
 			continue
@@ -754,6 +777,13 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			// restart with a keyless fleet.toml entry.
 			if pd.GatewayKey != "" {
 				updates.GatewayKey = &pd.GatewayKey
+			}
+			// SCHED-GAP-1712: the lane's gateway endpoint pins the same
+			// GatewayKey-conditional way — only an explicitly set
+			// gateway_url rewrites the row, so an API-assigned endpoint
+			// survives a restart with a keyless fleet.toml entry.
+			if pd.GatewayURL != "" {
+				updates.GatewayURL = &pd.GatewayURL
 			}
 			// SCHED-GAP-064: fallback tiers pin the same way as GatewayKey —
 			// only when fleet.toml explicitly sets them, so an API-assigned
@@ -924,6 +954,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		IdleModel:        pd.IdleModel,
 		IdleProvider:     pd.IdleProvider,
 		GatewayKey:       pd.GatewayKey,
+		GatewayURL:       pd.GatewayURL,
 		Command:          pd.Command,
 		Prompt:           pd.Prompt,
 		PromptMode:       pd.PromptMode,
@@ -1013,15 +1044,19 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		waveWorkersCap = 0
 	}
 	return &database.Namespace{
-		ID:              nd.ID,
-		Weight:          weight,
-		Reserved:        reserved,
-		HardCap:         hardCap,
-		MaxConcurrent:   maxConcurrent,
-		Enabled:         enabled,
-		Description:     nd.Description,
-		DefaultPrompt:   nd.DefaultPrompt,
-		ModelChain:      serializeModelChain(nd.ModelChain),
+		ID:            nd.ID,
+		Weight:        weight,
+		Reserved:      reserved,
+		HardCap:       hardCap,
+		MaxConcurrent: maxConcurrent,
+		Enabled:       enabled,
+		Description:   nd.Description,
+		DefaultPrompt: nd.DefaultPrompt,
+		ModelChain:    serializeModelChain(nd.ModelChain),
+		// SCHED-GAP-1712: the namespace gateway endpoint + credential
+		// (the middle tier of lane > namespace > global).
+		GatewayURL:      nd.GatewayURL,
+		GatewayKey:      nd.GatewayKey,
 		WaveEnabled:     waveEnabled,
 		WaveTickTimeout: nd.WaveTickTimeout,
 		WaveWorkersCap:  waveWorkersCap,

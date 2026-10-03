@@ -23,6 +23,7 @@ package bus
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,6 +103,14 @@ type Client struct {
 	enabled   bool
 	seq       func() uint64 // monotonic per-scheduler counter
 	subTopics []string
+
+	// inboxAgentID + agentKey arm the AGENT-SCOPED inbox routes
+	// (SCHED-GAP-1710, internal/bus/inbox.go): the relay's retrieve/ack
+	// surface requires the mailbox owner's ed25519 signature. Both empty is
+	// the pure "no receive leg configured" state — those routes then report
+	// ErrAgentIdentityMissing without any I/O.
+	inboxAgentID string
+	agentKey     ed25519.PrivateKey
 
 	httpClient *http.Client
 	// now is the timestamp source, overridable in tests. It is NOT the
