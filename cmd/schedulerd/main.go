@@ -1334,6 +1334,17 @@ func main() {
 		duckbrain.Run(context.Background())
 	}()
 
+	// Wait for the shutdown signal — armed BEFORE the "ready" line below so
+	// that line is a true "handlers installed" barrier. The subprocess test
+	// (cmd/schedulerd/instance_identity_subproc_test.go) and any supervisor
+	// that greps the log FILE for "schedulerd ready" may then deliver SIGTERM
+	// with no window in which the default disposition kills the daemon
+	// mid-boot instead of running this graceful path. Registering it after
+	// printStatus() left such a window (wider under CI/host load) and was the
+	// INT-CI-178 flake: the child died with no "Shutdown complete".
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// SCHED-GAP-148: the startup announcement carries the build identity, so
 	// one grep of the boot log answers "which commit is this daemon running?"
 	// — the same sha this daemon serves as /api/v1/status build_sha, which
@@ -1344,9 +1355,6 @@ func main() {
 		version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
 	printStatus(db)
 
-	// Wait for signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("Received %v, shutting down...", sig)
 
