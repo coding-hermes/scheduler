@@ -561,10 +561,17 @@ tick (transient blip → bounded retry → drop, or a terminal auth rejection on
 401/403 when it carries its own key); no other lane is affected, because each
 non-global endpoint gets its own `GatewayClient` (derived lazily, cached for
 the daemon's lifetime, and deliberately never handed the daemon's shared key
-implicitly). One boundary is deliberate: the daemon-wide gateway HEALTH GATE
-(SCHED-GAP-170) still admits or defers spawns on the GLOBAL gateway's health —
-per-lane endpoints do not bypass admission. A lane addressed at its own
-gateway therefore still waits when the daemon's own gateway is down.
+implicitly). **Admission follows the same endpoint** (t_cadba34c): the
+gateway HEALTH GATE (SCHED-GAP-170) judges the endpoint a lane RESOLVES to —
+the daemon's own gateway for a lane that inherits it, the lane's endpoint
+otherwise — so one dead daemon gateway no longer idles every remote lane, and
+one unreachable lane endpoint defers only the lanes behind it. Each endpoint
+keeps its own cached verdict (one probe per 30 s window per endpoint, bounded at
+64 endpoints) and its own outage episode; the fleet-wide `gatewayDead` latch and
+the reconnect/orphan-nudge remain GLOBAL-only. A deferred spawn is reported as a
+`gateway_defer` event carrying `gateway_url`/`gateway_source`/
+`gateway_key_source` and `gateway_health_endpoint`, so the endpoint that caused
+the deferral is auditable without a new column.
 
 ### Model chains, per-namespace caps, and foreman prompts (fleet.toml)
 

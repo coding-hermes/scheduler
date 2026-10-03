@@ -941,23 +941,30 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		return tickID, nil
 	}
 
-	// SCHED-GAP-170: the gateway-health gate, consulted at the SAME declared
-	// admission point and with the SAME cached 30s verdict the evaluation pass
-	// uses. The API contract is untouched (the returned tickID is a real stored
-	// row and the row keeps status='queued'), and the deferral is REPORTED as a
-	// `gateway_defer` event carrying that id — so a caller can tell "deferred
-	// because the gateway is unreachable" from "spawned" without polling the
-	// tick for a failure. Without this the row sat queued until the spawn
-	// failed, and the failure was booked as the LANE's fault.
+	// SCHED-GAP-170 / t_cadba34c: the gateway-health gate, consulted at the
+	// SAME declared admission point and with the SAME cached 30s verdict the
+	// evaluation pass uses — but for the ENDPOINT this project resolves to, so an
+	// addressed lane is judged by the gateway it will actually be dispatched to.
+	// The API contract is untouched (the returned tickID is a real stored row and
+	// the row keeps status='queued'), and the deferral is REPORTED as a
+	// `gateway_defer` event carrying that id plus the resolved endpoint — so a
+	// caller can tell "deferred because the gateway is unreachable" from
+	// "spawned" without polling the tick for a failure. Without this the row sat
+	// queued until the spawn failed, and the failure was booked as the LANE's
+	// fault.
 	//
 	// No latch is written here on purpose: gatewayDead is the fleet-wide
 	// transition state and only the evaluation pass (noteGatewayDeadOnce) owns
 	// it — an API-triggered deferral must not flip fleet-wide scheduling state
-	// from a request goroutine.
+	// from a request goroutine. That is true of a foreign endpoint's deferral
+	// too, by construction (t_cadba34c).
 	if l.gatewayClientOrNil() != nil && !simulate {
-		if deferSpawn, reason, probeErr := GatewayHealthGateShouldDefer(); deferSpawn {
-			l.emitGatewayDeferred(proj.Name, proj.NamespaceID, tickID, reason, probeErr)
-			return tickID, nil
+		ep := l.spawner.resolveTickEndpoint(context.Background(), proj.Name, proj.GatewayKey)
+		if gw := l.spawner.endpointClient(ep.URL); gw != nil {
+			if deferSpawn, reason, probeErr := GatewayHealthGateShouldDeferEndpoint(gw, ep.Key); deferSpawn {
+				l.emitGatewayDeferred(proj.Name, proj.NamespaceID, tickID, reason, probeErr, ep)
+				return tickID, nil
+			}
 		}
 	}
 

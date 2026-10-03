@@ -656,15 +656,15 @@ func gap170LogCount(buf *admitLogBuf, substr string) int {
 // gate is package state, so a test that needs a FRESH PROCESS has to save the
 // state it found, clear it, and restore it afterwards — the same seam the
 // load-gate tests use when they swap the package-level sampler.
+//
+// t_cadba34c: the per-endpoint verdicts live in one map keyed by endpoint
+// baseURL (the daemon's own endpoint included), so the snapshot carries the map
+// wholesale.
 type gap170GateState struct {
-	client           *GatewayClient
-	healthy          bool
-	probedAt         time.Time
-	lastErr          string
-	events           *EventLogger
-	episodeActive    bool
-	episodeDeferrals uint64
-	wired            bool
+	client    *GatewayClient
+	endpoints map[string]*gatewayHealthEndpointVerdict
+	events    *EventLogger
+	wired     bool
 }
 
 // gap170BootState clears the gate to its boot values (no client, cold cache,
@@ -682,34 +682,22 @@ func gap170BootState(t *testing.T) {
 	g := gatewayHealth
 	g.mu.Lock()
 	saved := gap170GateState{
-		client:           g.client,
-		healthy:          g.healthy,
-		probedAt:         g.probedAt,
-		lastErr:          g.lastErr,
-		events:           g.events,
-		episodeActive:    g.episodeActive,
-		episodeDeferrals: g.episodeDeferrals,
-		wired:            g.wired,
+		client:    g.client,
+		endpoints: g.endpoints,
+		events:    g.events,
+		wired:     g.wired,
 	}
 	g.client = nil
-	g.healthy = false
-	g.probedAt = time.Time{}
-	g.lastErr = ""
+	g.endpoints = nil
 	g.events = nil
-	g.episodeActive = false
-	g.episodeDeferrals = 0
 	g.wired = false
 	g.mu.Unlock()
 
 	t.Cleanup(func() {
 		g.mu.Lock()
 		g.client = saved.client
-		g.healthy = saved.healthy
-		g.probedAt = saved.probedAt
-		g.lastErr = saved.lastErr
+		g.endpoints = saved.endpoints
 		g.events = saved.events
-		g.episodeActive = saved.episodeActive
-		g.episodeDeferrals = saved.episodeDeferrals
 		g.wired = saved.wired
 		g.mu.Unlock()
 	})

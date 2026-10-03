@@ -252,9 +252,24 @@ func (l *Loop) evaluate() {
 	//     re-nudge) rides the first project the gate admits again —
 	//     noteGatewayReconnectedOnce — so it still runs BEFORE this pass's
 	//     spawns, exactly as before.
-	// gatewayDeferred counts this pass's deferrals: a pass that deferred
-	// anything is an outage pass and (as before) does not run the escalator.
+	// gatewayDeferred counts this pass's GLOBAL-endpoint deferrals: a pass that
+	// deferred anything on the daemon's own gateway is an outage pass and (as
+	// before) does not run the escalator. gatewayEndpointDeferred counts the
+	// deferrals charged to a FOREIGN lane endpoint (t_cadba34c): one lane's
+	// remote gateway being down is a lane-level event, not a fleet outage, so it
+	// must not suppress the fleet's escalation pass.
 	gatewayDeferred := 0
+	gatewayEndpointDeferred := 0
+
+	// t_cadba34c: resolve the pass's endpoints in ONE batched indexed query
+	// (only while the gate is armed) so admission can judge the endpoint each
+	// spawn will actually use — lane > namespace > global. A fleet with no
+	// per-lane endpoints resolves every project to the global tier, which is the
+	// pre-1712 behaviour exactly.
+	var endpoints map[string]GatewayEndpoint
+	if l.gatewayClientOrNil() != nil && !l.simulate {
+		endpoints = l.spawner.resolvePackedEndpoints(context.Background(), packed)
+	}
 
 	// Fire each project into the slot pool. The pool's semaphore limits
 	// concurrency — projects acquire a slot, spawn via gateway in their
@@ -299,27 +314,46 @@ func (l *Loop) evaluate() {
 			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
 			continue
 		}
-		// SCHED-GAP-170: the gateway-health gate — the same defer-not-drop
-		// contract as the load gate above, for the gateway dependency. A spawn
-		// into an unreachable gateway is a spawn that WILL fail (793 of the
-		// fleet's 859 failures in the 7 days to 2026-09-18), so it is not made:
-		// the project keeps its selection, and `continue` costs no row, no
-		// reservation, no slot, no cooldown, no failure and no nudge. The
-		// verdict is cached for gatewayHealthTTL, so this consults one clock
-		// read per project and at most ONE probe per pass (not per project).
+		// SCHED-GAP-170 / t_cadba34c: the gateway-health gate — the same
+		// defer-not-drop contract as the load gate above, for the gateway
+		// dependency. A spawn into an unreachable gateway is a spawn that WILL
+		// fail (793 of the fleet's 859 failures in the 7 days to 2026-09-18), so
+		// it is not made: the project keeps its selection, and `continue` costs
+		// no row, no reservation, no slot, no cooldown, no failure and no nudge.
+		//
+		// 1724: the gate judges the endpoint THIS project resolves to, not the
+		// daemon's gateway. A lane addressed at its own endpoint is admitted on
+		// ITS endpoint's health, so one dead daemon gateway no longer idles every
+		// remote lane — and an unreachable lane endpoint defers only its own lane.
+		// The verdict is cached per endpoint for gatewayHealthTTL, so a pass costs
+		// one clock read per project and at most ONE probe per endpoint.
 		//
 		// Guarded like the pre-existing liveness block: only a loop that owns a
 		// gateway client can probe, and simulation never touches the gateway
 		// (DOGFOOD-007). Fail-open on an absent client is the gate's own
 		// contract (gateway_health_gate.go).
 		if l.gatewayClientOrNil() != nil && !l.simulate {
-			if deferSpawn, reason, probeErr := GatewayHealthGateShouldDefer(); deferSpawn {
-				l.noteGatewayDeadOnce(reason)
-				l.emitGatewayDeferred(proj.Name, proj.NamespaceID, "", reason, probeErr)
-				gatewayDeferred++
-				continue
+			ep := endpoints[proj.Name]
+			if gw := l.spawner.endpointClient(ep.URL); gw != nil {
+				// global drives the FLEET-WIDE transitions: only the daemon's own
+				// endpoint may latch gatewayDead / release slots / trigger the
+				// reconnect orphan-nudge. A foreign endpoint's outage is that
+				// lane's, and must not touch fleet state (t_cadba34c).
+				global := l.spawner.isGlobalEndpointURL(ep.URL)
+				if deferSpawn, reason, probeErr := GatewayHealthGateShouldDeferEndpoint(gw, ep.Key); deferSpawn {
+					if global {
+						l.noteGatewayDeadOnce(reason)
+						gatewayDeferred++
+					} else {
+						gatewayEndpointDeferred++
+					}
+					l.emitGatewayDeferred(proj.Name, proj.NamespaceID, "", reason, probeErr, ep)
+					continue
+				}
+				if global {
+					l.noteGatewayReconnectedOnce()
+				}
 			}
-			l.noteGatewayReconnectedOnce()
 		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)
 	}
@@ -418,11 +452,25 @@ func (l *Loop) emitLoadGateDeferred(project, nsID, tickID string) {
 //     single lane can then be ruled in/out), and `deferred=true` mirrors the
 //     load-gate payload so both deferral kinds can be counted by one query.
 //
+// t_cadba34c adds the ENDPOINT the gate judged, in the tick row's own audit
+// vocabulary, so a deferral shows WHY and AGAINST WHICH endpoint — the
+// evaluation path defers BEFORE any row can exist, so the event detail is the
+// only place it can be recorded (no new `ticks` column):
+//
+//   - `gateway_url` / `gateway_source` / `gateway_key_source` — the resolved
+//     endpoint and the tier each field came from, exactly the columns a
+//     dispatched tick would have carried;
+//   - `gateway_health_endpoint` — the endpoint whose health verdict deferred it
+//     (the daemon's own URL for a global deferral, the lane's URL otherwise).
+//
+// Both keys are omitted entirely when no endpoint resolved (an exec/sim shape),
+// so the payload never invents an endpoint that does not exist.
+//
 // tickID is "" when the deferral precedes any row (the evaluation path, where
 // nothing was enqueued). Loop.SpawnNow passes the stored row's id — the row
 // stays `queued` there because the API contract requires the returned id to
 // resolve, so the id is how a caller tells "deferred" from "spawned".
-func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeErr error) {
+func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeErr error, ep GatewayEndpoint) {
 	if reason == "" && probeErr != nil {
 		reason = probeErr.Error()
 	}
@@ -442,6 +490,12 @@ func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeEr
 		"event_type": "gateway_defer",
 		"reason":     reason,
 		"deferred":   true,
+	}
+	if ep.URL != "" || ep.URLSource != "" {
+		details["gateway_url"] = ep.URL
+		details["gateway_source"] = ep.URLSource
+		details["gateway_key_source"] = ep.KeySource
+		details["gateway_health_endpoint"] = ep.URL
 	}
 	if tickID != "" {
 		details["tick_id"] = tickID

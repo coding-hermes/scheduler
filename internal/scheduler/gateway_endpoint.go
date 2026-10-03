@@ -132,6 +132,80 @@ WHERE p.name = ?`, projectName).Scan(&laneURL, &nsURL, &nsKey)
 	})
 }
 
+// resolvePackedEndpoints resolves the endpoints for a whole evaluation pass in
+// ONE indexed query (t_cadba34c).
+//
+// The gateway-health gate is consulted PER PACKED PROJECT at admission and must
+// judge the endpoint that project's spawn will use; resolving each project with
+// resolveTickEndpoint would add N point queries to the hot path. One IN(...)
+// query answers for the entire pass, and it is only issued while a gateway
+// client is installed (the caller's guard). The lane key still comes from the
+// packed row (PackedProject.GatewayKey), exactly as on the single-project path,
+// so the precedence has ONE implementation (ResolveGatewayEndpoint).
+//
+// A lookup failure is never fatal: the affected projects simply resolve against
+// the global tier (the pre-1712 behaviour), which is also what an absent row
+// does. Names are deduplicated so a pathological pack cannot blow the SQLite
+// variable limit.
+func (s *Spawner) resolvePackedEndpoints(ctx context.Context, packed []PackedProject) map[string]GatewayEndpoint {
+	out := make(map[string]GatewayEndpoint, len(packed))
+	if s.db == nil || len(packed) == 0 {
+		return out
+	}
+	laneKeys := make(map[string]string, len(packed))
+	names := make([]string, 0, len(packed))
+	seen := make(map[string]bool, len(packed))
+	for _, p := range packed {
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		names = append(names, p.Name)
+		laneKeys[p.Name] = p.GatewayKey
+	}
+	args := make([]any, len(names))
+	for i, n := range names {
+		args[i] = n
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.name, COALESCE(p.gateway_url, ''), COALESCE(ns.gateway_url, ''), COALESCE(ns.gateway_key, '')
+FROM projects p LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+WHERE p.name IN (`+strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")+`)`, args...)
+	if err != nil {
+		log.Printf("WARN: gateway endpoint batch lookup failed (%v) — resolving the pass against the global gateway only", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, laneURL, nsURL, nsKey string
+		if err := rows.Scan(&name, &laneURL, &nsURL, &nsKey); err != nil {
+			log.Printf("WARN: scan gateway endpoint batch row: %v", err)
+			continue
+		}
+		out[name] = ResolveGatewayEndpoint(GatewayEndpointConfig{
+			LaneURL:      laneURL,
+			NamespaceURL: nsURL,
+			GlobalURL:    s.gatewayURL,
+			LaneKey:      laneKeys[name],
+			NamespaceKey: nsKey,
+			GlobalKey:    s.gatewayKey,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("WARN: iterate gateway endpoint batch rows: %v", err)
+	}
+	return out
+}
+
+// isGlobalEndpointURL reports whether a resolved endpoint URL is the daemon's
+// own gateway (an empty URL — "no endpoint at all" — is the global client too,
+// see endpointClient). Callers use it to decide whether a gate decision belongs
+// to the fleet-wide transitions (gatewayDead latch / reconnect / orphan nudge)
+// or only to the lane(s) behind a foreign endpoint (t_cadba34c).
+func (s *Spawner) isGlobalEndpointURL(url string) bool {
+	return url == "" || url == s.gatewayURL
+}
+
 // endpointClient returns the GatewayClient for a resolved endpoint URL.
 //
 //   - An empty URL, or the daemon's own URL, returns the daemon client
