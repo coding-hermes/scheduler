@@ -113,6 +113,14 @@ type WorkItem struct {
 	// Empty means Dispatch mints one; either way the receipt echoes it and
 	// the same value is sent as the request id and the idempotency key.
 	CorrID string
+	// ReplyTo is the bus identity the ANSWER must be addressed to
+	// (SCHED-GAP-1710). The fleet's proven dispatcher honours
+	// payload.reply_to when it delivers the agent's answer, so a dispatch
+	// from the tick path names the scheduler's own inbox and the reply
+	// arrives where the correlation id can be matched. Empty keeps the
+	// dispatcher's historical default and is only correct for a caller with
+	// no reply leg.
+	ReplyTo string
 }
 
 // validate refuses an incomplete work item by name, before any I/O. A
@@ -144,6 +152,9 @@ func (w WorkItem) payload(schedulerID string, now time.Time) map[string]any {
 	}
 	if w.Workdir != "" {
 		p["workdir"] = w.Workdir
+	}
+	if w.ReplyTo != "" {
+		p["reply_to"] = w.ReplyTo
 	}
 	return p
 }

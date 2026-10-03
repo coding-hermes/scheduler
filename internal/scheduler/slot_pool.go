@@ -579,7 +579,44 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// wave-success branch is the one place a tick KNOWS workers were
 		// dispatched. Both ride the TickOutcome the existing
 		// lifecycle.Complete path persists.
-		st, err := p.spawner.Spawn(proj, tickID)
+		// SCHED-GAP-1710: a lane that DECLARES an execution target
+		// (dispatch-targets.jsonl) hands its work to that NAMED AGENT over the
+		// Crier bus instead of running it on the shared gateway. The branch is
+		// additive: no target declared — the fleet default, and every lane
+		// today — takes the identical local path below.
+		//
+		// A broken target FILE is logged loudly and the lane runs locally as
+		// before: a config typo in one line must not silently re-point a lane,
+		// but it also must not halt every other lane on the box while it is
+		// being fixed. The log line names the lane and the problem.
+		target, remoteLane, terr := LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+		if terr != nil {
+			log.Printf("DISPATCH: %s tick=%s dispatch targets unreadable (%v) — running locally as before", proj.Name, tickID, terr)
+			remoteLane = false
+		}
+		var st *SpawnedTick
+		var err error
+		if remoteLane {
+			st, err = p.dispatchRemote(context.Background(), proj, tickID, target, db)
+			if err != nil {
+				// LOUD, and deliberately WITHOUT a fallback to the gateway:
+				// a dispatch is what the scheduler decided to schedule, so a
+				// refused hand-out must be visible, not silently re-pointed
+				// (dispatch-spec.md §2). The tick fails below via the ordinary
+				// completion path; the reason is the named dispatch error.
+				if events := p.events; events != nil {
+					events.Emit(context.Background(), SeverityHigh, "dispatch",
+						"remote dispatch refused — tick failed with NO local fallback", map[string]any{
+							"project": proj.Name,
+							"tick_id": tickID,
+							"agent":   target.Agent,
+							"error":   err.Error(),
+						})
+				}
+			}
+		} else {
+			st, err = p.spawner.Spawn(proj, tickID)
+		}
 		if err != nil {
 			// This branch is the PROJECT-SIDE / terminal-error completion
 			// path (auth rejection, max-concurrency, a nil gateway with exec

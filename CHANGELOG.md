@@ -31,7 +31,11 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-10-01
+## [Unreleased] — 2026-10-03
+
+### Features
+- scheduler: **dispatch from the tick path** (SCHED-GAP-1710) — a tick now HANDS ITS WORK to a named agent over the Crier bus instead of only announcing that it ran. A lane declares its execution target in `dispatch-targets.jsonl` (`SCHEDULER_DISPATCH_TARGETS`); the leg hands over one unit carrying the lane + a board/workdir reference + a correlation id (never a task id), records the receipt against the tick (`tick_dispatch`, migration 62), and correlates the agent's answer back to the originating tick through the scheduler's own relay inbox (`CRIER_AGENT_ID` + `CRIER_AGENT_KEY_FILE`). An unreachable or refusing target fails the tick loudly with NO fallback to the shared gateway, and a lane with no declared target behaves exactly as before.
+- bus: the agent-scoped inbox receive leg (`internal/bus/inbox.go`) — signed retrieve/ack implemented in Go, so the scheduler can read and acknowledge its own mailbox without a second runtime.
 
 ## [1.12.0] — 2026-10-01
 

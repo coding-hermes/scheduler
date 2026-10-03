@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 60
+const latestMigration = 62
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1149,6 +1149,49 @@ ALTER TABLE ticks ADD COLUMN cooldown_remaining_s REAL NOT NULL DEFAULT 0;
 		stmt: `
 ALTER TABLE projects ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
 ALTER TABLE namespaces ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		// SCHED-GAP-1710 (the dispatch leg's receive half): the durable record
+		// of the work a tick HANDED OUT over the Crier bus.
+		//
+		// The scheduler could publish and query, but a tick never dispatched
+		// work, so nothing recorded "this lane's tick was handed to agent X".
+		// A dispatched unit is not a process: there is no exit code, no
+		// stdout pipe and no session id, so the facts that matter — the agent
+		// ACTUALLY addressed, the correlation id the answer must carry, the
+		// relay's message id, where the relay put it, and the reply — get
+		// their own per-tick row instead of being forced into ticks' process
+		// columns (session_id/exit_code would have to lie).
+		//
+		// This is the SCHED-GAP-1665 AC2 record: the target recorded is the
+		// one USED (the receipt's agent), never the configured one, and it is
+		// readable after the fact for every tick that dispatched. state is a
+		// closed vocabulary: dispatched | replied | failed | expired.
+		//
+		// The reply leg matches on corr_id / message_id, so both are indexed;
+		// a tick with no row here never dispatched anything and reads as such
+		// (absence of a row is the honest "local tick" signal — no NULL
+		// column with no meaning).
+		version: 62,
+		desc:    "SCHED-GAP-1710: tick_dispatch — the per-tick receipt of work handed to a named agent over the bus (lane, agent used, corr_id, message id, transport, state, reply)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS tick_dispatch (
+    tick_id    TEXT PRIMARY KEY,
+    lane       TEXT NOT NULL,
+    agent      TEXT NOT NULL,
+    corr_id    TEXT NOT NULL,
+    message_id TEXT NOT NULL DEFAULT '',
+    transport  TEXT NOT NULL DEFAULT '',
+    state      TEXT NOT NULL DEFAULT '',
+    issued_at  TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    reply      TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_corr ON tick_dispatch(corr_id);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_message ON tick_dispatch(message_id);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_state ON tick_dispatch(state);
 `,
 	},
 }

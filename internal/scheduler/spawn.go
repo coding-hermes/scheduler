@@ -2493,6 +2493,14 @@ type SpawnedTick struct {
 	rate     routerRate
 	workdir  string    // project workdir for git commit/file counting
 	reqStart time.Time // request start time (before SendResponse) for git window
+
+	// remoteOutcome (SCHED-GAP-1710) is set for a tick whose work was HANDED
+	// TO A NAMED AGENT over the bus (internal/scheduler/dispatch_leg.go).
+	// Such a tick has no process, no pipes and no gateway session — the leg
+	// waits for the agent's correlated answer itself and hands Wait() the
+	// verdict it built, so the whole completion/delivery/accounting tail in
+	// slot_pool reuses the ordinary path. Nil for every local spawn.
+	remoteOutcome *TickOutcome
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -2510,6 +2518,17 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// SCHED-GAP-1710: a REMOTE-DISPATCHED tick already has its verdict — the
+	// dispatch leg waited for the agent's correlated answer (or its absence)
+	// and built the outcome. There is no process to reap and no gateway
+	// session to gate: return the leg's verdict verbatim.
+	if st.remoteOutcome != nil {
+		out := *st.remoteOutcome
+		log.Printf("TICK: %s %s → %s (%v): remote dispatch to %s", st.Project, st.TickID, out.Status,
+			out.Duration.Round(time.Second), out.SessionID)
+		return out
+	}
 
 	// SCHED-GAP-1674: a GUARD-ABORTED tick (the builder no-artifact guard
 	// cancelled the session after two full no-write windows) yields a

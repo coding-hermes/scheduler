@@ -575,6 +575,18 @@ func main() {
 		crierClient.SetSubscribeTopics(crierCfg.Topics)
 	}
 	loop.SetSchedulerBus(scheduler.NewSchedulerBus(crierClient))
+	// SCHED-GAP-1710: arm the scheduler's own bus inbox so a tick dispatched
+	// to a named agent can receive the correlated ANSWER. Optional by design —
+	// without CRIER_AGENT_ID + CRIER_AGENT_KEY_FILE the receive leg stays
+	// unarmed, and a lane that declares a remote target then fails loudly at
+	// dispatch time rather than handing out work whose answer could never be
+	// matched. The failure is reported here, at boot, so it is not a surprise
+	// in the tick log.
+	if err := scheduler.SetDispatchIdentityFromEnv(crierClient); err != nil {
+		log.Printf("CRIER: inbox identity NOT armed — %v (remote dispatch will refuse until this is fixed)", err)
+	} else if id := crierClient.InboxAgentID(); id != "" {
+		log.Printf("CRIER: inbox identity armed — agent=%s (dispatch replies are correlated here)", id)
+	}
 	if crierClient.Enabled() {
 		log.Printf("CRIER: bus enabled — url=%s topic=%s subscribe=%v",
 			crierCfg.URL, crierClient.Topic(), strings.Join(crierClient.Topics(), ","))

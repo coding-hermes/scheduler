@@ -71,6 +71,20 @@ url = "http://localhost:3000"
 # token = ""                       # opt-in relay bearer (Crier CR_AUTH_TOKEN)
 # enabled = false
 # topics = ["sched.tick.>"]        # subscriber wildcard patterns
+#
+# Work dispatch (SCHED-GAP-1710). A LANE that declares an execution target in
+# dispatch-targets.jsonl (env SCHEDULER_DISPATCH_TARGETS; default
+# <home>/.hermes/coding-hermes/dispatch-targets.jsonl — a missing file means NO
+# lane is remote) has its ticks HANDED to that named agent over the relay's
+# durable per-agent inbox instead of running on the shared gateway. The answer
+# comes back to the scheduler's OWN inbox, which therefore needs an identity on
+# the relay (register it once with `crier keygen` + POST /agents):
+#
+#   CRIER_AGENT_ID        agent id whose inbox the scheduler reads
+#   CRIER_AGENT_KEY_FILE  the PKCS#8 PEM key written for that agent id
+#
+# Without BOTH, a lane that declares a remote target REFUSES to dispatch — it
+# never quietly falls back to the gateway. See docs/dispatch-spec.md §7.
 
 # ── Federation — per-caller read policy (REMOTE-013) ────────────────────────
 # Controls WHICH caller may read WHICH op of this scheduler's federation
