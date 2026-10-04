@@ -4813,14 +4813,3 @@ tasks:
   status: complete
   created_at: '2026-10-04T13:57:58.903194+00:00'
   completed_at: '2026-10-04T15:02:40.356746+00:00'
-- id: SCHED-GAP-1707
-  title: Partial telemetry on timeout + heartbeat silence watchdog
-  criteria:
-  - Timeout-killed tick rows carry partial telemetry (tokens/cost marked telemetry_partial
-    with named reason), a configurable heartbeat-silence watchdog terminates only
-    truly silent sessions (library default OFF, knob on all four config surfaces,
-    never backoff change), and each tick records wave-worker terminal-state count;
-    tests fail if removed; go build/vet/tests green.
-  status: complete
-  created_at: '2026-10-04T15:06:25.569261+00:00'
-  completed_at: '2026-10-04T15:07:01.208054+00:00'
