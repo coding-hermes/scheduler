@@ -110,7 +110,7 @@ func TestSchedGap1684TickDeadlineBooksTimeoutNotDeferred(t *testing.T) {
 		t.Errorf("deferrals_total delta = %d, want 0 — a self-timeout is NOT a transient blip", got)
 	}
 	if got := schedGap203BConsecutiveFailures(t, db, projectName); got != 0 {
-		t.Errorf("consecutive_failures = %d, want 0 — a timeout must not charge the lane's failure counter", got)
+		t.Errorf("consecutive_failures = %d, want 0 — the SCHED-GAP-143 carve-out: this timeout's error is transport-class (tick deadline exceeded), so it must not charge the lane's failure counter (SCHED-GAP-1705 charges only non-transport timeouts)", got)
 	}
 
 	// Full stack: the same shape through the slot pool, asserting the ROW.
