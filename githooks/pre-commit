@@ -1,0 +1,40 @@
+#!/bin/sh
+# githooks/pre-commit — SCHED-GAP-1699 pre-commit entrypoint.
+#
+# core.hooksPath-compatible: `git config core.hooksPath githooks` makes git
+# run THIS tracked file for every commit in any checkout/worktree of the
+# repo (tracked hooks ship with the tree; .git/hooks do not). Step 1 is the
+# board-commit guard and is ALWAYS enforced — it fails closed. Step 2 chains
+# the repo's installed Tier-1 guard (gitreins + lint-guard, SCHED-GAP-221)
+# when one is present in the git common dir, so a hooksPath checkout keeps
+# the same chain scripts/install-hooks.sh would have installed.
+#
+# Direct invocation (also how the tests drive it):
+#   sh githooks/pre-commit [path ...]     # args = changed paths
+#   git diff --cached --name-only | sh githooks/pre-commit
+#   sh githooks/pre-commit < /dev/null    # inside a repo: git fallback
+
+set -u
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
+GUARD="$HOOK_DIR/../scripts/board-commit-guard.sh"
+if [ ! -f "$GUARD" ]; then
+    printf '%s\n' "githooks/pre-commit (SCHED-GAP-1699): guard script missing: $GUARD" >&2
+    exit 2
+fi
+
+# 1. Board-commit guard (SCHED-GAP-1699) — always, fail-closed.
+sh "$GUARD" "$@"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    exit "$rc"
+fi
+
+# 2. Chain the installed Tier-1 guard (gitreins + lint-guard) when present.
+COMMON=$(git rev-parse --git-common-dir 2>/dev/null) || COMMON=""
+if [ -n "$COMMON" ] && [ -f "$COMMON/hooks/pre-commit" ]; then
+    sh "$COMMON/hooks/pre-commit" "$@"
+    exit $?
+fi
+
+exit 0
