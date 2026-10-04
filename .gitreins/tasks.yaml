@@ -4654,14 +4654,6 @@ tasks:
   status: complete
   created_at: '2026-09-30T07:39:40.378137+00:00'
   completed_at: '2026-09-30T09:27:30.645621+00:00'
-- id: SCHED-GAP-1678
-  title: Gate LLM spawn when board unchanged since previous tick
-  criteria:
-  - Lane whose board has not changed since its previous tick does not spawn a full
-    LLM tick; skip logged with reason; skip counted separately in /api/v1/status;
-    regression tests prove board-unchanged -> zero spawns, board-changed -> one spawn
-  status: in_progress
-  created_at: '2026-09-30T14:20:31.570732+00:00'
 - id: REMOTE-002
   title: 'Author the federation implementation SPEC (docs/remote-spec.md): identity,
     peer registry, three flows, ownership law, partition contract'
@@ -4784,3 +4776,40 @@ tasks:
   status: complete
   created_at: '2026-10-02T17:57:11.744895+00:00'
   completed_at: '2026-10-02T19:42:37.878731+00:00'
+- id: INT-CI-176
+  title: De-flake REMOTE011 fan-out timing tests in cmd/scheduler-query (arm64 + loaded-host
+    red)
+  criteria:
+  - TestREMOTE011_* in cmd/scheduler-query pass 3 consecutive -count=3 runs locally
+    AND on the arm64 CI leg (go build + test (arm64) job success); no production code
+    semantics changed; full short suite green
+  status: in_progress
+  created_at: '2026-10-02T21:50:18.838768+00:00'
+- id: SCHED-GAP-1706
+  title: "Reap stale tick_workers: janitor flips running\u2192abandoned after their\
+    \ tick is terminal (SCHED-GAP-1706)"
+  criteria:
+  - A janitor function in internal/scheduler (called after cleanDanglingOnStartup
+    and reapZombies, before the resume nudge) marks every tick_workers row state='running'
+    whose tick_id's ticks row is already terminal (completed/timeout/failed) OR whose
+    updated_at is older than the per-tick wave cap, as 'abandoned' with updated_at=datetime('now');
+    collect ids first, close the SELECT before the UPDATE (single-writer discipline);
+    rows already done/abandoned are left alone
+  - A regression test (table-driven) builds a temp SQLite db with ticks-terminal +
+    workers-running and verifies the count after the janitor is 0 while state='running';
+    one tick_workers row is in a non-running state and is left untouched
+  - At minimum a comment naming where the janitor is called and what it must NOT classify
+    (running rows of a live tick) plus the historical cleanup rows appear 'abandoned'
+    rather than deleted, so tick attribution stays reconstructable
+  status: in_progress
+  created_at: '2026-10-03T12:33:34.173391+00:00'
+- id: SCHED-GAP-1699
+  title: 'GUARD: code commit must never touch .coding-hermes/board/*'
+  criteria:
+  - 'A pre-commit guard rejects any commit whose changeset touches .coding-hermes/board/*
+    unless the commit is board-only (every changed path is under .coding-hermes/).
+    The dispatcher pre-merge check refuses to merge a code branch whose commit touches
+    the board. Tests prove: code commit touching tasks.jsonl REJECTED, board-only
+    commit ACCEPTED.'
+  status: in_progress
+  created_at: '2026-10-04T06:28:50.946373+00:00'
