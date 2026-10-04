@@ -2837,6 +2837,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// commits/files first): a tick that landed work the transcript
 			// misses keeps 'committed'.
 			NoTools: st.zeroTools,
+			// SCHED-GAP-1680: the non-commit artifact leg. A lane whose
+			// product is DuckBrain memory keys (the whole -sync family)
+			// records them here so commits=0 is not read as a no-op.
+			// Measured from the tick's own gateway session transcript; 0
+			// when the transcript is unavailable (which can only fall back
+			// to the git artifacts, never fabricate a no-op).
+			MemoryKeys: countMemoryKeysInSession(st.TickID),
 		}
 	}
 

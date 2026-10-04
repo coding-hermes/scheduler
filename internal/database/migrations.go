@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 62
+const latestMigration = 63
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1224,6 +1224,24 @@ CREATE INDEX IF NOT EXISTS idx_tick_dispatch_message ON tick_dispatch(message_id
 CREATE INDEX IF NOT EXISTS idx_tick_dispatch_state ON tick_dispatch(state);
 `,
 	},
+	{
+		// SCHED-GAP-1680: non-commit side effects are a tick ARTIFACT.
+		//
+		// memory_keys is the count of DuckBrain memory-key WRITES the tick's
+		// gateway session transcript observed — the deliverable of a lane
+		// whose product is not a git commit (the whole -sync family). It is
+		// recorded separately from code_commits / board_commits (which exist)
+		// so a sync tick that wrote five verified keys is never derived as
+		// outcome=dry_run. 0 = none observed on the measured surface (the
+		// session transcript); >0 = that many write-class memory tool calls.
+		// A plain additive column, no table rebuild: the value is a new
+		// fact, never a widening of an existing CHECK vocabulary.
+		version: 63,
+		desc:    "SCHED-GAP-1680: ticks.memory_keys — DuckBrain memory-key writes observed in the tick's session transcript, a non-commit artifact class",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN memory_keys INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // laneOutputBackfillStmt initializes the four family output counts from tick
@@ -1251,6 +1269,16 @@ const laneOutputBackfillStmt = `UPDATE projects SET
 // deferred never ran a foreman turn) whose commit anatomy records output.
 // Exported so tests outside the package can execute the same SQL the
 // migration runs, pinning the counts against the runtime accounting.
+//
+// DELIBERATE v47/runtime DIVERGENCE (SCHED-GAP-1680): this predicate is
+// FROZEN at the git-artifact columns the v47 backfill could see. The runtime
+// predicate (lane_output.go recordLaneFamilyOutput) additionally counts the
+// v63 non-commit leg (memory_keys > 0). The const cannot be widened to match:
+// migration v47 runs BEFORE v63 adds the column, so a fresh database would
+// fail the ladder with "no such column: memory_keys". The backfill is
+// therefore a historical approximation (git artifacts only) and the runtime
+// path is authoritative; a repair tool that wants the honest number must
+// apply the runtime predicate, not this one.
 const LaneOutputTickWhere = `AND status IN ('completed','timeout')
 	AND (
 		COALESCE(code_commits, 0) > 0

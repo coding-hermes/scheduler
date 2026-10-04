@@ -73,6 +73,7 @@ func main() {
 	// older than this renders stale=true (never "down") on GET /api/v1/peers.
 	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
+	boardStasisGate := flag.Bool("board-stasis-gate", true, "SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (mtime+size fingerprint; tasks-mode and reporter-class lanes are exempt, an unreadable board fails open, no cooldown is consumed, and an operator ForceEvaluate bypasses it for one pass). true = armed (fleet default); false = pre-gate scheduling, byte-identical. Env: SCHEDULER_BOARD_STASIS_GATE")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
@@ -249,6 +250,17 @@ func main() {
 			*spawnMemLimitMB = n
 		} else {
 			log.Printf("WARN: SCHEDULER_SPAWN_MEM_LIMIT_MB=%q invalid — limit stays %d MiB", v, *spawnMemLimitMB)
+		}
+	}
+	// SCHED-GAP-1678: board-stasis spawn-gate env override — same pattern. A
+	// parseable bool wins (including an explicit false, which restores the
+	// pre-gate scheduling behavior); an invalid value WARNs and keeps the
+	// current value.
+	if v := os.Getenv("SCHEDULER_BOARD_STASIS_GATE"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			*boardStasisGate = b
+		} else {
+			log.Printf("WARN: SCHEDULER_BOARD_STASIS_GATE=%q invalid — gate stays %v", v, *boardStasisGate)
 		}
 	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
@@ -528,6 +540,21 @@ func main() {
 	// [scheduler] spawn_mem_limit_mb applies below only when the flag sat
 	// at its 0 default (same precedence chain as the load gate).
 	scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
+	// SCHED-GAP-1678: arm the board-stasis spawn gate. The LOOP-level gate is
+	// constructed DISABLED on purpose (see board_stasis.go) so embedders and
+	// every existing unit test keep byte-identical selection until someone
+	// arms it; the daemon arms it here from the flag/env layer. A tick on a
+	// cooldown-mode BUILDER lane whose board has not moved since its previous
+	// completed tick is excluded at selection time (no LLM tick, no tick row,
+	// no cooldown consumed) and counted under board_unchanged on
+	// /api/v1/status. Passing --board-stasis-gate=false (or
+	// SCHEDULER_BOARD_STASIS_GATE=false) restores the pre-gate behavior.
+	loop.SetBoardStasisGateEnabled(*boardStasisGate)
+	if *boardStasisGate {
+		log.Printf("BOARD-STASIS: gate armed (SCHED-GAP-1678) — stale-board builder lanes will not spawn")
+	} else {
+		log.Printf("BOARD-STASIS: gate disabled (SCHED-GAP-1678) — pre-gate scheduling")
+	}
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {

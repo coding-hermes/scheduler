@@ -356,6 +356,16 @@ func (m *MultiPoolPacker) Pack(
 						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
 						continue
 					}
+					// SCHED-GAP-1678: board-stasis gate (namespace-mode
+					// mirror of packer.go's flat path) — a cooldown-mode
+					// BUILDER lane whose board file has not changed since
+					// its previous completed tick is excluded, before its
+					// pin is even consulted for the pack. Same conjunction
+					// as the 1655 gate above; one os.Stat, no git battery.
+					if blocked, _ := boardStasisBlocks(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
+						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
+						continue
+					}
 					if now.Sub(lt) < cooldownDur {
 						continue
 					}
@@ -415,6 +425,17 @@ func (m *MultiPoolPacker) Pack(
 					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeCooldown &&
 						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
 						continue // no-work skip — not queued
+					}
+					// SCHED-GAP-1678: the same board-stasis conjunction as
+					// the selection gate — a lane the gate excluded on a
+					// stale board must not be re-admitted by BORROWED
+					// budget (mirror of the 1655 no-work queued check).
+					// QUIET: the skip counter/log are the selection site's
+					// job — a lane refused at selection reaches this mirror
+					// too, and the noting wrapper would count it twice.
+					if blocked, _ := boardStasisBlockedQuiet(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
+						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
+						continue // board-unchanged skip — not queued
 					}
 					if now.Sub(lt) < cooldownDur {
 						continue // cooldown-skip, not queued

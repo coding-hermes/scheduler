@@ -114,6 +114,14 @@ func (s TickStatus) Outcome() string {
 // 'committed' — artifacts outrank the transcript, the SCHED-GAP-1652
 // doctrine. no_work is therefore unreachable for an artifact-bearing row
 // by construction, not by discipline.
+// SCHED-GAP-1680: a COMPLETED tick's success is derived from the artifacts
+// its lane can produce — git commits/files AND declared NON-COMMIT side
+// effects. commits=0 alone is NOT a no-op: a sync lane whose product is
+// DuckBrain memory keys records MemoryKeys > 0 and must never be derived as
+// dry_run (the fleet's 7-ticks/6-zero-commit sync shape was a measurement
+// artifact, not 85% waste). The non-commit leg sits in the SAME artifact
+// branch as the git leg, so an artifact of either kind outranks the
+// zero-tool no_work verdict by construction.
 func terminalOutcome(o TickOutcome) string {
 	if o.GuardAbort {
 		if o.Status == TickFailed {
@@ -124,7 +132,7 @@ func terminalOutcome(o TickOutcome) string {
 	if o.Status != TickCompleted {
 		return o.Status.Outcome()
 	}
-	if o.Commits > 0 || o.FilesChanged > 0 {
+	if o.Commits > 0 || o.FilesChanged > 0 || o.MemoryKeys > 0 {
 		return "committed"
 	}
 	if o.NoTools {
@@ -176,6 +184,16 @@ type TickOutcome struct {
 	// consulted on Status=completed — a failed/deferred/aborted row keeps
 	// its own verdict regardless.
 	NoTools bool
+	// MemoryKeys (SCHED-GAP-1680): DuckBrain memory-key WRITES observed in
+	// this tick's gateway session transcript — a NON-COMMIT artifact. A
+	// lane whose product is not a git commit (the whole -sync family)
+	// produces these instead of commits; terminalOutcome counts > 0 as a
+	// landed artifact so a sync tick with five verified keys is never
+	// derived as dry_run. 0 = none observed on the measured surface (the
+	// session transcript; exec/local ticks have no such mapping and read
+	// 0). A measurement failure can only leave it 0 — it can never
+	// manufacture a no-op.
+	MemoryKeys int
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one
@@ -297,11 +315,14 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if outcome.Status == TickCompleted {
 		// Landed-artifact evidence the OUTCOME carries: the measured git
 		// delta (positive = artifact; -1 = unmeasured, never read as
-		// zero — the SCHED-GAP-1652 sentinel rule). The wave's per-worker
-		// rows are attributed AFTER this write by manifest ingest, and
-		// code/board commit anatomy is split later from the same raw
-		// count — neither carries evidence this method could read yet.
-		landed := outcome.Commits > 0 || outcome.FilesChanged > 0
+		// zero — the SCHED-GAP-1652 sentinel rule), plus the non-commit
+		// side effects a lane whose product is not a commit produces
+		// (SCHED-GAP-1680: DuckBrain memory keys written). The wave's
+		// per-worker rows are attributed AFTER this write by manifest
+		// ingest, and code/board commit anatomy is split later from the
+		// same raw count — neither carries evidence this method could
+		// read yet.
+		landed := outcome.Commits > 0 || outcome.FilesChanged > 0 || outcome.MemoryKeys > 0
 		if !landed && !outcome.DispatchDispatched {
 			log.Printf("STAND-DOWN: %s tick=%s completed with no landed artifact and no dispatch — recorded reason=%q (SCHED-GAP-1653)",
 				outcome.Project, outcome.TickID, dispatchReason)
@@ -321,13 +342,13 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
-			commits = ?, files_changed = ?, failure_reason = ?,
+			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
 			dispatch_outcome = ?, dispatch_reason = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
-		outcome.Commits, outcome.FilesChanged, failureReason,
+		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
 		outcome.TickID)
 	if err != nil {

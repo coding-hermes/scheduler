@@ -74,6 +74,10 @@ type Packer struct {
 	// by lane for ONE evaluation (SOL-CADENCE). nil/absent entries read as
 	// zero; only lanes with a configured effective target consume it.
 	cadenceRates map[string]float64
+	// boardStasisGate is the SCHED-GAP-1678 spawn gate, installed per
+	// evaluation pass by the loop. nil = gate transparent (tests, and every
+	// loop that never armed it).
+	boardStasisGate *BoardStasisGate
 }
 
 // NewPacker creates a packer with the given budget and concurrency cap. The
@@ -111,6 +115,12 @@ func (p *Packer) SetCadenceRates(rates map[string]float64) {
 	p.cadenceRates = rates
 }
 
+// SetBoardStasisGate installs the SCHED-GAP-1678 board-stasis gate for this
+// evaluation pass. Pass nil to make the gate transparent.
+func (p *Packer) SetBoardStasisGate(g *BoardStasisGate) {
+	p.boardStasisGate = g
+}
+
 // scored is a project with its computed urgency.
 type scored struct {
 	name                string
@@ -126,40 +136,45 @@ type scored struct {
 	// deferred). True-prefixed helper on the struct: after a FAILED tick the
 	// tasks-mode waiver stands down (see the Pick gate below).
 	lastTickStatusFailed bool
-	budgetBlocked        bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
-	lastTickAt           *time.Time
-	createdAt            time.Time
-	workdir              string
-	repoURL              string
-	command              string
-	model                string
-	provider             string
-	fallbackModel        string
-	fallbackProvider     string
-	noGlobalFallback     bool
-	modelChain           string
-	idleModel            string
-	idleProvider         string
-	dailyBudgetUSD       float64
-	weeklyBudgetUSD      float64
-	finalBudgetUSD       float64
-	workerModel          string
-	workerProvider       string
-	gatewayKey           string
-	deliver              string
-	deliverMode          string // SCHED-GAP-1607: "" | full | file | link
-	prompt               string // Bane 2026-08-27: per-project extra foreman prompt
-	promptMode           string // "append" (default) | "replace"
-	bumpActive           bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
-	bumpCooldownS        int
-	bumpRemaining        int
-	namespaceDefaultPmt  string // namespace default_prompt (empty = built-in)
-	namespaceID          string // namespace_id (empty = no namespace)
-	namespaceMaxConc     int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
-	namespaceChain       string // namespace model_chain (JSON array string) (Bane 2026-08-27)
-	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
-	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
-	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+	// SCHED-GAP-1678: the raw last_tick_status. The board-stasis gate only
+	// applies when the previous tick COMPLETED — a failed/timeout/deferred
+	// tick may have died before reading its board, so stasis proves nothing
+	// and the lane must be retried.
+	lastTickStatus      string
+	budgetBlocked       bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
+	lastTickAt          *time.Time
+	createdAt           time.Time
+	workdir             string
+	repoURL             string
+	command             string
+	model               string
+	provider            string
+	fallbackModel       string
+	fallbackProvider    string
+	noGlobalFallback    bool
+	modelChain          string
+	idleModel           string
+	idleProvider        string
+	dailyBudgetUSD      float64
+	weeklyBudgetUSD     float64
+	finalBudgetUSD      float64
+	workerModel         string
+	workerProvider      string
+	gatewayKey          string
+	deliver             string
+	deliverMode         string // SCHED-GAP-1607: "" | full | file | link
+	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
+	promptMode          string // "append" (default) | "replace"
+	bumpActive          bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
+	bumpCooldownS       int
+	bumpRemaining       int
+	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
+	namespaceID         string // namespace_id (empty = no namespace)
+	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
+	namespaceChain      string // namespace model_chain (JSON array string) (Bane 2026-08-27)
+	admissionNsMode     string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
+	admissionMode       string // SCHED-GAP-124: project admission_mode override ('' = inherit)
+	boardOwnership      string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
 	// SCHED-GAP-1688 AC5: the end-of-tick hook's tri-state switch, lane then
 	// namespace (-1 inherit | 0 off | 1 on); the global (env) default is the
 	// last resort at spawn time.
@@ -236,6 +251,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		}
 		// SCHED-GAP-214: after a FAILED tick the tasks-mode waiver stands down.
 		s.lastTickStatusFailed = lastTickStatusFailed(lastStatus)
+		// SCHED-GAP-1678: keep the raw status for the board-stasis gate's
+		// completed-previous-tick leg.
+		s.lastTickStatus = lastStatus
 		// SCHED-GAP-066: budget-exhausted projects are excluded from the
 		// greedy pack — but kept in the candidate list, flagged, so the
 		// GAP-011 overdue force-select below can still pick them (a spend
@@ -357,6 +375,10 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	totalSkippedCooldown := 0
 	totalSkippedRunning := 0
 	totalSkippedNamespace := 0
+	// SCHED-GAP-1678: board-unchanged skips, reported in the "nothing packed"
+	// summary beside the cooldown/budget counters so an operator can see why
+	// a drained fleet packed nothing.
+	totalSkippedStasis := 0
 
 	for _, s := range list {
 		totalChecked++
@@ -475,6 +497,19 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				totalSkippedCooldown++
 				continue
 			}
+			// SCHED-GAP-1678: the board-stasis gate — a cooldown-mode
+			// builder lane whose board file has not changed since its
+			// previous completed tick is excluded (one os.Stat per lane;
+			// never the git battery). Same placement as the 1655 no-work
+			// gate above; this can only REMOVE a spawn (the gate sits
+			// strictly downstream of every pin the admission classifier
+			// reports), so a board write still reorders/boosts (ADV-R07)
+			// and can never re-fire inside a cooldown.
+			if blocked, _ := boardStasisBlocks(p.boardStasisGate, s.name, s.workdir,
+				database.AdmissionModeCooldown, s.lastTickStatus, ""); blocked {
+				totalSkippedStasis++
+				continue
+			}
 			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 				totalSkippedCooldown++
 				continue
@@ -487,8 +522,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	}
 
 	if len(packed) == 0 {
-		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d namespace-cap=%d, total-running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, currRunning, p.maxConcurrent)
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d namespace-cap=%d board-unchanged=%d, total-running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, totalSkippedStasis, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }

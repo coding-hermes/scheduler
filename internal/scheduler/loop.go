@@ -63,6 +63,23 @@ type Loop struct {
 	// spawner.GatewayResponseTimeout()); this atomic is a write-through
 	// cache read by the Loop getter only.
 	gatewayResponseTimeoutNs atomic.Int64
+	// SCHED-GAP-1678: the board-stasis spawn gate. Deliberately DISABLED at
+	// construction (see board_stasis.go): every existing selection contract
+	// stays byte-identical until the daemon arms it with
+	// SetBoardStasisGateEnabled. boardStasisForce is the ForceEvaluate
+	// bypass — an operator's explicit evaluate always spawns — so
+	// evaluate() arms the gate with (default && !forced) each pass. It is an
+	// atomic (not a mutex-guarded bool) so ForceEvaluate never blocks behind
+	// an in-flight pass's write lock: a POST /evaluate must not hang for the
+	// length of Phase 1 just to raise a flag.
+	boardStasisGate  *BoardStasisGate
+	boardStasisOn    bool
+	boardStasisForce atomic.Bool
+	// SCHED-GAP-1678: the previous tick's id the classifier just derived
+	// for a board_unchanged deferral (single-threaded within one
+	// emitAdmissionPass; classify and decision-building run in the same
+	// pass). Consumed immediately after classifyAdmissionDeferral sets it.
+	admissionPrevTickID string
 	// evalWakeCh + evalDone are the SCHED-GAP-1575-A coalescing channel
 	// for ForceEvaluate(). Buffered(1); non-blocking sends collapse N
 	// concurrent calls into at most one pending pass. The drain goroutine
@@ -240,6 +257,9 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		// concurrent calls collapse into at most one pending pass; the
 		// drain goroutine (started below) reads it and calls evaluate().
 		evalWakeCh: make(chan struct{}, 1),
+		// SCHED-GAP-1678: the board-stasis gate is constructed DISABLED —
+		// SetBoardStasisGateEnabled(true) (the daemon wiring) arms it.
+		boardStasisGate: NewBoardStasisGate(),
 	}
 	for _, reason := range admissionReasonVocabulary {
 		l.admitCounts[reason] = 0
@@ -813,7 +833,17 @@ func (l *Loop) PublishLaneState(ctx context.Context, project, state string) {
 // Falls back to `go l.evaluate()` if the wake channel was never
 // installed (tests that build a Loop without the drain goroutine — see
 // loop_force_evaluate_test.go for the path that uses the coalescer).
+//
+// SCHED-GAP-1678: ForceEvaluate also raises the board-stasis bypass — the
+// CURRENT pass must not gate (escape hatch (b): an operator's explicit
+// evaluate always spawns). One flag, consumed and cleared by the next
+// evaluate() that reads it; a flag (not a counter) because the coalesced
+// wake collapses N forces into ONE pass, and one bypass is exactly what
+// that pass owes.
 func (l *Loop) ForceEvaluate() {
+	// Raise the pass-scoped board-stasis bypass atomically — no lock, so an
+	// operator's POST /evaluate never waits behind an in-flight pass.
+	l.boardStasisForce.Store(true)
 	if l.evalWakeCh == nil {
 		// Drain goroutine not started (older test path) — keep the
 		// pre-fix behavior so legacy callers do not deadlock.
@@ -825,6 +855,34 @@ func (l *Loop) ForceEvaluate() {
 	default:
 		// Wake already pending; coalesce this call.
 	}
+}
+
+// SetBoardStasisGateEnabled arms or disarms the board-stasis spawn gate
+// (SCHED-GAP-1678). The gate is DISABLED at NewLoop — the daemon wires it
+// on at boot; tests and embedders keep the pre-gate behavior unless they
+// opt in. Must be called before Run(), the same startup-setter contract as
+// the other loop setters.
+func (l *Loop) SetBoardStasisGateEnabled(on bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.boardStasisOn = on
+}
+
+// BoardStasisGateEnabled reports whether the board-stasis spawn gate
+// (SCHED-GAP-1678) is armed at the loop level. The gate may still be
+// transparent for a pass: a ForceEvaluate-triggered pass bypasses it
+// (escape hatch (b)).
+func (l *Loop) BoardStasisGateEnabled() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.boardStasisOn
+}
+
+// BoardStasisGate returns the loop's gate, or nil when the loop was built
+// as a zero-value struct literal (tests). The packers read it through this
+// seam each pass; a nil gate makes every consult transparent.
+func (l *Loop) BoardStasisGate() *BoardStasisGate {
+	return l.boardStasisGate
 }
 
 // evalDrain is the single goroutine that services l.evalWakeCh for the
@@ -919,6 +977,9 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 			return "", fmt.Errorf("sim spawn %s: %w", project.Name, err)
 		}
+		// SCHED-GAP-1678: a manual spawn is a spawn — baseline the board so
+		// the very next evaluate can see the lane has just ticked.
+		l.recordBoardStasisSpawn(proj.Name, proj.Workdir, tickID)
 		return tickID, nil
 	}
 
@@ -978,6 +1039,9 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 	// stamps nothing (an honest empty).
 	l.SetNudgeSource(NudgeSourceManual)
 	l.slotPool.SpawnEnqueued(proj, tickID, l.clock().Now(), noDeliver, l.db)
+	// SCHED-GAP-1678: baseline the board for the manual spawn (same contract
+	// as the evaluation path — a spawned tick arms the gate).
+	l.recordBoardStasisSpawn(proj.Name, proj.Workdir, tickID)
 	return tickID, nil
 }
 
@@ -1606,6 +1670,7 @@ var admissionReasonVocabulary = []string{
 	AdmissionReasonTasksDeferred,
 	AdmissionReasonNoWork,
 	AdmissionReasonFailedCooldown,
+	AdmissionReasonBoardUnchanged,
 }
 
 // admissionReasonIsKnown reports whether reason is part of the vocabulary.
@@ -1676,6 +1741,10 @@ type admissionDecision struct {
 	InflightQueued     int
 	CooldownRemainingS float64
 	HasCooldownRem     bool
+	// SCHED-GAP-1678: the previous tick's id for reason=board_unchanged,
+	// rendered as prev_tick=<id> on the ADMIT line so the skip names the
+	// tick the board is unchanged SINCE (the row's log contract).
+	PrevTickID string
 }
 
 // AdmissionCounters returns a snapshot of the SCHED-GAP-155 admission
@@ -1796,6 +1865,11 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 		sanitizeAdmitField(d.Project), reason)
 	if d.HasCooldownRem {
 		line += fmt.Sprintf(" cooldown_remaining_s=%.1f", d.CooldownRemainingS)
+	}
+	// SCHED-GAP-1678: name the tick the board is unchanged since — the
+	// row's "board unchanged since <tick id>" contract, on the ADMIT line.
+	if d.PrevTickID != "" {
+		line += " prev_tick=" + sanitizeAdmitField(d.PrevTickID)
 	}
 	line += loadSuffix
 	admitWriteLine(line)
@@ -2034,6 +2108,21 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 	if deferred, rem, hasRem := l.cooldownVerdict(c, now); deferred {
 		return AdmissionReasonCooldown, rem, hasRem
 	}
+	// SCHED-GAP-1678: the board-stasis gate's classifier mirror — a
+	// cooldown-mode BUILDER lane whose board file has not changed since
+	// its previous completed tick. AFTER the pin (a lane inside its pin
+	// is plain "cooldown", the older still-true answer) and BEFORE
+	// no_work (a stale board makes the empty-board question moot; the
+	// gate is the stronger predictor of a no-op tick). QUIET: the skip
+	// was already counted at the packers' selection site for this pass;
+	// counting it again here would double the counter. The prev-tick id
+	// is threaded through the loop-scoped prevTickID holder because the
+	// classify signature returns only (reason, remaining, hasRemaining).
+	if blocked, prevTick := boardStasisBlockedQuiet(l.boardStasisGate, c.Name, c.Workdir,
+		database.AdmissionModeCooldown, c.LastTickStatus, c.ReporterClass); blocked {
+		l.admissionPrevTickID = prevTick
+		return AdmissionReasonBoardUnchanged, 0, false
+	}
 	// SCHED-GAP-1655 deliverable (1): a cooldown-mode BUILDER lane whose
 	// board holds no dispatchable row is deferred with reason no_work —
 	// the same board resolution + dispatchability logic the tasks-mode
@@ -2140,6 +2229,14 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) int64 {
 		} else {
 			d.Reason, d.CooldownRemainingS, d.HasCooldownRem =
 				l.classifyAdmissionDeferral(c, now, st, packedWeight, globalRunning, globalSelected)
+			// SCHED-GAP-1678: when the classifier answered
+			// board_unchanged it stashed the previous tick's id the skip
+			// names — pick it up and clear the holder so a later,
+			// non-stasis decision never carries a stale id.
+			if d.Reason == AdmissionReasonBoardUnchanged {
+				d.PrevTickID = l.admissionPrevTickID
+				l.admissionPrevTickID = ""
+			}
 		}
 		decisions = append(decisions, d)
 	}

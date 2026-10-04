@@ -37,6 +37,35 @@ func (l *Loop) evaluate() {
 	now := l.nowLocked()
 	l.lastEval = now
 
+	// SCHED-GAP-1678: pass-scope the board-stasis gate BEFORE the packers
+	// run. A ForceEvaluate-triggered pass consumes the bypass flag
+	// (atomic Swap — exactly one pass ever observes a raised flag) and
+	// disarms the gate for that pass (escape hatch (b): an operator's
+	// explicit evaluate always spawns); every other pass arms it with the
+	// loop-level switch. The baseline recording happens later, at the
+	// spawn sites (evaluate's spawn loop / SpawnNow).
+	// NOTE: the loop fields are read INLINE, never under a second lock —
+	// evaluate() already holds l.mu (acquired at entry) through the whole
+	// Phase-1 section below, and Go's RWMutex is not reentrant, so any
+	// Lock()/Unlock() pair here self-deadlocks or releases the entry lock
+	// early. boardStasisForce is an atomic for that reason.
+	gate := l.boardStasisGate
+	forced := l.boardStasisForce.Swap(false)
+	enabled := l.boardStasisOn && !forced
+	if gate != nil {
+		gate.SetEnabled(enabled)
+		// Wire the gate into BOTH selection paths exactly like the
+		// budget gate above — a namespace-mode pass gates in the
+		// multi-pool packer, the flat fallback and the legacy Packer
+		// mirror it, so all three selection sites share one predicate.
+		if l.multiPoolPacker != nil {
+			l.multiPoolPacker.SetBoardStasisGate(gate)
+		}
+		if l.packer != nil {
+			l.packer.SetBoardStasisGate(gate)
+		}
+	}
+
 	// ADV-R13: persist exactly ONE host load/memory sample per evaluation
 	// pass, immediately at entry — after the paused-loop gate (a paused
 	// loop runs no evaluation pass, so it records nothing) and BEFORE all
@@ -296,7 +325,13 @@ func (l *Loop) evaluate() {
 			tickID := l.simTickID(proj.Name, now)
 			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 				log.Printf("SIM: spawn %s failed: %v", proj.Name, err)
+				continue
 			}
+			// SCHED-GAP-1678: baseline the lane's board at SPAWN time (the sim
+			// path spawns a real tick row, so it must arm the gate identically
+			// to the real path — otherwise a --simulate daemon would gate a
+			// lane whose baseline it never recorded).
+			l.recordBoardStasisSpawn(proj.Name, proj.Workdir, tickID)
 			continue
 		}
 		// SCHED-GAP-171: consult the load gate BEFORE the spawn — and
@@ -355,7 +390,13 @@ func (l *Loop) evaluate() {
 				}
 			}
 		}
-		l.slotPool.Spawn(proj, now, noDeliver, l.db)
+		spawnedTickID := l.slotPool.Spawn(proj, now, noDeliver, l.db)
+		// SCHED-GAP-1678: baseline the lane's board fingerprint at spawn
+		// time, carrying the id the pool actually stored (Spawn returns it).
+		// Deliberately AFTER the gates above: a deferred spawn never reached
+		// here, so it records nothing and the next pass decides from the
+		// pre-deferral state (fail-open).
+		l.recordBoardStasisSpawn(proj.Name, proj.Workdir, spawnedTickID)
 	}
 
 	// Alert escalation runs while pool processes ticks. SCHED-GAP-170: a pass

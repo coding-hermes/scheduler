@@ -86,6 +86,9 @@ type MultiPoolPacker struct {
 	// cycle by the loop via SetWaveShedDB; nil (tests, tooling) = shed
 	// scanning disabled, packing byte-identical to pre-SCHED-GAP-113.
 	waveShedDB *sql.DB
+	// boardStasisGate is the SCHED-GAP-1678 spawn gate, installed per
+	// evaluation pass by the loop. nil = gate transparent.
+	boardStasisGate *BoardStasisGate
 
 	// holdState (SCHED-GAP-1614) is each namespace's budget-hold memory:
 	// the fairness-rotation cursor and the hold-event dedupe signature.
@@ -193,6 +196,12 @@ func (m *MultiPoolPacker) SetBudgetGate(g BudgetGate) {
 // SetCadenceRates installs the achieved runs/day snapshot for one evaluation.
 func (m *MultiPoolPacker) SetCadenceRates(rates map[string]float64) {
 	m.cadenceRates = rates
+}
+
+// SetBoardStasisGate installs the SCHED-GAP-1678 board-stasis gate for this
+// evaluation pass. Pass nil to make the gate transparent.
+func (m *MultiPoolPacker) SetBoardStasisGate(g *BoardStasisGate) {
+	m.boardStasisGate = g
 }
 
 // SetWaveShedDB installs the DB handle used for the SCHED-GAP-113 wave-shed
@@ -411,6 +420,15 @@ func (m *MultiPoolPacker) packFlat(
 				if mode == database.AdmissionModeCooldown &&
 					builderAdmissionBlocked(s.proj.Name, s.proj.Workdir, database.AdmissionModeCooldown, "") {
 					noteBuilderNoWorkDeferral(s.proj.Name, s.proj.Workdir)
+					continue
+				}
+				// SCHED-GAP-1678: the flat-fallback mirror of the
+				// namespace-path board-stasis gate (packer_select.go) —
+				// a cooldown-mode BUILDER lane whose board file has not
+				// changed since its previous completed tick is excluded.
+				// One os.Stat; never the git battery.
+				if blocked, _ := boardStasisBlocks(m.boardStasisGate, s.proj.Name, s.proj.Workdir,
+					database.AdmissionModeCooldown, s.proj.LastTickStatus, ""); blocked {
 					continue
 				}
 				if now.Sub(*s.lastTick) < cooldownDur {

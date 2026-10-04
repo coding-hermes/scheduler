@@ -580,6 +580,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// (0 = never seen this process), plus "admitted:<namespace>"
 		// totals and "passes". Counterpart of the `ADMIT ` log lines.
 		status["admission_counters"] = s.loop.AdmissionCounters()
+		// SCHED-GAP-1678: the process-lifetime count of board-unchanged
+		// skips — a skip increments WITHOUT a tick row existing, so
+		// counting tick rows undercounts the gate's work. Own field (not
+		// folded into admission_counters) because it is counted at the
+		// packers' selection site, once per lane per pass.
+		status["board_unchanged_skips"] = s.loop.BoardUnchangedSkips()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
