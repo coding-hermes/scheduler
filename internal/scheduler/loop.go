@@ -654,6 +654,13 @@ func (l *Loop) Run() {
 			if nudgeN, abortN := l.builderGuardPass(); nudgeN+abortN > 0 {
 				log.Printf("BUILDER-GUARD: pass complete — %d nudged, %d aborted", nudgeN, abortN)
 			}
+			// SCHED-GAP-1707: the session-silence watchdog rides the same
+			// pass, after the builder guard. A no-op until the daemon arms
+			// the grace (SetSessionSilenceGrace; 0 = off, the library
+			// default). Never fails the reaper.
+			if killed := l.sessionSilencePass(l.clock().Now()); killed > 0 {
+				log.Printf("SESSION-SILENCE: pass complete — %d silent session(s) terminated", killed)
+			}
 		case <-healthTicker.C:
 			// SCHED-GAP-131: periodic flush of the in-memory feature-usage
 			// counters to the persisted table, so a long-running daemon's

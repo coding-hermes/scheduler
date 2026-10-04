@@ -203,6 +203,13 @@ type Spawner struct {
 	// builder no-artifact guard cancelled, consumed exactly once by the
 	// spawn path to classify the outcome. Guarded by s.mu.
 	guardAbortedTicks map[string]bool
+
+	// silenceTicks (SCHED-GAP-1707) marks ticks the session-silence
+	// watchdog terminated, carrying the session_silent partial-telemetry
+	// tuple (with the measured quiet duration). Consumed exactly once by
+	// the spawn path's classification site — the same consume-once
+	// contract as guardAbortedTicks. Guarded by s.mu.
+	silenceTicks map[string]partialTelemetry
 }
 
 // sendTurn (SCHED-GAP-119) is the single dispatch seam for one gateway
@@ -571,12 +578,27 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 // stamps failure_reason=gateway_transport via failureReasonClass (the
 // deadline fired inside a gateway POST), and the status/outcome columns carry
 // timeout/timeout through TickTimeout.Outcome().
+//
+// SCHED-GAP-1707: the row is PARTIAL — telemetry_partial=1 named
+// tick_deadline, carrying whatever usage the turn's SSE trace observed before
+// the wall (the trace's folded token probe; zero when the turn never
+// streamed). Cost derives from the same observed tokens through the tick's
+// own price rate, never a fabricated estimate. The wave-commits
+// pre-count (gwFailCommits/gwFailFiles) keeps its SCHED-GAP-119 rule.
 func (s *Spawner) tickDeadlineTimeout(project PackedProject, tickID string, gwErr error, reqStart time.Time,
-	wall time.Duration, model, provider string, rate routerRate) *SpawnedTick {
+	wall time.Duration, model, provider string, rate routerRate, postTrace *GatewayPOSTTrace) *SpawnedTick {
 	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
 	reason := fmt.Sprintf("tick-timeout wall %s: %v", wall, gwErr)
 	log.Printf("TIMEOUT: %s tick=%s session deadline expired during gateway POST — booking timeout (NOT a gateway blip): %v",
 		project.Name, tickID, gwErr)
+	// SCHED-GAP-1707 deliverable 1: capture the partial telemetry NOW, at
+	// the kill site — the SSE trace's folded usage is whatever the turn
+	// streamed before the deadline tore the POST down.
+	tin, tout := 0, 0
+	if postTrace != nil {
+		tin, tout = postTrace.TokensIn, postTrace.TokensOut
+	}
+	partial := markPartialTelemetry(TelemetryPartialTickDeadline, tin, tout, computeCostUSD(provider, model, rate, tin, tout))
 	return &SpawnedTick{
 		TickID:        tickID,
 		Project:       project.Name,
@@ -589,6 +611,7 @@ func (s *Spawner) tickDeadlineTimeout(project PackedProject, tickID string, gwEr
 		completeAt:    s.clock().Now(),
 		gwFailErr:     reason,
 		gwTickTimeout: true,
+		gwPartial:     partial,
 		model:         model,
 		provider:      provider,
 		rate:          rate,
@@ -1649,6 +1672,50 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
 			// outcome (completed, aborted-by-turn-deadline, transport-error).
 			s.logPOSTTrace(tickID, postTrace)
+			// SCHED-GAP-1707: the session-silence watchdog cancelled this
+			// session. Consume the verdict exactly once (the guard's
+			// consume-once contract) and record the kill BEFORE the tick
+			// deadline classification below can read it as tick_deadline —
+			// the watchdog is the terminal statement about this row. Act
+			// only when the POST did not complete (a cancel that races a
+			// finished turn leaves the tick its own honest outcome). The
+			// verdict rides SpawnedTick.silenceKill into Wait(), which
+			// yields TickTimeout carrying the session_silent partial tuple
+			// through lifecycle.Complete.
+			if stSilence, ok := s.sessionSilenceFor(tickID); ok && (gwErr != nil || resp == nil) {
+				log.Printf("SESSION-SILENCE: %s tick=%s watchdog cancel recorded — quiet %ds (reason %s)",
+					project.Name, tickID, stSilence.silenceS, stSilence.reason)
+				// Consume the guard marker too: CancelTickSession stamped
+				// guardAbortedTicks on the way to the cancel, and this
+				// return path skips the guard's own consume site — an
+				// unconsumed entry would leak the map and could mislabel a
+				// later retry of the same tick id.
+				s.guardAborted(tickID)
+				commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+				return &SpawnedTick{
+					TickID:        tickID,
+					Project:       project.Name,
+					SessionID:     tickID,
+					Started:       reqStart,
+					Deliver:       project.Deliver,
+					DeliverMode:   project.DeliverMode,
+					spawner:       s,
+					completed:     false,
+					completeAt:    s.clock().Now(),
+					gwFailErr:     sessionSilentError(fmt.Sprintf("%ds", stSilence.silenceS)),
+					gwTickTimeout: true,
+					gwPartial:     stSilence,
+					model:         model,
+					provider:      provider,
+					rate:          rate,
+					workdir:       project.Workdir,
+					reqStart:      reqStart,
+					Trigger:       "prompt",
+					gwFailCounted: true,
+					gwFailCommits: commits,
+					gwFailFiles:   files,
+				}, nil
+			}
 			// SCHED-GAP-1674: the builder no-artifact guard cancelled this
 			// session. Consume the marker exactly once; act on it only when
 			// the POST did not complete (a cancel that races a finished turn
@@ -2099,7 +2166,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// still defers — this row reclassifies OUR wall, not every
 				// error that happens to share a deadline with a drop.
 				if errors.Is(gwErr, ErrTickDeadlineExceeded) && ctx.Err() == context.DeadlineExceeded {
-					return s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate), nil
+					return s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate, postTrace), nil
 				}
 				if gatewayTransientBlip(gwErr) {
 					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
@@ -2494,6 +2561,15 @@ type SpawnedTick struct {
 	// Spawner.tickDeadlineTimeout ONLY.
 	gwTickTimeout bool
 
+	// gwPartial (SCHED-GAP-1707): the partial-telemetry tuple captured at
+	// the kill site — measured-or-probed tokens/cost plus the partial mark
+	// and its closed-vocabulary reason. Wait() spreads it onto the
+	// TickOutcome so lifecycle.Complete writes the v64 columns in the same
+	// single finalization UPDATE. Today's producers: tickDeadlineTimeout
+	// (tick_deadline) and the silence watchdog (session_silence.go,
+	// session_silent).
+	gwPartial partialTelemetry
+
 	// guardAbort (SCHED-GAP-1674) marks a tick whose gateway session the
 	// builder no-artifact guard cancelled: the tick ran past two full
 	// no-write windows with zero write-class artifacts and an interaction
@@ -2646,7 +2722,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		dur := st.completeAt.Sub(st.Started)
 		log.Printf("TICK: %s %s → %s (%v): %s",
 			st.Project, st.TickID, TickTimeout, dur.Round(time.Second), st.gwFailErr)
-		return TickOutcome{
+		out := TickOutcome{
 			TickID:    st.TickID,
 			Project:   st.Project,
 			SessionID: st.SessionID,
@@ -2664,6 +2740,19 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
 		}
+		// SCHED-GAP-1707 deliverable 1: the row is PARTIAL. Spread the
+		// kill-site capture (the SSE trace's token probe + its derived cost)
+		// over the zero defaults, so a productive-but-too-big wave never
+		// reads 0/0/0 unmarked.
+		if st.gwPartial.partial {
+			out.TokensIn = st.gwPartial.tokensIn
+			out.TokensOut = st.gwPartial.tokensOut
+			out.CostUSD = st.gwPartial.costUSD
+			out.TelemetryPartial = true
+			out.TelemetryPartialReason = st.gwPartial.reason
+			out.TelemetrySilenceS = st.gwPartial.silenceS
+		}
+		return out
 	}
 	if st.gwDeferred {
 		dur := st.completeAt.Sub(st.Started)
@@ -2893,6 +2982,14 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		Started:   st.Started,
 		Finished:  finished,
 	}
+	// SCHED-GAP-1707: an exec tick killed by the scanner ctx (the effective
+	// session deadline) is a PARTIAL row — mark it now, before the status
+	// classification below lands TickTimeout. The exec path has no gateway
+	// usage to spread (cost resolution below measures the window), so the
+	// partial mark is the visibility: telemetry_partial=1 named
+	// tick_deadline on a row that would otherwise read 0/0/0.
+	execTimedOut := err != nil &&
+		(strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed"))
 
 	if err != nil {
 		if strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed") {
@@ -2965,6 +3062,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			log.Printf("WARN: tick %s git delta NOT measured: no usable baseline (preCommits=%d, cmdDir=%q) — commits/files stamped -1 (unknown), NOT evidence of no work",
 				st.TickID, st.preCommits, dir)
 		}
+	}
+
+	// SCHED-GAP-1707: stamp the partial mark on the exec timeout row (after
+	// cost/git resolution so the mark describes the FINAL telemetry legs).
+	if execTimedOut {
+		outcome.TelemetryPartial = true
+		outcome.TelemetryPartialReason = TelemetryPartialTickDeadline
 	}
 
 	// SCHED-GAP-085: closure-evidence gate on the EXEC completion path. Runs

@@ -222,7 +222,11 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 	case waitErr != nil:
 		rec.State = database.DispatchStateExpired
 		rec.Error = waitErr.Error()
-		st.remoteOutcome = &TickOutcome{
+		// SCHED-GAP-1707: the hand-out ran but its reply never arrived —
+		// the row's telemetry (none: the agent's usage never reached this
+		// process) is PARTIAL by the dispatch deadline, named
+		// dispatch_deadline, with the quiet wall on session_silence_s.
+		out := TickOutcome{
 			TickID: tickID, Project: proj.Name, SessionID: receipt.CorrID,
 			Started: issued, Finished: finished, Duration: finished.Sub(issued),
 			Status: TickTimeout, ExitCode: -1,
@@ -232,6 +236,10 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 			// accountability pair says so; the tick merely ran out of wall.
 			DispatchDispatched: true, DispatchReason: database.DispatchReasonDispatched,
 		}
+		out.TelemetryPartial = true
+		out.TelemetryPartialReason = TelemetryPartialDispatchDeadline
+		out.TelemetrySilenceS = int64(out.Duration / time.Second)
+		st.remoteOutcome = &out
 	case !ok:
 		rec.State = database.DispatchStateReplied
 		rec.Error = reply

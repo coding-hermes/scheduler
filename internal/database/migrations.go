@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 63
+const latestMigration = 64
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1240,6 +1240,48 @@ CREATE INDEX IF NOT EXISTS idx_tick_dispatch_state ON tick_dispatch(state);
 		desc:    "SCHED-GAP-1680: ticks.memory_keys — DuckBrain memory-key writes observed in the tick's session transcript, a non-commit artifact class",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN memory_keys INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-1707: partial telemetry + watchdog visibility on ticks.
+		// A deadline-killed (or watchdog-killed) tick used to finalize with
+		// 0/0/0 telemetry — indistinguishable in SQL from an idle session —
+		// and nothing recorded how far a wave got before the wall. Four
+		// plain additive columns, no table rebuild (same shape as v63):
+		//
+		//   telemetry_partial          1 = the row's telemetry was persisted
+		//                              at a non-terminal kill (tick deadline,
+		//                              silence watchdog, stale reap, dispatch
+		//                              deadline) and may undercount; 0 = a
+		//                              normal terminal accounting. A timeout
+		//                              row with telemetry_partial=0/0/0/0 is
+		//                              now provably an idle session, never a
+		//                              dead one.
+		//   telemetry_partial_reason   WHY the row is partial, from the
+		//                              closed vocabulary the scheduler package
+		//                              owns: 'tick_deadline' | 'session_silent'
+		//                              | 'stale_reap' | 'dispatch_deadline'.
+		//   session_silence_s          for watchdog kills: the quiet duration
+		//                              (no token delta and no tool activity)
+		//                              the session accumulated before the
+		//                              termination. 0 elsewhere.
+		//   workers_terminal           wave convergence: how many of the
+		//                              tick's wave workers had reached a
+		//                              terminal state when the manifest was
+		//                              ingested ('done' rows at ingest time).
+		//                              -1 = unmeasured (the -1 sentinel
+		//                              convention: never read as a count) —
+		//                              legacy rows, serial ticks whose
+		//                              manifest never landed, and ticks the
+		//                              deadline killed before the foreman
+		//                              wrote a manifest.
+		version: 64,
+		desc:    "SCHED-GAP-1707: timeout visibility on ticks — telemetry_partial + telemetry_partial_reason (a deadline-killed tick's partial telemetry is marked, never indistinguishable from an idle 0/0/0 row), session_silence_s (the quiet duration a watchdog-killed silent session accumulated) and workers_terminal (wave workers terminal before the wall; -1 unmeasured)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN telemetry_partial INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN telemetry_partial_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN session_silence_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN workers_terminal INTEGER NOT NULL DEFAULT -1;
 `,
 	},
 }

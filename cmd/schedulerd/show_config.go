@@ -42,6 +42,7 @@ func printSchema() {
         "slot_patience":  { "type": "string", "default": "5m0s", "description": "How long a tick waits for a free slot before being dropped; the drop emits a MEDIUM slot_pool event (ADV-R08/G3). Must be > 0 — the drop always exists; unset means the 5m default.", "env": "SCHEDULER_SLOT_PATIENCE", "cli": "--slot-patience" },
         "tasks_pacing": { "type": "string", "default": "1m0s", "description": "Minimum post-tick spacing before a tasks-mode project re-admits, plus up to 20 percent jitter (SCHED-GAP-136); '0s' disables. Composes with the failure backoff (S-GAP-001), never replaces it. Unset means the 1m fleet default.", "env": "SCHEDULER_TASKS_PACING", "cli": "--tasks-pacing" },
         "spawn_mem_limit_mb": { "type": "integer", "default": 0, "minimum": 0, "description": "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default — no limit call at all). NOT an admission gate: every selected project still spawns; the cap constrains the spawned process's resources at spawn time and is inherited by its workers. Best-effort — a failed cap WARNs and the spawn continues. Linux (prlimit); other platforms degrade to the documented no-op.", "env": "SCHEDULER_SPAWN_MEM_LIMIT_MB", "cli": "--spawn-mem-limit-mb" },
+        "session_silence_grace": { "type": "string", "default": "0s", "description": "Session-silence watchdog grace (SCHED-GAP-1707): terminate a gateway tick whose Hermes-state session shows no token delta and no tool activity for this long — failure_reason=session_silent, quiet duration on ticks.session_silence_s. '0s' = disabled (default; the watchdog only runs when armed). Never kills a producing session; cooldowns and the no-timeout-backoff chain are untouched.", "env": "SCHEDULER_SESSION_SILENCE_GRACE", "cli": "--session-silence-grace" },
         "load_gate_threshold": { "type": "number", "default": 0.0, "minimum": 0.0, "description": "Defer new spawns while the 1-minute load average is at or above this threshold; 0 = disabled (SCHED-GAP-125). Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'.", "env": "SCHEDULER_LOAD_GATE_THRESHOLD", "cli": "--load-gate-threshold" },
         "model_rates_file": { "type": "string", "default": "", "description": "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild. Empty = builtin rates only. The flag's default IS the env value, so an env-set path always surfaces in the resolved config.", "env": "SCHEDULER_MODEL_RATES_FILE", "cli": "--model-rates-file" },
         "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" },
@@ -144,6 +145,7 @@ func printConfig(
 	spawnMemLimitMB int64,
 	loadGateThreshold float64,
 	modelRatesFile string,
+	sessionSilenceGrace time.Duration,
 ) {
 	fmt.Printf(`# schedulerd resolved configuration (CLI flags + SCHEDULER_* env overrides; the root TOML [scheduler] layer resolves later in boot and is NOT reflected here)
 # source: CLI flags + SCHEDULER_* env overrides (CLI > env). TOML [scheduler] (FEAT-005, applied via default-guard in main.go) resolves after this print and is not shown
@@ -166,6 +168,7 @@ tasks_pacing = %q
 spawn_mem_limit_mb = %d
 load_gate_threshold = %v
 model_rates_file = %q
+session_silence_grace = %q
 namespace_mode = %v
 auto_disable_failure_rate = %v
 auto_disable_window = %d
@@ -188,6 +191,7 @@ url = %q
 		tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing,
 		spawnMemLimitMB,
 		loadGateThreshold, modelRatesFile,
+		sessionSilenceGrace,
 		namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
 		gatewayURL, gatewayKey, foremanHome, noExecFallback,
 		duckbrainNS, duckbrainURL,
@@ -210,6 +214,7 @@ url = %q
 		"SCHEDULER_SLOT_PATIENCE":             os.Getenv("SCHEDULER_SLOT_PATIENCE"),
 		"SCHEDULER_SPAWN_MEM_LIMIT_MB":        os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"),
 		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
+		"SCHEDULER_SESSION_SILENCE_GRACE":     os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"),
 		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
 		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
 		"SCHEDULER_AUTO_DISABLE_WINDOW":       os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),

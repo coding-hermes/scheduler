@@ -205,6 +205,7 @@ func TestPrintConfig(t *testing.T) {
 			512,
 			12.0,
 			"/tmp/rates.json",
+			45*time.Minute,
 		)
 	})
 
@@ -356,6 +357,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				0,
 				12.0,
 				"/tmp/rates.json",
+				45*time.Minute,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "12" {
@@ -388,6 +390,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				0,
 				7.5,
 				"/tmp/sentinel-rates.json",
+				45*time.Minute,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "7.5" {
@@ -436,6 +439,7 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 				0,
 				0,
 				"",
+				0,
 			)
 		})
 	}
