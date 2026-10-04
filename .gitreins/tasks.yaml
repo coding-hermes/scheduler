@@ -4804,12 +4804,12 @@ tasks:
   status: in_progress
   created_at: '2026-10-03T12:33:34.173391+00:00'
 - id: SCHED-GAP-1699
-  title: 'GUARD: code commit must never touch .coding-hermes/board/*'
+  title: Board-touching commit guard + pre-merge refusal
   criteria:
-  - 'A pre-commit guard rejects any commit whose changeset touches .coding-hermes/board/*
-    unless the commit is board-only (every changed path is under .coding-hermes/).
-    The dispatcher pre-merge check refuses to merge a code branch whose commit touches
-    the board. Tests prove: code commit touching tasks.jsonl REJECTED, board-only
-    commit ACCEPTED.'
-  status: in_progress
-  created_at: '2026-10-04T06:28:50.946373+00:00'
+  - A code changeset touching .coding-hermes/board/* mixed with code paths is refused
+    at commit time (githooks/pre-commit + scripts/board-commit-guard.sh) and pre-merge
+    (scheduler.EnsureNoBoardTouchingDiff at the wave-recovery merge site); board-only
+    and pure-code changesets pass; tests fail if the checks are removed.
+  status: complete
+  created_at: '2026-10-04T13:57:58.903194+00:00'
+  completed_at: '2026-10-04T13:58:27.127620+00:00'
