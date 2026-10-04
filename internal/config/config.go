@@ -106,6 +106,18 @@ type SchedulerConfig struct {
 	// TOML < env SCHEDULER_SPAWN_MEM_LIMIT_MB < flag --spawn-mem-limit-mb.
 	SpawnMemLimitMB int64 `toml:"spawn_mem_limit_mb"`
 
+	// SessionSilenceGrace (SCHED-GAP-1707) is the session-silence
+	// watchdog's grace period, stored as a duration string (e.g. "45m").
+	// A gateway tick whose Hermes-state telemetry shows no token delta and
+	// no tool activity for this long is cancelled early with
+	// failure_reason=session_silent and the quiet duration recorded on the
+	// tick row. Empty or "0s" = disabled (the default — the watchdog only
+	// runs when an operator arms it; library/embedding behavior is
+	// byte-identical). It never kills a producing session. Precedence:
+	// TOML < env SCHEDULER_SESSION_SILENCE_GRACE < flag
+	// --session-silence-grace.
+	SessionSilenceGrace string `toml:"session_silence_grace"`
+
 	// MeteredBudgetEnabled (SCHED-GAP-127) switches USD-cap enforcement from
 	// per-tick cost_usd to the fleet-wide Hermes state.db cash ledger. Default
 	// false preserves historical behavior; enable explicitly with TOML

@@ -599,6 +599,14 @@ func failureReasonClass(errText string) string {
 	if strings.Contains(errText, GatewayInstantTurnSentinel) {
 		return FailureReasonInstantTurn
 	}
+	// SCHED-GAP-1707: the silence watchdog's verdict is its OWN class, not
+	// gateway transport — the scheduler stopped the session, the gateway
+	// carried it fine. Named session_silent so an operator reading
+	// ticks.failure_reason sees the watchdog, and the row stays out of
+	// per-project health accounting via the marker list in failureclass.go.
+	if strings.Contains(strings.ToLower(errText), sessionSilentMarker) {
+		return "session_silent"
+	}
 	if strings.Contains(strings.ToLower(errText), "draining") {
 		return FailureReasonGatewayDrain
 	}

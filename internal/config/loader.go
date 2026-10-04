@@ -254,6 +254,11 @@ func applyEnvOverrides(cfg *RootConfig) {
 			cfg.Scheduler.SpawnMemLimitMB = n
 		}
 	}
+	// SCHED-GAP-1707: session-silence watchdog grace env override — no
+	// parse gate here, validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"); v != "" {
+		cfg.Scheduler.SessionSilenceGrace = v
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -334,6 +339,19 @@ func (r *RootConfig) Validate() error {
 	// normalizing one to "off" would hide a config typo from the operator.
 	if r.Scheduler.SpawnMemLimitMB < 0 {
 		errs = append(errs, fmt.Errorf("scheduler.spawn_mem_limit_mb (%d) must be >= 0 (0 = off; unset = off)", r.Scheduler.SpawnMemLimitMB))
+	}
+	// SCHED-GAP-1707: the session-silence watchdog grace is optional —
+	// empty or "0s" means disabled (the daemon flag default). When set it
+	// must parse and be strictly positive: the grace is the whole point of
+	// the knob, and the flag layer treats <= 0 as "keep default", so
+	// accepting a negative here would be a silent no-op rather than a real
+	// setting.
+	if v := r.Scheduler.SessionSilenceGrace; v != "" {
+		if d, err := parseDurationErr(v, "scheduler.session_silence_grace"); err != nil {
+			errs = append(errs, err)
+		} else if d < 0 {
+			errs = append(errs, fmt.Errorf("scheduler.session_silence_grace (%s) must be > 0 (unset or \"0s\" = disabled)", v))
+		}
 	}
 	// SCHED-GAP-1575-B: the heavy-read API deadline is optional — empty means
 	// "not set" (the 5s daemon flag default applies). When set it must parse

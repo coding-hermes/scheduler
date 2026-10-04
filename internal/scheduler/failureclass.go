@@ -69,6 +69,14 @@ func HarnessFailure(errText string) bool {
 		// turn deadline exceeded" — that abort is a stalled FAILURE with
 		// its own text, never a self-timeout.
 		"tick deadline exceeded",
+		// SCHED-GAP-1707: the session-silence watchdog's kill text
+		// (sessionSilentError). A zero-activity session is a HARNESS
+		// verdict — the scheduler stopped it — never the lane's own
+		// failure, so the row stamps failure_reason=session_silent through
+		// failureReasonClass and stays out of per-project health
+		// accounting (SCHED-GAP-134) exactly like every other harness-side
+		// kill. The silence duration itself rides ticks.session_silence_s.
+		sessionSilentMarker,
 		// SCHED-GAP-1641: an instant one-shot gateway turn is a HARNESS
 		// verdict, not a project failure — a completed response that did a
 		// near-zero-output single turn must not count in any healthy-tick

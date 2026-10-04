@@ -74,6 +74,14 @@ func main() {
 	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	boardStasisGate := flag.Bool("board-stasis-gate", true, "SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (mtime+size fingerprint; tasks-mode and reporter-class lanes are exempt, an unreadable board fails open, no cooldown is consumed, and an operator ForceEvaluate bypasses it for one pass). true = armed (fleet default); false = pre-gate scheduling, byte-identical. Env: SCHEDULER_BOARD_STASIS_GATE")
+	// SCHED-GAP-1707: session-silence watchdog grace. A gateway tick whose
+	// Hermes-state telemetry shows no token delta and no tool activity for
+	// this long is cancelled early with failure_reason=session_silent and
+	// the quiet duration on ticks.session_silence_s. 0 = off (the default —
+	// the watchdog only arms when an operator says so). It never kills a
+	// producing session; cooldowns and the "no timeout backoff" chain are
+	// untouched.
+	sessionSilenceGrace := flag.Duration("session-silence-grace", 0, "SCHED-GAP-1707: terminate a gateway tick whose session shows no token delta and no tool activity for this long (failure_reason=session_silent, quiet duration on the tick row); 0 = disabled (default). Never kills a producing session. Env: SCHEDULER_SESSION_SILENCE_GRACE")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
@@ -263,6 +271,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_BOARD_STASIS_GATE=%q invalid — gate stays %v", v, *boardStasisGate)
 		}
 	}
+	// SCHED-GAP-1707: session-silence watchdog grace env override — same
+	// pattern. A positive parseable duration arms the watchdog; 0 keeps it
+	// off (the library default). Invalid values WARN and keep the current
+	// value (the watchdog must never silently change).
+	if v := os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			*sessionSilenceGrace = d
+		} else {
+			log.Printf("WARN: SCHEDULER_SESSION_SILENCE_GRACE=%q invalid — watchdog stays %v", v, *sessionSilenceGrace)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -307,7 +326,8 @@ func main() {
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
-			*loadGateThreshold, *modelRatesFile)
+			*loadGateThreshold, *modelRatesFile,
+			*sessionSilenceGrace)
 		return
 	}
 
@@ -540,6 +560,12 @@ func main() {
 	// [scheduler] spawn_mem_limit_mb applies below only when the flag sat
 	// at its 0 default (same precedence chain as the load gate).
 	scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
+	// SCHED-GAP-1707: arm the session-silence watchdog (0 = off, the
+	// default — embedding tests and unit suites keep byte-identical
+	// behavior). The flag var carries the env override; the TOML
+	// [scheduler] session_silence_grace applies later in the config block
+	// below only when the flag sat at its 0 default.
+	scheduler.SetSessionSilenceGrace(*sessionSilenceGrace)
 	// SCHED-GAP-1678: arm the board-stasis spawn gate. The LOOP-level gate is
 	// constructed DISABLED on purpose (see board_stasis.go) so embedders and
 	// every existing unit test keep byte-identical selection until someone
@@ -809,6 +835,18 @@ func main() {
 				scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
 				log.Printf("ADV-R11: spawn mem limit enabled from config — %d MiB RLIMIT_AS per spawned process", *spawnMemLimitMB)
 			}
+			// SCHED-GAP-1707: TOML layer for the session-silence watchdog
+			// grace — same default-guard pattern (only when the flag sits
+			// at its 0 default, so CLI and env keep precedence). Positive
+			// values arm the watchdog; a TOML 0 keeps it off.
+			if rootCfg.Scheduler.SessionSilenceGrace != "" && *sessionSilenceGrace == 0 {
+				if d, derr := time.ParseDuration(rootCfg.Scheduler.SessionSilenceGrace); derr == nil && d > 0 {
+					*sessionSilenceGrace = d
+					log.Printf("SESSION-SILENCE: watchdog armed from config — grace %v (0 = off; never kills a producing session)", d)
+				} else {
+					log.Printf("WARN: scheduler.session_silence_grace=%q invalid — using %v", rootCfg.Scheduler.SessionSilenceGrace, *sessionSilenceGrace)
+				}
+			}
 		}
 	}
 	// REMOTE-003 (§2): env layer for the peer freshness window (same shape
@@ -1015,6 +1053,7 @@ func main() {
 		TasksPacing:            tasksPacing.String(),
 		LoadGateThreshold:      *loadGateThreshold,
 		SpawnMemLimitMB:        *spawnMemLimitMB,
+		SessionSilenceGrace:    sessionSilenceGrace.String(),
 		ModelRatesFile:         *modelRatesFile,
 		NamespaceMode:          *namespaceMode,
 		AutoDisableFailureRate: *autoDisableRate,

@@ -194,6 +194,28 @@ type TickOutcome struct {
 	// 0). A measurement failure can only leave it 0 — it can never
 	// manufacture a no-op.
 	MemoryKeys int
+	// SCHED-GAP-1707: partial-telemetry mark for ticks terminated by a
+	// non-terminal kill (tick deadline, silence watchdog, stale reap,
+	// dispatch deadline). TelemetryPartial=true persists telemetry_partial=1
+	// plus TelemetryPartialReason (the closed vocabulary in telemetry.go)
+	// and TelemetrySilenceS (the watchdog's measured quiet duration, 0 on
+	// every other path). A timeout row WITHOUT this mark reads 0/0/0 as an
+	// idle session — WITH it, the same zeros read "dead before any
+	// observable usage", and a nonzero figure reads as the undercount it
+	// is. The completed path never sets it.
+	TelemetryPartial       bool
+	TelemetryPartialReason string
+	// TelemetrySilenceS is the session-silence watchdog's measured quiet
+	// duration in whole seconds (ticks.session_silence_s). Only meaningful
+	// with TelemetryPartialReason=session_silent.
+	TelemetrySilenceS int64
+	// WorkersTerminal (SCHED-GAP-1707 deliverable 3): how many of this
+	// wave tick's workers had reached a terminal state (tick_workers.state
+	// 'done') when the wave manifest was ingested. -1 = unmeasured (the
+	// package's -1 sentinel convention): legacy rows, serial ticks, and
+	// ticks the deadline killed before the foreman wrote any manifest.
+	// Set by wave-manifest ingest, never by Wait().
+	WorkersTerminal int
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one
@@ -339,17 +361,49 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			})
 		}
 	}
+	// SCHED-GAP-1707: the partial-telemetry mark rides the SAME single
+	// finalization UPDATE (criterion 2's coverage guarantee applies here
+	// too — no second UPDATE that can silently miss). Only TIMEOUT rows may
+	// carry it: the brief's kill class is status/outcome=timeout, a
+	// guard-aborted row's telemetry legs were fully measured at the abort
+	// site (not partial), and a completed row must never read partial even
+	// if a caller set the field by mistake.
+	telemetryPartial := 0
+	telemetryReason := ""
+	telemetrySilence := int64(0)
+	if outcome.TelemetryPartial && outcome.Status == TickTimeout {
+		if !telemetryPartialReasonIsValid(outcome.TelemetryPartialReason) {
+			// Unreachable from the code paths (they all go through
+			// timeoutTelemetry), but the write site refuses to invent a
+			// named cause silently — name the most common class.
+			outcome.TelemetryPartialReason = TelemetryPartialTickDeadline
+		}
+		telemetryPartial = 1
+		telemetryReason = outcome.TelemetryPartialReason
+		telemetrySilence = outcome.TelemetrySilenceS
+	}
+	// workers_terminal: Complete NEVER carries a measured count — the wave
+	// manifest ingest writes its own post-Complete UPDATE (the only site
+	// that knows the real convergence). Any zero here is the struct's unset
+	// value, which maps to the -1 unmeasured sentinel (never a fabricated
+	// "0 workers were done"); ingest overwrites it with the real count.
+	workersTerminal := outcome.WorkersTerminal
+	if workersTerminal == 0 {
+		workersTerminal = -1
+	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
 			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
-			dispatch_outcome = ?, dispatch_reason = ?
+			dispatch_outcome = ?, dispatch_reason = ?,
+			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
+		telemetryPartial, telemetryReason, telemetrySilence, workersTerminal,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
@@ -458,10 +512,18 @@ func (lt *LifecycleTracker) CleanupStaleProjects(maxAge time.Duration) ([]string
 		projects = append(projects, name)
 	}
 	rows.Close()
+	// SCHED-GAP-1707: the stale reap is a non-terminal kill — flip the
+	// status AND stamp the partial mark in the SAME UPDATE, so the row is
+	// never indistinguishable from an idle 0/0/0 timeout. No Wait() path
+	// ever ran for these rows, so the telemetry legs stay whatever they were
+	// (0/0/0 for gateway rows: the mark is the honest statement that the
+	// session was killed unobserved, named stale_reap).
 	res, err := lt.db.Exec(`
-		UPDATE ticks SET status = ?, completed_at = ?, error = ?
+		UPDATE ticks SET status = ?, completed_at = ?, error = ?,
+			telemetry_partial = 1, telemetry_partial_reason = ?
 		WHERE status = ? AND spawned_at < ?
-	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
+	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(),
+		TelemetryPartialStaleReap, TickRunning, cutoff.Format(time.RFC3339))
 	if err != nil {
 		return nil, 0, err
 	}
