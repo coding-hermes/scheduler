@@ -455,19 +455,60 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	// (that path only fires on gateway spawn / new spawn), so a project that
 	// failed N times in a drain storm kept the residue across successful local
 	// completions (observed: cf=91 on bunker/chimera-v2/crier despite recent
-	// successful last_tick_completed). Failed and timeout outcomes
-	// intentionally leave the counter alone — GAP-133's FailureBackoff gate
-	// reads it to hold admission during consecutive failures.
+	// successful last_tick_completed).
 	//
-	// SCHED-GAP-203: a DEFERRED outcome leaves it alone too — it neither
-	// clears the counter (the project has not demonstrated a good tick) nor
-	// increments it (the spawn path never calls noteSpawnFailure for a
-	// deferral: a gateway blip is not the lane's failure).
+	// SCHED-GAP-1705 supersedes this block's old "failed and timeout outcomes
+	// intentionally leave the counter alone" sentence. The counter now moves
+	// on every terminal status, each in exactly one direction:
+	//
+	//   - TickCompleted: reset to 0 (unchanged; below). A completed tick is
+	//     the project demonstrating a good run.
+	//   - TickTimeout: +1 (below). A tick that ran the full wall and produced
+	//     nothing IS the lane's fault. Measured 2026-10-02: two
+	//     task-router-foreman wave ticks ended status=timeout at exactly
+	//     3h0m0s with worker_count=0 and tokens 0/0, while the working tick
+	//     the same day produced 8.4M tokens in 94 min — silence is
+	//     distinguishable from real work. The transport-class carve-out
+	//     (SCHED-GAP-143) is preserved exactly: when
+	//     failureReasonClass(outcome.Error) != "" (gateway drain, gateway
+	//     unreachable, a tick deadline that tore down a gateway POST, the
+	//     session-silence watchdog kill), the counter is untouched — the
+	//     harness, not the lane, ended that tick. The relative increment
+	//     matches noteSpawnFailure's SQL, so spawn-path failures and
+	//     timeout-path failures accumulate in the one counter GAP-133's
+	//     FailureBackoff gate already reads (effectiveCooldown, packer.go).
+	//     Deliberately NO new auto-disable wiring rides this: SCHED-GAP-018's
+	//     breaker reads failure_rate, not this counter (the
+	//     consecutive-failures alert does read it and now sees silent
+	//     timeouts too).
+	//   - TickFailed: left alone — the spawn path already counted it at
+	//     noteSpawnFailureClassed; a Complete-side increment would
+	//     double-charge the lane. Timeouts were the one terminal status no
+	//     counter observed; before SCHED-GAP-1705 that is why a dead wave
+	//     retried on its bare cooldown forever.
+	//   - TickDeferred (SCHED-GAP-203): untouched in both directions — it
+	//     neither clears the counter (the project has not demonstrated a
+	//     good tick) nor increments it (the spawn path never calls
+	//     noteSpawnFailure for a deferral: a gateway blip is not the
+	//     lane's failure).
 	if outcome.Status == TickCompleted {
 		if _, err := lt.db.Exec(`
 			UPDATE projects SET consecutive_failures = 0 WHERE name = ?
 		`, outcome.Project); err != nil {
 			log.Printf("WARN: failed to reset consecutive_failures for %s: %v", outcome.Project, err)
+		}
+	}
+	// SCHED-GAP-1705: a TIMEOUT counts as a lane failure for backoff —
+	// unless the failure is transport-class (SCHED-GAP-143's rule, applied
+	// through failureReasonClass — the same single classifier the spawn
+	// path uses, so the two paths can never disagree). Mirrors
+	// noteSpawnFailure's relative increment; best-effort: a DB error here
+	// is a WARN, never a Complete failure.
+	if outcome.Status == TickTimeout && failureReasonClass(outcome.Error) == "" {
+		if _, err := lt.db.Exec(`
+			UPDATE projects SET consecutive_failures = consecutive_failures + 1 WHERE name = ?
+		`, outcome.Project); err != nil {
+			log.Printf("WARN: failed to increment consecutive_failures for %s: %v", outcome.Project, err)
 		}
 	}
 

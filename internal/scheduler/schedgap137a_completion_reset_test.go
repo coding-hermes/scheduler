@@ -15,8 +15,12 @@ import (
 // counter, so local-spawn ticks never hit spawn.go's spawn-time reset.
 //
 // These tests pin the COMPLETION-time reset: a successful outcome clears the
-// residue; failed/timeout outcomes leave it alone (GAP-133 backoff depends on
-// the counter persisting across failures).
+// residue, and the failure counter persists across non-completed outcomes
+// (GAP-133 backoff depends on it). SCHED-GAP-1705 rewrote the timeout leg:
+// a NON-transport timeout now INCREMENTS the counter (see
+// schedgap1705_timeout_backoff_test.go), while a transport-class timeout is
+// untouched (SCHED-GAP-143 carve-out) and TickFailed stays increment-free
+// here because the spawn path already counted it.
 
 // getConsecutiveFailures reads the backoff counter directly (the setter,
 // setConsecutiveFailures, lives in sgap001_regression_test.go).
@@ -89,8 +93,13 @@ func TestSCHEDGAP137A_FailureDoesNotResetConsecutiveFailures(t *testing.T) {
 }
 
 // TestSCHEDGAP137A_TimeoutDoesNotResetConsecutiveFailures verifies timeout
-// outcomes also leave the counter intact ("no timeout backoff" applies to
-// cooldown, not to erasing the failure history).
+// outcomes do not clear the counter ("no timeout backoff" applies to
+// cooldown, not to erasing the failure history). SCHED-GAP-1705 note: this
+// cell uses an EMPTY error, so its timeout is non-transport and now lands
+// exactly one increment HIGHER than it was left — the history is kept AND
+// charged. The transport-class timeout's untouched counter is pinned by
+// TestSCHEDGAP1705_TimeoutCountsAsLaneFailure/gateway_drain and by
+// TestSCHEDGAP1684 below.
 func TestSCHEDGAP137A_TimeoutDoesNotResetConsecutiveFailures(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProject(t, db, "gap137a-timeout")
@@ -98,7 +107,7 @@ func TestSCHEDGAP137A_TimeoutDoesNotResetConsecutiveFailures(t *testing.T) {
 
 	got := runCompleteFor(t, db, "gap137a-timeout", "gap137a-timeout-1", scheduler.TickTimeout)
 
-	if got != 5 {
-		t.Errorf("consecutive_failures = %d after TickTimeout, want 5 (timeout must keep backoff counter)", got)
+	if got != 6 {
+		t.Errorf("consecutive_failures = %d after TickTimeout, want 6 (timeout keeps the backoff counter AND charges +1 — SCHED-GAP-1705)", got)
 	}
 }
