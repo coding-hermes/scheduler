@@ -252,6 +252,11 @@ func (s *Spawner) waveRecoveryBlock(project PackedProject, tickID string) string
 	if len(manifests) == 0 {
 		return ""
 	}
+	// SCHED-GAP-1699: surface any preserved worker branch whose diff mixes
+	// .coding-hermes/board/ with code — the preamble tells the foreman to
+	// merge green branches, so the refusal must be named in the log FIRST.
+	// Best-effort: never blocks the recovery spawn itself.
+	logBoardTouchingBranches(project.Workdir, project.Name, workerBranchesFromManifests(manifests))
 	if err := markTickWaveRecovery(context.Background(), s.db, tickID); err != nil {
 		// Best-effort stamp: the preamble is the load-bearing half (the
 		// foreman does the recovering); a failed flag only costs
