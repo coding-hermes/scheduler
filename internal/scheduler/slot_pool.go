@@ -280,6 +280,11 @@ func (p *SlotPool) Release(name string) {
 // later Release from the goroutine finds the refcount at zero and no-ops,
 // exactly like a Release for a name that holds no slot.
 func (p *SlotPool) releaseReaped(names []string) {
+	if p.spawner != nil && p.spawner.db != nil {
+		if err := database.ReleaseTerminalUsagePoolLeases(context.Background(), p.spawner.db, names); err != nil {
+			log.Printf("usage-pool: release reaped leases: %v", err)
+		}
+	}
 	for _, name := range names {
 		p.mu.Lock()
 		_, hadReservation := p.reserved[name]

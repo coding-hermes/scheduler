@@ -334,6 +334,22 @@ func ReleaseUsagePoolLease(ctx context.Context, db *sql.DB, leaseID string) erro
 	return tx.Commit()
 }
 
+// ReleaseTerminalUsagePoolLeases releases active leases for named lanes whose
+// ticks have already been made terminal by a scheduler reaper.
+func ReleaseTerminalUsagePoolLeases(ctx context.Context, db *sql.DB, lanes []string) error {
+	if len(lanes) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(lanes)), ",")
+	args := make([]any, 0, len(lanes)+1)
+	args = append(args, clock.FromContext(ctx).Now().UTC().Format(time.RFC3339Nano))
+	for _, lane := range lanes {
+		args = append(args, lane)
+	}
+	_, err := db.ExecContext(ctx, `UPDATE usage_pool_leases SET state='released',updated_at=? WHERE state='active' AND lane IN (`+placeholders+`) AND tick_id IN (SELECT id FROM ticks WHERE status IN ('completed','failed','timeout','deferred'))`, args...)
+	return err
+}
+
 // RecoverUsagePoolLeases releases terminal leases and retains leases for live
 // owners. An expired lease with a dead, identifiable owner is failed and
 // released atomically; ownerless and missing-tick leases remain quarantined.

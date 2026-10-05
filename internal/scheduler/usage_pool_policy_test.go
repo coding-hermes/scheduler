@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -306,10 +308,9 @@ func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
 	}, map[string][]string{"start-fails": {"project:start-fails"}}); err != nil {
 		t.Fatal(err)
 	}
-	// Make StartRunning refuse after the lease has been reserved. The trigger
-	// runs inside ReserveAll's transaction, so this deterministically exercises
-	// the cleanup defer after admission rather than a pre-admission failure.
-	if _, err := db.Exec(`CREATE TRIGGER fail_start_after_usage_lease AFTER INSERT ON usage_pool_leases BEGIN UPDATE ticks SET status='failed' WHERE id=NEW.tick_id; END`); err != nil {
+	// Make StartRunning refuse after the lease has been reserved. Ignoring the
+	// queued→running update deterministically exercises post-admission cleanup.
+	if _, err := db.Exec(`CREATE TRIGGER fail_start_after_usage_lease BEFORE UPDATE OF status ON ticks WHEN OLD.status='queued' AND NEW.status='running' BEGIN SELECT RAISE(IGNORE); END`); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, ""))
@@ -330,27 +331,88 @@ func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
 }
 
 func TestUsagePoolLeaseReleasedWhenSpawnPanics(t *testing.T) {
-	db := newTestDB(t)
-	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "project:panic", Kind: "project", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+	if path := os.Getenv("USAGE_POOL_PANIC_CHILD_DB"); path != "" {
+		t.Setenv(EnvDispatchTargets, os.Getenv("USAGE_POOL_PANIC_TARGETS"))
+		resetDispatchTargetsCache()
+		db, err := database.InitDB(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool := NewSlotPool(1, nil, NewLifecycleTracker(db))
+		pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, LocalPoolID: "local:panic"})
+		pool.Spawn(PackedProject{Name: "panic-lane", Workdir: "/tmp"}, time.Now(), true, db)
+		time.Sleep(time.Second)
+		t.Fatal("nil spawner did not panic in production spawn lifecycle")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "panic.db")
+	targetPath := filepath.Join(t.TempDir(), "dispatch-targets.jsonl")
+	if err := os.WriteFile(targetPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ReserveAll(context.Background(), db, "panic-lease", "panic-tick", "panic-lane", []string{"project:panic"}); err != nil {
+	db, err := database.InitDB(dbPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	func() {
-		defer func() {
-			if recovered := recover(); recovered == nil {
-				t.Error("fixture did not panic")
-			}
-		}()
-		defer releaseUsagePoolLeaseAfterSpawn(db, "panic-lease", "panic-lane")
-		panic("injected spawn panic")
-	}()
-	var state string
-	if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id='panic-lease'`).Scan(&state); err != nil || state != "released" {
-		t.Fatalf("panic cleanup state=%q err=%v, want released", state, err)
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "local:panic", Kind: "local", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('panic-lane','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestUsagePoolLeaseReleasedWhenSpawnPanics$")
+	cmd.Env = append(os.Environ(), "USAGE_POOL_PANIC_CHILD_DB="+dbPath, "USAGE_POOL_PANIC_TARGETS="+targetPath)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "nil pointer dereference") {
+		t.Fatalf("child did not panic through SlotPool.spawn: err=%v output=%s", err, output)
+	}
+	db, err = database.InitDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	assertNoActiveUsagePoolLeases(t, db)
+	var state string
+	if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lane='panic-lane' ORDER BY created_at DESC LIMIT 1`).Scan(&state); err != nil || state != "released" {
+		t.Fatalf("production panic cleanup state=%q err=%v, want released", state, err)
+	}
+	if err := database.ReleaseUsagePoolLease(context.Background(), db, mustQueryLeaseID(t, db, "panic-lane")); err != nil {
+		t.Fatalf("repeat release after panic: %v", err)
+	}
+}
+
+func TestUsagePoolLeaseReleasedByReaper(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('reaper-lane','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{
+		{ID: "local:reaper", Kind: "local", ActiveLimit: 1, Enabled: true},
+		{ID: "project:reaper", Kind: "project", ActiveLimit: 1, Enabled: true},
+	}, map[string][]string{"reaper-lane": {"project:reaper"}}); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := NewLifecycleTracker(db)
+	if err := lifecycle.Enqueue("reaper-lane", "reaper-tick"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE ticks SET status='timeout' WHERE id='reaper-tick'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReserveAll(context.Background(), db, "reaper-tick", "reaper-tick", "reaper-lane", []string{"local:reaper", "project:reaper"}); err != nil {
+		t.Fatal(err)
+	}
+	pool := NewSlotPool(1, NewSpawner(db, 1), lifecycle)
+	pool.releaseReaped([]string{"reaper-lane"})
+	pool.releaseReaped([]string{"reaper-lane"})
+	assertNoActiveUsagePoolLeases(t, db)
+	var state string
+	if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id='reaper-tick'`).Scan(&state); err != nil || state != "released" {
+		t.Fatalf("reaper lease state=%q err=%v, want released", state, err)
+	}
 }
 
 func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
@@ -364,6 +426,15 @@ func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
 			t.Fatalf("pool %s retained %d active leases", stat.PoolID, stat.Active)
 		}
 	}
+}
+
+func mustQueryLeaseID(t *testing.T, db *sql.DB, lane string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`SELECT lease_id FROM usage_pool_leases WHERE lane=? ORDER BY created_at DESC LIMIT 1`, lane).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func TestUsagePoolsDisabledCompatibility(t *testing.T) {
