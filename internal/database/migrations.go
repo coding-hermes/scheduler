@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 65
+const latestMigration = 66
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1315,6 +1315,21 @@ CREATE TABLE IF NOT EXISTS usage_pool_lease_members (
     PRIMARY KEY(lease_id,pool_id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_pool_lease_members_pool ON usage_pool_lease_members(pool_id,lease_id);
+`,
+	},
+	{
+		version: 66,
+		desc:    "SCHED-GAP-1726: persist usage-pool lease owner and expiry; track deferred attempts",
+		stmt: `
+ALTER TABLE usage_pool_leases ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_pool_leases ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS usage_pool_deferrals (
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    tick_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(pool_id,tick_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_pool_deferrals_tick ON usage_pool_deferrals(tick_id);
 `,
 	},
 }
