@@ -415,6 +415,22 @@ func TestUsagePoolLeaseReleasedByReaper(t *testing.T) {
 	}
 }
 
+func TestUsagePoolLeaseReleaseAllExits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{name: "local acquire timeout", run: TestUsagePoolLeaseReleasedAfterLocalSlotTimeout},
+		{name: "enqueue or start failure", run: TestUsagePoolLeaseReleasedWhenStartFails},
+		{name: "dispatch refusal", run: TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal},
+		{name: "cancel completion and timeout", run: TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout},
+		{name: "production spawn panic", run: TestUsagePoolLeaseReleasedWhenSpawnPanics},
+		{name: "reaper", run: TestUsagePoolLeaseReleasedByReaper},
+	} {
+		t.Run(tc.name, tc.run)
+	}
+}
+
 func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
 	t.Helper()
 	stats, err := database.UsagePoolStats(context.Background(), db)
