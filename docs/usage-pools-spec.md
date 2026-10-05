@@ -1,7 +1,7 @@
 # SCHED-GAP-1726 — Composable Usage Pools
 
-**Status:** Spec-first design contract (no runtime change in this commit)  
-**Scope:** Add dispatch/admission accounting pools orthogonal to the existing namespace weight allocator and namespace concurrency cap.  
+**Status:** Spec-first design contract (no runtime change in this commit)
+**Scope:** Add dispatch/admission accounting pools orthogonal to the existing namespace weight allocator and namespace concurrency cap.
 **Related authority:** `docs/design-decisions.md` (namespace cap/G7), `specs/S04-weight-packer.md`, `specs/S07-multi-namespace-extension.md`, `docs/dispatch-spec.md` (SCHED-GAP-1710), `docs/remote-scope.md` (REMOTE-001), `internal/scheduler/slot_pool.go`, `internal/scheduler/dispatch_leg.go`.
 
 ## 1. Problem statement
