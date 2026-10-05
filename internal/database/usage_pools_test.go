@@ -159,6 +159,69 @@ func TestUsagePoolRecoveryReleasesTerminalTickLease(t *testing.T) {
 	}
 }
 
+func TestUsagePoolRecoveryRetainsNonterminalAndQuarantinesOwnerlessLease(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := ConfigureUsagePools(ctx, db, []UsagePool{{ID: "p", Kind: "project", ActiveLimit: 2, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('rec-live','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"live-tick", "ownerless-tick"} {
+		if _, err := db.Exec(`INSERT INTO ticks(id,project_name,status,created_at) VALUES(?,'rec-live','queued','now')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReserveAll(ctx, db, id, id, "rec-live", []string{"p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE usage_pool_leases SET owner_id='',expires_at='2000-01-01T00:00:00Z' WHERE lease_id='ownerless-tick'`); err != nil {
+		t.Fatal(err)
+	}
+	if released, err := RecoverUsagePoolLeases(ctx, db); err != nil || released != 0 {
+		t.Fatalf("recovered=%d err=%v, nonterminal leases must be retained", released, err)
+	}
+	var active, recoveryEvents int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases WHERE state='active'`).Scan(&active); err != nil || active != 2 {
+		t.Fatalf("active leases=%d err=%v", active, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE message='usage_pool_recovery' AND details LIKE '%quarantined_retained%'`).Scan(&recoveryEvents); err != nil || recoveryEvents != 1 {
+		t.Fatalf("ownerless recovery events=%d err=%v", recoveryEvents, err)
+	}
+	var owner, expiry string
+	if err := db.QueryRow(`SELECT owner_id,expires_at FROM usage_pool_leases WHERE lease_id='live-tick'`).Scan(&owner, &expiry); err != nil || owner == "" || expiry == "" {
+		t.Fatalf("lease owner/expiry=%q/%q err=%v", owner, expiry, err)
+	}
+}
+
+func TestUsagePoolDeferredCountTracksQueuedDeferrals(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := ConfigureUsagePools(ctx, db, []UsagePool{{ID: "p", Kind: "project", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('deferred-lane','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"occupier", "waiting"} {
+		if _, err := db.Exec(`INSERT INTO ticks(id,project_name,status,created_at) VALUES(?,'deferred-lane','queued','now')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ReserveAll(ctx, db, "occupier", "occupier", "deferred-lane", []string{"p"}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := ReserveAll(ctx, db, "waiting", "waiting", "deferred-lane", []string{"p"})
+	if err != nil || !decision.Denied {
+		t.Fatalf("denial=%+v err=%v", decision, err)
+	}
+	stats, err := UsagePoolStats(ctx, db)
+	if err != nil || len(stats) != 1 || stats[0].Deferred != 1 {
+		t.Fatalf("stats=%+v err=%v, want one queued deferral", stats, err)
+	}
+}
+
 // Ensure the migration version test catches the new schema on a normal DB connection.
 func TestUsagePoolTablesMigrated(t *testing.T) {
 	db := newTestDB(t)

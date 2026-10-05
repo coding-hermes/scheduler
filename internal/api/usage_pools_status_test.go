@@ -34,7 +34,7 @@ func TestUsagePoolDeferralSurfaces(t *testing.T) {
 		t.Fatalf("usage_pools = %+v, want one configured pool", body.UsagePools)
 	}
 	pool := body.UsagePools[0]
-	if pool.PoolID != "host:build-01" || pool.Kind != "host" || pool.Active != 0 || pool.Limit != 8 || pool.Available != 8 {
+	if pool.PoolID != "host:build-01" || pool.Kind != "host" || pool.Active != 0 || pool.Limit != 8 || pool.Available != 8 || pool.Deferred != 0 {
 		t.Fatalf("usage pool status = %+v", pool)
 	}
 }

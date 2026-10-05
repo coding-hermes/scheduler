@@ -123,7 +123,7 @@ func newDispatchClient(t *testing.T, url string, opts ...Option) *Client {
 	return NewClient(true, url, "relay-token", "sched-a", opts...)
 }
 
-func TestDispatchSendsWorkItemToAgentInbox(t *testing.T) {
+func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	rec := &dispatchRecorder{}
 	srv := httptest.NewServer(rec)
 	defer srv.Close()

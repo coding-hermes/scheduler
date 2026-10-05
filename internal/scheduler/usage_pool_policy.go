@@ -80,7 +80,7 @@ func isUsagePoolMisconfiguration(err error) bool {
 	return errors.Is(err, database.ErrUsagePoolMissing) || errors.Is(err, database.ErrUsagePoolInvalid)
 }
 
-func (p *SlotPool) emitUsagePoolRefusal(proj PackedProject, tickID, reason string, err error) {
+func (p *SlotPool) emitUsagePoolRefusal(proj PackedProject, tickID, reason string, err error, target DispatchTarget) {
 	p.mu.Lock()
 	events := p.events
 	p.mu.Unlock()
@@ -90,8 +90,25 @@ func (p *SlotPool) emitUsagePoolRefusal(proj PackedProject, tickID, reason strin
 			"reason": reason, "lane": proj.Name, "tick_id": tickID,
 			"error_class": fmt.Sprintf("%T", err), "detail": err.Error(),
 			"configuration_source": "schedulerd.toml and dispatch-targets.jsonl",
+			"retryable":            reason == "usage_pool_authority_unavailable",
+		}
+		poolIDs := []string{}
+		var poolErr error
+		if p.lifecycle != nil && p.lifecycle.db != nil {
+			poolIDs, poolErr = database.UsagePoolIDsForLane(context.Background(), p.lifecycle.db, proj.Name)
+		}
+		if poolErr == nil {
+			if target.HostID != "" {
+				poolIDs = append(poolIDs, "host:"+target.HostID)
+			}
+		}
+		details["pool_ids"] = poolIDs
+		if target.HostID != "" {
+			details["host_id"] = target.HostID
 		}
 		if id := strings.TrimPrefix(err.Error(), "usage pool missing or disabled: "); id != err.Error() {
+			details["pool_id"] = id
+		} else if id := strings.TrimPrefix(err.Error(), "usage pool invalid: "); id != err.Error() {
 			details["pool_id"] = id
 		}
 		events.Emit(context.Background(), SeverityHigh, "usage_pool", "usage-pool admission refused", details)

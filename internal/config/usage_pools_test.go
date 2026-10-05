@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,5 +43,23 @@ pool_ids = ["project:alpha", "shared:build"]
 	}
 	if len(cfg.UsagePools.Memberships) != 1 || cfg.UsagePools.Memberships[0].Lane != "foreman-a" || len(cfg.UsagePools.Memberships[0].PoolIDs) != 2 {
 		t.Fatalf("memberships = %+v", cfg.UsagePools.Memberships)
+	}
+}
+
+func TestUsagePoolsNoLiveConfigMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schedulerd.toml")
+	original := []byte("[usage_pools]\nenabled = false\nobserve_only = true\nlocal_pool_id = \"local:control\"\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRootConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("config loader mutated its input: got %q, want byte-identical %q", got, original)
 	}
 }

@@ -236,7 +236,7 @@ and gateway-health admission state.
  "gateway_health_gate":{"armed":true,"deferrals_total":0,"healthy":true,
    "last_error":"","probed_at":"2026-09-19T07:58:12Z","ttl_s":30},
  "last_evaluation":"2026-08-18T06:52:15Z",
- "usage_pools":[{"pool_id":"host:build-01","pool_kind":"host","active":3,"limit":8,"available":5}],
+ "usage_pools":[{"pool_id":"host:build-01","pool_kind":"host","active":3,"limit":8,"available":5,"deferred":1}],
  "projects_failure_rates":{"9router":{"failed":1,"total":100,
    "failure_rate":0.01,"auto_disable_armed":false}, ...},
  "recent_outcomes":{"completed":401,"failed":6,"timeout":1},
@@ -257,7 +257,7 @@ and gateway-health admission state.
 | `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict of the DAEMON's own endpoint: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start across EVERY endpoint (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown). t_cadba34c: admission judges the endpoint each lane RESOLVES to (lane > namespace > global), so a foreign endpoint keeps its OWN cached verdict + outage episodes and never overwrites this global answer — those are observable as `gateway_health_defer`/`gateway_health_recovered` events carrying an `endpoint` field, and every deferral (`gateway_defer`, component `loop`) carries the resolved `gateway_url`/`gateway_source`/`gateway_key_source` + `gateway_health_endpoint` |
 | `duckbrain` | object | DuckBrain sync health `{base_url, consecutive_failures, interval, last_error, last_ok_at, reachable, spooled_pending}` (present when sync health reporting is configured) |
 | `lane_output_families` | object | SCHED-GAP-177 per-family rollup for the four non-code lane families — `{qa, pm, sync, dogfood}`, each `{lanes, output_ticks, max_zero_output_streak, lanes_at_alert_threshold}`. `lanes` counts ENABLED lanes only; `output_ticks` sums the family's lifetime output ticks (code OR board commits); `max_zero_output_streak` is the worst streak currently on any lane; `lanes_at_alert_threshold` counts lanes at/past the HIGH-event threshold (8). The `duckbrain-sync` namespace resolves as `sync` |
-| `usage_pools` | array | SCHED-GAP-1726 enabled pools, each `{pool_id, pool_kind, active, limit, available}`; empty when none are configured |
+| `usage_pools` | array | SCHED-GAP-1726 enabled pools, each `{pool_id, pool_kind, active, limit, available, deferred}`; `deferred` counts queued ticks denied by the pool; empty when none are configured |
 
 **Errors:** 405 on non-GET. **504** when a DB step exceeds the request deadline
 (SCHED-GAP-1575-B): the handler runs its ~12 sequential calls on ONE serialized

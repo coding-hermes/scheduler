@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +108,95 @@ func TestUsagePoolMissingLocalConfigLeavesDurableQueuedTick(t *testing.T) {
 	}
 	if leases != 0 || dispatches != 0 || pool.Running() != 0 {
 		t.Fatalf("refused tick leaked lease/dispatch/local slot: leases=%d dispatches=%d slots=%d", leases, dispatches, pool.Running())
+	}
+}
+
+func TestRemoteMissingHostPoolFailsClosedNoFallback(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects (name,repo_url,workdir,created_at,updated_at) VALUES ('remote-missing-pool','https://example.invalid/repo','/tmp/remote-missing-pool','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "local:control", Kind: "local", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	targets := writeDispatchTargets(t, `{"lane":"remote-missing-pool","agent":"agent-1","host_id":"bunker-1","workdir":"/remote"}`+"\n")
+	t.Setenv(EnvDispatchTargets, targets)
+	resetDispatchTargetsCache()
+	pool := NewSlotPool(1, NewSpawner(db, 1), NewLifecycleTracker(db))
+	pool.SetEventLogger(NewEventLogger(db))
+	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, LocalPoolID: "local:control"})
+	tickID := pool.Spawn(PackedProject{Name: "remote-missing-pool", Workdir: "/tmp/remote-missing-pool"}, time.Unix(1_800_000_000, 0), true, db)
+	deadline := time.After(5 * time.Second)
+	for {
+		var reason string
+		err := db.QueryRow(`SELECT message FROM events WHERE component='usage_pool' AND message='usage-pool admission refused' ORDER BY id DESC LIMIT 1`).Scan(&reason)
+		if err == nil {
+			if reason != "usage-pool admission refused" {
+				t.Fatalf("refusal event=%q", reason)
+			}
+			break
+		}
+		if err != sql.ErrNoRows {
+			t.Fatal(err)
+		}
+		select {
+		case <-deadline:
+			t.Fatal("missing remote host pool did not emit refusal event")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM ticks WHERE id=?`, tickID).Scan(&status); err != nil || status != "queued" {
+		t.Fatalf("tick status=%q err=%v, want durable queued row", status, err)
+	}
+	var leases, dispatches int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases WHERE tick_id=?`, tickID).Scan(&leases); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tick_dispatch WHERE tick_id=?`, tickID).Scan(&dispatches); err != nil {
+		t.Fatal(err)
+	}
+	if leases != 0 || dispatches != 0 || pool.Running() != 0 {
+		t.Fatalf("fallback/handout occurred: leases=%d dispatches=%d local_slots=%d", leases, dispatches, pool.Running())
+	}
+	var detail string
+	if err := db.QueryRow(`SELECT details FROM events WHERE component='usage_pool' AND message='usage-pool admission refused' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"reason":"usage_pool_missing"`, `"host_id":"bunker-1"`, `"pool_id":"host:bunker-1"`, `"retryable":false`} {
+		if !strings.Contains(detail, field) {
+			t.Errorf("refusal detail %q missing %s", detail, field)
+		}
+	}
+}
+
+func TestUsagePoolsDisabledCompatibility(t *testing.T) {
+	db := newTestDB(t)
+	pool := NewSlotPool(1, nil, nil)
+	reserved, err := pool.reserveUsagePools(context.Background(), db, "local-lane", "compat-tick", DispatchTarget{}, false)
+	if err != nil || reserved {
+		t.Fatalf("disabled policy decision=%t err=%v", reserved, err)
+	}
+	var leases int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases`).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("disabled policy changed lease state: count=%d err=%v", leases, err)
+	}
+}
+
+func TestUsagePoolsObserveOnlyNoMutation(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := database.ConfigureUsagePools(ctx, db, []database.UsagePool{{ID: "host:bunker", Kind: "host", ActiveLimit: 8, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pool := NewSlotPool(1, nil, nil)
+	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, ObserveOnly: true})
+	reserved, err := pool.reserveUsagePools(ctx, db, "remote-lane", "observe-tick", DispatchTarget{HostID: "bunker"}, true)
+	if err != nil || reserved {
+		t.Fatalf("observe-only decision=%t err=%v", reserved, err)
+	}
+	var leases int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases`).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("observe-only created %d leases, err=%v", leases, err)
 	}
 }

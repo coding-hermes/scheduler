@@ -3,12 +3,16 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -30,6 +34,7 @@ type UsagePoolLease struct {
 	Active    int    `json:"active"`
 	Limit     int    `json:"limit"`
 	Available int    `json:"available"`
+	Deferred  int    `json:"deferred"`
 	Denied    bool   `json:"denied,omitempty"`
 }
 
@@ -287,11 +292,19 @@ func ReserveAll(ctx context.Context, db *sql.DB, leaseID, tickID, lane string, p
 	}
 	for _, c := range counts {
 		if c.active >= c.limit {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO usage_pool_deferrals(pool_id,tick_id,created_at) VALUES(?,?,?) ON CONFLICT(pool_id,tick_id) DO UPDATE SET created_at=excluded.created_at`, c.id, tickID, clock.FromContext(ctx).Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return UsagePoolLease{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return UsagePoolLease{}, err
+			}
 			return UsagePoolLease{PoolID: c.id, Kind: c.kind, Active: c.active, Limit: c.limit, Available: 0, Denied: true}, nil
 		}
 	}
 	now := clock.FromContext(ctx).Now().UTC().Format(time.RFC3339Nano)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO usage_pool_leases(lease_id,tick_id,lane,state,created_at,updated_at) VALUES(?,?,?,'active',?,?)`, leaseID, tickID, lane, now, now); err != nil {
+	ownerID := fmt.Sprintf("pid:%d", os.Getpid())
+	expiresAt := clock.FromContext(ctx).Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO usage_pool_leases(lease_id,tick_id,lane,state,created_at,updated_at,owner_id,expires_at) VALUES(?,?,?,'active',?,?,?,?)`, leaseID, tickID, lane, now, now, ownerID, expiresAt); err != nil {
 		return UsagePoolLease{}, err
 	}
 	for _, id := range ids {
@@ -321,18 +334,103 @@ func ReleaseUsagePoolLease(ctx context.Context, db *sql.DB, leaseID string) erro
 	return tx.Commit()
 }
 
-// RecoverUsagePoolLeases releases reservations whose tick is already terminal and retains active tick ownership.
+// RecoverUsagePoolLeases releases terminal leases and conservatively retains
+// leases for queued/running or missing ticks. A missing/ambiguous owner is
+// quarantined by retention, never released, so recovery cannot over-admit.
 func RecoverUsagePoolLeases(ctx context.Context, db *sql.DB) (int64, error) {
-	r, err := db.ExecContext(ctx, `UPDATE usage_pool_leases SET state='released',updated_at=? WHERE state='active' AND EXISTS (SELECT 1 FROM ticks t WHERE t.id=usage_pool_leases.tick_id AND t.status IN ('completed','failed','timeout','deferred'))`, clock.FromContext(ctx).Now().UTC().Format(time.RFC3339Nano))
+	tx, err := beginUsagePoolTx(ctx, db)
 	if err != nil {
 		return 0, err
 	}
-	return r.RowsAffected()
+	defer rollbackUsagePoolTx(tx)
+	rows, err := tx.QueryContext(ctx, `SELECT l.lease_id,l.tick_id,l.lane,l.owner_id,l.expires_at,l.state,COALESCE(t.status,'missing') FROM usage_pool_leases l LEFT JOIN ticks t ON t.id=l.tick_id WHERE l.state='active' ORDER BY l.lease_id`)
+	if err != nil {
+		return 0, err
+	}
+	type recovery struct{ leaseID, tickID, lane, owner, expires, state, status string }
+	var candidates []recovery
+	for rows.Next() {
+		var item recovery
+		if err := rows.Scan(&item.leaseID, &item.tickID, &item.lane, &item.owner, &item.expires, &item.state, &item.status); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	now := clock.FromContext(ctx).Now().UTC().Format(time.RFC3339Nano)
+	var released int64
+	for _, item := range candidates {
+		action := "retained_live_owner"
+		if item.status == "completed" || item.status == "failed" || item.status == "timeout" || item.status == "deferred" {
+			if _, err := tx.ExecContext(ctx, `UPDATE usage_pool_leases SET state='released',updated_at=? WHERE lease_id=? AND state='active'`, now, item.leaseID); err != nil {
+				return 0, err
+			}
+			released++
+			action = "released_terminal"
+		} else if item.owner == "" || item.status == "missing" || !usagePoolOwnerAlive(item.owner) {
+			action = "quarantined_retained"
+		} else if expires, err := time.Parse(time.RFC3339Nano, item.expires); err != nil || !expires.After(clock.FromContext(ctx).Now()) {
+			action = "retained_expired_owner_active_tick"
+		}
+		poolRows, err := tx.QueryContext(ctx, `SELECT pool_id FROM usage_pool_lease_members WHERE lease_id=? ORDER BY pool_id`, item.leaseID)
+		if err != nil {
+			return 0, err
+		}
+		var poolIDs []string
+		for poolRows.Next() {
+			var id string
+			if err := poolRows.Scan(&id); err != nil {
+				poolRows.Close()
+				return 0, err
+			}
+			poolIDs = append(poolIDs, id)
+		}
+		if err := poolRows.Err(); err != nil {
+			poolRows.Close()
+			return 0, err
+		}
+		poolRows.Close()
+		if action != "retained_live_owner" {
+			detailBytes, err := json.Marshal(map[string]any{"lease_id": item.leaseID, "tick_id": item.tickID, "lane": item.lane, "pool_ids": poolIDs, "owner_id": item.owner, "expires_at": item.expires, "prior_status": item.status, "action": action})
+			if err != nil {
+				return 0, err
+			}
+			detail := string(detailBytes)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO events(severity,component,message,details,created_at,scheduler_id) VALUES(?,?,?,?,?,?)`, `MEDIUM`, "usage_pool", "usage_pool_recovery", detail, now, stampSchedulerID()); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return released, nil
+}
+
+func usagePoolOwnerAlive(ownerID string) bool {
+	pidText, ok := strings.CutPrefix(ownerID, "pid:")
+	if !ok {
+		return false
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
 }
 
 // UsagePoolStats returns active and configured limits for operator surfaces.
 func UsagePoolStats(ctx context.Context, db *sql.DB) ([]UsagePoolLease, error) {
-	rows, err := db.QueryContext(ctx, `SELECT p.pool_id,p.kind,p.active_limit,(SELECT COUNT(*) FROM usage_pool_lease_members m JOIN usage_pool_leases l USING(lease_id) WHERE m.pool_id=p.pool_id AND l.state='active') FROM usage_pools p WHERE p.enabled=1 ORDER BY p.pool_id`)
+	rows, err := db.QueryContext(ctx, `SELECT p.pool_id,p.kind,p.active_limit,(SELECT COUNT(*) FROM usage_pool_lease_members m JOIN usage_pool_leases l USING(lease_id) WHERE m.pool_id=p.pool_id AND l.state='active'),(SELECT COUNT(*) FROM usage_pool_deferrals d JOIN ticks t ON t.id=d.tick_id WHERE d.pool_id=p.pool_id AND t.status='queued') FROM usage_pools p WHERE p.enabled=1 ORDER BY p.pool_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +438,7 @@ func UsagePoolStats(ctx context.Context, db *sql.DB) ([]UsagePoolLease, error) {
 	out := make([]UsagePoolLease, 0)
 	for rows.Next() {
 		var s UsagePoolLease
-		if err := rows.Scan(&s.PoolID, &s.Kind, &s.Limit, &s.Active); err != nil {
+		if err := rows.Scan(&s.PoolID, &s.Kind, &s.Limit, &s.Active, &s.Deferred); err != nil {
 			return nil, err
 		}
 		s.Available = s.Limit - s.Active

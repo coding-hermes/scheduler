@@ -478,7 +478,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			var targetErr error
 			target, remoteLane, targetErr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
 			if targetErr != nil {
-				p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr)
+				p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr, target)
 				if !usagePolicy.ObserveOnly {
 					return
 				}
@@ -491,7 +491,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				if isUsagePoolMisconfiguration(reserveErr) {
 					reason = "usage_pool_missing"
 				}
-				p.emitUsagePoolRefusal(proj, tickID, reason, reserveErr)
+				p.emitUsagePoolRefusal(proj, tickID, reason, reserveErr, target)
 				if !usagePolicy.ObserveOnly {
 					return
 				}
