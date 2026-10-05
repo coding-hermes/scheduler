@@ -653,7 +653,10 @@ GatewayKey-style conditional pin). The same is true of namespace
 A namespace may cap how many of its projects run ticks at once —
 `0`/absent = unlimited (the global `--max-concurrent` still applies);
 a positive value is the namespace's live cap, enforced by the packer
-(`internal/scheduler/packer_select.go`, `nsCapMap`):
+(`internal/scheduler/packer_select.go`, `nsCapMap`) and authoritatively rechecked
+at the `SlotPool.spawn` admission point (`internal/scheduler/slot_pool.go`).
+This is independent of named usage-pool accounting; a tick can be subject to
+both controls. See [`docs/usage-pools-spec.md`](docs/usage-pools-spec.md).
 
 ```toml
 [[namespaces]]
