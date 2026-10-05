@@ -87,7 +87,7 @@ func TestMigrate_TelemetryPartialColumns(t *testing.T) {
 	}
 }
 
-// TestSCHEDGAP1707_MigrationVersionPinned keeps the ladder at v64 for this
+// TestSCHEDGAP1707_MigrationVersionPinned keeps v64 present in the ladder for this
 // row's build (the generic version test already reads latestMigration; this
 // arm names the number so a silent renumber shows up here first).
 func TestSCHEDGAP1707_MigrationVersionPinned(t *testing.T) {
@@ -96,8 +96,8 @@ func TestSCHEDGAP1707_MigrationVersionPinned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationVersion: %v", err)
 	}
-	if v != 64 {
-		t.Errorf("migration version = %d, want 64 (SCHED-GAP-1707's v64 must be applied)", v)
+	if v < 64 {
+		t.Errorf("migration version = %d, want at least 64 (SCHED-GAP-1707's v64 must be applied)", v)
 	}
 }
 

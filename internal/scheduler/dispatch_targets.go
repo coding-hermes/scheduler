@@ -63,6 +63,9 @@ type DispatchTarget struct {
 	// Workdir is the checkout reference the agent resolves. Empty = the lane's
 	// configured workdir (the control box's value).
 	Workdir string `json:"workdir"`
+	// HostID is the stable bunker identity used for cross-namespace capacity.
+	// It is required for an enabled remote lane when usage-pool enforcement is on.
+	HostID string `json:"host_id"`
 	// Enabled defaults to true when absent (a row exists to say "this lane is
 	// remote"); an explicit false parks the target without deleting it.
 	Enabled *bool `json:"enabled"`

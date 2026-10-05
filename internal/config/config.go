@@ -303,6 +303,30 @@ type RootConfig struct {
 	// its own alignment group so adding it does not reflow the accepted
 	// field block above.
 	Federation FederationConfig `toml:"federation"`
+	UsagePools UsagePoolsConfig `toml:"usage_pools"`
+}
+
+// UsagePoolsConfig defines the opt-in durable admission pools owned by this scheduler DB.
+type UsagePoolsConfig struct {
+	Enabled     bool                  `toml:"enabled"`
+	ObserveOnly bool                  `toml:"observe_only"`
+	LocalPoolID string                `toml:"local_pool_id"`
+	Pools       []UsagePoolDef        `toml:"pools"`
+	Memberships []UsagePoolMembership `toml:"memberships"`
+}
+
+// UsagePoolDef is one named concurrency pool in root configuration.
+type UsagePoolDef struct {
+	ID          string `toml:"id"`
+	Kind        string `toml:"kind"`
+	ActiveLimit int    `toml:"active_limit"`
+	Enabled     *bool  `toml:"enabled"`
+}
+
+// UsagePoolMembership assigns a lane to an explicit pool.
+type UsagePoolMembership struct {
+	Lane    string   `toml:"lane"`
+	PoolIDs []string `toml:"pool_ids"`
 }
 
 // APIConfig covers the HTTP API surface knobs (SCHED-GAP-1575-B).

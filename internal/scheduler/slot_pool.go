@@ -74,6 +74,10 @@ type SlotPool struct {
 	// Nil for a standalone pool (tests) — no stamp, no panic. Written once
 	// by SetLoop before any spawn; read under mu.
 	owner *Loop
+
+	// usagePolicy is installed once during daemon startup. Nil preserves
+	// historical behavior for embedded/test pools.
+	usagePolicy *UsagePoolPolicy
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
@@ -152,6 +156,14 @@ func (p *SlotPool) SetLoop(l *Loop) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.owner = l
+}
+
+// SetUsagePoolPolicy installs the opt-in durable pool admission policy.
+func (p *SlotPool) SetUsagePoolPolicy(policy UsagePoolPolicy) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	copy := policy
+	p.usagePolicy = &copy
 }
 
 // Available returns the number of free slots.
@@ -392,7 +404,18 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// exit before Acquire succeeds, Release is a no-op (running[name]
 		// == 0) and clearReserve alone frees the claim.
 		defer p.clearReserve(proj.Name)
-		defer p.Release(proj.Name)
+		localSlotAcquired := false
+		usageLeaseID := ""
+		defer func() {
+			if localSlotAcquired {
+				p.Release(proj.Name)
+			}
+			if usageLeaseID != "" && db != nil {
+				if err := database.ReleaseUsagePoolLease(context.Background(), db, usageLeaseID); err != nil {
+					log.Printf("USAGE_POOL: release lease=%s lane=%s failed: %v", usageLeaseID, proj.Name, err)
+				}
+			}
+		}()
 
 		// SCHED-GAP-157: consume the caller's pending nudge-source stamp
 		// (Loop.SetNudgeSource) FIRST — "startup" | "manual" | "board_wake",
@@ -436,6 +459,51 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 		}
 
+		var target DispatchTarget
+		remoteLane := false
+		p.mu.Lock()
+		usagePolicy := p.usagePolicy
+		p.mu.Unlock()
+		if usagePolicy != nil && usagePolicy.Enabled {
+			// Make tick ownership durable before taking a cross-resource lease.
+			// A crash after ReserveAll can then be recovered against this queued
+			// row instead of leaving a reservation with no tick identity.
+			if !usagePolicy.ObserveOnly && !enqueued {
+				if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil {
+					log.Printf("SPAWN: enqueue %s before usage-pool admission: %v", proj.Name, err)
+					return
+				}
+				enqueued = true
+			}
+			var targetErr error
+			target, remoteLane, targetErr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			if targetErr != nil {
+				p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr)
+				if !usagePolicy.ObserveOnly {
+					return
+				}
+				target, remoteLane = DispatchTarget{}, false
+			}
+			var reserveErr error
+			usageLease, reserveErr := p.reserveUsagePools(context.Background(), db, proj.Name, tickID, target, remoteLane)
+			if reserveErr != nil {
+				reason := "usage_pool_authority_unavailable"
+				if isUsagePoolMisconfiguration(reserveErr) {
+					reason = "usage_pool_missing"
+				}
+				p.emitUsagePoolRefusal(proj, tickID, reason, reserveErr)
+				if !usagePolicy.ObserveOnly {
+					return
+				}
+			}
+			if !usagePolicy.ObserveOnly {
+				if !usageLease {
+					return
+				}
+				usageLeaseID = tickID
+			}
+		}
+
 		// Wait for a free slot. The patience is configurable
 		// (ADV-R08/G3); the default keeps the historical 5-minute
 		// window byte-identical.
@@ -443,7 +511,8 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		patience := p.Patience()
 		ctx, cancel := context.WithTimeout(context.Background(), patience)
 		defer cancel()
-		if !p.Acquire(ctx, proj.Name) {
+		localSlotRequired := !remoteLane || usagePolicy == nil || !usagePolicy.Enabled || usagePolicy.ObserveOnly
+		if localSlotRequired && !p.Acquire(ctx, proj.Name) {
 			waited := p.clock().Since(waitStart)
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			// ADV-R08/G3: the drop was previously invisible to the
@@ -469,8 +538,11 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 			return
 		}
+		localSlotAcquired = localSlotRequired
 
-		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+		if localSlotRequired {
+			log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+		}
 
 		// SCHED-GAP-157: the slot wait and the admission decision are
 		// stamped onto the tick row the moment the slot is acquired —
@@ -589,10 +661,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// before: a config typo in one line must not silently re-point a lane,
 		// but it also must not halt every other lane on the box while it is
 		// being fixed. The log line names the lane and the problem.
-		target, remoteLane, terr := LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
-		if terr != nil {
-			log.Printf("DISPATCH: %s tick=%s dispatch targets unreadable (%v) — running locally as before", proj.Name, tickID, terr)
-			remoteLane = false
+		if usagePolicy == nil || !usagePolicy.Enabled {
+			var terr error
+			target, remoteLane, terr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			if terr != nil {
+				log.Printf("DISPATCH: %s tick=%s dispatch targets unreadable (%v) — running locally as before", proj.Name, tickID, terr)
+				remoteLane = false
+			}
 		}
 		var st *SpawnedTick
 		var err error
