@@ -329,6 +329,30 @@ func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
 	}
 }
 
+func TestUsagePoolLeaseReleasedWhenSpawnPanics(t *testing.T) {
+	db := newTestDB(t)
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "project:panic", Kind: "project", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReserveAll(context.Background(), db, "panic-lease", "panic-tick", "panic-lane", []string{"project:panic"}); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Error("fixture did not panic")
+			}
+		}()
+		defer releaseUsagePoolLeaseAfterSpawn(db, "panic-lease", "panic-lane")
+		panic("injected spawn panic")
+	}()
+	var state string
+	if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id='panic-lease'`).Scan(&state); err != nil || state != "released" {
+		t.Fatalf("panic cleanup state=%q err=%v, want released", state, err)
+	}
+	assertNoActiveUsagePoolLeases(t, db)
+}
+
 func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
 	t.Helper()
 	stats, err := database.UsagePoolStats(context.Background(), db)
