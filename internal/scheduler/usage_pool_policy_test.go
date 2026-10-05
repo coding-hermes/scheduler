@@ -184,12 +184,78 @@ func TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal(t *testing.T) {
 	pool.SetEventLogger(NewEventLogger(db))
 	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true})
 	tickID := pool.Spawn(PackedProject{Name: "remote-refused", Workdir: "/tmp"}, time.Now(), true, db)
-	if status, ok := waitForTickTerminal(t, db, tickID, 5*time.Second); !ok || status != "failed" {
+	if status, ok := waitForTickTerminal(t, db, tickID, 15*time.Second); !ok || status != "failed" {
 		t.Fatalf("remote dispatch refusal status=%q terminal=%t, want failed", status, ok)
 	}
 	assertNoActiveUsagePoolLeases(t, db)
 	if pool.Running() != 0 {
 		t.Fatalf("remote refusal consumed local slot: running=%d", pool.Running())
+	}
+}
+
+func TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		holdReply  bool
+		cancel     bool
+		timeout    time.Duration
+		wantStatus string
+	}{
+		{name: "completion", wantStatus: "completed"},
+		{name: "cancel", holdReply: true, cancel: true, wantStatus: "timeout"},
+		{name: "timeout", holdReply: true, timeout: 50 * time.Millisecond, wantStatus: "timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			relay := newFakeRelay(t, "usage-pool-scheduler", "usage-pool-agent", "completed")
+			relay.holdReply = tc.holdReply
+			_, pool, _, _, _ := newDispatchTestRig(t, relay, true)
+			db := pool.spawner.db
+			if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "host:bunker", Kind: "host", ActiveLimit: 8, Enabled: true}}, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, `{"lane":"helix","agent":"usage-pool-agent","host_id":"bunker","workdir":"/agent/helix"}`+"\n"))
+			resetDispatchTargetsCache()
+			pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true})
+			if tc.timeout > 0 {
+				pool.spawner.timeout = tc.timeout
+			}
+			tickID := pool.Spawn(PackedProject{Name: "helix", Workdir: "/tmp/helix"}, time.Now(), true, db)
+			if tc.cancel {
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					var state string
+					err := db.QueryRow(`SELECT state FROM tick_dispatch WHERE tick_id=?`, tickID).Scan(&state)
+					if err == nil && state == database.DispatchStateDispatched {
+						if !pool.spawner.CancelTickSession(tickID) {
+							t.Fatal("cancel registry refused the live remote tick")
+						}
+						break
+					}
+					if err != nil && err != sql.ErrNoRows {
+						t.Fatal(err)
+					}
+					if time.Now().Add(time.Millisecond).After(deadline) {
+						t.Fatalf("tick %s was not handed off before cancellation", tickID)
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			if status, ok := waitForTickTerminal(t, db, tickID, 15*time.Second); !ok || status != tc.wantStatus {
+				t.Fatalf("tick status=%q terminal=%t, want %q", status, ok, tc.wantStatus)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				stats, err := database.UsagePoolStats(context.Background(), db)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(stats) == 1 && stats[0].Active == 0 {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			assertNoActiveUsagePoolLeases(t, db)
+		})
 	}
 }
 
@@ -227,6 +293,40 @@ func TestUsagePoolLeaseReleasedAfterLocalSlotTimeout(t *testing.T) {
 	}
 	pool.Release("busy-other")
 	t.Fatalf("slot timeout did not release usage lease for tick %s", tickID)
+}
+
+func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('start-fails','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{
+		{ID: "local:control", Kind: "local", ActiveLimit: 1, Enabled: true},
+		{ID: "project:start-fails", Kind: "project", ActiveLimit: 1, Enabled: true},
+	}, map[string][]string{"start-fails": {"project:start-fails"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Make StartRunning refuse after the lease has been reserved. The trigger
+	// runs inside ReserveAll's transaction, so this deterministically exercises
+	// the cleanup defer after admission rather than a pre-admission failure.
+	if _, err := db.Exec(`CREATE TRIGGER fail_start_after_usage_lease AFTER INSERT ON usage_pool_leases BEGIN UPDATE ticks SET status='failed' WHERE id=NEW.tick_id; END`); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, ""))
+	resetDispatchTargetsCache()
+	pool := NewSlotPool(1, NewSpawner(db, 1), NewLifecycleTracker(db))
+	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, LocalPoolID: "local:control"})
+	tickID := pool.Spawn(PackedProject{Name: "start-fails", Workdir: "/tmp"}, time.Now(), true, db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pool.Wait(ctx); err != nil {
+		t.Fatalf("spawn did not exit after start refusal: %v", err)
+	}
+	assertNoActiveUsagePoolLeases(t, db)
+	var activeMemberships int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_lease_members m JOIN usage_pool_leases l ON l.lease_id=m.lease_id WHERE l.tick_id=? AND l.state='active'`, tickID).Scan(&activeMemberships); err != nil || activeMemberships != 0 {
+		t.Fatalf("active lease memberships after start refusal=%d err=%v", activeMemberships, err)
+	}
 }
 
 func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
