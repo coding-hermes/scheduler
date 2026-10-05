@@ -410,11 +410,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			if localSlotAcquired {
 				p.Release(proj.Name)
 			}
-			if usageLeaseID != "" && db != nil {
-				if err := database.ReleaseUsagePoolLease(context.Background(), db, usageLeaseID); err != nil {
-					log.Printf("USAGE_POOL: release lease=%s lane=%s failed: %v", usageLeaseID, proj.Name, err)
-				}
-			}
+			releaseUsagePoolLeaseAfterSpawn(db, usageLeaseID, proj.Name)
 		}()
 
 		// SCHED-GAP-157: consume the caller's pending nudge-source stamp
@@ -819,6 +815,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 		}
 	}()
+}
+
+func releaseUsagePoolLeaseAfterSpawn(db *sql.DB, leaseID, lane string) {
+	if leaseID == "" || db == nil {
+		return
+	}
+	if err := database.ReleaseUsagePoolLease(context.Background(), db, leaseID); err != nil {
+		log.Printf("USAGE_POOL: release lease=%s lane=%s failed: %v", leaseID, lane, err)
+	}
 }
 
 // SlotFreed returns a channel that receives when any slot is released.
