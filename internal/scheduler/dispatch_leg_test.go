@@ -67,6 +67,7 @@ type fakeRelay struct {
 	targetAgent    string
 	replyText      string
 	agentOK        *bool // nil = no verdict member (a plain answer)
+	holdReply      bool  // leave accepted work unanswered to exercise cancel/timeout exits
 
 	pub ed25519.PublicKey
 
@@ -150,7 +151,7 @@ func (f *fakeRelay) handleRetrieve(agent string, r *http.Request, w http.Respons
 		// now answers: the scheduler's first read of its own inbox is when the
 		// answer materialises, which is exactly the ordering the live fleet
 		// has (dispatch → poller picks it up → agent runs → reply).
-		if !f.replied && len(f.dispatches) > 0 {
+		if !f.holdReply && !f.replied && len(f.dispatches) > 0 {
 			d := f.dispatches[len(f.dispatches)-1]
 			answer := map[string]any{
 				"in_reply_to": d.messageID,
