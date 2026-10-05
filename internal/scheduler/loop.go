@@ -212,6 +212,11 @@ func (l *Loop) SetAutoDisablePolicy(failureRate float64, window, minTicks int) {
 // SetNoDeliver suppresses Telegram delivery of tick output.
 func (l *Loop) SetNoDeliver(v bool) { l.noDeliver = v }
 
+// SetUsagePoolPolicy installs durable usage-pool admission on the authoritative slot pool.
+func (l *Loop) SetUsagePoolPolicy(policy UsagePoolPolicy) {
+	l.slotPool.SetUsagePoolPolicy(policy)
+}
+
 // NewLoop creates the evaluation loop. namespaceMode is optional for backward
 // compatibility with existing callers; omitted values default to false.
 func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur int, namespaceMode ...bool) *Loop {

@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 64
+const latestMigration = 65
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1282,6 +1282,39 @@ ALTER TABLE ticks ADD COLUMN telemetry_partial INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ticks ADD COLUMN telemetry_partial_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN session_silence_s INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ticks ADD COLUMN workers_terminal INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		version: 65,
+		desc:    "SCHED-GAP-1726: durable composable usage pools and leases",
+		stmt: `
+CREATE TABLE IF NOT EXISTS usage_pools (
+    pool_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('local','host','project')),
+    active_limit INTEGER NOT NULL CHECK(active_limit > 0),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_pool_memberships (
+    lane TEXT NOT NULL,
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    PRIMARY KEY(lane,pool_id)
+);
+CREATE TABLE IF NOT EXISTS usage_pool_leases (
+    lease_id TEXT PRIMARY KEY,
+    tick_id TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('active','released')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_pool_leases_unique_tick ON usage_pool_leases(tick_id);
+CREATE TABLE IF NOT EXISTS usage_pool_lease_members (
+    lease_id TEXT NOT NULL REFERENCES usage_pool_leases(lease_id),
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    PRIMARY KEY(lease_id,pool_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_pool_lease_members_pool ON usage_pool_lease_members(pool_id,lease_id);
 `,
 	},
 }

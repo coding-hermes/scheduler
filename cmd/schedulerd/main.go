@@ -504,6 +504,50 @@ func main() {
 		log.Printf("Loaded %d projects, %d namespaces from %s",
 			len(cfg.Projects), len(cfg.Namespaces), *configFile)
 	}
+	usagePoolsConfig := config.UsagePoolsConfig{}
+	if *configFile != "" {
+		rootCfg, cfgErr := config.LoadRootConfig(*configFile)
+		if cfgErr != nil {
+			log.Fatalf("FATAL: load usage-pool config: %v", cfgErr)
+		}
+		usagePoolsConfig = rootCfg.UsagePools
+	}
+	localUsagePoolID := strings.TrimSpace(usagePoolsConfig.LocalPoolID)
+	if localUsagePoolID == "" {
+		localUsagePoolID = "local:" + schedID
+	}
+	if usagePoolsConfig.Enabled {
+		if len(usagePoolsConfig.Pools) == 0 {
+			log.Fatalf("FATAL: usage_pools.enabled requires at least one configured pool")
+		}
+		pools := make([]database.UsagePool, 0, len(usagePoolsConfig.Pools))
+		localPoolConfigured := false
+		for _, pool := range usagePoolsConfig.Pools {
+			enabled := pool.Enabled == nil || *pool.Enabled
+			if pool.ID == localUsagePoolID && pool.Kind == "local" && enabled {
+				localPoolConfigured = true
+			}
+			pools = append(pools, database.UsagePool{ID: pool.ID, Kind: pool.Kind, ActiveLimit: pool.ActiveLimit, Enabled: enabled})
+		}
+		if !localPoolConfigured {
+			log.Fatalf("FATAL: usage_pools requires an enabled local pool %q", localUsagePoolID)
+		}
+		memberships := make(map[string][]string, len(usagePoolsConfig.Memberships))
+		for _, membership := range usagePoolsConfig.Memberships {
+			if _, exists := memberships[membership.Lane]; exists {
+				log.Fatalf("FATAL: duplicate usage-pool membership for lane %q", membership.Lane)
+			}
+			memberships[membership.Lane] = membership.PoolIDs
+		}
+		if err := database.ConfigureUsagePools(context.Background(), db, pools, memberships); err != nil {
+			log.Fatalf("FATAL: configure usage pools: %v", err)
+		}
+		if recovered, err := database.RecoverUsagePoolLeases(context.Background(), db); err != nil {
+			log.Fatalf("FATAL: recover usage-pool leases: %v", err)
+		} else if recovered > 0 {
+			log.Printf("USAGE_POOL: startup recovery released %d terminal leases", recovered)
+		}
+	}
 
 	// SCHED-GAP-1696: boot-time admission-law correction. A lane whose
 	// LANE-LEVEL admission_mode contradicts its class is corrected to the class
@@ -524,6 +568,10 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
+	if usagePoolsConfig.Enabled {
+		loop.SetUsagePoolPolicy(scheduler.UsagePoolPolicy{Enabled: true, ObserveOnly: usagePoolsConfig.ObserveOnly, LocalPoolID: localUsagePoolID})
+		log.Printf("USAGE_POOL: enabled observe_only=%t local_pool=%s authority_db=%s", usagePoolsConfig.ObserveOnly, localUsagePoolID, *dbPath)
+	}
 	// SCHED-GAP-169: install the process clock (wall clock by default) and
 	// propagate it to every component the loop owns — spawner, slot pool,
 	// lifecycle tracker, sim spawner. The API and MCP servers are constructed

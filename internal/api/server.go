@@ -515,6 +515,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"min_ticks": adMinTicks,
 		},
 	}
+	obs.enter("usagePoolStats")
+	usagePools, poolErr := database.UsagePoolStats(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
+	if poolErr != nil {
+		writeError(w, 500, "usage-pool stats: "+poolErr.Error())
+		return
+	}
+	status["usage_pools"] = usagePools
 	// ADV-R09/G8 — spend reality block: what "recorded spend" actually is.
 	// Splits ticks.cost_usd by cost_source so measured/gateway money is
 	// never silently blended with the estimate tier, and states the price
