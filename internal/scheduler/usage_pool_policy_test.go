@@ -170,6 +170,78 @@ func TestRemoteMissingHostPoolFailsClosedNoFallback(t *testing.T) {
 	}
 }
 
+func TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('remote-refused','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "host:bunker", Kind: "host", ActiveLimit: 8, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, `{"lane":"remote-refused","agent":"agent-1","host_id":"bunker","workdir":"/remote"}`+"\n"))
+	resetDispatchTargetsCache()
+	pool := NewSlotPool(1, NewSpawner(db, 1), NewLifecycleTracker(db))
+	pool.SetEventLogger(NewEventLogger(db))
+	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true})
+	tickID := pool.Spawn(PackedProject{Name: "remote-refused", Workdir: "/tmp"}, time.Now(), true, db)
+	if status, ok := waitForTickTerminal(t, db, tickID, 5*time.Second); !ok || status != "failed" {
+		t.Fatalf("remote dispatch refusal status=%q terminal=%t, want failed", status, ok)
+	}
+	assertNoActiveUsagePoolLeases(t, db)
+	if pool.Running() != 0 {
+		t.Fatalf("remote refusal consumed local slot: running=%d", pool.Running())
+	}
+}
+
+func TestUsagePoolLeaseReleasedAfterLocalSlotTimeout(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('local-timeout','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ConfigureUsagePools(context.Background(), db, []database.UsagePool{{ID: "local:control", Kind: "local", ActiveLimit: 1, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, ""))
+	resetDispatchTargetsCache()
+	pool := NewSlotPool(1, NewSpawner(db, 1), NewLifecycleTracker(db))
+	pool.SetEventLogger(NewEventLogger(db))
+	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, LocalPoolID: "local:control"})
+	pool.SetPatience(time.Millisecond)
+	if !pool.Acquire(context.Background(), "busy-other") {
+		t.Fatal("failed to occupy local slot for timeout fixture")
+	}
+	tickID := pool.Spawn(PackedProject{Name: "local-timeout", Workdir: "/tmp"}, time.Now(), true, db)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var event string
+		err := db.QueryRow(`SELECT message FROM events WHERE component='slot_pool' AND message LIKE 'slot wait expired%' LIMIT 1`).Scan(&event)
+		if err == nil {
+			pool.Release("busy-other")
+			assertNoActiveUsagePoolLeases(t, db)
+			return
+		}
+		if err != sql.ErrNoRows {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	pool.Release("busy-other")
+	t.Fatalf("slot timeout did not release usage lease for tick %s", tickID)
+}
+
+func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
+	t.Helper()
+	stats, err := database.UsagePoolStats(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stat := range stats {
+		if stat.Active != 0 {
+			t.Fatalf("pool %s retained %d active leases", stat.PoolID, stat.Active)
+		}
+	}
+}
+
 func TestUsagePoolsDisabledCompatibility(t *testing.T) {
 	db := newTestDB(t)
 	pool := NewSlotPool(1, nil, nil)

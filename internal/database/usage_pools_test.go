@@ -195,6 +195,66 @@ func TestUsagePoolRecoveryRetainsNonterminalAndQuarantinesOwnerlessLease(t *test
 	}
 }
 
+func TestUsagePoolRecoveryExpiresDeadOwnerAndDispatchedWork(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := ConfigureUsagePools(ctx, db, []UsagePool{{ID: "p", Kind: "project", ActiveLimit: 2, Enabled: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('crash-recovery','url','/tmp','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"unhanded", "handed"} {
+		if _, err := db.Exec(`INSERT INTO ticks(id,project_name,status,created_at) VALUES(?,'crash-recovery','queued','now')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReserveAll(ctx, db, id, id, "crash-recovery", []string{"p"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE usage_pool_leases SET owner_id='pid:2147483647',expires_at='2000-01-01T00:00:00Z' WHERE lease_id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO tick_dispatch(tick_id,lane,agent,corr_id,state,updated_at) VALUES('handed','crash-recovery','agent','corr','dispatched','now')`); err != nil {
+		t.Fatal(err)
+	}
+	var dispatchState string
+	if err := db.QueryRow(`SELECT state FROM tick_dispatch WHERE tick_id='handed'`).Scan(&dispatchState); err != nil || dispatchState != "dispatched" {
+		t.Fatalf("fixture dispatch state=%q err=%v", dispatchState, err)
+	}
+	if recovered, err := RecoverUsagePoolLeases(ctx, db); err != nil || recovered != 2 {
+		t.Fatalf("recovered=%d err=%v, want both expired dead-owner leases released", recovered, err)
+	}
+	stats, err := UsagePoolStats(ctx, db)
+	if err != nil || len(stats) != 1 || stats[0].Active != 0 {
+		t.Fatalf("stats=%+v err=%v, expired dead-owner leases must not strand capacity", stats, err)
+	}
+	for _, tickID := range []string{"unhanded", "handed"} {
+		var status, state string
+		if err := db.QueryRow(`SELECT status FROM ticks WHERE id=?`, tickID).Scan(&status); err != nil || status != "failed" {
+			t.Fatalf("tick %s status=%q err=%v, want failed", tickID, status, err)
+		}
+		if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id=?`, tickID).Scan(&state); err != nil || state != "released" {
+			t.Fatalf("lease %s state=%q err=%v, want released", tickID, state, err)
+		}
+	}
+	if err := db.QueryRow(`SELECT state FROM tick_dispatch WHERE tick_id='handed'`).Scan(&dispatchState); err != nil || dispatchState != "expired" {
+		t.Fatalf("dispatch state=%q err=%v, want expired", dispatchState, err)
+	}
+	var actions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE message='usage_pool_recovery' AND details LIKE '%failed_expired_dead_owner%'`).Scan(&actions); err != nil || actions != 2 {
+		t.Fatalf("recovery events=%d err=%v, want two deterministic expiry actions", actions, err)
+	}
+	for _, id := range []string{"next-a", "next-b"} {
+		if lease, err := ReserveAll(ctx, db, id, id, "crash-recovery", []string{"p"}); err != nil || lease.Denied {
+			t.Fatalf("post-recovery admission %s = %+v, %v", id, lease, err)
+		}
+	}
+	if decision, err := ReserveAll(ctx, db, "over-limit", "over-limit", "crash-recovery", []string{"p"}); err != nil || !decision.Denied {
+		t.Fatalf("post-recovery limit check = %+v, %v", decision, err)
+	}
+}
+
 func TestUsagePoolDeferredCountTracksQueuedDeferrals(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

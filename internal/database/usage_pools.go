@@ -334,24 +334,24 @@ func ReleaseUsagePoolLease(ctx context.Context, db *sql.DB, leaseID string) erro
 	return tx.Commit()
 }
 
-// RecoverUsagePoolLeases releases terminal leases and conservatively retains
-// leases for queued/running or missing ticks. A missing/ambiguous owner is
-// quarantined by retention, never released, so recovery cannot over-admit.
+// RecoverUsagePoolLeases releases terminal leases and retains leases for live
+// owners. An expired lease with a dead, identifiable owner is failed and
+// released atomically; ownerless and missing-tick leases remain quarantined.
 func RecoverUsagePoolLeases(ctx context.Context, db *sql.DB) (int64, error) {
 	tx, err := beginUsagePoolTx(ctx, db)
 	if err != nil {
 		return 0, err
 	}
 	defer rollbackUsagePoolTx(tx)
-	rows, err := tx.QueryContext(ctx, `SELECT l.lease_id,l.tick_id,l.lane,l.owner_id,l.expires_at,l.state,COALESCE(t.status,'missing') FROM usage_pool_leases l LEFT JOIN ticks t ON t.id=l.tick_id WHERE l.state='active' ORDER BY l.lease_id`)
+	rows, err := tx.QueryContext(ctx, `SELECT l.lease_id,l.tick_id,l.lane,l.owner_id,l.expires_at,l.state,COALESCE(t.status,'missing'),COALESCE((SELECT d.state FROM tick_dispatch d WHERE d.tick_id=l.tick_id ORDER BY d.updated_at DESC LIMIT 1),'') FROM usage_pool_leases l LEFT JOIN ticks t ON t.id=l.tick_id WHERE l.state='active' ORDER BY l.lease_id`)
 	if err != nil {
 		return 0, err
 	}
-	type recovery struct{ leaseID, tickID, lane, owner, expires, state, status string }
+	type recovery struct{ leaseID, tickID, lane, owner, expires, state, status, dispatchState string }
 	var candidates []recovery
 	for rows.Next() {
 		var item recovery
-		if err := rows.Scan(&item.leaseID, &item.tickID, &item.lane, &item.owner, &item.expires, &item.state, &item.status); err != nil {
+		if err := rows.Scan(&item.leaseID, &item.tickID, &item.lane, &item.owner, &item.expires, &item.state, &item.status, &item.dispatchState); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -372,7 +372,27 @@ func RecoverUsagePoolLeases(ctx context.Context, db *sql.DB) (int64, error) {
 			}
 			released++
 			action = "released_terminal"
-		} else if item.owner == "" || item.status == "missing" || !usagePoolOwnerAlive(item.owner) {
+		} else if item.owner == "" || item.status == "missing" {
+			action = "quarantined_retained"
+		} else if expires, err := time.Parse(time.RFC3339Nano, item.expires); !usagePoolOwnerAlive(item.owner) && err == nil && !expires.After(clock.FromContext(ctx).Now()) {
+			// Once the recorded owner is dead and its durable lease deadline
+			// has elapsed, the attempt is no longer authorized to occupy
+			// capacity. Terminalize any still-live tick and expire an
+			// outstanding hand-out in this same serialized transaction.
+			if _, err := tx.ExecContext(ctx, `UPDATE ticks SET status='failed',outcome='failed',error='usage-pool lease expired after owner exit',completed_at=? WHERE id=? AND status IN ('queued','running')`, now, item.tickID); err != nil {
+				return 0, err
+			}
+			if item.dispatchState == "dispatched" {
+				if _, err := tx.ExecContext(ctx, `UPDATE tick_dispatch SET state='expired',error='usage-pool lease expired after owner exit',updated_at=? WHERE tick_id=? AND state='dispatched'`, now, item.tickID); err != nil {
+					return 0, err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE usage_pool_leases SET state='released',updated_at=? WHERE lease_id=? AND state='active'`, now, item.leaseID); err != nil {
+				return 0, err
+			}
+			released++
+			action = "failed_expired_dead_owner"
+		} else if !usagePoolOwnerAlive(item.owner) {
 			action = "quarantined_retained"
 		} else if expires, err := time.Parse(time.RFC3339Nano, item.expires); err != nil || !expires.After(clock.FromContext(ctx).Now()) {
 			action = "retained_expired_owner_active_tick"
