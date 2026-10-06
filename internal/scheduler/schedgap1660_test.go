@@ -306,8 +306,12 @@ func TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip(t *testing.T) {
 	// A tick id is <project>-<second> (see the pool's tickID), so an
 	// admission inside the SAME wall second as the previous tick collides on
 	// the primary key and the enqueue is dropped — not the path under test.
-	// Cross the second boundary before waking the lane again.
-	time.Sleep(1100 * time.Millisecond)
+	// Cross the second boundary deterministically (a fixed wall-clock sleep
+	// is non-deterministic under CI load — INT-CI-180).
+	firstSec := time.Now().Second()
+	for time.Now().Second() == firstSec {
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// The board write (adding a second non-perpetual row) plus the wake it
 	// fires: this admission IS board-wake sourced, but the lane never
