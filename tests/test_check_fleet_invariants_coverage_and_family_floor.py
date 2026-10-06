@@ -174,7 +174,7 @@ def test_satellite_family_pins_table_values():
     Bane 2026-09-29). The four-family table it replaced held qa/sync at 43200
     and knew nothing of releng/perf/review/readme/docs."""
     assert gate.SATELLITE_FAMILY_PINS == {
-        "qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200,
+        "qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200,
         "releng": 86400, "perf": 604800, "review": 604800,
         "readme": 604800, "docs": 604800,
     }, gate.SATELLITE_FAMILY_PINS

@@ -291,14 +291,14 @@ SANCTIONED_SUBFLOOR_PINS = {"hermes-dagger": 900, "coding-hermes-tools": 3600}
 # board day after day (~55 rows/day measured across the fleet).
 #   releng  : once per day (86400); 259200 also sanctioned (FAMILY_ALSO_ALLOWED)
 #   pm      : once per day (86400)
-#   qa      : every 6 hours (21600)
+#   qa      : every 12 hours (43200) — 2026-10-02 ruling, was 6h
 #   sync    : every 6 hours (21600)
 #   perf    : weekly (604800)
 #   dogfood : once every 3 days (259200)
 #   docs / readme / review : weekly (604800)
 # Keys are the BARE suffixes here; the policy script spells them dashed ('-qa').
 SATELLITE_FAMILY_PINS = {
-    "qa": 21600,
+    "qa": 43200,
     "pm": 86400,
     "sync": 21600,
     "dogfood": 259200,
@@ -1017,7 +1017,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # 5e. family-floor --------------------------------------------------------
     # Every enabled satellite sits on its family's CANONICAL cadence — the
-    # matrix Bane ratified 2026-09-29 (SCHED-GAP-1675): qa/sync 21600 (6h),
+    # matrix Bane ratified 2026-09-29 (SCHED-GAP-1675): qa 43200 (12h,
+    # 2026-10-02 ruling — was 6h), sync 21600 (6h),
     # pm/releng 86400 (daily), dogfood 259200 (3d), perf/review/readme/docs
     # 604800 (weekly); -releng is ALSO allowed at 259200. All nine families are
     # policed (the old hardcoded four-suffix alternation ignored the other

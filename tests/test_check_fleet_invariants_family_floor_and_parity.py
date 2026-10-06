@@ -402,16 +402,16 @@ def test_passing_fleet_toml_drift_flips_it_red(tmp_path):
     stale toml pin must exit 1 — proving the green run above is the checker
     distinguishing, not the fixture being invisible to it."""
     projects = _passing_fleet()
-    # The db row carries the canonical -qa cadence (21600); the stale toml pin
-    # still says 43200 — the retired value the family table used to document.
+    # The db row carries the canonical -qa cadence (43200, 2026-10-02
+    # ruling); the stale toml pin still says 21600 — the retired value.
     toml = """
 [[projects]]
 id = "fixture-primary-qa"
-cooldown_s = 43200
-cooldown_floor_s = 21600
+cooldown_s = 21600
+cooldown_floor_s = 43200
 """
     rc, out = _run_gate(tmp_path, projects, toml_text=toml)
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "parity") == [
-        "VIOLATION parity fixture-primary-qa: cooldown_s: db=21600 toml=43200 — a pin in one store is drift"], out
+        "VIOLATION parity fixture-primary-qa: cooldown_s: db=43200 toml=21600 — a pin in one store is drift"], out
