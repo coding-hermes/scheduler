@@ -396,8 +396,14 @@ break.
 
 ### POST /api/v1/projects
 
-**Purpose:** Create a project. **New projects are created DISABLED** —
-resume them explicitly before expecting ticks.
+**Purpose:** Create a project. **New projects are created DISABLED —
+resume them explicitly before expecting ticks.** An explicit `enabled: true`
+in the body is stored as `false`: the row is provisioned exactly as the body
+configured it (pacing, namespace, admission mode all ride along) but born
+parked, so the create -> configure -> enable order can never leave an armed,
+empty-prompt row one evaluation away from admission (SCHED-GAP-1729). The
+enable step is the later `PUT {"enabled": true}`, where the satellite
+auto-arm (SCHED-GAP-138) and the admission law (SCHED-GAP-1696) both run.
 
 **Request body** (canonical snake_case; PascalCase legacy accepted):
 
@@ -534,6 +540,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 | `workdir` off the lane convention for a satellite lane | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
 | A write that would leave an ENABLED satellite lane with no pacing policy (clearing the last `cooldown_floor_s`/`cooldown_ceiling_s`, or switching `adaptive_cooldown` off with no bound set) | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=21600 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight/priority ranges) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
+| `admission_mode` contradicting the lane's class (satellite+`tasks`, or foreman+`cooldown` once a namespace is set — SCHED-GAP-1696; a foreman's `cooldown` before any `namespace_id` is accepted, SCHED-GAP-1729) | 400 | `{"error":"admission law (SCHED-GAP-1696): a foreman lane must carry admission_mode=\"tasks\" (every foreman is tasks, every other lane is cooldown); \"cooldown\" is refused"}` |
 | Unknown project | 404 | `{"error":"project not found"}` |
 | Wrong method | 405 | `{"error":"GET, PUT, POST, or DELETE only"}` |
 
@@ -737,6 +744,13 @@ An API `PUT` is live immediately and the `fleet.toml` regen mirrors it, so a
 restart re-pins the operator's choice. Change a namespace cap with
 `PUT /api/v1/namespaces/{id}` `{"max_concurrent": N}`; change one lane's
 admission with `PUT /api/v1/projects/{name}` `{"admission_mode": "cooldown"}`.
+
+Provision a new lane in the documented order — create (born disabled,
+SCHED-GAP-1729), configure (`namespace_id`, then `admission_mode`), enable —
+and the admission law never refuses the admission PUT: the lane's class is
+derived from its name/parent/satellites, not from the namespace, and a
+foreman-classed lane that does not carry a namespace yet is deferred until it
+does, because only then is there a tasks-mode namespace to match or violate.
 
 For the full conceptual model behind these two dials — where each knob physically
 lives, which store wins on restart, the board-ownership precondition on `tasks`,

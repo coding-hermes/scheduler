@@ -103,6 +103,28 @@ func ExpectedAdmission(class string) string {
 	return database.AdmissionModeCooldown
 }
 
+// ClassifyLane derives the lane class from a project row (name, parent
+// reference, satellite ownership), the SCHED-GAP-1696 API-boundary
+// derivation in one place. SCHED-GAP-1729: the class is keyed on the EXPLICIT
+// lane facts only — the namespace is NOT an input. A lane whose namespace is
+// not yet set (NULL, or an id the project list does not resolve) classifies
+// identically to the same lane after it is assigned, so the documented
+// create -> configure -> enable provisioning order works: the admission PUT
+// lands between create and the namespace PUT and must read the same class
+// both times.
+//
+// The one DELIBERATE deferral: a foreman-classed lane that carries no
+// namespace yet also has no tasks-mode namespace to violate, so a cooldown
+// PUT in that window is accepted (the law's not_tasks/fore_wrong_ns prongs
+// are both defined by namespace membership; the packer packs an unassigned
+// lane flat on cooldown semantics). Once the lane carries a namespace the
+// deferral closes and the full law applies. Satellite-classed lanes are never
+// deferred: the suffix/parent rule is complete without a namespace, so the
+// tasks-on-satellite refusal holds in the window too.
+func ClassifyLane(p database.Project, all map[string]bool) string {
+	return LaneClass(p.Name, p.Parent, ownsSatelliteName(p.Name, all))
+}
+
 // AdmissionLawViolations returns the ENABLED lanes that break the admission law
 // — the exact set fleet_runrate_audit.py §3/§3b/§3c reports, so /api/v1/status
 // reads the same number the watchdog does:
