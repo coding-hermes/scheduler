@@ -2154,18 +2154,31 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// deadline expiries and HTTP 5xx refusals ARE in the retryable
 				// set but are not blips. See its doc for the full split.
 				// SCHED-GAP-1684: a self-timeout must not read as a gateway
-				// blip. When the TICK's session deadline expired, the POST
-				// was torn down BY US — the SSE reader reports that shape as
-				// ErrTickDeadlineExceeded, and the session ctx is visibly
-				// DeadlineExceeded here while the classification runs (same
-				// capture-early trap the GAP-117 fold above documents). Book
-				// TickTimeout with the wall named in the reason; everything
-				// else keeps the SCHED-GAP-203 deferral byte-for-byte. The
-				// ctx re-check is deliberately an AND with the error class:
-				// a DeadlineExceeded that raced a genuine transport failure
-				// still defers — this row reclassifies OUR wall, not every
-				// error that happens to share a deadline with a drop.
-				if errors.Is(gwErr, ErrTickDeadlineExceeded) && ctx.Err() == context.DeadlineExceeded {
+				// blip. When OUR OWN deadline tore the POST down, the SSE
+				// reader reports that shape as ErrTickDeadlineExceeded, and
+				// the tick must land TickTimeout with the wall named in the
+				// reason; everything else keeps the SCHED-GAP-203 deferral
+				// byte-for-byte.
+				// SCHED-GAP-1693: the error class alone is authoritative —
+				// do NOT gate it on ctx.Err()==DeadlineExceeded. The ctx
+				// flag at this site is an ORDERING ACCIDENT: the POST
+				// closure's deferred cancel() has already run by now, so
+				// ctx reads context.Canceled whenever the session wall is
+				// still alive, and the deadline that minted the sentinel
+				// can be any teardown INSIDE the call (e.g. the gateway
+				// client's own http.Client timeout — the read ends
+				// DeadlineExceeded-Is while the session ctx is untouched).
+				// Requiring the flag re-booked 34 of 50 wall kills on
+				// 2026-09-30/10-01 as failed/gateway_transport through the
+				// drop wrapper below while session readbacks showed active
+				// work. What makes the class alone safe lives at the
+				// SOURCE: the sentinel is minted only by our own deadline
+				// teardown (gateway_stream.go — the SSE read ended
+				// DeadlineExceeded-Is) and never wraps a genuine transport
+				// failure, so a DeadlineExceeded that raced a real drop
+				// still defers — this branch reclassifies OUR wall, not
+				// every error that happens to share a deadline with a drop.
+				if errors.Is(gwErr, ErrTickDeadlineExceeded) {
 					return s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate, postTrace), nil
 				}
 				if gatewayTransientBlip(gwErr) {
