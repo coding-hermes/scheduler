@@ -351,9 +351,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// freshness guard and any restart script read build_sha). Same
 		// resolution seam as version: ldflags injection wins, then vcs
 		// build info, then "unknown".
-		"version":                version.Current(),
-		"build_sha":              version.CurrentCommit(),
-		"build_time":             version.CurrentBuildDate(),
+		"version":    version.Current(),
+		"build_sha":  version.CurrentCommit(),
+		"build_time": version.CurrentBuildDate(),
 		// SCHED-GAP-1632: the daemon's clock mode + sim scale, from the same
 		// clock.Describe() source the boot line ("TIME: clock sim (scale=…)")
 		// prints. Without this, a --simulate daemon is indistinguishable
