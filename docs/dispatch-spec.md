@@ -167,3 +167,5 @@ which registers two throwaway agents on a running relay, hands one a unit of
 work, reads it back out of that agent's own inbox, has it answer into the
 scheduler's inbox and asserts the SHIPPED receive leg correlates the answer back
 to the hand-out and releases the lease by ack.
+
+All seven env vars this spec names are tabulated with defaults and code pointers in [docs/reference/env-vars.md](reference/env-vars.md#crier-bus-federation-visibility--work-dispatch).
