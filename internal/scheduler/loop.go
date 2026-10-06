@@ -575,6 +575,18 @@ func (l *Loop) Run() {
 	// running-row contract stays byte-identical this way.
 	l.reapStaleQueuedRows()
 
+	// SCHED-GAP-1706: flip tick_workers rows stuck in state='running' whose
+	// tick row is already terminal (completed/failed/timeout) or whose
+	// updated_at is older than the per-tick wave cap to 'abandoned'. Runs
+	// AFTER both reapers (which abandon their own reaps' workers via
+	// reapWaveAbandoned — this pass is the backstop for ticks that went
+	// terminal by any other path) and BEFORE the resume nudge, so the
+	// resume scan and admission counts never carry a leaked running worker
+	// row into this process. Attribution rows are kept (UPDATE, not DELETE).
+	if n := l.reapOrphanedWorkerRows(); n > 0 {
+		log.Printf("WORKER-JANITOR: startup pass flipped %d running worker row(s) to abandoned", n)
+	}
+
 	// SCHED-GAP-091: if the daemon booted with a live gateway, any ticks
 	// orphaned before the restart (gateway drop, previous crash) are
 	// re-nudged now — before the first eval, so interrupted work resumes
