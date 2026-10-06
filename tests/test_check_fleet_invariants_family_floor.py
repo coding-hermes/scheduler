@@ -58,7 +58,7 @@ SUPPORTED_COMMAND = "bash /home/kara/.hermes/scripts/scheduler-foreman-tick.sh"
 # of read from the gate: a fixture that imports the constant it is testing
 # cannot detect that constant being wrong.
 CANONICAL = {
-    "qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200,
+    "qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200,
     "releng": 86400, "perf": 604800, "review": 604800,
     "readme": 604800, "docs": 604800,
 }
@@ -184,10 +184,10 @@ def test_every_family_passes_at_its_canonical_value(tmp_path):
 
 
 def test_every_family_fires_when_cooldown_s_drifts(tmp_path):
-    """Drift per family: the OLD stale value for qa/sync (43200 — the exact
-    regression this row exists to catch) and the 6h default for the rest. The
-    five families the old regex never matched are the acceptance criterion."""
-    drift = {"qa": 43200, "sync": 43200, "pm": 21600, "releng": 21600,
+    """Drift per family: each family's stale pre-ruling value (qa 21600 —
+    the 6h the 2026-10-02 ruling replaced; sync 43200) and the 6h default for
+    the rest."""
+    drift = {"qa": 21600, "sync": 43200, "pm": 21600, "releng": 21600,
              "dogfood": 21600, "perf": 21600, "review": 21600,
              "readme": 21600, "docs": 21600}
     failures = []
