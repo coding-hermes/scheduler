@@ -205,11 +205,13 @@ Exit 0 = all checks pass. Logs land in `deploy/verify-*.log`. CI runs the same
   cooldown/model/provider/enabled from `fleet.toml`, overwriting API-side
   changes made before the restart. API PUTs write SQLite and take effect
   immediately, but for projects listed in `fleet.toml` they survive only until
-  the next restart. `fleet-cooldown-policy.py` (ops script,
-  `~/.hermes/scripts`) is the ONLY writer of `fleet.toml`: it reads live API
-  (SQLite) state first, applies the pending-based 900s/7200s policy plus the
-  ELEVATED_PINS whitelist, PUTs the normalized cooldowns, then regenerates
-  `fleet.toml` so restarts re-pin to the policy decision. To pin a custom
-  cooldown durably, set it in `fleet.toml` AND whitelist the project in
-  ELEVATED_PINS (SCHED-GAP-012); otherwise the next policy run normalizes it
-  back.
+  the next restart. `fleet-sync.py` (ops script, `~/.hermes/scripts`) is the ONLY writer of
+`fleet.toml` (Bane 2026-09-19 DB-authority ruling, SCHED-GAP-211): a pure
+one-way DB→file mirror — it reads live API (SQLite) state, never decides
+values and never PUTs corrections, and regenerates `fleet.toml` so restarts
+re-pin to what the operator set through the API. To pin a custom cooldown
+durably, PUT it via the API (`PUT /api/v1/projects/{name}`) and run
+`python3 ~/.hermes/scripts/fleet-sync.py --write`; the next restart re-pins
+from the regenerated toml. (`fleet-cooldown-policy.py --apply` — the old
+policy writer with ELEVATED_PINS normalization — is RETIRED; its
+`--verify`/`--dry-run` report modes remain.)
