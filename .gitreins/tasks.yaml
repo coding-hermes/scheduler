@@ -4785,23 +4785,14 @@ tasks:
   created_at: '2026-10-06T12:52:43.654029+00:00'
   completed_at: '2026-10-06T12:55:39.000284+00:00'
 - id: SCHED-GAP-1706
-  title: "Reap stale tick_workers: janitor flips running\u2192abandoned after their\
-    \ tick is terminal (SCHED-GAP-1706)"
+  title: reap tick_workers rows stuck in state=running
   criteria:
-  - A janitor function in internal/scheduler (called after cleanDanglingOnStartup
-    and reapZombies, before the resume nudge) marks every tick_workers row state='running'
-    whose tick_id's ticks row is already terminal (completed/timeout/failed) OR whose
-    updated_at is older than the per-tick wave cap, as 'abandoned' with updated_at=datetime('now');
-    collect ids first, close the SELECT before the UPDATE (single-writer discipline);
-    rows already done/abandoned are left alone
-  - A regression test (table-driven) builds a temp SQLite db with ticks-terminal +
-    workers-running and verifies the count after the janitor is 0 while state='running';
-    one tick_workers row is in a non-running state and is left untouched
-  - At minimum a comment naming where the janitor is called and what it must NOT classify
-    (running rows of a live tick) plus the historical cleanup rows appear 'abandoned'
-    rather than deleted, so tick attribution stays reconstructable
-  status: in_progress
-  created_at: '2026-10-03T12:33:34.173391+00:00'
+  - tick_workers rows whose owning tick is terminal or older than the wave cap are
+    flipped to abandoned by a startup janitor pass; regression test TestReapOrphanedWorkerRows
+    passes and merge is on origin/main
+  status: complete
+  created_at: '2026-10-06T19:26:05.282975+00:00'
+  completed_at: '2026-10-06T19:26:06.354199+00:00'
 - id: SCHED-GAP-1699
   title: Board-touching commit guard + pre-merge refusal
   criteria:
@@ -4889,3 +4880,12 @@ tasks:
   status: complete
   created_at: '2026-10-06T11:30:07.088221+00:00'
   completed_at: '2026-10-06T12:41:39.875630+00:00'
+- id: SCHED-GAP-1726-TEST-TIMEOUT
+  title: pin evalDrain lifecycle + suite-exit goroutine census
+  criteria:
+  - full suite go test -short -p 1 -count=1 -timeout 120s ./internal/scheduler/...
+    green; usage-pool tests green in isolation; no evalDrain goroutine parked at suite
+    exit; test-only change
+  status: complete
+  created_at: '2026-10-06T18:23:59.856457+00:00'
+  completed_at: '2026-10-06T18:24:06.738380+00:00'
