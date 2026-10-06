@@ -4777,14 +4777,13 @@ tasks:
   created_at: '2026-10-02T17:57:11.744895+00:00'
   completed_at: '2026-10-02T19:42:37.878731+00:00'
 - id: INT-CI-176
-  title: De-flake REMOTE011 fan-out timing tests in cmd/scheduler-query (arm64 + loaded-host
-    red)
+  title: 'arm64 CI test failure: TestREMOTE011_CLIAnswerEqualsInternalAnswer'
   criteria:
-  - TestREMOTE011_* in cmd/scheduler-query pass 3 consecutive -count=3 runs locally
-    AND on the arm64 CI leg (go build + test (arm64) job success); no production code
-    semantics changed; full short suite green
-  status: in_progress
-  created_at: '2026-10-02T21:50:18.838768+00:00'
+  - go test -count=1 -run TestREMOTE011 ./cmd/scheduler-query/ passes on amd64 AND
+    arm64 CI job go build + test (arm64) is green on main
+  status: complete
+  created_at: '2026-10-06T12:52:43.654029+00:00'
+  completed_at: '2026-10-06T12:55:39.000284+00:00'
 - id: SCHED-GAP-1706
   title: "Reap stale tick_workers: janitor flips running\u2192abandoned after their\
     \ tick is terminal (SCHED-GAP-1706)"
@@ -4855,3 +4854,38 @@ tasks:
   status: complete
   created_at: '2026-10-06T11:19:08.390239+00:00'
   completed_at: '2026-10-06T11:19:28.930204+00:00'
+- id: SCHED-GAP-1729
+  title: Fix provisioning-order defect in projects API
+  criteria:
+  - admission classification stops inferring foreman-class from NULL namespace (or
+    POST accepts namespace/admission fields); newly created row is born disarmed (enabled=false
+    or cooldown_floor_s>0); unit tests cover both acceptance points
+  status: complete
+  created_at: '2026-10-06T11:30:05.609824+00:00'
+  completed_at: '2026-10-06T12:39:17.576086+00:00'
+- id: SCHED-GAP-1618
+  title: build_explorer.py hardcoded path fix
+  criteria:
+  - tools/build_explorer.py derives output paths from script location or explicit
+    CLI arg; a run from a git worktree writes inside that worktree, not the main tree;
+    verified by running from a second worktree
+  status: complete
+  created_at: '2026-10-06T11:30:06.116159+00:00'
+  completed_at: '2026-10-06T12:42:51.507563+00:00'
+- id: DOC-9
+  title: Document Crier bus env layer in env-vars.md
+  criteria:
+  - CRIER_ENABLED, CRIER_URL, CRIER_LIVE_URL, CRIER_LIVE_TOKEN and the dispatch-targets
+    trio (SCHEDULER_DISPATCH_TARGETS, CRIER_AGENT_ID, CRIER_AGENT_KEY_FILE) documented
+    in docs/reference/env-vars.md with source-of-truth cross-refs
+  status: complete
+  created_at: '2026-10-06T11:30:06.595105+00:00'
+  completed_at: '2026-10-06T12:41:16.068526+00:00'
+- id: README-8
+  title: Refresh stale README warning box
+  criteria:
+  - README Getting Started warning box no longer cites the 2026-08-30 verified state;
+    reflects v1.12.0+ reality; no stale commit citations remain
+  status: complete
+  created_at: '2026-10-06T11:30:07.088221+00:00'
+  completed_at: '2026-10-06T12:41:39.875630+00:00'
