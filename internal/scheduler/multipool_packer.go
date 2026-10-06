@@ -380,14 +380,32 @@ func (m *MultiPoolPacker) packFlat(
 			if s.bumpCooldownS > 0 {
 				cd = s.bumpCooldownS
 			}
-			cooldownDur, skipMode := effectiveCooldown(cd, float64(s.proj.Priority), s.proj.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, s.proj.CooldownPinS)
-			if skipMode {
+			// SCHED-GAP-1666: taken through the ONE shared admission
+			// predicate every slot-pool entry point consults. The
+			// packer claims no bypass, so `gate.Defer` is exactly the
+			// historical `now.Sub(*s.lastTick) < cooldownDur`.
+			mode := admissionModeFor(s.proj.AdmissionMode, nsIDOf(s.proj), nsModes)
+			gate := effectiveCooldownGate(CooldownGateRequest{
+				Project:             s.proj.Name,
+				AdmissionMode:       mode,
+				CooldownS:           cd,
+				CooldownPinS:        s.proj.CooldownPinS,
+				Priority:            float64(s.proj.Priority),
+				ConsecutiveFailures: s.proj.ConsecutiveFailures,
+				LastTickStatus:      s.proj.LastTickStatus,
+				LastCompleted:       s.lastTick,
+				Workdir:             s.proj.Workdir,
+				BoardOwnership:      s.proj.BoardOwnership,
+				BlackoutWindows:     m.blackoutWindows,
+				Calculator:          urgencyCalc,
+			}, now)
+			cooldownDur := gate.Cooldown
+			if gate.SkipMode {
 				continue
 			}
 			// SCHED-GAP-124: tasks-mode admission (flat fallback path) —
 			// non-perpetual pending board work waives last-tick spacing.
 			// SCHED-GAP-133: FailureBackoff still gates even in tasks mode.
-			mode := admissionModeFor(s.proj.AdmissionMode, nsIDOf(s.proj), nsModes)
 			if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.proj.Workdir, s.proj.BoardOwnership) {
 				// SCHED-GAP-214: after a FAILED tick the waiver stands down
 				// — the lane paces on its full effective cooldown, so a
@@ -431,7 +449,8 @@ func (m *MultiPoolPacker) packFlat(
 					database.AdmissionModeCooldown, s.proj.LastTickStatus, ""); blocked {
 					continue
 				}
-				if now.Sub(*s.lastTick) < cooldownDur {
+				// SCHED-GAP-1666: the shared gate's wall-clock verdict.
+				if gate.Defer {
 					continue
 				}
 			}

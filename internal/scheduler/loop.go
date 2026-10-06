@@ -1041,6 +1041,24 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		}
 	}
 
+	// SCHED-GAP-1666 (a)/(e): the operator entry point consults the SAME
+	// shared admission predicate the packer applies. Manual is the ONE
+	// sanctioned bypass: an explicit operator spawn is admitted even ahead of
+	// the lane's effective cooldown (and outside a blackout window), and the
+	// bypass is LOGGED — an operator-driven admission must never be able to
+	// hide behind an on-schedule "ok". The decision is advisory here by
+	// design: "manual" means the operator overrode the clock, so the spawn
+	// proceeds in every case; what the gate contributes is the honest record
+	// of what it saw.
+	if dec, ok := l.effectiveCooldownGate(cooldownGateCall{Project: proj.Name, Bypass: CooldownBypassManual}); ok {
+		if dec.Bypass != "" {
+			log.Printf("MANUAL-SPAWN: %s admitted ahead of the shared cooldown gate (%s, remaining=%.0fs of %.0fs) — operator bypass (e)",
+				proj.Name, dec.Reason, dec.RemainingS, dec.EffectiveS)
+		}
+	} else {
+		log.Printf("MANUAL-SPAWN: %s shared cooldown gate could not read the lane's facts — operator bypass (e) proceeds unreconciled", proj.Name)
+	}
+
 	// Fire the spawn session (async — the row is already queued, so the
 	// returned id resolves regardless of slot availability). The slot pool
 	// exists from NewLoop (CI-003).
@@ -1470,8 +1488,26 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		// is 0, S-GAP-001 failure backoff, blackout multiplier +
 		// skip-mode). The loop's calculator matches the packer's (both
 		// are built from the same minI/maxI/numLevels in NewLoop).
-		cooldownDur, skipMode := effectiveCooldown(cooldown, float64(priority), consecFailures, l.packer.blackoutWindows, now, l.calculator, pinPtr)
-		if skipMode {
+		//
+		// SCHED-GAP-1666: reached through the ONE shared admission
+		// predicate every slot-pool entry point consults — this mirror
+		// must agree with the gate, or the GAP-043 alarm lies.
+		gate := effectiveCooldownGate(CooldownGateRequest{
+			Project:             name,
+			AdmissionMode:       admissionModeFor(projMode, name, map[string]string{name: nsMode}),
+			CooldownS:           cooldown,
+			CooldownPinS:        pinPtr,
+			Priority:            float64(priority),
+			ConsecutiveFailures: consecFailures,
+			LastTickStatus:      lastStatus,
+			LastCompleted:       &comp,
+			Workdir:             workdir,
+			BoardOwnership:      boardOwnership,
+			BlackoutWindows:     l.packer.blackoutWindows,
+			Calculator:          l.calculator,
+		}, now)
+		cooldownDur := gate.Cooldown
+		if gate.SkipMode {
 			continue // skip-mode blackout: packer skips this project
 		}
 		// SCHED-GAP-136: tasks-mode post-tick pacing mirror (base, no
@@ -1505,7 +1541,9 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			builderAdmissionBlocked(name, workdir, database.AdmissionModeCooldown, "") {
 			continue
 		}
-		if now.Sub(comp) >= cooldownDur {
+		// SCHED-GAP-1666: the shared gate's wall-clock verdict — the
+		// packer admits exactly when the gate does not defer.
+		if !gate.Defer {
 			eligible++
 		}
 	}

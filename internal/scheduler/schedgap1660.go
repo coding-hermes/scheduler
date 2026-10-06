@@ -55,6 +55,7 @@ package scheduler
 //     stamped too (the sim path never had a stamp — part of the 96 blank
 //     rows in the 7-day sample).
 import (
+	"log"
 	"sync"
 
 	"github.com/coding-hermes/scheduler/internal/database"
@@ -178,10 +179,28 @@ func wakeAdmitsAnyLane(l *Loop) bool {
 // while the forced evaluate() still runs (harmless for cooldown lanes: the
 // packer's wall-clock gate refuses them; every other lane treats the pass as
 // normal).
+//
+// SCHED-GAP-1666 (b): the decision is now taken PER LANE through the ONE
+// shared admission predicate (boardWakeCooldownGate → effectiveCooldownGate)
+// instead of the fleet-wide "some tasks lane exists" test alone. The
+// board-wake entry passes the only bypass a board write may claim —
+// CooldownBypassTasksParkedFlip — and the predicate refuses the stamp
+// whenever the lane is inside its effective cooldown and neither the
+// SCHED-GAP-124 tasks waiver nor the SCHED-GAP-1660 park-flip sanctions the
+// admission. That is what keeps a board write from being a generic resume
+// label: a wake that cannot admit THIS lane stamps nothing at all.
 func boardWakeAdmissionHook(l *Loop, raw func()) func() {
 	return func() {
-		if wakeAdmitsAnyLane(l) {
-			raw()
+		if !wakeAdmitsAnyLane(l) {
+			return
 		}
+		if project := boardWakeFiredTargetFor(); project != "" {
+			if dec, ok := boardWakeCooldownGate(l, project); ok && dec.Defer {
+				log.Printf("BOARD-WAKE: %s — shared cooldown gate refuses the board-write admission (%s, remaining=%.0fs of %.0fs, mode=%s); stamp dropped (SCHED-GAP-1666)",
+					project, dec.Reason, dec.RemainingS, dec.EffectiveS, dec.Mode)
+				return
+			}
+		}
+		raw()
 	}
 }

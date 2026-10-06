@@ -294,14 +294,32 @@ func (m *MultiPoolPacker) Pack(
 			// all apply in the one shared place; SCHED-GAP-1661: a
 			// set+positive cooldown_pin_s outranks the (bumped)
 			// cooldown base inside that shared predicate).
+			//
+			// SCHED-GAP-1666: the decision is taken through the ONE
+			// shared admission predicate every slot-pool entry point
+			// consults. The packer claims no bypass, so `gate.Defer`
+			// is exactly the historical `now.Sub(lt) < cooldownDur`.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cd := pu.Project.CooldownS
 				// SCHED-GAP-107: an active bump owns the effective cooldown.
 				if pu.BumpCooldownS > 0 {
 					cd = pu.BumpCooldownS
 				}
-				cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
-				if skipMode {
+				gate := effectiveCooldownGate(CooldownGateRequest{
+					Project:             pu.Project.Name,
+					CooldownS:           cd,
+					CooldownPinS:        pu.Project.CooldownPinS,
+					Priority:            float64(pu.Project.Priority),
+					ConsecutiveFailures: pu.Project.ConsecutiveFailures,
+					LastTickStatus:      pu.Project.LastTickStatus,
+					LastCompleted:       &lt,
+					Workdir:             pu.Project.Workdir,
+					BoardOwnership:      pu.Project.BoardOwnership,
+					BlackoutWindows:     m.blackoutWindows,
+					Calculator:          urgencyCalc,
+				}, now)
+				cooldownDur := gate.Cooldown
+				if gate.SkipMode {
 					continue // skip mode
 				}
 				// SCHED-GAP-124: tasks-mode admission — non-perpetual
@@ -366,7 +384,9 @@ func (m *MultiPoolPacker) Pack(
 						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
 						continue
 					}
-					if now.Sub(lt) < cooldownDur {
+					// SCHED-GAP-1666: the shared gate's wall-clock verdict
+					// (identical arithmetic to the historical comparison).
+					if gate.Defer {
 						continue
 					}
 				}
@@ -411,8 +431,22 @@ func (m *MultiPoolPacker) Pack(
 					// not be queued either. SCHED-GAP-1661: the pin rides
 					// in (pu.Project.CooldownPinS) so the queued check
 					// stays identical to the selection gate.
-					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
-					if skipMode {
+					// SCHED-GAP-1666: taken through the ONE shared
+					// admission predicate; the packer claims no bypass.
+					gate := effectiveCooldownGate(CooldownGateRequest{
+						Project:             pu.Project.Name,
+						CooldownS:           cd,
+						CooldownPinS:        pu.Project.CooldownPinS,
+						Priority:            float64(pu.Project.Priority),
+						ConsecutiveFailures: pu.Project.ConsecutiveFailures,
+						LastTickStatus:      pu.Project.LastTickStatus,
+						LastCompleted:       &lt,
+						Workdir:             pu.Project.Workdir,
+						BoardOwnership:      pu.Project.BoardOwnership,
+						BlackoutWindows:     m.blackoutWindows,
+						Calculator:          urgencyCalc,
+					}, now)
+					if gate.SkipMode {
 						continue // skip mode — not queued
 					}
 					// SCHED-GAP-1655: a cooldown-mode BUILDER lane the
@@ -437,7 +471,8 @@ func (m *MultiPoolPacker) Pack(
 						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
 						continue // board-unchanged skip — not queued
 					}
-					if now.Sub(lt) < cooldownDur {
+					// SCHED-GAP-1666: the shared gate's wall-clock verdict.
+					if gate.Defer {
 						continue // cooldown-skip, not queued
 					}
 				}

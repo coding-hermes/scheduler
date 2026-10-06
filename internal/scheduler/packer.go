@@ -610,6 +610,29 @@ func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int,
 	return cooldownDur, false
 }
 
+// effectiveCooldownGate is the packer's use of the shared admission
+// predicate (SCHED-GAP-1666): the SAME effectiveCooldown arithmetic the
+// legacy wrapper below always applied, reached through the one predicate
+// every entry point into the slot pool now consults. The packer claims no
+// bypass — a packer tick is on-schedule by definition (the tasks-admission
+// waiver is its own branch in the selection gates, unchanged).
+func (p *Packer) effectiveCooldownGate(s scored, now time.Time) CooldownGateDecision {
+	return effectiveCooldownGate(CooldownGateRequest{
+		Project:             s.name,
+		AdmissionMode:       s.admissionMode,
+		CooldownS:           s.cooldownS,
+		CooldownPinS:        s.cooldownPinS,
+		Priority:            s.priority,
+		ConsecutiveFailures: s.consecutiveFailures,
+		LastTickStatus:      s.lastTickStatus,
+		LastCompleted:       s.lastTickAt,
+		Workdir:             s.workdir,
+		BoardOwnership:      s.boardOwnership,
+		BlackoutWindows:     p.blackoutWindows,
+		Calculator:          p.calculator,
+	}, now)
+}
+
 // effectiveCooldownDur resolves the receiver's calculator and blackout
 // windows and delegates to the shared effectiveCooldown (ADV-R03 / G5).
 // Kept as a method so packer.go's internal callers (the greedy pack and
@@ -618,8 +641,13 @@ func effectiveCooldown(cooldownS int, priority float64, consecutiveFailures int,
 // SCHED-GAP-107 block above), so the bump is already reflected here —
 // which is why loop.go's watchdog feeds its own SQL-side bump value into
 // the same package-level function instead.
+//
+// SCHED-GAP-1666: this is now a thin projection of the shared gate, so the
+// packer's effective-cooldown decision and every other entry point's are the
+// identical predicate.
 func (p *Packer) effectiveCooldownDur(s scored, now time.Time) (cooldownDur time.Duration, skipMode bool) {
-	return effectiveCooldown(s.cooldownS, s.priority, s.consecutiveFailures, p.blackoutWindows, now, p.calculator, s.cooldownPinS)
+	dec := p.effectiveCooldownGate(s, now)
+	return dec.Cooldown, dec.SkipMode
 }
 
 // isOverdue reports whether an enabled, not-running project is due under the

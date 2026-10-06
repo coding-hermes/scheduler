@@ -382,6 +382,24 @@ func (p *SlotPool) SpawnEnqueued(proj PackedProject, tickID string, now time.Tim
 // selection, no cooldown is consumed, no failure is recorded, and no slot is
 // taken. The predicate itself (load_gate.go) and the `load_gate='off'`
 // namespace opt-out are unchanged and remain callable from anywhere.
+//
+// SCHED-GAP-1666 — the SAME shape, applied to the per-lane EFFECTIVE
+// COOLDOWN. This function still does not consult it (a deferral here would
+// strand an already-enqueued row exactly as SCHED-GAP-171's load gate did),
+// so the one shared predicate lives with the callers instead:
+//
+//	effectiveCooldownGate(CooldownGateRequest{...}, now)  // schedgap1666.go
+//
+// Callers: the packer's gates (packer.go via effectiveCooldownDur,
+// packer_select.go ×2, multipool_packer.go), loop.go's countEligibleProjects
+// mirror, Loop.SpawnNow (the manual/operator bypass, (e)),
+// Loop.resumeOrphans (the in-flight continuity bypass, (c)) and the
+// board-wake entry (boardWakeCooldownGate; the tasks-parked-flip bypass,
+// (b)). A caller that had no cooldown re-derivation before — the nudge
+// paths, measured at 123 of 402 dogfood/perf/docs/readme ticks in 7 days —
+// now reaches the identical decision the packer does, and
+// TestSCHEDGAP1666_GateConsultsAllEntryPoints fails the moment a new entry
+// point is added without it. See schedgap1666.go for the full contract.
 func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB, enqueued bool) {
 	// SCHED-GAP-103: atomically check-and-reserve BEFORE launching the
 	// goroutine. Spawn is fire-and-forget: the caller launches the goroutine

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -366,12 +367,56 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 		t.project, rep.WorkToSpawn, rep.TotalRows, rep.CanVerify)
 	// SCHED-GAP-157: stamp the board_wake nudge source BEFORE forcing the
 	// evaluation, so every tick this wake's pass admits records board_wake.
+	// SCHED-GAP-1666 (b): the target lane rides the hook call, so the
+	// wrapper can apply the ONE shared admission predicate to THIS lane —
+	// the process-wide stamp alone is lane-agnostic.
 	if w.onWake != nil {
+		setBoardWakeFiredTarget(t.project)
 		w.onWake()
+		setBoardWakeFiredTarget("")
 	}
 	if w.forceEval != nil {
 		w.forceEval()
 	}
+}
+
+// boardWakeFiredTarget carries the lane a FIRED wake belongs to for the
+// duration of its onWake hook call (SCHED-GAP-1666). The watcher sets it
+// immediately before invoking the hook and clears it immediately after, so
+// the hook can judge the RIGHT lane with the shared admission predicate. It
+// reads as "" outside a hook call: a caller that invokes the hook directly
+// (no watcher, e.g. the SCHED-GAP-157 stamp test) keeps the pre-1666
+// fleet-wide behaviour rather than being judged against a stale lane.
+var boardWakeFiredTarget atomic.Value // string
+
+// setBoardWakeFiredTarget / boardWakeFiredTargetFor scope the FIRED wake's
+// lane across the hook call.
+func setBoardWakeFiredTarget(project string) { boardWakeFiredTarget.Store(project) }
+
+// boardWakeFiredTargetFor returns the lane of the wake currently being
+// dispatched ("" when no wake is in flight).
+func boardWakeFiredTargetFor() string {
+	s, _ := boardWakeFiredTarget.Load().(string)
+	return s
+}
+
+// boardWakeCooldownGate applies the ONE shared admission predicate
+// (SCHED-GAP-1666) to the lane a board write just touched — deliverable (b).
+// The board-wake entry claims exactly ONE bypass: the SCHED-GAP-1660
+// park-flip of a tasks-admission lane parked on an empty board. The
+// predicate grants it only when the lane really carries the park mark AND
+// really resolves to tasks-admission, so no other effect of a board write can
+// admit a lane ahead of its cooldown. ok=false means the lane's facts could
+// not be read (fail-open; see schedgap1666.go).
+func boardWakeCooldownGate(l *Loop, project string) (CooldownGateDecision, bool) {
+	if l == nil || project == "" {
+		return CooldownGateDecision{}, false
+	}
+	return l.effectiveCooldownGate(cooldownGateCall{
+		Project:     project,
+		Bypass:      CooldownBypassTasksParkedFlip,
+		ParkedEmpty: isParkedEmpty(project),
+	})
 }
 
 // runWatchdog is the watcher's own heartbeat watchdog (GAP-042 applied to
