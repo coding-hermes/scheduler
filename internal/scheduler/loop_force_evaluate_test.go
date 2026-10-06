@@ -8,10 +8,10 @@ package scheduler
 // wedged 28-80 min on a loaded host.
 //
 // Post-fix: ForceEvaluate() sends a non-blocking wake to l.evalWakeCh
-// (buffered 1). A single drain goroutine started in NewLoop reads the
-// channel and calls l.evaluate() in a loop. N concurrent ForceEvaluate
-// calls collapse into at most one pending pass — while evaluate() is
-// running, additional calls just fail their non-blocking send and exit.
+// (buffered 1). A single drain goroutine starts lazily on the first real
+// ForceEvaluate call and exits before Stop returns. N concurrent calls
+// collapse into at most one pending pass — while evaluate() is running,
+// additional calls just fail their non-blocking send and exit.
 //
 // Test strategy: the production drain calls l.evaluate() which would
 // hit a real DB and a real spawner. To count evaluate() invocations
@@ -33,6 +33,32 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLoop_ForceEvaluate_DrainStartsLazily(t *testing.T) {
+	db := newTestDB(t)
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 4)
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			loop.Stop()
+		}
+	})
+
+	if loop.evalDrainStarted.Load() {
+		t.Fatal("NewLoop started an idle evalDrain before any force-evaluate request")
+	}
+	loop.ForceEvaluate()
+	if !loop.evalDrainStarted.Load() {
+		t.Fatal("ForceEvaluate did not start the evalDrain")
+	}
+	loop.Stop()
+	stopped = true
+	select {
+	case <-loop.evalDrainDone:
+	default:
+		t.Fatal("Loop.Stop returned before evalDrain exited")
+	}
+}
 
 func TestLoop_ForceEvaluate_CoalescesUnderBurst_HAPPY(t *testing.T) {
 	// Build a Loop with the wake channel installed (no spawner, no DB —

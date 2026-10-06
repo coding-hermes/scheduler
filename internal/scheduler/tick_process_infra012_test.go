@@ -302,6 +302,7 @@ func TestEvalFallback_NoDuplicateRespawnAfterRestart(t *testing.T) {
 	insertRunningTick(t, db, "p1-inflight", "p1", 0)
 
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	defer loop.Stop()
 	loop.ForceEvaluate()
 
 	// evaluate() must NOT spawn a second tick for p1. Poll briefly for the

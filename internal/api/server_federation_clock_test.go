@@ -39,7 +39,9 @@ func newFedSimStack(t *testing.T) (loop *scheduler.Loop, srv *Server, sim *clock
 	}
 	t.Cleanup(func() { db.Close() })
 	sim = clock.NewManualSimClock(time.Now())
+	t.Cleanup(sim.Close)
 	loop = scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
+	t.Cleanup(loop.Stop)
 	loop.SetNoExecFallback(true)
 	// The loop gets the sim clock BEFORE NewServer: NewServer seeds the
 	// server's seam from loop.Clock() (one atomic store — a second SetClock

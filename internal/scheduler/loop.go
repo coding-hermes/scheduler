@@ -82,13 +82,16 @@ type Loop struct {
 	admissionPrevTickID string
 	// evalWakeCh + evalDone are the SCHED-GAP-1575-A coalescing channel
 	// for ForceEvaluate(). Buffered(1); non-blocking sends collapse N
-	// concurrent calls into at most one pending pass. The drain goroutine
-	// (started in NewLoop, stopped by closing stopCh) reads it and calls
-	// l.evaluate() in a loop. Pre-fix ForceEvaluate() spawned
-	// `go l.evaluate()` with no coalescing, so a board-wake / API POST
-	// / evaluate storm queued 180+ evaluate goroutines behind one
-	// write lock.
-	evalWakeCh chan struct{}
+	// concurrent calls into at most one pending pass. NewLoop enables a lazy
+	// drain that starts on the first ForceEvaluate call and exits when stopCh
+	// closes. Pre-fix ForceEvaluate() spawned `go l.evaluate()` with no
+	// coalescing, so a board-wake / API POST / evaluate storm queued 180+
+	// evaluate goroutines behind one write lock.
+	evalWakeCh       chan struct{}
+	evalDrainEnabled bool
+	evalDrainOnce    sync.Once
+	evalDrainStarted atomic.Bool
+	evalDrainDone    chan struct{}
 	// pauseCh is a WAKE signal only (GAP-101): a parked legacy waiter or
 	// ticker stall reacts to it. It carries no state — pause state is the
 	// atomic paused flag. Buffered(1) + non-blocking sends in Pause/Resume.
@@ -259,9 +262,11 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		admitNSAdmits: make(map[string]int),
 		// SCHED-GAP-1575-A: wake channel for the coalesced ForceEvaluate()
 		// path. Buffered(1) + non-blocking send in ForceEvaluate() so N
-		// concurrent calls collapse into at most one pending pass; the
-		// drain goroutine (started below) reads it and calls evaluate().
-		evalWakeCh: make(chan struct{}, 1),
+		// concurrent calls collapse into at most one pending pass; the drain
+		// starts lazily on the first ForceEvaluate call.
+		evalWakeCh:       make(chan struct{}, 1),
+		evalDrainEnabled: true,
+		evalDrainDone:    make(chan struct{}),
 		// SCHED-GAP-1678: the board-stasis gate is constructed DISABLED —
 		// SetBoardStasisGateEnabled(true) (the daemon wiring) arms it.
 		boardStasisGate: NewBoardStasisGate(),
@@ -322,14 +327,9 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// is the logger every consult path — the evaluation pass and SpawnNow —
 	// shares.
 	SetGatewayHealthGateEvents(l.events)
-	// SCHED-GAP-1575-A: single drain goroutine for the coalesced
-	// ForceEvaluate() path. Reads l.evalWakeCh in a loop, calls
-	// l.evaluate(), repeats. evaluate() takes the Loop write lock
-	// internally — the drain must NOT hold it. Exits when stopCh is
-	// closed. Buffered(1) on the channel + the non-blocking send in
-	// ForceEvaluate() mean N concurrent wakeups collapse into at most
-	// one pending pass.
-	go l.evalDrain()
+	// SCHED-GAP-1575-A: the coalescing drain is started lazily by the first
+	// ForceEvaluate call. Loops that only use synchronous evaluation do not
+	// retain an idle goroutine for their entire lifetime.
 	return l
 }
 
@@ -739,6 +739,13 @@ func (l *Loop) Stop() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
+	if l.evalDrainStarted.Load() {
+		select {
+		case <-l.evalDrainDone:
+		case <-ctx.Done():
+			log.Printf("LOOP: eval drain did not stop within %v", grace)
+		}
+	}
 	if err := l.slotPool.Wait(ctx); err == nil {
 		log.Println("LOOP: all in-flight ticks completed")
 		return
@@ -862,6 +869,9 @@ func (l *Loop) ForceEvaluate() {
 		go l.evaluate()
 		return
 	}
+	if l.evalDrainEnabled {
+		l.startEvalDrain()
+	}
 	select {
 	case l.evalWakeCh <- struct{}{}:
 	default:
@@ -897,11 +907,21 @@ func (l *Loop) BoardStasisGate() *BoardStasisGate {
 	return l.boardStasisGate
 }
 
+func (l *Loop) startEvalDrain() {
+	l.evalDrainOnce.Do(func() {
+		l.evalDrainStarted.Store(true)
+		go func() {
+			defer close(l.evalDrainDone)
+			l.evalDrain()
+		}()
+	})
+}
+
 // evalDrain is the single goroutine that services l.evalWakeCh for the
-// coalesced ForceEvaluate() path (SCHED-GAP-1575-A). It blocks until
-// either stopCh closes (graceful shutdown) or a wake arrives. On a wake
-// it calls l.evaluate() and loops; evaluate() takes the Loop write
-// lock internally, so this drain goroutine NEVER holds Loop.mu —
+// coalesced ForceEvaluate() path (SCHED-GAP-1575-A). It starts on the first
+// ForceEvaluate call and blocks until stopCh closes or a wake arrives. On a
+// wake it calls l.evaluate() and loops; evaluate() takes the Loop write lock
+// internally, so this drain goroutine NEVER holds Loop.mu.
 // holding it across evaluate() is exactly the convoy the pre-fix code
 // caused.
 //

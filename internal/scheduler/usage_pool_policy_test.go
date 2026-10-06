@@ -220,7 +220,11 @@ func TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout(t *testing.
 			pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true})
 			if tc.timeout > 0 {
 				pool.spawner.timeout = tc.timeout
+				if got := pool.spawner.effectiveTickTimeout(PackedProject{Name: "helix", Workdir: "/tmp/helix"}); got != tc.timeout {
+					t.Fatalf("effective tick timeout=%s, want %s", got, tc.timeout)
+				}
 			}
+			started := time.Now()
 			tickID := pool.Spawn(PackedProject{Name: "helix", Workdir: "/tmp/helix"}, time.Now(), true, db)
 			if tc.cancel {
 				deadline := time.Now().Add(5 * time.Second)
@@ -244,6 +248,9 @@ func TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout(t *testing.
 			}
 			if status, ok := waitForTickTerminal(t, db, tickID, 15*time.Second); !ok || status != tc.wantStatus {
 				t.Fatalf("tick status=%q terminal=%t, want %q", status, ok, tc.wantStatus)
+			}
+			if tc.timeout > 0 && time.Since(started) > 2*time.Second {
+				t.Fatalf("configured %s timeout took %s; deadline override was not applied", tc.timeout, time.Since(started))
 			}
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {

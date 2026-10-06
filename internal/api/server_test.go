@@ -49,6 +49,7 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 
 	// budget=0 ensures Pick returns empty so ForceEvaluate is a no-op (no real spawning).
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
+	t.Cleanup(loop.Stop)
 	// DOGFOOD-015: the spawn endpoint now enqueues synchronously and fires a
 	// real spawn session. Disable the exec fallback so the session cannot
 	// launch an actual `hermes` process from the test host — the tick row is

@@ -40,6 +40,7 @@ func TestNewLoop_Defaults(t *testing.T) {
 func TestLoop_ForceEvaluateNoProjects(t *testing.T) {
 	db := newTestDB(t)
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	defer loop.Stop()
 
 	// ForceEvaluate runs evaluate in a goroutine. With no enabled projects it returns immediately.
 	loop.ForceEvaluate()

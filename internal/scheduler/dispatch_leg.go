@@ -282,9 +282,29 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 		budget = DefaultGatewayResponseTimeout
 	}
 	deadline := p.clock().Now().Add(budget)
+	deadlineErr := func() error {
+		return fmt.Errorf("no correlated reply for corr=%s (message=%s) within %s — the hand-out is recorded and the agent may still answer",
+			receipt.CorrID, receipt.MessageID, budget.Round(time.Millisecond))
+	}
 	for {
-		lease, err := client.InboxRetrieve(ctx, dispatchReplyBatchLimit, dispatchReplyLeaseSeconds)
+		remaining := deadline.Sub(p.clock().Now())
+		if remaining <= 0 {
+			return "", false, deadlineErr()
+		}
+		// InboxRetrieve has its own longer request timeout. Bound it by the
+		// remaining tick budget, or a long-poll can overrun a short tick
+		// deadline (and hold the slot until the bus client's default timeout).
+		retrieveCtx, retrieveCancel := context.WithTimeout(ctx, remaining)
+		lease, err := client.InboxRetrieve(retrieveCtx, dispatchReplyBatchLimit, dispatchReplyLeaseSeconds)
+		retrieveDeadline := errors.Is(retrieveCtx.Err(), context.DeadlineExceeded)
+		retrieveCancel()
 		if err != nil {
+			if ctx.Err() != nil {
+				return "", false, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
+			}
+			if retrieveDeadline || errors.Is(err, context.DeadlineExceeded) {
+				return "", false, deadlineErr()
+			}
 			// A bus blip is not a verdict about the work: log and keep
 			// waiting until the budget runs out.
 			log.Printf("DISPATCH: %s tick=%s inbox retrieve: %v (retrying)", proj.Name, tickID, err)
@@ -294,8 +314,13 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 				if !matched {
 					continue
 				}
-				if aerr := client.InboxAck(ctx, lease.LeaseID, msg.ID); aerr != nil {
-					log.Printf("DISPATCH: %s tick=%s ack %s: %v", proj.Name, tickID, msg.ID, aerr)
+				remaining := deadline.Sub(p.clock().Now())
+				if remaining > 0 {
+					ackCtx, ackCancel := context.WithTimeout(ctx, remaining)
+					if aerr := client.InboxAck(ackCtx, lease.LeaseID, msg.ID); aerr != nil {
+						log.Printf("DISPATCH: %s tick=%s ack %s: %v", proj.Name, tickID, msg.ID, aerr)
+					}
+					ackCancel()
 				}
 				ok, why := dispatchReplyVerdict(payload)
 				text := dispatchReplyText(payload)
@@ -308,14 +333,18 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 				return text, true, nil
 			}
 		}
-		if !p.clock().Now().Before(deadline) {
-			return "", false, fmt.Errorf("no correlated reply for corr=%s (message=%s) within %s — the hand-out is recorded and the agent may still answer",
-				receipt.CorrID, receipt.MessageID, budget.Round(time.Second))
+		remaining = deadline.Sub(p.clock().Now())
+		if remaining <= 0 {
+			return "", false, deadlineErr()
+		}
+		poll := dispatchReplyPollInterval
+		if poll > remaining {
+			poll = remaining
 		}
 		select {
 		case <-ctx.Done():
 			return "", false, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
-		case <-p.clock().After(dispatchReplyPollInterval):
+		case <-p.clock().After(poll):
 		}
 	}
 }

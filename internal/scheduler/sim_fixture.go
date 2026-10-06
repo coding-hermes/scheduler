@@ -244,8 +244,11 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		tickReport := sr.runOneTick(tick)
 		report.Ticks = append(report.Ticks, tickReport)
 
-		// Advance simulated time so cooldowns expire between ticks.
-		sr.clock().Sleep(time.Duration(sr.fixture.TestProjects()[0].CooldownS) * time.Second)
+		// Advance simulated time so cooldowns expire between ticks. A final
+		// post-run sleep has no next batch to affect and only delays the report.
+		if tick < tickCount {
+			sr.clock().Sleep(time.Duration(sr.fixture.TestProjects()[0].CooldownS) * time.Second)
+		}
 	}
 
 	report.Elapsed = sr.clock().Since(start)
