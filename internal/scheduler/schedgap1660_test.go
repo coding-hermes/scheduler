@@ -318,7 +318,12 @@ func TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip(t *testing.T) {
 	// parked — the label must therefore stay in the ordinary nudge family.
 	gap1660WriteBoard(t, board, live1, `{"id":"LIVE-2","status":"pending","title":"second"}`)
 	gap1660WakeNow(t, w, proj, wd, board)
-	waitFor1660(t, 10*time.Second, func() bool { return len(gap1660TickReasons(t, db, proj)) > 1 })
+	// Tick insertion precedes the async admit_reason stamp; wait for the
+	// second row's reason to be committed, not just for its id to appear.
+	waitFor1660(t, 10*time.Second, func() bool {
+		reasons := gap1660TickReasons(t, db, proj)
+		return len(reasons) > 1 && reasons[1] != ""
+	})
 
 	reasons := gap1660TickReasons(t, db, proj)
 	seenWake := false
