@@ -393,37 +393,63 @@ Higher urgency projects get picked first.
 
 Default 900s between successive ticks for the same project.
 
-### Cooldown Policy (fleet-cooldown-policy.py)
+### Fleet Config Mirror (fleet-sync.py)
 
-Fleet-wide cooldown normalization is governed by the ops script
-`~/.hermes/scripts/fleet-cooldown-policy.py` (not part of this repo — it lives
-in the Hermes ops home; run `python3 ~/.hermes/scripts/fleet-cooldown-policy.py`
-for a dry run, `--apply` to write). The script:
+`~/.hermes/fleet.toml` — the durable pin layer re-applied by the loader at every
+daemon startup — is written by the ops script `~/.hermes/scripts/fleet-sync.py`
+(not part of this repo — it lives in the Hermes ops home; run
+`python3 ~/.hermes/scripts/fleet-sync.py` to print the file it would write,
+`--write` to write it atomically). It **is the only writer of `fleet.toml`**
+(the scheduler API is the only writer of cooldowns/pins), and it is a pure
+one-way mirror:
 
-- Reads the live SQLite state first (`GET /api/v1/projects` equivalent), then
-  regenerates `~/.hermes/fleet.toml` so every `[[projects]]` entry's
-  `cooldown_s` matches the daemon's current value, and optionally PUTs
-  normalized cooldowns back to the API.
-- Honors the `ELEVATED_PINS` whitelist (e.g. `h3=21600`, `warpfs=43200`):
-  projects with an operator-set pin are never written below their canonical
-  cooldown (SCHED-GAP-012), no matter what the SQLite state says.
-- Is the **only** writer of `fleet.toml`. `fleet.toml` pins are durable across
-  daemon restarts (loader re-pins existing projects at every startup), while
-  an API `PUT /api/v1/projects/{name}` cooldown change is durable only within
-  the daemon session — the next policy run normalizes it back unless the
-  project has an ELEVATED_PINS entry.
-- Guarded against clobber (SCHED-PERF-006): the pre-commit hook and the
-  deploy-drain-restart verify block run
-  `scripts/policy-script-deploy-hash-guard.sh`, which aborts loudly whenever
-  the live `fleet-cooldown-policy.py` has diverged from its canonical
-  sidecar, so a consumer deploy/restart can no longer silently overwrite an
-  operator's live fix.
+- **DB → file, one direction, no correction rules.** It reads live API state
+  (`GET /api/v1/projects`, paging until `total` is covered) plus
+  `GET /api/v1/namespaces`, then regenerates `~/.hermes/fleet.toml` so every
+  enabled `[[projects]]` entry's `cooldown_s` (and model/provider,
+  `namespace_id`, `deliver`, `enabled`) and every namespace block
+  (weight/caps/`admission_mode`/`load_gate`/wave settings/prompts) match the
+  daemon's current state. It never decides values and never PUTs corrections
+  back (Bane 2026-09-19: the DB is the source of truth; the API is the only
+  writer).
+- `fleet.toml` pins are durable across daemon restarts (the loader re-pins
+  existing projects at every startup), while an API
+  `PUT /api/v1/projects/{name}` cooldown change is ephemeral across restarts
+  until it is re-mirrored into `fleet.toml`.
+- A hand-held `OVERRIDES` block (empty by default) lets a pin survive even a
+  drifted DB: the script **reads it and never rewrites it**.
+- No argument parser: write mode is a literal `'--write' in sys.argv` test, so
+  an unknown flag (e.g. `--writte`) silently performs a dry run. Confirm the
+  `fleet.toml: mirrored …` line before trusting a write.
 
-**Override procedure:** to pin a project's cooldown permanently, add it to
-`ELEVATED_PINS` in `~/.hermes/scripts/fleet-cooldown-policy.py` (and set the
-pin in `fleet.toml`), then run the script with `--apply`. The pin survives
-policy runs and daemon restarts. See `docs/integration.md` for the full
-authority model.
+#### Retired: `fleet-cooldown-policy.py --apply`
+
+`~/.hermes/scripts/fleet-cooldown-policy.py` is **RETIRED as a writer** (owner
+ruling 2026-10-02). `--apply` prints
+`RETIRED: … no longer writes anything` and exits 3 without touching
+`fleet.toml` or the API. What remains is read-only:
+
+- Bare invocation / `--dry-run` — the cooldown report (evaluation only; a
+  documented `--dry-run` always wins over `--apply` so it can never mutate live
+  state).
+- `--verify` — the SCHED-GAP-121 tripwire: it compares the canonical operator
+  pin set (`ELEVATED_PINS`, e.g. `h3`/`warpfs`) against `fleet.toml` and the
+  live DB rows and reports `MISMATCH` lines on drift (SCHED-GAP-012). It is a
+  **check, not a writer** — a mismatch is reported, never corrected.
+- Its board parsers are still imported as a library by
+  `fleet-cooldown-audit.py`.
+
+**Override procedure:** to pin a project's cooldown permanently, `PUT` the value
+via the API, then re-run `python3 ~/.hermes/scripts/fleet-sync.py --write` so the
+durable layer re-mirrors it. If the pin must survive even a drifted DB, add it to
+`fleet-sync.py`'s hand-held `OVERRIDES` block as well (read, never rewritten).
+
+Deploy-integrity guard (SCHED-PERF-003 / SCHED-PERF-006), unchanged: the
+pre-commit hook and the deploy-drain-restart verify block run
+`scripts/policy-script-deploy-hash-guard.sh`, which aborts loudly whenever the
+live `fleet-cooldown-policy.py` has diverged from its canonical sidecar, so a
+consumer deploy/restart can no longer silently overwrite an operator's live fix.
+See `docs/integration.md` for the full authority model.
 
 ---
 
@@ -794,7 +820,8 @@ removed in the same pass; everything else below is deliberate and must not be
   tests all checked). Recover with `git show bf482a5a:<path>` if ever needed.
 - **`fleet.toml` (tracked)** is a curated *static mirror* of operator cooldown
   pins, NOT the live fleet config — the live file is `~/.hermes/fleet.toml`,
-  written only by `~/.hermes/scripts/fleet-cooldown-policy.py`. The two are
+  written by `~/.hermes/scripts/fleet-sync.py` (the DB→file mirror;
+  `fleet-cooldown-policy.py --apply` is retired as a writer). The two are
   different on purpose; never copy the live file into the repo (see the file's
   own header).
 - **The outer directory `/home/kara/coding-hermes-scheduler/` is not the repo**
