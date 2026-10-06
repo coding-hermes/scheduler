@@ -85,7 +85,7 @@ func TestSchedGap1684TickDeadlineBooksTimeoutNotDeferred(t *testing.T) {
 	spawner.timeout = 1 * time.Second                         // the TICK wall under test
 	spawner.SetGatewayResponseTimeout(400 * time.Millisecond) // arms the supervised (streaming) POST; idle watch resets on every 50ms event, so only the wall can end it
 
-	beforeDeferrals := gap170Deferrals()
+	beforeDeferrals := gap170EndpointDeferrals(srv.URL)
 	tick, err := spawner.Spawn(PackedProject{Name: projectName, Workdir: t.TempDir()}, tickID)
 	if err != nil {
 		t.Fatalf("Spawn returned an error (%v) — a tick whose OWN wall expired must be booked timeout, not dropped/deferred (SCHED-GAP-1684)", err)
@@ -106,8 +106,8 @@ func TestSchedGap1684TickDeadlineBooksTimeoutNotDeferred(t *testing.T) {
 	if !strings.Contains(outcome.Error, "tick deadline exceeded") {
 		t.Errorf("outcome.Error = %q, want the underlying gateway error recorded for audit", outcome.Error)
 	}
-	if got := int(gap170Deferrals() - beforeDeferrals); got != 0 {
-		t.Errorf("deferrals_total delta = %d, want 0 — a self-timeout is NOT a transient blip", got)
+	if got := int(gap170EndpointDeferrals(srv.URL) - beforeDeferrals); got != 0 {
+		t.Errorf("endpoint deferrals delta = %d, want 0 — a self-timeout is NOT a transient blip", got)
 	}
 	if got := schedGap203BConsecutiveFailures(t, db, projectName); got != 0 {
 		t.Errorf("consecutive_failures = %d, want 0 — the SCHED-GAP-143 carve-out: this timeout's error is transport-class (tick deadline exceeded), so it must not charge the lane's failure counter (SCHED-GAP-1705 charges only non-transport timeouts)", got)
@@ -140,8 +140,8 @@ func TestSchedGap1684TickDeadlineBooksTimeoutNotDeferred(t *testing.T) {
 	if got := schedGap203BFailureReason(t, db, fsTickID); got != FailureReasonGatewayTransport {
 		t.Errorf("ticks.failure_reason = %q, want %q", got, FailureReasonGatewayTransport)
 	}
-	if got := int(gap170Deferrals() - beforeDeferrals); got != 0 {
-		t.Errorf("deferrals_total delta = %d after the slot-pool spawn, want 0", got)
+	if got := int(gap170EndpointDeferrals(srv.URL) - beforeDeferrals); got != 0 {
+		t.Errorf("endpoint deferrals delta = %d after the slot-pool spawn, want 0", got)
 	}
 	if got := schedGap203BConsecutiveFailures(t, db, projectName); got != 0 {
 		t.Errorf("consecutive_failures = %d after the slot-pool spawn, want 0", got)

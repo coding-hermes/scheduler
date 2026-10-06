@@ -709,6 +709,15 @@ func gap170Deferrals() uint64 {
 	return d
 }
 
+// gap170EndpointDeferrals returns the gate's count for one endpoint, including
+// decisions made before an outage episode is active. The total remains process-wide.
+func gap170EndpointDeferrals(url string) uint64 {
+	g := gatewayHealth
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.deferralsByEndpoint[url]
+}
+
 // gap170EpisodeEvents returns the gate's episode-transition events of one kind,
 // oldest first, selected by the machine marker in the payload (never by message
 // text), so both directions stay queryable after the fact.

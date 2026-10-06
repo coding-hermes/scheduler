@@ -252,6 +252,11 @@ type gatewayHealthGateState struct {
 	// work did the gateway(s) stop", so a per-endpoint deferral counts here too.
 	deferrals atomic.Uint64
 
+	// deferralsByEndpoint is diagnostic attribution for endpoint-specific tests.
+	// It is updated under mu alongside episodeDeferrals; the process-wide
+	// monotonic total above remains the status surface contract.
+	deferralsByEndpoint map[string]uint64
+
 	// wired records that a boot line has been logged for this process — either
 	// by an install or by the daemon's explicit boot-state call. It is what
 	// makes the boot line "exactly once per install" while still guaranteeing
@@ -708,6 +713,10 @@ func gatewayHealthNoteDeferral(url string) {
 	gatewayHealth.deferrals.Add(1)
 	g := gatewayHealth
 	g.mu.Lock()
+	if g.deferralsByEndpoint == nil {
+		g.deferralsByEndpoint = make(map[string]uint64)
+	}
+	g.deferralsByEndpoint[url]++
 	if v, ok := g.endpoints[url]; ok && v.episodeActive {
 		v.episodeDeferrals++
 	}
