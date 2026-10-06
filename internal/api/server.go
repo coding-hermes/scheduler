@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,6 +170,31 @@ func (s *Server) SetClock(c clock.Clock) {
 // clock returns the server's clock, never nil.
 func (s *Server) clock() clock.Clock { return s.clk.Get() }
 
+// clockStatus renders the server clock's mode + sim scale for /api/v1/health
+// (SCHED-GAP-1632). The mode word is derived from the SAME clock.Describe()
+// string the boot line prints ("real", "sim (scale=1000 …)"), so the API can
+// never disagree with the boot log; an unknown/future implementation still
+// reports mode "custom" (clock.Describe's contract). scale is 1 for the real
+// clock and the current multiplier for a sim clock.
+func (s *Server) clockStatus() map[string]interface{} {
+	clk := s.clock()
+	describe := clock.Describe(clk)
+	scale := 1.0
+	if sc, ok := clk.(interface{ Scale() float64 }); ok {
+		scale = sc.Scale()
+	}
+	mode := describe
+	// "sim (scale=… …)" → "sim"; describe is a single word for every
+	// in-repo non-sim clock, kept verbatim ("real" / "fixed …" / "custom").
+	if i := strings.IndexByte(describe, ' '); i >= 0 {
+		mode = describe[:i]
+	}
+	return map[string]interface{}{
+		"mode":  mode,
+		"scale": scale,
+	}
+}
+
 // SetFailureWindow sets the number of recent ticks per project used for the
 // /api/v1/status per-project failure-rate breakdown (SCHED-GAP-018).
 func (s *Server) SetFailureWindow(n int) {
@@ -328,6 +354,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"version":                version.Current(),
 		"build_sha":              version.CurrentCommit(),
 		"build_time":             version.CurrentBuildDate(),
+		// SCHED-GAP-1632: the daemon's clock mode + sim scale, from the same
+		// clock.Describe() source the boot line ("TIME: clock sim (scale=…)")
+		// prints. Without this, a --simulate daemon is indistinguishable
+		// from a real one on the API surface.
+		"clock":                  s.clockStatus(),
 		"uptime":                 s.clock().Since(s.started).String(),
 		"db":                     dbOK,
 		"active_ticks":           activeTicks,

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -233,6 +234,12 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 		Enabled:   countEnabled(projects),
 	}
 
+	// SCHED-GAP-1632: the REAL wall span is captured through clock.Real() —
+	// the seam's explicit wall-clock default (stdlib_guard-approved form). A
+	// sim clock's Now/Since would measure the same virtual span Elapsed
+	// already holds, defeating the label below.
+	realStart := clock.Real().Now()
+
 	start := sr.clock().Now()
 	for tick := 1; tick <= tickCount; tick++ {
 		select {
@@ -252,6 +259,13 @@ func (sr *SimRunner) RunMultiTick(ctx context.Context, tickCount int) (*SimRepor
 	}
 
 	report.Elapsed = sr.clock().Since(start)
+	// SCHED-GAP-1632: Elapsed above is the RUN CLOCK's elapsed — VIRTUAL time
+	// on a sim clock (scale makes it race past the wall). Capture the real
+	// wall span and the clock's own Describe() (the same string the boot line
+	// prints) so Summary can label the two spans honestly instead of calling
+	// virtual time "real".
+	report.ElapsedReal = clock.Real().Since(realStart)
+	report.ClockDescribe = clock.Describe(sr.clock())
 
 	// SCHED-GAP-1630: the completion goroutines of the LAST batch may still
 	// be pending on their 50-250ms sim sleeps, so per-tick snapshots taken
@@ -431,6 +445,16 @@ type SimReport struct {
 	// common case. Non-zero downgrades Summary's success-rate line to an
 	// explicit in-flight snapshot instead of a final verdict.
 	InFlight int
+	// ElapsedReal is the WALL-CLOCK span of the run (SCHED-GAP-1632). On a
+	// sim clock Elapsed is VIRTUAL time (sim.Since across the run), so the
+	// two spans are rendered separately by Summary instead of labeling
+	// virtual time "real". On the wall clock the two are the same span.
+	ElapsedReal time.Duration
+	// ClockDescribe is the run clock's clock.Describe() string captured at
+	// report build time — the same source the boot line (TIME: clock …)
+	// prints ("real", "sim (scale=…)"). Empty on hand-built reports, which
+	// Summary renders with the historical real-time wording.
+	ClockDescribe string
 }
 
 // SimTickReport holds one tick's statistics.
@@ -481,8 +505,20 @@ func (r *SimReport) Summary() string {
 			successRate, dbResolved, r.TotalSpawned)
 	}
 
+	// SCHED-GAP-1632: label the elapsed span per clock. On a sim clock,
+	// report.Elapsed is VIRTUAL time (the dogfood run printed "39.8s real
+	// time" while `time -p` measured 0.20s — scale 1000+ races the wall).
+	// The sim path renders both spans; the real path keeps the historical
+	// wording. Hand-built reports (ClockDescribe empty, e.g. unit tests and
+	// every pre-1632 constructor) keep the real-time wording too.
+	elapsedLine := fmt.Sprintf("%d (%.1fs real time)", r.TickCount, r.Elapsed.Seconds())
+	if strings.HasPrefix(r.ClockDescribe, clock.ModeSim) {
+		elapsedLine = fmt.Sprintf("%d (%.1fs virtual / %.1fs real)",
+			r.TickCount, r.Elapsed.Seconds(), r.ElapsedReal.Seconds())
+	}
+
 	s := fmt.Sprintf(`========== SIMULATION REPORT ==========
-Ticks:       %d (%.1fs real time)
+Ticks:       %s
 Projects:    %d total, %d enabled
 Budget:      %d  |  Max concurrent: %d
 Note: per-tick budget can exceed the budget — lanes past 2x cooldown are
@@ -495,7 +531,7 @@ Total:       %d spawned, %d completed, %d failed, %d timeout
 DB-verified: %d completed, %d failed, %d timeout (%.1f%% resolved-success)
 
 Priority spread by tick:
-`, r.TickCount, r.Elapsed.Seconds(), r.Projects, r.Enabled, r.Budget, r.MaxConcur,
+`, elapsedLine, r.Projects, r.Enabled, r.Budget, r.MaxConcur,
 		r.AvgPerTick, budgetPerTick,
 		r.TotalSpawned, r.TotalCompleted, r.TotalFailed, r.TotalTimeout,
 		rateLine,

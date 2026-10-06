@@ -161,7 +161,7 @@ canonical "is the scheduler alive" probe.
 **Response 200:**
 
 ```json
-{"active_ticks":1,"db":"connected","evaluation_age_seconds":185.1,
+{"active_ticks":1,"clock":{"mode":"real","scale":1},"db":"connected","evaluation_age_seconds":185.1,
  "last_evaluation":"2026-08-18T06:52:15Z","spawns_exec":0,"spawns_http":3,
  "status":"ok","uptime":"18m35.148135137s"}
 ```
@@ -169,6 +169,7 @@ canonical "is the scheduler alive" probe.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `status` | string | `"ok"` when the daemon is up |
+| `clock` | object | The daemon's clock (SCHED-GAP-1632): `mode` is `"real"` (wall clock) or `"sim"` (virtual simulator, `--simulate`), `scale` the sim speed multiplier (1 on the real clock). Same `clock.Describe()` source the boot line prints (`TIME: clock sim (scale=…)`), so the API can never disagree with the boot log |
 | `uptime` | string | Go duration since daemon start (`"18m35s"`) |
 | `db` | string | `"connected"`, or `"error: <detail>"` when the SQLite ping fails |
 | `active_ticks` | int | Ticks currently in `running` status |

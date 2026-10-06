@@ -890,7 +890,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Daemon health check",
         "responses": {
-          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count"}
+          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count, clock (mode real|sim + sim scale, SCHED-GAP-1632)"}
         }
       }
     },
