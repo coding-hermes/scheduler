@@ -4821,3 +4821,16 @@ tasks:
   status: complete
   created_at: '2026-10-06T08:29:16.284854+00:00'
   completed_at: '2026-10-06T09:16:42.307640+00:00'
+- id: SCHED-GAP-1666
+  title: 'Slot pool admission gate: nudge spawns bypass cooldown'
+  criteria:
+  - 'Every entry point into the slot pool must pass the packer''s admission gate.
+    Hoist effective-cooldown decision to ONE shared predicate called from EVERY caller
+    that enqueues (SpawnEnqueued/Spawn). Board_wake passes the ONLY sanctioned bypass
+    (tasks-admission lane parked-empty). Startup resume admits only ticks interrupted
+    IN FLIGHT. Table-driven test enumerates every caller asserting each consults the
+    shared gate. 7-day simulation: 72h cooldown lane median inter-tick gap >= 48h
+    with 3 restarts.'
+  status: complete
+  created_at: '2026-10-06T09:38:14.182692+00:00'
+  completed_at: '2026-10-06T10:17:08.775362+00:00'
