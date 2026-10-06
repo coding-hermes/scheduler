@@ -236,7 +236,7 @@ func TestSCHEDGAP138_CreateRejectsUnarmedEnabledSatellite(t *testing.T) {
 		pin           int
 	}{
 		{"bare-sync", filepath.Join(home, "sync-workdirs", "bare-sync"), 21600},
-		{"bare-qa", filepath.Join(home, "stand-in", "pm", "bare"), 21600},
+		{"bare-qa", filepath.Join(home, "stand-in", "pm", "bare"), 43200},
 		{"bare-pm", filepath.Join(home, "stand-in", "pm-lane", "bare"), 86400},
 		{"bare-dogfood", filepath.Join(home, "stand-in", "dogfood", "bare"), 259200},
 	} {
@@ -561,7 +561,7 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 
 	goPins := intMapIn(t, string(goSrc), `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
 	pyPins := intMapIn(t, string(pySrc), `(?s)SATELLITE_FAMILY_PINS\s*=\s*\{(.*?)\}`)
-	want := map[string]int{"qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200}
+	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200}
 
 	if len(goPins) != len(want) {
 		t.Fatalf("internal/api/lane_onboarding.go pins %d families (%v), want %d", len(goPins), goPins, len(want))

@@ -86,11 +86,13 @@ var satelliteWorkdirRoots = map[string][]string{
 // the moment either side is edited alone. The number is also the one the
 // refusal message hands an operator (unarmedLaneError) and the floor
 // laneAutoArm writes on an enable transition, so it must be the cadence the
-// fleet actually pins: qa/sync moved 43200 -> 21600 WITH the canonical matrix
-// (their 6h family cadence), and the derived ceiling follows at 8 x floor.
+// fleet actually pins: qa moved 21600 -> 43200 with the 2026-10-02 ruling
+// (12h — qa burned 32% of foremen slot-hours for 6% of commits,
+// docs/scheduler-rules.md R4.2), sync stays at its 6h family cadence, and
+// the derived ceiling follows at 8 x floor.
 // The host-side reconciler carries the same four numbers as FAM_CD.
 var satelliteFamilyPins = map[string]int{
-	"qa":      21600,
+	"qa":      43200,
 	"pm":      86400,
 	"sync":    21600,
 	"dogfood": 259200,
