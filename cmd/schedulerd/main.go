@@ -1127,6 +1127,7 @@ func main() {
 			"last_error":           h.LastError,
 			"last_ok_at":           h.LastOKAt,
 			"spooled_pending":      h.Spooled,
+			"duplicates_skipped":   h.DuplicatesSkipped,
 			"base_url":             h.BaseURL,
 			"interval":             h.Interval,
 		}
