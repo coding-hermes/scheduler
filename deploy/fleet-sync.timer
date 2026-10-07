@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the fleet config mirror (fleet-sync.py --write) daily
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=fleet-sync.service
+
+[Install]
+WantedBy=timers.target

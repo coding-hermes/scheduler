@@ -4932,3 +4932,14 @@ tasks:
   status: complete
   created_at: '2026-10-07T03:38:19.188961+00:00'
   completed_at: '2026-10-07T04:01:17.329771+00:00'
+- id: SCHED-GAP-1727
+  title: Deferred board rows must not count as actionable work for admission
+  criteria:
+  - Scheduler admission/no-work/board-wake/parked-empty paths treat pending+deferred:true
+    as NOT open actionable work; deferred-only board change parks a tasks-mode foreman
+    on temporary cooldown fallback; appending a normal actionable row wakes it; deferred
+    rows stay visible in result/report APIs; tests cover deferred-only, deferred+perpetual-only,
+    deferred+normal; full suite green <120s
+  status: complete
+  created_at: '2026-10-07T05:41:25.593681+00:00'
+  completed_at: '2026-10-07T06:33:53.842778+00:00'
