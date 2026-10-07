@@ -32,7 +32,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--simulate` | `false` | Run in dry-run/simulation mode (no real spawning) |
 | `--sim-success` | `0.85` | Simulated success rate (0.0-1.0) |
 | `--sim-idle` | `0` | Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs |
-| `--sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop) |
+| `--sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop). Bulk-sim window derives from the count (SCHED-GAP-1629): ceil(N/8) × 500ms + 10s headroom (~1min per 1000 ticks on the real clock). On the real clock pair with `SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000` — see README "Test-time simulator" for the 32s-vs-0.2s comparison |
 | `--gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
 | `--gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
 | `--gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |

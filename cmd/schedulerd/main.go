@@ -34,6 +34,23 @@ import (
 	"github.com/coding-hermes/scheduler/internal/version"
 )
 
+// BulkSimBeat is RunBulkSim's ticker period: at most 8 ticks fire per beat.
+const BulkSimBeat = 500 * time.Millisecond
+
+// BulkSimWindow derives the --sim-count context timeout from the requested
+// tick count (SCHED-GAP-1629): ceil(count/8) beats of 500ms plus a fixed
+// headroom for fixture load and the 1s simulated-completion sleep. Beats are
+// consumed on ANY clock — under SCHEDULER_TIME_MODE=sim they cost ~0 real
+// time, on the real clock they are wall time.
+func BulkSimWindow(count int) time.Duration {
+	beats := (count + 7) / 8
+	if beats < 1 {
+		beats = 1
+	}
+	const bulkHeadroom = 10 * time.Second
+	return time.Duration(beats)*BulkSimBeat + bulkHeadroom
+}
+
 func main() {
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
@@ -97,7 +114,7 @@ func main() {
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simIdle := flag.Float64("sim-idle", 0.0, "Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs")
-	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
+	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop). NOTE: with the default real clock each 500ms ticker fires at most 8 ticks, so --sim-count N needs ~ceil(N/8)*0.5s + ~2s headroom; the 120s context window supports ~1900 ticks. On the real clock set SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 (with --simulate) or keep --sim-count low")
 	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
 	modelRatesFile := flag.String("model-rates-file", os.Getenv("SCHEDULER_MODEL_RATES_FILE"), "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild")
@@ -995,9 +1012,22 @@ func main() {
 
 	// Simulation count mode: generate N ticks and exit.
 	if *simCount > 0 {
-		simCtx, simCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// SCHED-GAP-1629: the window derives from the requested tick count.
+		// RunBulkSim fires at most 8 ticks per 500ms ticker beat
+		// (min(8, len(projects)) per fire), so ceil(count/8) beats are
+		// needed on ANY clock — a real-clock run simply burns them as wall
+		// time. ceil(count/8)*500ms + fixed headroom (fixture load + the
+		// 1s simulated-completion sleep) replaces the old flat 30s window,
+		// which FATALed "context deadline exceeded" for --sim-count 2000
+		// (~480-tick ceiling) even though the run itself was healthy.
+		window := BulkSimWindow(*simCount)
+		simCtx, simCancel := context.WithTimeout(context.Background(), window)
 		defer simCancel()
 		if err := loop.RunBulkSim(simCtx, *simCount); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				log.Fatalf("FATAL: simulation: %v — %ds window supports ~%d ticks (8/fire, 500ms each); use SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 or a lower --sim-count",
+					err, int(window.Seconds()), 8*int(window/BulkSimBeat))
+			}
 			log.Fatalf("FATAL: simulation: %v", err)
 		}
 		log.Printf("SIM: generated %d ticks", *simCount)
