@@ -80,6 +80,9 @@ def _load_gate():
 
 
 gate = _load_gate()
+# SCHED-GAP-1604: releng/readme/docs/review/perf satellites live in the ROLE's
+# shared family namespace, not a per-suffix one — mirror the gate's map.
+NS_FOR_SUFFIX.update(gate.SATELLITE_FAMILY_NAMESPACES)
 
 
 def _run(base: Path, rows: list[dict]) -> tuple[int, str]:

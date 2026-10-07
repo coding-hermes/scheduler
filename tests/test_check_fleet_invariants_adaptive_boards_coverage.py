@@ -53,6 +53,9 @@ QA_PIN = gate.SATELLITE_FAMILY_PINS["qa"]
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
 FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood, releng, perf, review, readme, docs
 NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
+# SCHED-GAP-1604: releng/readme/docs/review/perf satellites live in the ROLE's
+# shared family namespace — mirror the gate's map so membership stays quiet.
+NS_FOR_SUFFIX.update(gate.SATELLITE_FAMILY_NAMESPACES)
 
 
 def _board_dir(root: Path, name: str) -> Path:

@@ -311,6 +311,31 @@ SATELLITE_FAMILY_PINS = {
 # releng may ALSO legitimately sit at 259200 (once per 3 days) — the policy's
 # FAMILY_ALSO_ALLOWED. A -releng satellite at EITHER value passes.
 SATELLITE_FAMILY_ALSO_ALLOWED = {"releng": (259200,)}
+
+# Namespace-membership convention (SCHED-GAP-1604, check 4b). A satellite lane
+# named "<base>-<role>" must live in its ROLE's shared family namespace, not in
+# a private per-project one. Measured 2026-09-24: the auger family was the
+# outlier — auger-qa/-pm/-dogfood/-sync/-releng all sat in a private `auger`
+# namespace while every other family (e.g. 9router) used qa/pm/dogfood/
+# duckbrain-sync/releases. The live fleet was normalized afterwards; this
+# table + check exist so the NEXT family that drifts is flagged, not found by
+# an operator staring at the PROJECTS table.
+#
+# Keys are BARE role suffixes (same spelling as SATELLITE_FAMILY_PINS above —
+# the policy script spells them dashed). The sync family's namespace is
+# `duckbrain-sync` (no bare "sync" namespace exists in the live fleet).
+SATELLITE_FAMILY_NAMESPACES = {
+    "qa": "qa",
+    "pm": "pm",
+    "sync": "duckbrain-sync",
+    "dogfood": "dogfood",
+    "releng": "releases",
+    "perf": "perf",
+    "review": "review",
+    "readme": "docs",
+    "docs": "docs",
+}
+NAMESPACE_MEMBERSHIP_CLASS = "namespace-membership"
 # Name matcher for a satellite lane of ANY family (check 5e), DERIVED from the
 # pin table so a family can never be added to the pins and left unpoliceable.
 # That derivation is the fix for SCHED-GAP-1675's blind spot: the old
@@ -478,7 +503,7 @@ COOLDOWN_PIN_PACING_EXCEPTIONS: dict[str, str] = {
 COOLDOWN_PIN_PACING_WINDOW_DAYS = 7
 COOLDOWN_PIN_PACING_CLASS = "cooldown-pin-pacing"
 
-CHECK_CLASSES = ("caps", "admission", "cooldown", "executors", "workdirs", "adaptive", "boards",
+CHECK_CLASSES = ("caps", "admission", NAMESPACE_MEMBERSHIP_CLASS, "cooldown", "executors", "workdirs", "adaptive", "boards",
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
                  "board-id-slot", "sync-orientation", "event-id-ascending",
@@ -923,6 +948,30 @@ def main(argv: list[str] | None = None) -> int:
             bad("admission", ns, f"mode={mode} — the foremen namespace must be tasks (fast with work, timer when perpetual-only)")
         elif ns != FOREMAN_NS and mode != "cooldown":
             bad("admission", ns, f"mode={mode} — satellite namespaces must be timer-paced (cooldown)")
+
+    # 2b. namespace-membership (SCHED-GAP-1604) --------------------------------
+    # A satellite lane "<base>-<role>" lives in its ROLE's shared family
+    # namespace (SATELLITE_FAMILY_NAMESPACES), never a private per-project
+    # one. Measured origin: the auger family parked five satellites in a
+    # private `auger` namespace. The matcher is derived from the SAME table
+    # it polices, so a family can never be added to the namespace map and
+    # left unpoliceable (the SCHED-GAP-1675 lesson applied to membership).
+    # Disabled lanes are checked too: a mis-placed row is the same defect one
+    # resume away from being live (mirrors validateLaneWorkdir's stance).
+    membership_re = re.compile(
+        r"^(.+)-(" + "|".join(re.escape(sfx) for sfx in SATELLITE_FAMILY_NAMESPACES) + r")$")
+    if con is not None:
+        for name, p in projects.items():
+            m = membership_re.match(name)
+            if not m:
+                continue
+            want = SATELLITE_FAMILY_NAMESPACES[m.group(2)]
+            got = p.get("namespace_id") or ""
+            if got != want:
+                bad(NAMESPACE_MEMBERSHIP_CLASS, name,
+                    f"namespace_id={got!r} but the {m.group(2)!r} family convention "
+                    f"is {want!r} (satellites live in the shared family namespace, "
+                    f"cf. SCHED-GAP-1604)")
 
     # 3. cooldown law ---------------------------------------------------------
     for name, p in projects.items():
