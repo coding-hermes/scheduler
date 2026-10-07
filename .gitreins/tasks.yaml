@@ -4952,3 +4952,14 @@ tasks:
   status: complete
   created_at: '2026-10-07T09:45:59.951979+00:00'
   completed_at: '2026-10-07T09:53:50.969113+00:00'
+- id: SCHED-GAP-1724
+  title: 'Deploy-divergence close (verification-only): live daemon at migration 66
+    with the dispatch leg'
+  criteria:
+  - The live scheduler.db is at migration 66 (>=62, tick_dispatch present), projects.gateway_url
+    exists, and the running daemon's build_sha ancestor-contains commits da2143df
+    and 9165c410 (the 1712/1710 dispatch code); a fresh local spawn path writes no
+    tick_dispatch receipt
+  status: complete
+  created_at: '2026-10-07T10:25:26.803906+00:00'
+  completed_at: '2026-10-07T10:26:03.676064+00:00'
