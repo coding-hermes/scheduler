@@ -99,6 +99,8 @@ var readOnlyTools = map[string]bool{
 	"templates_list":            true,
 	"templates_get":             true,
 	"events_list":               true,
+	"fleet_lane_tree":           true,
+	"observatory_snapshot":      true,
 	"namespaces_list":           true,
 	"namespaces_get":            true,
 	"namespaces_projects":       true,

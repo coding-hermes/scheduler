@@ -1079,6 +1079,27 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/lanes": {
+      "get": {
+        "summary": "List lanes, flat (DEPRECATED — use /api/v1/lanes/tree)",
+        "description": "SCHED-GAP-1587: the flat lane listing is kept for backward compatibility but deprecated in favour of the hierarchical /api/v1/lanes/tree. Consumers that walk parents client-side should move to the tree.",
+        "deprecated": true,
+        "responses": {
+          "200": {"description": "{\"lanes\": [<Project>, ...], \"total\": N} — full project rows (parent included), enabled AND disabled, name-ASC; GET only (405 otherwise)"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/lanes/tree": {
+      "get": {
+        "summary": "Lane hierarchy (SCHED-GAP-1587) — the fleet's parent→children tree",
+        "description": "SCHED-GAP-1587: the projects table is a LANES list; a project is one primary lane plus its satellites. Roots carry is_root=true and depth 0; every child carries its parent name and depth = parent + 1, resolved through the shared database.BuildLaneTree resolver. Disabled lanes keep their position; a dangling parent (purged/renamed primary) keeps its name visible on the node and surfaces as a root.",
+        "responses": {
+          "200": {"description": "{\"roots\": [{\"name\", \"parent\", \"depth\", \"is_root\", \"enabled\", \"children\": [...]}, ...], \"total\": N} — roots and every children slice name-ASC ordered; total counts every lane exactly once"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/namespaces": {
       "get": {
         "summary": "List namespaces",
@@ -1350,6 +1371,43 @@ var openapiSpec = []byte(`{
         ],
         "responses": {
           "200": {"description": "Array of event objects"}
+        }
+      }
+    },
+    "/api/v1/observatory": {
+      "get": {
+        "summary": "Observatory snapshot: tick-rate buckets, namespace allocation and failure heatmap (SCHED-GAP-1592)",
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+          {"name": "namespace", "in": "query", "schema": {"type": "string"}, "description": "Namespace id filter (absent = all)"}
+        ],
+        "responses": {
+          "200": {"description": "Observatory snapshot object (rate buckets, allocation slices, heatmap rows, totals)"},
+          "405": {"description": "Non-GET method"},
+          "500": {"description": "Snapshot computation failed (error body names the step)"},
+          "503": {"description": "No observatory collector configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/observatory/stream": {
+      "get": {
+        "summary": "SSE stream of Observatory snapshots, recomputed every 10s (SCHED-GAP-1592)",
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+          {"name": "namespace", "in": "query", "schema": {"type": "string"}, "description": "Namespace id filter (absent = all)"}
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream: one JSON snapshot per data frame, a comment heartbeat while quiet, and ': error collect:' comments instead of fabricated snapshots on compute failure",
+            "content": {
+              "text/event-stream": {
+                "schema": {"type": "string", "description": "SSE frames: \"data: <ObservatorySnapshot JSON>\" terminated by a blank line; \": heartbeat\" comments while idle"},
+                "example": "data: {\"generated_at\":\"2026-10-06T20:00:00Z\",\"window\":21600,\"window_label\":\"6h\",\"namespace\":\"\",\"rate\":[],\"allocation\":[],\"heatmap\":[],\"totals\":{\"spawned\":38,\"failed_pct\":51.3}}"
+              }
+            }
+          },
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No observatory collector configured (fail-closed)"}
         }
       }
     },

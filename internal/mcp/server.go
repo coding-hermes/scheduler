@@ -29,6 +29,13 @@ type Server struct {
 	// via SetBlocksStore; when nil the blocks tools answer a clear
 	// configuration error instead of panicking.
 	blocksStore *blocks.Store
+	// observatoryCollector (SCHED-GAP-1592) is the dashboard-side snapshot
+	// collector behind the observatory_snapshot tool. An interface so the
+	// MCP package does not import the dashboard; nil = the tool answers an
+	// explicit configuration error (fail-closed, never fabricated data).
+	observatoryCollector interface {
+		CollectObservatory(window, namespace string) (json.RawMessage, error)
+	}
 	// started is when this server was built. It is the origin for the
 	// metrics_get uptime_s field (the daemon constructs the MCP server at
 	// boot, so this is daemon uptime). Seeded in NewServer from the same
@@ -73,6 +80,15 @@ func (s *Server) clock() clock.Clock { return s.clk.Get() }
 // overrides) so MCP and the REST API read and write the SAME JSONL files.
 func (s *Server) SetBlocksStore(st *blocks.Store) {
 	s.blocksStore = st
+}
+
+// SetObservatoryCollector wires the dashboard-side snapshot collector behind
+// the observatory_snapshot tool (SCHED-GAP-1592). Nil (never wired) = the
+// tool answers an explicit configuration error — never fabricated data.
+func (s *Server) SetObservatoryCollector(c interface {
+	CollectObservatory(window, namespace string) (json.RawMessage, error)
+}) {
+	s.observatoryCollector = c
 }
 
 // SetFederationQueryHandler installs the REMOTE-010 shared query entry
@@ -133,6 +149,11 @@ var tools = []ToolDefinition{
 	{
 		Name:        "fleet_projects",
 		Description: "List all managed projects with weight, priority, and last tick info",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "fleet_lane_tree",
+		Description: "Lane hierarchy (SCHED-GAP-1587): the fleet's parent→children tree — a project is one primary foreman lane plus its satellites. Roots carry is_root=true and depth 0; every child carries its parent name and depth = parent + 1. Disabled lanes keep their position; a dangling parent keeps its name visible and surfaces as a root. Mirrors GET /api/v1/lanes/tree.",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
 	{
@@ -465,6 +486,17 @@ var tools = []ToolDefinition{
 		},
 	},
 	{
+		Name:        "observatory_snapshot",
+		Description: "Compute one Observatory snapshot over the tick history: tick-rate buckets, per-namespace allocation (volume share vs configured weight) and failure heatmap (SCHED-GAP-1592). window: seconds or 1h/6h/24h/7d (default 6h); namespace: optional namespace id filter",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"window":    map[string]interface{}{"type": "string", "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+				"namespace": map[string]interface{}{"type": "string", "description": "Namespace id filter (absent = all namespaces)"},
+			},
+		},
+	},
+	{
 		Name:        "events_list",
 		Description: "Read the scheduler event log; since returns only events with id > since (incremental tail polling)",
 		InputSchema: map[string]interface{}{
@@ -794,6 +826,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFleetStatus(ctx)
 	case "fleet_projects":
 		return s.toolFleetProjects(ctx)
+	case "fleet_lane_tree":
+		return s.toolFleetLaneTree(ctx)
 	case "fleet_project_detail":
 		return s.toolFleetProjectDetail(ctx, args)
 	case "fleet_set_weight":
@@ -848,6 +882,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolTemplatesDelete(ctx, args)
 	case "groups_deploy":
 		return s.toolGroupsDeploy(ctx, args)
+	case "observatory_snapshot":
+		return s.toolObservatorySnapshot(args)
 	case "events_list":
 		return s.toolEventsList(ctx, args)
 	case "peers_list":

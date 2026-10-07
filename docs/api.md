@@ -98,6 +98,8 @@ groups/templates routes are listed in the OpenAPI spec at
 | GET | `/api/v1/status` | [§4](#4-health-status-config) |
 | GET | `/api/v1/config` | [§4](#4-health-status-config) |
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
+| GET | `/api/v1/lanes/tree` | [§5](#5-projects) |
+| GET | `/api/v1/lanes` (deprecated) | [§5](#5-projects) |
 | GET, PUT, DELETE | `/api/v1/projects/{name}` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/resume` | [§5](#5-projects) |
@@ -460,6 +462,80 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
 # 503 {"error":"mutations disabled: no operator credential configured ..."} when no credential is configured daemon-side
 # 201 {"name":"my-project","weight":10,"priority":5,"cooldown_s":900,
 #      "decay_rate":1,"enabled":false,"created_at":"2026-08-18T...Z", ...} on success
+```
+
+### GET /api/v1/lanes/tree
+
+**Purpose:** The fleet's lane hierarchy (SCHED-GAP-1587) — the projects table
+is a LANES list, and a PROJECT is one primary foreman lane plus its satellites
+(the standing vocabulary ruling). This endpoint answers "what is nested under
+what" directly: every lane resolved through the shared `BuildLaneTree`
+resolver (SCHED-GAP-1586's `projects.parent` column is authoritative), roots
+at depth 0, each child at parent + 1. The dashboard's `/lanes/tree` page
+renders the same structure.
+
+**Query params:** none.
+
+**Request body:** none.
+
+**Response 200:**
+
+```json
+{
+  "roots": [
+    {"name": "h3", "parent": "", "depth": 0, "is_root": true, "enabled": true,
+     "children": [
+       {"name": "h3-qa", "parent": "h3", "depth": 1, "is_root": false, "enabled": true,
+        "children": [
+          {"name": "h3-qa-sync", "parent": "h3-qa", "depth": 2, "is_root": false, "enabled": false, "children": []}
+        ]}
+     ]}
+  ],
+  "total": 3
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `roots` | array | Every lane with no parent, name-ASC — plus any orphan whose parent does not resolve in this snapshot (dangling references surface AT ROOT level, parent name kept visible, never dropped) |
+| `roots[].children` | array | Nested satellites, name-ASC, arbitrary depth (a satellite may itself have satellites) |
+| `depth` | int | Position in the resolved tree: 0 = primary/root, each child = parent + 1 |
+| `is_root` | bool | True for roots only (roots AND children carry `depth`) |
+| `enabled` | bool | Disabled lanes KEEP their position in the tree |
+| `parent` | string | The declared parent name; `""` = primary. A dangling name stays on the node so a broken reference is legible |
+| `total` | int | Count of ALL lanes (enabled AND disabled) — every lane appears exactly once in the tree |
+
+**Errors:** 405 on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/lanes/tree | jq '.roots[] | {name, kids: [.children[].name]}'
+```
+
+### GET /api/v1/lanes
+
+**Purpose:** List lanes, flat — **DEPRECATED (SCHED-GAP-1587)** in favour of
+[`/api/v1/lanes/tree`](#get-apiv1lane-tree). Kept for backward compatibility:
+consumers that walk parents client-side (or read the full project row shape)
+keep working unchanged, but new consumers should use the tree, which resolves
+the hierarchy server-side.
+
+**Request body:** none.
+
+**Response 200:**
+
+```json
+{"lanes": [<Project>, ...], "total": 489}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `lanes` | array | Full project rows (the SCHED-GAP-1586 `parent` column included), enabled AND disabled, name-ASC, unpaginated |
+| `total` | int | Count of ALL lanes |
+
+**Errors:** 405 on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/lanes | jq '.lanes[] | select(.parent != "") | {name, parent}'
 ```
 
 ### GET /api/v1/projects/{name}
@@ -1440,4 +1516,51 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/federation/catalogue \
   -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```
+
+## 16. Observatory (SCHED-GAP-1592)
+
+Live graphs over the tick history: tick rate, namespace allocation, failure
+heatmap. The dashboard page is `/observatory`; both API routes are read-only
+and serve the SAME snapshot the page renders.
+
+### GET /api/v1/observatory
+
+One Observatory snapshot as JSON. Query params:
+
+- `window` — seconds, or shorthand `1h` / `6h` (default) / `24h` / `7d`
+- `namespace` — namespace id filter; absent = all namespaces
+
+**Response 200:** one snapshot object:
+`{generated_at, window, window_label, namespace, window_start,
+rate:[{bucket_start, spawned, completed, failed, timeout}],
+allocation:[{namespace, label, weight, enabled, lanes, ticks, share_pct,
+cost_usd, avg_seconds}],
+heatmap:[{namespace, label, failed, timeout, completed, total, fail_pct}],
+totals:{spawned, completed, failed, timeout, running, failed_pct, cost_usd,
+tokens_in, tokens_out, ticks_per_hour}}`.
+
+Semantics: the failure rate counts `failed + timeout` over terminal ticks
+(completed + failed + timeout + deferred); a namespace with zero terminal
+ticks carries `total: 0` — the page renders "no data", never 0% healthy.
+Unassigned projects render under `namespace: "unassigned"`. Shares sum to
+100 over the rendered (filtered) pie.
+
+**Errors:** 405 non-GET · 500 collect failure (error body names the step) ·
+503 no collector configured (fail-closed).
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/observatory?window=24h" | jq
+```
+
+### GET /api/v1/observatory/stream
+
+SSE stream of snapshots recomputed every 10 seconds for the query's filter.
+Framing: `data: <snapshot JSON>` per frame; a `: heartbeat` comment while the
+connection is quiet; `: error collect: <reason>` comments when the collector
+fails — NEVER a fabricated snapshot in place of a failure. The first frame
+is emitted immediately on connect.
+
+```bash
+curl -sN "http://127.0.0.1:9090/api/v1/observatory/stream?window=1h"
 ```

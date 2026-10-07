@@ -36,6 +36,12 @@ type Server struct {
 	// the sync package (no dependency cycle; nil = feature off).
 	duckbrainHealth func() map[string]interface{}
 
+	// observatorySnapshot (SCHED-GAP-1592) is the dashboard-side collector
+	// behind /api/v1/observatory and /api/v1/observatory/stream. An
+	// interface, not a concrete type, so neither package imports the other;
+	// main.go wires them. Nil = fail-closed 503 (never an empty stream).
+	observatorySnapshot observatorySnapshotter
+
 	// resolvedConfig is the startup-time snapshot of the active
 	// three-layer config served by GET /api/v1/config (SCHED-GAP-034).
 	// Populated by main.go via SetResolvedConfig after TOML/env resolution.
@@ -167,6 +173,15 @@ func (s *Server) SetClock(c clock.Clock) {
 	s.started = c.Now()
 }
 
+// SetObservatorySnapshot wires the dashboard-side collector behind
+// /api/v1/observatory and /api/v1/observatory/stream (SCHED-GAP-1592).
+// The implementation satisfies observatorySnapshotter (the dashboard's
+// *Generator does, via CollectObservatory). Nil (never wired) = both routes
+// fail closed with 503 — there is no honest snapshot to serve.
+func (s *Server) SetObservatorySnapshot(o observatorySnapshotter) {
+	s.observatorySnapshot = o
+}
+
 // clock returns the server's clock, never nil.
 func (s *Server) clock() clock.Clock { return s.clk.Get() }
 
@@ -255,6 +270,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
+	// SCHED-GAP-1587: lane tree views. /lanes/tree is the hierarchical
+	// parent→children surface resolved through database.BuildLaneTree;
+	// /lanes is the flat listing kept for backward compatibility but
+	// deprecated in docs/api.md §5 in favour of the tree.
+	mux.HandleFunc("/api/v1/lanes/tree", s.handleLanesTree)
+	mux.HandleFunc("/api/v1/lanes", s.handleLanes)
 	mux.HandleFunc("/api/v1/cadence", s.cadence)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)
@@ -272,6 +293,11 @@ func (s *Server) Handler() http.Handler {
 	// CTL-002: the live push counterpart of the poll-only event log above —
 	// one SSE connection instead of a client poll loop.
 	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
+	// SCHED-GAP-1592: the Observatory — one snapshot JSON (poll fallback)
+	// and its SSE live stream. Both fail closed (503) without a wired
+	// collector.
+	mux.HandleFunc("/api/v1/observatory", s.observatoryGet)
+	mux.HandleFunc("/api/v1/observatory/stream", s.observatoryStream)
 	mux.HandleFunc("/api/v1/queue", s.queue)
 	mux.HandleFunc("/api/v1/openapi.json", s.openapi)
 	// SCHED-GAP-156: the single read-only fleet-metrics endpoint (one request

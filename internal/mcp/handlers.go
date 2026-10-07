@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -43,6 +44,45 @@ func (s *Server) toolFleetProjects(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return jsonString(map[string]interface{}{"projects": projects}), nil
+}
+
+// toolFleetLaneTree answers fleet_lane_tree (SCHED-GAP-1587): the fleet's
+// lane hierarchy — the SAME shape as GET /api/v1/lanes/tree, resolved through
+// the ONE shared resolver (database.BuildLaneTree) so the MCP surface and the
+// REST surface can never disagree about who nests under whom.
+func (s *Server) toolFleetLaneTree(ctx context.Context) (string, error) {
+	lanes, err := database.ListProjects(ctx, s.db, false)
+	if err != nil {
+		return "", err
+	}
+	resp := map[string]interface{}{"roots": []interface{}{}, "total": len(lanes)}
+	if len(lanes) == 0 {
+		return jsonString(resp), nil
+	}
+	tree := database.BuildLaneTree(lanes)
+	// Declared before assignment: a recursive closure cannot reference itself
+	// inside its own := initializer.
+	var convert func(node *database.LaneNode, depth int) map[string]interface{}
+	convert = func(node *database.LaneNode, depth int) map[string]interface{} {
+		children := make([]interface{}, 0, len(node.Children))
+		for _, kid := range node.Children {
+			children = append(children, convert(kid, depth+1))
+		}
+		return map[string]interface{}{
+			"name":     node.Project.Name,
+			"parent":   node.Project.Parent,
+			"depth":    depth,
+			"is_root":  depth == 0,
+			"enabled":  node.Project.Enabled,
+			"children": children,
+		}
+	}
+	roots := make([]interface{}, 0, len(tree.Roots))
+	for _, root := range tree.Roots {
+		roots = append(roots, convert(root, 0))
+	}
+	resp["roots"] = roots
+	return jsonString(resp), nil
 }
 
 func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -2085,4 +2125,26 @@ func (s *Server) toolPeersHeartbeat(ctx context.Context, args map[string]interfa
 		return "", err
 	}
 	return jsonString(map[string]interface{}{"status": "heartbeat", "id": id}), nil
+}
+
+// toolObservatorySnapshot serves the observatory_snapshot MCP tool
+// (SCHED-GAP-1592): one computed snapshot over the tick history, same JSON
+// the /api/v1/observatory route answers. Fail-closed: without a wired
+// collector it returns an explicit configuration error, never fabricated
+// data.
+func (s *Server) toolObservatorySnapshot(args map[string]interface{}) (string, error) {
+	if s.observatoryCollector == nil {
+		return "", errors.New("observatory collector not configured (dashboard not wired)")
+	}
+	window := getStringArg(args, "window")
+	namespace := getStringArg(args, "namespace")
+	payload, err := s.observatoryCollector.CollectObservatory(window, namespace)
+	if err != nil {
+		return "", err
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, payload, "", "  "); err == nil {
+		return pretty.String(), nil
+	}
+	return string(payload), nil
 }

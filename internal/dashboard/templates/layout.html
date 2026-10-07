@@ -159,6 +159,12 @@ body.sb-collapsed .sidebar{display:none}
    primary explicitly. */
 .lane-rail{color:var(--faint);font-family:var(--mono);white-space:pre}
 .lane-parent{color:var(--muted);font-size:0.75rem;white-space:nowrap}
+/* SCHED-GAP-1587: the lane-tree page. The dangling marker uses the error tone
+   (a broken parent reference is the thing an operator scans for) and the rows
+   tighten their top border so deep families read as one block. */
+.tree-broken{color:var(--err);font-family:var(--mono);font-size:0.75rem}
+.tree-row td{padding-top:4px;padding-bottom:4px}
+.tree-dangling td{background:rgba(255,107,107,0.05)}
 /* SCHED-GAP-1589: queue explainability. Bands are TEXT, not colour-only;
    the blocked badge uses the error tone because "held by slots" is the
    signal the operator scans for. */
@@ -437,10 +443,12 @@ body.sb-collapsed .sidebar{display:none}
 <a href="/" {{if eq . "overview"}}class="active"{{end}}><span class="ic" aria-hidden="true">01</span> Overview</a>
 <a href="/tape" {{if eq . "tape"}}class="active"{{end}}><span class="ic" aria-hidden="true">02</span> Fleet Tape</a>
 <a href="/queue" {{if eq . "queue"}}class="active"{{end}}><span class="ic" aria-hidden="true">03</span> Queue</a>
-<a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Tick History</a>
-<a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">05</span> Health</a>
-<a href="/blocks" {{if eq . "blocks"}}class="active"{{end}}><span class="ic" aria-hidden="true">06</span> Deploy Blocks</a>
-<a href="/remote" {{if eq . "remote"}}class="active"{{end}}><span class="ic" aria-hidden="true">07</span> Remote</a>
+<a href="/lanes/tree" {{if eq . "lanes_tree"}}class="active"{{end}}><span class="ic" aria-hidden="true">04</span> Lane Tree</a>
+<a href="/ticks" {{if eq . "ticks"}}class="active"{{end}}><span class="ic" aria-hidden="true">05</span> Tick History</a>
+<a href="/health" {{if eq . "health"}}class="active"{{end}}><span class="ic" aria-hidden="true">06</span> Health</a>
+<a href="/observatory" {{if eq . "observatory"}}class="active"{{end}}><span class="ic" aria-hidden="true">07</span> Observatory</a>
+<a href="/blocks" {{if eq . "blocks"}}class="active"{{end}}><span class="ic" aria-hidden="true">08</span> Deploy Blocks</a>
+<a href="/remote" {{if eq . "remote"}}class="active"{{end}}><span class="ic" aria-hidden="true">09</span> Remote</a>
 </nav>
 <script>
 /* SCHED-GAP-1588: collapse/expand the sidebar, remembered across navigation.

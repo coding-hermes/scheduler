@@ -11,10 +11,12 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/static/htmx.min.js` | Bundled htmx asset (Go embed) |
 | `/projects/{name}` | Per-project detail page |
 | `/queue` | Global queue view |
+| `/lanes/tree` | Lane tree page (SCHED-GAP-1587) — the fleet's nested lane hierarchy: primaries at level 0, satellites indented under their parents (└ rail), per-row `L<depth>` marker, disabled lanes in position, dangling parents flagged visibly |
 | `/ticks?page=N` | Paginated tick history — server-side search/filter: `q` (substring over tick id + project name), `project`, `status`, `outcome` (SCHED-GAP-1593) |
 | `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
 | `/health` | Dashboard health panel |
+| `/observatory` | Observatory (SCHED-GAP-1592) — live tick-rate graph, namespace allocation chart and failure-rate heatmap over the tick history; the time-range (1h/6h/24h/7d) and namespace controls reload with the filter and the SSE stream `/api/v1/observatory/stream` pushes recomputed snapshots for it. Degrades honestly: a quiet stream shows STALE, a dead one shows LOST — never a silent frozen chart |
 | `/remote` | REMOTE-006 Remote section — every registered peer with its last-seen event (kind/status/timestamp) + staleness (the registry's freshness window; STALE, never "down"); htmx polls return the peer-rows fragment |
 | `/remote/partial` | REMOTE-006 htmx partial — the Remote section's peer rows only |
 | `/blocks` | Deploy blocks console (SCHED-GAP-1601) — groups + templates listed read-only; every write flows through `/dashboard/control` |
@@ -28,6 +30,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/features` | Per-feature live usage counters — every tracked mechanism's `use_count` + `first_used_at`/`last_used_at`, plus the `admission_mode_rows` gauge (SCHED-GAP-131) |
 | `/api/v1/features/prune-candidates` | Dead-feature reaper report — mechanisms never used or last used more than `?weeks=N` ago (default 8); flag only, no auto-delete (SCHED-GAP-131) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
+| `/api/v1/lanes/tree` | Lane hierarchy (SCHED-GAP-1587): the fleet's parent→children tree from `projects.parent` via the shared `BuildLaneTree` resolver — roots + nested children, per-node `depth` (`is_root`/`enabled` on every node); disabled lanes keep their position, a dangling parent keeps its name visible and surfaces as a root (GET) |
+| `/api/v1/lanes` | Flat lane listing (GET) — **deprecated** (SCHED-GAP-1587) in favour of `/api/v1/lanes/tree`; kept for backward compatibility: `{"lanes": [<Project>, ...], "total": N}` |
 | `/api/v1/cadence` | Configured vs achieved starts/day per lane over the trailing seven-day window; target source is explicit override, durable cooldown pin, disabled, or none (GET) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |
 | `/api/v1/namespaces` | List namespaces |
@@ -41,6 +45,8 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/ticks/{id}` | One tick by id (GET) |
 | `/api/v1/events` | List event log (GET) |
 | `/api/v1/events/stream` | SSE push stream of the event log (CTL-002) |
+| `/api/v1/observatory` | Observatory snapshot (JSON, SCHED-GAP-1592) — tick-rate buckets, namespace allocation shares and failure-rate heatmap for `?window=` (seconds or 1h/6h/24h/7d, default 6h) and `?namespace=`; 503 without a wired collector |
+| `/api/v1/observatory/stream` | SSE push stream of Observatory snapshots (SCHED-GAP-1592) — recomputed every 10s for the query's filter, `: heartbeat` comments while quiet, and `: error collect:` comments instead of fabricated snapshots on compute failure |
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/api/v1/pause` | Pause scheduling (POST) |
 | `/api/v1/resume` | Resume scheduling (POST) |
@@ -54,4 +60,4 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 
-**MCP surface:** `POST /mcp` serves **57 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
+**MCP surface:** `POST /mcp` serves **59 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

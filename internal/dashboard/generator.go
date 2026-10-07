@@ -58,11 +58,13 @@ type Generator struct {
 	queueTmpl         *template.Template // full page: /queue
 	tickHistoryTmpl   *template.Template // full page: /ticks
 	tickDetailTmpl    *template.Template // full page: /ticks/{id}
+	laneTreeTmpl      *template.Template // full page: /lanes/tree (SCHED-GAP-1587)
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
 	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
 	remoteTmpl        *template.Template // full page: /remote (REMOTE-006)
+	observatoryTmpl   *template.Template // full page: /observatory (SCHED-GAP-1592)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -155,6 +157,8 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.queueTmpl = g.tmpl.Lookup("queue")
 	g.tickHistoryTmpl = g.tmpl.Lookup("tick_history")
 	g.tickDetailTmpl = g.tmpl.Lookup("tick_detail")
+	// SCHED-GAP-1587: the nested lane-tree page.
+	g.laneTreeTmpl = g.tmpl.Lookup("lanes_tree")
 	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
 	g.healthTmpl = g.tmpl.Lookup("health")
 	g.tapeTmpl = g.tmpl.Lookup("tape")
@@ -162,16 +166,20 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.blocksTmpl = g.tmpl.Lookup("blocks_console")
 	// REMOTE-006: the Remote section — peers + last-seen events + freshness.
 	g.remoteTmpl = g.tmpl.Lookup("remote")
+	// SCHED-GAP-1592: the Observatory — live graphs over the tick history.
+	g.observatoryTmpl = g.tmpl.Lookup("observatory")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
 		"queue":          g.queueTmpl,
 		"tick_history":   g.tickHistoryTmpl,
 		"namespace_view": g.namespaceViewTmpl,
+		"lanes_tree":     g.laneTreeTmpl,
 		"health":         g.healthTmpl,
 		"tape":           g.tapeTmpl,
 		"blocks_console": g.blocksTmpl,
 		"remote":         g.remoteTmpl,
+		"observatory":    g.observatoryTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")

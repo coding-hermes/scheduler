@@ -55,6 +55,8 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 var apiToolCoverage = map[string][]string{
 	"GET /api/v1/status":                  {"fleet_status"},
 	"GET /api/v1/projects":                {"fleet_projects"},
+	"GET /api/v1/lanes":                   {"fleet_projects"},
+	"GET /api/v1/lanes/tree":              {"fleet_lane_tree"},
 	"POST /api/v1/projects":               {"fleet_add"},
 	"GET /api/v1/projects/{name}":         {"fleet_project_detail"},
 	"PUT /api/v1/projects/{name}":         {"fleet_set_weight", "fleet_set_priority", "fleet_set_cooldown", "fleet_set_decay"},
@@ -65,6 +67,7 @@ var apiToolCoverage = map[string][]string{
 	"POST /api/v1/pause":                  {"fleet_pause_scheduler"},
 	"POST /api/v1/resume":                 {"fleet_resume_scheduler"},
 	"GET /api/v1/events":                  {"events_list"},
+	"GET /api/v1/observatory":             {"observatory_snapshot"},
 	"GET /api/v1/groups":                  {"groups_list"},
 	"POST /api/v1/groups":                 {"groups_create"},
 	"GET /api/v1/groups/{name}":           {"groups_get"},
@@ -126,6 +129,8 @@ var paritySkipList = map[string]string{
 	"/mcp":                         "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
 	"/api/v1/events/stream": "SSE push stream (CTL-002) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
 		"events_list already covers the same data with the incremental since-cursor for polling clients",
+	"/api/v1/observatory/stream": "SSE push stream (SCHED-GAP-1592) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
+		"observatory_snapshot already covers the same computed snapshot for polling clients",
 }
 
 // allowedSkipKey reports whether a skip-list key is a dashboard/human/infra
@@ -140,6 +145,10 @@ func allowedSkipKey(key string) bool {
 		// tools) cannot express. Listed explicitly rather than by prefix so
 		// this exemption can never widen to sibling routes.
 		"/api/v1/events/stream",
+		// SCHED-GAP-1592: same transport shape — an SSE stream, MCP
+		// (request/response) cannot express it; observatory_snapshot
+		// covers the data.
+		"/api/v1/observatory/stream",
 		// REMOTE-008's catalogue route: it DOCUMENTS the ops the fed_* MCP
 		// tools (REMOTE-010) serve one-tool-per-op — a metadata surface,
 		// not an operation. The query route itself moved UP into

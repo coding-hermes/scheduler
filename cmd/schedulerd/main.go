@@ -1184,6 +1184,15 @@ func main() {
 	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
+	// SCHED-GAP-1592: the Observatory's live data flows through the API —
+	// the generator collects (one code path for the page, the SSE stream,
+	// and the poll fallback), the API Server frames and pushes. The adapter
+	// satisfies api.observatorySnapshotter without either package importing
+	// the other.
+	apiServer.SetObservatorySnapshot(dashGen)
+	// SCHED-GAP-1592: the observatory_snapshot MCP tool collects through the
+	// SAME Generator adapter the API's /api/v1/observatory routes use.
+	mcpServer.SetObservatoryCollector(dashGen)
 	// SCHED-GAP-1593: the tick drill-down resolves gateway_trace.session_id
 	// into the agent's own state database to show what the agent generated.
 	// Default path matches the Hermes state database; opened lazily and
@@ -1276,6 +1285,16 @@ func main() {
 		}
 	})
 
+	// Lane tree page: /lanes/tree (SCHED-GAP-1587) — the fleet's lane
+	// hierarchy rendered as a nested view: primaries at level 0, satellites
+	// indented under their parents, per-row depth, dangling parents marked.
+	mux.HandleFunc("GET /lanes/tree", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateLaneTree(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
 	// Tick history page: /ticks (paginated, global tick log). Supports
 	// server-side search/filter (SCHED-GAP-1593): q (substring against tick
 	// id / project name), project, status, outcome — all optional, all
@@ -1347,6 +1366,19 @@ func main() {
 			err = dashGen.GenerateHealth(w)
 		}
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Observatory page: /observatory (SCHED-GAP-1592) — live graphs over the
+	// tick history. The query carries the filter (?window=&namespace=); the
+	// page's controls reload with new params and the SSE stream
+	// (/api/v1/observatory/stream, wired below) pushes re-computed
+	// snapshots for the same filter.
+	mux.HandleFunc("GET /observatory", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		q := r.URL.Query()
+		if err := dashGen.GenerateObservatory(w, q.Get("window"), q.Get("namespace")); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
