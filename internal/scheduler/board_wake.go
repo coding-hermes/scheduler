@@ -315,6 +315,19 @@ func (w *BoardWakeWatcher) pollOnce(now time.Time) {
 		// !had: a board file that appeared since the baseline — a new
 		// board is itself a write (freshly-filed work).
 		if _, armed := w.pendingWake[name]; !armed {
+			// SCHED-GAP-1727: a board write only wakes a parked
+			// tasks-admission foreman when the board actually carries
+			// open actionable work. A deferred-only board change (BT-076)
+			// records its mtime but arms NOTHING — the row is visible
+			// board state, not work. The predicate is the ONE shared
+			// open-work scanner (builderBoardHasWork → boardOpenRows:
+			// fixture + deferred exclusion) — no second parser. Fail-open:
+			// an unreadable board keeps today's wake behavior (never hide
+			// real work behind a read failure).
+			if !builderBoardHasWork(t.workdir) {
+				log.Printf("BOARD-WAKE: %s board changed but holds no actionable work (deferred/fixture-only) — no wake", name)
+				continue
+			}
 			w.pendingWake[name] = now
 			log.Printf("BOARD-WAKE: %s board changed — wake armed (debounce %v)", name, w.debounce)
 		}

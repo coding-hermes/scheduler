@@ -97,6 +97,12 @@ const (
 	// from every aggregate — a fixture is never work and never idle
 	// evidence.
 	RowFixture RowStatus = "fixture"
+	// RowDeferred: "deferred": true row (SCHED-GAP-1727, BT-076 boardctl
+	// contract). Searchable/returnable board state that is NOT open
+	// actionable work: excluded from WorkToSpawn and from the idle claim,
+	// and kept visible in Rows/Counts for the consumer to decide — the
+	// same treatment as fixtures and blocked rows.
+	RowDeferred RowStatus = "deferred"
 	// RowBlocked: user-gated (status=blocked with a blocked_reason). Not
 	// work-to-spawn, but not idle-proof either — the work exists, it is
 	// deferred, not done.
@@ -416,6 +422,10 @@ func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) Freshn
 		var v RowVerdict
 		v.ID = e.id
 		switch {
+		case boardRowIsDeferred(e.obj):
+			// SCHED-GAP-1727: a deferred row is visible board state, not
+			// actionable work — never reclassified as work by this reader.
+			v.Status = RowDeferred
 		case e.fixture:
 			// ADV-R05: fixtures are excluded by data, regardless of
 			// status — never reclassified as work by this reader.
