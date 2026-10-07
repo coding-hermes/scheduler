@@ -64,6 +64,12 @@ type DuckBrainSync struct {
 	alertedDown     bool   // HIGH event already emitted for current outage
 	keyRejectedFlag bool   // API key rejected (SCHED-GAP-072) — sync cycles skipped until a probe succeeds
 	rateLimitedFlag bool   // daemon returned 429 this cycle — sweep stops early, no batch re-blasting
+	// duplicatesSkipped counts writes suppressed by change detection
+	// (SCHED-GAP-1572): the payload (minus synced_at) was byte-identical to
+	// the last successful post for that key. Exposed via HealthSnapshot so
+	// suppression is VISIBLE — a counter stuck at 0 next to high write
+	// volume is the defect signature this row was filed for.
+	duplicatesSkipped int
 
 	// pendingSpool buffers failed writes during a sync cycle. They are
 	// flushed to sync_spool AFTER all syncs complete, because sync
@@ -105,8 +111,13 @@ type HealthSnapshot struct {
 	LastError      string `json:"last_error,omitempty"`
 	LastOKAt       string `json:"last_ok_at,omitempty"`
 	Spooled        int    `json:"spooled_pending"`
-	BaseURL        string `json:"base_url"`
-	Interval       string `json:"interval"`
+	// DuplicatesSkipped is the change-detection suppression counter
+	// (SCHED-GAP-1572): identical snapshots NOT re-written. High and
+	// climbing is healthy; 0 against heavy write volume means the
+	// duplicate-snapshot defect is back.
+	DuplicatesSkipped int    `json:"duplicates_skipped"`
+	BaseURL           string `json:"base_url"`
+	Interval          string `json:"interval"`
 }
 
 // NewDuckBrainSync creates a DuckBrain syncer.
@@ -135,14 +146,23 @@ func (d *DuckBrainSync) Health() HealthSnapshot {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return HealthSnapshot{
-		Reachable:      d.reachable,
-		ConsecutiveErr: d.consecutiveErr,
-		LastError:      d.lastErr,
-		LastOKAt:       d.lastOKAt,
-		Spooled:        d.spooled,
-		BaseURL:        d.baseURL,
-		Interval:       d.interval.String(),
+		Reachable:         d.reachable,
+		ConsecutiveErr:    d.consecutiveErr,
+		LastError:         d.lastErr,
+		LastOKAt:          d.lastOKAt,
+		Spooled:           d.spooled,
+		DuplicatesSkipped: d.duplicatesSkipped,
+		BaseURL:           d.baseURL,
+		Interval:          d.interval.String(),
 	}
+}
+
+// DuplicatesSkipped reports the change-detection suppression counter
+// (SCHED-GAP-1572): how many byte-identical snapshot re-writes were skipped.
+func (d *DuckBrainSync) DuplicatesSkipped() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.duplicatesSkipped
 }
 
 // Run starts the periodic sync loop. Blocks until ctx is cancelled.
@@ -974,6 +994,9 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		prev, seen := d.lastPayloads[key]
 		d.mu.Unlock()
 		if seen && prev == hash {
+			d.mu.Lock()
+			d.duplicatesSkipped++ // SCHED-GAP-1572: suppression is counted, not silent
+			d.mu.Unlock()
 			return nil // unchanged — nothing to sync
 		}
 	}
