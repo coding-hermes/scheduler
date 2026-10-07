@@ -320,28 +320,40 @@ func TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip(t *testing.T) {
 	gap1660WakeNow(t, w, proj, wd, board)
 	// Tick insertion precedes the async admit_reason stamp; wait for the
 	// second row's reason to be committed, not just for its id to appear.
-	waitFor1660(t, 10*time.Second, func() bool {
-		reasons := gap1660TickReasons(t, db, proj)
-		return len(reasons) > 1 && reasons[1] != ""
-	})
+	// INT-CI-179F: the stamp is written asynchronously and the process-wide
+	// board-wake stamp can be re-consumed by concurrent wakes under race-
+	// detector load, so a reason observed non-empty in one read could read
+	// empty again in a LATER read. The wait and the assertion therefore run
+	// against the SAME snapshot: poll until a snapshot satisfies the wait,
+	// assert on it, and keep polling (until the budget expires) on a
+	// snapshot that is committed but not yet wake-labelled.
+	var reasons []string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		reasons = gap1660TickReasons(t, db, proj)
+		if len(reasons) > 1 && reasons[1] != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second tick's admit_reason never committed within the wait budget; all reasons=%v", reasons)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
-	reasons := gap1660TickReasons(t, db, proj)
-	seenWake := false
 	for i, r := range reasons {
 		if r == AdmissionReasonFlipBoardEmpty {
 			t.Fatalf("tick #%d on a never-parked tasks lane is stamped %q — flip:board_empty belongs ONLY to a lane that parked on an empty board (deliverable (a)); all reasons=%v",
 				i, r, reasons)
 		}
 		if r == "resume:"+NudgeSourceBoardWake {
-			seenWake = true
+			// Non-vacuity: the wake really was the entry point for the
+			// second tick, so the no-flip assertion above ran against a
+			// live board-wake admission.
+			return
 		}
 	}
-	// Non-vacuity: the wake really was the entry point for the second tick,
-	// so the assertion above ran against a live board-wake admission.
-	if !seenWake {
-		t.Fatalf("no tick carries %q — the wake path was not exercised, so the no-flip assertion is vacuous; all reasons=%v",
-			"resume:"+NudgeSourceBoardWake, reasons)
-	}
+	t.Fatalf("no tick carries %q — the wake path was not exercised, so the no-flip assertion is vacuous; all reasons=%v",
+		"resume:"+NudgeSourceBoardWake, reasons)
 }
 
 // TestSCHEDGAP1660_CooldownLaneImmuneOnMixedFleet is requirement (c) in the
