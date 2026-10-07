@@ -65,6 +65,10 @@ You now have:
 - `./bin/schedulerd` — the daemon
 - `./bin/migrate` — cron-to-scheduler migration tool
 
+(`bin/` is local build output, not an inventory: the repo ships additional
+tool sources under `cmd/` that operators build ad hoc — see
+[Maintenance tools](#maintenance-tools) under Development.)
+
 ### 3. Verify API Access
 
 The scheduler spawns foreman ticks through the Hermes gateway API. Verify your gateway is reachable:
@@ -769,6 +773,71 @@ make test-full   # Full test suite
 make lint        # Go vet
 make fmt         # Format code
 ```
+
+### Maintenance tools
+
+`make build` produces only `bin/schedulerd` and `bin/migrate`, but the repo
+ships additional tool sources under `cmd/` that are built ad hoc — `cmd/` may
+carry more residents than `bin/` shows.
+
+**`backfill-commit-signals`** (`cmd/backfill-commit-signals/main.go:1-6`)
+re-classifies historical scheduler ticks whose commit anatomy
+(`ticks.code_commits` / `ticks.board_commits`) was never stamped and writes the
+split back onto the tick row. It exists to repair databases affected by the
+pre-SCHED-GAP-202 defect (README: the fix landed in the daemon at 40ae3d3b;
+ticks before it recorded 0/0 anatomy regardless of commits landed).
+
+```bash
+go build -o bin/backfill-commit-signals ./cmd/backfill-commit-signals/
+# 1. Dry-run (default): reports counts, writes nothing
+bin/backfill-commit-signals --db ~/.hermes/coding-hermes/scheduler.db \
+  --since 2026-09-19T14:03:25-05:00 --until 2026-09-21T23:59:59-05:00
+# 2. Apply: stamp the split, mark the unmeasurable, note the causes
+bin/backfill-commit-signals --db ~/.hermes/coding-hermes/scheduler.db \
+  --since 2026-09-19T14:03:25-05:00 --until 2026-09-21T23:59:59-05:00 --apply
+```
+
+Flags (from `run()` in `cmd/backfill-commit-signals/main.go:170-181`):
+
+- `--db` — SQLite scheduler database path (default `~/.hermes/coding-hermes/scheduler.db`)
+- `--since` / `--until` — inclusive window, RFC3339 (tool defaults cover the
+  2026-09-19..21 repair window; always pass your own window)
+- `--dry-run` — default `true`; reports only. An explicit `--dry-run=true`
+  always wins over `--apply`, so `--apply --dry-run` can never silently write
+  (`main.go:193-196`)
+- `--apply` — explicit write opt-in; updates ONLY `ticks.code_commits` /
+  `ticks.board_commits`, both in one transaction, and re-checks the 0/0
+  predicate in the UPDATE `WHERE` clause so a row the daemon stamped in the
+  meantime is skipped, not clobbered (`main.go:542-576`)
+- `--board` / `--board-row` / `--no-board` — optional board `tasks.jsonl` write
+  appending a `review_notes` entry census of unrecoverable ticks (idempotent
+  via a marker string; nothing else on the line is touched)
+
+Safety notes, per source:
+
+- **Irreversibility:** writes are plain UPDATEs — no undo. Run a dry-run first;
+  the report states the mode explicitly (`DRY-RUN (nothing written; pass
+  --apply to write)`, `main.go:708`).
+- Ticks that cannot be measured (workdir gone, not a git repo, git
+  unavailable, history under-reports) get the explicit unmeasured marker
+  `-1/-1`, never a fake `0/0` (`main.go:559`).
+- A 0-byte (truncated) database file is detected and refused before the open
+  (`main.go:218, 309`).
+
+**`queueprobe`** (`cmd/queueprobe/main.go`) is a one-shot render probe for
+SCHED-GAP-1589: it renders the `/queue` dashboard page against a DB path given
+as `os.Args[1]` and prints the HTML to stdout, proving acceptance against real
+DB state without running the daemon. It is hidden behind a build tag, so it is
+invisible to plain `go build ./...`:
+
+```bash
+go build -tags schedgap1589probe -o /tmp/queueprobe ./cmd/queueprobe/
+/tmp/queueprobe /path/to/a/COPY/of/scheduler.db
+```
+
+(Build command verbatim from `cmd/queueprobe/main.go:5`. Point it at a COPY of
+the live database — the probe is not written for concurrent access with the
+running daemon.)
 
 ### Project Structure
 
