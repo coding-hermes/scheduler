@@ -4943,3 +4943,12 @@ tasks:
   status: complete
   created_at: '2026-10-07T05:41:25.593681+00:00'
   completed_at: '2026-10-07T06:33:53.842778+00:00'
+- id: SCHED-GAP-211-WIRE
+  title: Wire fleet-sync.py --write into a durable scheduled mechanism
+  criteria:
+  - A scheduled mechanism (systemd user timer or cron) runs fleet-sync.py --write
+    at least daily with observable log/exit; fleet.toml mtime advances after an API-only
+    PUT without manual action; unit/timer + docs committed and pushed
+  status: complete
+  created_at: '2026-10-07T09:45:59.951979+00:00'
+  completed_at: '2026-10-07T09:53:50.969113+00:00'
