@@ -92,6 +92,7 @@ var mutatingTools = map[string]bool{
 var readOnlyTools = map[string]bool{
 	"fleet_status":              true,
 	"fleet_projects":            true,
+	"fleet_lane_tree":           true, // SCHED-GAP-1587: hierarchical lane topology read
 	"fleet_project_detail":      true,
 	"fleet_ticks":               true,
 	"groups_list":               true,

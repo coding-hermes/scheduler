@@ -97,6 +97,7 @@ groups/templates routes are listed in the OpenAPI spec at
 | GET | `/api/v1/live` | [§4](#4-health-status-config) |
 | GET | `/api/v1/status` | [§4](#4-health-status-config) |
 | GET | `/api/v1/config` | [§4](#4-health-status-config) |
+| GET | `/api/v1/lanes/tree` | [§5](#5-projects) — hierarchical lane tree (SCHED-GAP-1587) |
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
 | GET, PUT, DELETE | `/api/v1/projects/{name}` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
@@ -346,6 +347,52 @@ Full Project model (response shape, snake_case):
 | `disabled_at`, `disabled_by`, `disabled_reason` | string | Disable provenance (GAP-044); empty while enabled/never disabled; `disabled_by` ∈ `api` \| `api-pause` \| `api-delete` \| `auto-disable` |
 | `consecutive_failures` | int | Internal spawn-failure counter (drives selection backoff; not user-editable) |
 | `qa_output_count`, `pm_output_count`, `sync_output_count`, `dogfood_output_count` | int | SCHED-GAP-177: lifetime output ticks (code OR board commits) recorded for the lane's non-code family (qa / pm / sync (the `duckbrain-sync` namespace) / dogfood); 0 for lanes outside the four families |
+
+### GET /api/v1/lanes/tree
+
+**Purpose:** Hierarchical lane tree (SCHED-GAP-1587) — the whole lane forest
+resolved from `projects.parent` through the shared `BuildLaneTree` resolver,
+in one response. This is the authoritative topology surface: the flat
+`GET /api/v1/projects` list is **deprecated as a topology source** (it
+carries no family structure) but is NOT removed — it remains the pagination
++ lifecycle surface.
+
+**Query params:** none. **Request body:** none.
+
+**Response 200** (object):
+
+```json
+{
+  "roots": [
+    {
+      "name": "coding-hermes-scheduler",
+      "parent": "",
+      "parent_known": true,
+      "enabled": true,
+      "admission_mode": "tasks",
+      "priority": 5,
+      "cooldown_s": 900,
+      "created_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-10-06T00:00:00Z",
+      "children": [
+        {"name": "coding-hermes-scheduler-qa", "parent": "coding-hermes-scheduler", "parent_known": true, "enabled": true, "children": []}
+      ]
+    }
+  ],
+  "lane_count": 2,
+  "root_count": 1,
+  "max_depth": 2,
+  "generated_at": "2026-10-06T12:00:00Z"
+}
+```
+
+- `children` is ordered lane name ASC at every level and is always non-null
+  (leaves carry `[]`).
+- A lane whose parent no longer resolves (purged/soft-deleted lane) surfaces
+  at root level with `parent_known=false` — the broken reference stays
+  visible rather than hiding.
+- Disabled lanes keep their real position in the tree.
+- Dashboard page: `/lanes/tree` (same resolver).
 
 ### GET /api/v1/projects
 

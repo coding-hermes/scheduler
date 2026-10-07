@@ -254,6 +254,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/status", s.status)
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
+	// SCHED-GAP-1587: hierarchical lane tree — resolved from projects.parent
+	// through database.BuildLaneTree (one shared resolver). The flat list
+	// above stays for compatibility; topology consumers move here.
+	mux.HandleFunc("/api/v1/lanes/tree", s.handleLanesTree)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
 	mux.HandleFunc("/api/v1/cadence", s.cadence)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)

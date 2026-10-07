@@ -63,6 +63,7 @@ type Generator struct {
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
 	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
 	remoteTmpl        *template.Template // full page: /remote (REMOTE-006)
+	laneTreeTmpl      *template.Template // full page: /lanes/tree (SCHED-GAP-1587)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -158,6 +159,8 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.blocksTmpl = g.tmpl.Lookup("blocks_console")
 	// REMOTE-006: the Remote section — peers + last-seen events + freshness.
 	g.remoteTmpl = g.tmpl.Lookup("remote")
+	// SCHED-GAP-1587: the lane tree page — nested hierarchy view.
+	g.laneTreeTmpl = g.tmpl.Lookup("lane_tree")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -168,6 +171,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 		"tape":           g.tapeTmpl,
 		"blocks_console": g.blocksTmpl,
 		"remote":         g.remoteTmpl,
+		"lane_tree":      g.laneTreeTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")

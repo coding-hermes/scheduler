@@ -45,6 +45,46 @@ func (s *Server) toolFleetProjects(ctx context.Context) (string, error) {
 	return jsonString(map[string]interface{}{"projects": projects}), nil
 }
 
+// toolFleetLaneTree serves the fleet_lane_tree MCP tool (SCHED-GAP-1587):
+// the same hierarchical lane forest the /api/v1/lanes/tree REST route
+// answers, resolved through the shared database.BuildLaneTree resolver.
+func (s *Server) toolFleetLaneTree(ctx context.Context) (string, error) {
+	projects, err := database.ListProjects(ctx, s.db, false)
+	if err != nil {
+		return "", err
+	}
+	tree := database.BuildLaneTree(projects)
+	known := make(map[string]bool, len(projects))
+	for _, p := range projects {
+		known[p.Name] = true
+	}
+	type m = map[string]interface{}
+	var node func(n *database.LaneNode) m
+	node = func(n *database.LaneNode) m {
+		p := n.Project
+		kids := make([]m, 0, len(n.Children))
+		for _, kid := range n.Children {
+			kids = append(kids, node(kid))
+		}
+		return m{
+			"name":         p.Name,
+			"parent":       p.Parent,
+			"parent_known": p.Parent == "" || known[p.Parent],
+			"enabled":      p.Enabled,
+			"children":     kids,
+		}
+	}
+	roots := make([]m, 0, len(tree.Roots))
+	for _, r := range tree.Roots {
+		roots = append(roots, node(r))
+	}
+	return jsonString(map[string]interface{}{
+		"roots":      roots,
+		"lane_count": len(projects),
+		"root_count": len(tree.Roots),
+	}), nil
+}
+
 func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]interface{}) (string, error) {
 	name := getStringArg(args, "name")
 	if name == "" {

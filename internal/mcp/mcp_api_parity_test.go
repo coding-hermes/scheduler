@@ -55,6 +55,7 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 var apiToolCoverage = map[string][]string{
 	"GET /api/v1/status":                  {"fleet_status"},
 	"GET /api/v1/projects":                {"fleet_projects"},
+	"GET /api/v1/lanes/tree":              {"fleet_lane_tree"}, // SCHED-GAP-1587
 	"POST /api/v1/projects":               {"fleet_add"},
 	"GET /api/v1/projects/{name}":         {"fleet_project_detail"},
 	"PUT /api/v1/projects/{name}":         {"fleet_set_weight", "fleet_set_priority", "fleet_set_cooldown", "fleet_set_decay"},

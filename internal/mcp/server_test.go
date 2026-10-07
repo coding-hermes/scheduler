@@ -1365,10 +1365,11 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 			t.Errorf("expected tool %q in registry, missing", w)
 		}
 	}
-	// 18 fleet_* + 12 blocks/events + 17 CTL-003 parity tools + 3 peers
+	// 19 fleet_* (incl. fleet_lane_tree, SCHED-GAP-1587) + 12 blocks/events
+	// + 17 CTL-003 parity tools + 3 peers
 	// + 7 REMOTE-010 federation tools (fed_query + 6 catalogue ops).
-	if len(toolsList) != 57 {
-		t.Errorf("tool count = %d, want 57 (18 fleet_* + 12 blocks/events + 17 CTL-003 + 2 features_* + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
+	if len(toolsList) != 58 {
+		t.Errorf("tool count = %d, want 58 (19 fleet_* + 12 blocks/events + 17 CTL-003 + 2 features_* + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
 	}
 }
 

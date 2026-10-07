@@ -946,9 +946,21 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/lanes/tree": {
+      "get": {
+        "summary": "Hierarchical lane tree (SCHED-GAP-1587)",
+        "description": "The whole lane forest resolved from projects.parent through the shared BuildLaneTree resolver, in one response: {roots: [{name, parent, parent_known, enabled, admission_mode, priority, cooldown_s, created_at, updated_at, children: [...]}], lane_count, root_count, max_depth, generated_at}. Children ordered lane name ASC at every level; children always non-null. Dangling parents render at root level with parent_known=false. Includes disabled lanes at their real position.",
+        "responses": {
+          "200": {"description": "LaneTreeResponse"},
+          "405": {"description": "Non-GET method"},
+          "504": {"description": "Deadline exceeded (DB stalled) — body names the helper"}
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "summary": "List projects, paginated (SCHED-GAP-1622)",
+        "description": "Deprecated as a topology source (SCHED-GAP-1587): the flat array carries no family structure — hierarchy-aware consumers read /api/v1/lanes/tree. The list remains the pagination + lifecycle surface.",
         "parameters": [
           {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 200, "maximum": 500}, "description": "Page size; <= 0 falls back to the default, > 500 clamps to 500 (never a 4xx)"},
           {"name": "offset", "in": "query", "schema": {"type": "integer", "default": 0}, "description": "Rows to skip; negative clamps to 0"}

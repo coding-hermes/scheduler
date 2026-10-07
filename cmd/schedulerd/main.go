@@ -1360,6 +1360,17 @@ func main() {
 		}
 	})
 
+	// SCHED-GAP-1587: the lane tree page (/lanes/tree) — the fleet's lane
+	// hierarchy rendered nested from projects.parent through
+	// database.BuildLaneTree (the shared resolver the API's
+	// /api/v1/lanes/tree uses too).
+	mux.HandleFunc("GET /lanes/tree", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateLaneTree(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
 	// SCHED-GAP-1601: the control proxy — POST /dashboard/control carries a
 	// urlencoded instruction (action + target + confirm/reason/…) and is
 	// served by the API handler the generator holds (same auth gate, same

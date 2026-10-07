@@ -1,0 +1,28 @@
+{{define "lane_tree"}}{{template "head" .}}
+{{template "sidebar" "lane_tree"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Lane Tree</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.LaneN}} lanes · {{.RootN}} roots · depth {{.MaxDepth}}</span></div>
+</div>
+<div class="meta">Hierarchical lane topology resolved from projects.parent (SCHED-GAP-1587). Primaries nest their satellites; a satellite may itself have satellites. A lane whose parent no longer resolves (dangling reference) renders at root level with its unresolvable parent named — the broken link stays visible. The flat lists (/queue, overview) keep their own orderings; this page shows the family SHAPE. Machine-readable equivalent: GET /api/v1/lanes/tree.</div>
+<div class="card">
+<table>
+<thead><tr><th>Lane</th><th>Parent</th><th>Enabled</th><th>Admission</th><th>Priority</th><th>Cooldown (s)</th></tr></thead>
+<tbody>
+{{range .Roots}}{{template "lane_tree_row" .}}{{end}}
+</tbody>
+</table>
+</div>
+{{template "ready_js"}}
+</body>
+</html>{{end}}
+
+{{define "lane_tree_row"}}<tr>
+<td>{{if .Rail}}<span aria-hidden="true">{{.Rail}} </span>{{end}}<a href="/projects/{{.Name}}">{{.Name}}</a></td>
+<td>{{if .ParentKnown}}{{.Parent}}{{else}}<span title="parent lane no longer resolves — dangling reference">{{.Parent}} (missing)</span>{{end}}</td>
+<td>{{if .Enabled}}yes{{else}}no{{end}}</td>
+<td>{{.AdmissionMode}}</td>
+<td>{{.Priority}}</td>
+<td>{{.CooldownS}}</td>
+</tr>{{range .Children}}{{template "lane_tree_row" .}}{{end}}{{end}}

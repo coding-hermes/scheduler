@@ -1101,6 +1101,7 @@ var documentedPaths = []string{
 	"/api/v1/live",
 	"/api/v1/status",
 	"/api/v1/config",
+	"/api/v1/lanes/tree", // SCHED-GAP-1587: hierarchical lane tree
 	"/api/v1/projects",
 	"/api/v1/projects/{name}",
 	"/api/v1/projects/{name}/pause",

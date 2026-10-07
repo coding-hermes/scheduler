@@ -136,6 +136,11 @@ var tools = []ToolDefinition{
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
 	{
+		Name:        "fleet_lane_tree",
+		Description: "Hierarchical lane tree (SCHED-GAP-1587): the whole lane forest resolved from projects.parent, with roots, nested children, and lane/root counts",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
 		Name:        "fleet_project_detail",
 		Description: "Get detailed info for one project including tick history",
 		InputSchema: map[string]interface{}{
@@ -794,6 +799,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFleetStatus(ctx)
 	case "fleet_projects":
 		return s.toolFleetProjects(ctx)
+	case "fleet_lane_tree":
+		return s.toolFleetLaneTree(ctx)
 	case "fleet_project_detail":
 		return s.toolFleetProjectDetail(ctx, args)
 	case "fleet_set_weight":
