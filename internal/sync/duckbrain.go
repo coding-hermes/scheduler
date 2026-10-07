@@ -418,6 +418,21 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 		if sendDomain != e.Domain {
 			log.Printf("SYNC: replay remapped domain %q -> %q for %s", e.Domain, sendDomain, e.MemKey)
 		}
+		// Empty-content guard (SCHED-GAP-1573): do NOT post rows spooled
+		// with empty/whitespace-only content. Unlike a live postMemory call
+		// (string values only), spooled content round-trips through SQLite
+		// and every row is a string here, so even a legacy `""` (the
+		// marshaled empty string) must be rejected on replay — posting it
+		// is what seeded the 60,925 empty rows. Bump the attempt counter so
+		// the existing 50-strike prune reaps the row instead of parking a
+		// permanently-unpostable write at the head of the batch.
+		if strings.TrimSpace(e.Content) == "" {
+			log.Printf("SYNC: skipping spooled %s — content is empty after trim; not posted, not spooled (SCHED-GAP-1573)",
+				e.MemKey)
+			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID,
+				fmt.Sprintf("%v: empty content after trim", ErrDuckBrainEmptyPayload))
+			continue
+		}
 		// Parse the original content JSON back into raw bytes for posting.
 		contentJSON := []byte(e.Content)
 		body := map[string]any{
@@ -911,6 +926,19 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 	}
 	if sendDomain != domain {
 		log.Printf("SYNC: remapped domain %q -> %q for %s", domain, sendDomain, key)
+	}
+
+	// Empty-content guard (SCHED-GAP-1573): an empty or whitespace-only
+	// content value is a client-side defect that no retry or replay can
+	// fix. Posting it is what wrote 60,925 empty rows into the DuckBrain
+	// scheduler namespace (33.9%). Skip the write loudly — no POST, no
+	// spool, no health change (same terminal-and-local policy as a
+	// rejected domain). Checked on the pre-marshal VALUE: json.Marshal("")
+	// is `""`, which no bytes-level whitespace check would catch.
+	if isEffectivelyEmptyContent(content) {
+		log.Printf("SYNC: SKIP %s — content is empty after trim (domain %q); not sent, not spooled (SCHED-GAP-1573)",
+			key, sendDomain)
+		return fmt.Errorf("%w: key %s", ErrDuckBrainEmptyPayload, key)
 	}
 
 	payload, err := json.Marshal(content)
