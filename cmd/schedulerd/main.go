@@ -1298,6 +1298,19 @@ func main() {
 	// Project detail page: /projects/{name}.
 	mux.HandleFunc("GET /projects/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
+		resolved, redirect, err := dashGen.ResolveProjectDetailName(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if resolved == "" {
+			http.Error(w, "project not found: "+name, http.StatusNotFound)
+			return
+		}
+		if redirect {
+			http.Redirect(w, r, "/projects/"+resolved, http.StatusFound)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.GenerateProjectDetail(w, name); err != nil {
 			if errors.Is(err, database.ErrProjectNotFound) {
@@ -1385,10 +1398,10 @@ func main() {
 		}
 	})
 
-	// Health page: /health (daemon, db, gateway status).
+	// Health page: /health (daemon, db, gateway status); /healthz is an alias.
 	// htmx polls return the .cards fragment only (HX-Request) — the full page
 	// must never be swapped into its own poller.
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		var err error
 		if r.Header.Get("HX-Request") != "" {
@@ -1399,7 +1412,9 @@ func main() {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-	})
+	}
+	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("GET /healthz", healthHandler)
 
 	// Observatory page: /observatory (SCHED-GAP-1592) — live graphs over the
 	// tick history. The query carries the filter (?window=&namespace=); the

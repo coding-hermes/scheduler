@@ -9,13 +9,14 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/` | Fleet dashboard (full HTML page; `/dashboard` is an alias) |
 | `/dashboard/partial` | htmx partial: project table refresh |
 | `/static/htmx.min.js` | Bundled htmx asset (Go embed) |
-| `/projects/{name}` | Per-project detail page |
+| `/projects/{name}` | Per-lane detail page; if `{name}` is a fleet project name with no exact lane row, redirects to its `<name>-foreman` primary lane (SCHED-GAP-1731) |
 | `/queue` | Global queue view |
 | `/lanes/tree` | Lane tree page (SCHED-GAP-1587) — the fleet's nested lane hierarchy: primaries at level 0, satellites indented under their parents (└ rail), per-row `L<depth>` marker, disabled lanes in position, dangling parents flagged visibly |
 | `/ticks?page=N` | Paginated tick history — server-side search/filter: `q` (substring over tick id + project name), `project`, `status`, `outcome` (SCHED-GAP-1593) |
 | `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
-| `/health` | Dashboard health panel |
+| `/health` | Dashboard health panel (`/healthz` is an alias; SCHED-GAP-1731) |
+| `/healthz` | Alias of the dashboard health panel at `/health` (SCHED-GAP-1731) |
 | `/observatory` | Observatory (SCHED-GAP-1592) — live tick-rate graph, namespace allocation chart and failure-rate heatmap over the tick history; the time-range (1h/6h/24h/7d) and namespace controls reload with the filter and the SSE stream `/api/v1/observatory/stream` pushes recomputed snapshots for it. Degrades honestly: a quiet stream shows STALE, a dead one shows LOST — never a silent frozen chart |
 | `/remote` | REMOTE-006 Remote section — every registered peer with its last-seen event (kind/status/timestamp) + staleness (the registry's freshness window; STALE, never "down"); htmx polls return the peer-rows fragment |
 | `/remote/partial` | REMOTE-006 htmx partial — the Remote section's peer rows only |

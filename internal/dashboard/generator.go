@@ -453,6 +453,28 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	return g.projectTmpl.Execute(w, data)
 }
 
+// ResolveProjectDetailName returns the stored lane name for a dashboard
+// project link. Fleet project names resolve to their primary <name>-foreman
+// lane when no exact row exists; exact lane names always take precedence.
+func (g *Generator) ResolveProjectDetailName(name string) (string, bool, error) {
+	if name == "" {
+		return "", false, nil
+	}
+	ctx := context.Background()
+	if _, err := database.GetProject(ctx, g.db, name); err == nil {
+		return name, false, nil
+	} else if !errors.Is(err, database.ErrProjectNotFound) {
+		return "", false, err
+	}
+	primary := name + "-foreman"
+	if _, err := database.GetProject(ctx, g.db, primary); err == nil {
+		return primary, true, nil
+	} else if !errors.Is(err, database.ErrProjectNotFound) {
+		return "", false, err
+	}
+	return "", false, nil
+}
+
 const tickHistoryPageSize = 50
 
 // GenerateTickHistory renders one page of the global tick history. Pages are
