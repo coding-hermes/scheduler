@@ -610,6 +610,12 @@ type HealthData struct {
 	TotalTicks       int
 	Goroutines       int
 	MemoryMB         float64
+	// TickPushState (SCHED-GAP-1594): how completed ticks reach the
+	// operator. "pushed" = per-tick git push runs at tick exit
+	// (SCHED-GAP-1694, default); "live" = --disable-tick-push is set and
+	// the web dashboard is the primary update surface (no per-tick push;
+	// the fleet-strand-push cron is the only remaining pusher).
+	TickPushState string
 	// HostSample* (ADV-R13): the latest PERSISTED host load/memory sample
 	// (host_samples table) — not the daemon's own runtime.MemStats above,
 	// which only ever measured this process. HostSampleAvailable=false

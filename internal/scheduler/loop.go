@@ -433,6 +433,21 @@ func (l *Loop) SetNoExecFallback(v bool) {
 	l.spawner.SetNoExecFallback(v)
 }
 
+// SetTickPushDisabled (SCHED-GAP-1594) disables the per-tick git push at tick
+// exit. Default false — the SCHED-GAP-1694 push-at-exit behavior is kept for
+// backward compat. When true, ticks only update the web dashboard (tick rows,
+// /api/v1/status, /health); the fleet-strand-push cron is the only pusher.
+func (l *Loop) SetTickPushDisabled(v bool) {
+	l.spawner.SetTickPushDisabled(v)
+}
+
+// TickPushDisabled reports whether the per-tick git push is disabled
+// (SCHED-GAP-1594). Consumed by the API status block and the dashboard's
+// live/pushed indicator.
+func (l *Loop) TickPushDisabled() bool {
+	return l.spawner.TickPushDisabled()
+}
+
 // EmitHighEvent writes a HIGH severity event to the events table (GAP-048).
 // This exported method lets callers outside the scheduler package (e.g. the
 // daemon's startup wiring in cmd/schedulerd) emit structured events through

@@ -73,6 +73,10 @@ type Generator struct {
 	// of 100 — never a bare literal at the render site.
 	weightBudget int
 	spawnCounts  func() (httpCount, execCount int64) // optional; /health panel
+	// tickPushDisabled (SCHED-GAP-1594): the resolved --disable-tick-push
+	// value, set by main.go via SetTickPushDisabled. False (tests, unset)
+	// renders the "pushed" default — the per-tick git push at tick exit.
+	tickPushDisabled bool
 	// agentLog (SCHED-GAP-1593): read-only, lazily-opened reader on the
 	// agent's own state database; the tick drill-down resolves
 	// gateway_trace.session_id through it. Nil = the drill-down renders the
@@ -190,6 +194,24 @@ func (g *Generator) SetWeightBudget(n int) {
 	if n > 0 {
 		g.weightBudget = n
 	}
+}
+
+// SetTickPushDisabled (SCHED-GAP-1594) records the resolved
+// --disable-tick-push value so the health panel can show the live/pushed
+// state. main.go passes the same value the Loop was armed with — one
+// resolution, both consumers.
+func (g *Generator) SetTickPushDisabled(v bool) {
+	g.tickPushDisabled = v
+}
+
+// tickPushState derives the health card's label from the resolved flag
+// (SCHED-GAP-1594): "live" = web-primary (per-tick push disabled), "pushed"
+// = per-tick git push at tick exit (default).
+func (g *Generator) tickPushState() string {
+	if g.tickPushDisabled {
+		return "live"
+	}
+	return "pushed"
 }
 
 // globalPaused reports the loop's authoritative paused flag for the console
@@ -762,6 +784,10 @@ func (g *Generator) healthData() HealthData {
 		GatewayURL:     g.gatewayURL,
 		Uptime:         g.clock().Since(g.started).Round(time.Second).String(),
 		Goroutines:     runtime.NumGoroutine(),
+		// SCHED-GAP-1594: live vs pushed — how completed ticks reach the
+		// operator (web dashboard is the primary surface either way; the
+		// card says whether a per-tick git push also runs).
+		TickPushState: g.tickPushState(),
 	}
 	if err := g.db.PingContext(ctx); err != nil {
 		data.DatabaseStatus = "error"

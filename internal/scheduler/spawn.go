@@ -143,6 +143,13 @@ type Spawner struct {
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
+	// SCHED-GAP-1594: per-tick git push behind a flag. Default false — the
+	// pre-flag behavior (push at tick exit) is kept for backward compat.
+	// When true, Wait()'s completed branch skips pushTickWork entirely: the
+	// web dashboard becomes the primary update surface, and the strand-push
+	// cron is the only remaining pusher. Never fails a tick either way.
+	tickPushDisabled bool // SCHED-GAP-1594: skip the per-tick git push at tick exit
+
 	// SCHED-GAP-1712: the GLOBAL tier of the endpoint resolution — captured
 	// from the client SetGatewayClient installed, so the resolver can name
 	// the global source without re-deriving it. Empty means this daemon has
@@ -836,6 +843,24 @@ func (s *Spawner) guardAborted(tickID string) bool {
 // SetNoExecFallback disables the exec.Command fallback when gateway spawns fail.
 func (s *Spawner) SetNoExecFallback(v bool) {
 	s.noExecFallback = v
+}
+
+// SetTickPushDisabled (SCHED-GAP-1594) turns the per-tick git push at tick
+// exit (tick_push.go) on or off. Default is off — disabled=false keeps the
+// SCHED-GAP-1694 push-at-exit behavior byte-identical. When disabled=true a
+// completed tick only updates the web dashboard (tick rows, /api/v1/status,
+// /health), no `git push` runs, and the fleet-strand-push cron is the only
+// remaining pusher. Reads happen on the Wait() completion path without a
+// lock; the daemon sets this once at boot before any tick can complete.
+func (s *Spawner) SetTickPushDisabled(v bool) {
+	s.tickPushDisabled = v
+}
+
+// TickPushDisabled reports whether the per-tick git push is disabled
+// (SCHED-GAP-1594). Consumed by the API status block and the dashboard's
+// live/pushed indicator.
+func (s *Spawner) TickPushDisabled() bool {
+	return s.tickPushDisabled
 }
 
 // SetEventLogger wires an optional EventLogger for HIGH events on terminal
@@ -2899,8 +2924,14 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		// depends on the model remembering. Best-effort: a push failure never
 		// fails the tick (the cron re-covers it), but it IS logged at the tick
 		// line so a strand is visible now, not 30 minutes later.
+		// SCHED-GAP-1594: behind the --disable-tick-push flag. When set, no
+		// per-tick push runs — the web dashboard is the primary update
+		// surface and the strand-push cron is the only remaining pusher.
+		// Default false: pre-flag behavior unchanged.
 		if commits > 0 {
-			if ok, detail := pushTickWork(st.workdir); ok {
+			if st.spawner != nil && st.spawner.tickPushDisabled {
+				log.Printf("TICK: %s %s → push skipped (tick-push disabled, web-primary; SCHED-GAP-1594)", st.Project, st.TickID)
+			} else if ok, detail := pushTickWork(st.workdir); ok {
 				log.Printf("TICK: %s %s → push %s", st.Project, st.TickID, detail)
 			} else {
 				log.Printf("TICK: %s %s → push STRANDED (%s)", st.Project, st.TickID, detail)

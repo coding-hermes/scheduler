@@ -82,6 +82,8 @@ func main() {
 	// producing session; cooldowns and the "no timeout backoff" chain are
 	// untouched.
 	sessionSilenceGrace := flag.Duration("session-silence-grace", 0, "SCHED-GAP-1707: terminate a gateway tick whose session shows no token delta and no tool activity for this long (failure_reason=session_silent, quiet duration on the tick row); 0 = disabled (default). Never kills a producing session. Env: SCHEDULER_SESSION_SILENCE_GRACE")
+	// SCHED-GAP-1594: per-tick git push behind a flag — web-primary updates.
+	disableTickPush := flag.Bool("disable-tick-push", false, "SCHED-GAP-1594: skip the per-tick git push at tick exit (SCHED-GAP-1694's push-at-exit); ticks only update the web dashboard (tick rows, /api/v1/status, /health) and the fleet-strand-push cron is the only remaining pusher. Default false = backward compat (per-tick push stays on). Env: SCHEDULER_DISABLE_TICK_PUSH")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
@@ -269,6 +271,16 @@ func main() {
 			*boardStasisGate = b
 		} else {
 			log.Printf("WARN: SCHEDULER_BOARD_STASIS_GATE=%q invalid — gate stays %v", v, *boardStasisGate)
+		}
+	}
+	// SCHED-GAP-1594: per-tick push env override — same pattern. A parseable
+	// bool wins (including an explicit false, which keeps the per-tick push
+	// on); an invalid value WARNs and keeps the current value.
+	if v := os.Getenv("SCHEDULER_DISABLE_TICK_PUSH"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			*disableTickPush = b
+		} else {
+			log.Printf("WARN: SCHEDULER_DISABLE_TICK_PUSH=%q invalid — tick-push stays disabled=%v", v, *disableTickPush)
 		}
 	}
 	// SCHED-GAP-1707: session-silence watchdog grace env override — same
@@ -628,6 +640,14 @@ func main() {
 		log.Printf("BOARD-STASIS: gate armed (SCHED-GAP-1678) — stale-board builder lanes will not spawn")
 	} else {
 		log.Printf("BOARD-STASIS: gate disabled (SCHED-GAP-1678) — pre-gate scheduling")
+	}
+	// SCHED-GAP-1594: per-tick push behind a flag. Default false keeps the
+	// SCHED-GAP-1694 push-at-exit behavior (backward compat). When enabled,
+	// ticks only update the web dashboard — no git push at tick exit — and
+	// the fleet-strand-push cron is the only remaining pusher.
+	loop.SetTickPushDisabled(*disableTickPush)
+	if *disableTickPush {
+		log.Printf("TICK-PUSH: disabled (SCHED-GAP-1594) — web-primary updates; per-tick git push skipped")
 	}
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
@@ -1178,6 +1198,9 @@ func main() {
 	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
 	// was built with — never an independent literal.
 	dashGen.SetWeightBudget(loop.WeightBudget())
+	// SCHED-GAP-1594: the health panel's live/pushed card reads the same
+	// resolved flag the Loop was armed with — one resolution, both consumers.
+	dashGen.SetTickPushDisabled(*disableTickPush)
 	// SCHED-GAP-1601: the operator console proxies every control through the
 	// IN-PROCESS API handler (identical auth gate, identical handlers,
 	// identical audit — the API is the single mutation point), and reads the

@@ -627,6 +627,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// folded into admission_counters) because it is counted at the
 		// packers' selection site, once per lane per pass.
 		status["board_unchanged_skips"] = s.loop.BoardUnchangedSkips()
+		// SCHED-GAP-1594: whether the per-tick git push is disabled
+		// (--disable-tick-push). false = per-tick push runs at tick exit
+		// (SCHED-GAP-1694, default); true = web-primary updates, the
+		// fleet-strand-push cron is the only remaining pusher.
+		status["tick_push_disabled"] = s.loop.TickPushDisabled()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
