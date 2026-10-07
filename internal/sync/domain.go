@@ -83,3 +83,29 @@ func resolveDomain(domain string) (string, bool) {
 
 // allowedDomains returns the allowlist as a comma-separated string for logs.
 func allowedDomains() string { return strings.Join(duckbrainDomains, ", ") }
+
+// ---------------------------------------------------------------------------
+// Empty-content rejection (SCHED-GAP-1573)
+// ---------------------------------------------------------------------------
+
+// ErrDuckBrainEmptyPayload marks a write this client refuses to send because
+// its content is empty or whitespace-only after trim. Terminal and LOCAL like
+// ErrDuckBrainDomainRejected: the caller skips the write — no HTTP POST, no
+// spool, no health change. An empty payload is a client-side defect that
+// replaying can never fix, and posting it is what poisoned the DuckBrain
+// namespace with 60,925 empty rows (33.9% of the scheduler namespace).
+var ErrDuckBrainEmptyPayload = errors.New("duckbrain empty payload rejected")
+
+// isEffectivelyEmptyContent reports whether the content VALUE is empty or
+// whitespace-only after trim. It deliberately inspects only pre-marshal
+// string values: json.Marshal("") produces `""` — two quote characters, not
+// whitespace — so a bytes-level check on the marshaled payload cannot catch
+// the empty case, while non-string content (structs, maps) is never treated
+// as empty. A legacy spooled `""` therefore stays postable (wire compat).
+func isEffectivelyEmptyContent(content any) bool {
+	s, ok := content.(string)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(s) == ""
+}

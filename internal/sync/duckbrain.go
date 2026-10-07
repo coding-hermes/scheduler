@@ -32,14 +32,6 @@ import (
 // immediately.
 var ErrDuckBrainKeyRejected = errors.New("duckbrain key rejected")
 
-// ErrDuckBrainEmptyPayload is the guard classification for writes whose
-// content is empty after trimming whitespace (SCHED-GAP-1573). A sync bug
-// produced 60,925 empty-content memories in the scheduler namespace before
-// the guard existed — empty payloads are useless read-replica rows and a
-// defect retrying cannot fix, so they are rejected loudly, NOT spooled,
-// and a spooled row that turns out empty is dropped during replay.
-var ErrDuckBrainEmptyPayload = errors.New("duckbrain empty payload")
-
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica
 // via its HTTP REST API. Writes that fail are spooled to SQLite and
 // replayed once DuckBrain is reachable — a write is never dropped
@@ -969,6 +961,19 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 	}
 	if sendDomain != domain {
 		log.Printf("SYNC: remapped domain %q -> %q for %s", domain, sendDomain, key)
+	}
+
+	// Empty-content guard (SCHED-GAP-1573): an empty or whitespace-only
+	// content value is a client-side defect that no retry or replay can
+	// fix. Posting it is what wrote 60,925 empty rows into the DuckBrain
+	// scheduler namespace (33.9%). Skip the write loudly — no POST, no
+	// spool, no health change (same terminal-and-local policy as a
+	// rejected domain). Checked on the pre-marshal VALUE: json.Marshal("")
+	// is `""`, which no bytes-level whitespace check would catch.
+	if isEffectivelyEmptyContent(content) {
+		log.Printf("SYNC: SKIP %s — content is empty after trim (domain %q); not sent, not spooled (SCHED-GAP-1573)",
+			key, sendDomain)
+		return fmt.Errorf("%w: key %s", ErrDuckBrainEmptyPayload, key)
 	}
 
 	payload, err := json.Marshal(content)
