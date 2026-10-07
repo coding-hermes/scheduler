@@ -256,7 +256,12 @@ func (s *Spawner) waveRecoveryBlock(project PackedProject, tickID string) string
 	// .coding-hermes/board/ with code — the preamble tells the foreman to
 	// merge green branches, so the refusal must be named in the log FIRST.
 	// Best-effort: never blocks the recovery spawn itself.
-	logBoardTouchingBranches(project.Workdir, project.Name, workerBranchesFromManifests(manifests))
+	branches := workerBranchesFromManifests(manifests)
+	logBoardTouchingBranches(project.Workdir, project.Name, branches)
+	// SCHED-GAP-1609: surface any preserved worker branch whose base
+	// predates the current main tip — merging it would silently revert the
+	// earlier same-wave merge. Same best-effort contract.
+	logStaleWaveBranches(project.Workdir, project.Name, branches)
 	if err := markTickWaveRecovery(context.Background(), s.db, tickID); err != nil {
 		// Best-effort stamp: the preamble is the load-bearing half (the
 		// foreman does the recovering); a failed flag only costs
