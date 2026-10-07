@@ -4963,3 +4963,22 @@ tasks:
   status: complete
   created_at: '2026-10-07T10:25:26.803906+00:00'
   completed_at: '2026-10-07T10:26:03.676064+00:00'
+- id: INT-CI-179F
+  title: Fix flaky TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip race-detector CI
+    failure
+  criteria:
+  - The test no longer fails under CI conditions (race detector, parallel load) after
+    determinism fix or bound widening; go test -run SCHEDGAP1660 -race -count=5 passes
+    locally; root cause documented in the test or commit
+  status: complete
+  created_at: '2026-10-07T10:51:04.812281+00:00'
+  completed_at: '2026-10-07T11:46:43.651905+00:00'
+- id: SCHED-GAP-1621
+  title: PERF-002 cold-start /api/v1/status 28-104s
+  criteria:
+  - "Cold /api/v1/status stalls 28-104s after daemon restart; warm path 0.24-0.44s.\
+    \ Root cause + fix bringing cold path under 5s. Goroutine dump during slow call\
+    \ shows no handler goroutine visible \u2014 blocked before measurable work."
+  status: complete
+  created_at: '2026-10-07T12:33:03.960026+00:00'
+  completed_at: '2026-10-07T12:41:50.836557+00:00'
