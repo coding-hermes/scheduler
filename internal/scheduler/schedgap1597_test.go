@@ -242,19 +242,22 @@ func TestSCHEDGAP1597_SpawnFailureOutcomeWritesNullExitCode(t *testing.T) {
 	// failed through lifecycle.Complete.
 	l.spawner.SetNoExecFallback(true)
 
+	// SCHED-GAP-1664 UPDATE: the nil-gateway + no-exec-fallback path now
+	// DEFERS instead of failing — the row lands status=deferred with
+	// exit_code NULL (the -1→NULL convention still applies, verified here).
 	tickID := l.slotPool.Spawn(PackedProject{Name: proj, NamespaceID: ""}, sim.Now(), true, db)
 	if tickID == "" {
 		t.Fatal("Spawn returned an empty tick id")
 	}
 
-	waitUntil(t, 10*time.Second, "the failed tick to reach a terminal status", func() bool {
+	waitUntil(t, 10*time.Second, "the deferred tick to reach a terminal status", func() bool {
 		st := schedGap157TickStatus(t, db, tickID)
-		return st == "failed" || st == "timeout"
+		return st == "deferred" || st == "failed" || st == "timeout"
 	})
 
 	exitCode, status := schedGap1597TerminalFacts(t, db, tickID)
-	if status != "failed" {
-		t.Fatalf("status = %q, want failed — the spawn was refused, the row must be a failure", status)
+	if status != "deferred" {
+		t.Fatalf("status = %q, want deferred — since SCHED-GAP-1664 the nil-gateway residual defers, not fails", status)
 	}
 	if exitCode != nil {
 		t.Errorf("ticks.exit_code = %v, want NULL — no process ever ran, so there is no exit status (pre-1597 this row carried a fabricated 0)", exitCode)
