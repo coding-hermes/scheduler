@@ -505,7 +505,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
 | `-sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
 | `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
-| `-config` | (none) | Path to TOML fleet config file |
+| `-config` | (none) | Path to TOML fleet config file — see [docs/reference/root-toml.md](docs/reference/root-toml.md) for which `[scheduler]` keys the root TOML actually applies vs ignores |
 | `-failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown |
 | `-auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off |
 | `-auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed |
