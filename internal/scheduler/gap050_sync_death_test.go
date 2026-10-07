@@ -424,9 +424,13 @@ func TestGap050_TransientHTTP500CountsAsDrop(t *testing.T) {
 }
 
 // TestGap050_NilGatewayDropCountsTowardAlert — the GAP-048 nil-gateway path
-// (no gateway client + exec fallback disabled) is a gateway-caused drop too:
-// each tick emits its existing 'gateway unavailable' HIGH event (exactly one
-// per dropped tick), and the consecutive-drop counter still alerts at 2.
+// (no gateway client + exec fallback disabled).
+//
+// SCHED-GAP-1664 UPDATE: this path is now a DEFERRAL, not a drop — each tick
+// still emits exactly one HIGH event (details say deferred), but the
+// consecutive-drop counter must NOT move and no >=2 alert may fire (a
+// transport outage is not a drop of tick work; the 209-lane-fault masquerade
+// this row removes came exactly from counting these as drops + failures).
 func TestGap050_NilGatewayDropCountsTowardAlert(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "gap050-nilgw"
@@ -440,26 +444,40 @@ func TestGap050_NilGatewayDropCountsTowardAlert(t *testing.T) {
 	tick1 := projectName + "-2026-08-31-10-11-00"
 	tick2 := projectName + "-2026-08-31-10-12-00"
 
-	if _, err := spawner.Spawn(project, tick1); err == nil {
-		t.Fatal("Spawn 1 returned nil error with nil gateway + noExecFallback")
+	tk1, err := spawner.Spawn(project, tick1)
+	if err != nil {
+		t.Fatalf("Spawn 1 returned an error (%v) — the nil-gateway path defers since SCHED-GAP-1664", err)
 	}
-	if got := gap050DropCount(spawner, projectName); got != 1 {
-		t.Errorf("counter after nil-gateway drop 1 = %d, want 1", got)
+	if tk1 == nil {
+		t.Fatal("Spawn 1 returned a nil tick")
+	}
+	if outcome := tk1.Wait(); outcome.Status != TickDeferred {
+		t.Errorf("Spawn 1 Wait() status = %s, want %s", outcome.Status, TickDeferred)
+	}
+	if got := gap050DropCount(spawner, projectName); got != 0 {
+		t.Errorf("drop counter after nil-gateway deferral 1 = %d, want 0 — a deferral is not a drop (SCHED-GAP-1664)", got)
 	}
 	if n := gap050AlertCount(t, db, projectName); n != 0 {
-		t.Errorf("alerts = %d, want 0 after a single nil-gateway drop", n)
+		t.Errorf("alerts = %d, want 0 after a single nil-gateway deferral", n)
 	}
 
-	if _, err := spawner.Spawn(project, tick2); err == nil {
-		t.Fatal("Spawn 2 returned nil error with nil gateway + noExecFallback")
+	tk2, err := spawner.Spawn(project, tick2)
+	if err != nil {
+		t.Fatalf("Spawn 2 returned an error (%v)", err)
 	}
-	if got := gap050DropCount(spawner, projectName); got != 2 {
-		t.Errorf("counter after nil-gateway drop 2 = %d, want 2", got)
+	if tk2 == nil {
+		t.Fatal("Spawn 2 returned a nil tick")
 	}
-	if n := gap050AlertCount(t, db, projectName); n != 1 {
-		t.Errorf("alerts = %d, want 1 — two consecutive nil-gateway drops must alert", n)
+	if outcome := tk2.Wait(); outcome.Status != TickDeferred {
+		t.Errorf("Spawn 2 Wait() status = %s, want %s", outcome.Status, TickDeferred)
 	}
-	// Exactly one HIGH event per dropped tick on this path too.
+	if got := gap050DropCount(spawner, projectName); got != 0 {
+		t.Errorf("drop counter after nil-gateway deferral 2 = %d, want 0 — consecutive deferrals must NOT alert", got)
+	}
+	if n := gap050AlertCount(t, db, projectName); n != 0 {
+		t.Errorf("alerts = %d, want 0 — two consecutive nil-gateway DEFERRALS must not alert (the transport outage deferral is not a drop)", n)
+	}
+	// Exactly one HIGH event per deferred tick on this path too (auditability).
 	if n := schedGap079HighEventCount(t, db, projectName, tick1); n != 1 {
 		t.Errorf("HIGH events for tick1 = %d, want 1", n)
 	}

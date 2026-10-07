@@ -1389,25 +1389,43 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// even though the flag says to stay idle. The background reconnector
 		// will SetGatewayClient when the gateway recovers, re-engaging HTTP.
 		if s.gateway == nil && s.noExecFallback {
-			log.Printf("SKIPPED: %s tick=%s no gateway client and exec fallback disabled — staying idle", project.Name, tickID)
-			s.noteSpawnFailure(project.Name)
+			// SCHED-GAP-1664: a nil gateway client with exec fallback
+			// disabled is a TRANSPORT DEFERRAL, not a lane failure. This is
+			// the residual nil-client race SCHED-GAP-170's pre-pick health
+			// gate cannot cover (the client can go nil between the gate and
+			// the pick, e.g. during the gateway restart cluster measured
+			// 2026-09-28: 209 such ticks in one hour, every one booked as a
+			// LANE failure — consecutive_failures bump, GAP-133 backoff-gate
+			// credit, recordGatewayDrop alert noise, a cooldown burn per
+			// lane — while the scheduler itself was up and the fleet was
+			// healthy). The tick must wait for the background reconnector
+			// instead of charging the lane for the gateway's death, so it
+			// reuses the SCHED-GAP-203 machinery:
+			//   - NO noteSpawnFailure* (consecutive_failures untouched);
+			//   - NO bumpConsecutiveDrops / recordGatewayDrop (a deferral is
+			//     not a drop — see transientGatewayDeferral's contract);
+			//   - a single HIGH event keeps the outage auditable, with
+			//     details saying DEFERRED, not dropped;
+			//   - the returned SpawnedTick carries gwDeferred/gwDeferReason,
+			//     so Wait() yields TickDeferred and slot_pool's existing
+			//     lifecycle.Complete path persists status=deferred /
+			//     outcome=deferred with the real reason text.
+			// The exec-fallback-enabled path below is untouched, and the
+			// ErrGatewayKeyRejected terminal path never sees a nil client.
 			dropErr := fmt.Errorf("no gateway client and exec fallback disabled for %s", project.Name)
+			log.Printf("DEFERRED: %s tick=%s no gateway client and exec fallback disabled — deferring (NOT a lane failure)", project.Name, tickID)
 			if s.events != nil {
 				s.events.Emit(context.Background(), SeverityHigh, "spawn",
-					"gateway unavailable and exec fallback disabled — tick dropped", map[string]any{
+					"gateway unavailable and exec fallback disabled — tick deferred", map[string]any{
 						"project":          project.Name,
 						"tick_id":          tickID,
 						"gateway":          "nil",
 						"no_exec_fallback": true,
+						"deferred":         true,
 						"error":            dropErr.Error(),
 					})
 			}
-			// GAP-050: a nil gateway is a gateway-caused drop too — advance
-			// the consecutive-drop counter (the event above is this tick's
-			// per-drop HIGH event, so bumpConsecutiveDrops emits only the
-			// >=2-consecutive alert, keeping one event per dropped tick).
-			s.bumpConsecutiveDrops(project.Name, dropErr)
-			return nil, dropErr
+			return s.transientGatewayDeferral(project, tickID, dropErr, s.clock().Now(), model, provider, routerRate{}), nil
 		}
 
 		// Try HTTP gateway spawn first (zero process overhead).
