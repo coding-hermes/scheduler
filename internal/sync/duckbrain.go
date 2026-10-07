@@ -32,6 +32,14 @@ import (
 // immediately.
 var ErrDuckBrainKeyRejected = errors.New("duckbrain key rejected")
 
+// ErrDuckBrainEmptyPayload is the guard classification for writes whose
+// content is empty after trimming whitespace (SCHED-GAP-1573). A sync bug
+// produced 60,925 empty-content memories in the scheduler namespace before
+// the guard existed — empty payloads are useless read-replica rows and a
+// defect retrying cannot fix, so they are rejected loudly, NOT spooled,
+// and a spooled row that turns out empty is dropped during replay.
+var ErrDuckBrainEmptyPayload = errors.New("duckbrain empty payload")
+
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica
 // via its HTTP REST API. Writes that fail are spooled to SQLite and
 // replayed once DuckBrain is reachable — a write is never dropped
@@ -418,8 +426,17 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 		if sendDomain != e.Domain {
 			log.Printf("SYNC: replay remapped domain %q -> %q for %s", e.Domain, sendDomain, e.MemKey)
 		}
-		// Parse the original content JSON back into raw bytes for posting.
+		// Empty-payload guard (SCHED-GAP-1573): a spooled row that is empty
+		// after trim is junk (e.g. pre-guard rows or a failed write of nothing).
+		// Drop it — bump the attempt counter so the 50-strike prune reaps it,
+		// but do NOT re-post empty content to DuckBrain.
 		contentJSON := []byte(e.Content)
+		if err := validatePayloadContent(e.MemKey, contentJSON); err != nil {
+			log.Printf("SYNC: skipping spooled %s — %v (dropped, not replayed)", e.MemKey, err)
+			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID, err.Error())
+			continue
+		}
+		// Parse the original content JSON back into raw bytes for posting.
 		body := map[string]any{
 			"key":        e.MemKey,
 			"domain":     sendDomain,
@@ -897,6 +914,27 @@ func canonicalPayloadHash(content any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// validatePayloadContent is the empty-payload guard (SCHED-GAP-1573): the
+// content that reaches DuckBrain must carry data. "Empty" means: nothing
+// after trim, a bare JSON string that is empty/whitespace, or a bare JSON
+// null — all of which is what the 60,925 junk rows looked like. Returns a
+// wrapped ErrDuckBrainEmptyPayload otherwise.
+func validatePayloadContent(key string, payload []byte) error {
+	trimmed := strings.TrimSpace(string(payload))
+	empty := trimmed == "" || trimmed == `""` || trimmed == "null"
+	if !empty {
+		var s string
+		if err := json.Unmarshal(payload, &s); err == nil && strings.TrimSpace(s) == "" {
+			empty = true
+		}
+	}
+	if empty {
+		return fmt.Errorf("%w: key %s has empty content after trim (%d raw bytes)",
+			ErrDuckBrainEmptyPayload, key, len(payload))
+	}
+	return nil
+}
+
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {
 	// Domain validation (SCHED-GAP-1669): DuckBrain rejects a domain outside
 	// its enum with 400 VALIDATION_ERROR. Resolve it BEFORE anything else —
@@ -916,6 +954,15 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 	payload, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	// Empty-payload guard (SCHED-GAP-1573): a write whose serialized content
+	// is empty after trim is a defect, not data. Reject it loudly BEFORE the
+	// change-detection/POST path so it can never reach DuckBrain — and never
+	// spool it (replaying an empty payload just re-writes junk).
+	if err := validatePayloadContent(key, payload); err != nil {
+		log.Printf("SYNC: SKIP %s — %v; not sent, not spooled", key, err)
+		return err
 	}
 
 	// Change detection: skip the POST entirely when the payload (minus the
