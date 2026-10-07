@@ -433,6 +433,21 @@ func (l *Loop) SetNoExecFallback(v bool) {
 	l.spawner.SetNoExecFallback(v)
 }
 
+// SetTickPushDisabled (SCHED-GAP-1594) arms or disarms the spawner's
+// push-at-tick-exit. The daemon wires --disable-tick-push /
+// SCHEDULER_DISABLE_TICK_PUSH here; the default (false) keeps SCHED-GAP-1694
+// behavior byte-identical.
+func (l *Loop) SetTickPushDisabled(v bool) {
+	l.spawner.SetTickPushDisabled(v)
+}
+
+// TickPushDisabled reports whether push-at-tick-exit is disabled
+// (SCHED-GAP-1594). Delegates to the spawner, the component that owns the
+// push decision at tick close-out.
+func (l *Loop) TickPushDisabled() bool {
+	return l.spawner.TickPushDisabled()
+}
+
 // EmitHighEvent writes a HIGH severity event to the events table (GAP-048).
 // This exported method lets callers outside the scheduler package (e.g. the
 // daemon's startup wiring in cmd/schedulerd) emit structured events through

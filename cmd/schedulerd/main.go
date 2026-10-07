@@ -74,6 +74,7 @@ func main() {
 	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	boardStasisGate := flag.Bool("board-stasis-gate", true, "SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (mtime+size fingerprint; tasks-mode and reporter-class lanes are exempt, an unreadable board fails open, no cooldown is consumed, and an operator ForceEvaluate bypasses it for one pass). true = armed (fleet default); false = pre-gate scheduling, byte-identical. Env: SCHEDULER_BOARD_STASIS_GATE")
+	disableTickPush := flag.Bool("disable-tick-push", false, "SCHED-GAP-1594: disable the per-tick push (SCHED-GAP-1694) — the daemon becomes WEB-PRIMARY: ticks update the dashboard and tick rows only, commits stay LOCAL until the fleet-strand-push cron or an operator pushes. Default false = push each tick's commits at tick exit. Surfaced as tick_push.mode on /api/v1/status and the Tick Push card on /health. Env: SCHEDULER_DISABLE_TICK_PUSH")
 	// SCHED-GAP-1707: session-silence watchdog grace. A gateway tick whose
 	// Hermes-state telemetry shows no token delta and no tool activity for
 	// this long is cancelled early with failure_reason=session_silent and
@@ -271,6 +272,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_BOARD_STASIS_GATE=%q invalid — gate stays %v", v, *boardStasisGate)
 		}
 	}
+	// SCHED-GAP-1594: per-tick push disable env override — same pattern. A
+	// parseable bool wins (including an explicit false, which restores the
+	// SCHED-GAP-1694 push-at-tick-exit); an invalid value WARNs and keeps
+	// the current value.
+	if v := os.Getenv("SCHEDULER_DISABLE_TICK_PUSH"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			*disableTickPush = b
+		} else {
+			log.Printf("WARN: SCHEDULER_DISABLE_TICK_PUSH=%q invalid — tick push stays disabled=%v", v, *disableTickPush)
+		}
+	}
 	// SCHED-GAP-1707: session-silence watchdog grace env override — same
 	// pattern. A positive parseable duration arms the watchdog; 0 keeps it
 	// off (the library default). Invalid values WARN and keep the current
@@ -327,7 +339,8 @@ func main() {
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
 			*loadGateThreshold, *modelRatesFile,
-			*sessionSilenceGrace)
+			*sessionSilenceGrace,
+			*disableTickPush)
 		return
 	}
 
@@ -628,6 +641,18 @@ func main() {
 		log.Printf("BOARD-STASIS: gate armed (SCHED-GAP-1678) — stale-board builder lanes will not spawn")
 	} else {
 		log.Printf("BOARD-STASIS: gate disabled (SCHED-GAP-1678) — pre-gate scheduling")
+	}
+	// SCHED-GAP-1594: arm the per-tick push switch. The spawner's flag stays
+	// at its zero value (pushes ON) until this line, so embedders and every
+	// unit test keep byte-identical SCHED-GAP-1694 behavior;
+	// --disable-tick-push / SCHEDULER_DISABLE_TICK_PUSH=true flips the
+	// daemon to web-primary (commits stay local, the dashboard is the
+	// primary update surface, the fleet-strand-push cron remains the net).
+	loop.SetTickPushDisabled(*disableTickPush)
+	if *disableTickPush {
+		log.Printf("TICK-PUSH: disabled (SCHED-GAP-1594) — web-primary: commits stay local until pushed")
+	} else {
+		log.Printf("TICK-PUSH: enabled (SCHED-GAP-1694 default) — commits pushed at tick exit")
 	}
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)

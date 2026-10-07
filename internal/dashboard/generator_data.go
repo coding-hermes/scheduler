@@ -623,6 +623,13 @@ type HealthData struct {
 	HostMemAvailMB      float64
 	HostSampleAt        string
 	HostSampleSource    string
+	// TickPushMode (SCHED-GAP-1594) names the live-vs-pushed state: "push"
+	// = the spawner pushes each tick's commits at tick exit (SCHED-GAP-1694
+	// default); "local-only" = --disable-tick-PUSH is on, the daemon is
+	// web-primary and commits stay local until pushed (the
+	// fleet-strand-push cron remains the net). Rendered as its own health
+	// card so the operator never has to grep tick lines for the answer.
+	TickPushMode string
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {

@@ -645,6 +645,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if !obs.check(w, ctx) {
 		return
 	}
+	// SCHED-GAP-1594: the per-tick push state — is the daemon pushing each
+	// tick's commits at tick exit (SCHED-GAP-1694 default) or running
+	// web-primary with commits staying local? Deliberately OUTSIDE the loop
+	// guard (gateway_health_gate precedent): package state, so the question
+	// must be answerable on every daemon, loop or no loop.
+	status["tick_push"] = tickPushStatusBlock()
 	writeJSON(w, 200, status)
 }
 

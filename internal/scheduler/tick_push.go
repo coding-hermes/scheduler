@@ -17,8 +17,35 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+// tickPushDisabledDefault (SCHED-GAP-1594) is the process-wide mirror of the
+// spawner's --disable-tick-push resolution, written by
+// Spawner.SetTickPushDisabled — the single choke point every wiring path
+// (daemon flag/env/TOML) goes through. The API's tick_push block and the
+// dashboard's /health indicator read THIS, so both surfaces answer on every
+// daemon (gateway_health_gate precedent: package state, no Server/loop
+// required) and can never disagree with the spawner's actual push decision.
+// The zero value is the fleet default: pushes ON (SCHED-GAP-1694 behavior).
+var tickPushDisabledDefault atomic.Bool
+
+// SetTickPushDisabledDefault installs the process-wide per-tick-push state
+// mirrored from the spawner. Called by Spawner.SetTickPushDisabled only.
+func setTickPushDisabledDefault(v bool) { tickPushDisabledDefault.Store(v) }
+
+// TickPushDisabledDefault reports whether push-at-tick-exit is disabled
+// process-wide (SCHED-GAP-1594): true = web-primary, ticks update the
+// dashboard only and commits stay local until pushed; false (the default) =
+// the spawner pushes each tick's commits at tick exit (SCHED-GAP-1694).
+func TickPushDisabledDefault() bool { return tickPushDisabledDefault.Load() }
+
+// SetTickPushDisabledDefaultForTest installs the process-wide per-tick push
+// state from OUTSIDE the scheduler package (the api tests flip it to prove
+// /api/v1/status reflects the live state). Test-only: production wiring
+// goes exclusively through Spawner.SetTickPushDisabled.
+func SetTickPushDisabledDefaultForTest(v bool) { setTickPushDisabledDefault(v) }
 
 // pushTickWork pushes dir's current branch and verifies the local branch is
 // level with its upstream afterwards. It is bounded to ~60s so a hung remote

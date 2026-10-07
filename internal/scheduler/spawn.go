@@ -106,6 +106,16 @@ type Spawner struct {
 	// the tick's outcome is still decided by the artifacts re-measured after
 	// it, so an explained idle tick stays an idle tick.
 	idleIntervention bool
+	// tickPushDisabled (SCHED-GAP-1594) turns OFF the SCHED-GAP-1694
+	// push-at-tick-exit: a daemon with it set is WEB-PRIMARY — ticks update
+	// the dashboard and the tick rows only, and commits stay LOCAL until
+	// the fleet-strand-push cron or an operator pushes. The zero value is
+	// the fleet default (pushes ON), so embedders and every existing test
+	// keep byte-identical behavior; --disable-tick-push /
+	// SCHEDULER_DISABLE_TICK_PUSH flips it. Surfaced on /api/v1/status
+	// (tick_push.mode) and the /health panel so the live-vs-pushed state is
+	// never guessed from log lines.
+	tickPushDisabled bool
 	model            string
 	provider         string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
@@ -836,6 +846,26 @@ func (s *Spawner) guardAborted(tickID string) bool {
 // SetNoExecFallback disables the exec.Command fallback when gateway spawns fail.
 func (s *Spawner) SetNoExecFallback(v bool) {
 	s.noExecFallback = v
+}
+
+// SetTickPushDisabled (SCHED-GAP-1594) turns the SCHED-GAP-1694
+// push-at-tick-exit off or on at the spawner level. false (the zero value)
+// keeps the fleet default: a tick that lands commits is pushed immediately.
+// true = web-primary: the tick updates the dashboard and the tick rows and
+// leaves the commits unpushed (the fleet-strand-push cron remains the net).
+// Also mirrors the value into the package-wide default the API and dashboard
+// surfaces read — this setter is the single choke point, so the spawner's
+// push decision and its two observation surfaces can never disagree.
+func (s *Spawner) SetTickPushDisabled(v bool) {
+	s.tickPushDisabled = v
+	setTickPushDisabledDefault(v)
+}
+
+// TickPushDisabled reports whether push-at-tick-exit is disabled
+// (SCHED-GAP-1594). Read by the API server and the dashboard health panel
+// so both name the live-vs-pushed state from the same source of truth.
+func (s *Spawner) TickPushDisabled() bool {
+	return s.tickPushDisabled
 }
 
 // SetEventLogger wires an optional EventLogger for HIGH events on terminal
@@ -2899,12 +2929,22 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		// depends on the model remembering. Best-effort: a push failure never
 		// fails the tick (the cron re-covers it), but it IS logged at the tick
 		// line so a strand is visible now, not 30 minutes later.
-		if commits > 0 {
+		//
+		// SCHED-GAP-1594: --disable-tick-push turns this off — the daemon is
+		// then WEB-PRIMARY: the tick's commits are visible on the dashboard
+		// (tick rows, metrics) the moment Wait() returns, but nothing leaves
+		// the local disk until the fleet-strand-push cron or an operator
+		// pushes. The disabled state is logged AT the tick line (same
+		// visibility contract as the push lines) and surfaced as
+		// tick_push.mode=local-only on /api/v1/status + the /health panel.
+		if commits > 0 && !st.spawner.tickPushDisabled {
 			if ok, detail := pushTickWork(st.workdir); ok {
 				log.Printf("TICK: %s %s → push %s", st.Project, st.TickID, detail)
 			} else {
 				log.Printf("TICK: %s %s → push STRANDED (%s)", st.Project, st.TickID, detail)
 			}
+		} else if commits > 0 {
+			log.Printf("TICK: %s %s → push disabled (web-primary, SCHED-GAP-1594) — %d commit(s) stay local", st.Project, st.TickID, commits)
 		}
 		// SCHED-GAP-1655: the no-work verdict is recorded (not just
 		// derived) — the operator watching the TICK lines sees the

@@ -812,6 +812,26 @@ func gatewayHealthGateStatusBlock() map[string]interface{} {
 	}
 }
 
+// tickPushStatusBlock renders the SCHED-GAP-1594 per-tick push state for
+// /api/v1/status: mode is "push" when the spawner pushes each tick's
+// commits at tick exit (the SCHED-GAP-1694 fleet default) and "local-only"
+// when --disable-tick-PUSH disabled it (web-primary: the dashboard and the
+// tick rows are the update surface; commits stay local until the
+// fleet-strand-push cron or an operator pushes). disabled is the raw
+// boolean for machines. Package state (gateway_health_gate precedent), so
+// the block answers on every daemon — loop or no loop.
+func tickPushStatusBlock() map[string]interface{} {
+	disabled := scheduler.TickPushDisabledDefault()
+	mode := "push"
+	if disabled {
+		mode = "local-only"
+	}
+	return map[string]interface{}{
+		"mode":     mode,
+		"disabled": disabled,
+	}
+}
+
 // queueItem is a single entry in the scheduler queue.
 type queueItem struct {
 	Project   string  `json:"project"`

@@ -146,6 +146,7 @@ func printConfig(
 	loadGateThreshold float64,
 	modelRatesFile string,
 	sessionSilenceGrace time.Duration,
+	disableTickPush bool,
 ) {
 	fmt.Printf(`# schedulerd resolved configuration (CLI flags + SCHEDULER_* env overrides; the root TOML [scheduler] layer resolves later in boot and is NOT reflected here)
 # source: CLI flags + SCHEDULER_* env overrides (CLI > env). TOML [scheduler] (FEAT-005, applied via default-guard in main.go) resolves after this print and is not shown
@@ -169,6 +170,7 @@ spawn_mem_limit_mb = %d
 load_gate_threshold = %v
 model_rates_file = %q
 session_silence_grace = %q
+disable_tick_push = %v
 namespace_mode = %v
 auto_disable_failure_rate = %v
 auto_disable_window = %d
@@ -192,6 +194,7 @@ url = %q
 		spawnMemLimitMB,
 		loadGateThreshold, modelRatesFile,
 		sessionSilenceGrace,
+		disableTickPush,
 		namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
 		gatewayURL, gatewayKey, foremanHome, noExecFallback,
 		duckbrainNS, duckbrainURL,

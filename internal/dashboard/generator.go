@@ -762,6 +762,10 @@ func (g *Generator) healthData() HealthData {
 		GatewayURL:     g.gatewayURL,
 		Uptime:         g.clock().Since(g.started).Round(time.Second).String(),
 		Goroutines:     runtime.NumGoroutine(),
+		// SCHED-GAP-1594: the live-vs-pushed indicator, read from the same
+		// package state the spawner's push decision uses — the card can
+		// never disagree with what Wait() actually does at tick close-out.
+		TickPushMode: tickPushMode(),
 	}
 	if err := g.db.PingContext(ctx); err != nil {
 		data.DatabaseStatus = "error"

@@ -79,6 +79,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				0,
 				"",
 				45*time.Minute,
+				false,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "session_silence_grace"); got != "45m0s" {
@@ -109,6 +110,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				0,
 				"",
 				90*time.Minute,
+				false,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "session_silence_grace"); got != "1h30m0s" {
