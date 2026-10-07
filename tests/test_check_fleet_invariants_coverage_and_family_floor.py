@@ -159,7 +159,9 @@ def _all_clean_satellites() -> dict[str, dict]:
     out = {}
     for prefix in (PRIMARY, OTHER_PRIMARY):
         for suffix, family in gate.SATELLITE_FAMILY_PINS.items():
-            ns = "duckbrain-sync" if suffix == "sync" else suffix
+            # SCHED-GAP-1604: the role's family namespace, not a per-suffix one
+            # (releng -> releases, readme -> docs), or membership cross-fires.
+            ns = gate.SATELLITE_FAMILY_NAMESPACES[suffix]
             out[f"{prefix}-{suffix}"] = {
                 "enabled": 1, "cooldown_s": family, "cooldown_floor_s": family,
                 "namespace_id": ns,

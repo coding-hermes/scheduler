@@ -215,13 +215,15 @@ def test_auger_releng_shape_short_own_no_fallback_fires(tmp_path):
     namespace fallback — short on its own, exactly what the sweep judged
     uninstructed."""
     rc, out = _run_gate(tmp_path, [
-        {"name": "fixture-releng", "namespace_id": "auger",
+        # SCHED-GAP-1604: a role-LESS base name keeps the namespace-membership
+        # class quiet while preserving the measured 296-char incident shape.
+        {"name": "fixture-lonerel", "namespace_id": "auger",
          "prompt": "x" * AUGER_RELENG_INCIDENT_CHARS},
     ], ns_defaults={"auger": 0})
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     lines = _violations(out, "lane-instructions")
-    assert lines == [_violation_line("fixture-releng", "auger",
+    assert lines == [_violation_line("fixture-lonerel", "auger",
                                      AUGER_RELENG_INCIDENT_CHARS, 0)], lines
     assert _other_violations(out, "lane-instructions") == [], \
         f"unexpected extra violations:\n{out}"

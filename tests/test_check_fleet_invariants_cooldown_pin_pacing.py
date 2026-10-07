@@ -103,19 +103,28 @@ def _seed_db(path: Path, lanes: list[dict], ticks: list[tuple[str, str, str]] | 
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY[ns]))
+    # SCHED-GAP-1604: a -perf fixture lane must sit in the `perf` family
+    # namespace or the membership class cross-fires; seed any family namespace
+    # not already in SATELLITE_NS (idempotently — doc-writer is in both).
+    for ns, cap in (("perf", 1), ("doc-writer", 1), ("releases", 9)):
+        con.execute("INSERT OR IGNORE INTO namespaces VALUES (?, ?, 'cooldown')", (ns, cap))
     old = "2026-01-01T00:00:00Z"  # far outside any window — all ticks in-era
     for ln in lanes:
         wd = path.parent / ln["name"]
         wd.mkdir(parents=True, exist_ok=True)
+        m = gate.SATELLITE_FAMILY_RE.match(ln["name"])
+        # role-matched -> family namespace; otherwise a namespace outside the
+        # foremen scope (coverage only polices coding-hermes primaries).
+        ns = gate.SATELLITE_FAMILY_NAMESPACES[m.group(2)] if m else "backup"
         if schema == "modern":
             con.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (ln["name"], ln.get("enabled", 1), ln["cooldown_s"],
-                         ln.get("cooldown_pin_s"), "", str(wd), "qa",
+                         ln.get("cooldown_pin_s"), "", str(wd), ns,
                          ln.get("updated_at", old), ln.get("admission_mode", "")))
         else:
             con.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)",
                         (ln["name"], ln.get("enabled", 1), ln["cooldown_s"],
-                         "", str(wd), "qa"))
+                         "", str(wd), ns))
     for row in ticks or []:
         con.execute("INSERT INTO ticks VALUES (?, ?, ?)", row)
     con.commit()
