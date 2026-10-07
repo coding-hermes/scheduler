@@ -11,9 +11,9 @@ drifts back. This is the regression gate for that class of change. Run it after
 every scheduler deploy and from the daily report.
 
 Checks
-  1. caps          — per-namespace max_concurrent (foreman 8; satellites per
-                     the SCHED-GAP-215 policy map: qa/pm/dogfood/releases 9,
-                     duckbrain-sync 12, doc-writer 1).
+  1. caps          — per-namespace max_concurrent (foremen 16 per R3.2;
+                     every satellite namespace 1 per R3.3, both ruled
+                     2026-10-02 in docs/scheduler-rules.md).
                      The GLOBAL --max-concurrent has no DB column; it is
                      parity-checked instead: pass the daemon's actual
                      ``--global-cap N`` on a deploy and the checker fails when
@@ -233,23 +233,21 @@ DEFAULT_TOML = os.path.expanduser("~/.hermes/fleet.toml")
 # is nothing in the DB to assert a constant against — it is checked as
 # flag↔TOML parity via the ``--global-cap`` argument instead (see check 7b).
 FOREMAN_NS = "coding-hermes"
-FOREMAN_CAP_EXPECTED = 8
+FOREMAN_CAP_EXPECTED = 16      # R3.2 (2026-10-02, docs/scheduler-rules.md)
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
-# SCHED-GAP-215 (2026-09-24): satellite caps moved OFF the flat 1 onto the
-# ~1-slot-per-3-enabled-lanes policy for the five big families — each hosts
-# 20-34 enabled lanes and a cap of 1 serialized the whole family behind a
-# single sibling (SCHED-GAP-144 cap-gate deferrals: 1445 by 2026-09-24; the
-# lane-lag 3-6x bucket held 45 of the 150 lanes with tick history). The 12-slot
-# global --max-concurrent still bounds the fleet, so the raise redistributes
-# slots, it does not multiply them. doc-writer keeps 1 by design (7 lanes,
-# weekly cadence — the flat cap still serves it). Namespaces absent from this
-# map are not asserted (0 = unlimited infra rows).
+# R3.3 (2026-10-02, docs/scheduler-rules.md): EVERY satellite namespace sits
+# back at max_concurrent = 1, superseding SCHED-GAP-215's 2026-09-24
+# per-family raise (qa/pm/dogfood/releases 9, duckbrain-sync 12) and the
+# earlier flat-1 policy it replaced. The dict shape is kept (per-namespace
+# slots) so a future ruling can re-level one family without re-shaping the
+# checker. Namespaces absent from this map are not asserted (0 = unlimited
+# infra rows).
 SATELLITE_CAP_POLICY = {
-    "qa": 9,
-    "pm": 9,
-    "dogfood": 9,
-    "releases": 9,
-    "duckbrain-sync": 12,
+    "qa": 1,
+    "pm": 1,
+    "dogfood": 1,
+    "releases": 1,
+    "duckbrain-sync": 1,
     "doc-writer": 1,
 }
 COOLDOWN_FLOOR = 21600            # 6h — Bane's uniform law
@@ -932,12 +930,13 @@ def main(argv: list[str] | None = None) -> int:
             if row is None:
                 bad("caps", ns, "namespace missing")
             else:
-                # SCHED-GAP-215: per-family policy, not the flat 1 — the big
-                # families (qa/pm/dogfood/releases/duckbrain-sync) carry
-                # ~1 slot per 3 enabled lanes; doc-writer keeps the flat 1.
+                # R3.3 (2026-10-02): flat 1 on every satellite namespace —
+                # SCHED-GAP-215's per-family raise (9/12) is superseded
+                # (docs/scheduler-rules.md R3.3). Kept as a policy map so a
+                # future ruling can re-level one family.
                 expected = SATELLITE_CAP_POLICY.get(ns, 1)
                 if row.get("max_concurrent") != expected:
-                    bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected {expected} (SCHED-GAP-215 satellite cap policy)")
+                    bad("caps", ns, f"max_concurrent={row.get('max_concurrent')} expected {expected} (R3.3 satellite cap policy)")
 
     # 2. admission ------------------------------------------------------------
     for ns, row in namespaces.items():

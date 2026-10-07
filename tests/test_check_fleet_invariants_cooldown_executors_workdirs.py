@@ -58,7 +58,7 @@ SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer
 
 def _seed_namespaces(con: sqlite3.Connection) -> None:
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))

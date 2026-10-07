@@ -119,7 +119,7 @@ def _seed_db(path: Path, lanes: list[dict], ns_defaults: dict[str, int] | None =
                 " workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER,"
                 " admission_mode TEXT, default_prompt TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks', '')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks', '')")
     defaults = dict(MEASURED_NS_DEFAULTS)
     defaults.update(ns_defaults or {})
     for ns in SATELLITE_NS:
@@ -353,7 +353,7 @@ def test_schema_without_prompt_columns_skips_with_info(tmp_path):
                 " cooldown_s INTEGER, command TEXT, prompt TEXT, workdir TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER,"
                 " admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY[ns]))

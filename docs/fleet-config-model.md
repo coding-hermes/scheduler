@@ -1,6 +1,6 @@
 # The fleet config model — what controls how often a lane runs
 
-**Offline copy:** scheduler repo `docs/fleet-config-model.md` · **As of:** 2026-09-20 (UTC) · **Verified against:** the live daemon on `127.0.0.1:9090`, `~/.hermes/coding-hermes/scheduler.db`, `~/.hermes/fleet.toml`, and the source at `83f5c824`.
+**Offline copy:** scheduler repo `docs/fleet-config-model.md` · **As of:** 2026-10-07 (UTC) · **Verified against:** the live daemon on `127.0.0.1:9090`, `~/.hermes/coding-hermes/scheduler.db`, `~/.hermes/fleet.toml`, and the source in this repo (§2.2/§2.3 caps re-verified 2026-10-07 against the R3.2/R3.3 ruling — B1/B2 agree).
 
 This page answers one question — *how often does a lane run, and what controls it* — and it answers it the only way this fleet accepts: **every claim below is paired with a command that shows the claim is true.** If a command in this page does not run on your host or does not print what the page says, the page is wrong, not the fleet. Section 8 is the index of every command.
 
@@ -71,17 +71,17 @@ A1 → `--max-concurrent 10` · A2 → `10` · A3 → `41: maxConcurrent := flag
 
 `--namespace-mode` must be on for the per-namespace caps to exist at all; A2 shows it as `true` on the live fleet. Without it the global dial is the only cap.
 
-### 2.2 The foremen namespace — `coding-hermes` `max_concurrent` = **8**
+### 2.2 The foremen namespace — `coding-hermes` `max_concurrent` = **16**
 
-### 2.3 Each satellite namespace — the SCHED-GAP-215 per-family policy
+### 2.3 Each satellite namespace — the R3.3 flat-1 ruling
 
 The two are the same knob at different scope, so they get one table.
 
 | Part | Value |
 |---|---|
-| **What** | `max_concurrent` on a **namespace**: how many ticks that namespace may have in flight at once. `0` = unlimited (the global cap still applies). The five big satellite families sit at ~1 slot per 3 enabled lanes — `qa`/`pm`/`dogfood`/`releases` = **9**, `duckbrain-sync` = **12** — because at 20-34 enabled lanes each, the old flat cap of 1 serialized whole families behind single siblings (SCHED-GAP-144 cap-gate deferrals: 1445 by 2026-09-24; the lane-lag 3-6x bucket held 45 of the 150 lanes with tick history). `doc-writer` keeps **1** by design: 7 lanes, weekly cadence. The 12-slot global ceiling still bounds the fleet, so the satellite raise *redistributes* slots (idle foremen budget flows to satellites through the borrowing engine); it does not multiply them. Migration **v40** backfills the DB rows (guarded: only cap-1 rows move) and `fleet.toml` `[[namespaces]]` blocks carry the same values as the restart pin. |
-| **Where** | **Primary:** the `namespaces` row in `~/.hermes/coding-hermes/scheduler.db` — this is what the packer reads. **Restart pin:** the `[[namespaces]]` block in `~/.hermes/fleet.toml`, re-applied by `internal/config/loader.go` (`ApplyFleetConfig`). **Code default** for a namespace created with no key: `defaultMaxConcurrent = 8` (`internal/config/loader.go:53`) — a *library* default, never the fleet's current value. **Policy map:** `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py` (the invariant checker asserts it; mirrored in `internal/database/schedgap215_test.go` and the tests fixture). |
-| **Wins on restart** | The **`fleet.toml` value, when the entry carries a non-zero `max_concurrent`** (SCHED-GAP-149). A keyless entry — or an explicit `0` — leaves the live DB cap alone, so a cap assigned through the API survives a restart with a keyless entry. A negative value normalizes to `0`, so the same file cannot land two different caps depending on whether the row pre-existed. Because the five policy namespaces carry explicit keys in fleet.toml, **a cap change must land in BOTH stores** (§5) — the file's explicit key would re-pin the old value over any DB-only change. v40 runs before `ApplyFleetConfig` at boot, so a pre-215 DB upgraded by a new binary is re-pinned by the file in the same boot. |
+| **What** | `max_concurrent` on a **namespace**: how many ticks that namespace may have in flight at once. `0` = unlimited (the global cap still applies). **R3.3 (fleet ruling, 2026-10-02, `docs/scheduler-rules.md`): every satellite namespace sits at `max_concurrent = 1`** — `qa`, `pm`, `dogfood`, `releases`, `duckbrain-sync`, `doc-writer` all included. R3.3 supersedes SCHED-GAP-215's per-family raise (2026-09-24: qa/pm/dogfood/releases = **9**, duckbrain-sync = **12**, doc-writer = 1); migration **v40** still backfills any pre-215 DB row toward those old values as landed history, and `fleet.toml` `[[namespaces]]` blocks no longer carry explicit `max_concurrent` keys — the live rows above were re-pinned to 1. |
+| **Where** | **Primary:** the `namespaces` row in `~/.hermes/coding-hermes/scheduler.db` — this is what the packer reads. **Restart pin:** the `[[namespaces]]` block in `~/.hermes/fleet.toml`, re-applied by `internal/config/loader.go` (`ApplyFleetConfig`). **Code default** for a namespace created with no key: `defaultMaxConcurrent = 8` (`internal/config/loader.go:53`) — a *library* default, never the fleet's current value. **Policy map:** `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py` (the invariant checker asserts it; mirrored in the tests fixtures). |
+| **Wins on restart** | The **`fleet.toml` value, when the entry carries a non-zero `max_concurrent`** (SCHED-GAP-149). A keyless entry — or an explicit `0` — leaves the live DB cap alone, so a cap assigned through the API survives a restart with a keyless entry. A negative value normalizes to `0`, so the same file cannot land two different caps depending on whether the row pre-existed. The current `[[namespaces]]` blocks carry **no** `max_concurrent` keys, so the DB rows (R3.3 flat 1) win on every restart. |
 | **How to change** | (1) `PUT /api/v1/namespaces/{id}` with `{"max_concurrent": N}` — live immediately (the eval loop re-reads namespaces every pass; the ADMIT log shows the new cap within a minute). (2) Make the durable store carry it: mirror the DB into `~/.hermes/fleet.toml` (that file's writer, §5) or edit the namespace block's cap line directly. (3) Update `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py` **and its fixture mirror in `tests/test_check_fleet_invariants_caps_and_admission.py`** — the checker fails the old policy otherwise. (4) Re-read both stores with **B1**/**B2**/**B3** below. |
 | **Verify** | **B1** (live API), **B2** (the DB rows the packer actually reads), **B3** (the restart pin). All three must agree for a value to be durable. |
 
@@ -94,32 +94,32 @@ sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT id, max_concurren
 grep -A6 '^id = "coding-hermes"' ~/.hermes/fleet.toml | head -7
 # B4 — how many namespaces are at cap 1, and the sum of all caps vs the global cap
 sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT count(*) FROM namespaces WHERE max_concurrent=1;"
-sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT 8 + (SELECT SUM(max_concurrent) FROM namespaces WHERE max_concurrent > 0 AND id <> 'coding-hermes');"
-# B5 — the six-namespace satellite list and the SCHED-GAP-215 cap policy the checker asserts
+sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT 16 + (SELECT SUM(max_concurrent) FROM namespaces WHERE max_concurrent > 0 AND id <> 'coding-hermes');"
+# B5 — the six-namespace satellite list and the R3.3 cap policy the checker asserts
 grep -n 'SATELLITE_NS = ' ops/check-fleet-invariants.py
 grep -n -A7 'SATELLITE_CAP_POLICY = ' ops/check-fleet-invariants.py
 ```
 
-Live output (2026-09-24, post SCHED-GAP-215) — B1 and B2 agree exactly:
+Live output (2026-10-07, post R3.2/R3.3) — B2 (abridged):
 
 ```
-backup            0  cooldown
-coding-hermes     8  tasks
-data-cleanup      0  cooldown
+backup            1  cooldown
+coding-hermes    16  tasks
+data-cleanup      1  cooldown
 doc-writer        1  cooldown
-dogfood           9  cooldown
-duckbrain-infra   0  cooldown
-duckbrain-sync   12  cooldown
-monitoring        0  cooldown
-pm                9  cooldown   load_gate=off
-qa                9  cooldown
-releases          9  cooldown
-update-and-patch  1  cooldown
+docs              1  cooldown
+dogfood           1  cooldown
+duckbrain-infra   1  cooldown
+duckbrain-sync    1  cooldown
+monitoring        1  cooldown   load_gate=off
+pm                1  cooldown   load_gate=off
+qa                1  cooldown
+releases          1  cooldown
 ```
 
-B3 → `max_concurrent = 8`, `admission_mode = "tasks"`. B5 → `SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")` plus the `SATELLITE_CAP_POLICY` map (qa/pm/dogfood/releases 9, duckbrain-sync 12, doc-writer 1).
+B3 → `id = "coding-hermes"`, `weight = 100` — **no `max_concurrent` key** (keyless = DB wins; the DB carries 16/tasks). B5 → `SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")` plus the `SATELLITE_CAP_POLICY` map (every entry 1, per R3.3).
 
-**Read this table carefully — the cap column is a policy, not a uniform rule.** The five big satellite families (`qa`, `pm`, `dogfood`, `duckbrain-sync`, `releases`) carry the SCHED-GAP-215 throughput caps (~1 slot per 3 enabled lanes; the pre-215 flat 1 serialized 20-34-lane families behind single siblings), `doc-writer` and `update-and-patch` keep the flat 1 (low lane counts / weekly cadence), verified by command **B4**. Four namespaces (`backup`, `data-cleanup`, `duckbrain-infra`, `monitoring`) are deliberately `0` = unlimited, and each holds low-frequency infrastructure lanes. And the caps are a *ceiling*, not a target: the sum of caps deliberately exceeds the global 12 — so the packer and the weight budget, not this table, decide how many actually run. The invariant checker asserts exactly the foreman-8 + SCHED-GAP-215 satellite shape and its six-namespace satellite list (command **F1**/**F6**).
+**Read this table carefully — the cap column is a policy, not a uniform rule.** Every satellite namespace sits at the **R3.3 flat 1** (ruled 2026-10-02, superseding SCHED-GAP-215's 9/12 raise), and the foremen namespace sits at **R3.2's 16**, verified by commands **B1**–**B3**. Four namespaces (`backup`, `data-cleanup`, `duckbrain-infra`, `monitoring`) were historically `0` = unlimited infra lanes; today every row reads 1. And the caps are a *ceiling*, not a target: the packer and the weight budget, not this table, decide how many actually run. The invariant checker asserts exactly the foremen-16 + R3.3 flat-1 shape and its six-namespace satellite list (command **F1**/**F6**).
 
 ---
 
@@ -416,7 +416,7 @@ Also note: `--verify` also prints `WARN … adaptive_cooldown: db=1` lines for a
 
 | Symptom | Meaning | Do |
 |---|---|---|
-| `VIOLATION caps <ns>: max_concurrent=… expected 9` (or the policy value) | A satellite family sits off the SCHED-GAP-215 cap policy (below it = the serialization bottleneck returns; above it = a family can hold too many of the global slots) | Re-read `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py`, `PUT /api/v1/namespaces/{ns}` `{"max_concurrent": <policy>}`, mirror into `~/.hermes/fleet.toml`, re-run F1 |
+| `VIOLATION caps <ns>: max_concurrent=… expected 1` (or the policy value) | A satellite namespace sits off the R3.3 cap policy — flat 1 on every satellite (below 1 = invalid, 0 = unlimited; above it = a namespace can hold too many of the global slots; a stale 9/12 row means SCHED-GAP-215's old raise was never re-pinned) | Re-read `SATELLITE_CAP_POLICY` in `ops/check-fleet-invariants.py`, `PUT /api/v1/namespaces/{ns}` `{"max_concurrent": <policy>}`, mirror into `~/.hermes/fleet.toml` (or leave it keyless so the DB wins), re-run F1 |
 | `VIOLATION admission <ns>: mode=…` | A satellite namespace is `tasks`, or the foremen namespace is not | See §3.2; for a satellite, `cooldown` is the only correct answer |
 | `VIOLATION cooldown <p>: cooldown_s=… below the 21600s (6h) floor` | A lane is running faster than the law, or a wake value never got reverted. Two named lanes are exempt while their pin matches `SANCTIONED_SUBFLOOR_PINS` (hermes-dagger 900, coding-hermes-tools 3600) — a DRIFT off either value still fires | Decide intent; if it is intentional, it needs a dated `ELEVATED_PINS` entry (§4.2) or a `SANCTIONED_SUBFLOOR_PINS` entry, otherwise raise it |
 | `VIOLATION family-floor <p>` | A satellite's `cooldown_s` is off its family cadence (§4.1) — usually the REDUCE rule pulled it to the 6 h default | Put `cooldown_s` back on the family's canonical value (releng accepts 86400 or 259200); `cooldown_floor_s` is no longer compared. `INFO cooldown-legacy-floor` is the same residue reported, not a violation |

@@ -106,7 +106,7 @@ def _make_db(path: Path, projects: list[dict], *,
     con.execute(f"CREATE TABLE projects ({cols})")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
@@ -151,9 +151,10 @@ def _conforming_toml(toml_path: Path, projects: list[dict]) -> None:
         lines.append(f'id = "{ns}"')
         lines.append('admission_mode = "tasks"' if ns == "coding-hermes"
                      else 'admission_mode = "cooldown"')
-        # SCHED-GAP-215: the conforming TOML must carry the per-family policy
-        # cap or the store-parity check (7) would flag the fixture itself.
-        cap = 8 if ns == "coding-hermes" else gate.SATELLITE_CAP_POLICY.get(ns, 1)
+        # The conforming TOML must mirror the DB's caps or the store-parity
+        # check (7) would flag the fixture itself (R3.2: foremen 16; R3.3:
+        # every satellite 1).
+        cap = 16 if ns == "coding-hermes" else gate.SATELLITE_CAP_POLICY.get(ns, 1)
         lines.append(f"max_concurrent = {cap}")
         lines.append("")
     toml_path.write_text("\n".join(lines), encoding="utf-8")
@@ -332,7 +333,8 @@ max_concurrent = 9
     got = _violations(out, "parity")
     assert got == [
         "VIOLATION parity coding-hermes: admission_mode: db=tasks toml=cooldown",
-        "VIOLATION parity coding-hermes: max_concurrent: db=8 toml=4"], got
+        "VIOLATION parity coding-hermes: max_concurrent: db=16 toml=4",
+        "VIOLATION parity qa: max_concurrent: db=1 toml=9"], got
     assert _other_violations(out, "parity") == [], f"unexpected extra violations:\n{out}"
 
 

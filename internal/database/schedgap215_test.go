@@ -8,32 +8,37 @@ import (
 
 // SCHED-GAP-215 — satellite namespace throughput, STORAGE layer.
 //
-// The five big satellite families (qa, pm, dogfood, releases, duckbrain-sync)
-// each host 20-34 enabled lanes but sat at max_concurrent = 1, so every family
-// serialized behind a single sibling: the SCHED-GAP-144 cap gate deferred
+// HISTORY: migration v40 (2026-09-24) raised the five big satellite families
+// (qa, pm, dogfood, releases, duckbrain-sync) from max_concurrent = 1 to the
+// then-canonical ~1-slot-per-3-enabled-lanes policy (9 / 9 / 9 / 9 / 12).
+// Each family hosted 20-34 enabled lanes and the flat cap of 1 serialized
+// every family behind a single sibling: the SCHED-GAP-144 cap gate deferred
 // 1445 spawn attempts by 2026-09-24 and the lane-lag 3-6x bucket held 45 of
-// the 150 lanes with tick history. Migration v40 raises each family to the
-// ~1-slot-per-3-enabled-lanes policy (9 / 9 / 9 / 9 / 12).
+// the 150 lanes with tick history.
 //
-// The 12-slot global ceiling still bounds the whole fleet — the raise
-// redistributes slots across namespaces (idle foremen budget flows to
-// satellites via the borrowing engine), it does not create new capacity.
+// SUPERSEDED: the fleet ruling R3.3 (2026-10-02, docs/scheduler-rules.md)
+// put EVERY satellite namespace back at max_concurrent = 1 (and R3.2 raised
+// the foremen namespace to 16 / reserved 8). This file still verifies the
+// v40 backfill as LANDED HISTORY — what the migration statement actually
+// does on a pre-215 shape — so the tests below assert 9/12 against the
+// migration's own guarded UPDATEs; the LIVE policy (R3.3 flat 1) is asserted
+// by ops/check-fleet-invariants.py and its pytest mirrors, and the live DB +
+// fleet.toml carry it. Do NOT read the 9/12 values here as the current
+// fleet policy.
 //
 // The migration is deliberately a GUARDED BACKFILL (v38's pattern): every
 // UPDATE is conditioned on the OLD cap (max_concurrent = 1), so re-running it
-// can never double the value, and namespaces outside the policy (doc-writer
-// stays at 1 by design; auger 2; foremen 8) are untouched because they are
-// named rows, not family-matched.
-//
-// Fresh databases are NOT covered here on purpose: migrations create the
-// empty namespaces table; rows are seeded later from fleet.toml
-// (config.ApplyFleetConfig), which carries the same policy values. That
-// split is the documented two-store law (docs/fleet-config-model.md §5).
+// can never double the value. Fresh databases are NOT covered here on
+// purpose: migrations create the empty namespaces table; rows are seeded
+// later from fleet.toml (config.ApplyFleetConfig), which carries the ruling
+// values. That split is the documented two-store law
+// (docs/fleet-config-model.md §5).
 
-// satelliteCapPolicy is the SCHED-GAP-215 cap policy this migration encodes:
-// namespace id → max_concurrent. ~1 slot per ~3 enabled lanes, measured
-// 2026-09-24 (qa 26, pm 25, dogfood 25, releases 27, duckbrain-sync 34
-// enabled lanes).
+// satelliteCapPolicy is the cap policy migration v40 encodes: namespace id →
+// max_concurrent, ~1 slot per ~3 enabled lanes as measured 2026-09-24 (qa 26,
+// pm 25, dogfood 25, releases 27, duckbrain-sync 34 enabled lanes).
+// R3.3 (2026-10-02) superseded this policy fleet-wide; the map stays because
+// the tests below verify what v40's statement actually does.
 var satelliteCapPolicy = map[string]int{
 	"qa":             9,
 	"pm":             9,
@@ -45,6 +50,9 @@ var satelliteCapPolicy = map[string]int{
 // satelliteDescPolicy mirrors satelliteCapPolicy for the three namespaces
 // whose pre-215 description text still claimed "1 concurrent." — the migration
 // refreshes those claims so the row's own prose cannot contradict its cap.
+// (The "Capped at 9/12" wording below is v40's own written text, kept verbatim
+// so the assertion pins the migration byte-for-byte; the live rows were since
+// re-pinned by the R3.3 fleet.toml values.)
 var satelliteDescPolicy = map[string]string{
 	"qa":             "QA lanes — clean-machine brittleness battery (skill qa-foreman-ops). Bunker path; the Dagger qa.ts executor is retired until the new dagger is built. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).",
 	"pm":             "Per-project PM lane — board hygiene: dedupe by content fingerprint, repair reused/malformed ids, normalise priorities, no refiling. Capped at 9 concurrent (SCHED-GAP-215: ~1 slot per 3 enabled lanes).",
@@ -53,8 +61,9 @@ var satelliteDescPolicy = map[string]string{
 
 // schedGap215SeedPre215 inserts the pre-215 namespace shape: the five policy
 // families at cap 1 with their stale "1 concurrent." descriptions, plus three
-// decoys the migration must leave alone. CreatedAt/UpdatedAt are filled by
-// CreateNamespace.
+// decoys the migration must leave alone (foremen at the pre-R3.2 cap of 8 —
+// this is the shape v40 ran against, not the live fleet; doc-writer at 1;
+// auger at 2). CreatedAt/UpdatedAt are filled by CreateNamespace.
 func schedGap215SeedPre215(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	seed := []struct {
@@ -106,7 +115,10 @@ func runSchedGap215Migration(t *testing.T, ctx context.Context, db *sql.DB) {
 
 // TestSCHEDGAP215_Backfill_RaisesSatelliteCaps proves the v40 backfill lands
 // exactly the policy map on a pre-215 namespace shape, touches nothing outside
-// it, and refreshes the stale "1 concurrent." description claims.
+// it, and refreshes the stale "1 concurrent." description claims. This pins
+// LANDED MIGRATION BEHAVIOR: the fleet's live policy has since moved to the
+// R3.3 flat 1 (2026-10-02, docs/scheduler-rules.md), asserted by the
+// invariant checker — what v40 does to a pre-215 database does not change.
 func TestSCHEDGAP215_Backfill_RaisesSatelliteCaps(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -144,7 +156,9 @@ func TestSCHEDGAP215_Backfill_RaisesSatelliteCaps(t *testing.T) {
 		}
 	}
 
-	// Outside the policy: untouched caps AND untouched prose.
+	// Outside the policy: untouched caps AND untouched prose. The foremen cap
+	// of 8 here is the pre-R3.2 shape v40 ran against (R3.2 later raised the
+	// live namespace to 16) — this asserts what v40 did NOT touch.
 	decoys := map[string]int{"coding-hermes": 8, "doc-writer": 1, "auger": 2}
 	for id, want := range decoys {
 		ns, err := GetNamespace(ctx, db, id)

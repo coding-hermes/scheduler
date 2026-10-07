@@ -57,7 +57,7 @@ def _seed_fleet_db(path: Path, command: str, workdir: Path) -> None:
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("CREATE TABLE projects (name TEXT PRIMARY KEY, enabled INTEGER, cooldown_s INTEGER,"
                 " command TEXT, prompt TEXT, workdir TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))

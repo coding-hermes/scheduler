@@ -99,14 +99,14 @@ def _seed_db(path: Path, lanes: list[dict], ticks: list[tuple[str, str, str]] | 
                     " cooldown_s INTEGER, command TEXT, workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER,"
                 " admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY[ns]))
     # SCHED-GAP-1604: a -perf fixture lane must sit in the `perf` family
     # namespace or the membership class cross-fires; seed any family namespace
     # not already in SATELLITE_NS (idempotently — doc-writer is in both).
-    for ns, cap in (("perf", 1), ("doc-writer", 1), ("releases", 9)):
+    for ns, cap in (("perf", 1), ("doc-writer", 1), ("releases", 1)):
         con.execute("INSERT OR IGNORE INTO namespaces VALUES (?, ?, 'cooldown')", (ns, cap))
     old = "2026-01-01T00:00:00Z"  # far outside any window — all ticks in-era
     for ln in lanes:

@@ -121,7 +121,7 @@ def _seed_namespaces(con: sqlite3.Connection) -> None:
     """Minimal namespaces table; the coverage/family-floor checks do not read it
     but the caps check does, so seed enough to keep it quiet."""
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))

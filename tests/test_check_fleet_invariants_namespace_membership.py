@@ -46,12 +46,15 @@ def _load_gate():
 gate = _load_gate()
 
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
+# Mirror of the gate's SATELLITE_CAP_POLICY (R3.3, 2026-10-02): every
+# satellite namespace back at the flat 1, superseding SCHED-GAP-215's
+# per-family 9/12 raise.
 SATELLITE_CAP_POLICY = {
-    "qa": 9,
-    "pm": 9,
-    "dogfood": 9,
-    "releases": 9,
-    "duckbrain-sync": 12,
+    "qa": 1,
+    "pm": 1,
+    "dogfood": 1,
+    "releases": 1,
+    "duckbrain-sync": 1,
     "doc-writer": 1,
 }
 
@@ -82,8 +85,8 @@ def _make_workdir_with_board(root: Path, name: str) -> Path:
 def _seed_db(path: Path, projects: list[tuple[str, str, int]]) -> Path:
     """Mint a scheduler DB with the given (name, namespace_id, enabled) rows.
 
-    Namespaces are seeded conforming (foreman 8/tasks; satellites at the
-    SCHED-GAP-215 policy caps on cooldown) so checks 1-2 are clean; each
+    Namespaces are seeded conforming (foremen 16/tasks per R3.2; satellites
+    at the R3.3 flat-1 policy caps on cooldown) so checks 1-2 are clean; each
     project gets a conforming workdir (board dir + sync orientation facts)
     and a `ticks` table exists (empty) so the sibling checks that read it
     stay quiet — any extra VIOLATION line means the fixture (not the gate)
@@ -94,7 +97,7 @@ def _seed_db(path: Path, projects: list[tuple[str, str, int]]) -> Path:
     con.execute("CREATE TABLE projects (name TEXT PRIMARY KEY, enabled INTEGER, cooldown_s INTEGER,"
                 " command TEXT, prompt TEXT, workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, SATELLITE_CAP_POLICY[ns]))
