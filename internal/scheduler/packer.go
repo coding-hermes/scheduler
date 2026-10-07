@@ -379,6 +379,21 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	// summary beside the cooldown/budget counters so an operator can see why
 	// a drained fleet packed nothing.
 	totalSkippedStasis := 0
+	// SCHED-GAP-225: code lanes skipped at the reserved-band ceiling, same
+	// summary treatment.
+	totalSkippedReserve := 0
+
+	// SCHED-GAP-225: the DYNAMIC review-lane reserve for this pass —
+	// min(configured reserve, eligible review lanes still unpacked), decayed
+	// as review lanes pack. An unused reservation never idles a slot.
+	eligibleReview := 0
+	for _, s := range list {
+		if !spawnerRunning[s.name] && IsReviewLane(s.name) {
+			eligibleReview++
+		}
+	}
+	packedReview := 0
+	reserveLeft := reviewReserveRemaining(eligibleReview, packedReview)
 
 	for _, s := range list {
 		totalChecked++
@@ -433,6 +448,16 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		}
 		if used+s.weight > p.budget {
 			totalSkippedBudget++
+			continue
+		}
+		// SCHED-GAP-225: a code lane at the (cap − reserveLeft) ceiling is
+		// SKIPPED while the reserved band holds — the loop continues (does
+		// not break) so a later -review lane can claim the band; a review
+		// lane reads the full cap. The break below still ends the pack at
+		// the full cap for every lane.
+		if currRunning < p.maxConcurrent &&
+			currRunning >= reviewLaneSlotCeiling(s.name, reserveLeft, p.maxConcurrent) {
+			totalSkippedReserve++
 			continue
 		}
 		if currRunning >= p.maxConcurrent {
@@ -519,11 +544,16 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		used += s.weight
 		currRunning++
 		nsRunning[s.namespaceID]++
+		// SCHED-GAP-225: decay the dynamic reserve as review lanes pack.
+		if IsReviewLane(s.name) {
+			packedReview++
+			reserveLeft = reviewReserveRemaining(eligibleReview, packedReview)
+		}
 	}
 
 	if len(packed) == 0 {
-		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d namespace-cap=%d board-unchanged=%d, total-running=%d/%d",
-			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, totalSkippedStasis, currRunning, p.maxConcurrent)
+		log.Printf("PACKER: nothing packed — checked %d projects, skipped budget=%d cooldown=%d already-running=%d budget-cap=%d namespace-cap=%d board-unchanged=%d reserve-band=%d, total-running=%d/%d",
+			totalChecked, totalSkippedBudget, totalSkippedCooldown, totalSkippedRunning, skippedBudgetCap, totalSkippedNamespace, totalSkippedStasis, totalSkippedReserve, currRunning, p.maxConcurrent)
 	}
 	return packed, nil
 }

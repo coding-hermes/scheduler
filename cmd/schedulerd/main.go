@@ -46,6 +46,10 @@ func main() {
 	numLevels := flag.Int("num-levels", 10, "Number of priority levels")
 	weightBudget := flag.Int("budget", 100, "Weight budget")
 	maxConcurrent := flag.Int("max-concurrent", 10, "Max concurrent foremen")
+	// SCHED-GAP-225: the review-lane slot reservation — up to N slots of the
+	// --max-concurrent budget are reachable ONLY by -review lanes, so code
+	// lanes saturating the fleet cannot starve them. 0 = disabled.
+	reviewLaneReservedSlots := flag.Int("review-lane-reserved-slots", 2, "SCHED-GAP-225: reserve this many slots of --max-concurrent for -review lanes (code lanes stop packing reserved-slots short of the cap; review lanes may fill the whole cap). 0 = disabled. Env: SCHEDULER_REVIEW_LANE_RESERVED_SLOTS")
 	namespaceMode := flag.Bool("namespace-mode", false, "Enable multi-namespace scheduling")
 	tickTimeout := flag.Duration("tick-timeout", 7200*time.Second, "Maximum tick duration before timeout (2h)")
 	// SCHED-GAP-1575-B: per-request deadline for the heavy DB-backed read
@@ -250,6 +254,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_LOAD_GATE_THRESHOLD=%q invalid — gate stays %v", v, *loadGateThreshold)
 		}
 	}
+	// SCHED-GAP-225: review-lane reserved slots env override — same pattern.
+	// A non-negative parseable int arms the reservation (0 = explicitly
+	// disabled); an invalid or negative value WARNs and keeps the current
+	// value (the reservation must never silently change).
+	if v := os.Getenv("SCHEDULER_REVIEW_LANE_RESERVED_SLOTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			*reviewLaneReservedSlots = n
+		} else {
+			log.Printf("WARN: SCHEDULER_REVIEW_LANE_RESERVED_SLOTS=%q invalid — reservation stays %d", v, *reviewLaneReservedSlots)
+		}
+	}
 	// ADV-R11: per-spawn memory cap env override — same pattern. A positive
 	// parseable int arms the RLIMIT_AS cap; 0 keeps it off. Invalid values
 	// WARN and keep the current value (the cap must never silently change).
@@ -326,7 +341,7 @@ func main() {
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
-			*loadGateThreshold, *modelRatesFile,
+			*loadGateThreshold, *reviewLaneReservedSlots, *modelRatesFile,
 			*sessionSilenceGrace)
 		return
 	}
@@ -594,6 +609,12 @@ func main() {
 	// the env override; TOML [scheduler] tasks_pacing applies below only
 	// when the flag was never set (same precedence as the load gate).
 	scheduler.SetTasksPacing(*tasksPacing)
+	// SCHED-GAP-225: arm the review-lane slot reservation. The flag var
+	// carries the env override; TOML [scheduler] review_lane_reserved_slots
+	// applies later in the config block below only when the flag sat at its
+	// 2 default (same precedence chain as the load gate) — that block also
+	// re-arms this knob when it changes the value.
+	scheduler.SetReviewLaneReservedSlots(*reviewLaneReservedSlots)
 	// SCHED-GAP-125: load-average gate (opt-in; 0 = disabled). The flag var
 	// carries the env override; TOML [scheduler] load_gate_threshold applies
 	// below only when the flag was never set (same precedence as budget).
@@ -850,6 +871,13 @@ func main() {
 				scheduler.SetWaveLoadCeiling(*loadGateThreshold)
 				log.Printf("LOAD-GATE: enabled from config — threshold=%.1f (1m loadavg; namespaces may opt out via load_gate=\"off\")", *loadGateThreshold)
 			}
+			// SCHED-GAP-225: TOML layer for the review-lane reservation —
+			// same default-guard pattern (only when the flag sits at its
+			// 2 default, so CLI and env keep precedence). 0 = the flag's
+			// off value, so a TOML 0 keeps it off; a negative is invalid.
+			if rootCfg.Scheduler.ReviewLaneReservedSlots >= 0 && *reviewLaneReservedSlots == 2 {
+				*reviewLaneReservedSlots = rootCfg.Scheduler.ReviewLaneReservedSlots
+			}
 			// SCHED-GAP-127: TOML is the lowest-precedence layer. Any valid
 			// env value (including explicit false) blocks this opt-in.
 			if rootCfg.Scheduler.MeteredBudgetEnabled && meteredBudgetSource == "default" {
@@ -1096,18 +1124,19 @@ func main() {
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		// SCHED-GAP-1575-B: the ARMED heavy-read request deadline, so
 		// /api/v1/config reports the same duration the handlers enforce.
-		APIReadTimeout:         apiReadTimeout.String(),
-		SlotPatience:           slotPatience.String(),
-		TasksPacing:            tasksPacing.String(),
-		LoadGateThreshold:      *loadGateThreshold,
-		SpawnMemLimitMB:        *spawnMemLimitMB,
-		SessionSilenceGrace:    sessionSilenceGrace.String(),
-		ModelRatesFile:         *modelRatesFile,
-		NamespaceMode:          *namespaceMode,
-		AutoDisableFailureRate: *autoDisableRate,
-		AutoDisableWindow:      *autoDisableWindow,
-		AutoDisableMinTicks:    *autoDisableMinTicks,
-		FailureWindow:          *failureWindow,
+		APIReadTimeout:          apiReadTimeout.String(),
+		SlotPatience:            slotPatience.String(),
+		TasksPacing:             tasksPacing.String(),
+		LoadGateThreshold:       *loadGateThreshold,
+		ReviewLaneReservedSlots: *reviewLaneReservedSlots,
+		SpawnMemLimitMB:         *spawnMemLimitMB,
+		SessionSilenceGrace:     sessionSilenceGrace.String(),
+		ModelRatesFile:          *modelRatesFile,
+		NamespaceMode:           *namespaceMode,
+		AutoDisableFailureRate:  *autoDisableRate,
+		AutoDisableWindow:       *autoDisableWindow,
+		AutoDisableMinTicks:     *autoDisableMinTicks,
+		FailureWindow:           *failureWindow,
 		Gateway: api.GatewayConfigSnapshot{
 			URL:            *gatewayURL,
 			Key:            *gatewayKey,

@@ -204,6 +204,7 @@ func TestPrintConfig(t *testing.T) {
 			100, 50, 100,
 			512,
 			12.0,
+			2,
 			"/tmp/rates.json",
 			45*time.Minute,
 		)
@@ -235,6 +236,8 @@ func TestPrintConfig(t *testing.T) {
 		// --show-config output (the RESOLVED values passed at the call site —
 		// the same variables that feed /api/v1/config in main.go).
 		"load_gate_threshold = 12",
+		// SCHED-GAP-225: the review-lane reservation must surface too.
+		"review_lane_reserved_slots = 2",
 		"model_rates_file = \"/tmp/rates.json\"",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
@@ -356,6 +359,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				100, 50, 100,
 				0,
 				12.0,
+				0,
 				"/tmp/rates.json",
 				45*time.Minute,
 			)
@@ -389,6 +393,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				100, 50, 100,
 				0,
 				7.5,
+				0,
 				"/tmp/sentinel-rates.json",
 				45*time.Minute,
 			)
@@ -436,6 +441,7 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 				ns, "http://localhost:3000",
 				0,
 				100, 50, 100,
+				0,
 				0,
 				0,
 				"",

@@ -12,6 +12,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--num-levels` | `10` | Number of priority levels |
 | `--budget` | `100` | Weight budget |
 | `--max-concurrent` | `10` | Max concurrent foremen |
+| `--review-lane-reserved-slots` | `2` | SCHED-GAP-225: reserve this many slots of `--max-concurrent` for `-review` lanes — code lanes stop packing reserved slots short of the cap (they saturate at `max_concurrent − reserved`), review lanes may fill the whole cap, and a reservation no review lane uses never idles a slot (code lanes run to the full cap when no review lane shows up). `0` = disabled (every lane packs to the same cap). Values above `max_concurrent` are clamped at selection time (degrades to review-lanes-only). Env: `SCHEDULER_REVIEW_LANE_RESERVED_SLOTS` |
 | `--slot-patience` | `5m0s` | How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3) |
 | `--tasks-pacing` | `1m0s` | Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); `0` = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff |
 | `--load-gate-threshold` | `0` | Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); `0` = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via `load_gate='off'` |

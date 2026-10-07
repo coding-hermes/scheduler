@@ -488,6 +488,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-num-levels` | `10` | Number of priority levels |
 | `-budget` | `100` | Weight budget |
 | `-max-concurrent` | `10` | Max concurrent foremen |
+| `-review-lane-reserved-slots` | `2` | SCHED-GAP-225: reserve this many slots of `-max-concurrent` for `-review` lanes — code lanes stop packing reserved slots short of the cap (they saturate at `max_concurrent − reserved`), review lanes may fill the whole cap, and an unused reservation never idles a slot. `0` = disabled. Env: `SCHEDULER_REVIEW_LANE_RESERVED_SLOTS` |
 | `-namespace-mode` | `false` | Enable multi-namespace scheduling |
 | `-tick-timeout` | `2h` | Maximum tick duration before timeout (2h) |
 | `-api-read-timeout` | `5s` | Per-request deadline for the heavy read API surfaces (`/api/v1/status`, `/projects`, `/namespaces`, `/ticks`); a stalled DB helper returns 504 naming the helper instead of hanging the handler (SCHED-GAP-1575-B; `<= 0` = keep the 5s default) |

@@ -70,6 +70,10 @@ type ResolvedConfig struct {
 	// load average is at or above this value. 0 = the gate is off.
 	LoadGateThreshold float64 `json:"load_gate_threshold"`
 
+	// ReviewLaneReservedSlots (SCHED-GAP-225): how many slots of
+	// max_concurrent are reachable only by -review lanes. 0 = disabled.
+	ReviewLaneReservedSlots int `json:"review_lane_reserved_slots"`
+
 	// SpawnMemLimitMB (ADV-R11, GAP-048 cure): per-spawn RLIMIT_AS memory
 	// cap in MiB for spawned foreman processes. 0 = off (default — no
 	// limit call at all). NOT an admission gate: every selected project

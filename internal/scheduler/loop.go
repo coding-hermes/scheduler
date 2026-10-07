@@ -1412,10 +1412,31 @@ func (l *Loop) noteZeroSelect(now time.Time, runningSet map[string]bool) {
 	// packer's global maxConcurrent cap breaks out of selection before
 	// picking anything, so eligible projects exist but NOTHING is wrong.
 	// Treat saturation like fleet-idle: reset the counter, emit nothing.
+	//
+	// SCHED-GAP-225: when the review-lane reserve is armed, code lanes
+	// saturate (cap − effective reserve) slots EARLIER; the mirror reads
+	// the same per-class ceiling (dynamic reserve = min(reserve, eligible
+	// review lanes)) so a reservation-armed fleet does not page GAP-043 on
+	// code-lane saturation the packer itself produced. The full-cap guard
+	// stays for genuine over-saturation.
 	if len(runningSet) >= l.maxConcur {
 		l.zeroSelectCount = 0
 		l.zeroSelectEligible = 0
 		return
+	}
+	// SCHED-GAP-225: the reserve is DYNAMIC — it exists only while a
+	// review lane still waits for a slot (countEligibleReviewLanes counts
+	// enabled not-running review lanes; a lane in cooldown still holds the
+	// reserve, which is the point). When in force, code lanes saturate one
+	// slot per reserved count EARLIER than the full cap and the mirror must
+	// not page GAP-043 on saturation the packer itself produced.
+	if eligibleReview := countEligibleReviewLanes(l.db, runningSet); eligibleReview > 0 {
+		if reserved := reviewReserveRemaining(eligibleReview, 0); reserved > 0 &&
+			len(runningSet) >= reviewLaneSlotCeiling("", reserved, l.maxConcur) {
+			l.zeroSelectCount = 0
+			l.zeroSelectEligible = 0
+			return
+		}
 	}
 	eligible := l.countEligibleProjects(now, runningSet)
 	if eligible == 0 {
@@ -2132,6 +2153,16 @@ func (l *Loop) admissionSpendBlocked(c admissionCandidate) bool {
 // residual note on the vocabulary above).
 func (l *Loop) admissionStructuralDeferral(c admissionCandidate, st admissionNSCounts, packedWeight, globalRunning, globalSelected int) string {
 	if st.cap > 0 && st.inflightRun >= st.cap {
+		return AdmissionReasonCap
+	}
+	// SCHED-GAP-225: the global-cap test is per-class — a CODE candidate is
+	// capped at (maxConcurrent − dynamic reserve) so a pass-over caused by
+	// the reservation reports "cap" (the slot arithmetic the pass actually
+	// ran) rather than falling through to the budget residual. Review
+	// candidates read the full cap, unchanged.
+	if l.maxConcur > 0 && globalRunning+globalSelected < l.maxConcur &&
+		globalRunning+globalSelected >= reviewLaneSlotCeiling(c.Name,
+			reviewReserveRemaining(countEligibleReviewLanes(l.db, nil), 0), l.maxConcur) {
 		return AdmissionReasonCap
 	}
 	if l.maxConcur > 0 && globalRunning+globalSelected >= l.maxConcur {

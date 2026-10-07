@@ -77,6 +77,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				100, 50, 100,
 				0,
 				0,
+				0,
 				"",
 				45*time.Minute,
 			)
@@ -105,6 +106,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				"scheduler", "http://localhost:3000",
 				0,
 				100, 50, 100,
+				0,
 				0,
 				0,
 				"",

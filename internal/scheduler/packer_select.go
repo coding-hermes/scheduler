@@ -38,6 +38,21 @@ func (m *MultiPoolPacker) Pack(
 	// Phase 1 — allocation (already implemented by NamespaceAllocator).
 	allocations := m.allocator.Allocate(namespaces)
 
+	// SCHED-GAP-225: the DYNAMIC review-lane reserve for this pack pass —
+	// min(configured reserve, eligible review lanes still unpacked), so the
+	// reservation exists only while a review lane is waiting for a slot and
+	// never idles a slot when none is. Decayed as the passes pack review
+	// lanes (packedReview).
+	eligibleReview := 0
+	for i := range projects {
+		p := &projects[i]
+		if p.Enabled && !runningSet[p.Name] && IsReviewLane(p.Name) {
+			eligibleReview++
+		}
+	}
+	packedReview := 0
+	reserveLeft := reviewReserveRemaining(eligibleReview, packedReview)
+
 	globalRunning := len(runningSet)
 	globalSelected := 0
 
@@ -393,6 +408,15 @@ func (m *MultiPoolPacker) Pack(
 			}
 
 			// Concurrency cap check (global across all namespaces).
+			// SCHED-GAP-225: a code lane at the (cap − reserveLeft) ceiling
+			// is SKIPPED while the reserved band holds — the loop continues
+			// (does not break) so a later -review lane can claim the band;
+			// a review lane reads the full cap. The break below still ends
+			// the pass at the full cap for every lane.
+			if globalRunning+globalSelected < m.maxConcurrent &&
+				globalRunning+globalSelected >= reviewLaneSlotCeiling(pu.Project.Name, reserveLeft, m.maxConcurrent) {
+				continue
+			}
 			if globalRunning+globalSelected >= m.maxConcurrent {
 				break
 			}
@@ -410,6 +434,11 @@ func (m *MultiPoolPacker) Pack(
 			st.selected = append(st.selected, pu)
 			budgetRemaining -= pu.EffectiveWeight
 			globalSelected++
+			// SCHED-GAP-225: decay the dynamic reserve as review lanes pack.
+			if IsReviewLane(pu.Project.Name) {
+				packedReview++
+				reserveLeft = reviewReserveRemaining(eligibleReview, packedReview)
+			}
 		}
 		// Any remaining items (after budget/concurrency break) go to queued.
 		for i := range scored {
@@ -541,6 +570,15 @@ func (m *MultiPoolPacker) Pack(
 			effW := CalcEffectiveWeight(pu.Project.Weight, totalWeightInNS+sumSelectedWeights(st.selected), newAlloc)
 			pu.EffectiveWeight = effW
 
+			// SCHED-GAP-225: the review-lane reservation in the borrow
+			// re-pack — the same per-lane ceiling as the selection gate
+			// above; borrowed budget cannot spend a reserved slot on a
+			// code lane either.
+			if globalRunning+globalSelected < m.maxConcurrent &&
+				globalRunning+globalSelected >= reviewLaneSlotCeiling(pu.Project.Name, reviewLaneReservedSlots, m.maxConcurrent) {
+				stillQueued = append(stillQueued, pu)
+				continue
+			}
 			if globalRunning+globalSelected >= m.maxConcurrent {
 				stillQueued = append(stillQueued, pu)
 				continue

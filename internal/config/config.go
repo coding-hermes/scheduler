@@ -95,6 +95,16 @@ type SchedulerConfig struct {
 	// TOML < env SCHEDULER_LOAD_GATE_THRESHOLD < flag).
 	LoadGateThreshold float64 `toml:"load_gate_threshold"`
 
+	// ReviewLaneReservedSlots (SCHED-GAP-225) is how many slots of the
+	// --max-concurrent budget are reachable ONLY by -review lanes: code
+	// lanes stop packing reserved slots short of the cap, review lanes may
+	// fill the whole cap. 0 = disabled. Applies only when the operator never
+	// passed --review-lane-reserved-slots (same precedence chain as the
+	// load gate: TOML < env SCHEDULER_REVIEW_LANE_RESERVED_SLOTS < flag).
+	// Must be >= 0; values above max_concurrent are clamped at selection
+	// time (the reservation degrades to "review lanes only").
+	ReviewLaneReservedSlots int `toml:"review_lane_reserved_slots"`
+
 	// SpawnMemLimitMB (ADV-R11, GAP-048 cure) is the per-spawn RLIMIT_AS
 	// memory cap in MiB applied to spawned foreman processes. 0 = off (the
 	// default — no limit call at all, byte-identical spawns). NOT an

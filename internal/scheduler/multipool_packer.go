@@ -360,9 +360,33 @@ func (m *MultiPoolPacker) packFlat(
 	var packed []PackedProject
 	used := 0
 	selected := globalSelected
+
+	// SCHED-GAP-225: the DYNAMIC review-lane reserve for this pass —
+	// min(configured reserve, eligible review lanes still unpacked), so the
+	// reservation exists only while a review lane is waiting for a slot and
+	// never idles a slot when none is. Decayed as review lanes pack below.
+	eligibleReview := 0
+	for i := range list {
+		if IsReviewLane(list[i].proj.Name) {
+			eligibleReview++
+		}
+	}
+	packedReview := 0
+	reserveLeft := reviewReserveRemaining(eligibleReview, packedReview)
+
 	for _, s := range list {
+		// Full cap — the hard stop (unchanged legacy bound).
 		if selected >= m.maxConcurrent {
 			break
+		}
+		// SCHED-GAP-225: a code lane at the (cap − reserveLeft) ceiling is
+		// SKIPPED while the reserved band holds — the walk continues so a
+		// later -review lane can claim the band. A review lane reads the
+		// full cap and packs whenever the window has room. reserveLeft
+		// decays to 0 as review lanes pack, so an unused reservation never
+		// idles a slot.
+		if selected >= reviewLaneSlotCeiling(s.proj.Name, reserveLeft, m.maxConcurrent) {
+			continue
 		}
 		if s.proj.Weight > budgetRemaining {
 			continue
@@ -485,6 +509,11 @@ func (m *MultiPoolPacker) packFlat(
 		used += s.proj.Weight
 		budgetRemaining -= s.proj.Weight
 		selected++
+		// SCHED-GAP-225: decay the dynamic reserve as review lanes pack.
+		if IsReviewLane(s.proj.Name) {
+			packedReview++
+			reserveLeft = reviewReserveRemaining(eligibleReview, packedReview)
+		}
 	}
 
 	if len(packed) > 0 {

@@ -394,6 +394,11 @@ func (r *RootConfig) Validate() error {
 	if r.Scheduler.MaxConcurrent < 1 {
 		errs = append(errs, fmt.Errorf("scheduler.max_concurrent must be >= 1, got %d", r.Scheduler.MaxConcurrent))
 	}
+	// SCHED-GAP-225: the review-lane reservation is a count of slots — a
+	// negative value is a config error (0 is the explicit "off").
+	if r.Scheduler.ReviewLaneReservedSlots < 0 {
+		errs = append(errs, fmt.Errorf("scheduler.review_lane_reserved_slots must be >= 0, got %d", r.Scheduler.ReviewLaneReservedSlots))
+	}
 	if r.Daemon.Listen == "" {
 		errs = append(errs, errors.New("daemon.listen is required"))
 	}

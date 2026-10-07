@@ -44,6 +44,7 @@ func printSchema() {
         "spawn_mem_limit_mb": { "type": "integer", "default": 0, "minimum": 0, "description": "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default — no limit call at all). NOT an admission gate: every selected project still spawns; the cap constrains the spawned process's resources at spawn time and is inherited by its workers. Best-effort — a failed cap WARNs and the spawn continues. Linux (prlimit); other platforms degrade to the documented no-op.", "env": "SCHEDULER_SPAWN_MEM_LIMIT_MB", "cli": "--spawn-mem-limit-mb" },
         "session_silence_grace": { "type": "string", "default": "0s", "description": "Session-silence watchdog grace (SCHED-GAP-1707): terminate a gateway tick whose Hermes-state session shows no token delta and no tool activity for this long — failure_reason=session_silent, quiet duration on ticks.session_silence_s. '0s' = disabled (default; the watchdog only runs when armed). Never kills a producing session; cooldowns and the no-timeout-backoff chain are untouched.", "env": "SCHEDULER_SESSION_SILENCE_GRACE", "cli": "--session-silence-grace" },
         "load_gate_threshold": { "type": "number", "default": 0.0, "minimum": 0.0, "description": "Defer new spawns while the 1-minute load average is at or above this threshold; 0 = disabled (SCHED-GAP-125). Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'.", "env": "SCHEDULER_LOAD_GATE_THRESHOLD", "cli": "--load-gate-threshold" },
+        "review_lane_reserved_slots": { "type": "integer", "default": 2, "minimum": 0, "description": "SCHED-GAP-225: reserve this many slots of max_concurrent for -review lanes — code lanes stop packing reserved slots short of the cap, review lanes may fill the whole cap. 0 = disabled (every lane packs to the same cap). Values above max_concurrent are clamped at selection time (degrades to review-lanes-only).", "env": "SCHEDULER_REVIEW_LANE_RESERVED_SLOTS", "cli": "--review-lane-reserved-slots" },
         "model_rates_file": { "type": "string", "default": "", "description": "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild. Empty = builtin rates only. The flag's default IS the env value, so an env-set path always surfaces in the resolved config.", "env": "SCHEDULER_MODEL_RATES_FILE", "cli": "--model-rates-file" },
         "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" },
         "auto_disable_failure_rate": { "type": "number", "default": 0.0, "minimum": 0.0, "maximum": 1.0, "description": "Per-project failure-rate threshold (0 = off). SCHED-GAP-018.", "env": "SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "cli": "--auto-disable-failure-rate" },
@@ -144,6 +145,7 @@ func printConfig(
 	autoDisableWindow, autoDisableMinTicks, failureWindow int,
 	spawnMemLimitMB int64,
 	loadGateThreshold float64,
+	reviewLaneReservedSlots int,
 	modelRatesFile string,
 	sessionSilenceGrace time.Duration,
 ) {
@@ -167,6 +169,7 @@ slot_patience = %q
 tasks_pacing = %q
 spawn_mem_limit_mb = %d
 load_gate_threshold = %v
+review_lane_reserved_slots = %d
 model_rates_file = %q
 session_silence_grace = %q
 namespace_mode = %v
@@ -190,7 +193,7 @@ url = %q
 		numLevels, weightBudget, maxConcurrent,
 		tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing,
 		spawnMemLimitMB,
-		loadGateThreshold, modelRatesFile,
+		loadGateThreshold, reviewLaneReservedSlots, modelRatesFile,
 		sessionSilenceGrace,
 		namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
 		gatewayURL, gatewayKey, foremanHome, noExecFallback,
@@ -202,30 +205,31 @@ url = %q
 
 	// Print env var overrides
 	envVars := map[string]string{
-		"SCHEDULER_DB_PATH":                   os.Getenv("SCHEDULER_DB_PATH"),
-		"SCHEDULER_LISTEN":                    os.Getenv("SCHEDULER_LISTEN"),
-		"SCHEDULER_MIN_INTERVAL":              os.Getenv("SCHEDULER_MIN_INTERVAL"),
-		"SCHEDULER_MAX_INTERVAL":              os.Getenv("SCHEDULER_MAX_INTERVAL"),
-		"SCHEDULER_NUM_LEVELS":                os.Getenv("SCHEDULER_NUM_LEVELS"),
-		"SCHEDULER_BUDGET":                    os.Getenv("SCHEDULER_BUDGET"),
-		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
-		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
-		"SCHEDULER_GATEWAY_RESPONSE_TIMEOUT":  os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"),
-		"SCHEDULER_SLOT_PATIENCE":             os.Getenv("SCHEDULER_SLOT_PATIENCE"),
-		"SCHEDULER_SPAWN_MEM_LIMIT_MB":        os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"),
-		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
-		"SCHEDULER_SESSION_SILENCE_GRACE":     os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"),
-		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
-		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
-		"SCHEDULER_AUTO_DISABLE_WINDOW":       os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),
-		"SCHEDULER_AUTO_DISABLE_MIN_TICKS":    os.Getenv("SCHEDULER_AUTO_DISABLE_MIN_TICKS"),
-		"SCHEDULER_FAILURE_WINDOW":            os.Getenv("SCHEDULER_FAILURE_WINDOW"),
-		"SCHEDULER_LOAD_GATE_THRESHOLD":       os.Getenv("SCHEDULER_LOAD_GATE_THRESHOLD"),
-		"SCHEDULER_GATEWAY_URL":               os.Getenv("SCHEDULER_GATEWAY_URL"),
-		"SCHEDULER_GATEWAY_KEY":               os.Getenv("SCHEDULER_GATEWAY_KEY"),
-		"SCHEDULER_FOREMAN_HOME":              os.Getenv("SCHEDULER_FOREMAN_HOME"),
-		"SCHEDULER_DUCK_BRAIN_NS":             os.Getenv("SCHEDULER_DUCK_BRAIN_NS"),
-		"SCHEDULER_DUCK_BRAIN_URL":            os.Getenv("SCHEDULER_DUCK_BRAIN_URL"),
+		"SCHEDULER_DB_PATH":                    os.Getenv("SCHEDULER_DB_PATH"),
+		"SCHEDULER_LISTEN":                     os.Getenv("SCHEDULER_LISTEN"),
+		"SCHEDULER_MIN_INTERVAL":               os.Getenv("SCHEDULER_MIN_INTERVAL"),
+		"SCHEDULER_MAX_INTERVAL":               os.Getenv("SCHEDULER_MAX_INTERVAL"),
+		"SCHEDULER_NUM_LEVELS":                 os.Getenv("SCHEDULER_NUM_LEVELS"),
+		"SCHEDULER_BUDGET":                     os.Getenv("SCHEDULER_BUDGET"),
+		"SCHEDULER_MAX_CONCURRENT":             os.Getenv("SCHEDULER_MAX_CONCURRENT"),
+		"SCHEDULER_TICK_TIMEOUT":               os.Getenv("SCHEDULER_TICK_TIMEOUT"),
+		"SCHEDULER_GATEWAY_RESPONSE_TIMEOUT":   os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"),
+		"SCHEDULER_SLOT_PATIENCE":              os.Getenv("SCHEDULER_SLOT_PATIENCE"),
+		"SCHEDULER_SPAWN_MEM_LIMIT_MB":         os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"),
+		"SCHEDULER_WAVE_TICK_TIMEOUT":          os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
+		"SCHEDULER_SESSION_SILENCE_GRACE":      os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"),
+		"SCHEDULER_NAMESPACE_MODE":             os.Getenv("SCHEDULER_NAMESPACE_MODE"),
+		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE":  os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
+		"SCHEDULER_AUTO_DISABLE_WINDOW":        os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),
+		"SCHEDULER_AUTO_DISABLE_MIN_TICKS":     os.Getenv("SCHEDULER_AUTO_DISABLE_MIN_TICKS"),
+		"SCHEDULER_FAILURE_WINDOW":             os.Getenv("SCHEDULER_FAILURE_WINDOW"),
+		"SCHEDULER_LOAD_GATE_THRESHOLD":        os.Getenv("SCHEDULER_LOAD_GATE_THRESHOLD"),
+		"SCHEDULER_REVIEW_LANE_RESERVED_SLOTS": os.Getenv("SCHEDULER_REVIEW_LANE_RESERVED_SLOTS"),
+		"SCHEDULER_GATEWAY_URL":                os.Getenv("SCHEDULER_GATEWAY_URL"),
+		"SCHEDULER_GATEWAY_KEY":                os.Getenv("SCHEDULER_GATEWAY_KEY"),
+		"SCHEDULER_FOREMAN_HOME":               os.Getenv("SCHEDULER_FOREMAN_HOME"),
+		"SCHEDULER_DUCK_BRAIN_NS":              os.Getenv("SCHEDULER_DUCK_BRAIN_NS"),
+		"SCHEDULER_DUCK_BRAIN_URL":             os.Getenv("SCHEDULER_DUCK_BRAIN_URL"),
 	}
 	activeEnvs := false
 	for name, val := range envVars {
