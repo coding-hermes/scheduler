@@ -716,6 +716,19 @@ All clock reads and waits go through `internal/clock`; the implementation is sel
 
 `SCHEDULER_TIME_MODE=sim` refuses to boot unless `--simulate` is also set (a stray env var can never move the live fleet onto a fake clock), and every boot logs `TIME: clock <mode>`. See AGENTS.md → "Test-time simulator" for the test-facing API (`Advance`, `WaitForNextTimer`, `NewManualSimClock`).
 
+**Speeding up real-clock rehearsals (SCHED-GAP-1629).** Without these env vars every simulated wait burns real wall time: a 10-tick `--simulate --sim-setup --sim-ticks 10` rehearsal takes ~32s (sleep-bound, 0.3% CPU), and `--sim-count` ticks fire at most 8 per 500ms ticker beat, so the old 30s bulk-sim window FATALed at ~480 ticks. The same 10-tick rehearsal under the simulator runs in ~0.2s — the sim flags and the clock env vars go together:
+
+```sh
+# real clock: ~32s (sleep-bound)
+./bin/schedulerd --simulate --sim-setup --sim-ticks 10 --db /tmp/rehearsal.db --listen 127.0.0.1:0
+
+# sim clock, scale 1000: ~0.2s (161x faster)
+SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 SCHEDULER_TIME_START=2026-09-25T00:00:00Z \
+  ./bin/schedulerd --simulate --sim-setup --sim-ticks 10 --db /tmp/rehearsal.db --listen 127.0.0.1:0
+```
+
+`--sim-count`'s context window now derives from the tick count: ceil(count/8) × 500ms + 10s headroom (SCHED-GAP-1629), and a deadline-exceeded error names the ceiling and the escape hatch.
+
 ---
 
 ## Hermes Plugin
