@@ -98,9 +98,17 @@ type Generator struct {
 	// ~30s. Conclusions are cached per workdir for ciTTL (300s default —
 	// DASH-PERF-003; never below 60s, which is shorter than a cold render)
 	// and the cold-cache warm pass is concurrency-bounded + timeout-capped.
-	ciMu     sync.Mutex
-	ciCache  map[string]ciCacheEntry
-	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
+	ciMu    sync.Mutex
+	ciCache map[string]ciCacheEntry
+	ciTTL   time.Duration // zero → ciCacheDefaultTTL
+	// SCHED-GAP-1730: the overview snapshot cache. collect() costs 4.58s
+	// cold / 1.04s warm on a copy of the live DB and the 10s htmx
+	// autorefresh re-runs it every render, so GenerateParams and
+	// GenerateFleetTableParams serve a 60s-TTL deep-copied snapshot instead
+	// (mechanism + invalidation in overview_cache.go). snapTTL shrinks the
+	// window per generator (tests); zero reads the package default.
+	snap     ovSnapshot
+	snapTTL  time.Duration
 	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
 	// fleetPausedFn (SCHED-GAP-1601) reads the loop's authoritative paused
 	// flag for the console badge. Nil = unknown state, never fabricated.
@@ -201,6 +209,7 @@ func (g *Generator) SetDuckBrainURL(u string) {
 func (g *Generator) SetWeightBudget(n int) {
 	if n > 0 {
 		g.weightBudget = n
+		g.expireOverview()
 	}
 }
 
@@ -245,6 +254,7 @@ func (g *Generator) SetFleetPaused(fn func() bool) {
 func (g *Generator) SetDB(db *sql.DB) {
 	if db != nil {
 		g.db = db
+		g.expireOverview()
 	}
 }
 
@@ -265,7 +275,7 @@ func (g *Generator) Generate(w io.Writer) error {
 // WHOLE fleet — they are computed in collect() before the tables are sliced.
 func (g *Generator) GenerateParams(w io.Writer, params *FleetTables) error {
 	ctx := context.Background()
-	data := g.collect(ctx)
+	data := g.cachedOverview(ctx)
 	if params != nil {
 		data.TableState = *params
 	} else {
@@ -321,7 +331,7 @@ func (g *Generator) GenerateFleetTable(w io.Writer) error {
 // table's state applies here.
 func (g *Generator) GenerateFleetTableParams(w io.Writer, q url.Values) error {
 	ctx := context.Background()
-	data := g.collect(ctx)
+	data := g.cachedOverview(ctx)
 	var projectOptions []string
 	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
 		projectOptions = projs
@@ -1003,7 +1013,7 @@ const pageTemplate = `{{template "head" .}}
 <span class="signal"><span class="dot"></span> live</span>
 </div>
 </div>
-<div class="meta">Generated {{.GeneratedAt}}</div>
+<div class="meta">Generated {{.GeneratedAt}}</div>{{if .CacheAge}}<div class="meta" id="cacheAge">snapshot cached {{.CacheAge}}</div>{{end}}
 
 {{/* SCHED-GAP-1601: the global console — pause-all (confirm-gated), resume-all,
      force evaluate. Every button's result line prints the API's own status and
@@ -1300,6 +1310,7 @@ func (g *Generator) SetClock(c clock.Clock) {
 	}
 	g.clk.Set(c)
 	g.started = c.Now()
+	g.expireOverview()
 }
 
 // clock returns the generator's clock, never nil.

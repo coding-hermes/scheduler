@@ -417,6 +417,9 @@ type FleetData struct {
 	// projects filter (outcome) and every table's page-size control.
 	OutcomeOptions  []string
 	PageSizeOptions []int
+	// CacheAge (SCHED-GAP-1730): age label of the cached snapshot
+	// served by cachedOverview; empty on a fresh collect.
+	CacheAge string
 }
 
 // FleetTables is the per-table parameter set for the overview page.
