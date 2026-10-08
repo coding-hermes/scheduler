@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -189,6 +190,13 @@ func TestGenerateTape_FragmentMatchesPageRows(t *testing.T) {
 	db := newTestDB(t)
 	seedTapeFleet(t, db)
 	gen := dashboard.NewGenerator(db, nil)
+	// INT-CI-177F: seedTapeFleet anchors its 24h/14h windows on the wall
+	// clock, and GenerateTape/GenerateTapeRows each read "now" again. Two
+	// renders a second apart can straddle a bucket boundary (a tick seeded
+	// seconds before the hour edge moves buckets between renders), so the
+	// fragment diverged from the page under CI load. Pin the generator to
+	// the seed instant so both render paths share one "now".
+	gen.SetClock(clock.NewFixed(time.Now()))
 
 	var page, frag strings.Builder
 	if err := gen.GenerateTape(&page); err != nil {
