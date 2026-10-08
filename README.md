@@ -949,14 +949,12 @@ removed in the same pass; everything else below is deliberate and must not be
   are live; the integration-tagged root test and the simulation smoke exist ONLY
   in `ci.yaml`. Merging them is filed as a finding, not done blind.
 
-**Known layout drift (found by this inventory, filed — not fixed here):**
-`deploy/coding-hermes-scheduler.service` sets
-`ExecStart=%h/coding-hermes-scheduler/bin/schedulerd`, a path that does not exist
-(the repo is the doubly-nested checkout). The running daemon is the *user* unit
-`~/.config/systemd/user/coding-hermes-scheduler.service`, whose ExecStart is
-`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -config
-/home/kara/.hermes/fleet.toml`. The tracked unit file must be reconciled with the
-live one before anyone deploys it.
+**Layout drift, reconciled (README-7, 2026-10-08):** `deploy/coding-hermes-scheduler.service`
+previously pointed `ExecStart` at `%h/coding-hermes-scheduler/bin/schedulerd`, a path that does
+not exist (the repo is the doubly-nested checkout) while the live daemon is the *user* unit
+`~/.config/systemd/user/coding-hermes-scheduler.service`. The tracked unit is now byte-identical
+to that live user unit (ExecStart
+`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -config /home/kara/.hermes/fleet.toml`, plus `ExecStartPre` rebuild, drop-in-armed env, and the operator note that drop-ins/EnvironmentFile paths are host-specific). NOTE: the live unit carries `%h`-anchored host paths; a fresh-clone deploy on a different box must still review the ExecStart path before enabling — `make deploy-install` installs it verbatim.
 
 ## Fleet & Skills
 
