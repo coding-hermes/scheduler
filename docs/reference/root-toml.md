@@ -33,6 +33,14 @@ CLI and env on top. Two consequences:
    `load_gate_threshold`, `spawn_mem_limit_mb`, the auto-disable knobs) a TOML
    `0` just leaves the default in place.
 
+TR-162: the loader enforces the middle of this chain itself —
+`config.LoadRootConfig` (the daemon boot path) applies the `SCHEDULER_*` env
+layer over the decoded TOML, where it previously returned the raw decode (so
+env > TOML held only on the `LoadConfig` path and in main.go's per-key
+default-guard blocks). This corrects the loaded config for every call site;
+it does not wire `[gateway]` / `[daemon]` / `[duckbrain]` into the running
+daemon, which still read those knobs from flags/env only (see below).
+
 Keys outside this pattern:
 
 - `blackout_windows` has no CLI flag or env var at all — the TOML file is the

@@ -573,11 +573,19 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 	return &cfg, nil
 }
 
-// LoadRootConfig reads and validates a TOML file into a RootConfig.
-// The same file may also contain fleet declarations alongside scheduler
-// config sections (blackout windows, etc.). Unlike LoadFleetConfig,
+// LoadRootConfig reads a TOML file into a RootConfig and applies the
+// SCHEDULER_* env overrides on top of it (layer 3 of the FEAT-005
+// precedence: defaults < TOML < env; CLI flags are applied afterwards by
+// the caller). The same file may also contain fleet declarations alongside
+// scheduler config sections (blackout windows, etc.). Unlike LoadFleetConfig,
 // this function does not validate project/namespace fields — call
-// ApplyFleetConfig separately with AsFleet() for that.
+// ApplyFleetConfig separately with AsFleet() for that. Like LoadConfig, the
+// decoded RootConfig is NOT validated here (most boot call sites decode
+// partial sections such as [crier] or [federation] only); call Validate
+// where the full config is consumed. TR-162: before this fix the function
+// returned the raw TOML decode, so the documented env precedence did not
+// hold on the daemon boot path (a systemd SCHEDULER_GATEWAY_URL drop-in was
+// a silent no-op).
 func LoadRootConfig(path string) (*RootConfig, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
@@ -586,6 +594,7 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
+	applyEnvOverrides(&cfg)
 	return &cfg, nil
 }
 
