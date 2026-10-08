@@ -34,7 +34,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--sim-success` | `0.85` | Simulated success rate (0.0-1.0) |
 | `--sim-idle` | `0` | Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs |
 | `--sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop). Bulk-sim window derives from the count (SCHED-GAP-1629): ceil(N/8) × 500ms + 10s headroom (~1min per 1000 ticks on the real clock). On the real clock pair with `SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000` — see README "Test-time simulator" for the 32s-vs-0.2s comparison |
-| `--gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
+| `--gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command). Env: `SCHEDULER_GATEWAY_URL` — see the authority chain below |
 | `--gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
 | `--gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |
 | `--gateway-transient-retries` | `3` | Bounded transient-gateway retry count (SCHED-GAP-1681): a 5xx/refused-dial/SSE stream-drop is retried up to N times on the same model/provider pair with the SAME session key (`X-Hermes-Session-Key` = tick id, session continuation), so the agent resumes where the stream died. Every POST lands on `gateway_trace.Attempts` and the `ticks.attempts` column. `0` = single attempt (retry off). Env: `SCHEDULER_GATEWAY_TRANSIENT_RETRIES`; TOML `scheduler.gateway_transient_retries` |
@@ -60,6 +60,14 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--session-reap-threshold` | `24h0m0s` | Stale api_server session reap threshold (SCHED-GAP-089; default 24h) |
 
 Related: every environment variable the daemon reads is tabulated in [env-vars.md](env-vars.md), including the env-only knobs with no flag (`SCHEDULER_OPERATOR_TOKEN`, `SCHEDULER_WAVE_TICK_TIMEOUT`, the `SCHEDULER_FOREMAN_*` model pins).
+
+## Config precedence (one authority chain)
+
+```
+CLI flag  >  SCHEDULER_* env var  >  root TOML  >  built-in default
+```
+
+For `--gateway-url` this reads `--gateway-url` > `SCHEDULER_GATEWAY_URL` > root TOML `[gateway] url` > default. The env layer applies on the daemon boot path: `config.LoadRootConfig` runs `applyEnvOverrides` over the decoded TOML (TR-162; before that fix the loader returned the raw decode and a systemd drop-in `SCHEDULER_GATEWAY_URL` was a silent no-op). The flag layer is applied by the caller (`cmd/schedulerd/main.go`) after the loader returns — the loader never invents a flag layer. Note: main.go currently consumes the gateway URL only from the flag, so a TOML `[gateway] url` value changes the loaded config but not the running daemon; set the flag or the env var.
 
 ## Canonical invocation
 
