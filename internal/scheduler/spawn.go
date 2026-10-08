@@ -217,6 +217,13 @@ type Spawner struct {
 	// the spawn path's classification site — the same consume-once
 	// contract as guardAbortedTicks. Guarded by s.mu.
 	silenceTicks map[string]partialTelemetry
+
+	// pollLoopTicks (SCHED-GAP-1698) marks ticks the poll-loop idle guard
+	// terminated, carrying the sleep_poll partial-telemetry tuple (with the
+	// confirmed polling span on silenceS). Consumed exactly once by the
+	// spawn path's classification site — the same consume-once contract as
+	// silenceTicks. Guarded by s.mu.
+	pollLoopTicks map[string]partialTelemetry
 }
 
 // sendTurn (SCHED-GAP-119) is the single dispatch seam for one gateway
@@ -1715,6 +1722,50 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
 			// outcome (completed, aborted-by-turn-deadline, transport-error).
 			s.logPOSTTrace(tickID, postTrace)
+			// SCHED-GAP-1698: the poll-loop idle guard cancelled this
+			// session (confirmed sleep-poll cycling). Checked BEFORE the
+			// silence block below — the guard's verdict is the more
+			// specific statement about the row — with the identical
+			// consume-once / did-not-complete contract: act only when the
+			// POST did not complete (a cancel that races a finished turn
+			// leaves the tick its own honest outcome), consume the
+			// guardAborted marker too, and yield the TickTimeout carrying
+			// the sleep_poll partial tuple through Wait() → lifecycle.
+			// Complete (failure_reason=sleep_poll via failureReasonClass).
+			if stPoll, ok := s.sessionPollLoopFor(tickID); ok && (gwErr != nil || resp == nil) {
+				log.Printf("POLL-LOOP: %s tick=%s guard cancel recorded — confirmed span %ds (reason %s)",
+					project.Name, tickID, stPoll.silenceS, stPoll.reason)
+				// Consume the guard marker: CancelTickSession stamped
+				// guardAbortedTicks on the way to the cancel, and this
+				// return path skips the guard's own consume site — an
+				// unconsumed entry would leak the map and could mislabel a
+				// later retry of the same tick id.
+				s.guardAborted(tickID)
+				commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+				return &SpawnedTick{
+					TickID:        tickID,
+					Project:       project.Name,
+					SessionID:     tickID,
+					Started:       reqStart,
+					Deliver:       project.Deliver,
+					DeliverMode:   project.DeliverMode,
+					spawner:       s,
+					completed:     false,
+					completeAt:    s.clock().Now(),
+					gwFailErr:     sessionPollLoopError(fmt.Sprintf("%ds", stPoll.silenceS)),
+					gwTickTimeout: true,
+					gwPartial:     stPoll,
+					model:         model,
+					provider:      provider,
+					rate:          rate,
+					workdir:       project.Workdir,
+					reqStart:      reqStart,
+					Trigger:       "prompt",
+					gwFailCounted: true,
+					gwFailCommits: commits,
+					gwFailFiles:   files,
+				}, nil
+			}
 			// SCHED-GAP-1707: the session-silence watchdog cancelled this
 			// session. Consume the verdict exactly once (the guard's
 			// consume-once contract) and record the kill BEFORE the tick

@@ -259,6 +259,13 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"); v != "" {
 		cfg.Scheduler.SessionSilenceGrace = v
 	}
+	// SCHED-GAP-1698: poll-loop idle guard env override — no parse gate
+	// here, validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			cfg.Scheduler.SessionPollLoopMinTicks = n
+		}
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -351,6 +358,19 @@ func (r *RootConfig) Validate() error {
 			errs = append(errs, err)
 		} else if d < 0 {
 			errs = append(errs, fmt.Errorf("scheduler.session_silence_grace (%s) must be > 0 (unset or \"0s\" = disabled)", v))
+		}
+	}
+	// SCHED-GAP-1698: the poll-loop guard minimum is optional — 0 means
+	// disabled (the daemon flag default). Negative values are rejected
+	// (disabled is spelled 0, not -1) and values 1-5 are rejected with a
+	// pointer at the built-in floor: the flag layer clamps 1-5 up to 6, so
+	// accepting them in TOML would be a silent value change rather than a
+	// real setting. N >= 6 arms the guard at that (stricter) threshold.
+	if n := r.Scheduler.SessionPollLoopMinTicks; n != 0 {
+		if n < 0 {
+			errs = append(errs, fmt.Errorf("scheduler.session_poll_loop_min_ticks (%d) must be >= 0 (0 = disabled)", n))
+		} else if n < 6 {
+			errs = append(errs, fmt.Errorf("scheduler.session_poll_loop_min_ticks (%d) must be >= 6 — the built-in stride floor (0 = disabled)", n))
 		}
 	}
 	// SCHED-GAP-1575-B: the heavy-read API deadline is optional — empty means

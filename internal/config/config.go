@@ -118,6 +118,22 @@ type SchedulerConfig struct {
 	// --session-silence-grace.
 	SessionSilenceGrace string `toml:"session_silence_grace"`
 
+	// SessionPollLoopMinTicks (SCHED-GAP-1698) is the poll-loop idle
+	// guard's per-stride tool-call minimum, stored as an integer. A gateway
+	// tick whose session shows >= N tool calls in each of two consecutive
+	// 5-minute strides — every call a sleep-led or read-only status probe
+	// at a fixed cadence, with zero advancement — for 4 consecutive guard
+	// passes is cancelled with failure_reason=sleep_poll. 0 = disabled
+	// (the default — the guard only runs when an operator arms it;
+	// library/embedding behavior is byte-identical). Values 1-5 are
+	// rejected in favor of the built-in floor of 6 (the knob can only make
+	// the guard STRICTER, never looser than the measured classification).
+	// It never kills a producing session: any non-poll call in a stride
+	// spares the tick. Precedence: TOML < env
+	// SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS < flag
+	// --session-poll-loop-min-ticks.
+	SessionPollLoopMinTicks int `toml:"session_poll_loop_min_ticks"`
+
 	// MeteredBudgetEnabled (SCHED-GAP-127) switches USD-cap enforcement from
 	// per-tick cost_usd to the fleet-wide Hermes state.db cash ledger. Default
 	// false preserves historical behavior; enable explicitly with TOML

@@ -206,6 +206,7 @@ func TestPrintConfig(t *testing.T) {
 			12.0,
 			"/tmp/rates.json",
 			45*time.Minute,
+			12, // SCHED-GAP-1698 sentinel: the printed session_poll_loop_min_ticks is this argument
 		)
 	})
 
@@ -236,6 +237,9 @@ func TestPrintConfig(t *testing.T) {
 		// the same variables that feed /api/v1/config in main.go).
 		"load_gate_threshold = 12",
 		"model_rates_file = \"/tmp/rates.json\"",
+		// SCHED-GAP-1698: the poll-loop guard minimum must surface in
+		// --show-config output (the value passed at the call site).
+		"session_poll_loop_min_ticks = 12",
 		"namespace_mode = false",
 		// SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5 resolved into the printed
 		// effective value (was previously invisible to --show-config).
@@ -358,6 +362,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				12.0,
 				"/tmp/rates.json",
 				45*time.Minute,
+				0,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "12" {
@@ -391,6 +396,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				7.5,
 				"/tmp/sentinel-rates.json",
 				45*time.Minute,
+				0,
 			)
 		})
 		if got := tomlSectionValue(t, out, "scheduler", "load_gate_threshold"); got != "7.5" {
@@ -439,6 +445,7 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 				0,
 				0,
 				"",
+				0,
 				0,
 			)
 		})

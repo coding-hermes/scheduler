@@ -191,6 +191,13 @@ type Loop struct {
 	// nothing — the autonomy law (a Crier failure never blocks or fails a
 	// tick) is structural, not a caller discipline.
 	schedulerBus *SchedulerBus
+
+	// pollLoopHist (SCHED-GAP-1698) is the poll-loop guard's per-tick
+	// confirmation history (streaks of consecutive confirming passes).
+	// Pruned by retain() at the top of every sessionPollLoopPass against
+	// the current running-tick candidate set, so entries for finished ticks
+	// never leak. Touched only from the reaper goroutine — no lock.
+	pollLoopHist pollLoopTracker
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -692,6 +699,13 @@ func (l *Loop) Run() {
 			// default). Never fails the reaper.
 			if killed := l.sessionSilencePass(l.clock().Now()); killed > 0 {
 				log.Printf("SESSION-SILENCE: pass complete — %d silent session(s) terminated", killed)
+			}
+			// SCHED-GAP-1698: the poll-loop idle guard rides the same pass,
+			// after the silence watchdog. A no-op until the daemon arms it
+			// (SetSessionPollLoopMinTicks; 0 = off, the library default).
+			// Never fails the reaper.
+			if killed := l.sessionPollLoopPass(l.clock().Now()); killed > 0 {
+				log.Printf("POLL-LOOP: pass complete — %d poll-looping session(s) terminated", killed)
 			}
 		case <-healthTicker.C:
 			// SCHED-GAP-131: periodic flush of the in-memory feature-usage

@@ -47,6 +47,13 @@ const (
 	// TelemetryPartialDispatchDeadline: a remote-dispatched tick (SCHED-GAP-1710)
 	// whose reply never arrived before the session deadline.
 	TelemetryPartialDispatchDeadline = "dispatch_deadline"
+	// TelemetryPartialSleepPoll: the SCHED-GAP-1698 poll-loop guard
+	// cancelled a session whose recent tool activity is a confirmed
+	// sleep-poll cycle (`sleep N; <status check>` at a fixed cadence with
+	// zero advancement) — the shape that emits stream events forever and
+	// never trips any idle deadline. The row also carries the confirmed
+	// polling span on session_silence_s.
+	TelemetryPartialSleepPoll = "sleep_poll"
 )
 
 // telemetryPartialReasonIsValid reports whether reason belongs to the
@@ -55,7 +62,8 @@ const (
 func telemetryPartialReasonIsValid(reason string) bool {
 	switch reason {
 	case TelemetryPartialTickDeadline, TelemetryPartialSessionSilent,
-		TelemetryPartialStaleReap, TelemetryPartialDispatchDeadline:
+		TelemetryPartialStaleReap, TelemetryPartialDispatchDeadline,
+		TelemetryPartialSleepPoll:
 		return true
 	}
 	return false
@@ -115,6 +123,16 @@ func markSilentTelemetry(tokensIn, tokensOut int, cost float64, silenceS int64) 
 	return pt
 }
 
+// markPollLoopTelemetry is markPartialTelemetry for the SCHED-GAP-1698
+// poll-loop guard: the same tuple named sleep_poll, carrying the confirmed
+// polling span (whole seconds) on silenceS — the same column the silence
+// watchdog uses, since both values are "measured window the guard acted on".
+func markPollLoopTelemetry(tokensIn, tokensOut int, cost float64, spanS int64) partialTelemetry {
+	pt := markPartialTelemetry(TelemetryPartialSleepPoll, tokensIn, tokensOut, cost)
+	pt.silenceS = spanS
+	return pt
+}
+
 // sessionSilentMarker is the watchdog kill's error-text marker. HarnessFailure
 // (failureclass.go) carries it, so a watchdog-killed tick stamps
 // failure_reason=session_silent through the SAME classifier every other
@@ -128,4 +146,20 @@ const sessionSilentMarker = "session silent"
 // depend on the leading "session silent" marker.
 func sessionSilentError(quiet string) string {
 	return sessionSilentMarker + " — no token delta and no tool activity for " + quiet
+}
+
+// sessionPollLoopMarker is the SCHED-GAP-1698 poll-loop guard's kill-text
+// marker (deliberately distinct from sessionSilentMarker). HarnessFailure
+// (failureclass.go) carries it, so a guard-killed tick stamps
+// failure_reason=sleep_poll through the SAME classifier every other
+// harness-side verdict uses, and never feeds per-project health accounting
+// (SCHED-GAP-134) as the lane's own fault.
+const sessionPollLoopMarker = "session poll-loop detected"
+
+// sessionPollLoopError renders the guard's ticks.error text. span names the
+// confirmed polling window (already formatted, e.g. "15m"). The text is
+// stable: the classifier (HarnessFailure → failureReasonClass) and operator
+// greps depend on the leading marker.
+func sessionPollLoopError(span string) string {
+	return sessionPollLoopMarker + " — repeated sleep+status tool cycles with zero advancement for " + span
 }

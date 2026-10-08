@@ -77,6 +77,16 @@ func HarnessFailure(errText string) bool {
 		// accounting (SCHED-GAP-134) exactly like every other harness-side
 		// kill. The silence duration itself rides ticks.session_silence_s.
 		sessionSilentMarker,
+		// SCHED-GAP-1698: the poll-loop idle guard's kill text
+		// (sessionPollLoopError). A confirmed sleep-poll session is a
+		// HARNESS verdict — the scheduler stopped it for zero-advancement
+		// cycling — never the lane's own failure, so the row stamps
+		// failure_reason=sleep_poll through failureReasonClass and stays
+		// out of per-project health accounting (SCHED-GAP-134) exactly
+		// like every other harness-side kill. The confirmed polling span
+		// rides ticks.session_silence_s (same column as the silence
+		// watchdog's quiet duration).
+		sessionPollLoopMarker,
 		// SCHED-GAP-1641: an instant one-shot gateway turn is a HARNESS
 		// verdict, not a project failure — a completed response that did a
 		// near-zero-output single turn must not count in any healthy-tick

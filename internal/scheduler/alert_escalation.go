@@ -607,6 +607,18 @@ func failureReasonClass(errText string) string {
 	if strings.Contains(strings.ToLower(errText), sessionSilentMarker) {
 		return "session_silent"
 	}
+	// SCHED-GAP-1698: the poll-loop guard's verdict is its OWN class for the
+	// same reason — the scheduler stopped a zero-advancement sleep-poll
+	// session; the gateway carried it fine the whole time (which is exactly
+	// why no idle deadline ever fired). Named sleep_poll so an operator
+	// reading ticks.failure_reason sees the guard; the row stays out of
+	// per-project health accounting via the marker list in failureclass.go.
+	// Checked BEFORE the transport fallback: the marker is more specific
+	// than any transport class and the guard rides the same classification
+	// site as the silence watchdog.
+	if strings.Contains(strings.ToLower(errText), sessionPollLoopMarker) {
+		return "sleep_poll"
+	}
 	if strings.Contains(strings.ToLower(errText), "draining") {
 		return FailureReasonGatewayDrain
 	}

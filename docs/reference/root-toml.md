@@ -58,6 +58,7 @@ Keys outside this pattern:
 | `tasks_pacing` | Yes | Default-guard (flag default 60s) | `0s` disables pacing explicitly. |
 | `spawn_mem_limit_mb` | Yes | Default-guard (flag default 0) | Positive arms the RLIMIT_AS cap. |
 | `session_silence_grace` | Yes | Default-guard (flag default 0) | Positive arms the watchdog. |
+| `session_poll_loop_min_ticks` | Yes | Default-guard (flag default 0) | Value >= 6 arms the poll-loop guard at that (stricter) threshold; 1-5 rejected in TOML (the flag layer clamps them up). |
 | `metered_budget_enabled` | Yes | Default-guard (env `SCHEDULER_METERED_BUDGET_ENABLED` wins, even an explicit `false`) | Not listed in `--schema` output — an undocumented-but-applied key. |
 | `min_interval` | **No** | — | Advertised by `--schema` and present in `config.example.toml`, but `main.go` never reads `Scheduler.MinInterval`; only `--min-interval` / `SCHEDULER_MIN_INTERVAL` work. |
 | `max_interval` | **No** | — | Same shape as `min_interval`. |

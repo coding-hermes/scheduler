@@ -99,6 +99,17 @@ func main() {
 	// producing session; cooldowns and the "no timeout backoff" chain are
 	// untouched.
 	sessionSilenceGrace := flag.Duration("session-silence-grace", 0, "SCHED-GAP-1707: terminate a gateway tick whose session shows no token delta and no tool activity for this long (failure_reason=session_silent, quiet duration on the tick row); 0 = disabled (default). Never kills a producing session. Env: SCHEDULER_SESSION_SILENCE_GRACE")
+	// SCHED-GAP-1698: poll-loop idle guard. A gateway tick whose session's
+	// tool activity is a confirmed sleep-poll cycle — sleep-led or
+	// read-only status probes at a fixed cadence in two consecutive
+	// 5-minute strides, zero advancement, 4 consecutive guard passes — is
+	// cancelled with failure_reason=sleep_poll. The value is the per-stride
+	// tool-call minimum; the built-in floor is 6 (values 1-5 clamp up), 0 =
+	// off (the default). It never kills a producing session: any non-poll
+	// call in a stride, any gap past 10 minutes, or any unreadable telemetry
+	// spares the tick; cooldowns and the no-timeout-backoff chain are
+	// untouched.
+	sessionPollLoopMinTicks := flag.Int("session-poll-loop-min-ticks", 0, "SCHED-GAP-1698: terminate a gateway tick whose session shows a confirmed sleep-poll tool cycle (sleep-led/read-only status probes at a fixed cadence, zero advancement) — this many tool calls per 5-minute stride, 4 consecutive passes (failure_reason=sleep_poll); 0 = disabled (default), values 1-5 clamp to the built-in floor of 6. Never kills a producing session. Env: SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS")
 	// SCHED-GAP-1594: per-tick git push behind a flag — web-primary updates.
 	disableTickPush := flag.Bool("disable-tick-push", false, "SCHED-GAP-1594: skip the per-tick git push at tick exit (SCHED-GAP-1694's push-at-exit); ticks only update the web dashboard (tick rows, /api/v1/status, /health) and the fleet-strand-push cron is the only remaining pusher. Default false = backward compat (per-tick push stays on). Env: SCHEDULER_DISABLE_TICK_PUSH")
 	meteredBudgetEnabled := false
@@ -311,6 +322,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_SESSION_SILENCE_GRACE=%q invalid — watchdog stays %v", v, *sessionSilenceGrace)
 		}
 	}
+	// SCHED-GAP-1698: poll-loop idle guard env override — same pattern. A
+	// value >= 1 arms the guard (1-5 clamp up to the built-in floor of 6 at
+	// the setter); 0 keeps it off (the library default). Invalid values
+	// WARN and keep the current value.
+	if v := os.Getenv("SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			*sessionPollLoopMinTicks = n
+		} else {
+			log.Printf("WARN: SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS=%q invalid — poll-loop guard stays %d", v, *sessionPollLoopMinTicks)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -356,7 +378,7 @@ func main() {
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
 			*loadGateThreshold, *modelRatesFile,
-			*sessionSilenceGrace)
+			*sessionSilenceGrace, *sessionPollLoopMinTicks)
 		return
 	}
 
@@ -643,6 +665,12 @@ func main() {
 	// [scheduler] session_silence_grace applies later in the config block
 	// below only when the flag sat at its 0 default.
 	scheduler.SetSessionSilenceGrace(*sessionSilenceGrace)
+	// SCHED-GAP-1698: arm the poll-loop idle guard (0 = off, the default —
+	// embedding tests and unit suites keep byte-identical behavior). The
+	// flag var carries the env override; the TOML [scheduler]
+	// session_poll_loop_min_ticks applies later in the config block below
+	// only when the flag sat at its 0 default.
+	scheduler.SetSessionPollLoopMinTicks(*sessionPollLoopMinTicks)
 	// SCHED-GAP-1678: arm the board-stasis spawn gate. The LOOP-level gate is
 	// constructed DISABLED on purpose (see board_stasis.go) so embedders and
 	// every existing unit test keep byte-identical selection until someone
@@ -924,12 +952,32 @@ func main() {
 			// grace — same default-guard pattern (only when the flag sits
 			// at its 0 default, so CLI and env keep precedence). Positive
 			// values arm the watchdog; a TOML 0 keeps it off.
+			// SCHED-GAP-220 re-arm rule (the tasks_pacing lesson): the
+			// SetSessionSilenceGrace wiring call ran BEFORE this TOML
+			// block, so a TOML-only grace was silently DEAD — the config
+			// snapshot reported the TOML number while the running
+			// watchdog stayed off. Re-arm the setter here.
 			if rootCfg.Scheduler.SessionSilenceGrace != "" && *sessionSilenceGrace == 0 {
 				if d, derr := time.ParseDuration(rootCfg.Scheduler.SessionSilenceGrace); derr == nil && d > 0 {
 					*sessionSilenceGrace = d
+					scheduler.SetSessionSilenceGrace(*sessionSilenceGrace)
 					log.Printf("SESSION-SILENCE: watchdog armed from config — grace %v (0 = off; never kills a producing session)", d)
 				} else {
 					log.Printf("WARN: scheduler.session_silence_grace=%q invalid — using %v", rootCfg.Scheduler.SessionSilenceGrace, *sessionSilenceGrace)
+				}
+			}
+			// SCHED-GAP-1698: TOML layer for the poll-loop idle guard —
+			// same default-guard + re-arm pattern (the setter call ran
+			// before this block). A value >= 1 arms the guard (1-5 clamp
+			// up to the built-in floor of 6 at the setter); a TOML 0 keeps
+			// it off.
+			if rootCfg.Scheduler.SessionPollLoopMinTicks != 0 && *sessionPollLoopMinTicks == 0 {
+				if n := rootCfg.Scheduler.SessionPollLoopMinTicks; n > 0 {
+					*sessionPollLoopMinTicks = n
+					scheduler.SetSessionPollLoopMinTicks(*sessionPollLoopMinTicks)
+					log.Printf("POLL-LOOP: guard armed from config — %d tool calls per 5-minute stride (0 = off; never kills a producing session)", n)
+				} else {
+					log.Printf("WARN: scheduler.session_poll_loop_min_ticks=%d invalid — using %d", rootCfg.Scheduler.SessionPollLoopMinTicks, *sessionPollLoopMinTicks)
 				}
 			}
 		}
@@ -1146,18 +1194,19 @@ func main() {
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
 		// SCHED-GAP-1575-B: the ARMED heavy-read request deadline, so
 		// /api/v1/config reports the same duration the handlers enforce.
-		APIReadTimeout:         apiReadTimeout.String(),
-		SlotPatience:           slotPatience.String(),
-		TasksPacing:            tasksPacing.String(),
-		LoadGateThreshold:      *loadGateThreshold,
-		SpawnMemLimitMB:        *spawnMemLimitMB,
-		SessionSilenceGrace:    sessionSilenceGrace.String(),
-		ModelRatesFile:         *modelRatesFile,
-		NamespaceMode:          *namespaceMode,
-		AutoDisableFailureRate: *autoDisableRate,
-		AutoDisableWindow:      *autoDisableWindow,
-		AutoDisableMinTicks:    *autoDisableMinTicks,
-		FailureWindow:          *failureWindow,
+		APIReadTimeout:          apiReadTimeout.String(),
+		SlotPatience:            slotPatience.String(),
+		TasksPacing:             tasksPacing.String(),
+		LoadGateThreshold:       *loadGateThreshold,
+		SpawnMemLimitMB:         *spawnMemLimitMB,
+		SessionSilenceGrace:     sessionSilenceGrace.String(),
+		SessionPollLoopMinTicks: *sessionPollLoopMinTicks,
+		ModelRatesFile:          *modelRatesFile,
+		NamespaceMode:           *namespaceMode,
+		AutoDisableFailureRate:  *autoDisableRate,
+		AutoDisableWindow:       *autoDisableWindow,
+		AutoDisableMinTicks:     *autoDisableMinTicks,
+		FailureWindow:           *failureWindow,
 		Gateway: api.GatewayConfigSnapshot{
 			URL:            *gatewayURL,
 			Key:            *gatewayKey,

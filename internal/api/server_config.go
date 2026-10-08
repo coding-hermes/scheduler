@@ -81,6 +81,11 @@ type ResolvedConfig struct {
 	// no tool activity for this long is terminated with
 	// failure_reason=session_silent. "0s" = disabled (the default).
 	SessionSilenceGrace string `json:"session_silence_grace"`
+	// SessionPollLoopMinTicks (SCHED-GAP-1698): the poll-loop idle guard's
+	// per-stride tool-call minimum — a gateway tick whose session shows a
+	// confirmed sleep-poll tool cycle at this density is terminated with
+	// failure_reason=sleep_poll. 0 = disabled (the default).
+	SessionPollLoopMinTicks int `json:"session_poll_loop_min_ticks"`
 	// ModelRatesFile (ADV-R09/G8): path to a JSON price-sticker file applied
 	// over the builtin maps at startup (refresh without rebuild). Empty = the
 	// builtin 2026-08 stickers.
