@@ -4982,3 +4982,12 @@ tasks:
   status: complete
   created_at: '2026-10-07T12:33:03.960026+00:00'
   completed_at: '2026-10-07T12:41:50.836557+00:00'
+- id: README-7
+  title: Reconcile tracked deploy/coding-hermes-scheduler.service with the live user
+    unit
+  criteria:
+  - deploy/coding-hermes-scheduler.service is byte-identical to the live user unit
+    and README drift note states reconciliation with the ExecStart path
+  status: complete
+  created_at: '2026-10-08T05:40:32.442902+00:00'
+  completed_at: '2026-10-08T05:41:22.900865+00:00'
