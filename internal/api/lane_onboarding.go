@@ -60,10 +60,14 @@ func laneSatelliteFamily(name string) string {
 // a preference: the -qa family sits in stand-in/pm (53 lanes) and stand-in/qa
 // (4), the -pm family in stand-in/pm (23) and stand-in/pm-lane (34), -sync in
 // sync-workdirs (65) and -dogfood in stand-in/dogfood (57) — no satellite row
-// lived anywhere else. The host-side provisioning script
+// lived anywhere else (the -releng family was added later, SCHED-GAP-1733:
+// each releng lane gets its own leaf stand-in/releng-lane/<primary>, matching
+// ~/.hermes/scripts/complete_satellite_families.py and asce_align.py). The
+// host-side provisioning script
 // (~/.hermes/scripts/satellite-coverage-reconcile.py, outside this repo) writes
 // exactly stand-in/pm for -qa, stand-in/pm-lane for -pm, sync-workdirs for
-// -sync and stand-in/dogfood for -dogfood; all four are accepted here, so the
+// -sync and stand-in/dogfood for -dogfood (and stand-in/releng-lane for
+// -releng); all five are accepted here, so the
 // canonical provisioning path can never be refused by this gate. Adding a
 // family to satelliteLaneSuffixes without adding its roots here is a bug: the
 // *_Parity test asserts the key sets agree.
@@ -72,16 +76,17 @@ var satelliteWorkdirRoots = map[string][]string{
 	"pm":      {"stand-in/pm", "stand-in/pm-lane"},
 	"sync":    {"sync-workdirs"},
 	"dogfood": {"stand-in/dogfood"},
+	"releng":  {"stand-in/releng-lane"},
 }
 
 // satelliteFamilyPins is the per-family cadence pin an enabled satellite
-// carries (seconds), for the four families this onboarding gate POLICES (its
+// carries (seconds), for the five families this onboarding gate POLICES (its
 // workdir/arming vocabulary in satelliteLaneSuffixes). Every value here MUST
 // equal the matching entry of SATELLITE_FAMILY_PINS in
 // ops/check-fleet-invariants.py — the canonical cadence matrix (Bane's
 // 2026-09-29 alignment, SCHED-GAP-1675, mirrored as FAMILY_CANONICAL in
-// ~/.hermes/scripts/fleet-cooldown-policy.py) — which carries five further
-// families (releng/perf/review/readme/docs) this gate does not onboard.
+// ~/.hermes/scripts/fleet-cooldown-policy.py) — which carries four further
+// families (perf/review/readme/docs) this gate does not onboard.
 // TestSCHEDGAP138_FamilyConstantsParity reads both sources and fails the build
 // the moment either side is edited alone. The number is also the one the
 // refusal message hands an operator (unarmedLaneError) and the floor
@@ -96,7 +101,19 @@ var satelliteFamilyPins = map[string]int{
 	"pm":      86400,
 	"sync":    21600,
 	"dogfood": 259200,
+	"releng":  86400,
 }
+
+// Out-of-scope families (SCHED-GAP-1733 criterion 2): perf/review/readme/docs
+// remain offboarded by this gate — the fleet-topology warden's --apply does
+// not CREATE those lanes (no live provisioning convention dir exists for
+// them), so onboarding them here would be dead vocabulary. FAMILY_CANONICAL
+// in ~/.hermes/scripts/fleet-cooldown-policy.py does carry cadence pins for
+// them (weekly cadence for all four), and ops/check-fleet-invariants.py's
+// SATELLITE_FAMILY_PINS mirrors that, but a pin alone is not a workdir
+// convention: until a measured live directory exists (like
+// stand-in/releng-lane for -releng), they stay out of satelliteWorkdirRoots,
+// satelliteFamilyPins, and the *_Parity key-set assertions.
 
 // hermesHomeDir resolves the Hermes home (~/.hermes) the way the ops scripts
 // do: HERMES_HOME when set (it IS the .hermes directory — see

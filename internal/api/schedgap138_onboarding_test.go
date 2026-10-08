@@ -147,6 +147,8 @@ func TestSCHEDGAP138_CreateAcceptsCanonicalWorkdirs(t *testing.T) {
 		{"ok-pm", filepath.Join(home, "stand-in", "pm", "ok")},
 		{"ok2-pm", filepath.Join(home, "stand-in", "pm-lane", "ok2")},
 		{"ok-dogfood", filepath.Join(home, "stand-in", "dogfood", "ok")},
+		// SCHED-GAP-1733: the -releng family's measured convention dir.
+		{"ok-releng", filepath.Join(home, "stand-in", "releng-lane", "ok")},
 		// Trailing slash / dot segments normalize to the same path.
 		{"ok3-sync", filepath.Join(home, "sync-workdirs", "ok3-sync") + string(filepath.Separator)},
 		// A primary lane is not constrained by the family convention.
@@ -169,6 +171,65 @@ func TestSCHEDGAP138_CreateAcceptsCanonicalWorkdirs(t *testing.T) {
 			t.Errorf("case %d: stored workdir = %q, want %q", i, stored.Workdir, tc.workdir)
 		}
 	}
+}
+
+// TestSCHEDGAP1733_RelengOnboarding proves the SCHED-GAP-1733 contract: a
+// -releng lane whose workdir sits under the family's measured convention dir
+// (stand-in/releng-lane/<primary>) passes validateLaneWorkdir (both the direct
+// validator and the create path), and the family pin the gate enforces/hands
+// to the operator is 86400 — the value SATELLITE_FAMILY_PINS in
+// ops/check-fleet-invariants.py and FAMILY_CANONICAL in
+// ~/.hermes/scripts/fleet-cooldown-policy.py both carry for releng.
+func TestSCHEDGAP1733_RelengOnboarding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	a := newAPITestServer(t)
+	ctx := context.Background()
+
+	// Direct validator seam: validateLaneWorkdir is unexported (package api)
+	// and this file is api_test, so the contract is proven through the create
+	// path below — the handler calls validateLaneWorkdir before any DB write,
+	// so a 201 on the canonical dir and a 400 naming it on the off-convention
+	// dir is exactly that validator's verdict, wired.
+	canonical := filepath.Join(home, "stand-in", "releng-lane", "mischief-chaos")
+	offConvention := filepath.Join(home, "stand-in", "pm", "mischief-chaos")
+
+	// Off-convention (this is the shape the topology warden --apply used to
+	// hit — SCHED-GAP-1733): a releng workdir under the -qa family's dir must
+	// be refused with 'off-convention' naming the canonical releng path.
+	body := gap138LaneBody("mischief-chaos3-releng", offConvention, nil)
+	status, resp := a.do(t, "POST", "/api/v1/projects", body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("off-convention releng workdir: status = %d, want 400 (body %v)", status, resp)
+	}
+	if msg, _ := resp["error"].(string); !strings.Contains(msg, "off-convention") ||
+		!strings.Contains(msg, canonical) {
+		t.Fatalf("off-convention releng refusal must name 'off-convention' and %q, got %q", canonical, msg)
+	}
+
+	// Create path: 201, and the pin the arming refusal names is 86400.
+	body = gap138LaneBody("mischief-chaos-releng", canonical, map[string]interface{}{"enabled": false})
+	status, resp = a.do(t, "POST", "/api/v1/projects", body)
+	if status != http.StatusCreated {
+		t.Fatalf("POST mischief-chaos-releng: status = %d, want 201 (body %v)", status, resp)
+	}
+	if _, err := database.GetProject(ctx, a.db, "mischief-chaos-releng"); err != nil {
+		t.Fatalf("read back mischief-chaos-releng: %v", err)
+	}
+	// An ENABLED releng lane with no pacing policy must be refused, and the
+	// refusal names the releng family pin (86400).
+	enabled := gap138LaneBody("mischief-chaos2-releng", filepath.Join(home, "stand-in", "releng-lane", "mischief-chaos2"),
+		map[string]interface{}{"enabled": true})
+	status, resp = a.do(t, "POST", "/api/v1/projects", enabled)
+	if status != http.StatusBadRequest {
+		t.Fatalf("enabled unarmed releng: status = %d, want 400 (body %v)", status, resp)
+	}
+	if msg, _ := resp["error"].(string); !strings.Contains(msg, "86400") {
+		t.Errorf("unarmed-releng refusal must name the 86400 family pin, got %q", msg)
+	}
+	// The arming refusal naming 86400 already proves satelliteFamilyPins has
+	// the releng entry (unarmedLaneError reads it); TestSCHEDGAP138_FamilyConstantsParity
+	// additionally pins the value against the Python canonical matrices.
 }
 
 // TestSCHEDGAP138_UpdateRejectsOffConventionWorkdir proves the PUT path refuses
@@ -561,7 +622,7 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 
 	goPins := intMapIn(t, string(goSrc), `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
 	pyPins := intMapIn(t, string(pySrc), `(?s)SATELLITE_FAMILY_PINS\s*=\s*\{(.*?)\}`)
-	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200}
+	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200, "releng": 86400}
 
 	if len(goPins) != len(want) {
 		t.Fatalf("internal/api/lane_onboarding.go pins %d families (%v), want %d", len(goPins), goPins, len(want))
@@ -607,9 +668,8 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 		t.Fatalf("laneRoleSuffixes carries %d suffixes (%v), cannot cover the %d policed families", len(suffixes), suffixes, len(want))
 	}
 	// Directional coverage (INT-CI-173): every POLICED family must appear in
-	// the canonical suffix table. Suffixes beyond the policed four (perf,
-	// releng, review, docs, readme — SCHED-GAP-1675 matrix) belong to families
-	// this gate does not onboard and are expected here without pins/roots.
+	// the canonical suffix table. Suffixes beyond the policed five (perf,
+	// review, docs, readme — SCHED-GAP-1675 matrix) belong to families
 	policed := map[string]bool{}
 	for family := range want {
 		policed["-"+family] = true
