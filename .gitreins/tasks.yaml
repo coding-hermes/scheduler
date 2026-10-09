@@ -4991,3 +4991,43 @@ tasks:
   status: complete
   created_at: '2026-10-08T05:40:32.442902+00:00'
   completed_at: '2026-10-08T05:41:22.900865+00:00'
+- id: TR-162
+  title: "Scheduler gateway URL: CLI flag is sole authority on boot path \u2014 honour\
+    \ SCHEDULER_* env precedence or stop claiming it"
+  criteria:
+  - LoadRootConfig applies SCHEDULER_* env overrides (or docs+tests pin the flag as
+    the single authority); a test pins the precedence and would fail on the current
+    code; docs name the one authority next to the flag and env var
+  status: complete
+  created_at: '2026-10-08T11:02:02.533745+00:00'
+  completed_at: '2026-10-08T11:32:04.657583+00:00'
+- id: SCHED-GAP-1733
+  title: releng onboarding gate blocks topology warden
+  criteria:
+  - releng accepted in lane_onboarding.go with parity tests green and unit test proving
+    releng workdir passes validation
+  status: complete
+  created_at: '2026-10-08T11:16:50.738079+00:00'
+  completed_at: '2026-10-08T11:39:48.855637+00:00'
+- id: SCHED-GAP-1644
+  title: gateway.log silence during incident window
+  criteria:
+  - 'Add periodic heartbeat line to gateway log while serving so silence is detectable;
+    investigate whether log buffering/rotation can drop lines; raise gateway unit
+    stop timeout or make shutdown fast. PASS: gateway.log shows heartbeat lines during
+    normal operation across a 10-minute window; shutdown completes within the unit''s
+    stop timeout without SIGKILL.'
+  status: complete
+  created_at: '2026-10-09T16:35:30.453233+00:00'
+  completed_at: '2026-10-09T16:40:35.790256+00:00'
+- id: SCHED-GAP-1681
+  title: Gateway transient retry with session continuation
+  criteria:
+  - On transient gateway error (SSE stream ended without terminal event), retry up
+    to configurable N times (default 3, 0=off) with same session key; each attempt
+    counted in postTrace.Attempts and tick row; test proves attempt 1 fails -> attempt
+    2 succeeds -> tick committed, attempts=2; go build/vet/gofmt clean, go test -short
+    -p 1 ./... passes
+  status: complete
+  created_at: '2026-10-09T18:34:31.281541+00:00'
+  completed_at: '2026-10-09T18:48:13.383501+00:00'
