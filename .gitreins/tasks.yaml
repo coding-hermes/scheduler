@@ -5031,3 +5031,12 @@ tasks:
   status: complete
   created_at: '2026-10-09T19:17:12.200508+00:00'
   completed_at: '2026-10-09T20:17:53.942702+00:00'
+- id: SCHED-GAP-1691
+  title: Namespace tick deadline decoupled from wave_enabled
+  criteria:
+  - A wave_enabled=0 namespace with wave_tick_timeout set gets that deadline at spawn
+    (qa=3h while global stays 2h), env/namespace/base resolution order and 4h ceiling
+    preserved, proven by a test that a non-wave namespace with 3h really gets 3h
+  status: complete
+  created_at: '2026-10-09T21:09:18.675417+00:00'
+  completed_at: '2026-10-09T22:33:39.597801+00:00'
