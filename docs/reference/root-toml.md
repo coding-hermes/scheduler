@@ -53,6 +53,7 @@ Keys outside this pattern:
 | `failure_window` | Yes | Default-guard (flag default 100) | |
 | `weight_budget` | Yes | Default-guard (`--budget` default 100) | |
 | `gateway_response_timeout` | Yes | Default-guard (flag default 30m) | Invalid duration logs a WARN and keeps the default. |
+| `gateway_transient_retries` | Yes | Default-guard (flag default 3) | Non-negative int only (0 = single attempt, retry off); negative logs a WARN and keeps the default. |
 | `slot_patience` | Yes | Default-guard (flag default 5m) | Strictly positive only; TOML `0` = keep default. |
 | `load_gate_threshold` | Yes | Default-guard (flag default 0) | Positive value arms the gate and the wave-load ceiling. |
 | `tasks_pacing` | Yes | Default-guard (flag default 60s) | `0s` disables pacing explicitly. |

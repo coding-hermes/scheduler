@@ -194,6 +194,7 @@ func TestPrintConfig(t *testing.T) {
 			30*60*1000000000,
 			5*60*1000000000,
 			60*1000000000,
+			7, // SCHED-GAP-1681 sentinel: the printed gateway_transient_retries is this argument
 			"http://127.0.0.1:8642",
 			"secret",
 			"/tmp/foreman",
@@ -224,6 +225,9 @@ func TestPrintConfig(t *testing.T) {
 		// SCHED-GAP-117: the per-turn gateway deadline must surface in
 		// --show-config output.
 		"gateway_response_timeout = \"30m0s\"",
+		// SCHED-GAP-1681: the transient-retry count must surface in
+		// --show-config output (the value passed at the call site).
+		"gateway_transient_retries = 7",
 		// ADV-R08/G3: the slot-wait patience must surface in
 		// --show-config output.
 		"slot_patience = \"5m0s\"",
@@ -353,6 +357,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				10, 100, 10,
 				false,
 				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				3, // SCHED-GAP-1681: gateway_transient_retries (the new printConfig arg, between the deadline and slot_patience)
 				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
 				true,
 				"scheduler", "http://localhost:3000",
@@ -387,6 +392,7 @@ func TestLoadGateAndModelRatesOnBothIntrospectionSurfaces(t *testing.T) {
 				10, 100, 10,
 				false,
 				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				3, // SCHED-GAP-1681: gateway_transient_retries (the new printConfig arg, between the deadline and slot_patience)
 				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
 				true,
 				"scheduler", "http://localhost:3000",
@@ -437,6 +443,7 @@ func TestDuckBrainNSDefaultMatchesFlag(t *testing.T) {
 				10, 100, 10,
 				false,
 				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				3, // SCHED-GAP-1681: gateway_transient_retries (the new printConfig arg, between the deadline and slot_patience)
 				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
 				true,
 				ns, "http://localhost:3000",

@@ -641,6 +641,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// disabled; a stalled POST fails the tick as "stalled" before
 		// --tick-timeout).
 		status["gateway_response_timeout"] = s.loop.GatewayResponseTimeout().String()
+		// SCHED-GAP-1681: the armed transient-retry count (0 = single
+		// attempt) sits next to its GAP-117 sibling so the knob is
+		// introspectable from the same surface.
+		status["gateway_transient_retries"] = s.loop.GatewayTransientRetries()
 		// SCHED-GAP-155: per-reason admission-decision counters, so an
 		// operator can see WHY projects are not spawning without grepping
 		// the scheduler log. Every reason in the vocabulary is present

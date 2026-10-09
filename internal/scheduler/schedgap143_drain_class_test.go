@@ -207,7 +207,7 @@ func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wa
 
 // gap143InsertFailedTick records a terminal failed tick row directly. Used to
 // fill an auto-disable window without paying the gateway retry backoff
-// (1 + gatewayRetryMaxAttempts POSTs, ≈3.5s) per row.
+// (1 + gatewayRetryDefaultMax POSTs, ≈3.5s) per row.
 func gap143InsertFailedTick(t *testing.T, db *sql.DB, tickID, project, errText, failureReason string, at time.Time) {
 	t.Helper()
 	ts := at.UTC().Format(time.RFC3339)
@@ -307,7 +307,7 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 //
 // Two of the ten rows are produced END TO END by the real drain path (so the
 // fixture carries production's own text); the remaining eight reuse that exact
-// captured text, because each real drain tick costs 1 + gatewayRetryMaxAttempts
+// captured text, because each real drain tick costs 1 + gatewayRetryDefaultMax
 // POSTs with backoff.
 //
 // KNOWN FLAKE — see INT-CI-158 (2026-09-23, tick #670 follow-up). The CI race-detector

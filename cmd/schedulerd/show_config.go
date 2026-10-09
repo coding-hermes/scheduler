@@ -39,6 +39,7 @@ func printSchema() {
         "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
         "gateway_response_timeout": { "type": "string", "default": "30m0s", "description": "Per-turn deadline for a gateway /v1/responses POST (SCHED-GAP-117). A POST that makes no progress for this long fails the tick as 'stalled' BEFORE --tick-timeout; '0s' disables (POST runs on the tick deadline alone). Effective POST deadline = min(this, tick_timeout).", "env": "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", "cli": "--gateway-response-timeout" },
+        "gateway_transient_retries": { "type": "integer", "default": 3, "minimum": 0, "description": "Bounded transient-gateway retry count for the GAP-080 loop (SCHED-GAP-1681): a transient POST failure (HTTP 5xx, refused dial, SSE stream ended without a terminal event, body read/unmarshal) is retried up to N times on the same model/provider pair with the SAME session key (X-Hermes-Session-Key: tick id — session continuation), so the agent resumes where the stream died. Every POST lands on gateway_trace.Attempts and ticks.attempts. 0 = single attempt (retry off); negative values are rejected (WARN, default stands).", "env": "SCHEDULER_GATEWAY_TRANSIENT_RETRIES", "cli": "--gateway-transient-retries" },
         "slot_patience":  { "type": "string", "default": "5m0s", "description": "How long a tick waits for a free slot before being dropped; the drop emits a MEDIUM slot_pool event (ADV-R08/G3). Must be > 0 — the drop always exists; unset means the 5m default.", "env": "SCHEDULER_SLOT_PATIENCE", "cli": "--slot-patience" },
         "tasks_pacing": { "type": "string", "default": "1m0s", "description": "Minimum post-tick spacing before a tasks-mode project re-admits, plus up to 20 percent jitter (SCHED-GAP-136); '0s' disables. Composes with the failure backoff (S-GAP-001), never replaces it. Unset means the 1m fleet default.", "env": "SCHEDULER_TASKS_PACING", "cli": "--tasks-pacing" },
         "spawn_mem_limit_mb": { "type": "integer", "default": 0, "minimum": 0, "description": "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default — no limit call at all). NOT an admission gate: every selected project still spawns; the cap constrains the spawned process's resources at spawn time and is inherited by its workers. Best-effort — a failed cap WARNs and the spawn continues. Linux (prlimit); other platforms degrade to the documented no-op.", "env": "SCHEDULER_SPAWN_MEM_LIMIT_MB", "cli": "--spawn-mem-limit-mb" },
@@ -138,6 +139,7 @@ func printConfig(
 	numLevels, weightBudget, maxConcurrent int,
 	namespaceMode bool,
 	tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing time.Duration,
+	gatewayTransientRetries int,
 	gatewayURL, gatewayKey, foremanHome string,
 	noExecFallback bool,
 	duckbrainNS, duckbrainURL string,
@@ -165,6 +167,7 @@ weight_budget = %d
 max_concurrent = %d
 tick_timeout = %q
 gateway_response_timeout = %q
+gateway_transient_retries = %d
 slot_patience = %q
 tasks_pacing = %q
 spawn_mem_limit_mb = %d
@@ -191,7 +194,7 @@ url = %q
 		dbPath, listen, logFile,
 		minInterval, maxInterval,
 		numLevels, weightBudget, maxConcurrent,
-		tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing,
+		tickTimeout, gatewayResponseTimeout, gatewayTransientRetries, slotPatience, tasksPacing,
 		spawnMemLimitMB,
 		loadGateThreshold, modelRatesFile,
 		sessionSilenceGrace,
@@ -215,6 +218,7 @@ url = %q
 		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
 		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
 		"SCHEDULER_GATEWAY_RESPONSE_TIMEOUT":  os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"),
+		"SCHEDULER_GATEWAY_TRANSIENT_RETRIES": os.Getenv("SCHEDULER_GATEWAY_TRANSIENT_RETRIES"),
 		"SCHEDULER_SLOT_PATIENCE":             os.Getenv("SCHEDULER_SLOT_PATIENCE"),
 		"SCHEDULER_SPAWN_MEM_LIMIT_MB":        os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"),
 		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),

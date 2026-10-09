@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 66
+const latestMigration = 67
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1330,6 +1330,24 @@ CREATE TABLE IF NOT EXISTS usage_pool_deferrals (
     PRIMARY KEY(pool_id,tick_id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_pool_deferrals_tick ON usage_pool_deferrals(tick_id);
+`,
+	},
+	{
+		// SCHED-GAP-1681: the tick row must expose HOW MANY gateway POSTs the
+		// tick consumed — the GAP-080 transient retry loop (now configurable
+		// via --gateway-transient-retries) re-sends the same session after a
+		// transport blip, and the merged GatewayPOSTTrace already counts those
+		// attempts (trace.Attempts), but the row itself had no column, so an
+		// audit asking "did the retry absorb this blip?" had to parse
+		// gateway_trace JSON instead of reading SQL. Plain additive column,
+		// same shape as v63/v64: 0 = the honest "no gateway POST" (exec
+		// spawns, spawn-site refusals, remote dispatch); >=1 = POSTs made,
+		// stamped by lifecycle.Complete from the merged trace on every
+		// gateway path (completed, failed, deferred, timeout).
+		version: 67,
+		desc:    "SCHED-GAP-1681: ticks.attempts — gateway POST count per tick (the GAP-080 retry loop's per-attempt accounting, previously only inside the gateway_trace JSON)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }

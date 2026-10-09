@@ -216,6 +216,14 @@ type TickOutcome struct {
 	// ticks the deadline killed before the foreman wrote any manifest.
 	// Set by wave-manifest ingest, never by Wait().
 	WorkersTerminal int
+	// Attempts (SCHED-GAP-1681) is the gateway POST count for this tick,
+	// folded from the merged GatewayPOSTTrace by the spawn path (the only
+	// code that sees the trace: every POST, primary + GAP-080 retries +
+	// chain hops). lifecycle.Complete stamps it on the v67 ticks.attempts
+	// column in the same single finalization UPDATE. 0 = no gateway POST
+	// (exec spawns, spawn-site refusals, remote dispatch) — the column's
+	// honest default, never a fabricated count.
+	Attempts int
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one
@@ -396,7 +404,8 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
 			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
 			dispatch_outcome = ?, dispatch_reason = ?,
-			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?
+			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?,
+			attempts = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
@@ -404,6 +413,7 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
 		telemetryPartial, telemetryReason, telemetrySilence, workersTerminal,
+		outcome.Attempts,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)

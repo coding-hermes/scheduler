@@ -70,6 +70,19 @@ type SchedulerConfig struct {
 	// 2h slot. Empty = the daemon flag default (30m).
 	GatewayResponseTimeout string `toml:"gateway_response_timeout"`
 
+	// GatewayTransientRetries (SCHED-GAP-1681) is the bounded
+	// transient-gateway retry count for the GAP-080 loop. A pointer because
+	// 0 is a MEANING (single attempt, retry loop off) that must be
+	// distinguishable from unset: nil = the daemon flag default (3), 0 =
+	// explicitly one attempt, N = up to N retries after the initial POST.
+	// Every retry re-sends the SAME session key (X-Hermes-Session-Key:
+	// tickID), so the gateway continues the session instead of minting a
+	// new one. Negative values are rejected at the apply site (WARN, keep
+	// default). Applies only when --gateway-transient-retries was never
+	// passed (default-guard pattern; SCHEDULER_GATEWAY_TRANSIENT_RETRIES
+	// still outranks TOML).
+	GatewayTransientRetries *int `toml:"gateway_transient_retries"`
+
 	// SlotPatience (ADV-R08/G3) is how long a spawn waits for a free slot
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event), stored as a duration string (e.g. "5m"). Empty = the daemon

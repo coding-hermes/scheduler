@@ -49,6 +49,11 @@ type ResolvedConfig struct {
 	// gateway /v1/responses POST — "0s" means disabled (the POST runs on the
 	// tick deadline alone).
 	GatewayResponseTimeout string `json:"gateway_response_timeout"`
+	// GatewayTransientRetries (SCHED-GAP-1681): the bounded transient-gateway
+	// retry count — how many times a transient POST failure is retried on
+	// the same model/provider pair with the same session key. 0 = single
+	// attempt (retry loop off). Default 3.
+	GatewayTransientRetries int `json:"gateway_transient_retries"`
 	// APIReadTimeout (SCHED-GAP-1575-B): the per-request deadline armed for
 	// the heavy DB-backed read surfaces (/api/v1/status, /projects,
 	// /namespaces, /ticks). A step that exceeds it answers 504 naming the

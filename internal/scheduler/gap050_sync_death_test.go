@@ -409,8 +409,8 @@ func TestGap050_TransientHTTP500CountsAsDrop(t *testing.T) {
 	}
 	// All 4 POSTs (1 initial + 3 retries) were transient — the SCHED-GAP-080
 	// counter reflects them AND the GAP-050 drop counter counts the drop.
-	if got := spawner.GatewayErrorCount(); got != 1+gatewayRetryMaxAttempts {
-		t.Errorf("GatewayErrorCount() = %d, want %d", got, 1+gatewayRetryMaxAttempts)
+	if got := spawner.GatewayErrorCount(); got != 1+gatewayRetryDefaultMax {
+		t.Errorf("GatewayErrorCount() = %d, want %d", got, 1+gatewayRetryDefaultMax)
 	}
 	if got := gap050DropCount(spawner, projectName); got != 1 {
 		t.Errorf("consecutive drop counter = %d, want 1 — a 5xx drop counts", got)

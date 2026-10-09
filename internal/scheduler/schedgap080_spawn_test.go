@@ -139,7 +139,7 @@ func TestSCHEDGAP080_BlipRecoversWithRetry(t *testing.T) {
 
 // TestSCHEDGAP080_Persistent500FailsAfterRetries — the bounded-retry safety
 // net: a gateway that 500s EVERY attempt is retried exactly
-// gatewayRetryMaxAttempts times (4 POSTs total) and then FAILS the tick via
+// gatewayRetryDefaultMax times (4 POSTs total) and then FAILS the tick via
 // the existing path — gateway error text persisted, consecutive_failures
 // incremented, tick never completed, counter reflects all 4 failures.
 func TestSCHEDGAP080_Persistent500FailsAfterRetries(t *testing.T) {
@@ -168,11 +168,11 @@ func TestSCHEDGAP080_Persistent500FailsAfterRetries(t *testing.T) {
 	if !strings.Contains(err.Error(), "database disk image is malformed") {
 		t.Errorf("error = %q, want the gateway detail 'database disk image is malformed'", err.Error())
 	}
-	if got := atomic.LoadInt32(&requests); got != 1+gatewayRetryMaxAttempts {
-		t.Errorf("gateway POST count = %d, want %d (1 initial + %d retries — bounded!)", got, 1+gatewayRetryMaxAttempts, gatewayRetryMaxAttempts)
+	if got := atomic.LoadInt32(&requests); got != 1+gatewayRetryDefaultMax {
+		t.Errorf("gateway POST count = %d, want %d (1 initial + %d retries — bounded!)", got, 1+gatewayRetryDefaultMax, gatewayRetryDefaultMax)
 	}
-	if got := spawner.GatewayErrorCount(); got != 1+gatewayRetryMaxAttempts {
-		t.Errorf("GatewayErrorCount() = %d, want %d", got, 1+gatewayRetryMaxAttempts)
+	if got := spawner.GatewayErrorCount(); got != 1+gatewayRetryDefaultMax {
+		t.Errorf("GatewayErrorCount() = %d, want %d", got, 1+gatewayRetryDefaultMax)
 	}
 	// SCHED-GAP-079 completion gate: the tick is NEVER recorded completed.
 	if got := tickStatusOf(t, db, tickID); got == "completed" {

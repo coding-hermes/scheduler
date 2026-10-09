@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,8 +107,21 @@ type Spawner struct {
 	// the tick's outcome is still decided by the artifacts re-measured after
 	// it, so an explained idle tick stays an idle tick.
 	idleIntervention bool
-	model            string
-	provider         string
+	// gatewayTransientRetries (SCHED-GAP-1681) is the bounded transient-retry
+	// count for the GAP-080 loop: how many times a transient gateway failure
+	// (5xx, refused dial, SSE stream ended without a terminal event, body
+	// read/unmarshal) is retried on the SAME model/provider pair with the
+	// SAME session key (X-Hermes-Session-Key: tickID) before the spawn path
+	// classifies the tick (stalled / deferred / drop / exec fallback).
+	// Default gatewayRetryDefaultMax (3, the pre-1681 hardcoded value);
+	// 0 = single attempt, the retry loop is skipped entirely; negative
+	// values are ignored by the setter. The session-key reuse on every
+	// attempt IS the session continuation: the gateway scopes the run under
+	// the tick id, so a retry re-attaches to the same session instead of
+	// starting a fresh one (see gateway_client.go's SendResponse docs).
+	gatewayTransientRetries int
+	model                   string
+	provider                string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
 	// chain. Applied AFTER the project's primary and fallback tiers; skipped
 	// entirely when a project sets NoGlobalFallback.
@@ -272,23 +286,36 @@ func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Contex
 		}
 		return r, err
 	}
+	// SCHED-GAP-1681: the legacy path records a trace for EVERY attempt —
+	// failed ones included — so the merged tick trace's Attempts count is
+	// honest on every outcome (the GAP-080 retry loop re-sends through this
+	// seam, and a failed retry used to vanish: postTrace showed 1 attempt
+	// even when 4 POSTs were made). A failed attempt carries
+	// classification=transport-error (the same string SendResponseStream
+	// stamps); a successful one completed/wall, unchanged. The session-key
+	// contract is the same on both paths: tickID rides X-Hermes-Session-Key
+	// (SendResponseWithSessionKey), so a retry CONTINUES the tick's gateway
+	// session instead of minting a new one.
+	start := s.clock().Now()
 	r, err := gw.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
-	if err == nil {
-		// Legacy path carries no per-POST supervision, but AC 1 still wants
-		// the trace: record a minimal completed/wall entry for the attempt.
-		now := s.clock().Now()
-		mergePostTrace(tickTrace, &GatewayPOSTTrace{
-			TickID:         tickID,
-			Project:        project,
-			Model:          model,
-			Provider:       provider,
-			Start:          now.Add(-s.clock().Since(now)),
-			Finish:         now,
-			DeadlineMode:   "wall",
-			Classification: "completed",
-			Attempts:       1,
-		})
+	now := s.clock().Now()
+	attemptTrace := &GatewayPOSTTrace{
+		TickID:   tickID,
+		Project:  project,
+		Model:    model,
+		Provider: provider,
+		Start:    start,
+		Finish:   now,
+		// DeadlineMode "wall": no activity signal on the legacy path.
+		DeadlineMode: "wall",
+		Attempts:     1,
 	}
+	if err != nil {
+		attemptTrace.Classification = "transport-error"
+	} else {
+		attemptTrace.Classification = "completed"
+	}
+	mergePostTrace(tickTrace, attemptTrace)
 	return r, err
 }
 
@@ -333,13 +360,17 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		active:                 make(map[string]*exec.Cmd),
 		timeout:                to,
 		gatewayResponseTimeout: gatewayResponseTimeoutFromEnv(),
-		idleIntervention:       idleInterventionFromEnv(),
-		model:                  getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
-		provider:               getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
-		fallbackModel:          getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
-		fallbackProvider:       getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
-		idleModel:              getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
-		idleProvider:           getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		// SCHED-GAP-1681: the transient-retry count resolves the same
+		// precedence chain as the deadline — env default here, daemon
+		// flag/TOML override via SetGatewayTransientRetries at boot.
+		gatewayTransientRetries: gatewayTransientRetriesFromEnv(),
+		idleIntervention:        idleInterventionFromEnv(),
+		model:                   getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
+		provider:                getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
+		fallbackModel:           getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
+		fallbackProvider:        getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
+		idleModel:               getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
+		idleProvider:            getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
 		// TASK-ROUTER-001: the task router is OPT-IN via env — hosts
 		// without SCHEDULER_ROUTER_CMD (and every test) keep the
 		// pre-router resolution exactly (fail-open default). The command
@@ -418,6 +449,54 @@ func (s *Spawner) SetGatewayResponseTimeout(d time.Duration) {
 // (SCHED-GAP-117); 0 when no deadline is armed.
 func (s *Spawner) GatewayResponseTimeout() time.Duration {
 	return s.gatewayResponseTimeout
+}
+
+// envGatewayTransientRetries (SCHED-GAP-1681) is the env layer for the
+// transient-retry count, mirroring envGatewayResponseTimeout's precedence:
+// TOML [scheduler] gateway_transient_retries < this env var < the
+// --gateway-transient-retries flag.
+const envGatewayTransientRetries = "SCHEDULER_GATEWAY_TRANSIENT_RETRIES"
+
+// gatewayTransientRetriesFromEnv resolves the library-level default for the
+// transient-retry count: the env var when set (a negative value is rejected
+// as nonsensical — the default stands), else gatewayRetryDefaultMax (3, the
+// pre-1681 hardcoded value).
+func gatewayTransientRetriesFromEnv() int {
+	if v := os.Getenv(envGatewayTransientRetries); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			log.Printf("WARN: %s=%q unparseable — using default %d",
+				envGatewayTransientRetries, v, gatewayRetryDefaultMax)
+			return gatewayRetryDefaultMax
+		}
+		if n < 0 {
+			log.Printf("WARN: %s=%q negative — using default %d",
+				envGatewayTransientRetries, v, gatewayRetryDefaultMax)
+			return gatewayRetryDefaultMax
+		}
+		return n
+	}
+	return gatewayRetryDefaultMax
+}
+
+// SetGatewayTransientRetries arms the bounded transient-retry count for the
+// GAP-080 loop (SCHED-GAP-1681). 0 DISABLES the retry loop (one attempt per
+// POST — the pre-080 behavior, byte-for-byte); only negative values are
+// ignored as nonsensical. The daemon wires --gateway-transient-retries here
+// (after the env + TOML layers resolved it); tests shrink it so a retry
+// scenario costs real POSTs without waiting out the full default count.
+func (s *Spawner) SetGatewayTransientRetries(n int) {
+	if n < 0 {
+		return
+	}
+	s.gatewayTransientRetries = n
+}
+
+// GatewayTransientRetries returns the armed transient-retry count
+// (SCHED-GAP-1681); surfaced by /api/v1/status so the knob's ARMED value is
+// introspectable like its GAP-117 sibling.
+func (s *Spawner) GatewayTransientRetries() int {
+	return s.gatewayTransientRetries
 }
 
 // routerFromEnv wires the task router from SCHEDULER_ROUTER_CMD
@@ -904,15 +983,20 @@ func (s *Spawner) SetCircuitClient(cc *CircuitClient) {
 // latency to a spawn, and a slow probe must not stall the tick.
 const gatewayKeyProbeTimeout = 5 * time.Second
 
-// SCHED-GAP-080: bounded transient-gateway retry. gatewayRetryMaxAttempts is
-// the number of retries AFTER the initial attempt (so a persistently-failing
-// gateway sees 1 + gatewayRetryMaxAttempts = 4 POSTs). gatewayRetryBackoff
+// SCHED-GAP-080: bounded transient-gateway retry. gatewayRetryDefaultMax
+// attempts is the number of retries AFTER the initial attempt (so a
+// persistently-failing gateway sees 1 + N = 4 POSTs at the default). The
+// SCHED-GAP-1681 knob (--gateway-transient-retries /
+// scheduler.gateway_transient_retries / SCHEDULER_GATEWAY_TRANSIENT_RETRIES)
+// replaces the hardcoded value: 0 disables the retry loop entirely
+// (single-attempt behavior, pre-080), negative values are ignored as
+// nonsensical. gatewayRetryBackoff
 // returns the exponential backoff for retry attempt k: 500ms → 1s → 2s → 4s
 // cap (≈3.5s worst-case added latency, far below the tick timeout). The tick
 // context is the outer bound: a ctx cancel anywhere in the loop aborts
 // immediately, so a persistently-5xx gateway still fails the tick instead of
 // hanging it (SCHED-GAP-080 acceptance: bounded attempts, ctx-bounded).
-const gatewayRetryMaxAttempts = 3
+const gatewayRetryDefaultMax = 3
 
 // gatewayRetryBackoff returns the backoff duration for the given retry
 // attempt (1-based), capped at 4s. When the failed attempt carried a
@@ -1508,6 +1592,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			var turnStalled bool
 			var postTrace *GatewayPOSTTrace
 
+			// SCHED-GAP-1681: the merged trace's Attempts count (every POST
+			// this tick made — primary, GAP-080 retries, chain hops), read
+			// at each SpawnedTick construction site. postTrace is nil until
+			// the first POST merges a trace, so 0 = no POST (the honest
+			// default for the nil-gateway site below).
+			traceAttempts := func() int {
+				if postTrace != nil {
+					return postTrace.Attempts
+				}
+				return 0
+			}
+
 			// GAP-035: validate a per-project gateway key BEFORE dispatch.
 			// The 2026-08-04 outage had the fleet send revoked fk-* keys
 			// blindly — every spawn burned a full gateway cycle, failed, and
@@ -1629,11 +1725,22 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// enter this path — auth stays terminal (GAP-035) and the
 				// chain-hop logic below is untouched. The tick context bounds the
 				// loop, so a persistently-5xx gateway still fails the tick.
-				if err != nil && IsTransientGatewayErr(err) {
+				//
+				// SCHED-GAP-1681: the retry count is the configurable
+				// --gateway-transient-retries knob (0 = single attempt, loop
+				// skipped), and every attempt — including this first one and
+				// every retry — carries the SAME session key (sendTurn passes
+				// tickID as X-Hermes-Session-Key on every path), so the gateway
+				// re-attaches the session instead of minting a new one: the
+				// agent resumes where the stream died rather than restarting.
+				// postTrace.Attempts counts every POST (mergePostTrace folds
+				// attempt traces; the legacy path now records failed attempts
+				// too, so the count is honest on every outcome).
+				if err != nil && IsTransientGatewayErr(err) && s.gatewayTransientRetries > 0 {
 					atomic.AddInt64(&s.spawnGatewayErrors, 1)
-					for attempt := 1; attempt <= gatewayRetryMaxAttempts; attempt++ {
-						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q error=%v",
-							project.Name, tickID, attempt, gatewayRetryMaxAttempts, model, provider, err)
+					for attempt := 1; attempt <= s.gatewayTransientRetries; attempt++ {
+						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q session_key=%s error=%v",
+							project.Name, tickID, attempt, s.gatewayTransientRetries, model, provider, tickID, err)
 						select {
 						case <-turnCtx.Done():
 							return r, err
@@ -1755,6 +1862,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					gwFailErr:     sessionPollLoopError(fmt.Sprintf("%ds", stPoll.silenceS)),
 					gwTickTimeout: true,
 					gwPartial:     stPoll,
+					gwAttempts:    traceAttempts(),
 					model:         model,
 					provider:      provider,
 					rate:          rate,
@@ -1799,6 +1907,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					gwFailErr:     sessionSilentError(fmt.Sprintf("%ds", stSilence.silenceS)),
 					gwTickTimeout: true,
 					gwPartial:     stSilence,
+					gwAttempts:    traceAttempts(),
 					model:         model,
 					provider:      provider,
 					rate:          rate,
@@ -1948,6 +2057,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						completed:   false,
 						completeAt:  now,
 						gwFailErr:   errText,
+						gwAttempts:  traceAttempts(),
 						usage:       resp.Usage,
 						model:       model,
 						provider:    provider,
@@ -1987,6 +2097,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						completed:   false,
 						completeAt:  now,
 						gwFailErr:   errText,
+						gwAttempts:  traceAttempts(),
 						usage:       resp.Usage,
 						model:       model,
 						provider:    provider,
@@ -2063,8 +2174,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 							"session_id": sessionID,
 						})
 				}
-				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
-					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d attempts=%d",
+					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens, traceAttempts())
 				return &SpawnedTick{
 					TickID:      tickID,
 					Project:     project.Name,
@@ -2076,6 +2187,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					spawner:     s,
 					completed:   true,
 					completeAt:  now,
+					gwAttempts:  traceAttempts(),
 					// SCHED-GAP-029: carry real usage + context for outcome metrics.
 					usage:    resp.Usage,
 					model:    model,
@@ -2177,6 +2289,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					completed:   false,
 					completeAt:  s.clock().Now(),
 					gwFailErr:   stallErr,
+					gwAttempts:  traceAttempts(),
 					model:       model,
 					provider:    provider,
 					rate:        rate,
@@ -2273,10 +2386,19 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// still defers — this branch reclassifies OUR wall, not
 				// every error that happens to share a deadline with a drop.
 				if errors.Is(gwErr, ErrTickDeadlineExceeded) {
-					return s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate, postTrace), nil
+					td := s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate, postTrace)
+					// SCHED-GAP-1681: carry the POST count onto the timeout
+					// row so ticks.attempts records what the wall consumed.
+					td.gwAttempts = traceAttempts()
+					return td, nil
 				}
 				if gatewayTransientBlip(gwErr) {
-					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
+					td := s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate)
+					// SCHED-GAP-1681: a deferral that exhausted its retries
+					// records every attempt (ticks.attempts) — the honest
+					// "we tried N+1 times" evidence for the next wake.
+					td.gwAttempts = traceAttempts()
+					return td, nil
 				}
 				// SCHED-GAP-1687: this SKIPPED line is the drop's OWN
 				// announcement now — the pre-classification "GATEWAY FAIL …
@@ -2727,6 +2849,14 @@ type SpawnedTick struct {
 	// verdict it built, so the whole completion/delivery/accounting tail in
 	// slot_pool reuses the ordinary path. Nil for every local spawn.
 	remoteOutcome *TickOutcome
+
+	// gwAttempts (SCHED-GAP-1681) is the gateway POST count folded from the
+	// merged GatewayPOSTTrace (trace.Attempts) — primary + GAP-080 retries +
+	// chain hops — stamped onto TickOutcome.Attempts by Wait() so
+	// lifecycle.Complete persists it on the v67 ticks.attempts column. 0 on
+	// every non-gateway path (exec spawns, spawn-site refusals, remote
+	// dispatch): the column's honest default.
+	gwAttempts int
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -2796,6 +2926,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// the persistence layer maps it to outcome='aborted:no_artifact'
 			// (legal only on this failed status).
 			GuardAbort: true,
+			// SCHED-GAP-1681: POSTs the guard's cancel raced — carried
+			// onto the row like every other gateway outcome.
+			Attempts: st.gwAttempts,
 			// Git artifacts are pre-counted at the abort site when present,
 			// mirroring the SCHED-GAP-119 rule: a cancelled turn may have
 			// committed mid-window, and zero-accounting real work is the
@@ -2846,6 +2979,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// the wall may have committed mid-window.
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: the POSTs the wall consumed (retries
+			// included) land on ticks.attempts with the timeout verdict.
+			Attempts: st.gwAttempts,
 		}
 		// SCHED-GAP-1707 deliverable 1: the row is PARTIAL. Spread the
 		// kill-site capture (the SSE trace's token probe + its derived cost)
@@ -2889,6 +3025,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// drop can abort a turn that already committed.
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: every POST the retry loop burned before the
+			// blip exhausted the knob lands on ticks.attempts — the
+			// deferral is auditable as "attempted N+1 times".
+			Attempts: st.gwAttempts,
 		}
 	}
 
@@ -2933,6 +3073,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// that landed commits mid-window — see 2026-09-15 evidence).
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: the POST count rides the failed row too
+			// (079-gate failures and stalled turns included).
+			Attempts: st.gwAttempts,
 		}
 	}
 
@@ -2980,6 +3123,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 				CostSource:   CostSourceGateway,
 				Commits:      commits,
 				FilesChanged: files,
+				// SCHED-GAP-1681: the closure-rejected row keeps its POST
+				// count like every other gateway outcome.
+				Attempts: st.gwAttempts,
 			}
 		}
 		log.Printf("TICK: %s %s → %s (%v) %s",
@@ -3020,6 +3166,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			Started:   st.Started,
 			Finished:  st.completeAt,
 			Status:    TickCompleted,
+			// SCHED-GAP-1681: the committed row carries its POST count —
+			// attempts=2 on the tick this row's acceptance names (one
+			// dropped stream + one completed retry).
+			Attempts: st.gwAttempts,
 			// SCHED-GAP-1597: 0 is the gateway-completed CONVENTION (the
 			// gateway session never exposes a process exit status), stated
 			// here explicitly — a zero left by struct-default omission and

@@ -79,6 +79,16 @@ func main() {
 	// fails the tick as "stalled". Effective POST deadline is
 	// min(--gateway-response-timeout, --tick-timeout).
 	gatewayResponseTimeout := flag.Duration("gateway-response-timeout", 30*time.Minute, "Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before --tick-timeout (SCHED-GAP-117; 0 disables)")
+	// SCHED-GAP-1681: bounded transient-gateway retry count (the GAP-080
+	// loop). A transient failure (HTTP 5xx, refused dial, SSE stream ended
+	// without a terminal event, body read/unmarshal) is retried up to N
+	// times on the SAME model/provider pair with the SAME session key
+	// (X-Hermes-Session-Key: the tick id), so the gateway re-attaches the
+	// session and the agent resumes where the stream died. Every POST is
+	// counted on gateway_trace.Attempts and the new ticks.attempts column.
+	// 0 = single attempt (retry loop off); negative is ignored at the
+	// setter. Default 3 = the pre-1681 hardcoded value.
+	gatewayTransientRetries := flag.Int("gateway-transient-retries", 3, "Bounded transient-gateway retry count for the GAP-080 loop (SCHED-GAP-1681): a 5xx/refused-dial/SSE-drop is retried up to N times on the same model/provider pair with the SAME session key (session continuation); every POST lands on gateway_trace.Attempts and ticks.attempts. 0 = single attempt (retry off); default 3. Env: SCHEDULER_GATEWAY_TRANSIENT_RETRIES")
 	// ADV-R08/G3: slot-wait patience — how long a spawn waits for a free
 	// slot before the project is dropped (the drop emits a MEDIUM
 	// slot_pool event). Default keeps the historical hardcoded 5m window.
@@ -333,6 +343,17 @@ func main() {
 			log.Printf("WARN: SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS=%q invalid — poll-loop guard stays %d", v, *sessionPollLoopMinTicks)
 		}
 	}
+	// SCHED-GAP-1681: transient-retry count env override — same pattern. A
+	// parseable non-negative int wins (0 = single attempt, retry off);
+	// negative/invalid WARN and keep the current value (the retry count
+	// must never silently change).
+	if v := os.Getenv("SCHEDULER_GATEWAY_TRANSIENT_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			*gatewayTransientRetries = n
+		} else {
+			log.Printf("WARN: SCHEDULER_GATEWAY_TRANSIENT_RETRIES=%q invalid — transient retries stay %d", v, *gatewayTransientRetries)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -373,6 +394,7 @@ func main() {
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
 			*tickTimeout, *gatewayResponseTimeout, *slotPatience, *tasksPacing,
+			*gatewayTransientRetries,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
@@ -636,6 +658,11 @@ func main() {
 	// carries the env override resolved above; 0 disables the per-turn
 	// deadline (POST runs on the tick deadline alone, pre-117 behavior).
 	loop.SetGatewayResponseTimeout(*gatewayResponseTimeout)
+	// SCHED-GAP-1681: apply the bounded transient-retry count. The flag var
+	// already carries the env + TOML overrides resolved above; negative
+	// values are ignored by the spawner's setter.
+	loop.SetGatewayTransientRetries(*gatewayTransientRetries)
+	log.Printf("GATEWAY RETRIES: transient_retry_count=%d (SCHED-GAP-1681; 0 = single attempt)", *gatewayTransientRetries)
 	// ADV-R08/G3: apply the configured slot-wait patience; the drop emits
 	// a MEDIUM slot_pool event. The flag var already carries the env
 	// override resolved above; <= 0 keeps the 5m default in the pool.
@@ -850,6 +877,18 @@ func main() {
 					*gatewayResponseTimeout = d
 				} else {
 					log.Printf("WARN: scheduler.gateway_response_timeout=%q invalid — using %v", rootCfg.Scheduler.GatewayResponseTimeout, *gatewayResponseTimeout)
+				}
+			}
+			// SCHED-GAP-1681: TOML layer for the transient-retry count —
+			// same default-guard pattern (applies only while the flag sits
+			// at its 3 default, so CLI and env keep precedence). A
+			// non-negative int wins (0 = single attempt); negative/invalid
+			// WARN and keep the default.
+			if rootCfg.Scheduler.GatewayTransientRetries != nil && *gatewayTransientRetries == 3 {
+				if n := *rootCfg.Scheduler.GatewayTransientRetries; n >= 0 {
+					*gatewayTransientRetries = n
+				} else {
+					log.Printf("WARN: scheduler.gateway_transient_retries=%d invalid — using %d", n, *gatewayTransientRetries)
 				}
 			}
 		}
@@ -1192,6 +1231,9 @@ func main() {
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
+		// SCHED-GAP-1681: the ARMED transient-retry count, so /api/v1/config
+		// reports the same number the retry loop enforces.
+		GatewayTransientRetries: *gatewayTransientRetries,
 		// SCHED-GAP-1575-B: the ARMED heavy-read request deadline, so
 		// /api/v1/config reports the same duration the handlers enforce.
 		APIReadTimeout:          apiReadTimeout.String(),

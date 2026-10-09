@@ -296,7 +296,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 {"db_path":"/home/kara/.hermes/coding-hermes/scheduler.db","listen":"127.0.0.1:9090",
  "min_interval":"30s","max_interval":"24h0m0s","num_levels":10,
  "weight_budget":100,"max_concurrent":4,"tick_timeout":"2h0m0s",
- "api_read_timeout":"5s","gateway_response_timeout":"30m0s",
+ "api_read_timeout":"5s","gateway_response_timeout":"30m0s","gateway_transient_retries":3,
  "namespace_mode":true,"auto_disable_failure_rate":0.9,
  "auto_disable_window":100,"auto_disable_min_ticks":50,"failure_window":100,
  "gateway":{"url":"http://127.0.0.1:8642","key":"WZJh****",
@@ -308,6 +308,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 |-------|------|---------|
 | `db_path`, `listen`, `min_interval`, `max_interval`, `tick_timeout` | string | Paths/address/durations (`min_interval` "30s", `tick_timeout` "2h0m0s") |
 | `api_read_timeout` | string | The ARMED per-request deadline for the heavy read surfaces (default "5s"; `--api-read-timeout` / `SCHEDULER_API_READ_TIMEOUT` / `[api] read_timeout`) — the same duration the handlers enforce (SCHED-GAP-1575-B) |
+| `gateway_transient_retries` | int | The ARMED bounded transient-gateway retry count (default 3; `--gateway-transient-retries` / `SCHEDULER_GATEWAY_TRANSIENT_RETRIES` / `[scheduler] gateway_transient_retries`) — 0 = single attempt (SCHED-GAP-1681) |
 | `num_levels`, `weight_budget`, `max_concurrent` | int | Priority levels, budget, max parallel foremen |
 | `namespace_mode` | bool | Multi-namespace weight allocation enabled |
 | `auto_disable_failure_rate` | float | Auto-disable threshold (0 = feature off) |

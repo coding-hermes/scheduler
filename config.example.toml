@@ -37,6 +37,14 @@ weight_budget = 100
 max_concurrent = 12
 # Maximum wall-clock duration for a single tick before kill (2h = 2 hours)
 tick_timeout = "2h"
+# Per-turn deadline for a gateway /v1/responses POST (SCHED-GAP-117);
+# effective POST deadline = min(this, tick_timeout); "0s" disables
+gateway_response_timeout = "30m0s"
+# Bounded transient-gateway retry count (SCHED-GAP-1681): a 5xx/refused
+# dial/SSE stream-drop is retried up to N times on the same model/provider
+# pair with the SAME session key (session continuation). 0 = single attempt.
+# Applies only when --gateway-transient-retries was never passed.
+gateway_transient_retries = 3
 # Enable multi-namespace scheduling (reserved/hard_cap per namespace)
 namespace_mode = true
 

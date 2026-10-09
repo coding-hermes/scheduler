@@ -70,6 +70,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				10, 100, 10,
 				false,
 				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				3, // SCHED-GAP-1681: gateway_transient_retries (the new printConfig arg, between the deadline and slot_patience)
 				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
 				true,
 				"scheduler", "http://localhost:3000",
@@ -101,6 +102,7 @@ func TestSCHEDGAP1707_SessionSilenceGraceOnAllSurfaces(t *testing.T) {
 				10, 100, 10,
 				false,
 				2*time.Hour, 30*time.Minute, 5*time.Minute, time.Minute,
+				3, // SCHED-GAP-1681: gateway_transient_retries (the new printConfig arg, between the deadline and slot_patience)
 				"http://127.0.0.1:8642", "secret", "/tmp/foreman",
 				true,
 				"scheduler", "http://localhost:3000",

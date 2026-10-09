@@ -37,6 +37,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | `--gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
 | `--gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
 | `--gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |
+| `--gateway-transient-retries` | `3` | Bounded transient-gateway retry count (SCHED-GAP-1681): a 5xx/refused-dial/SSE stream-drop is retried up to N times on the same model/provider pair with the SAME session key (`X-Hermes-Session-Key` = tick id, session continuation), so the agent resumes where the stream died. Every POST lands on `gateway_trace.Attempts` and the `ticks.attempts` column. `0` = single attempt (retry off). Env: `SCHEDULER_GATEWAY_TRANSIENT_RETRIES`; TOML `scheduler.gateway_transient_retries` |
 | `--model-rates-file` | (none) | JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): `{as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}}` — refresh stickers without a rebuild |
 | `--no-exec-fallback` | `true` | Disable exec.Command fallback when gateway fails (default true for safety) |
 | `--version` | `false` | Print version/build info and exit; version resolves ldflags tag → vcs buildinfo (dev-<shorthash>) → dev; same identity serves /api/v1/health, openapi info.version, MCP serverInfo.version |

@@ -60,9 +60,18 @@ type Loop struct {
 	// single duration; on a loaded host /api/v1/status joined the same
 	// convoy as evaluate() and was stuck 28-80 min. The spawner remains
 	// the source of truth (existing tests rely on
-	// spawner.GatewayResponseTimeout()); this atomic is a write-through
-	// cache read by the Loop getter only.
+	// spawner.GatewayResponseTimeout()); the atomic is a write-through
+	// cache read by the Loop getter only. NewLoop primes it from the
+	// spawner's resolved default (the SCHED-GAP-117 default is 30m,
+	// observable in schedgap117_status_test.go).
 	gatewayResponseTimeoutNs atomic.Int64
+	// gatewayTransientRetries (SCHED-GAP-1681) mirrors the armed bounded
+	// transient-retry count the same way: the spawner is the source of
+	// truth, this atomic is a write-through cache the Loop getter reads
+	// without the loop mutex. Primed in NewLoop from the spawner's
+	// resolved default (3), overwritten whenever the daemon calls
+	// SetGatewayTransientRetries.
+	gatewayTransientRetries atomic.Int64
 	// SCHED-GAP-1678: the board-stasis spawn gate. Deliberately DISABLED at
 	// construction (see board_stasis.go): every existing selection contract
 	// stays byte-identical until the daemon arms it with
@@ -306,6 +315,10 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// applies --gateway-response-timeout or the env-var resolver changes
 	// the value; this prime keeps the mirror aligned from boot.
 	l.gatewayResponseTimeoutNs.Store(int64(l.spawner.GatewayResponseTimeout()))
+	// SCHED-GAP-1681: prime the transient-retry mirror the same way, so
+	// /api/v1/status reports the armed count before the daemon applies the
+	// flag (the spawner resolved env/default at construction).
+	l.gatewayTransientRetries.Store(int64(l.spawner.GatewayTransientRetries()))
 	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
 	// through the same logger.
 	l.slotPool.SetEventLogger(l.events)
@@ -527,6 +540,25 @@ func (l *Loop) SetGatewayResponseTimeout(d time.Duration) {
 	if l.spawner != nil {
 		l.spawner.SetGatewayResponseTimeout(d)
 	}
+}
+
+// SetGatewayTransientRetries updates the real spawner's bounded
+// transient-retry count (SCHED-GAP-1681). The daemon wires
+// --gateway-transient-retries here; 0 disables the retry loop (one attempt),
+// negative values are ignored by the spawner.
+func (l *Loop) SetGatewayTransientRetries(n int) {
+	l.gatewayTransientRetries.Store(int64(n))
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.spawner != nil {
+		l.spawner.SetGatewayTransientRetries(n)
+	}
+}
+
+// GatewayTransientRetries reports the armed bounded transient-retry count
+// (SCHED-GAP-1681), surfaced by /api/v1/status.
+func (l *Loop) GatewayTransientRetries() int {
+	return int(l.gatewayTransientRetries.Load())
 }
 
 // SetSlotPatience sets how long a spawn waits for a free slot before the
