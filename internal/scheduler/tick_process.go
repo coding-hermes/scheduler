@@ -36,6 +36,9 @@ func (l *Loop) evaluate() {
 	// escalator); no second read of the seam happens inside evaluate().
 	now := l.nowLocked()
 	l.lastEval = now
+	// SCHED-GAP-1621: keep the lock-free mirror in sync (write-through under
+	// the write lock we already hold) so LastEvalTime() never needs mu.
+	l.lastEvalNs.Store(now.UnixNano())
 
 	// SCHED-GAP-1678: pass-scope the board-stasis gate BEFORE the packers
 	// run. A ForceEvaluate-triggered pass consumes the bypass flag

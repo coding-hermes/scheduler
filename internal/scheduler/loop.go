@@ -113,6 +113,17 @@ type Loop struct {
 	paused   atomic.Bool
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval time.Time
+	// lastEvalNs (SCHED-GAP-1621) is an atomic write-through mirror of
+	// lastEval, read by LastEvalTime() so /api/v1/status and /health never
+	// take Loop.mu. evaluate() holds the WRITE lock across the whole pack
+	// (packer.Pick for the cold pack takes tens of seconds), so the getter's
+	// old RLock joined the same convoy and the status route stalled 28-104s
+	// behind it. The mirror follows the SCHED-GAP-1575-A pattern
+	// (gatewayResponseTimeoutNs): production writes only at the single
+	// lastEval assignment in evaluate(), under the write lock it already
+	// holds; in-loop readers (checkEvalStall, the health log) and tests
+	// keep reading/writing the plain field under mu.
+	lastEvalNs atomic.Int64
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
 	// HIGH/MEDIUM stall event (zero = never). Guards the stall-event
 	// throttle shared by both severities (SCHED-GAP-061).
@@ -1194,11 +1205,15 @@ func (l *Loop) Resume() {
 // /api/v1/status can finally distinguish "paused" from "idle").
 func (l *Loop) IsPaused() bool { return l.paused.Load() }
 
-// LastEvalTime returns when the last evaluation ran.
+// LastEvalTime returns when the last evaluation ran. SCHED-GAP-1621: reads
+// the atomic mirror, NOT Loop.mu — evaluate() holds the write lock across
+// the whole pack, so a locked read here stalled /api/v1/status 28-104s on a
+// cold pack. See lastEvalNs on the struct for the coherence contract.
 func (l *Loop) LastEvalTime() time.Time {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.lastEval
+	if ns := l.lastEvalNs.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
 }
 
 // WeightBudget returns the scheduling weight budget this loop was built
