@@ -1,0 +1,40 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-10-10-16-36-30",
+  "created_at": "2026-10-10T16:36:30-05:00",
+  "wave_budget": 7,
+  "workers_dispatched": 3,
+  "tasks": [
+    {
+      "id": "SCHED-GAP-1654",
+      "title": "Gateway availability path: track ticks lost to 503/429/connection-refused",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-SCHED-GAP-1654",
+      "branch": "wt/SCHED-GAP-1654",
+      "base_sha": "457b31470",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "status": "dispatched"
+    },
+    {
+      "id": "SCHED-GAP-1642",
+      "title": "Dashboard burst signal: N one-shot ticks in M minutes",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-SCHED-GAP-1642",
+      "branch": "wt/SCHED-GAP-1642",
+      "base_sha": "457b31470",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "status": "dispatched"
+    },
+    {
+      "id": "SCHED-GAP-1644",
+      "title": "Gateway.log incident gap: log nothing for 2 hours of 03:00 incident",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-SCHED-GAP-1644",
+      "branch": "wt/SCHED-GAP-1644",
+      "base_sha": "457b31470",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "status": "dispatched"
+    }
+  ],
+  "finished_at": "2026-10-10T18:15:00-05:00",
+  "recovery_note": "No worker session ever started (no hermes chat process, no session in state.db). All 3 branches zero-commit vs base 457b31470; worktrees clean except untracked dagger.db. Nothing to merge. SCHED-GAP-1644 closed as phantom; 1654 tasks.yaml flip reverted (judge FAIL 5c19a3e9); 1642 re-queued."
+}
