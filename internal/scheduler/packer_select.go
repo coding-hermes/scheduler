@@ -396,6 +396,15 @@ func (m *MultiPoolPacker) Pack(
 					if tasksPacingDeferredJittered(&lt, now) {
 						continue
 					}
+					// SCHED-GAP-1657: the stale-premise gate on the tasks-mode
+					// waiver path — the board HAS open rows (the waiver fired)
+					// but they are all stale pending rows whose commit_hash is
+					// already present. Defer rather than dispatch a session to
+					// re-discover it. `mode` is tasks here (the branch guard).
+					if blocked, _ := stalePremiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
+						continue
+					}
 				} else {
 					// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose
 					// board holds no dispatchable row is deferred BEFORE
@@ -440,6 +449,15 @@ func (m *MultiPoolPacker) Pack(
 					// as the 1655 gate above; one os.Stat, no git battery.
 					if blocked, _ := boardStasisBlocks(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
 						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
+						continue
+					}
+					// SCHED-GAP-1657: the stale-premise gate's cooldown-mode
+					// half (and tasks-mode-without-waiver, a no-op here — a
+					// board with no open rows has no stale pending rows either).
+					// After the no-work and board-stasis gates; strictly
+					// downstream of the pin. A board read, no git ops.
+					if blocked, _ := stalePremiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
 						continue
 					}
 					// SCHED-GAP-1666: the shared gate's wall-clock verdict
@@ -563,6 +581,13 @@ func (m *MultiPoolPacker) Pack(
 					if blocked, _ := boardStasisBlockedQuiet(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
 						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
 						continue // board-unchanged skip — not queued
+					}
+					// SCHED-GAP-1657: the stale-premise quiet mirror — a lane the
+					// selection gate deferred on its all-stale pending rows must
+					// not be re-admitted by BORROWED budget either.
+					if blocked, _ := stalePremiseBlockedQuiet(pu.Project.Name, pu.Project.Workdir,
+						effectiveAdmissionModeFor(pu.Project, nsModes), pu.Project.BoardOwnership, st.ns.ReporterClass); blocked {
+						continue // stale-premise skip — not queued
 					}
 					// SCHED-GAP-1666: the shared gate's wall-clock verdict.
 					if gate.Defer {

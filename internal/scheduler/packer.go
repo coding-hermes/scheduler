@@ -430,6 +430,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				noteBuilderNoWorkDeferral(s.name, s.workdir)
 				continue
 			}
+			// SCHED-GAP-1657: the stale-premise gate on the overdue rescue —
+			// an overdue BUILDER lane whose pending rows are all
+			// already-satisfied is not being starved, it has nothing to do.
+			// Force-selecting it would re-create the wasted session this row
+			// closes through the one path built to bypass every gate.
+			if blocked, _ := stalePremiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				continue
+			}
 			if currRunning >= p.maxConcurrent {
 				log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
 				break
@@ -500,6 +508,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				totalSkippedCooldown++
 				continue
 			}
+			// SCHED-GAP-1657: the stale-premise gate on the tasks-mode
+			// waiver path — the board HAS open rows (the waiver fired) but
+			// they are all stale pending rows whose commit_hash is already
+			// present. Defer rather than dispatch a session to re-discover
+			// it. `mode` is tasks here (the branch guard above).
+			if blocked, _ := stalePremiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				totalSkippedCooldown++
+				continue
+			}
 		} else {
 			// SCHED-GAP-1655: the legacy-path mirror of the namespace and
 			// flat-fallback gates — a cooldown-mode BUILDER lane with no
@@ -538,6 +555,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			if blocked, _ := boardStasisBlocks(p.boardStasisGate, s.name, s.workdir,
 				database.AdmissionModeCooldown, s.lastTickStatus, ""); blocked {
 				totalSkippedStasis++
+				continue
+			}
+			// SCHED-GAP-1657: the stale-premise gate's cooldown-mode half
+			// (and tasks-mode-without-waiver, a no-op here — a board with
+			// no open rows has no stale pending rows either). After the
+			// no-work and board-stasis gates; strictly downstream of the
+			// pin. A board read, no git ops.
+			if blocked, _ := stalePremiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				totalSkippedCooldown++
 				continue
 			}
 			if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {

@@ -89,6 +89,11 @@ type Loop struct {
 	// emitAdmissionPass; classify and decision-building run in the same
 	// pass). Consumed immediately after classifyAdmissionDeferral sets it.
 	admissionPrevTickID string
+	// SCHED-GAP-1657: the stale row id(s) the classifier just derived for a
+	// stale_premise deferral — the same holder pattern as
+	// admissionPrevTickID, carrying the "row" the ADMIT line and the
+	// deferral record must name.
+	admissionStaleRowID string
 	// evalWakeCh + evalDone are the SCHED-GAP-1575-A coalescing channel
 	// for ForceEvaluate(). Buffered(1); non-blocking sends collapse N
 	// concurrent calls into at most one pending pass. NewLoop enables a lazy
@@ -1658,6 +1663,15 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			tasksBuilderAdmissionBlocked(name, workdir, database.AdmissionModeTasks, boardOwnership, "") {
 			continue
 		}
+		// SCHED-GAP-1657 mirror: a BUILDER lane whose board's pending rows
+		// are all premise-met (commit_hash already present) is deferred by
+		// the packers' stale-premise gate, so it is not eligible either —
+		// the GAP-043 zero-select alarm must not fire over work that is
+		// already done. The same mode/ownership resolution the packers use;
+		// reporter lanes stay exempt inside the gate.
+		if blocked, _ := stalePremiseBlockedQuiet(name, workdir, mode, boardOwnership, ""); blocked {
+			continue
+		}
 		// SCHED-GAP-1666: the shared gate's wall-clock verdict — the
 		// packer admits exactly when the gate does not defer.
 		if !gate.Defer {
@@ -1842,6 +1856,13 @@ var admissionReasonVocabulary = []string{
 	AdmissionReasonNoWork,
 	AdmissionReasonFailedCooldown,
 	AdmissionReasonBoardUnchanged,
+	// SCHED-GAP-1657: a BUILDER lane whose board holds pending rows and
+	// every one of them is stale (status still pending but commit_hash
+	// already present — the "work landed, row never flipped" shape) was
+	// excluded at pick time because the candidate row's premise is already
+	// satisfied. Distinct from no_work (an EMPTY board): the board HAS
+	// rows, they are just already done. Carries no cooldown_remaining_s.
+	AdmissionReasonStalePremise,
 }
 
 // admissionReasonIsKnown reports whether reason is part of the vocabulary.
@@ -1916,6 +1937,10 @@ type admissionDecision struct {
 	// rendered as prev_tick=<id> on the ADMIT line so the skip names the
 	// tick the board is unchanged SINCE (the row's log contract).
 	PrevTickID string
+	// SCHED-GAP-1657: the stale row id(s) for reason=stale_premise,
+	// rendered as row=<id> on the ADMIT line so the deferral names the
+	// blocking row(s).
+	StaleRowID string
 }
 
 // AdmissionCounters returns a snapshot of the SCHED-GAP-155 admission
@@ -2042,6 +2067,11 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	if d.PrevTickID != "" {
 		line += " prev_tick=" + sanitizeAdmitField(d.PrevTickID)
 	}
+	// SCHED-GAP-1657: name the stale row(s) whose premise is already met —
+	// the deferral must identify the blocker row, not just the lane.
+	if d.StaleRowID != "" {
+		line += " row=" + sanitizeAdmitField(d.StaleRowID)
+	}
 	line += loadSuffix
 	admitWriteLine(line)
 
@@ -2053,6 +2083,9 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	// row is self-contained. Best-effort: persistence failure is logged and
 	// the decision is unchanged.
 	detail := fmt.Sprintf("pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s", passID, eligible, admitted, deferred, ns) + loadSuffix
+	if d.StaleRowID != "" {
+		detail += " row=" + d.StaleRowID
+	}
 	l.recordDeferral(d.Project, reason, int64(passID), detail)
 
 	if !admissionReasonIsKnown(reason) {
@@ -2259,6 +2292,17 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 		// keeps the mark exactly as fresh as the last classification — a
 		// stale park can never outlive the work that disproves it.
 		noteParkedEmpty(c.Name, false)
+		// SCHED-GAP-1657: the stale-premise gate's tasks-mode half — the
+		// board HAS open rows (the no_work check above passed) but they are
+		// all stale: pending rows whose commit_hash is already present, the
+		// "work landed, row never flipped" shape. Defer with the new reason
+		// and name the blocker row. QUIET: the skip log is the packers'
+		// selection site's job; this re-derives the verdict for the ADMIT
+		// line and the deferral record.
+		if blocked, rowID := stalePremiseBlockedQuiet(c.Name, c.Workdir, database.AdmissionModeTasks, c.BoardOwnership, c.ReporterClass); blocked {
+			l.admissionStaleRowID = rowID
+			return AdmissionReasonStalePremise, 0, false
+		}
 		// Waiver granted: the block (if any) is structural, the
 		// SCHED-GAP-133/136 floors downstream, or the SCHED-GAP-214
 		// post-failure stand-down (last tick FAILED → full effective
@@ -2308,6 +2352,17 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 	// DESIGN (deliverable 3), so an empty board never blocks them.
 	if builderAdmissionBlocked(c.Name, c.Workdir, database.AdmissionModeCooldown, c.ReporterClass) {
 		return AdmissionReasonNoWork, 0, false
+	}
+	// SCHED-GAP-1657: the stale-premise gate's cooldown-mode half — a board
+	// with open rows that are ALL stale (pending + commit_hash present).
+	// AFTER no_work (an empty board is the older, still-true answer; a
+	// stale pending row is an OPEN row, so no_work never fires here) and
+	// BEFORE the structural gates (the waste question is "why did it not
+	// run", and "already done" outranks "no room to run it in"). QUIET,
+	// the same split as the tasks half.
+	if blocked, rowID := stalePremiseBlockedQuiet(c.Name, c.Workdir, database.AdmissionModeCooldown, c.BoardOwnership, c.ReporterClass); blocked {
+		l.admissionStaleRowID = rowID
+		return AdmissionReasonStalePremise, 0, false
 	}
 	if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
 		return r, 0, false
@@ -2407,6 +2462,13 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) int64 {
 			if d.Reason == AdmissionReasonBoardUnchanged {
 				d.PrevTickID = l.admissionPrevTickID
 				l.admissionPrevTickID = ""
+			}
+			// SCHED-GAP-1657: when the classifier answered stale_premise it
+			// stashed the blocking row id(s) — pick it up and clear the
+			// holder, mirroring the board_unchanged handling above.
+			if d.Reason == AdmissionReasonStalePremise {
+				d.StaleRowID = l.admissionStaleRowID
+				l.admissionStaleRowID = ""
 			}
 		}
 		decisions = append(decisions, d)
