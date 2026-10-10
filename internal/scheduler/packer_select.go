@@ -108,6 +108,28 @@ func (m *MultiPoolPacker) Pack(
 		nsSet[ns.ID] = true
 	}
 
+	// SCHED-GAP-1686 trigger clause: resolve each lane's project-family root
+	// (following Parent links) and count enabled lanes per root, so the
+	// cadence ceiling can exempt a lane that is its project's ONLY runnable
+	// lane — deferring it would starve the project entirely. Computed over
+	// the FULL project list (all namespaces, enabled and disabled) because a
+	// project's family spans namespaces; a lane whose parent is absent from
+	// the snapshot is its own root (mirrors database.BuildLaneTree).
+	parentOf := make(map[string]string, len(projects))
+	for _, p := range projects {
+		parentOf[p.Name] = p.Parent
+	}
+	rootOf := make(map[string]string, len(projects))
+	for name := range parentOf {
+		rootOf[name] = projectRootName(name, parentOf)
+	}
+	enabledByRoot := make(map[string]int)
+	for _, p := range projects {
+		if p.Enabled {
+			enabledByRoot[rootOf[p.Name]]++
+		}
+	}
+
 	// --- Phase 2 — intra-namespace packing (per namespace) ---
 	for _, ns := range namespaces {
 		if !ns.Enabled {
@@ -182,6 +204,12 @@ func (m *MultiPoolPacker) Pack(
 			urgency := urgencyCalc.ComputeUrgency(
 				float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 			)
+			// SCHED-GAP-1686: track which boost (if any) set this lane's
+			// urgency so the cadence ceiling can name the over-serving
+			// mechanism when it defers the lane. Highest applicable tier wins
+			// (each block is gated on urgency < tier, and the tiers are
+			// strictly ordered starvation > pending > bump > organic).
+			boostCause := BoostCauseOrganic
 			// S-GAP-001 fairness: an eligible project whose last attempt is
 			// older than its starvation window jumps the urgency queue so the
 			// prio-10 cohort cannot starve it indefinitely. The boost is
@@ -190,6 +218,7 @@ func (m *MultiPoolPacker) Pack(
 			if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
 				age := starvationAge(lastTick, createdAt, now)
 				urgency = starvationBoostUrgencyFor(age)
+				boostCause = BoostCauseStarvation
 				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v starved=%v) — starvation guarantee",
 					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
 			}
@@ -201,6 +230,7 @@ func (m *MultiPoolPacker) Pack(
 			if m.pendingCounter != nil {
 				if pending := m.pendingCounter.CountPending(p.Workdir); pending > 0 && urgency < pendingBoostUrgency {
 					urgency = pendingBoostUrgencyFor(pending)
+					boostCause = BoostCausePending
 				}
 			}
 			// SCHED-GAP-107: active bump — the bump cooldown overrides the
@@ -211,6 +241,7 @@ func (m *MultiPoolPacker) Pack(
 				bumpCD = p.BumpCooldownS
 				if urgency < bumpBoostUrgency {
 					urgency = bumpBoostUrgency
+					boostCause = BoostCauseBump
 				}
 			}
 
@@ -222,6 +253,7 @@ func (m *MultiPoolPacker) Pack(
 				Urgency:         urgency,
 				EffectiveWeight: effW,
 				BumpCooldownS:   bumpCD,
+				BoostCause:      boostCause,
 			})
 			members = append(members, p.Name)
 		}
@@ -278,6 +310,18 @@ func (m *MultiPoolPacker) Pack(
 		// state so the hold build (after borrowing) can stamp them on the hold.
 		st.roster = members
 		st.rotatedNames = rotate
+		// SCHED-GAP-1686: the namespace's cadence ceiling, computed once per
+		// namespace from the enabled-lane roster (nsProjects) and the
+		// trailing-window completed-tick count injected by the loop.
+		impliedDemand := cadenceImpliedDemand(nsProjects, CadenceCeilingWindow)
+		ceiling := cadenceCeilingFor(impliedDemand)
+		tickCount := m.namespaceTickCounts[ns.ID]
+		// ceilingArmed: the ceiling is enforced only when the loop injected
+		// the trailing-window counts (nil map = fail-open, no ceiling — the
+		// pre-SCHED-GAP-1686 behavior). An empty non-nil map is armed with
+		// zero counts, so the ceiling still applies (the namespace has no
+		// completed ticks in the window and may pack up to the ceiling).
+		ceilingArmed := m.namespaceTickCounts != nil
 		budgetRemaining := alloc
 		for i := range scored {
 			pu := &scored[i]
@@ -415,6 +459,23 @@ func (m *MultiPoolPacker) Pack(
 				break
 			}
 
+			// SCHED-GAP-1686: per-namespace cadence ceiling — an ADDITIONAL
+			// deferral reason placed AFTER the cooldown/board gates (so it only
+			// defers a lane that would otherwise pack) and BEFORE the budget/
+			// concurrency checks. It never consumes cooldown: a deferred lane
+			// is simply not packed this cycle. The check is a hard cap —
+			// tickCount (the trailing 24h) plus the lanes already selected this
+			// cycle must stay under the ceiling, so the namespace can never
+			// push its rolling-window consumption past it. The trigger clause
+			// exempts a lane that is its project's ONLY runnable lane:
+			// deferring it would starve the project entirely.
+			if ceilingArmed && enabledByRoot[rootOf[pu.Project.Name]] > 1 &&
+				cadenceCeilingDefers(tickCount, len(st.selected), ceiling) {
+				log.Printf("CEILING: ns=%s lane=%s deferred — cadence ceiling (ticks=%d + selected=%d >= %v), boost=%s",
+					ns.ID, pu.Project.Name, tickCount, len(st.selected), ceiling, pu.BoostCause)
+				continue
+			}
+
 			// Budget check.
 			if pu.EffectiveWeight > budgetRemaining {
 				st.queued = append(st.queued, pu)
@@ -433,6 +494,15 @@ func (m *MultiPoolPacker) Pack(
 				continue
 			}
 			if !puInList(pu, st.selected) && !puInList(pu, st.queued) {
+				// SCHED-GAP-1686: a lane deferred by the cadence ceiling at
+				// selection must not be re-admitted by BORROWED budget
+				// (mirror of the cooldown/board no-queue checks below). QUIET:
+				// the CEILING log is the selection site's job — a lane refused
+				// there reaches this mirror too and must not be counted twice.
+				if ceilingArmed && enabledByRoot[rootOf[pu.Project.Name]] > 1 &&
+					cadenceCeilingDefers(tickCount, len(st.selected), ceiling) {
+					continue // ceiling skip — not queued
+				}
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
 					cd := pu.Project.CooldownS

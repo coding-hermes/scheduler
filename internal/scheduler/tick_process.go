@@ -156,6 +156,17 @@ func (l *Loop) evaluate() {
 		nss, _ := database.ListNamespaces(ctx, l.db, false)
 		if len(nss) > 0 {
 			projs, _ := database.ListProjects(ctx, l.db, false)
+			// SCHED-GAP-1686: inject the trailing-window completed-tick
+			// counts per namespace so the packer can enforce the cadence
+			// ceiling. Fail-open — a broken count query must never halt
+			// scheduling, so nil (no ceiling) is armed on error.
+			nsCounts, err := database.LoadNamespaceTickCounts(ctx, l.db, now, CadenceCeilingWindow)
+			if err != nil {
+				log.Printf("cadence ceiling: namespace tick-count query failed open: %v", err)
+				l.multiPoolPacker.SetNamespaceTickCounts(nil)
+			} else {
+				l.multiPoolPacker.SetNamespaceTickCounts(nsCounts)
+			}
 			running, lastComp := l.evalContext(ctx)
 			result := l.multiPoolPacker.Pack(projs, nss, l.calculator, lastComp, running, now)
 			packed = result.Projects

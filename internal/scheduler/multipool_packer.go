@@ -23,6 +23,12 @@ type ProjectUrgency struct {
 	// BumpCooldownS, when > 0 (SCHED-GAP-107), is the active bump cooldown
 	// that overrides Project.CooldownS in the cooldown gates.
 	BumpCooldownS int
+	// BoostCause (SCHED-GAP-1686) records which urgency boost set the lane's
+	// urgency in the scoring loop — one of BoostCauseStarvation /
+	// BoostCausePending / BoostCauseBump / BoostCauseOrganic. The cadence
+	// ceiling names it when it defers the lane, so the over-serving mechanism
+	// is visible rather than inferred from a tick census.
+	BoostCause string
 }
 
 // NamespaceTickData holds per-namespace utilization for a single evaluation
@@ -89,6 +95,11 @@ type MultiPoolPacker struct {
 	// boardStasisGate is the SCHED-GAP-1678 spawn gate, installed per
 	// evaluation pass by the loop. nil = gate transparent.
 	boardStasisGate *BoardStasisGate
+	// namespaceTickCounts (SCHED-GAP-1686) is the trailing-window completed
+	// tick count per namespace, installed per evaluation by the loop. nil or
+	// an absent entry reads as zero, so the cadence ceiling is a no-op until
+	// the loop arms it (fail-open: a broken count query never halts packing).
+	namespaceTickCounts map[string]int
 
 	// holdState (SCHED-GAP-1614) is each namespace's budget-hold memory:
 	// the fairness-rotation cursor and the hold-event dedupe signature.
@@ -202,6 +213,14 @@ func (m *MultiPoolPacker) SetCadenceRates(rates map[string]float64) {
 // evaluation pass. Pass nil to make the gate transparent.
 func (m *MultiPoolPacker) SetBoardStasisGate(g *BoardStasisGate) {
 	m.boardStasisGate = g
+}
+
+// SetNamespaceTickCounts installs the trailing-window completed-tick counts
+// per namespace for one evaluation (SCHED-GAP-1686). Pass nil (or leave
+// unset — tests, tooling) to disable the cadence ceiling entirely: no
+// namespace is ever deferred on it, matching pre-SCHED-GAP-1686 behavior.
+func (m *MultiPoolPacker) SetNamespaceTickCounts(counts map[string]int) {
+	m.namespaceTickCounts = counts
 }
 
 // SetWaveShedDB installs the DB handle used for the SCHED-GAP-113 wave-shed
