@@ -393,6 +393,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalSkippedNamespace++
 			continue
 		}
+		// SCHED-GAP-124: this candidate's effective admission mode,
+		// resolved ONCE per iteration and reused by the overdue rescue and
+		// the greedy pack below (both previously resolved it with the same
+		// call — hoisted so the SCHED-GAP-1656 board gate and the tasks
+		// waiver can never disagree about the mode).
+		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
 		// GAP-011: hard due-aware selection. Any enabled, not-running
 		// project whose time since last completed tick is STRICTLY greater
 		// than 2x its effective cooldown MUST be selected — force-select it
@@ -410,6 +416,17 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			// gate decides; reporter lanes keep their cadence.
 			if admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode}) == database.AdmissionModeCooldown &&
 				builderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeCooldown, "") {
+				noteBuilderNoWorkDeferral(s.name, s.workdir)
+				continue
+			}
+			// SCHED-GAP-1656: the tasks-mode half of the same rescue rule —
+			// an overdue TASKS builder lane whose own board was read and
+			// holds no dispatchable row is not starved, it has nothing to
+			// do. This path bypasses every gate by design, so the board
+			// gate must be mirrored here or the rescue would re-create the
+			// wasted session this row closes.
+			if mode == database.AdmissionModeTasks &&
+				tasksBuilderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeTasks, s.boardOwnership, "") {
 				noteBuilderNoWorkDeferral(s.name, s.workdir)
 				continue
 			}
@@ -446,8 +463,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		}
 		// SCHED-GAP-124: tasks-mode admission (legacy non-namespace path).
 		// Non-perpetual pending board work waives last-tick spacing;
-		// backoff/blackout/skip above still applied.
-		mode := admissionModeFor(s.admissionMode, s.namespaceID, map[string]string{"": s.admissionNsMode})
+		// backoff/blackout/skip above still applied. `mode` was resolved
+		// once above (SCHED-GAP-1656).
 		if mode == database.AdmissionModeTasks && tasksAdmissionDue(s.workdir, s.boardOwnership) {
 			// SCHED-GAP-214: after a FAILED tick the waiver stands down —
 			// the lane paces on its full effective cooldown (the same
@@ -493,6 +510,19 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			// same way; a no-work skip is the waste-shaped cousin).
 			if mode == database.AdmissionModeCooldown &&
 				builderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeCooldown, "") {
+				noteBuilderNoWorkDeferral(s.name, s.workdir)
+				totalSkippedCooldown++
+				continue
+			}
+			// SCHED-GAP-1656: the TASKS-mode half — a tasks builder lane
+			// whose own board was READ and holds no dispatchable row is
+			// deferred here rather than falling through to its pin. The
+			// board IS the answer; the session the pin would have burned is
+			// the waste. Same conjunction and same NO-WORK log line as the
+			// cooldown gate above (one vocabulary, one operator signal);
+			// reporter lanes and foreign boards stay transparent.
+			if mode == database.AdmissionModeTasks &&
+				tasksBuilderAdmissionBlocked(s.name, s.workdir, database.AdmissionModeTasks, s.boardOwnership, "") {
 				noteBuilderNoWorkDeferral(s.name, s.workdir)
 				totalSkippedCooldown++
 				continue

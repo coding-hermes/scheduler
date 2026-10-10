@@ -11,8 +11,13 @@ SCHED-GAP-124 gave lanes two admission modes: `cooldown` (cron — a tick is
 admitted only when `now - last_tick_completed >= effective cooldown`) and
 `tasks` (work-driven — a lane whose board holds non-perpetual open work is
 admitted immediately; when the board drains, including the perpetual-only
-NEVER-DONE / fixture case, the cooldown pin applies again). Namespaces carry
-the default; projects may override.
+NEVER-DONE / fixture case, the cooldown pin applies again). SCHED-GAP-1656
+amended the drained case for BUILDER lanes only: rather than dispatching on
+the pin, the packers defer a builder lane whose own board was read and holds
+no dispatchable row (reason `tasks_no_work`); the row that lands later
+re-admits it immediately through the waiver, so the deferral costs no
+latency. Reporter-class lanes and lanes that do not own their board keep the
+pin fallback verbatim. Namespaces carry the default; projects may override.
 
 Measured leak (live scheduler.db, 2026-09-17): the "satellite" lanes
 (`-sync`, `-qa`, `-dogfood`, `-pm`) run in their own workdirs, but each one's

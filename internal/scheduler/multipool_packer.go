@@ -440,6 +440,20 @@ func (m *MultiPoolPacker) packFlat(
 					noteBuilderNoWorkDeferral(s.proj.Name, s.proj.Workdir)
 					continue
 				}
+				// SCHED-GAP-1656: the tasks-mode half on the flat fallback
+				// path — a tasks builder lane whose own board was read and
+				// holds no dispatchable row is deferred rather than
+				// dispatching a session to re-discover the empty board.
+				// Same board authority and log line as the cooldown gate
+				// above; reporter lanes and foreign boards stay transparent
+				// (no namespace is in scope here, so the lane class is
+				// name-derived — the same resolution the 1655 gate uses on
+				// this path).
+				if mode == database.AdmissionModeTasks &&
+					tasksBuilderAdmissionBlocked(s.proj.Name, s.proj.Workdir, database.AdmissionModeTasks, s.proj.BoardOwnership, "") {
+					noteBuilderNoWorkDeferral(s.proj.Name, s.proj.Workdir)
+					continue
+				}
 				// SCHED-GAP-1678: the flat-fallback mirror of the
 				// namespace-path board-stasis gate (packer_select.go) —
 				// a cooldown-mode BUILDER lane whose board file has not

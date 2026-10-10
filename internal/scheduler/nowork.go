@@ -34,6 +34,16 @@ import (
 // class is explicit and testable (laneClass), never an inline suffix
 // substring, and the namespace reporter_class config (SCHED-GAP-1674)
 // overrides it declaratively.
+//
+// SCHED-GAP-1656 completes the policy on the other admission mode. The
+// 1655 gate covers COOLDOWN-mode builders; a TASKS-mode builder lane still
+// fell through its drained board to the wall-clock pin and dispatched a
+// whole session once the pin elapsed. tasksBuilderAdmissionBlocked closes
+// that half: a tasks builder whose OWN board was read and holds zero
+// dispatchable rows is deferred with the SAME tasks_no_work reason the
+// admission classifier already uses (no vocabulary is added), and is
+// admitted by the existing tasks waiver — plus the board-wake flip — the
+// moment a dispatchable row lands, so the deferral costs no latency.
 
 // laneClassBuilder and laneClassReporter are the two classes of lane
 // (SCHED-GAP-1655 deliverable 3). A BUILDER lane's product is code/board
@@ -193,6 +203,56 @@ func noteBuilderNoWorkDeferral(projectName, workdir string) {
 		return
 	}
 	log.Printf("NO-WORK: deferring %s — board holds 0 dispatchable rows (%d open rows counted)", projectName, open)
+}
+
+// tasksBuilderAdmissionBlocked is the SCHED-GAP-1656 admission gate for ONE
+// candidate: should this pass refuse to dispatch a TASKS-mode BUILDER lane
+// because its own board holds no dispatchable work?
+//
+// WHY THIS EXISTS. SCHED-GAP-1655 gave the no-work gate to COOLDOWN-mode
+// builder lanes (builderAdmissionBlocked). A tasks-mode builder lane had no
+// such gate: the SCHED-GAP-124 waiver only fires when work EXISTS, so a
+// board with zero dispatchable rows simply fell through the tasks branch to
+// the lane's wall-clock pin — and once the pin elapsed the packer dispatched
+// the lane anyway, burning a slot, a cooldown and a full LLM session to
+// discover (again) that there was nothing to dispatch. That is the tasks
+// half of the measured no-op-tick waste the no-work policy closes.
+//
+// Deferring costs NO latency, which is what makes the gate safe: a tasks lane
+// with work is admitted by the SCHED-GAP-124 waiver the moment the row
+// exists (no pin to wait out), and a board write additionally forces an
+// evaluation through the board-wake watcher (a tasks-mode privilege,
+// SCHED-GAP-1695/1727). The lane also parks — SCHED-GAP-1660's parked-empty
+// registry records it at the classification step, which now RUNS because the
+// lane is deferred rather than admitted — so the flip-back path is armed.
+//
+// Gate order mirrors builderAdmissionBlocked: mode first, then class, then
+// ownership, then the board. Only the conjunction "tasks-mode AND builder
+// AND owns its board AND board read-and-empty" blocks; every other shape is
+// transparent:
+//
+//   - COOLDOWN mode is builderAdmissionBlocked's jurisdiction (SCHED-GAP-1655),
+//     untouched here — the two gates partition by admission mode.
+//   - REPORTER-class lanes (-sync/-pm/-qa/-dogfood/-releng/-review/-docs/
+//     -readme/-perf suffixes, or a namespace reporter_class="reporter" pin)
+//     keep their timer cadence BY DESIGN — an empty board is not a fault for
+//     a lane whose product is a periodic report.
+//   - a lane that does NOT own the board it reads resolves through
+//     boardOwnedByLane (SCHED-GAP-141): it is a time-based lane and must keep
+//     its cooldown, exactly as the tasks waiver refuses it.
+//   - a missing/unreadable board or an empty workdir is fail-open
+//     (builderBoardHasWork) — an evidence gap must never starve a lane.
+func tasksBuilderAdmissionBlocked(projectName, workdir, admissionMode, boardOwnership, reporterConfig string) bool {
+	if admissionMode != database.AdmissionModeTasks {
+		return false // cooldown mode: SCHED-GAP-1655's gate owns that shape
+	}
+	if !laneIsBuilder(projectName, reporterConfig) {
+		return false // reporter lane: timer cadence BY DESIGN, untouched
+	}
+	if !boardOwnedByLane(workdir, boardOwnership) {
+		return false // foreign/unowned board: time-based lane (SCHED-GAP-141)
+	}
+	return !builderBoardHasWork(workdir)
 }
 
 // noWorkTickLine is the grep-stable completion line for a tick recorded

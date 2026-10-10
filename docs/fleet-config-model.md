@@ -130,7 +130,7 @@ B3 → `id = "coding-hermes"`, `weight = 100` — **no `max_concurrent` key** (k
 | Mode | Meaning | Right for |
 |---|---|---|
 | `cooldown` (default) | Wall-clock cron semantics: admit only when `now − last_tick_completed ≥ cooldown_s`. | Every satellite lane. Their work is cadence-driven, and their cadence is the signal an operator reads. |
-| `tasks` | Admit immediately while the project's **own** board holds real (non-perpetual) pending work; fall back to the wall-clock pin once the board is drained or holds only fixture rows. All other gates (caps, budget, pacing, blackout, failure backoff) still apply. | The `coding-hermes` foremen — "fast when there is work, slow when it is only perpetual stuff". |
+| `tasks` | Admit immediately while the project's **own** board holds real (non-perpetual) pending work; fall back to the wall-clock pin once the board is drained or holds only fixture rows. A **builder** lane whose board is read and drained is DEFERRED rather than dispatched on that pin (SCHED-GAP-1656, reason `tasks_no_work`) — a filed row re-admits it at once through the waiver; reporter lanes (`-sync`/`-pm`/… or a namespace `reporter_class="reporter"` pin) keep the timer. All other gates (caps, budget, pacing, blackout, failure backoff) still apply. | The `coding-hermes` foremen — "fast when there is work, slow when it is only perpetual stuff". |
 
 ### 3.1 The board-ownership precondition — the one rule that explains the satellites
 

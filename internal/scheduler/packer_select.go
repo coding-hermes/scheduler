@@ -374,6 +374,20 @@ func (m *MultiPoolPacker) Pack(
 						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
 						continue
 					}
+					// SCHED-GAP-1656: the TASKS-mode half on this path — a
+					// tasks builder lane whose own board was read and holds
+					// no dispatchable row is deferred HERE, before its pin
+					// is consulted, instead of dispatching a whole session
+					// to discover the board is empty. Same board authority
+					// as the 1655 gate above (one parser, one log line); a
+					// namespace reporter_class="reporter" pin is honored
+					// through ns.ReporterClass, so a declaratively-exempt
+					// namespace keeps its timer cadence.
+					if mode == database.AdmissionModeTasks &&
+						tasksBuilderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeTasks, pu.Project.BoardOwnership, ns.ReporterClass) {
+						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
+						continue
+					}
 					// SCHED-GAP-1678: board-stasis gate (namespace-mode
 					// mirror of packer.go's flat path) — a cooldown-mode
 					// BUILDER lane whose board file has not changed since
@@ -458,6 +472,15 @@ func (m *MultiPoolPacker) Pack(
 					// reporter-class lane is exempt by the gate itself.
 					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeCooldown &&
 						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
+						continue // no-work skip — not queued
+					}
+					// SCHED-GAP-1656: the tasks-mode mirror of the 1655
+					// queued check — a tasks builder lane the selection gate
+					// deferred on its drained board must not be re-admitted
+					// by BORROWED budget either. Same conjunction as the
+					// selection gate above.
+					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeTasks &&
+						tasksBuilderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeTasks, pu.Project.BoardOwnership, st.ns.ReporterClass) {
 						continue // no-work skip — not queued
 					}
 					// SCHED-GAP-1678: the same board-stasis conjunction as

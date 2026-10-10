@@ -1634,6 +1634,15 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 			builderAdmissionBlocked(name, workdir, database.AdmissionModeCooldown, "") {
 			continue
 		}
+		// SCHED-GAP-1656 mirror: the TASKS-mode half. A tasks builder lane
+		// the packers defer on its drained board is not eligible either —
+		// the mirror must agree with all three selection paths (packer.go,
+		// packer_select.go, multipool_packer.go) or the GAP-043 alarm lies
+		// about a lane that has nothing to do.
+		if mode == database.AdmissionModeTasks &&
+			tasksBuilderAdmissionBlocked(name, workdir, database.AdmissionModeTasks, boardOwnership, "") {
+			continue
+		}
 		// SCHED-GAP-1666: the shared gate's wall-clock verdict — the
 		// packer admits exactly when the gate does not defer.
 		if !gate.Defer {
@@ -1728,7 +1737,11 @@ func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
 //	tasks_no_work   tasks-mode project (SCHED-GAP-124) whose board IS owned
 //	                by the lane but holds no non-perpetual open work
 //	                (admission_mode.go tasksAdmissionDue), so the cooldown
-//	                waiver does not fire.
+//	                waiver does not fire. SCHED-GAP-1656: a BUILDER lane in
+//	                this state is now DEFERRED by the packers (not merely
+//	                classified) instead of dispatching on its pin —
+//	                reporter-class lanes keep their timer cadence and stay
+//	                outside the gate.
 //	board_unowned   tasks-mode project whose board resolves OUTSIDE its own
 //	                workdir (admission_mode.go boardOwnedByLane /
 //	                laneOwnsBoard, SCHED-GAP-141): a time-based lane. The

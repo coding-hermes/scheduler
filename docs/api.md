@@ -813,7 +813,13 @@ by namespace weight and the pool's `--max-concurrent` is the hard ceiling.)
   for satellite lanes (their work is cadence-driven).
 - `tasks` — admit immediately while the project's **own** board still has real
   (non-perpetual) rows to work, then fall back to the cooldown timer when the
-  board is drained or holds only perpetual rows. A lane only qualifies when it
+  board is drained or holds only perpetual rows. SCHED-GAP-1656 narrows the
+  fallback for one class: a **builder** lane whose board is read and drained is
+  DEFERRED (reason `tasks_no_work`) instead of being dispatched on that pin —
+  the drained board is the answer, and the row that lands later re-admits the
+  lane immediately through the tasks waiver. Reporter lanes (`-sync`/`-pm`/…
+  suffixes, or a namespace `reporter_class="reporter"` pin) are exempt and keep
+  the documented timer. A lane only qualifies when it
   OWNS the board it reads (SCHED-GAP-141, migration v32 `projects.board_ownership`:
   `''` = derived by full symlink resolution, `owner`, `shared`) — a satellite
   reading its primary's board through a symlinked `board/` directory does not.
