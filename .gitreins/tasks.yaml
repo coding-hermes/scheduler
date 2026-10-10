@@ -5041,3 +5041,21 @@ tasks:
   status: complete
   created_at: '2026-10-09T21:09:18.675417+00:00'
   completed_at: '2026-10-09T22:33:39.597801+00:00'
+- id: SCHED-GAP-1657
+  title: Verify row premise at pick time
+  criteria:
+  - A row whose declared artifact (commit_hash/files_changed) is already present in
+    the workdir is not dispatched; the tick defers with the row named
+  status: complete
+  created_at: '2026-10-10T09:33:04.638552+00:00'
+  completed_at: '2026-10-10T10:33:05.293802+00:00'
+- id: SCHED-GAP-1734
+  title: Isolate TestUsagePoolLeaseReleasedWhenStartFails from the live dispatch path
+  criteria:
+  - The test constructs its spawner with WithNoExecFallback so no exec.Command(hermes)
+    fallback can fire; go build and go vet clean; the test passes under go test; no
+    start-fails-* sessions appear in ~/.hermes/foreman/logs/agent.log after a suite
+    run
+  status: complete
+  created_at: '2026-10-10T15:31:57.413073+00:00'
+  completed_at: '2026-10-10T15:43:24.004900+00:00'
