@@ -322,7 +322,13 @@ func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
 	}
 	t.Setenv(EnvDispatchTargets, writeDispatchTargets(t, ""))
 	resetDispatchTargetsCache()
-	pool := NewSlotPool(1, NewSpawner(db, 1), NewLifecycleTracker(db))
+	sp := NewSpawner(db, 1)
+	// SCHED-GAP-1734: the spawner has no gateway client, so with the exec
+	// fallback enabled Spawn would shell out to the LIVE hermes CLI and leak
+	// a real foreman session on every suite run. Disable the fallback so the
+	// nil-gateway path defers instead of exec-spawning.
+	sp.SetNoExecFallback(true)
+	pool := NewSlotPool(1, sp, NewLifecycleTracker(db))
 	pool.SetUsagePoolPolicy(UsagePoolPolicy{Enabled: true, LocalPoolID: "local:control"})
 	tickID := pool.Spawn(PackedProject{Name: "start-fails", Workdir: "/tmp"}, time.Now(), true, db)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
