@@ -2,10 +2,13 @@ package scheduler
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
 )
@@ -37,20 +40,28 @@ import (
 //     (boardOpenRows == 0) — never sees it; the two reasons partition
 //     "nothing to do" into empty-board and all-stale.
 //
-// THE SIGNAL (cheap, a board read only — no git operations inside the
-// daemon): a row is stale when its status is still "pending" AND its
-// commit_hash is non-empty. We deliberately do NOT run the git battery
-// (board_freshness.go is a library, never called from the live daemon) and
-// do NOT content-sniff files_changed — per the row's "keep it SIMPLE and
-// cheap" contract the commit_hash signal is the whole check.
+// THE SIGNAL (cheap — one bounded subprocess per stale-shaped row): a row
+// is stale when its status is still "pending", its commit_hash is
+// non-empty, AND that hash names a commit object in the lane's workdir
+// repo — the criterion "the declared artifact is ALREADY PRESENT IN THE
+// WORKDIR", verified with a single bounded `git rev-parse --verify
+// <hash>^{commit}` (see commitPresentInWorkdir). Exit 0 means the commit
+// landed; ANY error — a missing repo, a fabricated/never-landed hash, a
+// hung git — means NOT stale (fail-open: a wrong deferral skips real work
+// and costs more than a spent tick). We deliberately do NOT run the full
+// git battery (board_freshness.go is a library, never called from the live
+// daemon) and do NOT content-sniff files_changed — per the row's "keep it
+// SIMPLE and cheap" contract the commit_hash reachability is the whole
+// check.
 //
-// LIMITATION (documented per the brief): because reachability is NOT
-// checked, a pending row whose commit_hash names a commit that has not
-// actually landed in the workdir would still read as stale here. That is
-// accepted: the fallback signal the brief names (commit_hash present on a
-// still-pending row) is the classic stale shape, and a hash on a pending
-// row that never landed is a board-integrity anomaly the foreman fixes on
-// its next real tick — not a reason to keep burning sessions on it.
+// LIMITATION (documented): the probe verifies object existence, not
+// full reachability-from-HEAD — a hash that names an orphaned object
+// (present in the object DB but not an ancestor of HEAD) reads as stale.
+// That is accepted: the false-positive class this gate must fix is the
+// fabricated/never-landed hash (object absent entirely), and an orphaned
+// object still proves the artifact was created in this workdir at some
+// point. Free-text commit_hash values ("out-of-band (daemon)") fail the
+// probe and read as NOT stale — the safe side.
 
 // AdmissionReasonStalePremise is the SCHED-GAP-1657 vocabulary entry: a
 // BUILDER lane whose board holds pending rows and every one of them is
@@ -63,8 +74,10 @@ const AdmissionReasonStalePremise = "stale_premise"
 
 // boardStalePendingRows scans the lane's board and reports its stale
 // pending rows. A row is STALE when its status is still "pending" and its
-// commit_hash is non-empty — the "work landed, row never flipped" shape.
-// It returns:
+// commit_hash is non-empty AND resolves to a commit object in the lane's
+// workdir repo — the "work landed, row never flipped" shape, now
+// git-verified (SCHED-GAP-1657 rework: a fabricated/never-landed hash must
+// NOT read as stale). It returns:
 //
 //   - staleIDs: the ids of every stale pending row, in board order,
 //   - pendingCount: the total number of non-fixture, non-deferred pending
@@ -110,14 +123,46 @@ func boardStalePendingRows(workdir string) (staleIDs []string, pendingCount int,
 			continue
 		}
 		pendingCount++
-		if strings.TrimSpace(boardString(obj["commit_hash"])) != "" {
+		hash := strings.TrimSpace(boardString(obj["commit_hash"]))
+		if hash != "" && commitPresentInWorkdir(workdir, hash) {
 			staleIDs = append(staleIDs, boardRowID(obj))
 		}
+		// else: empty hash (fresh work) or a hash that does not resolve in
+		// the workdir (fabricated/never-landed, or a non-git workdir) — NOT
+		// stale. Fail-open: a wrong deferral skips real work.
 	}
 	if err := sc.Err(); err != nil {
 		return nil, 0, false
 	}
 	return staleIDs, pendingCount, true
+}
+
+// stalePremiseGitTimeout bounds one reachability probe so a hung git can
+// never stall the picker (SCHED-GAP-1657 rework): the probe must be cheap
+// and must fail-open — on timeout or any other error the row reads as NOT
+// stale and the lane dispatches.
+const stalePremiseGitTimeout = 2 * time.Second
+
+// commitPresentInWorkdir reports whether hash names a commit object in the
+// git repo rooted at workdir — the premise check "the declared artifact is
+// already present in the workdir". The probe is exactly
+// `git rev-parse --verify <hash>^{commit}` (object existence; the cheapest
+// correct check per the brief), run with a bounded context so a hung git
+// can never block the picker. It is fail-open: a missing repo, a
+// fabricated/never-landed hash, or a timeout all return false. The hash is
+// passed as an argv element (never shell-interpolated) — it is hex by
+// construction, and even an attacker-shaped value stays inert to git.
+func commitPresentInWorkdir(workdir, hash string) bool {
+	if strings.TrimSpace(workdir) == "" || strings.TrimSpace(hash) == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stalePremiseGitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--verify", hash+"^{commit}")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 // stalePremiseBlockedQuiet is the gate decision for ONE candidate, without
