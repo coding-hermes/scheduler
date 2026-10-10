@@ -320,3 +320,23 @@ func memoryCallsFixture(t *testing.T, tickID string, calls []memoryToolCall) {
 	}
 	t.Setenv(hermesStateDBPathEnv, stateDB)
 }
+
+// TestSCHEDGAP1651_PromptAppendIdempotent proves no duplicate block when the
+// namespace prompt already carries it (the live duckbrain-sync default_prompt
+// has the block baked in; a second append would ship it twice per tick).
+func TestSCHEDGAP1651_PromptAppendIdempotent(t *testing.T) {
+	withBlock := PackedProject{Name: "blog-sync", NamespacePrompt: "base " + SyncScopeBudgetPrompt}
+	if got := buildForemanPrompt(withBlock, "t1"); strings.Count(got, "SCOPE AND READ BUDGET") != 1 {
+		t.Errorf("prompt with block already present must carry it exactly once, got %d",
+			strings.Count(got, "SCOPE AND READ BUDGET"))
+	}
+	without := PackedProject{Name: "blog-sync", NamespacePrompt: "plain base"}
+	got := buildForemanPrompt(without, "t2")
+	if strings.Count(got, "SCOPE AND READ BUDGET") != 1 {
+		t.Errorf("plain namespace prompt must get exactly one appended block")
+	}
+	qa := PackedProject{Name: "blog-qa", NamespacePrompt: "plain base"}
+	if strings.Contains(buildForemanPrompt(qa, "t3"), "SCOPE AND READ BUDGET") {
+		t.Errorf("non-sync lane must not receive the block")
+	}
+}

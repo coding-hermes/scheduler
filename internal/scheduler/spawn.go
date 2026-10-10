@@ -1173,9 +1173,15 @@ func buildForemanPrompt(project PackedProject, tickID string) string {
 // to duckbrain-sync lanes — the mechanical fact-writers whose per-tick input
 // (1.2–8.3M tokens) came mostly from out-of-scope context reads. The
 // namespace prompt stays the authoritative procedure; this adds the boundary.
-// Non-sync lanes return "" and their prompts are byte-identical to pre-1651.
+// Idempotent: when the namespace prompt already carries the block (the live
+// fleet config has it baked into duckbrain-sync's default_prompt), the
+// append is skipped — no duplicate block on the wire. Non-sync lanes return
+// "" and their prompts are byte-identical to pre-1651.
 func syncScopeBudgetClause(project PackedProject) string {
 	if !strings.HasSuffix(project.Name, "-sync") {
+		return ""
+	}
+	if strings.Contains(project.NamespacePrompt, "SCOPE AND READ BUDGET (SCHED-GAP-1651)") {
 		return ""
 	}
 	return "\n\n" + SyncScopeBudgetPrompt
