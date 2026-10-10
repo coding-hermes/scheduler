@@ -4974,14 +4974,15 @@ tasks:
   created_at: '2026-10-07T10:51:04.812281+00:00'
   completed_at: '2026-10-07T11:46:43.651905+00:00'
 - id: SCHED-GAP-1621
-  title: PERF-002 cold-start /api/v1/status 28-104s
+  title: "PERF-002: cold /api/v1/status stalls 28-104s \u2014 evaluate() write-locks\
+    \ l.mu across packer.Pick"
   criteria:
-  - "Cold /api/v1/status stalls 28-104s after daemon restart; warm path 0.24-0.44s.\
-    \ Root cause + fix bringing cold path under 5s. Goroutine dump during slow call\
-    \ shows no handler goroutine visible \u2014 blocked before measurable work."
+  - curl to /api/v1/status on a freshly started daemon completes in <5s even during
+    the cold window; a test proves the status handler no longer blocks behind a full
+    evaluate() pack; full go test -short -p 1 suite passes
   status: complete
-  created_at: '2026-10-07T12:33:03.960026+00:00'
-  completed_at: '2026-10-07T12:41:50.836557+00:00'
+  created_at: '2026-10-10T03:50:05.986116+00:00'
+  completed_at: '2026-10-10T04:51:51.189663+00:00'
 - id: README-7
   title: Reconcile tracked deploy/coding-hermes-scheduler.service with the live user
     unit
