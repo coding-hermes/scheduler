@@ -1165,8 +1165,49 @@ func buildForemanPrompt(project PackedProject, tickID string) string {
 	}
 	return "[Scheduler tick: " + tickID + "] " + base +
 		"\nWorkdir: " + project.Workdir + "." +
-		"\nWorker model/provider: " + WorkerDefaults(project) + "."
+		"\nWorker model/provider: " + WorkerDefaults(project) + "." +
+		syncScopeBudgetClause(project)
 }
+
+// syncScopeBudgetClause (SCHED-GAP-1651) appends the scope/read-budget block
+// to duckbrain-sync lanes — the mechanical fact-writers whose per-tick input
+// (1.2–8.3M tokens) came mostly from out-of-scope context reads. The
+// namespace prompt stays the authoritative procedure; this adds the boundary.
+// Non-sync lanes return "" and their prompts are byte-identical to pre-1651.
+func syncScopeBudgetClause(project PackedProject) string {
+	if !strings.HasSuffix(project.Name, "-sync") {
+		return ""
+	}
+	return "\n\n" + SyncScopeBudgetPrompt
+}
+
+// SyncScopeBudgetPrompt (SCHED-GAP-1651) is the scope/read-budget block the
+// spawn path appends to every duckbrain-sync tick prompt, after the
+// namespace's default_prompt. The canonical sync procedure leaves scope
+// open ("do not sweep unless the data skill requires it") and the lanes
+// still read 1.2–8.3M input tokens per tick — mostly context reads outside
+// the target namespace. This block makes the boundary mechanical:
+//
+//   - SCOPE — one namespace, named by the lane; no cross-namespace reads;
+//   - the read budget — every large read is bounded and justified, not
+//     exploratory; skills and reference docs load per procedure, never wholesale;
+//   - the failure shape — a token-splat tick is a bad tick even when the
+//     keys verify.
+//
+// Appended (not replacing) so the namespace prompt stays the authoritative
+// procedure (fleet-lane-config-writes doctrine). Exported so the config
+// layer and tests can assert the canonical text.
+const SyncScopeBudgetPrompt = "SCOPE AND READ BUDGET (SCHED-GAP-1651): This tick syncs ONE namespace — " +
+	"the one your project prompt names. Read only the namespace specified: do not sweep other " +
+	"namespaces, do not load cross-references or related namespaces, and do not explore sibling " +
+	"projects' repos. TOKEN/READ BUDGET: keep total context reads inside the target namespace — " +
+	"cap any single source read (git log, board file, session scan, JSONL table) at roughly " +
+	"2000 lines / one command's worth of output, prefer targeted flags over full dumps, and " +
+	"stop reading once the Intended Facts table is populated (max 50 entries). Load skills " +
+	"lazily per procedure; never cat a whole skill or data file. Do not sweep ChromaDB, " +
+	"Obsidian, GitHub, or any other namespace unless the data skill explicitly requires it. " +
+	"A tick that writes N verified keys and stays inside this budget is a success; a tick " +
+	"that splurges millions of tokens on out-of-scope reads is a failure even if its keys verify."
 
 // chainEntry is one step of the model/provider fallback chain (SCHED-GAP-064).
 // An entry is PRESENT when at least one of model/provider is non-empty; a
@@ -1461,6 +1502,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				if m, p, headOK := res.OpenHead(); headOK {
 					model, provider = m, p
 				}
+			}
+			// SCHED-GAP-1651: the primary dispatch pair carries the router's
+			// PUBLIC price — not only the 401/403 retry hops. Without this
+			// wiring a router-priced FREE head (e.g. qwen3.7-plus:free@xkiro-2,
+			// usd_1m=0) left rate unknown, computeCostUSD fell through to the
+			// static maps, the model id was unknown there, and every such tick
+			// was billed at the unknown-model fallback ($2/M in, $8/M out):
+			// measured 2026-10-10, 348 duckbrain-sync ticks in 7 days carried
+			// $828.77 of phantom cost for a $0 lane. A known-but-$0 rate is
+			// load-bearing — computeCostUSD never falls through for a known
+			// lane — and pairs the router never priced still fall back to the
+			// static maps exactly as before.
+			if rr, ok := routerRes.HopRate(provider, model); ok {
+				rate = rr
 			}
 		}
 		chainKind := "work"
@@ -3069,6 +3124,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
 		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
+		priceAsOf := lastComputedPriceAsOf
 		log.Printf("TICK: %s %s → %s (%v): %s",
 			st.Project, st.TickID, TickFailed,
 			st.completeAt.Sub(st.Started).Round(time.Second), st.gwFailErr)
@@ -3085,6 +3141,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
 			CostUSD:   cost,
+			PriceAsOf: priceAsOf,
 			// ADV-R09/G8: gateway response usage = gateway-sourced figures.
 			CostSource: CostSourceGateway,
 			// SCHED-GAP-119: keep real work on failed rows (stalled ticks
@@ -3138,6 +3195,7 @@ func (st *SpawnedTick) Wait() TickOutcome {
 				TokensIn:     tokensIn,
 				TokensOut:    tokensOut,
 				CostUSD:      cost,
+				PriceAsOf:    lastComputedPriceAsOf,
 				CostSource:   CostSourceGateway,
 				Commits:      commits,
 				FilesChanged: files,
@@ -3214,6 +3272,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// when the transcript is unavailable (which can only fall back
 			// to the git artifacts, never fabricate a no-op).
 			MemoryKeys: countMemoryKeysInSession(st.TickID),
+			// SCHED-GAP-1651: the price-list vintage of the cost figure
+			// above, surfaced on the sync cost footer.
+			PriceAsOf: lastComputedPriceAsOf,
 		}
 	}
 

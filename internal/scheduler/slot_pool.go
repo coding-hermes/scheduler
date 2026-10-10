@@ -803,8 +803,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		}
 
 		// Deliver output (suppressed in test-verify mode).
+		// SCHED-GAP-1651: sync-family deliveries append the per-tick
+		// cost/keys footer so cost-per-key is visible on the delivered
+		// message. Non-sync deliveries are byte-identical to pre-1651.
 		if !noDeliver {
-			deliverOutputWithMode(clock.Real(), outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &st.Output, st.DeliverMode)
+			body := st.Output
+			if line := syncTickCostFooter(outcome); line != "" {
+				body.WriteString("\n\n" + line)
+			}
+			deliverOutputWithMode(clock.Real(), outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &body, st.DeliverMode)
 		}
 
 		// Auto-slowdown: if tick signals IDLE, gently slow down.

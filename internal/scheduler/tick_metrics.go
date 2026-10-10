@@ -167,7 +167,33 @@ func ApplyModelRatesFile(path string) error {
 // A routerRate with known=true but all components 0.0 is a FREE lane — cost
 // legitimately computes to 0 (never fall through to the maps for a free
 // lane: that would bill a $0 lane at the model's sticker).
+//
+// SCHED-GAP-1651: every completion-path call also refreshes
+// lastComputedPriceAsOf (the price list vintage for the computed figure).
+//
+// priceAsOfSnapshot records the active price list's as-of stamp for the
+// completion path (SCHED-GAP-1651). computeCostUSD runs on every completion
+// goroutine right before TickOutcome is assembled; this records WHICH price
+// list produced the figure so TickOutcome.PriceAsOf can carry it (the sync
+// cost footer surfaces it next to the sticker). Assigned under the map's own
+// read lock; never fails.
+func priceAsOfSnapshot() {
+	lastComputedPriceAsOf = PriceMapAsOf()
+}
+
+// lastComputedPriceAsOf mirrors the as-of of the price list for the most
+// recent computeCostUSD call. A completion-path global because the cost
+// function's signature is frozen (called from eight sites); the completion
+// path reads it immediately after its own computeCostUSD call, so the
+// single-goroutine write-then-read window is the contract.
+var lastComputedPriceAsOf string
+
 func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut int) float64 {
+	// SCHED-GAP-1651: stamp the as-of of the price list that produced this
+	// figure — read on the completion path, carried on TickOutcome.PriceAsOf
+	// and the sync cost footer. Read-only snapshot of the last applied
+	// sticker source; never blocks or fails the cost computation.
+	priceAsOfSnapshot()
 	if rr.known {
 		if rr.inPerM >= 0 && rr.outPerM >= 0 {
 			return float64(tokensIn)/1e6*rr.inPerM + float64(tokensOut)/1e6*rr.outPerM

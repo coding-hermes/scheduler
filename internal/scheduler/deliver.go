@@ -296,6 +296,43 @@ func deliverOutput(clk clock.Clock, project, tickID, deliver, trigger string, ou
 	deliverOutputWithMode(clk, project, tickID, deliver, trigger, output, "")
 }
 
+// syncTickCostFooter renders the SCHED-GAP-1651 per-tick cost/keys line that
+// sync-family deliveries append to every tick report. The lane's own body
+// already reports namespace and keys written; this footer grounds those
+// numbers in the ledger: tokens, sticker cost and the measured key count —
+// so cost-per-key is visible on the exact message the operator reads.
+//
+// Scope: lanes whose name carries the "-sync" suffix (the DuckBrain sync
+// family). Everything else returns "" and its delivery is byte-identical to
+// pre-1651. Fail-open: zero output never blocks a delivery.
+func syncTickCostFooter(outcome TickOutcome) string {
+	if !strings.HasSuffix(outcome.Project, "-sync") {
+		return ""
+	}
+	cost := fmt.Sprintf("$%.4f", outcome.CostUSD)
+	if outcome.CostUSD <= 0 {
+		cost = "$0"
+	}
+	line := fmt.Sprintf("COST: %d in / %d out tokens · %s (%s)%s",
+		outcome.TokensIn, outcome.TokensOut, cost, outcome.CostSource,
+		syncKeysFragment(outcome.MemoryKeys))
+	if outcome.PriceAsOf != "" {
+		line += " · prices as of " + outcome.PriceAsOf
+	}
+	return line
+}
+
+// syncKeysFragment renders the memory-key count of a sync tick (" · N keys").
+// "0 keys (unmeasured)" is load-bearing honesty, not a defect: the transcript
+// scan can fail or miss (an unmeasured 0), and Bane's data law wants a REASON
+// carried on every zero — an unexplained 0 reads as a lane that wrote nothing.
+func syncKeysFragment(keys int) string {
+	if keys > 0 {
+		return fmt.Sprintf(" · %d keys", keys)
+	}
+	return " · 0 keys (unmeasured)"
+}
+
 // deliverOutputWithMode delivers one tick report according to the project's
 // deliver_mode (SCHED-GAP-1607):
 //

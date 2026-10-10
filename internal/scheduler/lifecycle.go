@@ -194,6 +194,11 @@ type TickOutcome struct {
 	// 0). A measurement failure can only leave it 0 — it can never
 	// manufacture a no-op.
 	MemoryKeys int
+	// PriceAsOf (SCHED-GAP-1651): the price map's as-of stamp carried onto
+	// the row and into the sync cost footer, so a reader of the reported
+	// sticker knows WHICH price list produced it. Read once at completion
+	// alongside the cost computation.
+	PriceAsOf string
 	// SCHED-GAP-1707: partial-telemetry mark for ticks terminated by a
 	// non-terminal kill (tick deadline, silence watchdog, stale reap,
 	// dispatch deadline). TelemetryPartial=true persists telemetry_partial=1
