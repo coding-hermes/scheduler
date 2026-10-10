@@ -2148,3 +2148,21 @@ func (s *Server) toolObservatorySnapshot(args map[string]interface{}) (string, e
 	}
 	return string(payload), nil
 }
+
+// toolGatewayErrors serves the gateway_errors MCP tool (SCHED-GAP-1654): the
+// same 24h gateway-availability counts the /api/v1/gateway-errors route
+// answers, built by the SAME scheduler.BuildGatewayErrorsReport so the two
+// surfaces cannot disagree (CTL-003 pairs this tool with that route). The
+// empty window is an honest zero — every class at 0, by_project an empty
+// array — never fabricated data.
+func (s *Server) toolGatewayErrors() (string, error) {
+	report, err := scheduler.BuildGatewayErrorsReport(context.Background(), s.db, s.clock().Now())
+	if err != nil {
+		return "", err
+	}
+	b, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}

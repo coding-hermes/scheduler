@@ -298,6 +298,10 @@ func (s *Server) Handler() http.Handler {
 	// collector.
 	mux.HandleFunc("/api/v1/observatory", s.observatoryGet)
 	mux.HandleFunc("/api/v1/observatory/stream", s.observatoryStream)
+	// SCHED-GAP-1654: ticks lost to gateway unavailability (503 / 429 /
+	// refused dial), counted by error class and lane over the last 24h from
+	// the spawn path's gateway_availability events.
+	mux.HandleFunc("/api/v1/gateway-errors", s.handleGatewayErrors)
 	mux.HandleFunc("/api/v1/queue", s.queue)
 	mux.HandleFunc("/api/v1/openapi.json", s.openapi)
 	// SCHED-GAP-156: the single read-only fleet-metrics endpoint (one request

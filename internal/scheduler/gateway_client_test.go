@@ -1,8 +1,10 @@
 package scheduler_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -458,5 +460,141 @@ func TestGatewayClient_IsTransient_Unmarshal(t *testing.T) {
 	}
 	if !scheduler.IsTransientGatewayErr(err) {
 		t.Errorf("IsTransientGatewayErr = false for unmarshal failure, want true")
+	}
+}
+
+// SCHED-GAP-1654 — gateway availability classification, driven against REAL
+// mock HTTP responses. The distinction between "the gateway refused to serve
+// this" (503 drain, 429 rate limit, refused dial) and every other failure is
+// what the spawn path's per-tick event and /api/v1/gateway-errors count, so
+// the mapping is pinned here at the client boundary where the status code
+// actually exists.
+
+// TestSCHEDGAP1654_ClassifyGatewayError_StatusClasses maps the served status
+// to a class: only 503 and 429 are availability refusals. 401/403 stay the
+// terminal auth classification (GAP-035), and any other 5xx keeps its own
+// failure class rather than being laundered into "the gateway was down".
+func TestSCHEDGAP1654_ClassifyGatewayError_StatusClasses(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		want       string
+		wantReject bool
+	}{
+		{name: "503 service unavailable", status: http.StatusServiceUnavailable, want: scheduler.GatewayErrClassUnavailable503},
+		{name: "429 rate limited", status: http.StatusTooManyRequests, want: scheduler.GatewayErrClassRateLimited429},
+		{name: "500 internal", status: http.StatusInternalServerError, want: ""},
+		{name: "502 bad gateway", status: http.StatusBadGateway, want: ""},
+		{name: "401 auth rejected", status: http.StatusUnauthorized, want: "", wantReject: true},
+		{name: "403 auth forbidden", status: http.StatusForbidden, want: "", wantReject: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]string{"type": "gateway_error", "message": "mock refusal"},
+				})
+			}))
+			defer srv.Close()
+
+			client := scheduler.NewGatewayClient(srv.URL, "test-key", 10*time.Second)
+			_, err := client.SendResponseWithSessionKey(t.Context(), "hi", "m", "", "", "tick-1654")
+			if err == nil {
+				t.Fatalf("HTTP %d: SendResponseWithSessionKey returned nil error", tc.status)
+			}
+			if got := scheduler.ClassifyGatewayError(err); got != tc.want {
+				t.Errorf("ClassifyGatewayError(HTTP %d) = %q, want %q (err: %v)", tc.status, got, tc.want, err)
+			}
+			if got := errors.Is(err, scheduler.ErrGatewayKeyRejected); got != tc.wantReject {
+				t.Errorf("errors.Is(err, ErrGatewayKeyRejected) = %t, want %t", got, tc.wantReject)
+			}
+			// The class must survive a wrap — the spawn path hands the
+			// classification a *wrapped* error ("gateway POST: %w"), so a
+			// classifier that only inspects the outermost error would report
+			// nothing for every real tick.
+			wrapped := fmt.Errorf("gateway unreachable and exec fallback disabled: %w", err)
+			if got := scheduler.ClassifyGatewayError(wrapped); got != tc.want {
+				t.Errorf("ClassifyGatewayError(wrapped HTTP %d) = %q, want %q", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSCHEDGAP1654_ClassifyGatewayError_ConnectionRefused — no HTTP response
+// at all (dead listener) is the third class. It is derived from the error
+// chain via client.Do's *url.Error → *net.OpError → syscall.ECONNREFUSED,
+// with the phrase as the text-level fallback for a proxied/wrapped shape.
+func TestSCHEDGAP1654_ClassifyGatewayError_ConnectionRefused(t *testing.T) {
+	// Port 1 has no listener: the dial is refused by the kernel.
+	client := scheduler.NewGatewayClient("http://127.0.0.1:1", "test-key", 5*time.Second)
+	_, err := client.SendResponseWithSessionKey(t.Context(), "hi", "m", "", "", "tick-1654-refused")
+	if err == nil {
+		t.Fatal("SendResponseWithSessionKey against a dead port returned nil error")
+	}
+	if got := scheduler.ClassifyGatewayError(err); got != scheduler.GatewayErrClassConnRefused {
+		t.Errorf("ClassifyGatewayError(refused dial) = %q, want %q (err: %v)",
+			got, scheduler.GatewayErrClassConnRefused, err)
+	}
+	if !scheduler.IsTransientGatewayErr(err) {
+		t.Error("IsTransientGatewayErr = false for a refused dial, want true (SCHED-GAP-080 retry invariant)")
+	}
+	if got := scheduler.ClassifyGatewayError(fmt.Errorf("gateway POST: %w", err)); got != scheduler.GatewayErrClassConnRefused {
+		t.Errorf("ClassifyGatewayError(wrapped refused dial) = %q, want %q", got, scheduler.GatewayErrClassConnRefused)
+	}
+	// Text-level fallback: a shape that reached us as prose only.
+	if got := scheduler.ClassifyGatewayError(errors.New(`Post "http://127.0.0.1:8642/v1/responses": dial tcp 127.0.0.1:8642: connect: Connection refused`)); got != scheduler.GatewayErrClassConnRefused {
+		t.Errorf("ClassifyGatewayError(prose refused dial) = %q, want %q", got, scheduler.GatewayErrClassConnRefused)
+	}
+}
+
+// TestSCHEDGAP1654_ClassifyGatewayError_NonAvailability — nil and ordinary
+// errors classify to "" (no class). This is what keeps the availability
+// counter honest: every failure class that is NOT a gateway refusal must fall
+// through the spawn path's emitter without writing an event.
+func TestSCHEDGAP1654_ClassifyGatewayError_NonAvailability(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "nil", err: nil},
+		{name: "plain error", err: errors.New("boom")},
+		{name: "context deadline", err: fmt.Errorf("gateway POST: %w", context.DeadlineExceeded)},
+		{name: "transient body read", err: fmt.Errorf("read response: %w: %w", scheduler.ErrGatewayTransient, errors.New("unexpected EOF"))},
+		{name: "key rejected", err: fmt.Errorf("%w (HTTP 401): auth_error", scheduler.ErrGatewayKeyRejected)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scheduler.ClassifyGatewayError(tc.err); got != "" {
+				t.Errorf("ClassifyGatewayError(%v) = %q, want \"\" (not an availability class)", tc.err, got)
+			}
+		})
+	}
+}
+
+// TestSCHEDGAP1654_ClassOrderIsClosed pins the reporting vocabulary: the
+// endpoint seeds its by_class map from this order, so a class dropped from it
+// would silently vanish from the API output instead of reading 0.
+func TestSCHEDGAP1654_ClassOrderIsClosed(t *testing.T) {
+	want := map[string]bool{
+		scheduler.GatewayErrClassUnavailable503: true,
+		scheduler.GatewayErrClassRateLimited429: true,
+		scheduler.GatewayErrClassConnRefused:    true,
+	}
+	got := map[string]bool{}
+	for _, class := range scheduler.GatewayErrorClassOrder {
+		if !want[class] {
+			t.Errorf("GatewayErrorClassOrder carries unexpected class %q", class)
+		}
+		got[class] = true
+	}
+	for class := range want {
+		if !got[class] {
+			t.Errorf("GatewayErrorClassOrder is missing %q — the endpoint would report it as absent, not 0", class)
+		}
+	}
+	if len(scheduler.GatewayErrorClassOrder) != len(want) {
+		t.Errorf("GatewayErrorClassOrder length = %d, want %d", len(scheduler.GatewayErrorClassOrder), len(want))
 	}
 }

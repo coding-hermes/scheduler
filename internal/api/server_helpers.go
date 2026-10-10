@@ -1411,6 +1411,17 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/gateway-errors": {
+      "get": {
+        "summary": "Ticks not run because of gateway unavailability, by error class and lane (SCHED-GAP-1654)",
+        "description": "Counts the per-tick gateway_availability events the spawn path writes when a tick is genuinely not run because the gateway refused it: HTTP 503 (drain/unavailable), HTTP 429 (rate limited) or a refused dial (no HTTP response at all). Fixed 24-hour window; every known class is present even at 0; by_project is ordered by total descending. Failures with their own classification (exec-fallback rescues, auth rejections, tick deadlines, 5xx that is not 503) are excluded by construction.",
+        "responses": {
+          "200": {"description": "Counts object: generated_at, window_hours (24), cutoff, total, by_class (unavailable_503 / rate_limited_429 / connection_refused) and by_project rows (project, total, by_class)"},
+          "405": {"description": "Non-GET method"},
+          "500": {"description": "Event-table query failed (error body names the failure; never fabricated zeros)"}
+        }
+      }
+    },
     "/api/v1/events/stream": {
       "get": {
         "summary": "Server-Sent Events stream of newly committed events (push, not poll)",

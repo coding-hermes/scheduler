@@ -257,7 +257,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (59 tools)            │
+│  /mcp      → MCP server (60 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -343,6 +343,7 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `groups_deploy` | Deploy a template's task rows to every member project of a group (`dry_run` plans without writing) |
 | `events_list` | Read the event log (`since` returns only events with id > since) |
 | `observatory_snapshot` | Compute one Observatory snapshot over the tick history: tick-rate buckets, per-namespace allocation (volume share vs configured weight) and failure heatmap; `window` (seconds or 1h/6h/24h/7d, default 6h) + optional `namespace` filter (SCHED-GAP-1592) |
+| `gateway_errors` | Count ticks NOT run because the gateway refused them over the last 24h: `total`, `by_class` (`unavailable_503`/`rate_limited_429`/`connection_refused`, every class present even at 0) and `by_project` rows ordered by total desc (SCHED-GAP-1654) |
 | `namespaces_list` | List all namespaces (allocation pools) |
 | `namespaces_get` | Get one namespace by id (weight, caps, admission_mode, load_gate) |
 | `namespaces_create` | Create a namespace (id + positive weight required) |
@@ -1044,7 +1045,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 59 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 60 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP

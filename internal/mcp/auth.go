@@ -90,17 +90,20 @@ var mutatingTools = map[string]bool{
 // surface — cron probes, the ops watchdog, Observatory-style pullers — are
 // read-only, and the mutation is the danger, not the observation.
 var readOnlyTools = map[string]bool{
-	"fleet_status":              true,
-	"fleet_projects":            true,
-	"fleet_project_detail":      true,
-	"fleet_ticks":               true,
-	"groups_list":               true,
-	"groups_get":                true,
-	"templates_list":            true,
-	"templates_get":             true,
-	"events_list":               true,
-	"fleet_lane_tree":           true,
-	"observatory_snapshot":      true,
+	"fleet_status":         true,
+	"fleet_projects":       true,
+	"fleet_project_detail": true,
+	"fleet_ticks":          true,
+	"groups_list":          true,
+	"groups_get":           true,
+	"templates_list":       true,
+	"templates_get":        true,
+	"events_list":          true,
+	"fleet_lane_tree":      true,
+	"observatory_snapshot": true,
+	// SCHED-GAP-1654: a count of already-committed events — a read, and an
+	// open one like every other introspection surface above.
+	"gateway_errors":            true,
 	"namespaces_list":           true,
 	"namespaces_get":            true,
 	"namespaces_projects":       true,

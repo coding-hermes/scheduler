@@ -1571,3 +1571,69 @@ is emitted immediately on connect.
 ```bash
 curl -sN "http://127.0.0.1:9090/api/v1/observatory/stream?window=1h"
 ```
+
+## 17. Gateway availability losses (SCHED-GAP-1654)
+
+### GET /api/v1/gateway-errors
+
+Ticks that were **not run** because the gateway refused them, over a fixed
+24-hour window, split by error class and by lane. Built for the 2026-09-27
+03:00 incident (SCHED-GAP-1644), where the gateway logged nothing for two
+hours and the scheduler could not say how many ticks the gateway had cost.
+
+| Class | Meaning |
+|-------|---------|
+| `unavailable_503` | The endpoint answered HTTP 503 — on this fleet overwhelmingly the drain response ("Gateway is draining"), i.e. a gateway restart or a saturated handler |
+| `rate_limited_429` | The endpoint answered HTTP 429 — the request was refused for pacing and never reached a model |
+| `connection_refused` | No HTTP response at all: the dial was refused (dead listener / restarted box) |
+
+Classification is one function in the spawn path
+(`scheduler.ClassifyGatewayError`); a 401/403 stays the terminal auth
+rejection (GAP-035), and any other failure — 5xx that is not 503, a per-turn
+stall, our own tick deadline — keeps its own classification and is **never**
+counted here. One event per tick is written at the terminal spawn site
+(component `gateway_availability`, details carry `event_type:
+"gateway_error"`, `error_class`, `project`, `tick_id` and an RFC3339
+`timestamp`), including the refused-dial shape that lands as a SCHED-GAP-203
+deferral rather than a drop — so the surface counts lost *work*, not failed
+*requests*.
+
+**Response (200):**
+
+```json
+{
+  "generated_at": "2026-10-10T21:40:00Z",
+  "window_hours": 24,
+  "cutoff": "2026-10-09T21:40:00Z",
+  "total": 12,
+  "by_class": {"unavailable_503": 7, "rate_limited_429": 3, "connection_refused": 2},
+  "by_project": [
+    {"project": "lore-foreman", "total": 5, "by_class": {"unavailable_503": 5, "rate_limited_429": 0, "connection_refused": 0}}
+  ]
+}
+```
+
+Every class is present in `by_class` (and in each `by_project.by_class`)
+even at `0`, so a consumer never has to distinguish "no losses" from a
+missing field. `by_project` is ordered by `total` descending, then project
+name ascending. An empty window is an honest zero with `"by_project": []`,
+never `null`.
+
+**Errors:** 405 non-GET · 500 DB failure (the error text is returned; the
+surface never answers 200 with fabricated zeros).
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/gateway-errors" | jq '.by_class'
+```
+
+To see the underlying rows (the same rows `/api/v1/events/stream` pushes
+live):
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/events?component=gateway_availability&limit=50" | jq '.events[].details'
+```
+
+AI agents read the same report through the MCP tool `gateway_errors` (`POST
+/mcp`) — both surfaces are built by one aggregation
+(`scheduler.BuildGatewayErrorsReport`), so the REST wire and the tool output
+cannot disagree.

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -135,6 +136,81 @@ func gatewayTransientBlip(err error) bool {
 	// which keeps its own failure class — see the doc above.
 	var gse *GatewayStatusError
 	return !errors.As(err, &gse)
+}
+
+// Gateway availability error classes (SCHED-GAP-1654). These name the three
+// ways a gateway REFUSES work for reasons that are not the lane's fault and
+// not (until this row) distinguishable in the event log:
+//
+//	unavailable_503  — the endpoint answered HTTP 503. On this fleet that is
+//	                   overwhelmingly the drain response ("Gateway is
+//	                   draining"), i.e. a gateway restart or a saturated
+//	                   handler, but a proxy in front of the gateway produces
+//	                   the same code, so the class names the CODE, not a
+//	                   guessed cause.
+//	rate_limited_429 — the endpoint answered HTTP 429. The request was
+//	                   refused for pacing; it never reached a model.
+//	connection_refused — no HTTP response at all: the dial was refused
+//	                   (dead listener / restarted box). Transport-level, so
+//	                   the class is derived from the error chain, not from a
+//	                   status code.
+//
+// Anything else — auth rejections (GAP-035), 5xx that is not 503, deadline
+// expiries, unparseable bodies — is deliberately NOT an availability class:
+// those already have their own classification and must not be laundered into
+// "the gateway was down".
+const (
+	GatewayErrClassUnavailable503 = "unavailable_503"
+	GatewayErrClassRateLimited429 = "rate_limited_429"
+	GatewayErrClassConnRefused    = "connection_refused"
+)
+
+// GatewayErrorClassOrder is the reporting order of the closed vocabulary
+// above. Surfaces that emit or count per class iterate this slice so every
+// class is present in output even at zero (never a null the reader has to
+// interpret).
+var GatewayErrorClassOrder = []string{
+	GatewayErrClassUnavailable503,
+	GatewayErrClassRateLimited429,
+	GatewayErrClassConnRefused,
+}
+
+// ClassifyGatewayError returns the gateway availability class of err, or ""
+// when err is not a gateway-availability failure (nil included). It is the
+// SINGLE classification authority for the availability path: the spawn path
+// emits its per-tick event from this verdict and nothing downstream may
+// re-derive the class from error text.
+//
+// Precedence: a *GatewayStatusError names the code (503/429) — the gateway
+// answered, so its own status is authoritative. Only when there is no status
+// does the error chain get inspected for a refused dial
+// (errors.Is(err, syscall.ECONNREFUSED) covers client.Do's *url.Error →
+// *net.OpError → *os.SyscallError chain), with the lowercased message as the
+// text-level fallback for a wrapped/hosted proxy that only reports the
+// phrase. 401/403 never classify: ErrGatewayKeyRejected is terminal
+// (GAP-035) and an auth regression must stay visible as such, not become
+// gateway unavailability.
+func ClassifyGatewayError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var gse *GatewayStatusError
+	if errors.As(err, &gse) {
+		switch gse.StatusCode {
+		case http.StatusServiceUnavailable:
+			return GatewayErrClassUnavailable503
+		case http.StatusTooManyRequests:
+			return GatewayErrClassRateLimited429
+		}
+		return ""
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return GatewayErrClassConnRefused
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
+		return GatewayErrClassConnRefused
+	}
+	return ""
 }
 
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
