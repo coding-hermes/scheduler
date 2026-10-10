@@ -881,6 +881,12 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.BoardOwnership != "" {
 				updates.BoardOwnership = &pd.BoardOwnership
 			}
+			// SCHED-GAP-1682: the no-op override pins GatewayKey-conditionally
+			// — only an explicitly present key rewrites the row, so an
+			// API-set override survives a restart with a keyless entry.
+			if pd.NoopAllowed != nil {
+				updates.NoopAllowed = pd.NoopAllowed
+			}
 			// SCHED-GAP-150: a retired dagger-era driver must never be
 			// re-armed through the loader. The enabled re-pin is retired
 			// (SCHED-GAP-219: the DB owns enabled), but the guard still
@@ -1001,6 +1007,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		AdaptiveCooldown: adaptive,
 		AdmissionMode:    pd.AdmissionMode,
 		BoardOwnership:   pd.BoardOwnership,
+		NoopAllowed:      pd.NoopAllowed,
 	}
 	// Normalize the adaptive policy for enabled projects so the stored row
 	// carries EFFECTIVE values: floor = the fleet cooldown, ceiling and

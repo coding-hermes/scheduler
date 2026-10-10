@@ -462,6 +462,13 @@ type ProjectDef struct {
 	// when explicitly set (GatewayKey-style conditional pin), and drives
 	// ORDERING ONLY — no admission gate reads it.
 	TargetRunsPerDay *float64 `toml:"target_runs_per_day"`
+
+	// SCHED-GAP-1682: the per-lane no-op verdict override. nil = the key is
+	// absent — the row falls back to the lane-class derivation (satellites
+	// may no-op, foremen may not); true/false is the explicit operator
+	// override that wins in both directions and pins GatewayKey-conditionally
+	// at boot (a keyless entry never rewrites an API-set value).
+	NoopAllowed *bool `toml:"noop_allowed"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are

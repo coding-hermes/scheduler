@@ -1631,6 +1631,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}
 			}
 
+			// SCHED-GAP-1682: the commit trigger's BEFORE capture — the
+			// (HEAD sha, branch) pair plus the board fingerprint of the
+			// lane's workdir, stamped on the tick row before the foreman
+			// runs, so the tick-close verdict (unchanged pair + unchanged
+			// board = no-op) is auditable from the row. Best-effort: a
+			// failed capture reads UNMEASURED and can never produce a
+			// no-op verdict (the safe failure direction).
+			noopPreCommit, noopPreBranch, noopPreBoard := s.recordNoopPreCapture(tickID, project.Workdir)
+
 			// S-GAP-003: the gateway call below is synchronous and blocks for
 			// the whole tick (up to --tick-timeout). Persist a placeholder
 			// session id + first heartbeat BEFORE it starts, so the tick row
@@ -2130,6 +2139,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						}
 					}
 				}
+				// SCHED-GAP-1682: the commit trigger's AFTER capture and the
+				// lane-class verdict. Runs while the session ctx is alive so
+				// the enforcement branch can re-enter the SAME session; a
+				// satellite's (or override-permitted) no-op closes clean with
+				// the noop_allowed event, a foreman's gets noop_flag=1 plus
+				// the do-it-or-explain re-entry. Best-effort: the verdict
+				// never changes the tick's outcome.
+				s.closeNoopVerdict(gwClient, ctx, project, tickID,
+					noopPreCommit, noopPreBranch, noopPreBoard, model, provider, endpoint.Key)
 				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
 				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
 				// removed in GAP-002 — it referenced non-existent columns

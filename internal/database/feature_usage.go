@@ -38,6 +38,9 @@ const (
 	// FeatureBuilderGuard (SCHED-GAP-1674): the builder no-artifact guard
 	// fired (nudged or aborted) at least one running tick.
 	FeatureBuilderGuard = "builder_guard"
+	// FeatureNoopGuard (SCHED-GAP-1682): the no-op-by-lane-class guard
+	// re-entered (or attempted to re-enter) at least one no-op tick.
+	FeatureNoopGuard = "noop_guard"
 )
 
 // FeatureDefinition names one tracked mechanism and what "use" means for it.
@@ -56,6 +59,7 @@ var FeatureDefinitions = []FeatureDefinition{
 	{FeatureLoadGateDeferrals, "the SCHED-GAP-125 load-average gate deferred a spawn"},
 	{FeatureDedupeSuppress, "a duplicate spawn suppressed (SCHED-GAP-030/103)"},
 	{FeatureBuilderGuard, "the SCHED-GAP-1674 builder no-artifact guard nudged or aborted a running tick"},
+	{FeatureNoopGuard, "the SCHED-GAP-1682 no-op guard re-entered (or attempted) a no-op tick's session"},
 }
 
 // FeatureUsage is one feature-usage row as served to the API. FirstUsedAt and

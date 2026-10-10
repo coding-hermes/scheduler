@@ -210,6 +210,17 @@ type Project struct {
 	// from the trailing cadence window and is surfaced separately by the API.
 	TargetRunsPerDay   *float64 `json:"target_runs_per_day_override"`
 	AchievedRunsPerDay float64  `json:"-"`
+
+	// SCHED-GAP-1682: the per-lane no-op verdict override. nil (NULL on the
+	// row) = DERIVE from the lane class — satellite lanes may no-op (their
+	// product is a report / DuckBrain key / filed row, not a commit),
+	// foreman lanes may not (a zero-artifact tick on the lane that owns
+	// the work is a defect that must be explained). A non-nil value is the
+	// operator override and wins in BOTH directions: false on a satellite
+	// arms re-entry there; true on a foreman closes its no-op ticks clean.
+	// The nullable pointer is what makes "unset" and "explicitly set"
+	// distinguishable on the wire — the same shape cooldown_pin_s uses.
+	NoopAllowed *bool `json:"noop_allowed"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are
@@ -438,6 +449,24 @@ type Tick struct {
 	GatewayURL       string `json:"gateway_url"`
 	GatewaySource    string `json:"gateway_source"`
 	GatewayKeySource string `json:"gateway_key_source"`
+	// SCHED-GAP-1682: the commit trigger — the (HEAD sha, branch) pair of
+	// the lane's workdir captured BEFORE the foreman ran and again AFTER
+	// the tick finished, so the no-op verdict (pre==post on BOTH legs) is
+	// auditable from the row itself. Zero values are the honest "no
+	// workdir, or the repo was not readable at capture time" — never a
+	// fabricated measurement; a pair of empty legs reads as unmeasured and
+	// can never produce a no-op verdict. NoopFlag is the enforcement
+	// verdict: 1 = this tick was judged a NO-OP on a lane that may not
+	// no-op and the scheduler re-entered the session with the instruction
+	// (or, with no session channel, emitted the scheduler event instead).
+	// 0 = everything else, including an ALLOWED satellite no-op (that
+	// verdict lives in the noop_guard events, not on this flag).
+	PreCommit  string `json:"pre_commit"`
+	PreBranch  string `json:"pre_branch"`
+	PreBoard   string `json:"pre_board"`
+	PostCommit string `json:"post_commit"`
+	PostBranch string `json:"post_branch"`
+	NoopFlag   int    `json:"noop_flag"`
 }
 
 // SCHED-GAP-1712 gateway endpoint tiers. These are the values recorded in

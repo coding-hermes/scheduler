@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 67
+const latestMigration = 68
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1348,6 +1348,32 @@ CREATE INDEX IF NOT EXISTS idx_usage_pool_deferrals_tick ON usage_pool_deferrals
 		desc:    "SCHED-GAP-1681: ticks.attempts — gateway POST count per tick (the GAP-080 retry loop's per-attempt accounting, previously only inside the gateway_trace JSON)",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-1682: no-op-by-lane-class. The TRIGGER is the pair
+		// (HEAD commit sha, branch name) captured on the lane's workdir
+		// BEFORE the foreman runs and again AFTER the tick finishes —
+		// stored on the tick row so the verdict is auditable in SQL, not
+		// re-derived from git. Zero values are the honest "no workdir / no
+		// readable repo" (never a fabricated measurement). noop_flag=1 is
+		// written ONLY on the enforcement branch (a FOREMAN-class lane
+		// whose verdict is no-op) — a satellite's allowed no-op records
+		// its verdict through the noop_guard events, never through this
+		// flag, so `noop_flag=1` always means "the lane was told to
+		// explain itself". projects.noop_allowed is deliberately NULLABLE:
+		// NULL = derive from the lane class (satellites allowed, foremen
+		// not), 0/1 = the operator override that wins in BOTH directions.
+		version: 68,
+		desc:    "SCHED-GAP-1682: no-op by lane class — projects.noop_allowed override (NULL = derive from lane class), ticks pre/post commit+branch trigger capture, ticks.noop_flag",
+		stmt: `
+ALTER TABLE projects ADD COLUMN noop_allowed INTEGER;
+ALTER TABLE ticks ADD COLUMN pre_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN pre_branch TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN pre_board TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN post_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN post_branch TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN noop_flag INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }
