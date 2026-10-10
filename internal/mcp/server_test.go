@@ -1353,6 +1353,9 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		"project_delete", "project_spawn", "project_bump", "project_unbump",
 		"tick_get", "config_get", "queue_get", "metrics_get",
 		"features_get", "features_prune_candidates",
+		// SCHED-GAP-1654: the gateway_errors parity tool (same report the
+		// /api/v1/gateway-errors route serves).
+		"gateway_errors",
 		"peers_list", "peers_register", "peers_heartbeat",
 		// REMOTE-010: the federation query tools (federation-query-spec §3
 		// MCP row) — the generic envelope tool + one per read-catalogue op.
@@ -1366,10 +1369,10 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		}
 	}
 	// 18 fleet_* + 12 blocks/events + 18 CTL-003 parity tools (incl.
-	// fleet_lane_tree + observatory_snapshot) + 2 features_* + 3 peers
-	// + 7 REMOTE-010 federation tools (fed_query + 6 catalogue ops).
-	if len(toolsList) != 59 {
-		t.Errorf("tool count = %d, want 59 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + 2 features_* + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
+	// fleet_lane_tree + observatory_snapshot + gateway_errors) + 2 features_*
+	// + 3 peers + 7 REMOTE-010 federation tools (fed_query + 6 catalogue ops).
+	if len(toolsList) != 60 {
+		t.Errorf("tool count = %d, want 60 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
 	}
 }
 

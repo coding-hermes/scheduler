@@ -68,17 +68,20 @@ var apiToolCoverage = map[string][]string{
 	"POST /api/v1/resume":                 {"fleet_resume_scheduler"},
 	"GET /api/v1/events":                  {"events_list"},
 	"GET /api/v1/observatory":             {"observatory_snapshot"},
-	"GET /api/v1/groups":                  {"groups_list"},
-	"POST /api/v1/groups":                 {"groups_create"},
-	"GET /api/v1/groups/{name}":           {"groups_get"},
-	"PUT /api/v1/groups/{name}":           {"groups_update"},
-	"DELETE /api/v1/groups/{name}":        {"groups_delete"},
-	"POST /api/v1/groups/{name}/deploy":   {"groups_deploy"},
-	"GET /api/v1/templates":               {"templates_list"},
-	"POST /api/v1/templates":              {"templates_create"},
-	"GET /api/v1/templates/{name}":        {"templates_get"},
-	"PUT /api/v1/templates/{name}":        {"templates_update"},
-	"DELETE /api/v1/templates/{name}":     {"templates_delete"},
+	// SCHED-GAP-1654: the gateway_errors MCP tool serves the same
+	// scheduler.BuildGatewayErrorsReport the REST route answers.
+	"GET /api/v1/gateway-errors":        {"gateway_errors"},
+	"GET /api/v1/groups":                {"groups_list"},
+	"POST /api/v1/groups":               {"groups_create"},
+	"GET /api/v1/groups/{name}":         {"groups_get"},
+	"PUT /api/v1/groups/{name}":         {"groups_update"},
+	"DELETE /api/v1/groups/{name}":      {"groups_delete"},
+	"POST /api/v1/groups/{name}/deploy": {"groups_deploy"},
+	"GET /api/v1/templates":             {"templates_list"},
+	"POST /api/v1/templates":            {"templates_create"},
+	"GET /api/v1/templates/{name}":      {"templates_get"},
+	"PUT /api/v1/templates/{name}":      {"templates_update"},
+	"DELETE /api/v1/templates/{name}":   {"templates_delete"},
 	// CTL-003: the namespace/pool control surface, project lifecycle
 	// (delete/spawn/bump/unbump), tick detail, and the read-only
 	// config/queue/metrics introspection routes.

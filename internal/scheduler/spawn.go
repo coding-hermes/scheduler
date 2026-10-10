@@ -578,6 +578,68 @@ func (s *Spawner) noteTransientGatewayDeferral(project, reason string) {
 	gatewayHealth.NoteTransientGatewayDeferral(project, reason)
 }
 
+// GatewayAvailabilityEventComponent is the events.component value of every
+// gateway-availability loss event (SCHED-GAP-1654). It is a stable query
+// anchor: /api/v1/gateway-errors counts exactly these rows, and an operator
+// can grep the events table (or the SSE stream, CTL-002) for the same token.
+const GatewayAvailabilityEventComponent = "gateway_availability"
+
+// GatewayAvailabilityEventType is the machine marker carried in the event
+// details, mirroring the gateway_health_* / board_closure convention: the
+// class is queryable with json_extract(details,'$.event_type') without
+// matching on message prose.
+const GatewayAvailabilityEventType = "gateway_error"
+
+// noteGatewayAvailabilityError records ONE tick lost (or deferred) to gateway
+// unavailability, classified by ClassifyGatewayError (SCHED-GAP-1654).
+//
+// THE DEFECT THIS SERVES. During the 2026-09-27 03:00 incident
+// (SCHED-GAP-1644) the gateway logged nothing for two hours and the scheduler
+// could not say how many ticks had been lost to gateway unavailability as
+// opposed to any other failure: every class — 503 drain, 429 rate limit, and
+// a refused dial — reached the events table either as the generic
+// "gateway spawn dropped" HIGH event, or, for the refused-dial blip, as a
+// deferral that is not a failure at all. The three classes are different
+// operational problems (restart/drain vs provider pacing vs dead listener)
+// with different operator responses, so they must be countable apart.
+//
+// Placement contract: called ONLY from the no-exec-fallback terminal site in
+// Spawn() — i.e. when the tick is genuinely not run (dropped on 503/429,
+// deferred on a refused dial). A tick rescued by exec fallback, an auth
+// rejection (GAP-035), a per-turn stall, and our own tick deadline each have
+// their own classification and are never counted here, so the endpoint's
+// numbers cannot be inflated by failures that were not gateway availability.
+//
+// Best-effort observability, exactly like recordGatewayDrop: an unwired
+// EventLogger (tests, exec-only hosts) logs the line and emits nothing, and a
+// failed event write is logged by EventLogger.Emit, never propagated — the
+// spawn path's outcome must not depend on an audit write.
+func (s *Spawner) noteGatewayAvailabilityError(project, tickID string, gwErr error) {
+	class := ClassifyGatewayError(gwErr)
+	if class == "" {
+		return
+	}
+	at := s.clock().Now().UTC().Format(time.RFC3339)
+	log.Printf("GATEWAY-UNAVAILABLE: %s tick=%s class=%s at=%s — tick not run (gateway availability): %v",
+		project, tickID, class, at, gwErr)
+	if s.events == nil {
+		return
+	}
+	s.events.Emit(context.Background(), SeverityHigh, GatewayAvailabilityEventComponent,
+		"gateway unavailable: "+class,
+		map[string]any{
+			// event_type is the machine marker; timestamp is written into the
+			// payload as well as the row's created_at so a consumer that only
+			// reads details (or a forwarded copy of the row) still has WHEN.
+			"event_type":  GatewayAvailabilityEventType,
+			"error_class": class,
+			"project":     project,
+			"tick_id":     tickID,
+			"error":       gwErr.Error(),
+			"timestamp":   at,
+		})
+}
+
 // transientGatewayDeferral books a transient gateway blip as a DEFERRAL
 // instead of a lane failure (SCHED-GAP-203), returning the non-completed tick
 // whose Wait() yields TickDeferred.
@@ -2471,6 +2533,19 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					td.gwAttempts = traceAttempts()
 					return td, nil
 				}
+				// SCHED-GAP-1654: classify the refusal that is about to cost
+				// this tick its run — 503 (drain/unavailable), 429 (rate
+				// limited) and a refused dial all land here, and until this
+				// row the events table could not tell them apart (or, for the
+				// refused-dial deferral below, could not see the loss at all
+				// in the availability vocabulary). Placement is load-bearing:
+				// AFTER the key-rejected / stall / deadline branches (those
+				// are different classes) and BEFORE the drop/deferral
+				// branches, so ONE event covers both outcomes of a genuine
+				// availability refusal and a rescued tick is never counted.
+				// ClassifyGatewayError returns "" for anything outside the
+				// three classes, so this is a no-op for every other failure.
+				s.noteGatewayAvailabilityError(project.Name, tickID, gwErr)
 				if gatewayTransientBlip(gwErr) {
 					td := s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate)
 					// SCHED-GAP-1681: a deferral that exhausted its retries

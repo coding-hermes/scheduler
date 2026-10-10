@@ -497,6 +497,11 @@ var tools = []ToolDefinition{
 		},
 	},
 	{
+		Name:        "gateway_errors",
+		Description: "Count ticks NOT run because the gateway refused them, over the last 24h (SCHED-GAP-1654): total, by_class (unavailable_503 / rate_limited_429 / connection_refused, every class present even at 0) and by_project rows ordered by total descending. Counts gateway_availability events only — exec-fallback rescues, auth rejections and tick deadlines keep their own classification",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
 		Name:        "events_list",
 		Description: "Read the scheduler event log; since returns only events with id > since (incremental tail polling)",
 		InputSchema: map[string]interface{}{
@@ -884,6 +889,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolGroupsDeploy(ctx, args)
 	case "observatory_snapshot":
 		return s.toolObservatorySnapshot(args)
+	case "gateway_errors":
+		return s.toolGatewayErrors()
 	case "events_list":
 		return s.toolEventsList(ctx, args)
 	case "peers_list":

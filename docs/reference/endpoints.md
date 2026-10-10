@@ -48,6 +48,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/events/stream` | SSE push stream of the event log (CTL-002) |
 | `/api/v1/observatory` | Observatory snapshot (JSON, SCHED-GAP-1592) — tick-rate buckets, namespace allocation shares and failure-rate heatmap for `?window=` (seconds or 1h/6h/24h/7d, default 6h) and `?namespace=`; 503 without a wired collector |
 | `/api/v1/observatory/stream` | SSE push stream of Observatory snapshots (SCHED-GAP-1592) — recomputed every 10s for the query's filter, `: heartbeat` comments while quiet, and `: error collect:` comments instead of fabricated snapshots on compute failure |
+| `/api/v1/gateway-errors` | Ticks NOT run because of gateway unavailability, over a fixed 24h window (SCHED-GAP-1654): `total`, `by_class` (`unavailable_503` / `rate_limited_429` / `connection_refused`, every class present even at 0) and `by_project` (counts per lane, ordered by total desc), counted from the spawn path's `gateway_availability` events |
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/api/v1/pause` | Pause scheduling (POST) |
 | `/api/v1/resume` | Resume scheduling (POST) |
@@ -61,4 +62,4 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 
-**MCP surface:** `POST /mcp` serves **59 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
+**MCP surface:** `POST /mcp` serves **60 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
