@@ -5066,3 +5066,36 @@ tasks:
     cover burst detection logic'
   status: in_progress
   created_at: '2026-10-10T16:39:29.139743+00:00'
+- id: SCHED-GAP-1651-R2
+  title: 'Sync lane cost: cheap-model routing (fleet config) + scoped prompts + cost-per-key
+    visibility (code)'
+  criteria:
+  - "Repo fleet.toml is a curated cooldown subset by design (header); sync-lane model\
+    \ routing lives in the live fleet config (~/.hermes/fleet.toml) and the scheduler\
+    \ DB \u2014 duckbrain-sync namespace model_chain pins glm-5.3-flash@zai-glm, verified\
+    \ live via API GET /api/v1/namespaces and sqlite"
+  - Sync tick prompts carry the SCOPE AND READ BUDGET block with an idempotent append
+    (non-sync prompts byte-identical); covered by tests in internal/scheduler
+  - "Sync-family tick deliveries append a COST footer (tokens in/out, sticker cost\
+    \ + cost_source, N keys with an unmeasured-0 reason, price-list as-of) \u2014\
+    \ non-sync deliveries byte-identical"
+  - The primary dispatch pair carries the task router's HopRate (known-but-$0 never
+    falls through to unknown-model fallback pricing)
+  - memory_keys counts curl -X POST /api/memories terminal writes in addition to MCP
+    tool-name writes
+  - go build ./... clean, go vet ./internal/scheduler clean, golangci-lint 0 issues,
+    all SCHEDGAP1651 tests pass, full internal/scheduler suite passes
+  status: complete
+  created_at: '2026-10-10T19:51:58.513538+00:00'
+  completed_at: '2026-10-10T19:52:50.687916+00:00'
+- id: INT-CI-184
+  title: 'fix: eliminate lastComputedPriceAsOf data race (tick_metrics.go) introduced
+    by fb350ca5; race-scheduler CI red'
+  criteria:
+  - 'Race-free price-as-of stamp: global eliminated or lock-guarded; go test -race
+    -count=1 ./internal/scheduler/ exits 0 with zero DATA RACE warnings; SCHEDGAP1651
+    footer tests pass; go build/vet/golangci-lint clean; commit carries Co-authored-by
+    trailer; stale comment claims corrected.'
+  status: complete
+  created_at: '2026-10-10T20:30:55.194522+00:00'
+  completed_at: '2026-10-10T20:47:55.121975+00:00'
