@@ -5011,16 +5011,14 @@ tasks:
   created_at: '2026-10-08T11:16:50.738079+00:00'
   completed_at: '2026-10-08T11:39:48.855637+00:00'
 - id: SCHED-GAP-1644
-  title: gateway.log silence during incident window
+  title: 'Gateway.log incident gap: log nothing for 2 hours of 03:00 incident'
   criteria:
-  - 'Add periodic heartbeat line to gateway log while serving so silence is detectable;
-    investigate whether log buffering/rotation can drop lines; raise gateway unit
-    stop timeout or make shutdown fast. PASS: gateway.log shows heartbeat lines during
-    normal operation across a 10-minute window; shutdown completes within the unit''s
-    stop timeout without SIGKILL.'
+  - Investigate why gateway.log logged nothing during the 03:00 incident; add heartbeat/keepalive
+    logging to gateway client; ensure connection errors are logged even when the gateway
+    is unreachable; tests cover logging under connection failure
   status: complete
-  created_at: '2026-10-09T16:35:30.453233+00:00'
-  completed_at: '2026-10-09T16:40:35.790256+00:00'
+  created_at: '2026-10-10T16:39:29.978070+00:00'
+  completed_at: '2026-10-10T18:03:26.803164+00:00'
 - id: SCHED-GAP-1681
   title: Gateway transient retry with session continuation
   criteria:
@@ -5059,3 +5057,21 @@ tasks:
   status: complete
   created_at: '2026-10-10T15:31:57.413073+00:00'
   completed_at: '2026-10-10T15:43:24.004900+00:00'
+- id: SCHED-GAP-1654
+  title: 'Gateway availability path: track ticks lost to 503/429/connection-refused'
+  criteria:
+  - Add gateway error classification (503/429/connection-refused) to spawn path; emit
+    events for each class; add /api/v1/gateway-errors endpoint with counts by class
+    and project; tests cover all three error classes
+  status: in_progress
+  created_at: '2026-10-10T16:39:28.287678+00:00'
+  completed_at: '2026-10-10T18:05:47.043367+00:00'
+- id: SCHED-GAP-1642
+  title: 'Dashboard burst signal: N one-shot ticks in M minutes'
+  criteria:
+  - 'Add burst detection to dashboard: track tick frequency per project, flag when
+    N ticks complete within M minutes (configurable threshold, default 3 ticks in
+    5 minutes); surface burst signal in project detail view and fleet overview; tests
+    cover burst detection logic'
+  status: in_progress
+  created_at: '2026-10-10T16:39:29.139743+00:00'
