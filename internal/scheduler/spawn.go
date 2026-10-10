@@ -3129,8 +3129,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	if st.gwFailErr != "" {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
-		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
-		priceAsOf := lastComputedPriceAsOf
+		// SCHED-GAP-1651-R3: cost and its price-list vintage come back together
+		// from the call — no shared completion-path global (the old one was
+		// written by every concurrent SlotPool completion goroutine: data race,
+		// CI run 38080365263).
+		cost, priceAsOf := computeCostUSDWithAsOf(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		log.Printf("TICK: %s %s → %s (%v): %s",
 			st.Project, st.TickID, TickFailed,
 			st.completeAt.Sub(st.Started).Round(time.Second), st.gwFailErr)
@@ -3168,7 +3171,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	if st.completed {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
-		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
+		// SCHED-GAP-1651-R3: cost and its price-list vintage come back together
+		// from the call — no shared completion-path global (see
+		// computeCostUSDWithAsOf).
+		cost, priceAsOf := computeCostUSDWithAsOf(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
 		// SCHED-GAP-085: closure-evidence gate. A row closed within this
 		// tick's window with NO reasoning/commit_hash/worker_summary rejects
@@ -3189,19 +3195,21 @@ func (st *SpawnedTick) Wait() TickOutcome {
 				st.Project, st.TickID, TickFailed,
 				st.completeAt.Sub(st.Started).Round(time.Second), err)
 			return TickOutcome{
-				TickID:       st.TickID,
-				Project:      st.Project,
-				SessionID:    st.SessionID,
-				Started:      st.Started,
-				Finished:     st.completeAt,
-				Status:       TickFailed,
-				ExitCode:     -1,
-				Error:        err.Error(),
-				Duration:     st.completeAt.Sub(st.Started),
-				TokensIn:     tokensIn,
-				TokensOut:    tokensOut,
-				CostUSD:      cost,
-				PriceAsOf:    lastComputedPriceAsOf,
+				TickID:    st.TickID,
+				Project:   st.Project,
+				SessionID: st.SessionID,
+				Started:   st.Started,
+				Finished:  st.completeAt,
+				Status:    TickFailed,
+				ExitCode:  -1,
+				Error:     err.Error(),
+				Duration:  st.completeAt.Sub(st.Started),
+				TokensIn:  tokensIn,
+				TokensOut: tokensOut,
+				CostUSD:   cost,
+				// SCHED-GAP-1651-R3: the vintage of the price list that
+				// produced this call's own cost figure, returned alongside it.
+				PriceAsOf:    priceAsOf,
 				CostSource:   CostSourceGateway,
 				Commits:      commits,
 				FilesChanged: files,
@@ -3278,9 +3286,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// when the transcript is unavailable (which can only fall back
 			// to the git artifacts, never fabricate a no-op).
 			MemoryKeys: countMemoryKeysInSession(st.TickID),
-			// SCHED-GAP-1651: the price-list vintage of the cost figure
-			// above, surfaced on the sync cost footer.
-			PriceAsOf: lastComputedPriceAsOf,
+			// SCHED-GAP-1651 (vintage), SCHED-GAP-1651-R3 (transport): the
+			// price-list as-of returned alongside this call's own cost figure —
+			// no shared completion-path global. Rendered by the sync cost
+			// footer's "prices as of".
+			PriceAsOf: priceAsOf,
 		}
 	}
 
