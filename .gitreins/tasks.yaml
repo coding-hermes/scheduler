@@ -5010,15 +5010,6 @@ tasks:
   status: complete
   created_at: '2026-10-08T11:16:50.738079+00:00'
   completed_at: '2026-10-08T11:39:48.855637+00:00'
-- id: SCHED-GAP-1644
-  title: 'Gateway.log incident gap: log nothing for 2 hours of 03:00 incident'
-  criteria:
-  - Investigate why gateway.log logged nothing during the 03:00 incident; add heartbeat/keepalive
-    logging to gateway client; ensure connection errors are logged even when the gateway
-    is unreachable; tests cover logging under connection failure
-  status: complete
-  created_at: '2026-10-10T16:39:29.978070+00:00'
-  completed_at: '2026-10-10T18:03:26.803164+00:00'
 - id: SCHED-GAP-1681
   title: Gateway transient retry with session continuation
   criteria:
