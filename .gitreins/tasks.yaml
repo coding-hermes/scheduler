@@ -5099,3 +5099,15 @@ tasks:
   status: complete
   created_at: '2026-10-10T20:30:55.194522+00:00'
   completed_at: '2026-10-10T20:47:55.121975+00:00'
+- id: SCHED-GAP-1685
+  title: 'Implement restart handoff slice: listener inheritance and safe live-tick
+    adoption'
+  criteria:
+  - 'Implement a bounded, test-backed slice of SCHED-GAP-1685 in the scheduler repo:
+    preserve/adopt provably live in-flight ticks across restart without duplicate
+    execution, and add the listener/handoff contract or wiring required by the existing
+    codebase. Acceptance must be individually verified with focused tests plus build/vet/full
+    sequential tests; do not claim socket activation if the repo cannot provide it.'
+  status: complete
+  created_at: '2026-10-11T23:13:18.843010+00:00'
+  completed_at: '2026-10-13T15:27:07.736943+00:00'
