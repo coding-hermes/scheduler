@@ -625,8 +625,8 @@ type staleGatewayTick struct {
 
 // staleGatewayTicks returns running pid=0 ticks whose liveness signal is
 // older than gatewayZombieMaxAge. Rows are consumed and closed inside the
-// helper so callers can issue UPDATEs immediately (SQLite single-writer —
-// an UPDATE while a SELECT still holds the pool's only connection deadlocks).
+// helper so callers can issue UPDATEs immediately (SQLite single-writer — an
+// UPDATE while a SELECT still holds the pool's only connection deadlocks).
 func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
 	rows, err := l.db.QueryContext(ctx, staleGatewayTicksSQL)
 	if err != nil {
@@ -645,6 +645,69 @@ func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
 	return out
 }
 
+// liveGatewayTicksSQL selects the complementary handoff set for startup:
+// running gateway ticks with a fresh heartbeat, or legacy rows with no
+// heartbeat whose spawn is still inside the same grace window used by the
+// reaper. A timestamp must parse successfully; malformed liveness data is not
+// adopted and remains eligible for the existing fail-safe cleanup path.
+var liveGatewayTicksSQL = fmt.Sprintf(`
+SELECT id, project_name FROM ticks
+WHERE status='running' AND pid = 0 AND (
+    (heartbeat_at IS NOT NULL AND heartbeat_at <> ''
+        AND julianday(heartbeat_at) IS NOT NULL
+        AND julianday(heartbeat_at) >= julianday('now', '-%d minutes'))
+ OR ((heartbeat_at IS NULL OR heartbeat_at = '')
+        AND spawned_at IS NOT NULL
+        AND julianday(spawned_at) IS NOT NULL
+        AND julianday(spawned_at) >= julianday('now', '-%d minutes'))
+)`, int(gatewayZombieMaxAge/time.Minute), int(gatewayZombieMaxAge/time.Minute))
+
+// adoptLiveGatewayTicksAtStartup restores the in-process dedup/slot claim for
+// gateway work that is provably still live when a new scheduler process boots.
+// This is a bounded handoff, not socket activation: the old process's
+// outbound HTTP response cannot be transferred to this process, so adoption
+// never issues a second request. If the heartbeat later goes stale,
+// cleanDanglingOnStartup reaps the row, releases this claim, and the existing
+// orphan resume path starts a continuation. Returning the number of newly
+// claimed projects makes repeated reconciliation observable and idempotent.
+func (l *Loop) adoptLiveGatewayTicksAtStartup() int {
+	rows, err := l.db.Query(liveGatewayTicksSQL)
+	if err != nil {
+		log.Printf("HANDOFF: live-gateway adoption query failed: %v", err)
+		return 0
+	}
+	var live []staleGatewayTick
+	for rows.Next() {
+		var tick staleGatewayTick
+		if err := rows.Scan(&tick.id, &tick.project); err != nil {
+			continue
+		}
+		live = append(live, tick)
+	}
+	rows.Close()
+
+	adopted := 0
+	seen := make(map[string]bool, len(live))
+	for _, tick := range live {
+		if seen[tick.project] {
+			continue
+		}
+		seen[tick.project] = true
+		if l.slotPool.RunningSet()[tick.project] {
+			continue
+		}
+		if !l.slotPool.AdoptRunning(tick.project) {
+			// The DB running-row merge in evaluate() still prevents a
+			// duplicate spawn when the local pool is full.
+			log.Printf("HANDOFF: live gateway tick %s (%s) not claimed — slot pool at capacity; DB dedup remains active", tick.id, tick.project)
+			continue
+		}
+		adopted++
+		log.Printf("HANDOFF: adopted live gateway tick %s (%s) without replaying its request", tick.id, tick.project)
+	}
+	return adopted
+}
+
 // timeoutReapSQL marks a running tick as timed out. GAP-045: completed_at is
 // stamped exactly like the failed/completed paths (lifecycle.Complete,
 // CleanupStale) so a timeout row is terminal for duration / failure-window /
@@ -659,7 +722,10 @@ const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=? WHERE 
 // daemon, so a heartbeat older than gatewayZombieMaxAge means the session's
 // owner is gone. LIVE gateway ticks — fresh heartbeat, or NULL heartbeat with
 // a fresh spawned_at (pre-S-GAP-003 rows inside the grace window) — are left
-// 'running': their HTTP sessions SURVIVE a daemon restart.
+// 'running' for SCHED-GAP-1685 startup claim adoption. The new process does
+// not replay the gateway request because its response stream is not
+// transferable; an adopted claim only prevents duplicate execution until the
+// normal stale-owner reap can hand the tick to the continuation path.
 // Regression: INFRA-012 (2026-08-01) — restart marked live gateway ticks
 // 'timeout' and the packer spawned duplicate ticks for in-flight projects.
 func (l *Loop) cleanDanglingOnStartup() {

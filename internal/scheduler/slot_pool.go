@@ -176,6 +176,27 @@ func (p *SlotPool) Running() int {
 	return len(p.sem)
 }
 
+// AdoptRunning claims one slot for a running tick that was persisted by a
+// previous scheduler process. Adoption is deliberately a claim-only handoff:
+// it does not start another gateway request. Returning true for an existing
+// claim makes repeated startup reconciliation idempotent; false means the
+// local pool is at capacity and the durable DB running-row dedup remains the
+// safety backstop until a slot is available.
+func (p *SlotPool) AdoptRunning(project string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running[project] > 0 || p.reserved[project] {
+		return true
+	}
+	select {
+	case p.sem <- struct{}{}:
+		p.running[project]++
+		return true
+	default:
+		return false
+	}
+}
+
 // RunningSet returns the set of project names currently occupying slots —
 // plus names RESERVED by an in-flight Spawn that has not acquired its slot
 // yet (SCHED-GAP-103). Used by the packer and the evaluation-loop dedup to

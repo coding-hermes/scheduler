@@ -660,6 +660,13 @@ func (l *Loop) Run() {
 
 	l.cleanDanglingOnStartup()
 
+	// SCHED-GAP-1685: adopt fresh gateway-owned rows into this process's
+	// dedup/slot view before the first evaluation. This is claim-only because
+	// the old process's outbound HTTP response cannot be transferred here;
+	// socket activation/listener inheritance is intentionally not implemented
+	// by this slice.
+	l.adoptLiveGatewayTicksAtStartup()
+
 	// SCHED-GAP-145: reap 'queued' rows the previous process enqueued and
 	// never dispatched. Runs immediately after the running-row reap and
 	// BEFORE the first evaluation, so neither the in-flight dedup (which
