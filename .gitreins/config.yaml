@@ -12,6 +12,7 @@ guards:
   # suite exceeds it and the hook blocks EVERY commit, code or not. 900s covers
   # the suite at load ~46 with room to spare.
   test_timeout: 900
+  hook_timeout: 900
   go:
     build: true
     lint: true
