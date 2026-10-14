@@ -22,7 +22,9 @@ import (
 // kind in the DB).
 //
 // Metric: output for a completed tick = code_commits > 0 OR
-// board_commits > 0, the split persistGitCommitSignals already stamps on
+// board_commits > 0 OR memory_keys > 0 (SCHED-GAP-1680 added the non-commit
+// leg: a sync lane that wrote DuckBrain keys produced output even with zero
+// git artifacts), the split persistGitCommitSignals already stamps on
 // every tick row (SCHED-GAP-202 made that stamp unconditional). When the
 // split is unmeasured (-1/-1 sentinel), the tick falls open to the raw
 // commit claim — the same fall-open rule adaptive cooldown uses, so a
@@ -88,9 +90,10 @@ func recordLaneFamilyOutput(db *sql.DB, project, tickID string) {
 		codeCommits  sql.NullInt64
 		boardCommits sql.NullInt64
 		commits      sql.NullInt64
+		memoryKeys   sql.NullInt64
 	)
-	err := db.QueryRow(`SELECT status, code_commits, board_commits, commits
-FROM ticks WHERE id = ?`, tickID).Scan(&status, &codeCommits, &boardCommits, &commits)
+	err := db.QueryRow(`SELECT status, code_commits, board_commits, commits, memory_keys
+FROM ticks WHERE id = ?`, tickID).Scan(&status, &codeCommits, &boardCommits, &commits, &memoryKeys)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("LANE-OUTPUT: %s tick %s read failed: %v", project, tickID, err)
@@ -109,7 +112,11 @@ FROM ticks WHERE id = ?`, tickID).Scan(&status, &codeCommits, &boardCommits, &co
 		code = int(commits.Int64)
 		board = 0
 	}
-	output := code > 0 || board > 0
+	// SCHED-GAP-1680: a lane whose deliverable is NOT a commit (the -sync
+	// family writes DuckBrain keys) is productive without any git artifact.
+	// memory_keys is the non-commit leg of the output predicate — without it
+	// the sync family's zero-output streak climbed on real work.
+	output := code > 0 || board > 0 || memoryKeys.Int64 > 0
 
 	var nsID sql.NullString
 	if err := db.QueryRow(`SELECT namespace_id FROM projects WHERE name = ?`, project).Scan(&nsID); err != nil {

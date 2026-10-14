@@ -103,6 +103,25 @@ func (s TickStatus) Outcome() string {
 // verdict is only legal for a status=failed row (an aborted session did not
 // complete), so any other status keeps its own Outcome() mapping — the
 // guard's outcome can never ride a completed or deferred row.
+//
+// SCHED-GAP-1655: a COMPLETED tick whose session ran ZERO tool calls
+// (NoTools set by the gateway success path — envelope has no tool-call
+// item and the SSE trace saw no tool event) records outcome='no_work',
+// the migration-v55 verdict for "the lane had nothing to do". Ordering
+// inside the completed branch is load-bearing: the artifact check runs
+// FIRST, so a tick that somehow landed a commit without a tool item
+// (countGitChanges measures the repo, not the transcript) still records
+// 'committed' — artifacts outrank the transcript, the SCHED-GAP-1652
+// doctrine. no_work is therefore unreachable for an artifact-bearing row
+// by construction, not by discipline.
+// SCHED-GAP-1680: a COMPLETED tick's success is derived from the artifacts
+// its lane can produce — git commits/files AND declared NON-COMMIT side
+// effects. commits=0 alone is NOT a no-op: a sync lane whose product is
+// DuckBrain memory keys records MemoryKeys > 0 and must never be derived as
+// dry_run (the fleet's 7-ticks/6-zero-commit sync shape was a measurement
+// artifact, not 85% waste). The non-commit leg sits in the SAME artifact
+// branch as the git leg, so an artifact of either kind outranks the
+// zero-tool no_work verdict by construction.
 func terminalOutcome(o TickOutcome) string {
 	if o.GuardAbort {
 		if o.Status == TickFailed {
@@ -113,8 +132,11 @@ func terminalOutcome(o TickOutcome) string {
 	if o.Status != TickCompleted {
 		return o.Status.Outcome()
 	}
-	if o.Commits > 0 || o.FilesChanged > 0 {
+	if o.Commits > 0 || o.FilesChanged > 0 || o.MemoryKeys > 0 {
 		return "committed"
+	}
+	if o.NoTools {
+		return string(database.OutcomeNoWork)
 	}
 	return "dry_run"
 }
@@ -153,6 +175,60 @@ type TickOutcome struct {
 	// status/outcome pair therefore records the guard's verdict on every
 	// surface without any second marker column.
 	GuardAbort bool
+	// NoTools (SCHED-GAP-1655): the completed gateway session ran ZERO
+	// tool calls — the response envelope carried no tool-call output item
+	// and the SSE trace never observed a tool event. terminalOutcome maps
+	// the row to outcome='no_work' (migration v55), the honest verdict
+	// for "the lane had nothing to do": distinct from dry_run (ran tools,
+	// landed no artifact) so the measured waste class is queryable. Only
+	// consulted on Status=completed — a failed/deferred/aborted row keeps
+	// its own verdict regardless.
+	NoTools bool
+	// MemoryKeys (SCHED-GAP-1680): DuckBrain memory-key WRITES observed in
+	// this tick's gateway session transcript — a NON-COMMIT artifact. A
+	// lane whose product is not a git commit (the whole -sync family)
+	// produces these instead of commits; terminalOutcome counts > 0 as a
+	// landed artifact so a sync tick with five verified keys is never
+	// derived as dry_run. 0 = none observed on the measured surface (the
+	// session transcript; exec/local ticks have no such mapping and read
+	// 0). A measurement failure can only leave it 0 — it can never
+	// manufacture a no-op.
+	MemoryKeys int
+	// PriceAsOf (SCHED-GAP-1651): the price map's as-of stamp carried onto
+	// the row and into the sync cost footer, so a reader of the reported
+	// sticker knows WHICH price list produced it. Read once at completion
+	// alongside the cost computation.
+	PriceAsOf string
+	// SCHED-GAP-1707: partial-telemetry mark for ticks terminated by a
+	// non-terminal kill (tick deadline, silence watchdog, stale reap,
+	// dispatch deadline). TelemetryPartial=true persists telemetry_partial=1
+	// plus TelemetryPartialReason (the closed vocabulary in telemetry.go)
+	// and TelemetrySilenceS (the watchdog's measured quiet duration, 0 on
+	// every other path). A timeout row WITHOUT this mark reads 0/0/0 as an
+	// idle session — WITH it, the same zeros read "dead before any
+	// observable usage", and a nonzero figure reads as the undercount it
+	// is. The completed path never sets it.
+	TelemetryPartial       bool
+	TelemetryPartialReason string
+	// TelemetrySilenceS is the session-silence watchdog's measured quiet
+	// duration in whole seconds (ticks.session_silence_s). Only meaningful
+	// with TelemetryPartialReason=session_silent.
+	TelemetrySilenceS int64
+	// WorkersTerminal (SCHED-GAP-1707 deliverable 3): how many of this
+	// wave tick's workers had reached a terminal state (tick_workers.state
+	// 'done') when the wave manifest was ingested. -1 = unmeasured (the
+	// package's -1 sentinel convention): legacy rows, serial ticks, and
+	// ticks the deadline killed before the foreman wrote any manifest.
+	// Set by wave-manifest ingest, never by Wait().
+	WorkersTerminal int
+	// Attempts (SCHED-GAP-1681) is the gateway POST count for this tick,
+	// folded from the merged GatewayPOSTTrace by the spawn path (the only
+	// code that sees the trace: every POST, primary + GAP-080 retries +
+	// chain hops). lifecycle.Complete stamps it on the v67 ticks.attempts
+	// column in the same single finalization UPDATE. 0 = no gateway POST
+	// (exec spawns, spawn-site refusals, remote dispatch) — the column's
+	// honest default, never a fabricated count.
+	Attempts int
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one
@@ -184,11 +260,28 @@ type LifecycleTracker struct {
 	// not just evaluate().
 	clk clockSeam
 	db  *sql.DB
+	// schedulerBus (REMOTE-004, §3 visibility flow) publishes the terminal
+	// transition to the federation bus. nil = disabled: the Complete path
+	// checks Enabled() and behaves byte-identically to pre-REMOTE-004.
+	// A bus failure can never fail Complete — PublishTickTerminal is
+	// contractually cannot-error (the autonomy law).
+	schedulerBus *SchedulerBus
 }
 
 // NewLifecycleTracker creates a lifecycle tracker.
 func NewLifecycleTracker(db *sql.DB) *LifecycleTracker {
 	return &LifecycleTracker{db: db}
+}
+
+// SetSchedulerBus installs the visibility publisher (REMOTE-004). nil or a
+// disabled bus leaves the tracker silent. Loop.SetSchedulerBus propagates
+// here, matching the SetClock propagation convention.
+func (lt *LifecycleTracker) SetSchedulerBus(b *SchedulerBus) {
+	if b == nil || !b.Enabled() {
+		lt.schedulerBus = nil
+		return
+	}
+	lt.schedulerBus = b
 }
 
 // Enqueue creates a queued tick entry for the project.
@@ -257,11 +350,14 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if outcome.Status == TickCompleted {
 		// Landed-artifact evidence the OUTCOME carries: the measured git
 		// delta (positive = artifact; -1 = unmeasured, never read as
-		// zero — the SCHED-GAP-1652 sentinel rule). The wave's per-worker
-		// rows are attributed AFTER this write by manifest ingest, and
-		// code/board commit anatomy is split later from the same raw
-		// count — neither carries evidence this method could read yet.
-		landed := outcome.Commits > 0 || outcome.FilesChanged > 0
+		// zero — the SCHED-GAP-1652 sentinel rule), plus the non-commit
+		// side effects a lane whose product is not a commit produces
+		// (SCHED-GAP-1680: DuckBrain memory keys written). The wave's
+		// per-worker rows are attributed AFTER this write by manifest
+		// ingest, and code/board commit anatomy is split later from the
+		// same raw count — neither carries evidence this method could
+		// read yet.
+		landed := outcome.Commits > 0 || outcome.FilesChanged > 0 || outcome.MemoryKeys > 0
 		if !landed && !outcome.DispatchDispatched {
 			log.Printf("STAND-DOWN: %s tick=%s completed with no landed artifact and no dispatch — recorded reason=%q (SCHED-GAP-1653)",
 				outcome.Project, outcome.TickID, dispatchReason)
@@ -278,20 +374,67 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			})
 		}
 	}
+	// SCHED-GAP-1707: the partial-telemetry mark rides the SAME single
+	// finalization UPDATE (criterion 2's coverage guarantee applies here
+	// too — no second UPDATE that can silently miss). Only TIMEOUT rows may
+	// carry it: the brief's kill class is status/outcome=timeout, a
+	// guard-aborted row's telemetry legs were fully measured at the abort
+	// site (not partial), and a completed row must never read partial even
+	// if a caller set the field by mistake.
+	telemetryPartial := 0
+	telemetryReason := ""
+	telemetrySilence := int64(0)
+	if outcome.TelemetryPartial && outcome.Status == TickTimeout {
+		if !telemetryPartialReasonIsValid(outcome.TelemetryPartialReason) {
+			// Unreachable from the code paths (they all go through
+			// timeoutTelemetry), but the write site refuses to invent a
+			// named cause silently — name the most common class.
+			outcome.TelemetryPartialReason = TelemetryPartialTickDeadline
+		}
+		telemetryPartial = 1
+		telemetryReason = outcome.TelemetryPartialReason
+		telemetrySilence = outcome.TelemetrySilenceS
+	}
+	// workers_terminal: Complete NEVER carries a measured count — the wave
+	// manifest ingest writes its own post-Complete UPDATE (the only site
+	// that knows the real convergence). Any zero here is the struct's unset
+	// value, which maps to the -1 unmeasured sentinel (never a fabricated
+	// "0 workers were done"); ingest overwrites it with the real count.
+	workersTerminal := outcome.WorkersTerminal
+	if workersTerminal == 0 {
+		workersTerminal = -1
+	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
-			commits = ?, files_changed = ?, failure_reason = ?,
-			dispatch_outcome = ?, dispatch_reason = ?
+			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
+			dispatch_outcome = ?, dispatch_reason = ?,
+			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?,
+			attempts = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
-		outcome.Commits, outcome.FilesChanged, failureReason,
+		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
+		telemetryPartial, telemetryReason, telemetrySilence, workersTerminal,
+		outcome.Attempts,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
+	}
+
+	// REMOTE-004 (§3 visibility flow): the tick just reached a TERMINAL
+	// state — publish the transition to the federation bus. The event's
+	// status is the row's lifecycle verdict (completed / failed / deferred
+	// / timeout), deliberately NOT the outcome column's artifact verdict.
+	// BEST-EFFORT by construction: PublishTickTerminal cannot error and
+	// cannot block beyond the client's own 5s deadline — a down, refused
+	// or timed-out relay is logged and dropped inside, so this call can
+	// never change Complete's result (the autonomy law, proven by
+	// TestRemote004_PublishFailureDoesNotFailTick).
+	if lt.schedulerBus != nil && lt.schedulerBus.Enabled() {
+		lt.schedulerBus.PublishTickTerminal(context.Background(), outcome.Project, outcome.TickID, string(outcome.Status))
 	}
 
 	// Update project's last_tick_completed for ALL outcomes (completed, failed, timeout).
@@ -327,19 +470,60 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	// (that path only fires on gateway spawn / new spawn), so a project that
 	// failed N times in a drain storm kept the residue across successful local
 	// completions (observed: cf=91 on bunker/chimera-v2/crier despite recent
-	// successful last_tick_completed). Failed and timeout outcomes
-	// intentionally leave the counter alone — GAP-133's FailureBackoff gate
-	// reads it to hold admission during consecutive failures.
+	// successful last_tick_completed).
 	//
-	// SCHED-GAP-203: a DEFERRED outcome leaves it alone too — it neither
-	// clears the counter (the project has not demonstrated a good tick) nor
-	// increments it (the spawn path never calls noteSpawnFailure for a
-	// deferral: a gateway blip is not the lane's failure).
+	// SCHED-GAP-1705 supersedes this block's old "failed and timeout outcomes
+	// intentionally leave the counter alone" sentence. The counter now moves
+	// on every terminal status, each in exactly one direction:
+	//
+	//   - TickCompleted: reset to 0 (unchanged; below). A completed tick is
+	//     the project demonstrating a good run.
+	//   - TickTimeout: +1 (below). A tick that ran the full wall and produced
+	//     nothing IS the lane's fault. Measured 2026-10-02: two
+	//     task-router-foreman wave ticks ended status=timeout at exactly
+	//     3h0m0s with worker_count=0 and tokens 0/0, while the working tick
+	//     the same day produced 8.4M tokens in 94 min — silence is
+	//     distinguishable from real work. The transport-class carve-out
+	//     (SCHED-GAP-143) is preserved exactly: when
+	//     failureReasonClass(outcome.Error) != "" (gateway drain, gateway
+	//     unreachable, a tick deadline that tore down a gateway POST, the
+	//     session-silence watchdog kill), the counter is untouched — the
+	//     harness, not the lane, ended that tick. The relative increment
+	//     matches noteSpawnFailure's SQL, so spawn-path failures and
+	//     timeout-path failures accumulate in the one counter GAP-133's
+	//     FailureBackoff gate already reads (effectiveCooldown, packer.go).
+	//     Deliberately NO new auto-disable wiring rides this: SCHED-GAP-018's
+	//     breaker reads failure_rate, not this counter (the
+	//     consecutive-failures alert does read it and now sees silent
+	//     timeouts too).
+	//   - TickFailed: left alone — the spawn path already counted it at
+	//     noteSpawnFailureClassed; a Complete-side increment would
+	//     double-charge the lane. Timeouts were the one terminal status no
+	//     counter observed; before SCHED-GAP-1705 that is why a dead wave
+	//     retried on its bare cooldown forever.
+	//   - TickDeferred (SCHED-GAP-203): untouched in both directions — it
+	//     neither clears the counter (the project has not demonstrated a
+	//     good tick) nor increments it (the spawn path never calls
+	//     noteSpawnFailure for a deferral: a gateway blip is not the
+	//     lane's failure).
 	if outcome.Status == TickCompleted {
 		if _, err := lt.db.Exec(`
 			UPDATE projects SET consecutive_failures = 0 WHERE name = ?
 		`, outcome.Project); err != nil {
 			log.Printf("WARN: failed to reset consecutive_failures for %s: %v", outcome.Project, err)
+		}
+	}
+	// SCHED-GAP-1705: a TIMEOUT counts as a lane failure for backoff —
+	// unless the failure is transport-class (SCHED-GAP-143's rule, applied
+	// through failureReasonClass — the same single classifier the spawn
+	// path uses, so the two paths can never disagree). Mirrors
+	// noteSpawnFailure's relative increment; best-effort: a DB error here
+	// is a WARN, never a Complete failure.
+	if outcome.Status == TickTimeout && failureReasonClass(outcome.Error) == "" {
+		if _, err := lt.db.Exec(`
+			UPDATE projects SET consecutive_failures = consecutive_failures + 1 WHERE name = ?
+		`, outcome.Project); err != nil {
+			log.Printf("WARN: failed to increment consecutive_failures for %s: %v", outcome.Project, err)
 		}
 	}
 
@@ -384,10 +568,18 @@ func (lt *LifecycleTracker) CleanupStaleProjects(maxAge time.Duration) ([]string
 		projects = append(projects, name)
 	}
 	rows.Close()
+	// SCHED-GAP-1707: the stale reap is a non-terminal kill — flip the
+	// status AND stamp the partial mark in the SAME UPDATE, so the row is
+	// never indistinguishable from an idle 0/0/0 timeout. No Wait() path
+	// ever ran for these rows, so the telemetry legs stay whatever they were
+	// (0/0/0 for gateway rows: the mark is the honest statement that the
+	// session was killed unobserved, named stale_reap).
 	res, err := lt.db.Exec(`
-		UPDATE ticks SET status = ?, completed_at = ?, error = ?
+		UPDATE ticks SET status = ?, completed_at = ?, error = ?,
+			telemetry_partial = 1, telemetry_partial_reason = ?
 		WHERE status = ? AND spawned_at < ?
-	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(), TickRunning, cutoff.Format(time.RFC3339))
+	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(),
+		TelemetryPartialStaleReap, TickRunning, cutoff.Format(time.RFC3339))
 	if err != nil {
 		return nil, 0, err
 	}

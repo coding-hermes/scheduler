@@ -30,6 +30,10 @@
 <p class="meta">Dispatch accountability (SCHED-GAP-1653, all-time): {{.DispatchSplit.Dispatched}} dispatched · {{.DispatchSplit.NoDispatch}} no-dispatch ({{range $r, $n := .DispatchSplit.Reasons}}{{if $n}}{{$r}}×{{$n}} {{end}}{{end}}){{if .DispatchSplit.Coverage}} · {{.DispatchSplit.Coverage}} predating dispatch recording{{end}}</p>
 {{end}}
 
+{{if .OutcomeKnown}}
+<p class="meta">Tick outcomes (SCHED-GAP-1655, all-time): {{.OutcomeSplit.Total}} with a verdict · <strong>{{.OutcomeSplit.NoWork}} no_work</strong> (zero tool calls){{range $r, $n := .OutcomeSplit.Buckets}}{{if and $n (ne $r "no_work")}} · {{$r}}×{{$n}}{{end}}{{end}}{{if .OutcomeSplit.Unset}} · {{.OutcomeSplit.Unset}} unmeasured{{end}}</p>
+{{end}}
+
 {{if .BoardSteps}}
 <h2>Roadmap</h2>
 <p class="meta">{{.BoardDone}} of {{.BoardTotal}} steps done · {{.SuccessRate}}% success (last 10 ticks) · est. completion {{if .ETA}}{{.ETA}}{{else}}—{{end}}</p>

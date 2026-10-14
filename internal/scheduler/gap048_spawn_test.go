@@ -15,9 +15,14 @@ import (
 // stay idle. These tests pin the guard at the spawner level.
 
 // TestSpawn_NilGatewayNoExecFallback_DropsTick proves that a spawner with no
-// gateway client and noExecFallback=true drops the tick (returns an error)
-// and does NOT exec-spawn. This is the core GAP-048 invariant: the daemon
-// must not silently degrade to exec when the flag is set.
+// gateway client and noExecFallback=true does NOT exec-spawn.
+//
+// SCHED-GAP-1664 UPDATE: the outcome changed from DROP (nil tick + error) to
+// DEFER (a non-nil SpawnedTick whose Wait() yields TickDeferred). The core
+// GAP-048 invariant — the daemon must not silently degrade to exec when the
+// flag is set — is unchanged: no HTTP and no exec spawn occurs, and the
+// tick carries the reason text. The lane's consecutive_failures must stay
+// untouched (a transport outage is not a lane fault).
 func TestSpawn_NilGatewayNoExecFallback_DropsTick(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "gap048-nil-nofb")
@@ -29,20 +34,28 @@ func TestSpawn_NilGatewayNoExecFallback_DropsTick(t *testing.T) {
 	project := PackedProject{Name: "gap048-nil-nofb", Workdir: t.TempDir()}
 	tick, err := spawner.Spawn(project, "gap048-nil-nofb-2026-08-14-15-00-00")
 
-	if err == nil {
-		t.Fatal("Spawn returned nil error with nil gateway + noExecFallback — tick should be dropped")
+	if err != nil {
+		t.Fatalf("Spawn returned an error (%v) — since SCHED-GAP-1664 the nil-gateway path DEFERS, not drops", err)
 	}
-	if tick != nil {
-		t.Error("Spawn returned a non-nil tick — no tick should be produced when idle")
+	if tick == nil {
+		t.Fatal("Spawn returned a nil tick — the nil-gateway path must now return a deferred tick")
 	}
-	if !strings.Contains(err.Error(), "exec fallback disabled") {
-		t.Errorf("error = %q, want it to mention 'exec fallback disabled'", err.Error())
+	outcome := tick.Wait()
+	if outcome.Status != TickDeferred {
+		t.Errorf("Wait() status = %s, want %s — the nil-gateway path is a DEFERRAL since SCHED-GAP-1664", outcome.Status, TickDeferred)
+	}
+	if !strings.Contains(outcome.Error, "exec fallback disabled") {
+		t.Errorf("outcome.Error = %q, want it to mention 'exec fallback disabled'", outcome.Error)
 	}
 
 	// No spawn should have occurred — neither HTTP nor exec.
 	httpCount, execCount := spawner.SpawnMethodCounts()
 	if httpCount != 0 || execCount != 0 {
 		t.Errorf("SpawnMethodCounts = (%d, %d), want (0, 0) — no spawn should occur when idle", httpCount, execCount)
+	}
+	// The lane must not be charged for the transport outage.
+	if n := schedGap203BConsecutiveFailures(t, db, "gap048-nil-nofb"); n != 0 {
+		t.Errorf("consecutive_failures = %d, want 0 — a deferral is not the lane's failure (SCHED-GAP-1664)", n)
 	}
 }
 
@@ -90,6 +103,7 @@ func TestSpawn_NilGatewayExecFallbackAllowed_StillExecSpawns(t *testing.T) {
 // TestSpawn_NilGatewayNoExecFallback_EmitsHighEvent proves the HIGH event is
 // emitted when the event logger is wired, so a startup-fallback daemon is
 // visible in the events table/dashboard instead of silently degrading.
+// SCHED-GAP-1664: the event now says the tick was DEFERRED (not dropped).
 func TestSpawn_NilGatewayNoExecFallback_EmitsHighEvent(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "gap048-event")
@@ -99,9 +113,16 @@ func TestSpawn_NilGatewayNoExecFallback_EmitsHighEvent(t *testing.T) {
 	spawner.SetEventLogger(NewEventLogger(db))
 
 	project := PackedProject{Name: "gap048-event", Workdir: t.TempDir()}
-	_, err := spawner.Spawn(project, "gap048-event-2026-08-14-15-00-00")
-	if err == nil {
-		t.Fatal("Spawn should have returned an error")
+	tick, err := spawner.Spawn(project, "gap048-event-2026-08-14-15-00-00")
+	if err != nil {
+		t.Fatalf("Spawn returned an error (%v) — the nil-gateway path defers since SCHED-GAP-1664", err)
+	}
+	if tick == nil {
+		t.Fatal("Spawn returned a nil tick — the nil-gateway path must return a deferred tick")
+	}
+	outcome := tick.Wait()
+	if outcome.Status != TickDeferred {
+		t.Fatalf("Wait() status = %s, want %s", outcome.Status, TickDeferred)
 	}
 
 	// Verify a HIGH event was written to the events table.

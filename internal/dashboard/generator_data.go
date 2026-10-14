@@ -417,6 +417,9 @@ type FleetData struct {
 	// projects filter (outcome) and every table's page-size control.
 	OutcomeOptions  []string
 	PageSizeOptions []int
+	// CacheAge (SCHED-GAP-1730): age label of the cached snapshot
+	// served by cachedOverview; empty on a fresh collect.
+	CacheAge string
 }
 
 // FleetTables is the per-table parameter set for the overview page.
@@ -465,6 +468,12 @@ type ProjectDetailData struct {
 	// could read as "everything dispatched".
 	DispatchSplit database.DispatchCount
 	DispatchKnown bool
+	// SCHED-GAP-1655: this lane's terminal ticks split by outcome —
+	// OutcomeSplit.NoWork is the zero-tool-call waste count. Known=false
+	// renders the "not yet recorded" line (no terminal tick with an
+	// outcome yet), never a zero that could read as "no waste ever".
+	OutcomeSplit database.OutcomeSplit
+	OutcomeKnown bool
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -604,6 +613,12 @@ type HealthData struct {
 	TotalTicks       int
 	Goroutines       int
 	MemoryMB         float64
+	// TickPushState (SCHED-GAP-1594): how completed ticks reach the
+	// operator. "pushed" = per-tick git push runs at tick exit
+	// (SCHED-GAP-1694, default); "live" = --disable-tick-push is set and
+	// the web dashboard is the primary update surface (no per-tick push;
+	// the fleet-strand-push cron is the only remaining pusher).
+	TickPushState string
 	// HostSample* (ADV-R13): the latest PERSISTED host load/memory sample
 	// (host_samples table) — not the daemon's own runtime.MemStats above,
 	// which only ever measured this process. HostSampleAvailable=false

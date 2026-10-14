@@ -11,6 +11,6 @@ Three implementations:
 | Env var | Values | Meaning |
 |---------|--------|---------|
 | `SCHEDULER_TIME_MODE` | `real` (default) \| `sim` | selects the implementation |
-| `SCHEDULER_TIME_SCALE` | positive float, default `1.0` | simulator speed: a blocked wait costs `d/scale` of REAL time while virtual now advances the full `d` (10x/100x/1000x) |
+| `SCHEDULER_TIME_SCALE` | positive float, default `1.0` | simulator speed: a blocked wait costs `d/scale` of REAL time while virtual now advances the full `d` (10x/100x/1000x). Ignored unless `SCHEDULER_TIME_MODE=sim`; setting SCALE (or AUTOADVANCE) in real mode has no effect and the daemon boots on the wall clock with no warning. |
 | `SCHEDULER_TIME_START` | RFC3339 | simulator start instant (default: now) |
-| `SCHEDULER_TIME_AUTOADVANCE` | `0` (default) \| `1` | skip straight to the next armed timer at zero real cost |
+| `SCHEDULER_TIME_AUTOADVANCE` | `0` (default) \| `1` | skip straight to the next armed timer at zero real cost. Ignored unless `SCHEDULER_TIME_MODE=sim`; setting AUTOADVANCE (or SCALE) in real mode has no effect and the daemon boots on the wall clock with no warning. |

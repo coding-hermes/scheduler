@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // TestSimTickID_UniqueWithinSameSecond locks the DOGFOOD-007 contract:
@@ -34,6 +36,11 @@ func TestRunBulkSim_UniqueTickIDs(t *testing.T) {
 	}
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 8)
 	loop.SetSimulation(0.85)
+	// Preserve the 500ms virtual tick spacing without spending 2.5s of wall
+	// time in this ID-collision test.
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
+	loop.SetClock(sim)
 
 	const count = 40 // 8 per 500ms fire; > len(projects) → wrap collisions without the fix
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -63,6 +70,7 @@ func TestEvaluate_SimulateModeSpawnsSimulatedTicks(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 8)
+	defer loop.Stop()
 	loop.SetSimulation(0.85)
 
 	loop.ForceEvaluate()

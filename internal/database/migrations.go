@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 52
+const latestMigration = 68
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -917,6 +917,465 @@ ALTER TABLE namespaces ADD COLUMN no_artifact_recon_floor TEXT NOT NULL DEFAULT 
 ALTER TABLE ticks ADD COLUMN guard_nudged_at TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// SOL-CADENCE / SCHED-GAP-1668: the optional per-lane cadence target
+		// the ordering half reads. NULL (no override) derives the target from
+		// the durable cooldown pin at read time; 0 explicitly means "no
+		// cadence opinion" and preserves legacy ordering; a positive value
+		// overrides. Additive ALTER — a live database migrates in place and
+		// every existing row reads NULL (derived), never a fabricated target.
+		version: 53,
+		desc:    "SOL-CADENCE: optional per-lane target_runs_per_day override (NULL derives from cooldown pin, 0 opts out, positive overrides) for measurable cadence ordering and reporting",
+		stmt: `
+ALTER TABLE projects ADD COLUMN target_runs_per_day REAL CHECK(target_runs_per_day >= 0);
+`,
+	},
+	{
+		// DOGFOOD-024: the dashboard's batchCompletedSamples windows over the
+		// last ≤20 completed ticks PER PROJECT (ROW_NUMBER PARTITION BY
+		// project_name ORDER BY spawned_at DESC) and batchTickHealth windows
+		// over the last ≤10 ticks of any status per project. At 78k+ tick
+		// rows the first sorted the FULL completed set (idx_ticks_status
+		// search + temp B-tree, measured 125ms) and the second sorted the
+		// FULL history through idx_ticks_project_spawned's per-partition
+		// temp B-tree (measured 284ms) — both on the single serialized
+		// connection every render. This covering partial index lets the
+		// completed-window query run index-only over completed rows, and
+		// reuses idx_ticks_project_spawned (already prefix-complete) for the
+		// any-status window. Idempotent IF NOT EXISTS, additive — no query
+		// loses its old plan.
+		version: 54,
+		desc:    "DOGFOOD-024: covering partial index idx_ticks_completed_project_spawned (project_name, spawned_at, completed_at, cost_usd) WHERE status='completed' so the dashboard's per-project completed-tick window scans the index instead of the full 78k-row ticks table",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_completed_project_spawned
+ON ticks(project_name, spawned_at, completed_at, cost_usd)
+WHERE status = 'completed';
+`,
+	},
+	{
+		// SCHED-GAP-1655: the no_work outcome vocabulary. A tick whose
+		// session ran ZERO tool calls is the fleet's measured dominant waste
+		// class (261 zero-tool sessions/week); recording it 'dry_run' — the
+		// verdict that already means "ran tools, landed no artifact" — made
+		// the two classes indistinguishable and the waste unmeasurable.
+		// SQLite cannot alter a CHECK in place, so the ticks table is
+		// REBUILT with the widened outcome CHECK: v50's procedure verbatim
+		// (own-transaction, PRAGMA foreign_keys=OFF around the DROP so the
+		// tick_workers child rows survive, full column copy, rename, index
+		// restoration). latestMigration is bumped to 55 with this entry.
+		version: 55,
+		desc:    "SCHED-GAP-1655: no_work outcome vocabulary — rebuild the ticks table (v50's procedure) widening the outcome CHECK so a zero-tool-call tick records its own terminal verdict instead of collapsing into 'dry_run'",
+		ownTx:   true,
+		stmt: `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+DROP TABLE IF EXISTS ticks_1655;
+CREATE TABLE ticks_1655 (
+    id            TEXT PRIMARY KEY,
+    project_name  TEXT NOT NULL REFERENCES projects(name),
+    session_id    TEXT,
+    pid           INTEGER DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact','no_work')),
+    spawned_at    TEXT,
+    completed_at  TEXT,
+    exit_code     INTEGER,
+    commits       INTEGER DEFAULT 0,
+    files_changed INTEGER DEFAULT 0,
+    tokens_in     INTEGER DEFAULT 0,
+    tokens_out    INTEGER DEFAULT 0,
+    cost_usd      REAL DEFAULT 0.0,
+    urgency       REAL DEFAULT 0.0,
+    weight_used   INTEGER DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    heartbeat_at  TEXT,
+    orphaned_at   TEXT,
+    orphan_reason TEXT,
+    nudge_count   INTEGER NOT NULL DEFAULT 0,
+    code_commits  INTEGER NOT NULL DEFAULT 0,
+    board_commits INTEGER NOT NULL DEFAULT 0,
+    bump          INTEGER NOT NULL DEFAULT 0,
+    worker_count  INTEGER NOT NULL DEFAULT 0,
+    wave_recovery INTEGER NOT NULL DEFAULT 0,
+    gateway_trace TEXT NOT NULL DEFAULT '',
+    cost_source   TEXT NOT NULL DEFAULT '',
+    failure_reason TEXT NOT NULL DEFAULT '',
+    slot_wait_ms  INTEGER NOT NULL DEFAULT 0,
+    admit_reason  TEXT NOT NULL DEFAULT '',
+    nudge_source  TEXT NOT NULL DEFAULT '',
+    dispatch_outcome TEXT NOT NULL DEFAULT '' CHECK(dispatch_outcome IN ('', 'yes', 'no')),
+    dispatch_reason TEXT NOT NULL DEFAULT '' CHECK(dispatch_reason IN ('', 'dispatched', 'no_work', 'blocked', 'verification_only', 'chose_not_to', 'unavailable')),
+    guard_nudged_at TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO ticks_1655 (
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason, guard_nudged_at
+)
+SELECT
+    id, project_name, session_id, pid, status, outcome, spawned_at, completed_at,
+    exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency,
+    weight_used, error, created_at, heartbeat_at, orphaned_at, orphan_reason,
+    nudge_count, code_commits, board_commits, bump, worker_count, wave_recovery,
+    gateway_trace, cost_source, failure_reason, slot_wait_ms, admit_reason, nudge_source,
+    dispatch_outcome, dispatch_reason, guard_nudged_at
+FROM ticks;
+DROP TABLE ticks;
+ALTER TABLE ticks_1655 RENAME TO ticks;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned ON ticks(project_name, spawned_at);
+CREATE INDEX IF NOT EXISTS idx_ticks_status ON ticks(status);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ticks_project_spawned_cost ON ticks(project_name, spawned_at, cost_usd);
+CREATE INDEX IF NOT EXISTS idx_ticks_status_running ON ticks(status) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_ticks_completed_project_spawned
+ON ticks(project_name, spawned_at, completed_at, cost_usd)
+WHERE status = 'completed';
+COMMIT;
+PRAGMA foreign_keys=ON;
+`,
+	},
+	{
+		// REMOTE-003 (§1 scheduler identity): every row the daemon writes
+		// carries the scheduler_id of the scheduler that wrote it — the join
+		// key for the whole federation (docs/remote-spec.md §1). Additive
+		// ALTERs, no rebuild: a live database migrates in place and every
+		// existing row reads '' (honest: written before identity existed).
+		//
+		// THE BACKFILL runs at BOOT, not here: this migration has no access
+		// to the resolved scheduler identity (it lives in the config/env
+		// layer, not the schema), and a migration statement is fixed SQL.
+		// main.go calls BackfillSchedulerID right after InitDB, claiming the
+		// '' rows for the booting scheduler — spec §1: "backfilled with the
+		// local id at first boot".
+		version: 56,
+		desc:    "REMOTE-003: scheduler_id identity column on projects, ticks and events — the writer-attribution join key for federation (docs/remote-spec.md §1)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE events ADD COLUMN scheduler_id TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_events_scheduler ON events(scheduler_id, created_at DESC);
+`,
+	},
+	{
+		// REMOTE-003 (§2 peer registry): the per-scheduler LOCAL registry of
+		// federation peers — one row per peer keyed by its scheduler id, in
+		// THIS scheduler's own database (no shared store; spec §2). Freshness
+		// is computed at READ time (IsPeerStale) and rendered as a boolean
+		// next to the raw last_contact — never a "down" state. Fresh table,
+		// no backfill: there are no peers until one registers.
+		version: 57,
+		desc:    "REMOTE-003: peers table — the per-scheduler local federation peer registry (id, url, version, capabilities, last_contact) backing /api/v1/peers + heartbeat (docs/remote-spec.md §2)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS peers (
+    id            TEXT PRIMARY KEY,
+    url           TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    capabilities  TEXT NOT NULL DEFAULT '',
+    last_contact  TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+`,
+	},
+	{
+		// REMOTE-006 (§5 partition contract): the durable idempotency store for
+		// inbound federation events. (scheduler_id, event_id) is the spec's
+		// idempotency key; the composite PK makes a duplicate insert physically
+		// impossible — the writer's `ON CONFLICT DO NOTHING` turns a replayed
+		// or re-delivered envelope into a counted no-op (REMOTE-006's dedupe
+		// drop), never an error. Fresh table, no backfill: only events received
+		// after this lands are dedupe-protected (REMOTE-004's memory window
+		// covered the pre-v58 traffic; its pruned ids can resurface as fresh
+		// rows, which is the honest store boundary).
+		version: 58,
+		desc:    "REMOTE-006: remote_events table — the durable idempotency store for inbound peer events keyed by (scheduler_id, event_id), plus per-scheduler last_event high-water marks for replay ordering (docs/remote-spec.md §5)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS remote_events (
+    scheduler_id  TEXT NOT NULL,
+    event_id      TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT '',
+    project       TEXT NOT NULL DEFAULT '',
+    tick_id       TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT '',
+    ts            TEXT NOT NULL DEFAULT '',
+    topic         TEXT NOT NULL DEFAULT '',
+    pattern       TEXT NOT NULL DEFAULT '',
+    ingested_at   TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'live' CHECK(source IN ('live','replay','replayed-live')),
+    PRIMARY KEY (scheduler_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_events_ingested
+ON remote_events(scheduler_id, ingested_at DESC);
+
+CREATE TABLE IF NOT EXISTS remote_events_stats (
+    scheduler_id  TEXT PRIMARY KEY,
+    last_event_id TEXT NOT NULL DEFAULT '',
+    dedupe_drops  INTEGER NOT NULL DEFAULT 0
+);
+`,
+	},
+	{
+		// SCHED-GAP-1695 requirement 3 (STAMP): record HOW EARLY an admitted
+		// tick ran. cooldown_remaining_s is the lane's cooldown left at the
+		// moment of admission — 0 for a packer tick that ran on schedule, > 0
+		// for a tick admitted ahead of its cooldown (a board wake, an
+		// operator manual spawn). It makes the law's invariant MEASURABLE
+		// with one query: no row may carry admit_reason='ok' AND
+		// cooldown_remaining_s > 0 — 'ok' means "on schedule", so an early
+		// row must name its own reason. Additive ALTER, no rebuild; existing
+		// rows read 0 (honest: written before the column existed).
+		version: 59,
+		desc:    "SCHED-GAP-1695: ticks.cooldown_remaining_s — seconds of cooldown left at admission (0 = ran on schedule); the audit column that makes 'no early tick carries admit_reason=ok' a one-query check",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN cooldown_remaining_s REAL NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-1688 AC5: the end-of-tick hook's switch, resolvable at the
+		// LANE and the NAMESPACE, over a global default (the env knob). Tri-
+		// state: -1 = inherit (from the namespace, then the global default),
+		// 0 = off, 1 = on. Shipping at -1 everywhere means the hook stays
+		// exactly as dark as the env default until a family is opted in, which
+		// is the row's "default OFF until proven on one family" with the
+		// no-op rate measurable before and after. Additive ALTERs, no rebuild.
+		version: 60,
+		desc:    "SCHED-GAP-1688: idle_intervention switch on projects + namespaces (-1 inherit | 0 off | 1 on) — the per-lane and per-namespace resolution over the global env default",
+		stmt: `
+ALTER TABLE projects ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE namespaces ADD COLUMN idle_intervention INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		// SCHED-GAP-1712: per-lane and per-namespace gateway endpoints. The
+		// daemon resolved ONE gateway URL for every project (GatewayConfig
+		// carries a single url), so lanes could be DISTINGUISHED by key but
+		// never ADDRESSED by endpoint: one Hermes gateway served ~90
+		// projects. These columns add the two missing tiers — the lane's own
+		// endpoint and its namespace's — leaving [gateway].url as the global
+		// fallback. Resolution is lane > namespace > global, applied per tick
+		// at dispatch time; both defaults are '' = inherit, so a fleet that
+		// sets nothing behaves exactly as before.
+		//
+		// ticks.* records the RESOLVED endpoint on the ticket row so a
+		// dispatch can be audited after the fact: gateway_url is the
+		// endpoint the POST went to ('' = no HTTP dispatch: exec spawn, or a
+		// row written before this migration), gateway_source names which
+		// tier supplied the URL, gateway_key_source which tier supplied the
+		// credential. The credential ITSELF is never persisted — the source
+		// is the auditable fact, not the secret. Sources are the closed set
+		// "lane" | "namespace" | "global" ("" pairs with an empty URL).
+		version: 61,
+		desc:    "SCHED-GAP-1712: per-lane/per-namespace gateway endpoints (projects.gateway_url, namespaces.gateway_url|gateway_key) and the resolved endpoint recorded per tick (ticks.gateway_url|gateway_source|gateway_key_source)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN gateway_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN gateway_key_source TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SCHED-GAP-1710 (the dispatch leg's receive half): the durable record
+		// of the work a tick HANDED OUT over the Crier bus.
+		//
+		// The scheduler could publish and query, but a tick never dispatched
+		// work, so nothing recorded "this lane's tick was handed to agent X".
+		// A dispatched unit is not a process: there is no exit code, no
+		// stdout pipe and no session id, so the facts that matter — the agent
+		// ACTUALLY addressed, the correlation id the answer must carry, the
+		// relay's message id, where the relay put it, and the reply — get
+		// their own per-tick row instead of being forced into ticks' process
+		// columns (session_id/exit_code would have to lie).
+		//
+		// This is the SCHED-GAP-1665 AC2 record: the target recorded is the
+		// one USED (the receipt's agent), never the configured one, and it is
+		// readable after the fact for every tick that dispatched. state is a
+		// closed vocabulary: dispatched | replied | failed | expired.
+		//
+		// The reply leg matches on corr_id / message_id, so both are indexed;
+		// a tick with no row here never dispatched anything and reads as such
+		// (absence of a row is the honest "local tick" signal — no NULL
+		// column with no meaning).
+		version: 62,
+		desc:    "SCHED-GAP-1710: tick_dispatch — the per-tick receipt of work handed to a named agent over the bus (lane, agent used, corr_id, message id, transport, state, reply)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS tick_dispatch (
+    tick_id    TEXT PRIMARY KEY,
+    lane       TEXT NOT NULL,
+    agent      TEXT NOT NULL,
+    corr_id    TEXT NOT NULL,
+    message_id TEXT NOT NULL DEFAULT '',
+    transport  TEXT NOT NULL DEFAULT '',
+    state      TEXT NOT NULL DEFAULT '',
+    issued_at  TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    reply      TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_corr ON tick_dispatch(corr_id);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_message ON tick_dispatch(message_id);
+CREATE INDEX IF NOT EXISTS idx_tick_dispatch_state ON tick_dispatch(state);
+`,
+	},
+	{
+		// SCHED-GAP-1680: non-commit side effects are a tick ARTIFACT.
+		//
+		// memory_keys is the count of DuckBrain memory-key WRITES the tick's
+		// gateway session transcript observed — the deliverable of a lane
+		// whose product is not a git commit (the whole -sync family). It is
+		// recorded separately from code_commits / board_commits (which exist)
+		// so a sync tick that wrote five verified keys is never derived as
+		// outcome=dry_run. 0 = none observed on the measured surface (the
+		// session transcript); >0 = that many write-class memory tool calls.
+		// A plain additive column, no table rebuild: the value is a new
+		// fact, never a widening of an existing CHECK vocabulary.
+		version: 63,
+		desc:    "SCHED-GAP-1680: ticks.memory_keys — DuckBrain memory-key writes observed in the tick's session transcript, a non-commit artifact class",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN memory_keys INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-1707: partial telemetry + watchdog visibility on ticks.
+		// A deadline-killed (or watchdog-killed) tick used to finalize with
+		// 0/0/0 telemetry — indistinguishable in SQL from an idle session —
+		// and nothing recorded how far a wave got before the wall. Four
+		// plain additive columns, no table rebuild (same shape as v63):
+		//
+		//   telemetry_partial          1 = the row's telemetry was persisted
+		//                              at a non-terminal kill (tick deadline,
+		//                              silence watchdog, stale reap, dispatch
+		//                              deadline) and may undercount; 0 = a
+		//                              normal terminal accounting. A timeout
+		//                              row with telemetry_partial=0/0/0/0 is
+		//                              now provably an idle session, never a
+		//                              dead one.
+		//   telemetry_partial_reason   WHY the row is partial, from the
+		//                              closed vocabulary the scheduler package
+		//                              owns: 'tick_deadline' | 'session_silent'
+		//                              | 'stale_reap' | 'dispatch_deadline'.
+		//   session_silence_s          for watchdog kills: the quiet duration
+		//                              (no token delta and no tool activity)
+		//                              the session accumulated before the
+		//                              termination. 0 elsewhere.
+		//   workers_terminal           wave convergence: how many of the
+		//                              tick's wave workers had reached a
+		//                              terminal state when the manifest was
+		//                              ingested ('done' rows at ingest time).
+		//                              -1 = unmeasured (the -1 sentinel
+		//                              convention: never read as a count) —
+		//                              legacy rows, serial ticks whose
+		//                              manifest never landed, and ticks the
+		//                              deadline killed before the foreman
+		//                              wrote a manifest.
+		version: 64,
+		desc:    "SCHED-GAP-1707: timeout visibility on ticks — telemetry_partial + telemetry_partial_reason (a deadline-killed tick's partial telemetry is marked, never indistinguishable from an idle 0/0/0 row), session_silence_s (the quiet duration a watchdog-killed silent session accumulated) and workers_terminal (wave workers terminal before the wall; -1 unmeasured)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN telemetry_partial INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN telemetry_partial_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN session_silence_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN workers_terminal INTEGER NOT NULL DEFAULT -1;
+`,
+	},
+	{
+		version: 65,
+		desc:    "SCHED-GAP-1726: durable composable usage pools and leases",
+		stmt: `
+CREATE TABLE IF NOT EXISTS usage_pools (
+    pool_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('local','host','project')),
+    active_limit INTEGER NOT NULL CHECK(active_limit > 0),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_pool_memberships (
+    lane TEXT NOT NULL,
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    PRIMARY KEY(lane,pool_id)
+);
+CREATE TABLE IF NOT EXISTS usage_pool_leases (
+    lease_id TEXT PRIMARY KEY,
+    tick_id TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('active','released')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_pool_leases_unique_tick ON usage_pool_leases(tick_id);
+CREATE TABLE IF NOT EXISTS usage_pool_lease_members (
+    lease_id TEXT NOT NULL REFERENCES usage_pool_leases(lease_id),
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    PRIMARY KEY(lease_id,pool_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_pool_lease_members_pool ON usage_pool_lease_members(pool_id,lease_id);
+`,
+	},
+	{
+		version: 66,
+		desc:    "SCHED-GAP-1726: persist usage-pool lease owner and expiry; track deferred attempts",
+		stmt: `
+ALTER TABLE usage_pool_leases ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_pool_leases ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS usage_pool_deferrals (
+    pool_id TEXT NOT NULL REFERENCES usage_pools(pool_id),
+    tick_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(pool_id,tick_id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_pool_deferrals_tick ON usage_pool_deferrals(tick_id);
+`,
+	},
+	{
+		// SCHED-GAP-1681: the tick row must expose HOW MANY gateway POSTs the
+		// tick consumed — the GAP-080 transient retry loop (now configurable
+		// via --gateway-transient-retries) re-sends the same session after a
+		// transport blip, and the merged GatewayPOSTTrace already counts those
+		// attempts (trace.Attempts), but the row itself had no column, so an
+		// audit asking "did the retry absorb this blip?" had to parse
+		// gateway_trace JSON instead of reading SQL. Plain additive column,
+		// same shape as v63/v64: 0 = the honest "no gateway POST" (exec
+		// spawns, spawn-site refusals, remote dispatch); >=1 = POSTs made,
+		// stamped by lifecycle.Complete from the merged trace on every
+		// gateway path (completed, failed, deferred, timeout).
+		version: 67,
+		desc:    "SCHED-GAP-1681: ticks.attempts — gateway POST count per tick (the GAP-080 retry loop's per-attempt accounting, previously only inside the gateway_trace JSON)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// SCHED-GAP-1682: no-op-by-lane-class. The TRIGGER is the pair
+		// (HEAD commit sha, branch name) captured on the lane's workdir
+		// BEFORE the foreman runs and again AFTER the tick finishes —
+		// stored on the tick row so the verdict is auditable in SQL, not
+		// re-derived from git. Zero values are the honest "no workdir / no
+		// readable repo" (never a fabricated measurement). noop_flag=1 is
+		// written ONLY on the enforcement branch (a FOREMAN-class lane
+		// whose verdict is no-op) — a satellite's allowed no-op records
+		// its verdict through the noop_guard events, never through this
+		// flag, so `noop_flag=1` always means "the lane was told to
+		// explain itself". projects.noop_allowed is deliberately NULLABLE:
+		// NULL = derive from the lane class (satellites allowed, foremen
+		// not), 0/1 = the operator override that wins in BOTH directions.
+		version: 68,
+		desc:    "SCHED-GAP-1682: no-op by lane class — projects.noop_allowed override (NULL = derive from lane class), ticks pre/post commit+branch trigger capture, ticks.noop_flag",
+		stmt: `
+ALTER TABLE projects ADD COLUMN noop_allowed INTEGER;
+ALTER TABLE ticks ADD COLUMN pre_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN pre_branch TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN pre_board TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN post_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN post_branch TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN noop_flag INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // laneOutputBackfillStmt initializes the four family output counts from tick
@@ -944,6 +1403,16 @@ const laneOutputBackfillStmt = `UPDATE projects SET
 // deferred never ran a foreman turn) whose commit anatomy records output.
 // Exported so tests outside the package can execute the same SQL the
 // migration runs, pinning the counts against the runtime accounting.
+//
+// DELIBERATE v47/runtime DIVERGENCE (SCHED-GAP-1680): this predicate is
+// FROZEN at the git-artifact columns the v47 backfill could see. The runtime
+// predicate (lane_output.go recordLaneFamilyOutput) additionally counts the
+// v63 non-commit leg (memory_keys > 0). The const cannot be widened to match:
+// migration v47 runs BEFORE v63 adds the column, so a fresh database would
+// fail the ladder with "no such column: memory_keys". The backfill is
+// therefore a historical approximation (git artifacts only) and the runtime
+// path is authoritative; a repair tool that wants the honest number must
+// apply the runtime predicate, not this one.
 const LaneOutputTickWhere = `AND status IN ('completed','timeout')
 	AND (
 		COALESCE(code_commits, 0) > 0

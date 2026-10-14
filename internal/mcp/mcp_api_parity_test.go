@@ -55,6 +55,8 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 var apiToolCoverage = map[string][]string{
 	"GET /api/v1/status":                  {"fleet_status"},
 	"GET /api/v1/projects":                {"fleet_projects"},
+	"GET /api/v1/lanes":                   {"fleet_projects"},
+	"GET /api/v1/lanes/tree":              {"fleet_lane_tree"},
 	"POST /api/v1/projects":               {"fleet_add"},
 	"GET /api/v1/projects/{name}":         {"fleet_project_detail"},
 	"PUT /api/v1/projects/{name}":         {"fleet_set_weight", "fleet_set_priority", "fleet_set_cooldown", "fleet_set_decay"},
@@ -65,17 +67,21 @@ var apiToolCoverage = map[string][]string{
 	"POST /api/v1/pause":                  {"fleet_pause_scheduler"},
 	"POST /api/v1/resume":                 {"fleet_resume_scheduler"},
 	"GET /api/v1/events":                  {"events_list"},
-	"GET /api/v1/groups":                  {"groups_list"},
-	"POST /api/v1/groups":                 {"groups_create"},
-	"GET /api/v1/groups/{name}":           {"groups_get"},
-	"PUT /api/v1/groups/{name}":           {"groups_update"},
-	"DELETE /api/v1/groups/{name}":        {"groups_delete"},
-	"POST /api/v1/groups/{name}/deploy":   {"groups_deploy"},
-	"GET /api/v1/templates":               {"templates_list"},
-	"POST /api/v1/templates":              {"templates_create"},
-	"GET /api/v1/templates/{name}":        {"templates_get"},
-	"PUT /api/v1/templates/{name}":        {"templates_update"},
-	"DELETE /api/v1/templates/{name}":     {"templates_delete"},
+	"GET /api/v1/observatory":             {"observatory_snapshot"},
+	// SCHED-GAP-1654: the gateway_errors MCP tool serves the same
+	// scheduler.BuildGatewayErrorsReport the REST route answers.
+	"GET /api/v1/gateway-errors":        {"gateway_errors"},
+	"GET /api/v1/groups":                {"groups_list"},
+	"POST /api/v1/groups":               {"groups_create"},
+	"GET /api/v1/groups/{name}":         {"groups_get"},
+	"PUT /api/v1/groups/{name}":         {"groups_update"},
+	"DELETE /api/v1/groups/{name}":      {"groups_delete"},
+	"POST /api/v1/groups/{name}/deploy": {"groups_deploy"},
+	"GET /api/v1/templates":             {"templates_list"},
+	"POST /api/v1/templates":            {"templates_create"},
+	"GET /api/v1/templates/{name}":      {"templates_get"},
+	"PUT /api/v1/templates/{name}":      {"templates_update"},
+	"DELETE /api/v1/templates/{name}":   {"templates_delete"},
 	// CTL-003: the namespace/pool control surface, project lifecycle
 	// (delete/spawn/bump/unbump), tick detail, and the read-only
 	// config/queue/metrics introspection routes.
@@ -96,7 +102,16 @@ var apiToolCoverage = map[string][]string{
 	"GET /api/v1/metrics":                   {"metrics_get"},
 	"GET /api/v1/features":                  {"features_get"},
 	"GET /api/v1/features/prune-candidates": {"features_prune_candidates"},
-	"GET /api/v1/cooldown/residue":          {"cooldown_residue"},
+	"GET /api/v1/peers":                     {"peers_list"},
+	"POST /api/v1/peers":                    {"peers_register"},
+	"POST /api/v1/peers/{id}/heartbeat":     {"peers_heartbeat"},
+	// REMOTE-010 (federation-query-spec §3 MCP row): the query envelope
+	// route IS the generic transport adapter, and fed_query is its MCP
+	// tool — the per-catalogue-op tools (fed_peer_status …) cover the same
+	// ops one tool per op. (A POST route carrying a READ — do not add
+	// fed_* to any mutation cross-check.)
+	"POST /api/v1/federation/query": {"fed_query"},
+	"GET /api/v1/cooldown/residue":  {"cooldown_residue"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.
@@ -107,12 +122,19 @@ var apiToolCoverage = map[string][]string{
 // enforces this mechanically so the escape hatch cannot be widened by
 // convenience.
 var paritySkipList = map[string]string{
-	"/api/v1/health":       "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
-	"/api/v1/live":         "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
-	"/api/v1/openapi.json": "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
-	"/mcp":                 "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
+	// REMOTE-010 landed: the per-op MCP tools (fed_peer_status …) + the
+	// fed_query escape hatch now cover the query route (it sits in
+	// apiToolCoverage above), so only the catalogue remains exempt here —
+	// it DOCUMENTS the ops (a metadata surface, not an operation).
+	"/api/v1/federation/catalogue": "REMOTE-008 read catalogue — documents the ops the fed_* MCP tools (REMOTE-010) serve one-tool-per-op; a metadata surface, not a fleet operation",
+	"/api/v1/health":               "human/ops daemon-health probe (uptime, DB ping, gateway error count); fleet_status covers fleet-level status, not daemon health",
+	"/api/v1/live":                 "human/ops DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, no DB access; the watchdog's cheap pre-probe before /api/v1/health, deliberately not exposed as an MCP tool (a JSON-RPC tool call would still cost the agent context; the 200 OK IS the contract)",
+	"/api/v1/openapi.json":         "the OpenAPI document itself — served for humans and codegen, not a fleet operation",
+	"/mcp":                         "the MCP JSON-RPC endpoint itself (never enumerated via openapi.json; listed so skip entries stay self-documenting)",
 	"/api/v1/events/stream": "SSE push stream (CTL-002) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
 		"events_list already covers the same data with the incremental since-cursor for polling clients",
+	"/api/v1/observatory/stream": "SSE push stream (SCHED-GAP-1592) — a long-lived server-sent-event feed cannot be represented as a request/response MCP tool; " +
+		"observatory_snapshot already covers the same computed snapshot for polling clients",
 }
 
 // allowedSkipKey reports whether a skip-list key is a dashboard/human/infra
@@ -126,7 +148,17 @@ func allowedSkipKey(key string) bool {
 		// push stream, which is a transport shape MCP (request/response
 		// tools) cannot express. Listed explicitly rather than by prefix so
 		// this exemption can never widen to sibling routes.
-		"/api/v1/events/stream":
+		"/api/v1/events/stream",
+		// SCHED-GAP-1592: same transport shape — an SSE stream, MCP
+		// (request/response) cannot express it; observatory_snapshot
+		// covers the data.
+		"/api/v1/observatory/stream",
+		// REMOTE-008's catalogue route: it DOCUMENTS the ops the fed_* MCP
+		// tools (REMOTE-010) serve one-tool-per-op — a metadata surface,
+		// not an operation. The query route itself moved UP into
+		// apiToolCoverage (covered by fed_query) when REMOTE-010 landed;
+		// this exemption can never grow back over it.
+		"/api/v1/federation/catalogue":
 		return true
 	}
 	for _, prefix := range []string{"/projects/", "/namespaces/", "/dashboard/"} {

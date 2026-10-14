@@ -321,6 +321,23 @@ func TestRunMultiTick_ReportMatchesSQLite_RealClock(t *testing.T) {
 	}
 }
 
+func TestRunMultiTick_DoesNotWaitAfterFinalTick(t *testing.T) {
+	db := newTestDB(t)
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
+
+	runner, _ := newSimRunner1630(t, db, sim)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	report, err := runner.RunMultiTick(ctx, 1)
+	if err != nil {
+		t.Fatalf("RunMultiTick: %v", err)
+	}
+	if report.Elapsed >= 2*time.Second {
+		t.Fatalf("one-tick run elapsed %s; final cooldown should only be advanced between ticks", report.Elapsed)
+	}
+}
+
 // TestRunMultiTick_NonHundredPercentSimSuccess exercises the mixed-outcome
 // census across a multi-batch run driven through the caller-set rate:
 // runner.SetSuccessRate(0.5) before RunMultiTick, which installs 0.5 on the

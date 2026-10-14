@@ -220,21 +220,27 @@ func testVerify(cycles int, clk clock.Clock) error {
 	// cycle is a TOLERANCE WINDOW around the earliest spawn second, not an
 	// exact-second bucket: 2s, safe because the tightest fixture cooldown is
 	// 5s (epsilon), so the second cycle cannot begin inside the window.
+	// The window bounds are computed on the SECOND-RESOLUTION string
+	// substr(spawned_at, 1, 19) ("YYYY-MM-DDTHH:MM:SS" — the RFC3339
+	// timezone suffix is cut off). INT-CI-169: the old code parsed that
+	// truncated string with time.RFC3339, which REQUIRES a timezone
+	// designator, so the parse always failed and the degrade branch
+	// shrank the window to the exact first second — any first-cycle
+	// spawn landing in second+1 on a loaded runner fell outside. The
+	// bounds must be parsed with the truncated layout itself.
+	// SCHED-GAP-143-era: the MIN query must NOT filter on terminal
+	// status — at check time the last first-cycle tick can still be
+	// 'running', and excluding it pushes the window start later (again
+	// shrinking the window so early spawners fall out). spawned_at is
+	// only stamped at the running transition, so any row with a
+	// spawned_at is a real spawn stamp.
 	firstCycle := ""
 	if err := db.QueryRowContext(ctx, `
 		SELECT MIN(substr(spawned_at, 1, 19)) FROM ticks
-		WHERE status IN ('completed','failed','timeout') AND spawned_at != ''`).Scan(&firstCycle); err != nil {
+		WHERE spawned_at != ''`).Scan(&firstCycle); err != nil || firstCycle == "" {
 		firstCycle = ""
 	}
-	firstCycleEnd := ""
-	if firstCycle != "" {
-		minT, err := time.Parse(time.RFC3339, firstCycle)
-		if err == nil {
-			firstCycleEnd = minT.Add(2 * time.Second).Format(time.RFC3339)
-		} else {
-			firstCycleEnd = firstCycle // parse failed: degrade to exact match
-		}
-	}
+	firstCycleEnd := firstCycleWindowEnd(firstCycle)
 	gotFirst := map[string]bool{}
 	if firstCycle != "" {
 		fcRows, _ := db.QueryContext(ctx, `
@@ -455,6 +461,26 @@ func testVerify(cycles int, clk clock.Clock) error {
 	}
 	fmt.Println("✅ SCHEDULER VERIFIED")
 	return nil
+}
+
+// firstCycleWindowEnd returns the inclusive upper bound (same
+// second-resolution string shape) of the first-cycle tolerance window:
+// min + 2s, parsed and formatted with the TRUNCATED layout
+// "2006-01-02T15:04:05" — NOT time.RFC3339, which requires a timezone
+// designator that substr(spawned_at, 1, 19) has already cut off
+// (INT-CI-169: the RFC3339 parse always failed, degrading the window
+// to an exact-second match). An empty or unparseable input degrades
+// to an exact match (end == start), which is safe (narrower, never
+// wider) on a fleet whose whole first cycle lands in one second.
+func firstCycleWindowEnd(firstCycle string) string {
+	if firstCycle == "" {
+		return ""
+	}
+	minT, err := time.Parse("2006-01-02T15:04:05", firstCycle)
+	if err != nil {
+		return firstCycle
+	}
+	return minT.Add(2 * time.Second).Format("2006-01-02T15:04:05")
 }
 
 // latencyStats returns p50/p90/p99 and the max of a latency sample.

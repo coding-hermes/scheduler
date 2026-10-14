@@ -127,18 +127,14 @@ jobs:
           version: latest
           args: --timeout=5m
 
-  race:
-    # CI-004: the build job's Test steps run without -race, so internal/blocks
-    # and internal/scheduler had no data-race coverage in CI. This job is the
-    # only raced lane; -p 1 mirrors the repo convention (cgroup pids limits on
-    # the fleet host make parallelism unsafe).
-    #
-    # -timeout=900s is a pure safety bound (it does not slow a green run).
-    # Measured locally on the fleet host: the raced scheduler suite takes
-    # 377s at loadavg ~6 (blocks 1.2s), and at loadavg ~30 the same command
-    # blew through 480s and died with "panic: test timed out after 8m0s".
-    # 480s left too little headroom for a loaded runner, so the bound is
-    # raised; a hung test still fails within 15 minutes.
+  race-blocks:
+    # CI-004 (split from the single race job by QA-CHS-178): the build job's
+    # Test steps run without -race, so internal/blocks had no data-race
+    # coverage in CI. Split into its own job so a timeout in the heavy
+    # scheduler suite cannot mask a blocks failure (and vice versa). The
+    # raced blocks suite takes ~1-2s, so no special bound is needed.
+    # -p 1 mirrors the repo convention (cgroup pids limits on the fleet host
+    # make parallelism unsafe).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,5 +143,38 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Race detector — blocks + scheduler
-        run: go test -short -race -count=1 -p 1 -timeout=900s ./internal/blocks/... ./internal/scheduler/...
+      - name: Race detector — blocks
+        run: go test -short -race -count=1 -p 1 -timeout=300s ./internal/blocks/...
+
+  race-scheduler:
+    # CI-004 (split from the single race job by QA-CHS-178): the build job's
+    # Test steps run without -race, so internal/scheduler had no data-race
+    # coverage in CI. Its own job gives the heavy suite a clean budget that a
+    # fast sibling cannot interact with. -p 1 mirrors the repo convention
+    # (cgroup pids limits on the fleet host make parallelism unsafe).
+    #
+    # GOMAXPROCS=8: GitHub-hosted runners are oversized (4+ vCPU), and -race
+    # overhead scales with goroutine scheduling breadth. Capping GOMAXPROCS
+    # narrows that breadth on loaded runners without touching -p 1 (package
+    # parallelism stays 1 per the cgroup convention).
+    #
+    # -timeout=1800s is a pure safety bound (it does not slow a green run).
+    # Measured locally on the fleet host: the raced scheduler suite takes
+    # 216-377s at loadavg ~6. The original bound of 480s was too small: at
+    # loadavg ~30 the same command blew through it and died with
+    # "panic: test timed out after 8m0s". The next bound of 900s (CI-004
+    # raise) was ALSO insufficient — CI run 36614465102 (commit dc94c8be)
+    # failed the same way on a loaded runner. 1800s leaves real headroom;
+    # a hung test still fails within 30 minutes.
+    runs-on: ubuntu-latest
+    env:
+      GOMAXPROCS: "8"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Race detector — scheduler
+        run: go test -short -race -count=1 -p 1 -timeout=1800s ./internal/scheduler/...

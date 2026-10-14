@@ -43,11 +43,17 @@ import (
 // os/exec per lane per render".
 
 // tickWorkCacheTTLDefault is how long a window's classification is reused.
-// It only needs to cover a render burst; the entry is invalidated for free by
-// never being asked again once the sample ages out of the ≤20-completed-ticks
-// query. It mirrors gitReinsCacheTTLDefault (60s) for the same reason: it
-// must exceed the cold-render cost, else every render is cold.
-const tickWorkCacheTTLDefault = 60 * time.Second
+// DOGFOOD-024: raised from 60s to 24h. The original 60s was sized to "cover a
+// render burst", but the live dashboard re-renders every 10s indefinitely, so
+// EVERY render past the first 60s paid the full cold cost again — measured at
+// HEAD (benchmark vs a copy of the live 78k-tick DB): cold fleet render 4.2s
+// with ~20% of CPU in fork/exec Syscall6 (one git log per completed sample ×
+// ~10k windows per fleet render). The memo soundness argument directly above
+// says a COMPLETED tick's window is immutable history, so 24h keeps that
+// guarantee (history rewrites remain an ops event) while making steady-state
+// renders warm. The entry is still invalidated for free by never being asked
+// again once the sample ages out of the ≤20-completed-ticks query.
+const tickWorkCacheTTLDefault = 24 * time.Hour
 
 // tickWorkCacheTTL is the effective reuse window. Var for test injection —
 // the cache is a package-level singleton with no owner to inject into (the

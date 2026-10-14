@@ -4,6 +4,8 @@
 **Depends on:** S01, S02, S03, S04, S05, S06  
 **Pages target:** 6-8
 
+> **Scope clarification (SCHED-GAP-1726):** This draft specifies namespace-based weight allocation/borrowing only. A namespace is NOT the sole or canonical resource pool for concurrency admission. Named usage pools are orthogonal and additive; see [`docs/usage-pools-spec.md`](../docs/usage-pools-spec.md). Existing namespace allocation, borrowing, and `max_concurrent` semantics remain independent controls. In particular, this draft's flat-mode fallback is not permission to run a remote lane locally when its required host usage pool is missing.
+
 ---
 
 ## 1. Overview

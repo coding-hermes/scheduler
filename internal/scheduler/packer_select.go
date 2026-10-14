@@ -108,6 +108,28 @@ func (m *MultiPoolPacker) Pack(
 		nsSet[ns.ID] = true
 	}
 
+	// SCHED-GAP-1686 trigger clause: resolve each lane's project-family root
+	// (following Parent links) and count enabled lanes per root, so the
+	// cadence ceiling can exempt a lane that is its project's ONLY runnable
+	// lane — deferring it would starve the project entirely. Computed over
+	// the FULL project list (all namespaces, enabled and disabled) because a
+	// project's family spans namespaces; a lane whose parent is absent from
+	// the snapshot is its own root (mirrors database.BuildLaneTree).
+	parentOf := make(map[string]string, len(projects))
+	for _, p := range projects {
+		parentOf[p.Name] = p.Parent
+	}
+	rootOf := make(map[string]string, len(projects))
+	for name := range parentOf {
+		rootOf[name] = projectRootName(name, parentOf)
+	}
+	enabledByRoot := make(map[string]int)
+	for _, p := range projects {
+		if p.Enabled {
+			enabledByRoot[rootOf[p.Name]]++
+		}
+	}
+
 	// --- Phase 2 — intra-namespace packing (per namespace) ---
 	for _, ns := range namespaces {
 		if !ns.Enabled {
@@ -182,6 +204,12 @@ func (m *MultiPoolPacker) Pack(
 			urgency := urgencyCalc.ComputeUrgency(
 				float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 			)
+			// SCHED-GAP-1686: track which boost (if any) set this lane's
+			// urgency so the cadence ceiling can name the over-serving
+			// mechanism when it defers the lane. Highest applicable tier wins
+			// (each block is gated on urgency < tier, and the tiers are
+			// strictly ordered starvation > pending > bump > organic).
+			boostCause := BoostCauseOrganic
 			// S-GAP-001 fairness: an eligible project whose last attempt is
 			// older than its starvation window jumps the urgency queue so the
 			// prio-10 cohort cannot starve it indefinitely. The boost is
@@ -190,6 +218,7 @@ func (m *MultiPoolPacker) Pack(
 			if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
 				age := starvationAge(lastTick, createdAt, now)
 				urgency = starvationBoostUrgencyFor(age)
+				boostCause = BoostCauseStarvation
 				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v starved=%v) — starvation guarantee",
 					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
 			}
@@ -201,6 +230,7 @@ func (m *MultiPoolPacker) Pack(
 			if m.pendingCounter != nil {
 				if pending := m.pendingCounter.CountPending(p.Workdir); pending > 0 && urgency < pendingBoostUrgency {
 					urgency = pendingBoostUrgencyFor(pending)
+					boostCause = BoostCausePending
 				}
 			}
 			// SCHED-GAP-107: active bump — the bump cooldown overrides the
@@ -211,8 +241,11 @@ func (m *MultiPoolPacker) Pack(
 				bumpCD = p.BumpCooldownS
 				if urgency < bumpBoostUrgency {
 					urgency = bumpBoostUrgency
+					boostCause = BoostCauseBump
 				}
 			}
+
+			urgency = cadenceAdjustedUrgency(urgency, p, m.cadenceRates[p.Name])
 
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
 			scored = append(scored, ProjectUrgency{
@@ -220,6 +253,7 @@ func (m *MultiPoolPacker) Pack(
 				Urgency:         urgency,
 				EffectiveWeight: effW,
 				BumpCooldownS:   bumpCD,
+				BoostCause:      boostCause,
 			})
 			members = append(members, p.Name)
 		}
@@ -276,6 +310,18 @@ func (m *MultiPoolPacker) Pack(
 		// state so the hold build (after borrowing) can stamp them on the hold.
 		st.roster = members
 		st.rotatedNames = rotate
+		// SCHED-GAP-1686: the namespace's cadence ceiling, computed once per
+		// namespace from the enabled-lane roster (nsProjects) and the
+		// trailing-window completed-tick count injected by the loop.
+		impliedDemand := cadenceImpliedDemand(nsProjects, CadenceCeilingWindow)
+		ceiling := cadenceCeilingFor(impliedDemand)
+		tickCount := m.namespaceTickCounts[ns.ID]
+		// ceilingArmed: the ceiling is enforced only when the loop injected
+		// the trailing-window counts (nil map = fail-open, no ceiling — the
+		// pre-SCHED-GAP-1686 behavior). An empty non-nil map is armed with
+		// zero counts, so the ceiling still applies (the namespace has no
+		// completed ticks in the window and may pack up to the ceiling).
+		ceilingArmed := m.namespaceTickCounts != nil
 		budgetRemaining := alloc
 		for i := range scored {
 			pu := &scored[i]
@@ -292,14 +338,32 @@ func (m *MultiPoolPacker) Pack(
 			// all apply in the one shared place; SCHED-GAP-1661: a
 			// set+positive cooldown_pin_s outranks the (bumped)
 			// cooldown base inside that shared predicate).
+			//
+			// SCHED-GAP-1666: the decision is taken through the ONE
+			// shared admission predicate every slot-pool entry point
+			// consults. The packer claims no bypass, so `gate.Defer`
+			// is exactly the historical `now.Sub(lt) < cooldownDur`.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cd := pu.Project.CooldownS
 				// SCHED-GAP-107: an active bump owns the effective cooldown.
 				if pu.BumpCooldownS > 0 {
 					cd = pu.BumpCooldownS
 				}
-				cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
-				if skipMode {
+				gate := effectiveCooldownGate(CooldownGateRequest{
+					Project:             pu.Project.Name,
+					CooldownS:           cd,
+					CooldownPinS:        pu.Project.CooldownPinS,
+					Priority:            float64(pu.Project.Priority),
+					ConsecutiveFailures: pu.Project.ConsecutiveFailures,
+					LastTickStatus:      pu.Project.LastTickStatus,
+					LastCompleted:       &lt,
+					Workdir:             pu.Project.Workdir,
+					BoardOwnership:      pu.Project.BoardOwnership,
+					BlackoutWindows:     m.blackoutWindows,
+					Calculator:          urgencyCalc,
+				}, now)
+				cooldownDur := gate.Cooldown
+				if gate.SkipMode {
 					continue // skip mode
 				}
 				// SCHED-GAP-124: tasks-mode admission — non-perpetual
@@ -332,8 +396,73 @@ func (m *MultiPoolPacker) Pack(
 					if tasksPacingDeferredJittered(&lt, now) {
 						continue
 					}
+					// SCHED-GAP-1657: the stale-premise gate on the tasks-mode
+					// waiver path — the board HAS open rows (the waiver fired)
+					// but they are all stale pending rows whose commit_hash is
+					// already present. Defer rather than dispatch a session to
+					// re-discover it. `mode` is tasks here (the branch guard).
+					if blocked, _ := stalePremiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
+						continue
+					}
 				} else {
-					if now.Sub(lt) < cooldownDur {
+					// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose
+					// board holds no dispatchable row is deferred BEFORE
+					// its pin is even consulted — the measured 261
+					// zero-tool sessions/week this gate closes. The lane
+					// keeps its selection (defer, not drop: no cooldown
+					// consumed, no row, no session) and the next
+					// evaluation re-checks the board. Reporter-class
+					// lanes and tasks lanes are untouched (the deliverable
+					// 3 exemption; the tasks branch above).
+					//
+					// Gate ordering note: the cooldown check below still
+					// runs for gate-transparent lanes. For a gated lane
+					// the board decision is the FIRST answer — "no work"
+					// is true even when the pin has elapsed, so the lane
+					// must not fall through to the pack. Logging is at
+					// the same site as the decision (one board walk).
+					if mode == database.AdmissionModeCooldown &&
+						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
+						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
+						continue
+					}
+					// SCHED-GAP-1656: the TASKS-mode half on this path — a
+					// tasks builder lane whose own board was read and holds
+					// no dispatchable row is deferred HERE, before its pin
+					// is consulted, instead of dispatching a whole session
+					// to discover the board is empty. Same board authority
+					// as the 1655 gate above (one parser, one log line); a
+					// namespace reporter_class="reporter" pin is honored
+					// through ns.ReporterClass, so a declaratively-exempt
+					// namespace keeps its timer cadence.
+					if mode == database.AdmissionModeTasks &&
+						tasksBuilderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeTasks, pu.Project.BoardOwnership, ns.ReporterClass) {
+						noteBuilderNoWorkDeferral(pu.Project.Name, pu.Project.Workdir)
+						continue
+					}
+					// SCHED-GAP-1678: board-stasis gate (namespace-mode
+					// mirror of packer.go's flat path) — a cooldown-mode
+					// BUILDER lane whose board file has not changed since
+					// its previous completed tick is excluded, before its
+					// pin is even consulted for the pack. Same conjunction
+					// as the 1655 gate above; one os.Stat, no git battery.
+					if blocked, _ := boardStasisBlocks(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
+						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
+						continue
+					}
+					// SCHED-GAP-1657: the stale-premise gate's cooldown-mode
+					// half (and tasks-mode-without-waiver, a no-op here — a
+					// board with no open rows has no stale pending rows either).
+					// After the no-work and board-stasis gates; strictly
+					// downstream of the pin. A board read, no git ops.
+					if blocked, _ := stalePremiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
+						continue
+					}
+					// SCHED-GAP-1666: the shared gate's wall-clock verdict
+					// (identical arithmetic to the historical comparison).
+					if gate.Defer {
 						continue
 					}
 				}
@@ -346,6 +475,23 @@ func (m *MultiPoolPacker) Pack(
 			// Per-namespace concurrency cap (Bane 2026-08-27): 0 = unlimited.
 			if nsCap > 0 && nsRunning+len(st.selected) >= nsCap {
 				break
+			}
+
+			// SCHED-GAP-1686: per-namespace cadence ceiling — an ADDITIONAL
+			// deferral reason placed AFTER the cooldown/board gates (so it only
+			// defers a lane that would otherwise pack) and BEFORE the budget/
+			// concurrency checks. It never consumes cooldown: a deferred lane
+			// is simply not packed this cycle. The check is a hard cap —
+			// tickCount (the trailing 24h) plus the lanes already selected this
+			// cycle must stay under the ceiling, so the namespace can never
+			// push its rolling-window consumption past it. The trigger clause
+			// exempts a lane that is its project's ONLY runnable lane:
+			// deferring it would starve the project entirely.
+			if ceilingArmed && enabledByRoot[rootOf[pu.Project.Name]] > 1 &&
+				cadenceCeilingDefers(tickCount, len(st.selected), ceiling) {
+				log.Printf("CEILING: ns=%s lane=%s deferred — cadence ceiling (ticks=%d + selected=%d >= %v), boost=%s",
+					ns.ID, pu.Project.Name, tickCount, len(st.selected), ceiling, pu.BoostCause)
+				continue
 			}
 
 			// Budget check.
@@ -366,6 +512,15 @@ func (m *MultiPoolPacker) Pack(
 				continue
 			}
 			if !puInList(pu, st.selected) && !puInList(pu, st.queued) {
+				// SCHED-GAP-1686: a lane deferred by the cadence ceiling at
+				// selection must not be re-admitted by BORROWED budget
+				// (mirror of the cooldown/board no-queue checks below). QUIET:
+				// the CEILING log is the selection site's job — a lane refused
+				// there reaches this mirror too and must not be counted twice.
+				if ceilingArmed && enabledByRoot[rootOf[pu.Project.Name]] > 1 &&
+					cadenceCeilingDefers(tickCount, len(st.selected), ceiling) {
+					continue // ceiling skip — not queued
+				}
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
 					cd := pu.Project.CooldownS
@@ -378,11 +533,64 @@ func (m *MultiPoolPacker) Pack(
 					// not be queued either. SCHED-GAP-1661: the pin rides
 					// in (pu.Project.CooldownPinS) so the queued check
 					// stays identical to the selection gate.
-					cooldownDur, skipMode := effectiveCooldown(cd, float64(pu.Project.Priority), pu.Project.ConsecutiveFailures, m.blackoutWindows, now, urgencyCalc, pu.Project.CooldownPinS)
-					if skipMode {
+					// SCHED-GAP-1666: taken through the ONE shared
+					// admission predicate; the packer claims no bypass.
+					gate := effectiveCooldownGate(CooldownGateRequest{
+						Project:             pu.Project.Name,
+						CooldownS:           cd,
+						CooldownPinS:        pu.Project.CooldownPinS,
+						Priority:            float64(pu.Project.Priority),
+						ConsecutiveFailures: pu.Project.ConsecutiveFailures,
+						LastTickStatus:      pu.Project.LastTickStatus,
+						LastCompleted:       &lt,
+						Workdir:             pu.Project.Workdir,
+						BoardOwnership:      pu.Project.BoardOwnership,
+						BlackoutWindows:     m.blackoutWindows,
+						Calculator:          urgencyCalc,
+					}, now)
+					if gate.SkipMode {
 						continue // skip mode — not queued
 					}
-					if now.Sub(lt) < cooldownDur {
+					// SCHED-GAP-1655: a cooldown-mode BUILDER lane the
+					// selection gate deferred on its empty board is not
+					// queued for borrowing either — borrowed budget must
+					// not re-admit a lane the board said has no work.
+					// Same conjunction as the selection gate: the tasks
+					// branch above never queues here untouched, and a
+					// reporter-class lane is exempt by the gate itself.
+					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeCooldown &&
+						builderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeCooldown, "") {
+						continue // no-work skip — not queued
+					}
+					// SCHED-GAP-1656: the tasks-mode mirror of the 1655
+					// queued check — a tasks builder lane the selection gate
+					// deferred on its drained board must not be re-admitted
+					// by BORROWED budget either. Same conjunction as the
+					// selection gate above.
+					if effectiveAdmissionModeFor(pu.Project, nsModes) == database.AdmissionModeTasks &&
+						tasksBuilderAdmissionBlocked(pu.Project.Name, pu.Project.Workdir, database.AdmissionModeTasks, pu.Project.BoardOwnership, st.ns.ReporterClass) {
+						continue // no-work skip — not queued
+					}
+					// SCHED-GAP-1678: the same board-stasis conjunction as
+					// the selection gate — a lane the gate excluded on a
+					// stale board must not be re-admitted by BORROWED
+					// budget (mirror of the 1655 no-work queued check).
+					// QUIET: the skip counter/log are the selection site's
+					// job — a lane refused at selection reaches this mirror
+					// too, and the noting wrapper would count it twice.
+					if blocked, _ := boardStasisBlockedQuiet(m.boardStasisGate, pu.Project.Name, pu.Project.Workdir,
+						database.AdmissionModeCooldown, pu.Project.LastTickStatus, ""); blocked {
+						continue // board-unchanged skip — not queued
+					}
+					// SCHED-GAP-1657: the stale-premise quiet mirror — a lane the
+					// selection gate deferred on its all-stale pending rows must
+					// not be re-admitted by BORROWED budget either.
+					if blocked, _ := stalePremiseBlockedQuiet(pu.Project.Name, pu.Project.Workdir,
+						effectiveAdmissionModeFor(pu.Project, nsModes), pu.Project.BoardOwnership, st.ns.ReporterClass); blocked {
+						continue // stale-premise skip — not queued
+					}
+					// SCHED-GAP-1666: the shared gate's wall-clock verdict.
+					if gate.Defer {
 						continue // cooldown-skip, not queued
 					}
 				}

@@ -117,9 +117,20 @@ func registryDeclares(id string, fixtureIDs map[string]bool) bool {
 //  3. NEVER-DONE id family (SCHED-GAP-106 fallback for boards that carry
 //     the fleet-standard fixture without declaring or flagging it)
 //
+// SCHED-GAP-1727: "deferred": true on the row also excludes it — a
+// deferred row is searchable/returnable board state (BT-076 boardctl
+// contract), not open actionable work. Exclusion is counting-only; the
+// row stays visible in result/report APIs.
+//
 // Used by both board-work consumers — countPendingBoard (board_awareness.go)
 // and boardOpenRows (adaptive_cooldown.go) — so all layers exclude in both.
 func boardRowIsFixture(obj map[string]json.RawMessage, fixtureIDs map[string]bool) bool {
+	if perpRaw, ok := obj["deferred"]; ok {
+		var def bool
+		if json.Unmarshal(perpRaw, &def) == nil && def {
+			return true
+		}
+	}
 	if perpRaw, ok := obj["perpetual"]; ok {
 		var perp bool
 		if json.Unmarshal(perpRaw, &perp) == nil && perp {
@@ -138,6 +149,20 @@ func boardRowIsFixture(obj map[string]json.RawMessage, fixtureIDs map[string]boo
 		}
 	}
 	return false
+}
+
+// boardRowIsDeferred reports whether a parsed JSONL board row carries
+// "deferred": true — the BT-076 boardctl contract. A deferred row stays
+// searchable/returnable in result/report APIs but is NOT open actionable
+// work (SCHED-GAP-1727): every admission/wake open-work counter excludes
+// it, exactly like a fixture.
+func boardRowIsDeferred(obj map[string]json.RawMessage) bool {
+	defRaw, ok := obj["deferred"]
+	if !ok {
+		return false
+	}
+	var def bool
+	return json.Unmarshal(defRaw, &def) == nil && def
 }
 
 // markdownTaskID extracts the task id (first token) from a markdown board

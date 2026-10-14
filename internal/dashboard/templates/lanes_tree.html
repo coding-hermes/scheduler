@@ -1,0 +1,44 @@
+{{define "lanes_tree"}}{{template "head" .}}
+{{template "sidebar" "lanes_tree"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Lane Tree</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.Total}} lanes</span></div>
+</div>
+<div class="meta">Generated {{.GeneratedAt}} — resolved from projects.parent (SCHED-GAP-1586) through database.BuildLaneTree, the ONE shared resolver. Depth is the node's position in the tree: roots at level 0, each child = parent + 1.</div>
+{{/* SCHED-GAP-1587: the tree page is where the fleet's STACKED nesting becomes
+     legible at a glance — the flat list views annotate satellites in place
+     (SCHED-GAP-1590), this page renders the hierarchy itself. Disabled lanes
+     keep their position; a DANGLING parent (the named lane does not resolve)
+     renders at root level with the broken name kept visible, never dropped. */}}
+<div class="cards">
+<div class="card"><div class="label">Lanes</div><div class="value">{{.Total}}</div></div>
+<div class="card"><div class="label">Primaries (roots)</div><div class="value">{{.RootCount}}</div></div>
+<div class="card"><div class="label">Max Depth</div><div class="value">{{.MaxDepth}}</div></div>
+</div>
+<div class="table-wrap">
+<table>
+<thead><tr>
+<th title="Nesting level in the resolved tree: 0 = primary/root, 1 = direct satellite, 2 = satellite of a satellite.">L</th>
+<th title="Lane name. The rail (└ marks) shows the branch position; every row links to its lane page.">Lane</th>
+<th title="The declared parent from projects.parent. Empty = primary. A name that does not resolve in the current fleet renders with a dangling marker — the reference is broken (purged or renamed primary), but the lane itself is still served.">Parent</th>
+<th title="Enabled lanes are schedulable; disabled lanes keep their position in the tree.">State</th>
+</tr></thead>
+<tbody>
+{{range .Rows}}
+<tr class="tree-row{{if .Dangling}} tree-dangling{{end}}{{if not .Enabled}} disabled{{end}}">
+<td class="num meta">L{{.Depth}}</td>
+<td>{{if .Indent}}<span class="lane-rail">{{.Indent}}</span> {{end}}{{if .Dangling}}<span title="parent does not resolve — dangling reference" class="tree-broken">⚠</span> {{end}}<a href="/projects/{{.Name}}">{{.Name}}</a></td>
+<td class="meta">{{if .Parent}}{{if .Dangling}}<span class="tree-broken">{{.Parent}} (dangling)</span>{{else}}<a href="/projects/{{.Parent}}">{{.Parent}}</a>{{end}}{{else}}—{{end}}</td>
+<td>{{if .Enabled}}<span class="pill ok">enabled</span>{{else}}<span class="pill">disabled</span>{{end}}</td>
+</tr>{{end}}
+{{if not .Rows}}
+<tr><td colspan="4" class="meta">No lanes configured — the tree is empty.</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+</div>
+{{template "ready_js"}}
+</body>
+</html>{{end}}

@@ -214,6 +214,9 @@ func loadTemplates(seam *clock.Seam) *template.Template {
 		// urgencyColor returns a literal hex color for the same sanitizer
 		// reason as utilColor (GAP-055). Values match the layout.html palette:
 		// --ok, --warn/--signal, --err.
+		// peerStatusClass (REMOTE-006): an event status → pill class for
+		// the Remote section's last-event cell.
+		"peerStatusClass": peerStatusClass,
 		"urgencyColor": func(u float64) string {
 			if u < 50 {
 				return "#37d399"

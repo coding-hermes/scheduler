@@ -20,6 +20,27 @@ def get_json(url):
         return json.load(resp)
 
 
+def fetch_all_projects(base):
+    """Fetch every project across the paginated /api/v1/projects endpoint.
+
+    The endpoint is paginated (default limit 200); fetching one page silently
+    truncates the fleet document (judge finding, README-17 tick 2026-10-14).
+    """
+    base = base.rstrip("/")
+    projects = []
+    offset = 0
+    limit = 500
+    while True:
+        page = get_json(f"{base}/api/v1/projects?limit={limit}&offset={offset}")
+        batch = page["projects"]
+        projects.extend(batch)
+        total = page.get("total")
+        offset += len(batch)
+        if not batch or (total is not None and offset >= total):
+            break
+    return projects
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--api", default="http://127.0.0.1:9090")
@@ -27,7 +48,7 @@ def main():
     args = ap.parse_args()
 
     status = get_json(args.api.rstrip("/") + "/api/v1/status")
-    projects = get_json(args.api.rstrip("/") + "/api/v1/projects")["projects"]
+    projects = fetch_all_projects(args.api)
 
     enabled = sorted(
         (p for p in projects if p["enabled"]),

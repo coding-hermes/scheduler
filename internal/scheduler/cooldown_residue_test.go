@@ -54,13 +54,13 @@ func TestDailyCooldownResidueCheck_CadenceAndEvent(t *testing.T) {
 	if severity != string(SeverityMedium) {
 		t.Errorf("event severity = %q, want %q", severity, SeverityMedium)
 	}
-	if !contains(message, "1 enabled lane") {
+	if !containsSub(message, "1 enabled lane") {
 		t.Errorf("event message %q does not state the residue count", message)
 	}
 	// The lane names ride the details JSON ("lanes": [...]) — the report
 	// must NAME the residue lanes, not just count them.
 	for _, want := range []string{"hot-lane", "live=900s", "pin=86400s"} {
-		if !contains(details, want) {
+		if !containsSub(details, want) {
 			t.Errorf("event details %q does not name %q", details, want)
 		}
 	}
@@ -116,7 +116,7 @@ func TestResidueReportOnce_CleanFleet(t *testing.T) {
 	}
 }
 
-func contains(haystack, needle string) bool {
+func containsSub(haystack, needle string) bool {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {
 			return true

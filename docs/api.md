@@ -98,6 +98,8 @@ groups/templates routes are listed in the OpenAPI spec at
 | GET | `/api/v1/status` | [§4](#4-health-status-config) |
 | GET | `/api/v1/config` | [§4](#4-health-status-config) |
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
+| GET | `/api/v1/lanes/tree` | [§5](#5-projects) |
+| GET | `/api/v1/lanes` (deprecated) | [§5](#5-projects) |
 | GET, PUT, DELETE | `/api/v1/projects/{name}` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/resume` | [§5](#5-projects) |
@@ -117,6 +119,8 @@ groups/templates routes are listed in the OpenAPI spec at
 | POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/pause` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
+| GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
+| POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
 
 ## 2. Wire format
 
@@ -159,7 +163,7 @@ canonical "is the scheduler alive" probe.
 **Response 200:**
 
 ```json
-{"active_ticks":1,"db":"connected","evaluation_age_seconds":185.1,
+{"active_ticks":1,"clock":{"mode":"real","scale":1},"db":"connected","evaluation_age_seconds":185.1,
  "last_evaluation":"2026-08-18T06:52:15Z","spawns_exec":0,"spawns_http":3,
  "status":"ok","uptime":"18m35.148135137s"}
 ```
@@ -167,6 +171,7 @@ canonical "is the scheduler alive" probe.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `status` | string | `"ok"` when the daemon is up |
+| `clock` | object | The daemon's clock (SCHED-GAP-1632): `mode` is `"real"` (wall clock) or `"sim"` (virtual simulator, `--simulate`), `scale` the sim speed multiplier (1 on the real clock). Same `clock.Describe()` source the boot line prints (`TIME: clock sim (scale=…)`), so the API can never disagree with the boot log |
 | `uptime` | string | Go duration since daemon start (`"18m35s"`) |
 | `db` | string | `"connected"`, or `"error: <detail>"` when the SQLite ping fails |
 | `active_ticks` | int | Ticks currently in `running` status |
@@ -216,9 +221,8 @@ curl -s http://127.0.0.1:9090/api/v1/live
 ### GET /api/v1/status
 
 **Purpose:** Fleet overview — budget, active projects/ticks, recent outcome
-counts, and a per-project failure-rate breakdown (SCHED-GAP-018) with
-auto-disable arming (GAP-047). Also carries the gateway-health admission gate's
-armed state (`gateway_health_gate`, SCHED-GAP-170).
+counts, per-project failure rates, usage-pool active/limit/available counters,
+and gateway-health admission state.
 
 **Query params:** none. **Request body:** none.
 
@@ -235,6 +239,7 @@ armed state (`gateway_health_gate`, SCHED-GAP-170).
  "gateway_health_gate":{"armed":true,"deferrals_total":0,"healthy":true,
    "last_error":"","probed_at":"2026-09-19T07:58:12Z","ttl_s":30},
  "last_evaluation":"2026-08-18T06:52:15Z",
+ "usage_pools":[{"pool_id":"host:build-01","pool_kind":"host","active":3,"limit":8,"available":5,"deferred":1}],
  "projects_failure_rates":{"9router":{"failed":1,"total":100,
    "failure_rate":0.01,"auto_disable_armed":false}, ...},
  "recent_outcomes":{"completed":401,"failed":6,"timeout":1},
@@ -252,9 +257,10 @@ armed state (`gateway_health_gate`, SCHED-GAP-170).
 | `last_evaluation` | string | RFC3339 of last evaluation |
 | `auto_disable` | object | `{enabled, threshold, window, min_ticks}` — the auto-disable policy snapshot; `enabled` is false when `--auto-disable-failure-rate` is 0 |
 | `zero_select_consecutive` / `zero_select_eligible` / `zero_select_last_at` | int / int / string | Zero-select diagnostics (present when the loop is attached): consecutive evals that selected nothing despite eligible projects, eligible count at the last one, and its timestamp |
-| `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown) |
+| `gateway_health_gate` | object | Gateway-health admission gate (SCHED-GAP-170), always present (package state, not loop state): `{armed, healthy, probed_at, last_error, ttl_s, deferrals_total}`. `armed` is true exactly when a gateway client is INSTALLED on the gate; **armed=false means the gate fails open** — no probe, no deferrals, every spawn goes straight to the gateway. `healthy` is the raw cached verdict of the DAEMON's own endpoint: false when the last probe failed (`last_error` names it, `probed_at` is when) and also when there is no verdict yet (`probed_at` `""` on a cold cache or an unarmed gate) — read `armed`/`probed_at` with it, never `healthy` alone. `ttl_s` is the verdict cache window (30). `deferrals_total` counts deferral decisions since daemon start across EVERY endpoint (monotonic; a deferred project creates no tick row, takes no slot, and charges no cooldown). t_cadba34c: admission judges the endpoint each lane RESOLVES to (lane > namespace > global), so a foreign endpoint keeps its OWN cached verdict + outage episodes and never overwrites this global answer — those are observable as `gateway_health_defer`/`gateway_health_recovered` events carrying an `endpoint` field, and every deferral (`gateway_defer`, component `loop`) carries the resolved `gateway_url`/`gateway_source`/`gateway_key_source` + `gateway_health_endpoint` |
 | `duckbrain` | object | DuckBrain sync health `{base_url, consecutive_failures, interval, last_error, last_ok_at, reachable, spooled_pending}` (present when sync health reporting is configured) |
 | `lane_output_families` | object | SCHED-GAP-177 per-family rollup for the four non-code lane families — `{qa, pm, sync, dogfood}`, each `{lanes, output_ticks, max_zero_output_streak, lanes_at_alert_threshold}`. `lanes` counts ENABLED lanes only; `output_ticks` sums the family's lifetime output ticks (code OR board commits); `max_zero_output_streak` is the worst streak currently on any lane; `lanes_at_alert_threshold` counts lanes at/past the HIGH-event threshold (8). The `duckbrain-sync` namespace resolves as `sync` |
+| `usage_pools` | array | SCHED-GAP-1726 enabled pools, each `{pool_id, pool_kind, active, limit, available, deferred}`; `deferred` counts queued ticks denied by the pool; empty when none are configured |
 
 **Errors:** 405 on non-GET. **504** when a DB step exceeds the request deadline
 (SCHED-GAP-1575-B): the handler runs its ~12 sequential calls on ONE serialized
@@ -290,7 +296,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 {"db_path":"/home/kara/.hermes/coding-hermes/scheduler.db","listen":"127.0.0.1:9090",
  "min_interval":"30s","max_interval":"24h0m0s","num_levels":10,
  "weight_budget":100,"max_concurrent":4,"tick_timeout":"2h0m0s",
- "api_read_timeout":"5s","gateway_response_timeout":"30m0s",
+ "api_read_timeout":"5s","gateway_response_timeout":"30m0s","gateway_transient_retries":3,
  "namespace_mode":true,"auto_disable_failure_rate":0.9,
  "auto_disable_window":100,"auto_disable_min_ticks":50,"failure_window":100,
  "gateway":{"url":"http://127.0.0.1:8642","key":"WZJh****",
@@ -302,6 +308,7 @@ curl -s http://127.0.0.1:9090/api/v1/status | jq '.active_projects, .projects_fa
 |-------|------|---------|
 | `db_path`, `listen`, `min_interval`, `max_interval`, `tick_timeout` | string | Paths/address/durations (`min_interval` "30s", `tick_timeout` "2h0m0s") |
 | `api_read_timeout` | string | The ARMED per-request deadline for the heavy read surfaces (default "5s"; `--api-read-timeout` / `SCHEDULER_API_READ_TIMEOUT` / `[api] read_timeout`) — the same duration the handlers enforce (SCHED-GAP-1575-B) |
+| `gateway_transient_retries` | int | The ARMED bounded transient-gateway retry count (default 3; `--gateway-transient-retries` / `SCHEDULER_GATEWAY_TRANSIENT_RETRIES` / `[scheduler] gateway_transient_retries`) — 0 = single attempt (SCHED-GAP-1681) |
 | `num_levels`, `weight_budget`, `max_concurrent` | int | Priority levels, budget, max parallel foremen |
 | `namespace_mode` | bool | Multi-namespace weight allocation enabled |
 | `auto_disable_failure_rate` | float | Auto-disable threshold (0 = feature off) |
@@ -332,6 +339,7 @@ Full Project model (response shape, snake_case):
 | `model`, `provider` | string | LLM model/provider passed to the spawned agent |
 | `worker_model`, `worker_provider` | string | Optional suggested worker model/provider |
 | `gateway_key` | string | Per-foreman Hermes gateway key; empty = daemon's shared key |
+| `gateway_url` | string | SCHED-GAP-1712: per-LANE gateway endpoint; empty = inherit the namespace's `gateway_url`, then `[gateway].url`. The resolved endpoint is stamped per tick as `gateway_url`/`gateway_source` |
 | `command` | string | Optional custom spawn command |
 | `namespace_id` | string \| null | FK → namespaces.id; null = unscheduled in namespace mode |
 | `deliver` | string | Delivery target `platform:chat_id:thread_id` |
@@ -392,8 +400,14 @@ break.
 
 ### POST /api/v1/projects
 
-**Purpose:** Create a project. **New projects are created DISABLED** —
-resume them explicitly before expecting ticks.
+**Purpose:** Create a project. **New projects are created DISABLED —
+resume them explicitly before expecting ticks.** An explicit `enabled: true`
+in the body is stored as `false`: the row is provisioned exactly as the body
+configured it (pacing, namespace, admission mode all ride along) but born
+parked, so the create -> configure -> enable order can never leave an armed,
+empty-prompt row one evaluation away from admission (SCHED-GAP-1729). The
+enable step is the later `PUT {"enabled": true}`, where the satellite
+auto-arm (SCHED-GAP-138) and the admission law (SCHED-GAP-1696) both run.
 
 **Request body** (canonical snake_case; PascalCase legacy accepted):
 
@@ -410,7 +424,7 @@ resume them explicitly before expecting ticks.
 | `cooldown_s` | no | 900 |
 | `decay_rate` | no | 1.0 |
 | `enabled` | no | **false** (creating never auto-enables) |
-| `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `command`, `namespace_id`, `deliver` | no | zero value / null |
+| `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command`, `namespace_id`, `deliver` | no | zero value / null |
 
 **Response 201:** the created project object (flat, with `created_at`/`updated_at`
 stamped).
@@ -451,6 +465,80 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
 #      "decay_rate":1,"enabled":false,"created_at":"2026-08-18T...Z", ...} on success
 ```
 
+### GET /api/v1/lanes/tree
+
+**Purpose:** The fleet's lane hierarchy (SCHED-GAP-1587) — the projects table
+is a LANES list, and a PROJECT is one primary foreman lane plus its satellites
+(the standing vocabulary ruling). This endpoint answers "what is nested under
+what" directly: every lane resolved through the shared `BuildLaneTree`
+resolver (SCHED-GAP-1586's `projects.parent` column is authoritative), roots
+at depth 0, each child at parent + 1. The dashboard's `/lanes/tree` page
+renders the same structure.
+
+**Query params:** none.
+
+**Request body:** none.
+
+**Response 200:**
+
+```json
+{
+  "roots": [
+    {"name": "h3", "parent": "", "depth": 0, "is_root": true, "enabled": true,
+     "children": [
+       {"name": "h3-qa", "parent": "h3", "depth": 1, "is_root": false, "enabled": true,
+        "children": [
+          {"name": "h3-qa-sync", "parent": "h3-qa", "depth": 2, "is_root": false, "enabled": false, "children": []}
+        ]}
+     ]}
+  ],
+  "total": 3
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `roots` | array | Every lane with no parent, name-ASC — plus any orphan whose parent does not resolve in this snapshot (dangling references surface AT ROOT level, parent name kept visible, never dropped) |
+| `roots[].children` | array | Nested satellites, name-ASC, arbitrary depth (a satellite may itself have satellites) |
+| `depth` | int | Position in the resolved tree: 0 = primary/root, each child = parent + 1 |
+| `is_root` | bool | True for roots only (roots AND children carry `depth`) |
+| `enabled` | bool | Disabled lanes KEEP their position in the tree |
+| `parent` | string | The declared parent name; `""` = primary. A dangling name stays on the node so a broken reference is legible |
+| `total` | int | Count of ALL lanes (enabled AND disabled) — every lane appears exactly once in the tree |
+
+**Errors:** 405 on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/lanes/tree | jq '.roots[] | {name, kids: [.children[].name]}'
+```
+
+### GET /api/v1/lanes
+
+**Purpose:** List lanes, flat — **DEPRECATED (SCHED-GAP-1587)** in favour of
+[`/api/v1/lanes/tree`](#get-apiv1lane-tree). Kept for backward compatibility:
+consumers that walk parents client-side (or read the full project row shape)
+keep working unchanged, but new consumers should use the tree, which resolves
+the hierarchy server-side.
+
+**Request body:** none.
+
+**Response 200:**
+
+```json
+{"lanes": [<Project>, ...], "total": 489}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `lanes` | array | Full project rows (the SCHED-GAP-1586 `parent` column included), enabled AND disabled, name-ASC, unpaginated |
+| `total` | int | Count of ALL lanes |
+
+**Errors:** 405 on non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/lanes | jq '.lanes[] | select(.parent != "") | {name, parent}'
+```
+
 ### GET /api/v1/projects/{name}
 
 **Purpose:** Single project detail wrapped under a `project` key alongside its
@@ -461,7 +549,7 @@ latest tick and the lane's dispatch-accountability split.
 **Response 200:**
 
 ```json
-{"project": {<Project>}, "latest_tick": {<Tick>}, "dispatch_split": {<DispatchCount>}}
+{"project": {<Project>}, "latest_tick": {<Tick>}, "dispatch_split": {<DispatchCount>}, "outcome_split": {<OutcomeSplit>}}
 ```
 
 `latest_tick` is `null` when the project has never been ticked. Note: the
@@ -478,6 +566,16 @@ dispatch reason so the operator reads declined-vs-absent per lane:
 | `no_dispatch` | int | No dispatch (sum of the five no-reasons below) |
 | `reasons` | object | Every vocabulary bucket, zero-filled: `dispatched`, `no_work`, `blocked`, `verification_only`, `chose_not_to`, `unavailable` |
 | `coverage` | int | Terminal ticks still carrying `""` — legacy rows, i.e. absence of MEASUREMENT, never absence of work |
+
+`outcome_split` (SCHED-GAP-1655) aggregates the lane's TERMINAL ticks by
+outcome so the zero-tool-call waste is measurable per lane:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `total` | int | Terminal ticks with an outcome recorded |
+| `no_work` | int | Ticks whose session ran ZERO tool calls (`outcome='no_work'`) — the waste count |
+| `unset` | int | Terminal ticks with a NULL outcome — unmeasured rows, never a zero |
+| `buckets` | object | Every outcome vocabulary value, zero-filled: `committed`, `dry_run`, `failed`, `timeout`, `deferred`, `aborted:no_artifact`, `no_work` |
 
 **Errors:** 404 `{"error":"project not found"}`; 405 on non-GET.
 
@@ -500,7 +598,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 
 | Field | Notes |
 |-------|-------|
-| `repo_url`, `workdir`, `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `command` | String fields; `gateway_key` `""` clears back to the shared key |
+| `repo_url`, `workdir`, `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command` | String fields; `gateway_key` `""` clears back to the shared key, `gateway_url` `""` clears back to the namespace endpoint, then the global gateway (SCHED-GAP-1712) |
 | `weight` | 1..100 |
 | `priority` | 1..10 |
 | `cooldown_s` | Seconds |
@@ -520,6 +618,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 | `workdir` off the lane convention for a satellite lane | 400 | `{"error":"lane \"x-sync\" workdir \"/tmp/x-sync\" is off-convention: -sync lanes live in \"/home/<user>/.hermes/sync-workdirs/x-sync\""}` |
 | A write that would leave an ENABLED satellite lane with no pacing policy (clearing the last `cooldown_floor_s`/`cooldown_ceiling_s`, or switching `adaptive_cooldown` off with no bound set) | 400 | `{"error":"enabled satellite lane \"x-sync\" is unarmed: set cooldown_floor_s=21600 (the -sync family pin) so the lane is paced instead of drifting"}` |
 | CHECK violation (weight/priority ranges) | 400 | `{"error":"invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"}` |
+| `admission_mode` contradicting the lane's class (satellite+`tasks`, or foreman+`cooldown` once a namespace is set — SCHED-GAP-1696; a foreman's `cooldown` before any `namespace_id` is accepted, SCHED-GAP-1729) | 400 | `{"error":"admission law (SCHED-GAP-1696): a foreman lane must carry admission_mode=\"tasks\" (every foreman is tasks, every other lane is cooldown); \"cooldown\" is refused"}` |
 | Unknown project | 404 | `{"error":"project not found"}` |
 | Wrong method | 405 | `{"error":"GET, PUT, POST, or DELETE only"}` |
 
@@ -686,6 +785,8 @@ hard cap (S07). Namespace model:
 | `load_gate` | string | `off` opts the namespace out of the daemon-wide load gate (SCHED-GAP-125) |
 | `default_prompt` | string | Base prompt every project in the namespace inherits (project `prompt` appends to it, or replaces it per `prompt_mode`) |
 | `model_chain` | string | Optional per-namespace chain override (JSON) |
+| `gateway_url` | string | SCHED-GAP-1712: namespace gateway endpoint, inherited by member lanes with no `gateway_url` of their own, over `[gateway].url`; `""` = inherit |
+| `gateway_key` | string | SCHED-GAP-1712: namespace gateway key, inherited by member lanes with no `gateway_key` of their own, over the shared `--gateway-key`; `""` = inherit |
 | `enabled` | bool | Disabled namespaces get zero allocation |
 | `description` | string | Human-readable label |
 | `created_at`, `updated_at` | string | RFC3339 |
@@ -712,7 +813,13 @@ by namespace weight and the pool's `--max-concurrent` is the hard ceiling.)
   for satellite lanes (their work is cadence-driven).
 - `tasks` — admit immediately while the project's **own** board still has real
   (non-perpetual) rows to work, then fall back to the cooldown timer when the
-  board is drained or holds only perpetual rows. A lane only qualifies when it
+  board is drained or holds only perpetual rows. SCHED-GAP-1656 narrows the
+  fallback for one class: a **builder** lane whose board is read and drained is
+  DEFERRED (reason `tasks_no_work`) instead of being dispatched on that pin —
+  the drained board is the answer, and the row that lands later re-admits the
+  lane immediately through the tasks waiver. Reporter lanes (`-sync`/`-pm`/…
+  suffixes, or a namespace `reporter_class="reporter"` pin) are exempt and keep
+  the documented timer. A lane only qualifies when it
   OWNS the board it reads (SCHED-GAP-141, migration v32 `projects.board_ownership`:
   `''` = derived by full symlink resolution, `owner`, `shared`) — a satellite
   reading its primary's board through a symlinked `board/` directory does not.
@@ -721,6 +828,13 @@ An API `PUT` is live immediately and the `fleet.toml` regen mirrors it, so a
 restart re-pins the operator's choice. Change a namespace cap with
 `PUT /api/v1/namespaces/{id}` `{"max_concurrent": N}`; change one lane's
 admission with `PUT /api/v1/projects/{name}` `{"admission_mode": "cooldown"}`.
+
+Provision a new lane in the documented order — create (born disabled,
+SCHED-GAP-1729), configure (`namespace_id`, then `admission_mode`), enable —
+and the admission law never refuses the admission PUT: the lane's class is
+derived from its name/parent/satellites, not from the namespace, and a
+foreman-classed lane that does not carry a namespace yet is deferred until it
+does, because only then is there a tasks-mode namespace to match or violate.
 
 For the full conceptual model behind these two dials — where each knob physically
 lives, which store wins on restart, the board-ownership precondition on `tasks`,
@@ -861,6 +975,9 @@ A tick is one spawned agent invocation against one project. Tick model:
 | `error` | string | Error text on failure |
 | `dispatch_outcome` | string | `yes` \| `no` \| `""` — did this tick dispatch a foreman worker? `""` = legacy row (pre-migration-v48) or the tick is not yet terminal (SCHED-GAP-1653) |
 | `dispatch_reason` | string | `dispatched` (pairs with `yes`) \| `no_work` \| `blocked` \| `verification_only` \| `chose_not_to` \| `unavailable` (pair with `no`) \| `""` legacy — the closed-vocabulary why (SCHED-GAP-1653) |
+| `gateway_url` | string | SCHED-GAP-1712: the RESOLVED gateway endpoint this tick's dispatch was addressed to; `""` = no HTTP dispatch (exec spawn, or a row written before migration v61) |
+| `gateway_source` | string | `lane` \| `namespace` \| `global` \| `""` — which tier supplied `gateway_url` (`""` pairs with an empty URL) |
+| `gateway_key_source` | string | `lane` \| `namespace` \| `global` \| `""` — which tier supplied the credential. The key ITSELF is never stored |
 | `created_at` | string | RFC3339 |
 
 ### GET /api/v1/ticks
@@ -941,6 +1058,26 @@ stream after a successful INSERT, so an event written by any component (the
 scheduler loop, the API, the MCP server, the DuckBrain sync) appears on the
 stream as it lands.
 
+**Query params:** the stream accepts the same `severity` and `component`
+filters as `GET /api/v1/events` (SCHED-GAP-1737).
+
+| Param | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `severity` | string | — | Only events with this exact severity (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) |
+| `component` | string | — | Only events with this exact component name |
+
+Both are optional, and omitting them streams every event — the behaviour
+before the filters existed. The comparison is exact and case-sensitive, the
+same one `GET /api/v1/events` uses, so a value that matches nothing (a
+misspelling, or the wrong case) yields a stream with no data frames rather
+than an error. Every other query param is ignored on this endpoint: in
+particular `limit` belongs to the poll endpoint and has no meaning on a push
+stream. The filter covers the catch-up window as well as live delivery: a
+client with no `Last-Event-ID` is seeded with the newest 100 events MATCHING
+the filter (the stream's parallel to
+`GET /api/v1/events?severity=…&limit=100`), and the replay after a
+`Last-Event-ID` sends every matching event with a greater id.
+
 **Response 200:** `Content-Type: text/event-stream`, `Cache-Control: no-cache`.
 One frame per event:
 
@@ -957,9 +1094,12 @@ While the log is quiet a comment heartbeat (`: heartbeat`) is written every
 request header. Every persisted event with a greater id is replayed before live
 events resume. A missing, empty or malformed `Last-Event-ID` (anything that is
 not a plain decimal integer) is treated as "no cursor" and replays the newest
-100 events — never an error, never an unbounded read. Each replay query is
-capped at 500 rows and a whole replay at 100 pages; if that bound is reached
-the stream emits a `: replay truncated` comment.
+100 events matching the filter — never an error, never an unbounded read. The
+resume cursor is id-based: an event the filter excludes still advances it, so a
+filtered reconnect neither re-delivers an event the client already saw nor
+skips a matching one. Each replay query is capped at 500 rows and a whole
+replay at 100 pages; if that bound is reached the stream emits a
+`: replay truncated` comment.
 
 **Slow clients:** each subscriber has a bounded (64-event) buffer. A client that
 falls that far behind drops its overflow rather than blocking event writers; the
@@ -975,6 +1115,9 @@ context is canceled.
 curl -N http://127.0.0.1:9090/api/v1/events/stream
 # Resume after event 12345.
 curl -N -H 'Last-Event-ID: 12345' http://127.0.0.1:9090/api/v1/events/stream
+# Only CRITICAL events from the spawner, resuming after event 12345.
+curl -N -H 'Last-Event-ID: 12345' \
+  'http://127.0.0.1:9090/api/v1/events/stream?severity=CRITICAL&component=spawner'
 ```
 
 ## 9. Queue
@@ -1288,3 +1431,270 @@ Verify the loop is back after resume: `curl -s http://127.0.0.1:9090/api/v1/heal
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/openapi.json | jq '.info, (.paths | keys)'
 ```
+
+## 14. Federation peer registry (REMOTE-003)
+
+The per-scheduler LOCAL registry of federation peers (docs/remote-spec.md §2):
+one row per peer in this scheduler's own database — no shared store, no
+broker. **Every route in this section is operator-token gated** (the same
+SCHED-GAP-1602 gate as every mutating route; the GET is gated too — the peer
+list is fleet topology, not public read material). With no credential
+configured the surface fails CLOSED: 503.
+
+**Rendering law:** a peer with no heartbeat within the freshness window
+(`--peer-freshness-window`, default 180s; env
+`SCHEDULER_PEER_FRESHNESS_WINDOW`) is **STALE with its `last_contact`
+timestamp — never "down"**. `stale` is a boolean; `last_contact` is always
+present (`""` = never heartbeated). There is no "down" state anywhere in this
+surface.
+
+### POST /api/v1/peers
+
+**Purpose:** register or refresh a peer (upsert keyed by `id`). A
+re-registration refreshes identity only — it never fabricates liveness;
+only a heartbeat stamps `last_contact`.
+
+**Request body:** `{"id": "...", "url": "...", "version": "...", "capabilities": "..."}`
+(`id` required; the rest may be empty).
+
+**Response 200:** `{"status": "registered", "id": ..., "url": ..., "version": ...}`.
+**Errors:** 400 invalid body / missing id · 401 bad credential · 503 no credential.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/peers \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"kara","url":"http://kara:9090","version":"v1.3.0","capabilities":"control,query"}'
+```
+
+### GET /api/v1/peers
+
+**Purpose:** list every registered peer with freshness computed at read time.
+
+**Response 200:** `{"peers": [{"id","url","last_contact","stale","version"}, ...], "count": N}`.
+**Errors:** 401 bad credential · 503 no credential.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/peers -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```
+
+### POST /api/v1/peers/{id}/heartbeat
+
+**Purpose:** liveness ping — stamps the peer's `last_contact` to now.
+
+**Response 200:** `{"status": "heartbeat", "id": ...}`.
+**Errors:** 404 unknown peer (heartbeat does NOT auto-register) · 401 bad
+credential · 503 no credential.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/peers/kara/heartbeat \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+```
+
+## 15. Federation query (REMOTE-008)
+
+The READ half of federation (docs/federation-query-spec.md §2 + §3 HTTP row):
+another scheduler asks this one a question and gets an answer identical in
+shape no matter how the question travelled. **Every route in this section is
+operator-token gated** (the same SCHED-GAP-1602 gate as the peers registry;
+spec §4 auth posture). With no credential configured the surface fails
+CLOSED: 503. Every answered query — allowed AND refused — writes one local
+audit row (`component=api.federation`): reads are observable, not silently
+free.
+
+The six ops (§2.3) reuse the daemon's OWN read paths — a federation query
+never invents an aggregation the peer could not answer about itself:
+
+| op | args | reuses |
+|---|---|---|
+| `peer.status` | — | `/api/v1/health` payload fields |
+| `fleet.status` | — | `/api/v1/status` summary + peer registry count |
+| `projects.list` | `filter` | `GET /api/v1/projects` (database.ListProjects) |
+| `queue.get` | — | `GET /api/v1/queue` (GAP-054 urgency ordering) |
+| `ticks.list` | `since`, `limit` | `GET /api/v1/ticks` (listTicks) |
+| `events.list` | `since`, `limit`, `severity` | `GET /api/v1/events` (listEvents) |
+
+### POST /api/v1/federation/query
+
+**Request body (§2.1):** `{"op": "...", "args": {...}, "corr_id": "...",
+"budget_ms": 10000, "want": "answer"}` — `op` and `corr_id` REQUIRED
+(named refusals `missing_op`/`missing_corr_id` otherwise); `budget_ms`
+absent = peer default (clamped to a 30s cap); `want` absent = `"answer"`.
+
+**Response 200 (§2.2):** `{"corr_id": echoed, "op": echoed, "peer": "<this
+scheduler_id>", "status": "ok|partial|stale", "as_of": "<RFC3339 UTC>",
+"age_ms": 0, "data": {...}, "gaps": [], "error": null, "contract":
+"1.0.0"}`. Invariants: `peer` always names THIS scheduler; empty `data` is
+`[]`/`{}` — never null; `status="stale"` is a first-class answer (the
+peer's own last self-observation older than its freshness window), never
+conflated with `error`.
+
+**Idempotent replay (§2.5):** `(caller, corr_id, op)` → the reply for 5
+minutes — a retried query returns the IDENTICAL body (as_of included).
+**Errors (HTTP 400, envelope `status="error"`):** `unknown_op` (message
+names the supported ops) · `missing_op` · `missing_corr_id` ·
+`bad_request`. **504:** `deadline_exceeded` inside the same envelope when
+the read blows the caller-clamped budget. **403 (REMOTE-013 read policy,
+spec §4):** `op_not_allowed` inside the same envelope when the op is not
+published for the caller — reads are scoped, not open: the per-caller
+allow-list lives in the `[federation]` config layer
+(`[federation.allow."*"] ops = [...]`, plus one row per specific caller
+id; a caller's own row wins over `*`; empty/absent = deny-all, every read
+refused until the operator publishes ops), and the refusal — like every
+answered query — writes an `api.federation` audit row.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"op":"queue.get","corr_id":"q-42","want":"answer"}'
+```
+
+**The aggregate (`op: "fleet.aggregate"`, REMOTE-012, spec §5):** the
+primary's fan-out of the SAME envelope over every peer in the local
+registry, merged by the §5 rules — ok blocks merge per peer; any
+`partial`/`error`/timeout becomes a named gap and the aggregate's status
+drops to `partial`; every known peer appears as a row with its OWN status
+(a silent peer is `status:"error" code:"timeout"` with `stale` +
+`last_contact`, never an omitted row, never "down"; the primary's own
+answer is the `self:true` row). Address it through this same route with
+`args.op` naming the read op to fan out — the remaining `args` members
+pass through to every leg verbatim. Bounded fan-out (8 legs in flight,
+per-peer deadlines under `budget_ms`); one hanging peer can never hold the
+answer past its budget. An all-peers-silent fleet STILL answers (every row
+degraded, gaps named) — an empty aggregate is a bug. Replayed like any op
+(`(caller, corr_id, op)`); refusal arms (`bad_request` for a missing
+`args.op`, `unknown_op` for one outside the catalogue) map to the same
+HTTP ladder. The catalogue stays the six §2.3 ops: a PEER is never asked
+to aggregate (spec §7) — `scheduler-query --all` delegates here.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/federation/query \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"op":"fleet.aggregate","corr_id":"agg-7","args":{"op":"queue.get"}}'
+```
+
+### GET /api/v1/federation/catalogue
+
+**Response 200:** `{"peer": "<this scheduler_id>", "contract": "1.0.0",
+"ops": [{"op", "args", "description", "owner"}, ...], "count": 6}`.
+**Errors:** 401 bad credential · 503 no credential.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/federation/catalogue \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```
+
+## 16. Observatory (SCHED-GAP-1592)
+
+Live graphs over the tick history: tick rate, namespace allocation, failure
+heatmap. The dashboard page is `/observatory`; both API routes are read-only
+and serve the SAME snapshot the page renders.
+
+### GET /api/v1/observatory
+
+One Observatory snapshot as JSON. Query params:
+
+- `window` — seconds, or shorthand `1h` / `6h` (default) / `24h` / `7d`
+- `namespace` — namespace id filter; absent = all namespaces
+
+**Response 200:** one snapshot object:
+`{generated_at, window, window_label, namespace, window_start,
+rate:[{bucket_start, spawned, completed, failed, timeout}],
+allocation:[{namespace, label, weight, enabled, lanes, ticks, share_pct,
+cost_usd, avg_seconds}],
+heatmap:[{namespace, label, failed, timeout, completed, total, fail_pct}],
+totals:{spawned, completed, failed, timeout, running, failed_pct, cost_usd,
+tokens_in, tokens_out, ticks_per_hour}}`.
+
+Semantics: the failure rate counts `failed + timeout` over terminal ticks
+(completed + failed + timeout + deferred); a namespace with zero terminal
+ticks carries `total: 0` — the page renders "no data", never 0% healthy.
+Unassigned projects render under `namespace: "unassigned"`. Shares sum to
+100 over the rendered (filtered) pie.
+
+**Errors:** 405 non-GET · 500 collect failure (error body names the step) ·
+503 no collector configured (fail-closed).
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/observatory?window=24h" | jq
+```
+
+### GET /api/v1/observatory/stream
+
+SSE stream of snapshots recomputed every 10 seconds for the query's filter.
+Framing: `data: <snapshot JSON>` per frame; a `: heartbeat` comment while the
+connection is quiet; `: error collect: <reason>` comments when the collector
+fails — NEVER a fabricated snapshot in place of a failure. The first frame
+is emitted immediately on connect.
+
+```bash
+curl -sN "http://127.0.0.1:9090/api/v1/observatory/stream?window=1h"
+```
+
+## 17. Gateway availability losses (SCHED-GAP-1654)
+
+### GET /api/v1/gateway-errors
+
+Ticks that were **not run** because the gateway refused them, over a fixed
+24-hour window, split by error class and by lane. Built for the 2026-09-27
+03:00 incident (SCHED-GAP-1644), where the gateway logged nothing for two
+hours and the scheduler could not say how many ticks the gateway had cost.
+
+| Class | Meaning |
+|-------|---------|
+| `unavailable_503` | The endpoint answered HTTP 503 — on this fleet overwhelmingly the drain response ("Gateway is draining"), i.e. a gateway restart or a saturated handler |
+| `rate_limited_429` | The endpoint answered HTTP 429 — the request was refused for pacing and never reached a model |
+| `connection_refused` | No HTTP response at all: the dial was refused (dead listener / restarted box) |
+
+Classification is one function in the spawn path
+(`scheduler.ClassifyGatewayError`); a 401/403 stays the terminal auth
+rejection (GAP-035), and any other failure — 5xx that is not 503, a per-turn
+stall, our own tick deadline — keeps its own classification and is **never**
+counted here. One event per tick is written at the terminal spawn site
+(component `gateway_availability`, details carry `event_type:
+"gateway_error"`, `error_class`, `project`, `tick_id` and an RFC3339
+`timestamp`), including the refused-dial shape that lands as a SCHED-GAP-203
+deferral rather than a drop — so the surface counts lost *work*, not failed
+*requests*.
+
+**Response (200):**
+
+```json
+{
+  "generated_at": "2026-10-10T21:40:00Z",
+  "window_hours": 24,
+  "cutoff": "2026-10-09T21:40:00Z",
+  "total": 12,
+  "by_class": {"unavailable_503": 7, "rate_limited_429": 3, "connection_refused": 2},
+  "by_project": [
+    {"project": "lore-foreman", "total": 5, "by_class": {"unavailable_503": 5, "rate_limited_429": 0, "connection_refused": 0}}
+  ]
+}
+```
+
+Every class is present in `by_class` (and in each `by_project.by_class`)
+even at `0`, so a consumer never has to distinguish "no losses" from a
+missing field. `by_project` is ordered by `total` descending, then project
+name ascending. An empty window is an honest zero with `"by_project": []`,
+never `null`.
+
+**Errors:** 405 non-GET · 500 DB failure (the error text is returned; the
+surface never answers 200 with fabricated zeros).
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/gateway-errors" | jq '.by_class'
+```
+
+To see the underlying rows (the same rows `/api/v1/events/stream` pushes
+live):
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/events?component=gateway_availability&limit=50" | jq '.events[].details'
+```
+
+AI agents read the same report through the MCP tool `gateway_errors` (`POST
+/mcp`) — both surfaces are built by one aggregation
+(`scheduler.BuildGatewayErrorsReport`), so the REST wire and the tool output
+cannot disagree.

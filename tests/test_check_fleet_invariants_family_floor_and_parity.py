@@ -55,6 +55,9 @@ gate = _load_gate()
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
 FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood, releng, perf, review, readme, docs
 NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
+# SCHED-GAP-1604: releng/readme/docs/review/perf satellites live in the ROLE's
+# shared family namespace — mirror the gate's map so membership stays quiet.
+NS_FOR_SUFFIX.update(gate.SATELLITE_FAMILY_NAMESPACES)
 
 
 def _board_dir(root: Path, name: str) -> Path:
@@ -103,7 +106,7 @@ def _make_db(path: Path, projects: list[dict], *,
     con.execute(f"CREATE TABLE projects ({cols})")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
@@ -148,9 +151,10 @@ def _conforming_toml(toml_path: Path, projects: list[dict]) -> None:
         lines.append(f'id = "{ns}"')
         lines.append('admission_mode = "tasks"' if ns == "coding-hermes"
                      else 'admission_mode = "cooldown"')
-        # SCHED-GAP-215: the conforming TOML must carry the per-family policy
-        # cap or the store-parity check (7) would flag the fixture itself.
-        cap = 8 if ns == "coding-hermes" else gate.SATELLITE_CAP_POLICY.get(ns, 1)
+        # The conforming TOML must mirror the DB's caps or the store-parity
+        # check (7) would flag the fixture itself (R3.2: foremen 16; R3.3:
+        # every satellite 1).
+        cap = 16 if ns == "coding-hermes" else gate.SATELLITE_CAP_POLICY.get(ns, 1)
         lines.append(f"max_concurrent = {cap}")
         lines.append("")
     toml_path.write_text("\n".join(lines), encoding="utf-8")
@@ -329,7 +333,8 @@ max_concurrent = 9
     got = _violations(out, "parity")
     assert got == [
         "VIOLATION parity coding-hermes: admission_mode: db=tasks toml=cooldown",
-        "VIOLATION parity coding-hermes: max_concurrent: db=8 toml=4"], got
+        "VIOLATION parity coding-hermes: max_concurrent: db=16 toml=4",
+        "VIOLATION parity qa: max_concurrent: db=1 toml=9"], got
     assert _other_violations(out, "parity") == [], f"unexpected extra violations:\n{out}"
 
 
@@ -402,16 +407,16 @@ def test_passing_fleet_toml_drift_flips_it_red(tmp_path):
     stale toml pin must exit 1 — proving the green run above is the checker
     distinguishing, not the fixture being invisible to it."""
     projects = _passing_fleet()
-    # The db row carries the canonical -qa cadence (21600); the stale toml pin
-    # still says 43200 — the retired value the family table used to document.
+    # The db row carries the canonical -qa cadence (43200, 2026-10-02
+    # ruling); the stale toml pin still says 21600 — the retired value.
     toml = """
 [[projects]]
 id = "fixture-primary-qa"
-cooldown_s = 43200
-cooldown_floor_s = 21600
+cooldown_s = 21600
+cooldown_floor_s = 43200
 """
     rc, out = _run_gate(tmp_path, projects, toml_text=toml)
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert _violations(out, "parity") == [
-        "VIOLATION parity fixture-primary-qa: cooldown_s: db=21600 toml=43200 — a pin in one store is drift"], out
+        "VIOLATION parity fixture-primary-qa: cooldown_s: db=43200 toml=21600 — a pin in one store is drift"], out

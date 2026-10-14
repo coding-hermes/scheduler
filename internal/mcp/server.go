@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
@@ -28,6 +29,13 @@ type Server struct {
 	// via SetBlocksStore; when nil the blocks tools answer a clear
 	// configuration error instead of panicking.
 	blocksStore *blocks.Store
+	// observatoryCollector (SCHED-GAP-1592) is the dashboard-side snapshot
+	// collector behind the observatory_snapshot tool. An interface so the
+	// MCP package does not import the dashboard; nil = the tool answers an
+	// explicit configuration error (fail-closed, never fabricated data).
+	observatoryCollector interface {
+		CollectObservatory(window, namespace string) (json.RawMessage, error)
+	}
 	// started is when this server was built. It is the origin for the
 	// metrics_get uptime_s field (the daemon constructs the MCP server at
 	// boot, so this is daemon uptime). Seeded in NewServer from the same
@@ -38,6 +46,14 @@ type Server struct {
 	// SetOperatorAuth). Nil = authOff fail-closed: every mutating tools/call
 	// is refused, reads stay open.
 	auth OperatorAuth
+	// federationQuery is the REMOTE-010 shared query entry point —
+	// api.Server.FederationQueryHandler, installed by main.go via
+	// SetFederationQueryHandler so the fed_* tools compute their answers
+	// through the ONE internal query entry point the HTTP surface runs
+	// (spec §3: an adapter that computes an answer itself is a bug). Nil =
+	// not wired: the fed_* tools fail closed with a configuration error
+	// instead of answering anything themselves.
+	federationQuery federationQueryEntry
 }
 
 // NewServer creates an MCP server.
@@ -64,6 +80,28 @@ func (s *Server) clock() clock.Clock { return s.clk.Get() }
 // overrides) so MCP and the REST API read and write the SAME JSONL files.
 func (s *Server) SetBlocksStore(st *blocks.Store) {
 	s.blocksStore = st
+}
+
+// SetObservatoryCollector wires the dashboard-side snapshot collector behind
+// the observatory_snapshot tool (SCHED-GAP-1592). Nil (never wired) = the
+// tool answers an explicit configuration error — never fabricated data.
+func (s *Server) SetObservatoryCollector(c interface {
+	CollectObservatory(window, namespace string) (json.RawMessage, error)
+}) {
+	s.observatoryCollector = c
+}
+
+// SetFederationQueryHandler installs the REMOTE-010 shared query entry
+// point — the daemon's ONE api.Server's FederationQueryHandler — so the
+// fed_* tools answer through the SAME internal query entry point the HTTP
+// surface runs (spec §3: every adapter "calls the SAME internal query
+// entry point"). Wiring the live server means MCP shares the HTTP
+// surface's replay window (§2.5), freshness/stale clock (§2.2) and the §4
+// cross-box read audit row; a nil call (or no call) leaves the fail-closed
+// arm: the fed_* tools answer a configuration error, never a locally
+// computed answer.
+func (s *Server) SetFederationQueryHandler(fn func(q bus.QueryEnvelope, caller string) bus.ResponseEnvelope) {
+	s.federationQuery = fn
 }
 
 // Handler returns HTTP handler for MCP endpoints.
@@ -111,6 +149,11 @@ var tools = []ToolDefinition{
 	{
 		Name:        "fleet_projects",
 		Description: "List all managed projects with weight, priority, and last tick info",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "fleet_lane_tree",
+		Description: "Lane hierarchy (SCHED-GAP-1587): the fleet's parent→children tree — a project is one primary foreman lane plus its satellites. Roots carry is_root=true and depth 0; every child carries its parent name and depth = parent + 1. Disabled lanes keep their position; a dangling parent keeps its name visible and surfaces as a root. Mirrors GET /api/v1/lanes/tree.",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
 	{
@@ -443,6 +486,22 @@ var tools = []ToolDefinition{
 		},
 	},
 	{
+		Name:        "observatory_snapshot",
+		Description: "Compute one Observatory snapshot over the tick history: tick-rate buckets, per-namespace allocation (volume share vs configured weight) and failure heatmap (SCHED-GAP-1592). window: seconds or 1h/6h/24h/7d (default 6h); namespace: optional namespace id filter",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"window":    map[string]interface{}{"type": "string", "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+				"namespace": map[string]interface{}{"type": "string", "description": "Namespace id filter (absent = all namespaces)"},
+			},
+		},
+	},
+	{
+		Name:        "gateway_errors",
+		Description: "Count ticks NOT run because the gateway refused them, over the last 24h (SCHED-GAP-1654): total, by_class (unavailable_503 / rate_limited_429 / connection_refused, every class present even at 0) and by_project rows ordered by total descending. Counts gateway_availability events only — exec-fallback rescues, auth rejections and tick deadlines keep their own classification",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
 		Name:        "events_list",
 		Description: "Read the scheduler event log; since returns only events with id > since (incremental tail polling)",
 		InputSchema: map[string]interface{}{
@@ -453,6 +512,36 @@ var tools = []ToolDefinition{
 				"severity":  map[string]interface{}{"type": "string", "description": "Filter by severity (CRITICAL/HIGH/MEDIUM/LOW/INFO)"},
 				"component": map[string]interface{}{"type": "string", "description": "Filter by component"},
 			},
+		},
+	},
+	{
+		Name:        "peers_list",
+		Description: "List federation peers with freshness (stale flag computed against the peer freshness window)",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
+	{
+		Name:        "peers_register",
+		Description: "Register or refresh a federation peer (identity only — does not refresh liveness)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":           map[string]interface{}{"type": "string", "description": "Stable peer identity"},
+				"url":          map[string]interface{}{"type": "string", "description": "Peer base URL"},
+				"version":      map[string]interface{}{"type": "string", "description": "Peer version string"},
+				"capabilities": map[string]interface{}{"type": "string", "description": "Free-form capability string (e.g. control,query)"},
+			},
+			"required": []string{"id", "url"},
+		},
+	},
+	{
+		Name:        "peers_heartbeat",
+		Description: "Stamp a registered peer's last_contact to now (liveness; does NOT auto-register)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Registered peer id"},
+			},
+			"required": []string{"id"},
 		},
 	},
 	// ── CTL-003: parity with the remaining /api/v1 control + read routes ──
@@ -649,7 +738,18 @@ var tools = []ToolDefinition{
 		Description: "Cooldown-pin residue detector (mirror of GET /api/v1/cooldown/residue, SCHED-GAP-1670): ENABLED lanes whose live cooldown_s sits strictly BELOW their own stored operator pin — the 'wake residue, NOT intent' class. Read-only: never mutates; reconciliation happens on the pin write paths (fleet.toml import / API PUT cooldown_pin_s), not here.",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
+	// ── REMOTE-010: federation query tools (federation-query-spec §3, the
+	// "MCP" row) — `fed_query` (the generic escape hatch) + one tool per
+	// §2.3 read-catalogue op. Every fed_* tool routes to the SAME internal
+	// query entry point the HTTP surface runs (the ONE contract); the
+	// definitions live in federationTools()/federation_query.go so the
+	// catalogue stays one generated list. All reads.
 }
+
+// Register the REMOTE-010 federation tools additively — the registry stays
+// one list clients enumerate via tools/list (the README/endpoints parity
+// guards count it).
+var _ = func() struct{} { tools = append(tools, federationTools()...); return struct{}{} }()
 
 // handleMCP routes MCP protocol requests.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -736,6 +836,8 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFleetStatus(ctx)
 	case "fleet_projects":
 		return s.toolFleetProjects(ctx)
+	case "fleet_lane_tree":
+		return s.toolFleetLaneTree(ctx)
 	case "fleet_project_detail":
 		return s.toolFleetProjectDetail(ctx, args)
 	case "fleet_set_weight":
@@ -790,8 +892,18 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolTemplatesDelete(ctx, args)
 	case "groups_deploy":
 		return s.toolGroupsDeploy(ctx, args)
+	case "observatory_snapshot":
+		return s.toolObservatorySnapshot(args)
+	case "gateway_errors":
+		return s.toolGatewayErrors()
 	case "events_list":
 		return s.toolEventsList(ctx, args)
+	case "peers_list":
+		return s.toolPeersList(ctx)
+	case "peers_register":
+		return s.toolPeersRegister(ctx, args)
+	case "peers_heartbeat":
+		return s.toolPeersHeartbeat(ctx, args)
 	case "namespaces_list":
 		return s.toolNamespacesList(ctx)
 	case "namespaces_get":
@@ -828,6 +940,11 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolFeaturesPruneCandidates(ctx, args)
 	case "cooldown_residue":
 		return s.toolCooldownResidue(ctx)
+	case "fed_query":
+		return s.toolFedQuery(ctx, args)
+	case "fed_peer_status", "fed_fleet_status", "fed_projects_list",
+		"fed_queue_get", "fed_ticks_list", "fed_events_list":
+		return s.toolFedOpQuery(ctx, name, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

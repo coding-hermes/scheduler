@@ -179,6 +179,26 @@ func computeCostUSD(provider, model string, rr routerRate, tokensIn, tokensOut i
 	return stickerCostUSD(provider, model, tokensIn, tokensOut)
 }
 
+// computeCostUSDWithAsOf is the completion-path variant of computeCostUSD
+// (SCHED-GAP-1651-R3): it returns the cost figure together with the as-of
+// stamp of the price list that produced it, which the caller carries on
+// TickOutcome.PriceAsOf (rendered by the sync cost footer's "prices as of").
+//
+// The stamp travels in the return value on purpose. The first cut (fb350ca5)
+// parked it in a package-level global written inside computeCostUSD — under
+// SlotPool's concurrent completion goroutines that write raced every other
+// completion's read (CI race job, run 38080365263), and one goroutine's
+// stamp could land in another tick's outcome. Here both reads happen on the
+// calling goroutine, inside one call: no shared mutable state. The only
+// remaining window is a concurrent ApplyModelRatesFile between the two reads
+// (startup/test-only), pairing a fresh stamp with the prior vintage's
+// figure — an exposure every sticker refresh already had, and far tighter
+// than the cross-goroutine global it replaces.
+func computeCostUSDWithAsOf(provider, model string, rr routerRate, tokensIn, tokensOut int) (float64, string) {
+	asOf := PriceMapAsOf()
+	return computeCostUSD(provider, model, rr, tokensIn, tokensOut), asOf
+}
+
 // stickerCostUSD returns the public listed-price figure without applying lane
 // subscription policy. SCHED-GAP-127 deliberately keeps the sticker DERIVED
 // from persisted token totals plus the price map instead of adding another

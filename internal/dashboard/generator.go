@@ -26,7 +26,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
-//go:embed static/htmx.min.js
+//go:embed static/htmx.min.js static/js/events-toast.js
 var staticFS embed.FS
 
 //go:embed templates/*.html
@@ -35,6 +35,17 @@ var templatesFS embed.FS
 // htmxJS is the bundled htmx library, loaded via Go embed so the dashboard
 // works offline (no CDN dependency at runtime).
 var htmxJS = mustReadStatic("static/htmx.min.js")
+
+// EventsToastAssetPath is the URL path the live-event toast client is served
+// from (SCHED-GAP-1599). main.go mounts the route at this constant and
+// templates/layout.html references the same literal; dashboard_test pins the
+// two together, so the page can never point at a path nothing serves.
+const EventsToastAssetPath = "/static/js/events-toast.js"
+
+// eventsToastJS is the bundled toast client (SCHED-GAP-1599). It is a real
+// file rather than an inline <script> so the policy it implements (dedupe,
+// rate cap, notification opt-in) is reviewable and testable on its own.
+var eventsToastJS = mustReadStatic("static/js/events-toast.js")
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
@@ -58,10 +69,13 @@ type Generator struct {
 	queueTmpl         *template.Template // full page: /queue
 	tickHistoryTmpl   *template.Template // full page: /ticks
 	tickDetailTmpl    *template.Template // full page: /ticks/{id}
+	laneTreeTmpl      *template.Template // full page: /lanes/tree (SCHED-GAP-1587)
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
 	tapeTmpl          *template.Template // full page: /tape (+ its rows fragment)
 	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
+	remoteTmpl        *template.Template // full page: /remote (REMOTE-006)
+	observatoryTmpl   *template.Template // full page: /observatory (SCHED-GAP-1592)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -72,6 +86,10 @@ type Generator struct {
 	// of 100 — never a bare literal at the render site.
 	weightBudget int
 	spawnCounts  func() (httpCount, execCount int64) // optional; /health panel
+	// tickPushDisabled (SCHED-GAP-1594): the resolved --disable-tick-push
+	// value, set by main.go via SetTickPushDisabled. False (tests, unset)
+	// renders the "pushed" default — the per-tick git push at tick exit.
+	tickPushDisabled bool
 	// agentLog (SCHED-GAP-1593): read-only, lazily-opened reader on the
 	// agent's own state database; the tick drill-down resolves
 	// gateway_trace.session_id through it. Nil = the drill-down renders the
@@ -91,13 +109,25 @@ type Generator struct {
 	// ~30s. Conclusions are cached per workdir for ciTTL (300s default —
 	// DASH-PERF-003; never below 60s, which is shorter than a cold render)
 	// and the cold-cache warm pass is concurrency-bounded + timeout-capped.
-	ciMu     sync.Mutex
-	ciCache  map[string]ciCacheEntry
-	ciTTL    time.Duration               // zero → ciCacheDefaultTTL
+	ciMu    sync.Mutex
+	ciCache map[string]ciCacheEntry
+	ciTTL   time.Duration // zero → ciCacheDefaultTTL
+	// SCHED-GAP-1730: the overview snapshot cache. collect() costs 4.58s
+	// cold / 1.04s warm on a copy of the live DB and the 10s htmx
+	// autorefresh re-runs it every render, so GenerateParams and
+	// GenerateFleetTableParams serve a 60s-TTL deep-copied snapshot instead
+	// (mechanism + invalidation in overview_cache.go). snapTTL shrinks the
+	// window per generator (tests); zero reads the package default.
+	snap     ovSnapshot
+	snapTTL  time.Duration
 	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
 	// fleetPausedFn (SCHED-GAP-1601) reads the loop's authoritative paused
 	// flag for the console badge. Nil = unknown state, never fabricated.
 	fleetPausedFn func() bool
+	// peerFreshnessWindow (REMOTE-006) is the staleness window the Remote
+	// section applies at read time; zero reads as RemoteFreshnessWindowDefault
+	// (the registry's own default), so the two surfaces share one semantics.
+	peerFreshnessWindow int
 }
 
 // SetAgentStateDB wires the reader the tick drill-down uses to resolve
@@ -146,20 +176,29 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.queueTmpl = g.tmpl.Lookup("queue")
 	g.tickHistoryTmpl = g.tmpl.Lookup("tick_history")
 	g.tickDetailTmpl = g.tmpl.Lookup("tick_detail")
+	// SCHED-GAP-1587: the nested lane-tree page.
+	g.laneTreeTmpl = g.tmpl.Lookup("lanes_tree")
 	g.namespaceViewTmpl = g.tmpl.Lookup("namespace_view")
 	g.healthTmpl = g.tmpl.Lookup("health")
 	g.tapeTmpl = g.tmpl.Lookup("tape")
 	// SCHED-GAP-1601: the operator console pages.
 	g.blocksTmpl = g.tmpl.Lookup("blocks_console")
+	// REMOTE-006: the Remote section — peers + last-seen events + freshness.
+	g.remoteTmpl = g.tmpl.Lookup("remote")
+	// SCHED-GAP-1592: the Observatory — live graphs over the tick history.
+	g.observatoryTmpl = g.tmpl.Lookup("observatory")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
 		"queue":          g.queueTmpl,
 		"tick_history":   g.tickHistoryTmpl,
 		"namespace_view": g.namespaceViewTmpl,
+		"lanes_tree":     g.laneTreeTmpl,
 		"health":         g.healthTmpl,
 		"tape":           g.tapeTmpl,
 		"blocks_console": g.blocksTmpl,
+		"remote":         g.remoteTmpl,
+		"observatory":    g.observatoryTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")
@@ -181,7 +220,26 @@ func (g *Generator) SetDuckBrainURL(u string) {
 func (g *Generator) SetWeightBudget(n int) {
 	if n > 0 {
 		g.weightBudget = n
+		g.expireOverview()
 	}
+}
+
+// SetTickPushDisabled (SCHED-GAP-1594) records the resolved
+// --disable-tick-push value so the health panel can show the live/pushed
+// state. main.go passes the same value the Loop was armed with — one
+// resolution, both consumers.
+func (g *Generator) SetTickPushDisabled(v bool) {
+	g.tickPushDisabled = v
+}
+
+// tickPushState derives the health card's label from the resolved flag
+// (SCHED-GAP-1594): "live" = web-primary (per-tick push disabled), "pushed"
+// = per-tick git push at tick exit (default).
+func (g *Generator) tickPushState() string {
+	if g.tickPushDisabled {
+		return "live"
+	}
+	return "pushed"
 }
 
 // globalPaused reports the loop's authoritative paused flag for the console
@@ -207,11 +265,16 @@ func (g *Generator) SetFleetPaused(fn func() bool) {
 func (g *Generator) SetDB(db *sql.DB) {
 	if db != nil {
 		g.db = db
+		g.expireOverview()
 	}
 }
 
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
 func (g *Generator) HTMXJS() []byte { return htmxJS }
+
+// EventsToastJS returns the bundled live-event toast client bytes (SCHED-GAP-1599)
+// for serving via HTTP at EventsToastAssetPath.
+func (g *Generator) EventsToastJS() []byte { return eventsToastJS }
 
 // Generate writes the dashboard HTML to w, applying the per-table controls
 // with their defaults (SCHED-GAP-1598). Template is pre-parsed — zero
@@ -227,7 +290,7 @@ func (g *Generator) Generate(w io.Writer) error {
 // WHOLE fleet — they are computed in collect() before the tables are sliced.
 func (g *Generator) GenerateParams(w io.Writer, params *FleetTables) error {
 	ctx := context.Background()
-	data := g.collect(ctx)
+	data := g.cachedOverview(ctx)
 	if params != nil {
 		data.TableState = *params
 	} else {
@@ -283,7 +346,7 @@ func (g *Generator) GenerateFleetTable(w io.Writer) error {
 // table's state applies here.
 func (g *Generator) GenerateFleetTableParams(w io.Writer, q url.Values) error {
 	ctx := context.Background()
-	data := g.collect(ctx)
+	data := g.cachedOverview(ctx)
 	var projectOptions []string
 	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
 		projectOptions = projs
@@ -383,6 +446,15 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.DispatchKnown = dc.Total+dc.Coverage > 0
 	}
 
+	// SCHED-GAP-1655: the lane's outcome split — no_work is the
+	// zero-tool-call waste count. Known only when the aggregate saw at
+	// least one terminal tick with an outcome recorded; otherwise the
+	// page renders the honest "not yet recorded" line.
+	if os, err := database.CountProjectOutcomes(ctx, g.db, name); err == nil {
+		data.OutcomeSplit = os
+		data.OutcomeKnown = os.Total+os.Unset > 0
+	}
+
 	// SCHED-GAP-1601: the lane's control strip + paused badge.
 	data.Control = ControlData{Actions: laneControls(name)}
 	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()
@@ -394,6 +466,28 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	}
 
 	return g.projectTmpl.Execute(w, data)
+}
+
+// ResolveProjectDetailName returns the stored lane name for a dashboard
+// project link. Fleet project names resolve to their primary <name>-foreman
+// lane when no exact row exists; exact lane names always take precedence.
+func (g *Generator) ResolveProjectDetailName(name string) (string, bool, error) {
+	if name == "" {
+		return "", false, nil
+	}
+	ctx := context.Background()
+	if _, err := database.GetProject(ctx, g.db, name); err == nil {
+		return name, false, nil
+	} else if !errors.Is(err, database.ErrProjectNotFound) {
+		return "", false, err
+	}
+	primary := name + "-foreman"
+	if _, err := database.GetProject(ctx, g.db, primary); err == nil {
+		return primary, true, nil
+	} else if !errors.Is(err, database.ErrProjectNotFound) {
+		return "", false, err
+	}
+	return "", false, nil
 }
 
 const tickHistoryPageSize = 50
@@ -745,6 +839,10 @@ func (g *Generator) healthData() HealthData {
 		GatewayURL:     g.gatewayURL,
 		Uptime:         g.clock().Since(g.started).Round(time.Second).String(),
 		Goroutines:     runtime.NumGoroutine(),
+		// SCHED-GAP-1594: live vs pushed — how completed ticks reach the
+		// operator (web dashboard is the primary surface either way; the
+		// card says whether a per-tick git push also runs).
+		TickPushState: g.tickPushState(),
 	}
 	if err := g.db.PingContext(ctx); err != nil {
 		data.DatabaseStatus = "error"
@@ -952,7 +1050,7 @@ const pageTemplate = `{{template "head" .}}
 <span class="signal"><span class="dot"></span> live</span>
 </div>
 </div>
-<div class="meta">Generated {{.GeneratedAt}}</div>
+<div class="meta">Generated {{.GeneratedAt}}</div>{{if .CacheAge}}<div class="meta" id="cacheAge">snapshot cached {{.CacheAge}}</div>{{end}}
 
 {{/* SCHED-GAP-1601: the global console — pause-all (confirm-gated), resume-all,
      force evaluate. Every button's result line prints the API's own status and
@@ -1249,6 +1347,7 @@ func (g *Generator) SetClock(c clock.Clock) {
 	}
 	g.clk.Set(c)
 	g.started = c.Now()
+	g.expireOverview()
 }
 
 // clock returns the generator's clock, never nil.

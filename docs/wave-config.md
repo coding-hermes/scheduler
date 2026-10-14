@@ -23,13 +23,21 @@ preamble for interrupted waves (SCHED-GAP-114).
 All three live on the `namespaces` table (migration v27,
 `internal/database/migrations.go`) and on the TOML `[[namespaces]]` blocks
 (`internal/config/config.go`, `NamespaceDef`). All default OFF: with
-`wave_enabled = false` namespace behavior is byte-identical to pre-S12
-scheduling.
+`wave_enabled = false` and an empty `wave_tick_timeout` namespace behavior is
+byte-identical to pre-S12 scheduling.
+
+SCHED-GAP-1691: the tick deadline (`wave_tick_timeout`) is decoupled from
+waves — a namespace with `wave_enabled = false` that carries a non-empty
+`wave_tick_timeout` (e.g. a 3h tick wall on the `qa` namespace) resolves the
+same env > namespace > `--tick-timeout` cascade at spawn as a wave-enabled
+namespace. Only the `wave_ticks` feature metric stays wave-gated: it fires
+when a tick dispatches into a namespace with `wave_enabled = true`, deadline
+override or not.
 
 | Key | Type / default | Meaning |
 |-----|----------------|---------|
 | `wave_enabled` | bool, default `false` | Master switch. `false` → no `WAVE_BUDGET` line is ever injected; the foreman runs its usual serial tick. |
-| `wave_tick_timeout` | duration string, default `""` | Max duration of a wave tick. `""` = inherit the scheduler `--tick-timeout`. Parsed and validated at config load; a bad value is a load error naming `namespaces[<id>].wave_tick_timeout`. Hard upper bound: 4h (`config.WaveTickTimeoutCeiling`, `internal/config/loader.go`). |
+| `wave_tick_timeout` | duration string, default `""` | Max duration of a tick in this namespace (SCHED-GAP-1691: applies with `wave_enabled` on OR off — a wave-off namespace carrying a value gets the same env > namespace > `--tick-timeout` deadline cascade; only the `wave_ticks` metric stays wave-gated). `""` = inherit the scheduler `--tick-timeout`. Parsed and validated at config load; a bad value is a load error naming `namespaces[<id>].wave_tick_timeout`. Hard upper bound: 4h (`config.WaveTickTimeoutCeiling`, `internal/config/loader.go`). |
 | `wave_workers_cap` | int, default `0` | Max concurrent wave workers across the namespace's RUNNING ticks. `0` = unlimited: no `WAVE_BUDGET` line is injected and the foreman prompt alone governs wave width. Negative values normalize to `0` at load. |
 
 ## Advisory vs enforcement (Option C sub-ruling, G9 / ADV-R14)

@@ -1,0 +1,245 @@
+{{define "observatory"}}{{template "head" .}}
+{{template "sidebar" "observatory"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Observatory</h1>
+<div class="actions"><span class="signal" id="obsSignal"><span class="dot"></span> <span id="obsSignalText">connecting…</span></span></div>
+</div>
+<div class="meta">Snapshot {{.GeneratedAt}} · window {{.WindowLabel}} · every number is a live read of the scheduler database — the committed pages are the record, this view is not</div>
+
+<div class="controls" id="obsControls" style="display:flex;gap:12px;align-items:end;margin:10px 0 16px;flex-wrap:wrap">
+  <label>Time range
+    <select id="obsWindow" aria-label="Time range">
+      <option value="1h" {{if eq .WindowLabel "1h"}}selected{{end}}>Last 1h</option>
+      <option value="6h" {{if eq .WindowLabel "6h"}}selected{{end}}>Last 6h</option>
+      <option value="24h" {{if eq .WindowLabel "24h"}}selected{{end}}>Last 24h</option>
+      <option value="7d" {{if eq .WindowLabel "7d"}}selected{{end}}>Last 7d</option>
+    </select>
+  </label>
+  <label>Namespace
+    <select id="obsNamespace" aria-label="Namespace filter">
+      <option value="" {{if eq .Namespace ""}}selected{{end}}>All namespaces</option>
+      {{range .Namespaces}}<option value="{{.Namespace}}" {{if eq .Namespace $.Namespace}}selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </label>
+</div>
+
+{{if .Error}}
+<div id="obsBanner" class="banner-err" role="alert" style="border:1px solid var(--err);color:var(--err);padding:8px 12px;margin-bottom:14px;font-family:var(--mono);font-size:0.8rem">observatory collector unavailable: {{.Error}} — the stream keeps retrying; nothing is faked.</div>
+{{else}}<div id="obsBanner" hidden class="banner-err" role="alert" style="border:1px solid var(--err);color:var(--err);padding:8px 12px;margin-bottom:14px;font-family:var(--mono);font-size:0.8rem"></div>{{end}}
+
+<script type="application/json" id="obsInit">{{.SnapshotJSON}}</script>
+
+<div class="cards" id="obsTotals"></div>
+
+<h2 style="margin-top:18px">Tick rate over time</h2>
+<div class="surface" style="padding:10px"><div id="obsRate" aria-label="Tick rate chart"></div><div class="meta" id="obsRateMeta"></div></div>
+
+<h2 style="margin-top:18px">Namespace allocation (tick volume share vs configured weight)</h2>
+<div class="surface" style="padding:10px"><div id="obsPie" aria-label="Namespace allocation chart"></div></div>
+
+<h2 style="margin-top:18px">Failure rate by namespace</h2>
+<div class="surface" style="padding:10px"><div id="obsHeat"></div><div class="meta">failed+timeout share of terminal ticks — gray = no terminal ticks in the window (no data, never 0% healthy)</div></div>
+
+<script>
+/* SCHED-GAP-1592 observatory driver: initial snapshot from the inline JSON
+   (correct even before the first SSE push), then live updates from
+   /api/v1/observatory/stream. Honest degradation: a quiet stream past the
+   heartbeat window reads STALE, a dead one reads LOST — never a silent
+   frozen chart. Charts are hand-rolled SVG (no CDN dependency: the dashboard
+   must render offline, same rule that embeds htmx). */
+(function () {
+  var initEl = document.getElementById('obsInit');
+  var snap = null;
+  try { snap = JSON.parse(initEl.textContent); } catch (err) { snap = null; }
+  if (!snap) { banner('initial snapshot unparsable — stream retry will repair'); }
+
+  var lastData = Date.now();
+  var STALE_MS = 45000; // heartbeat is 15s; 3 missed heartbeats = stale
+  var es = null;
+
+  function banner(msg) {
+    var b = document.getElementById('obsBanner');
+    b.hidden = false; b.textContent = msg;
+  }
+  function clearBanner() { var b = document.getElementById('obsBanner'); b.hidden = true; }
+  function signal(cls, text) {
+    var s = document.getElementById('obsSignal'), t = document.getElementById('obsSignalText');
+    s.className = 'signal ' + cls;
+    t.textContent = text;
+  }
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function fmtInt(n) { return Number(n).toLocaleString(); }
+  function fmtUSD(v) { return '$' + Number(v).toFixed(2); }
+
+  function drawTotals(t) {
+    var el = document.getElementById('obsTotals');
+    var cells = [
+      ['Spawned', fmtInt(t.spawned)],
+      ['Completed', fmtInt(t.completed)],
+      ['Failed', fmtInt(t.failed)],
+      ['Timeout', fmtInt(t.timeout)],
+      ['Running now', fmtInt(t.running)],
+      ['Failure rate', t.failed_pct.toFixed(1) + '%'],
+      ['Ticks / hour', t.ticks_per_hour.toFixed(1)],
+      ['Cost (sticker est.)', fmtUSD(t.cost_usd)],
+      ['Tokens in/out', fmtInt(t.tokens_in) + ' / ' + fmtInt(t.tokens_out)]
+    ];
+    el.innerHTML = cells.map(function (c) {
+      return '<div class="card"><div class="label">' + esc(c[0]) + '</div><div class="value" style="font-size:1.1rem">' + esc(c[1]) + '</div></div>';
+    }).join('');
+  }
+
+  function drawRate(points) {
+    var host = document.getElementById('obsRate');
+    if (!points.length) { host.innerHTML = '<div class="meta">no buckets in window</div>'; return; }
+    var W = 900, H = 200, pad = 28;
+    var maxV = 1;
+    points.forEach(function (p) { maxV = Math.max(maxV, p.spawned, p.completed, p.failed + p.timeout); });
+    var bw = (W - pad * 2) / points.length;
+    var bars = '';
+    points.forEach(function (p, i) {
+      var x = pad + i * bw;
+      function bar(v, color, offset) {
+        if (!v) return '';
+        var h = (v / maxV) * (H - pad * 2);
+        return '<rect x="' + (x + 1).toFixed(1) + '" y="' + (H - pad - h - offset).toFixed(1) +
+          '" width="' + Math.max(1, bw - 2).toFixed(1) + '" height="' + h.toFixed(1) +
+          '" fill="' + color + '"><title>' + esc(p.bucket_start) + ': ' + v + '</title></rect>';
+      }
+      bars += bar(p.spawned, 'rgba(110,168,254,0.55)', 0) +
+              bar(p.completed, 'rgba(107,203,119,0.8)', 0) +
+              bar(p.failed + p.timeout, 'rgba(255,107,107,0.8)', 0);
+    });
+    var axis = '<line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="rgba(255,255,255,0.25)"/>' +
+      '<text x="' + pad + '" y="16" fill="rgba(255,255,255,0.6)" font-size="11">max ' + maxV + ' per bucket</text>';
+    var first = points[0].bucket_start, last = points[points.length - 1].bucket_start;
+    host.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="Ticks per bucket: spawned, completed, failed+timeout">' + axis + bars +
+      '<text x="' + pad + '" y="' + (H - 8) + '" fill="rgba(255,255,255,0.5)" font-size="10">' + esc(first) + '</text>' +
+      '<text x="' + (W - pad) + '" y="' + (H - 8) + '" text-anchor="end" fill="rgba(255,255,255,0.5)" font-size="10">' + esc(last) + '</text>' +
+      '</svg>' +
+      '<div class="meta">■ spawned &nbsp; ■ completed &nbsp; ■ failed+timeout — bucket size ' + esc(document.getElementById('obsRateMeta').getAttribute('data-bucket') || 'auto') + '</div>';
+  }
+
+  function drawPie(allocation) {
+    var host = document.getElementById('obsPie');
+    var total = 0;
+    allocation.forEach(function (a) { total += a.ticks; });
+    if (!total) { host.innerHTML = '<div class="meta">no ticks in the window for this filter</div>'; return; }
+    var sorted = allocation.slice().sort(function (a, b) { return b.ticks - a.ticks; });
+    var palette = ['#6ea8fe', '#6bcb77', '#ffd166', '#ef476f', '#9b5de5', '#00bbf9', '#f15bb5', '#fee440'];
+    var cx = 90, cy = 90, r = 70, ir = 38;
+    var svg = '<svg viewBox="0 0 520 190" width="100%" role="img" aria-label="Namespace tick volume share">';
+    var angle = -Math.PI / 2;
+    var legend = '';
+    sorted.forEach(function (a, i) {
+      var frac = a.ticks / total;
+      var a2 = angle + frac * Math.PI * 2;
+      var color = palette[i % palette.length];
+      if (frac > 0.0001) {
+        var x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+        var x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+        var xi2 = cx + ir * Math.cos(a2), yi2 = cy + ir * Math.sin(a2);
+        var xi1 = cx + ir * Math.cos(angle), yi1 = cy + ir * Math.sin(angle);
+        var large = frac > 0.5 ? 1 : 0;
+        svg += '<path d="M' + x1.toFixed(2) + ' ' + y1.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x2.toFixed(2) + ' ' + y2.toFixed(2) +
+          ' L' + xi2.toFixed(2) + ' ' + yi2.toFixed(2) + ' A' + ir + ' ' + ir + ' 0 ' + large + ' 0 ' + xi1.toFixed(2) + ' ' + yi1.toFixed(2) + ' Z" fill="' + color + '">' +
+          '<title>' + esc(a.label) + ': ' + a.ticks + ' ticks (' + a.share_pct.toFixed(1) + '%)</title></path>';
+      }
+      angle = a2;
+      legend += '<div style="margin:2px 0"><span style="display:inline-block;width:10px;height:10px;background:' + color + ';margin-right:6px"></span>' +
+        esc(a.label) + ' — ' + fmtInt(a.ticks) + ' ticks (' + a.share_pct.toFixed(1) + '%) · weight ' + a.weight +
+        (a.enabled ? '' : ' · <b style="color:var(--err)">disabled</b>') +
+        (a.avg_seconds ? ' · avg ' + Math.round(a.avg_seconds) + 's' : '') +
+        ' · ' + fmtUSD(a.cost_usd) + '</div>';
+    });
+    svg += '</svg>';
+    host.innerHTML = '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">' +
+      '<div style="max-width:220px;flex-shrink:0">' + svg + '</div><div style="font-size:0.78rem;line-height:1.5">' + legend + '</div></div>';
+  }
+
+  function drawHeat(heatmap) {
+    var host = document.getElementById('obsHeat');
+    if (!heatmap.length) { host.innerHTML = '<div class="meta">no namespaces for this filter</div>'; return; }
+    var rows = heatmap.map(function (c) {
+      var style, txt;
+      if (c.total === 0) { style = 'background:rgba(255,255,255,0.06)'; txt = 'no data'; }
+      else if (c.fail_pct >= 50) { style = 'background:rgba(255,107,107,0.55)'; txt = c.fail_pct.toFixed(1) + '%'; }
+      else if (c.fail_pct >= 20) { style = 'background:rgba(255,209,102,0.45)'; txt = c.fail_pct.toFixed(1) + '%'; }
+      else { style = 'background:rgba(107,203,119,0.35)'; txt = c.fail_pct.toFixed(1) + '%'; }
+      return '<tr><td>' + esc(c.label) + '</td><td style="' + style + ';text-align:center;font-family:var(--mono)">' + esc(txt) + '</td>' +
+        '<td>' + fmtInt(c.failed) + ' failed</td><td>' + fmtInt(c.timeout) + ' timeout</td><td>' + fmtInt(c.completed) + ' completed</td><td>' + fmtInt(c.total) + ' terminal</td></tr>';
+    }).join('');
+    host.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem"><thead><tr>' +
+      '<th style="text-align:left">namespace</th><th>failure rate</th><th style="text-align:left"></th><th style="text-align:left"></th><th style="text-align:left"></th><th style="text-align:left"></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function render(s) {
+    if (!s) return;
+    lastData = Date.now();
+    clearBanner();
+    drawTotals(s.totals);
+    drawRate(s.rate);
+    drawPie(s.allocation);
+    drawHeat(s.heatmap);
+    document.getElementById('obsRateMeta').setAttribute('data-bucket', bucketLabel(s.window));
+    document.getElementById('obsRateMeta').textContent = 'window ' + s.window_label + ' · snapshot at ' + s.generated_at;
+  }
+
+  function bucketLabel(windowS) {
+    var h = Math.round(windowS / 3600);
+    if (h <= 1) return '5-minute buckets';
+    return 'hourly buckets';
+  }
+
+  // Controls: a change re-fetches the page with the new filter — the server
+  // re-renders AND re-subscribes the stream with the same params, so what is
+  // displayed is always what the API computed for exactly this filter.
+  var win = document.getElementById('obsWindow'), ns = document.getElementById('obsNamespace');
+  var baseWindow = {{.Window}}, baseNS = {{.Namespace}};
+  function applyFilter() {
+    var w = win.value, n = ns.value;
+    var q = '?window=' + encodeURIComponent(w);
+    if (n) q += '&namespace=' + encodeURIComponent(n);
+    window.location.search = q;
+  }
+  win.addEventListener('change', applyFilter);
+  ns.addEventListener('change', applyFilter);
+
+  // Live stream. Note the URL carries the CURRENT filter; the page reloads on
+  // filter change so this never needs re-subscribing mid-flight.
+  var streamURL = {{.StreamURL}};
+  function connect() {
+    if (!window.EventSource) { signal('signal fleet-paused', 'SSE unsupported — snapshot static'); return; }
+    es = new EventSource(streamURL);
+    es.onopen = function () { signal('', 'live'); };
+    es.onmessage = function (ev) {
+      try { render(JSON.parse(ev.data)); signal('', 'live'); }
+      catch (err) { banner('stream payload unparsable: ' + err.message); }
+    };
+    es.onerror = function () {
+      // EventSource auto-reconnects; say so honestly.
+      signal('signal fleet-paused', 'stream lost — retrying');
+      banner('observatory stream lost — auto-retrying; charts show the last good snapshot and the STALE banner below is authoritative until the stream returns');
+      setTimeout(function () { if ((Date.now() - lastData) > STALE_MS) { markStale(); } }, STALE_MS);
+    };
+  }
+  function markStale() {
+    var age = Math.round((Date.now() - lastData) / 1000);
+    signal('signal fleet-paused', 'stale (' + age + ' s)');
+    banner('no stream data for ' + age + ' s — the charts below are the last known snapshot, not current (publish real numbers: this is a gap, stated as one)');
+  }
+  setInterval(function () {
+    if (es && es.readyState === 1 && (Date.now() - lastData) > STALE_MS) markStale();
+  }, 5000);
+
+  render(snap);
+  connect();
+})();
+</script>
+{{template "ready_js"}}
+</div>
+</body>
+</html>{{end}}

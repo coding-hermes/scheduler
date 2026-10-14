@@ -70,6 +70,16 @@ def _fixture_cooldown(name: str) -> int:
     return gate.SATELLITE_FAMILY_PINS[m.group(2)] if m else 43200
 
 
+def _fixture_namespace(name: str) -> str:
+    """The role's family namespace for a satellite-shaped fixture lane — the
+    namespace-membership class (SCHED-GAP-1604) must stay quiet so these
+    fixtures isolate check 6."""
+    m = gate.SATELLITE_FAMILY_RE.match(name)
+    if not m:
+        return OUT_OF_SCOPE_NS
+    return gate.SATELLITE_FAMILY_NAMESPACES[m.group(2)]
+
+
 # Premise of the module: the chosen base name is portable — no candidate path exists.
 for cand in (f"/home/kara/{PRIMARY}", f"/home/kara/{PRIMARY.replace('-', '_')}",
              str(Path.home() / ".hermes" / PRIMARY)):
@@ -88,7 +98,7 @@ def _make_db(path: Path, primary: dict | None, rows: list[dict],
                 " cooldown_floor_s INTEGER, command TEXT, prompt TEXT, workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
     con.execute("CREATE TABLE ticks (project_name TEXT, spawned_at TEXT, status TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
@@ -113,7 +123,7 @@ def _make_db(path: Path, primary: dict | None, rows: list[dict],
             "INSERT INTO projects (name, enabled, cooldown_s, cooldown_floor_s, command, prompt,"
             " workdir, namespace_id) VALUES (?, ?, ?, ?, ?, '', ?, ?)",
             (r["name"], r.get("enabled", 1), cd, r.get("cooldown_floor_s", cd), SUPPORTED_COMMAND,
-             str(swd), r.get("namespace_id", "dogfood")))
+             str(swd), r.get("namespace_id", _fixture_namespace(r["name"]))))
         for spawned_at, status in (sat_ticks or []):
             con.execute("INSERT INTO ticks (project_name, spawned_at, status) VALUES (?, ?, ?)",
                         (r["name"], spawned_at, status))

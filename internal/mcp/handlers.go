@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
@@ -42,6 +44,45 @@ func (s *Server) toolFleetProjects(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return jsonString(map[string]interface{}{"projects": projects}), nil
+}
+
+// toolFleetLaneTree answers fleet_lane_tree (SCHED-GAP-1587): the fleet's
+// lane hierarchy — the SAME shape as GET /api/v1/lanes/tree, resolved through
+// the ONE shared resolver (database.BuildLaneTree) so the MCP surface and the
+// REST surface can never disagree about who nests under whom.
+func (s *Server) toolFleetLaneTree(ctx context.Context) (string, error) {
+	lanes, err := database.ListProjects(ctx, s.db, false)
+	if err != nil {
+		return "", err
+	}
+	resp := map[string]interface{}{"roots": []interface{}{}, "total": len(lanes)}
+	if len(lanes) == 0 {
+		return jsonString(resp), nil
+	}
+	tree := database.BuildLaneTree(lanes)
+	// Declared before assignment: a recursive closure cannot reference itself
+	// inside its own := initializer.
+	var convert func(node *database.LaneNode, depth int) map[string]interface{}
+	convert = func(node *database.LaneNode, depth int) map[string]interface{} {
+		children := make([]interface{}, 0, len(node.Children))
+		for _, kid := range node.Children {
+			children = append(children, convert(kid, depth+1))
+		}
+		return map[string]interface{}{
+			"name":     node.Project.Name,
+			"parent":   node.Project.Parent,
+			"depth":    depth,
+			"is_root":  depth == 0,
+			"enabled":  node.Project.Enabled,
+			"children": children,
+		}
+	}
+	roots := make([]interface{}, 0, len(tree.Roots))
+	for _, root := range tree.Roots {
+		roots = append(roots, convert(root, 0))
+	}
+	resp["roots"] = roots
+	return jsonString(resp), nil
 }
 
 func (s *Server) toolFleetProjectDetail(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -2041,4 +2082,106 @@ WHERE julianday(spawned_at) >= julianday(?)
 		"zero_output_committed": zeroOutput,
 		"window":                mcpMetricsWindowLabel,
 	}
+}
+
+// toolPeersList mirrors GET /api/v1/peers: every registered peer rendered
+// through the freshness predicate (stale against the configured window).
+func (s *Server) toolPeersList(ctx context.Context) (string, error) {
+	peers, err := database.ListPeers(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	nowFn := clock.Real().Now
+	window := database.PeerFreshnessWindowDefault
+	out := make([]map[string]interface{}, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, map[string]interface{}{
+			"id":           p.ID,
+			"url":          p.URL,
+			"version":      p.Version,
+			"capabilities": p.Capabilities,
+			"last_contact": p.LastContact,
+			"stale":        database.IsPeerStale(p.LastContact, window, nowFn),
+		})
+	}
+	return jsonString(map[string]interface{}{"peers": out, "count": len(out)}), nil
+}
+
+// toolPeersRegister mirrors POST /api/v1/peers: register or refresh peer
+// identity. Registration is NOT liveness — last_contact is untouched.
+func (s *Server) toolPeersRegister(ctx context.Context, args map[string]interface{}) (string, error) {
+	id := getStringArg(args, "id")
+	url := getStringArg(args, "url")
+	if id == "" || url == "" {
+		return "", fmt.Errorf("id and url are required")
+	}
+	p := &database.Peer{
+		ID:           id,
+		URL:          url,
+		Version:      getStringArg(args, "version"),
+		Capabilities: getStringArg(args, "capabilities"),
+	}
+	if existing, err := database.GetPeer(ctx, s.db, p.ID); err == nil {
+		p.LastContact = existing.LastContact
+	}
+	if err := database.UpsertPeer(ctx, s.db, p); err != nil {
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"status": "registered", "id": p.ID, "url": p.URL, "version": p.Version}), nil
+}
+
+// toolPeersHeartbeat mirrors POST /api/v1/peers/{id}/heartbeat: stamp a
+// registered peer's last_contact. Unknown ids are a not-found error.
+func (s *Server) toolPeersHeartbeat(ctx context.Context, args map[string]interface{}) (string, error) {
+	id := getStringArg(args, "id")
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	if err := database.PeerHeartbeat(ctx, s.db, id); err != nil {
+		if errors.Is(err, database.ErrPeerNotFound) {
+			return "", fmt.Errorf("peer %q not found — heartbeat does not auto-register", id)
+		}
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"status": "heartbeat", "id": id}), nil
+}
+
+// toolObservatorySnapshot serves the observatory_snapshot MCP tool
+// (SCHED-GAP-1592): one computed snapshot over the tick history, same JSON
+// the /api/v1/observatory route answers. Fail-closed: without a wired
+// collector it returns an explicit configuration error, never fabricated
+// data.
+func (s *Server) toolObservatorySnapshot(args map[string]interface{}) (string, error) {
+	if s.observatoryCollector == nil {
+		return "", errors.New("observatory collector not configured (dashboard not wired)")
+	}
+	window := getStringArg(args, "window")
+	namespace := getStringArg(args, "namespace")
+	payload, err := s.observatoryCollector.CollectObservatory(window, namespace)
+	if err != nil {
+		return "", err
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, payload, "", "  "); err == nil {
+		return pretty.String(), nil
+	}
+	return string(payload), nil
+}
+
+// toolGatewayErrors serves the gateway_errors MCP tool (SCHED-GAP-1654): the
+// same 24h gateway-availability counts the /api/v1/gateway-errors route
+// answers, built by the SAME scheduler.BuildGatewayErrorsReport so the two
+// surfaces cannot disagree (CTL-003 pairs this tool with that route). The
+// empty window is an honest zero — every class at 0, by_project an empty
+// array — never fabricated data.
+func (s *Server) toolGatewayErrors() (string, error) {
+	report, err := scheduler.BuildGatewayErrorsReport(context.Background(), s.db, s.clock().Now())
+	if err != nil {
+		return "", err
+	}
+	b, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

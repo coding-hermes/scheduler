@@ -141,9 +141,10 @@ func TestBackstopMaxAge_waveCeiling(t *testing.T) {
 	}
 }
 
-// TestBackstopMaxAge_waveOffNamespaceInherits — a wave-off namespace (the
-// common case for most namespaces) must NOT contribute a deadline larger
-// than the base. The helper returns the base + grace for the running tick.
+// TestBackstopMaxAge_waveOffNamespaceInherits — a namespace with NO deadline
+// config (wave_enabled=0 AND empty wave_tick_timeout) must NOT contribute a
+// deadline larger than the base. The helper returns the base + grace for the
+// running tick.
 func TestBackstopMaxAge_waveOffNamespaceInherits(t *testing.T) {
 	db := newTestDB(t)
 	l := newLoopForBackstop(t, db, 2*time.Hour)
@@ -155,6 +156,28 @@ func TestBackstopMaxAge_waveOffNamespaceInherits(t *testing.T) {
 	want := maxDuration(2*time.Hour+backstopGrace, backstopFloor)
 	if got != want {
 		t.Fatalf("wave-off backstop = %v, want %v (base 2h + 30m grace)", got, want)
+	}
+}
+
+// TestBackstopMaxAge_waveOffNamespaceWithTimeout (SCHED-GAP-1691) — a
+// wave_enabled=0 namespace carrying wave_tick_timeout="3h" contributes its
+// 3h deadline to the reaper cutoff, exactly like a wave-enabled namespace.
+// Otherwise the backstop would reap a live 3h qa tick at base+30m (the
+// phantom-timeout class SCHED-GAP-217 fixed). A sibling namespace with no
+// deadline config does not raise the max above 3h.
+func TestBackstopMaxAge_waveOffNamespaceWithTimeout(t *testing.T) {
+	db := newTestDB(t)
+	l := newLoopForBackstop(t, db, 2*time.Hour)
+
+	sg217InsertRunningTick(t, db, "proj-qa", 30*time.Minute)
+	sg217InsertRunningTick(t, db, "proj-plain", 30*time.Minute)
+	setNamespace(t, db, "qa", "proj-qa", false, "3h")
+	setNamespace(t, db, "plain", "proj-plain", false, "")
+
+	got := l.backstopMaxAge()
+	want := maxDuration(3*time.Hour+backstopGrace, backstopFloor)
+	if got != want {
+		t.Fatalf("wave-off-with-timeout backstop = %v, want %v (3h + 30m grace)", got, want)
 	}
 }
 

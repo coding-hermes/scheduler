@@ -30,13 +30,18 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 ## Getting Started (5 minutes)
 
-> ## ⚠️ BROKEN/STALE warning — verify before you trust this guide (GAP-042)
+> **Note:** releases are published on the
+> [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
+> checkout of `main` passes `make test` (all 18 packages) and `make build`,
+> which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
+> run both on a fresh checkout before trusting any step here. Past flaky-CI
+> episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
+> board and do not affect this guide.
 >
-> **The public repo may be broken or stale relative to local fleet fixes.** This warning was written against `origin/main` commit `bb104c8` (`bb104c841edcc79a87166fef1dd5b551e8327d63`) on 2026-08-30.
->
-> Verified state at that commit: a **fresh clone passes `make test`** — the repo is not currently known-broken, and no unpushed fleet fixes were found at write time. But the fleet's canonical checkout is a separate working copy: local fixes land there first and can lag this public repo, so what is on `main` here may be broken or stale relative to what the fleet actually runs at any later time.
->
-> **Always run `make test` on a fresh clone before trusting the steps below.** If it fails or the steps misbehave, open a [release-check task](.github/ISSUE_TEMPLATE/release-check.md) and let a human gate the fix and push — agents never auto-push.
+> The fleet's internal checkout can move ahead of this public repo between
+> pushes. If a step misbehaves, open a
+> [release-check task](.github/ISSUE_TEMPLATE/release-check.md) and a human
+> gates the fix — agents never auto-push.
 
 This guide takes you from zero to a running scheduler with your existing cron jobs imported.
 
@@ -58,6 +63,10 @@ make build
 You now have:
 - `./bin/schedulerd` — the daemon
 - `./bin/migrate` — cron-to-scheduler migration tool
+
+(`bin/` is local build output, not an inventory: the repo ships additional
+tool sources under `cmd/` that operators build ad hoc — see
+[Maintenance tools](#maintenance-tools) under Development.)
 
 ### 3. Verify API Access
 
@@ -247,7 +256,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (48 tools)            │
+│  /mcp      → MCP server (61 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -288,11 +297,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 48 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 61 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
-table drifts from the registry). Verify the running daemon's surface (a
-daemon built from this tree reports 48; an older deployed build reports
-fewer):
+table drifts from the registry). Verify the running daemon's surface (older
+deployed builds report fewer tools):
 
 ```sh
 curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
@@ -303,6 +311,7 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 |------|-------------|
 | `fleet_status` | Fleet-wide status and budget |
 | `fleet_projects` | List all projects with config |
+| `fleet_lane_tree` | Lane hierarchy (SCHED-GAP-1587): primaries with satellites nested (parent → children, per-node depth); disabled lanes keep their position, dangling parents surface as roots |
 | `fleet_project_detail` | Get single project details |
 | `fleet_set_weight` | Change project weight (1-100) |
 | `fleet_set_priority` | Change project priority (1-10) |
@@ -331,6 +340,8 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `templates_delete` | Delete a deploy template |
 | `groups_deploy` | Deploy a template's task rows to every member project of a group (`dry_run` plans without writing) |
 | `events_list` | Read the event log (`since` returns only events with id > since) |
+| `observatory_snapshot` | Compute one Observatory snapshot over the tick history: tick-rate buckets, per-namespace allocation (volume share vs configured weight) and failure heatmap; `window` (seconds or 1h/6h/24h/7d, default 6h) + optional `namespace` filter (SCHED-GAP-1592) |
+| `gateway_errors` | Count ticks NOT run because the gateway refused them over the last 24h: `total`, `by_class` (`unavailable_503`/`rate_limited_429`/`connection_refused`, every class present even at 0) and `by_project` rows ordered by total desc (SCHED-GAP-1654) |
 | `namespaces_list` | List all namespaces (allocation pools) |
 | `namespaces_get` | Get one namespace by id (weight, caps, admission_mode, load_gate) |
 | `namespaces_create` | Create a namespace (id + positive weight required) |
@@ -349,6 +360,16 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `features_get` | Per-feature live usage counters (SCHED-GAP-131) — every tracked mechanism's `use_count` + first/last-used, plus the `admission_mode_rows` gauge |
 | `features_prune_candidates` | Dead-feature reaper report (SCHED-GAP-131) — mechanisms never used or last used more than `weeks` ago (default 8); flag only |
 | `cooldown_residue` | Cooldown-pin residue detector (SCHED-GAP-1670) — ENABLED lanes whose live `cooldown_s` sits strictly BELOW their own pin; read-only, never mutates |
+| `peers_list` | Federation peers with freshness — `stale` computed against the peer freshness window (REMOTE-003) |
+| `peers_register` | Register or refresh a federation peer (identity only — liveness is heartbeat-only) |
+| `peers_heartbeat` | Stamp a registered peer's `last_contact` to now (no auto-register) |
+| `fed_query` | Federation query envelope (REMOTE-010): op + args + required `corr_id`; returns the §2.2 response envelope verbatim |
+| `fed_peer_status` | Federation read op `peer.status` — identity, version, clock, load, uptime |
+| `fed_fleet_status` | Federation read op `fleet.status` — peers, projects, active ticks, budget |
+| `fed_projects_list` | Federation read op `projects.list` — project rows (name, enabled, weight, priority, cooldown) |
+| `fed_queue_get` | Federation read op `queue.get` — the ordered scheduling queue |
+| `fed_ticks_list` | Federation read op `ticks.list` — tick rows, newest first |
+| `fed_events_list` | Federation read op `events.list` — event rows, newest first |
 
 ---
 
@@ -384,37 +405,63 @@ Higher urgency projects get picked first.
 
 Default 900s between successive ticks for the same project.
 
-### Cooldown Policy (fleet-cooldown-policy.py)
+### Fleet Config Mirror (fleet-sync.py)
 
-Fleet-wide cooldown normalization is governed by the ops script
-`~/.hermes/scripts/fleet-cooldown-policy.py` (not part of this repo — it lives
-in the Hermes ops home; run `python3 ~/.hermes/scripts/fleet-cooldown-policy.py`
-for a dry run, `--apply` to write). The script:
+`~/.hermes/fleet.toml` — the durable pin layer re-applied by the loader at every
+daemon startup — is written by the ops script `~/.hermes/scripts/fleet-sync.py`
+(not part of this repo — it lives in the Hermes ops home; run
+`python3 ~/.hermes/scripts/fleet-sync.py` to print the file it would write,
+`--write` to write it atomically). It **is the only writer of `fleet.toml`**
+(the scheduler API is the only writer of cooldowns/pins), and it is a pure
+one-way mirror:
 
-- Reads the live SQLite state first (`GET /api/v1/projects` equivalent), then
-  regenerates `~/.hermes/fleet.toml` so every `[[projects]]` entry's
-  `cooldown_s` matches the daemon's current value, and optionally PUTs
-  normalized cooldowns back to the API.
-- Honors the `ELEVATED_PINS` whitelist (e.g. `h3=21600`, `warpfs=43200`):
-  projects with an operator-set pin are never written below their canonical
-  cooldown (SCHED-GAP-012), no matter what the SQLite state says.
-- Is the **only** writer of `fleet.toml`. `fleet.toml` pins are durable across
-  daemon restarts (loader re-pins existing projects at every startup), while
-  an API `PUT /api/v1/projects/{name}` cooldown change is durable only within
-  the daemon session — the next policy run normalizes it back unless the
-  project has an ELEVATED_PINS entry.
-- Guarded against clobber (SCHED-PERF-006): the pre-commit hook and the
-  deploy-drain-restart verify block run
-  `scripts/policy-script-deploy-hash-guard.sh`, which aborts loudly whenever
-  the live `fleet-cooldown-policy.py` has diverged from its canonical
-  sidecar, so a consumer deploy/restart can no longer silently overwrite an
-  operator's live fix.
+- **DB → file, one direction, no correction rules.** It reads live API state
+  (`GET /api/v1/projects`, paging until `total` is covered) plus
+  `GET /api/v1/namespaces`, then regenerates `~/.hermes/fleet.toml` so every
+  enabled `[[projects]]` entry's `cooldown_s` (and model/provider,
+  `namespace_id`, `deliver`, `enabled`) and every namespace block
+  (weight/caps/`admission_mode`/`load_gate`/wave settings/prompts) match the
+  daemon's current state. It never decides values and never PUTs corrections
+  back (Bane 2026-09-19: the DB is the source of truth; the API is the only
+  writer).
+- `fleet.toml` pins are durable across daemon restarts (the loader re-pins
+  existing projects at every startup), while an API
+  `PUT /api/v1/projects/{name}` cooldown change is ephemeral across restarts
+  until it is re-mirrored into `fleet.toml`.
+- A hand-held `OVERRIDES` block (empty by default) lets a pin survive even a
+  drifted DB: the script **reads it and never rewrites it**.
+- No argument parser: write mode is a literal `'--write' in sys.argv` test, so
+  an unknown flag (e.g. `--writte`) silently performs a dry run. Confirm the
+  `fleet.toml: mirrored …` line before trusting a write.
 
-**Override procedure:** to pin a project's cooldown permanently, add it to
-`ELEVATED_PINS` in `~/.hermes/scripts/fleet-cooldown-policy.py` (and set the
-pin in `fleet.toml`), then run the script with `--apply`. The pin survives
-policy runs and daemon restarts. See `docs/integration.md` for the full
-authority model.
+#### Retired: `fleet-cooldown-policy.py --apply`
+
+`~/.hermes/scripts/fleet-cooldown-policy.py` is **RETIRED as a writer** (owner
+ruling 2026-10-02). `--apply` prints
+`RETIRED: … no longer writes anything` and exits 3 without touching
+`fleet.toml` or the API. What remains is read-only:
+
+- Bare invocation / `--dry-run` — the cooldown report (evaluation only; a
+  documented `--dry-run` always wins over `--apply` so it can never mutate live
+  state).
+- `--verify` — the SCHED-GAP-121 tripwire: it compares the canonical operator
+  pin set (`ELEVATED_PINS`, e.g. `h3`/`warpfs`) against `fleet.toml` and the
+  live DB rows and reports `MISMATCH` lines on drift (SCHED-GAP-012). It is a
+  **check, not a writer** — a mismatch is reported, never corrected.
+- Its board parsers are still imported as a library by
+  `fleet-cooldown-audit.py`.
+
+**Override procedure:** to pin a project's cooldown permanently, `PUT` the value
+via the API, then re-run `python3 ~/.hermes/scripts/fleet-sync.py --write` so the
+durable layer re-mirrors it. If the pin must survive even a drifted DB, add it to
+`fleet-sync.py`'s hand-held `OVERRIDES` block as well (read, never rewritten).
+
+Deploy-integrity guard (SCHED-PERF-003 / SCHED-PERF-006), unchanged: the
+pre-commit hook and the deploy-drain-restart verify block run
+`scripts/policy-script-deploy-hash-guard.sh`, which aborts loudly whenever the
+live `fleet-cooldown-policy.py` has diverged from its canonical sidecar, so a
+consumer deploy/restart can no longer silently overwrite an operator's live fix.
+See `docs/integration.md` for the full authority model.
 
 ---
 
@@ -462,7 +509,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
 | `-sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
 | `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
-| `-config` | (none) | Path to TOML fleet config file |
+| `-config` | (none) | Path to TOML fleet config file — see [docs/reference/root-toml.md](docs/reference/root-toml.md) for which `[scheduler]` keys the root TOML actually applies vs ignores |
 | `-failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown |
 | `-auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off |
 | `-auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed |
@@ -472,6 +519,8 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 | `-duckbrain-interval` | `5m0s` | DuckBrain sync interval (spool replay cadence) |
 | `-gateway-response-timeout` | `30m0s` | Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before `--tick-timeout` (SCHED-GAP-117; 0 disables) |
+| `-gateway-transient-retries` | `3` | Bounded transient-gateway retry count (SCHED-GAP-1681): a 5xx/refused-dial/SSE stream-drop is retried up to N times on the same model/provider pair with the SAME session key (`X-Hermes-Session-Key` = tick id, session continuation), so the agent resumes where the stream died. Every POST lands on `gateway_trace.Attempts` and the `ticks.attempts` column. `0` = single attempt (retry off). Env: `SCHEDULER_GATEWAY_TRANSIENT_RETRIES`; TOML `scheduler.gateway_transient_retries` |
+| `-peer-freshness-window` | `180` | Peer freshness window in seconds for the federation peer registry (REMOTE-003): a peer whose last `POST /api/v1/peers/{id}/heartbeat` is older renders `stale:true` (with its `last_contact`, never a "down" state) on `GET /api/v1/peers`. Env: `SCHEDULER_PEER_FRESHNESS_WINDOW` |
 | `-groups-file` | (none) | JSONL file for deploy groups (default `<db dir>/groups.jsonl` when the blocks store is enabled; empty = default paths) |
 | `-load-gate-threshold` | `0` | Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); `0` = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via `load_gate='off'` |
 | `-feature-prune-weeks` | `8` | Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): `/api/v1/features/prune-candidates` flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted |
@@ -483,6 +532,10 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-sim-idle` | `0` | Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs |
 | `-slot-patience` | `5m0s` | How long a tick waits for a free slot before being dropped; the drop emits an event (ADV-R08/G3) |
 | `-spawn-mem-limit-mb` | `0` | Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); `0` = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues |
+| `-board-stasis-gate` | `true` | SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (a tick on a static board no-ops ~69% of the time vs 25% when it moved, and costs more per tick). mtime+size fingerprint, fails open on an unreadable/missing board, tasks-mode and reporter-class lanes exempt, a non-completed previous tick is never gated, no cooldown consumed, and `ForceEvaluate` bypasses it. Skips log `BOARD-UNCHANGED` and count as `board_unchanged_skips` on `/api/v1/status`. Env: `SCHEDULER_BOARD_STASIS_GATE`; `false` = pre-gate scheduling |
+| `-session-silence-grace` | `0s` | SCHED-GAP-1707: session-silence watchdog — terminate a gateway tick whose session shows no token delta and no tool activity for this long (`failure_reason=session_silent`, quiet duration on the tick row, `telemetry_partial=1`). Producing sessions are never killed; cooldowns untouched. Env: `SCHEDULER_SESSION_SILENCE_GRACE`; `0s` = disabled |
+| `-session-poll-loop-min-ticks` | `0` | SCHED-GAP-1698: poll-loop idle guard — terminate a gateway tick whose session shows a confirmed sleep-poll tool cycle (sleep-led or read-only status probes at a fixed cadence in two consecutive 5-minute strides, zero advancement) for 4 consecutive guard passes (`failure_reason=sleep_poll`, confirmed span on the tick row, `telemetry_partial=1`). This many tool calls per stride; `0` = disabled (default), values 1-5 clamp to the built-in floor of 6. Producing sessions are never killed (any non-poll call, a gap past 10 minutes, or unreadable telemetry spares the tick); cooldowns untouched. Env: `SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS` |
+| `-disable-tick-push` | `false` | SCHED-GAP-1594: skip the per-tick git push at tick exit (SCHED-GAP-1694's push-at-exit). Ticks only update the web dashboard (tick rows, `/api/v1/status`, `/health` — the health panel shows the `live` vs `pushed` state) and the fleet-strand-push cron is the only remaining pusher. Default `false` = backward compat (per-tick push stays on). Env: `SCHEDULER_DISABLE_TICK_PUSH` |
 | `-tasks-pacing` | `1m0s` | Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); `0` = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff |
 | `-templates-file` | (none) | JSONL file for deploy templates (default `<db dir>/templates.jsonl` when the blocks store is enabled; empty = default paths) |
 | `-verify-board` | (none) | Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any |
@@ -493,6 +546,75 @@ Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.tom
 #### DuckBrain sync auth (`DUCKBRAIN_API_KEY`)
 
 When `DUCKBRAIN_API_KEY` is set, every sync request carries it as the `X-API-Key` header — the daemon validates the key once at startup with a side-effect-free probe, and a rejected key (HTTP 401/403) fails fast with a distinct HIGH `DuckBrain API key REJECTED` event instead of spooling every failed write. A 429 from the DuckBrain daemon is treated as backpressure rather than an error: the current burst stops, the remaining writes spool, and they replay on the next `-duckbrain-interval` tick. With the env var unset or empty the daemon stays in pre-auth compatibility mode — no probe is made and no `X-API-Key` header is sent (deliberate, not a bug).
+
+### Per-lane and per-namespace gateway endpoints (SCHED-GAP-1712)
+
+The daemon used to resolve **one** Hermes gateway URL for the whole fleet:
+`[gateway].url`. Lanes could be *distinguished* (each project may carry its own
+`gateway_key`) but never *addressed* — one endpoint served every project. The
+tick path now resolves an endpoint per tick through three tiers, applied
+**independently to the URL and the key**:
+
+| tier | URL | key |
+| --- | --- | --- |
+| lane | `projects.gateway_url` | `projects.gateway_key` |
+| namespace | `namespaces.gateway_url` | `namespaces.gateway_key` |
+| global | `[gateway].url` / `--gateway-url` | `[gateway].key` / `--gateway-key` |
+
+Resolution is **lane > namespace > global**, and a tier that is empty (or
+whitespace) inherits from the tier below, so a fleet that sets nothing
+resolves to the global endpoint on every tick — byte-for-byte the pre-1712
+behavior (`internal/scheduler/gateway_endpoint.go`,
+`ResolveGatewayEndpoint`).
+
+```toml
+# global fallback for the whole daemon
+[gateway]
+url = "http://127.0.0.1:8642"
+
+# a namespace may point its members at their own Hermes
+[[namespaces]]
+id = "remote-family"
+#gateway_url = "http://10.0.0.7:8642"
+#gateway_key = "fk-remote-family"
+
+# a single lane may be addressed on its own, without moving the fleet
+[[projects]]
+name = "remote-lane"
+#gateway_url = "http://10.0.0.9:8642"
+#gateway_key = "fk-remote-lane"
+```
+
+**Auditability (no unexplained blanks):** the RESOLVED endpoint is stamped on
+the tick row at dispatch time — `ticks.gateway_url` (the endpoint the POST was
+addressed to), `ticks.gateway_source` and `ticks.gateway_key_source` (which
+tier supplied each; `lane` / `namespace` / `global`). A blank URL always pairs
+with a blank source and means "no HTTP dispatch" (an exec spawn, or a row
+written before migration v61). The credential itself is never stored — the
+source is the auditable fact, not the secret.
+
+**Durability:** `gateway_url` / `gateway_key` follow the GatewayKey-conditional
+pin law — the *presence* of the key in fleet.toml re-pins the row on every
+boot, and an entry that omits it never clears an endpoint assigned through the
+API. Clear an endpoint back to inheritance with `PUT /api/v1/projects/{name}`
+(`{"gateway_url": ""}`) or `PUT /api/v1/namespaces/{id}`.
+
+**Failure isolation:** a lane whose own endpoint is unreachable fails ITS
+tick (transient blip → bounded retry → drop, or a terminal auth rejection on
+401/403 when it carries its own key); no other lane is affected, because each
+non-global endpoint gets its own `GatewayClient` (derived lazily, cached for
+the daemon's lifetime, and deliberately never handed the daemon's shared key
+implicitly). **Admission follows the same endpoint** (t_cadba34c): the
+gateway HEALTH GATE (SCHED-GAP-170) judges the endpoint a lane RESOLVES to —
+the daemon's own gateway for a lane that inherits it, the lane's endpoint
+otherwise — so one dead daemon gateway no longer idles every remote lane, and
+one unreachable lane endpoint defers only the lanes behind it. Each endpoint
+keeps its own cached verdict (one probe per 30 s window per endpoint, bounded at
+64 endpoints) and its own outage episode; the fleet-wide `gatewayDead` latch and
+the reconnect/orphan-nudge remain GLOBAL-only. A deferred spawn is reported as a
+`gateway_defer` event carrying `gateway_url`/`gateway_source`/
+`gateway_key_source` and `gateway_health_endpoint`, so the endpoint that caused
+the deferral is auditable without a new column.
 
 ### Model chains, per-namespace caps, and foreman prompts (fleet.toml)
 
@@ -572,7 +694,10 @@ GatewayKey-style conditional pin). The same is true of namespace
 A namespace may cap how many of its projects run ticks at once —
 `0`/absent = unlimited (the global `--max-concurrent` still applies);
 a positive value is the namespace's live cap, enforced by the packer
-(`internal/scheduler/packer_select.go`, `nsCapMap`):
+(`internal/scheduler/packer_select.go`, `nsCapMap`) and authoritatively rechecked
+at the `SlotPool.spawn` admission point (`internal/scheduler/slot_pool.go`).
+This is independent of named usage-pool accounting; a tick can be subject to
+both controls. See [`docs/usage-pools-spec.md`](docs/usage-pools-spec.md).
 
 ```toml
 [[namespaces]]
@@ -596,6 +721,19 @@ All clock reads and waits go through `internal/clock`; the implementation is sel
 | `SCHEDULER_TIME_AUTOADVANCE` | `0` | `1` = skip straight to the next armed timer at zero real cost |
 
 `SCHEDULER_TIME_MODE=sim` refuses to boot unless `--simulate` is also set (a stray env var can never move the live fleet onto a fake clock), and every boot logs `TIME: clock <mode>`. See AGENTS.md → "Test-time simulator" for the test-facing API (`Advance`, `WaitForNextTimer`, `NewManualSimClock`).
+
+**Speeding up real-clock rehearsals (SCHED-GAP-1629).** Without these env vars every simulated wait burns real wall time: a 10-tick `--simulate --sim-setup --sim-ticks 10` rehearsal takes ~32s (sleep-bound, 0.3% CPU), and `--sim-count` ticks fire at most 8 per 500ms ticker beat, so the old 30s bulk-sim window FATALed at ~480 ticks. The same 10-tick rehearsal under the simulator runs in ~0.2s — the sim flags and the clock env vars go together:
+
+```sh
+# real clock: ~32s (sleep-bound)
+./bin/schedulerd --simulate --sim-setup --sim-ticks 10 --db /tmp/rehearsal.db --listen 127.0.0.1:0
+
+# sim clock, scale 1000: ~0.2s (161x faster)
+SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 SCHEDULER_TIME_START=2026-09-25T00:00:00Z \
+  ./bin/schedulerd --simulate --sim-setup --sim-ticks 10 --db /tmp/rehearsal.db --listen 127.0.0.1:0
+```
+
+`--sim-count`'s context window now derives from the tick count: ceil(count/8) × 500ms + 10s headroom (SCHED-GAP-1629), and a deadline-exceeded error names the ceiling and the escape hatch.
 
 ---
 
@@ -645,11 +783,76 @@ This scheduler is part of the Coding Hermes ecosystem. See [`coding-hermes/skill
 
 ```bash
 make build       # Build binaries
-make test        # Run tests
-make test-full   # Full test suite
+make test        # Fast suite: go test -short -count=1 ./... (short mode, quick feedback)
+make test-full   # SLOW trust gate: go test -count=1 ./... (no -short; ~8+ min) — run before merge
 make lint        # Go vet
 make fmt         # Format code
 ```
+
+### Maintenance tools
+
+`make build` produces only `bin/schedulerd` and `bin/migrate`, but the repo
+ships additional tool sources under `cmd/` that are built ad hoc — `cmd/` may
+carry more residents than `bin/` shows.
+
+**`backfill-commit-signals`** (`cmd/backfill-commit-signals/main.go:1-6`)
+re-classifies historical scheduler ticks whose commit anatomy
+(`ticks.code_commits` / `ticks.board_commits`) was never stamped and writes the
+split back onto the tick row. It exists to repair databases affected by the
+pre-SCHED-GAP-202 defect (README: the fix landed in the daemon at 40ae3d3b;
+ticks before it recorded 0/0 anatomy regardless of commits landed).
+
+```bash
+go build -o bin/backfill-commit-signals ./cmd/backfill-commit-signals/
+# 1. Dry-run (default): reports counts, writes nothing
+bin/backfill-commit-signals --db ~/.hermes/coding-hermes/scheduler.db \
+  --since 2026-09-19T14:03:25-05:00 --until 2026-09-21T23:59:59-05:00
+# 2. Apply: stamp the split, mark the unmeasurable, note the causes
+bin/backfill-commit-signals --db ~/.hermes/coding-hermes/scheduler.db \
+  --since 2026-09-19T14:03:25-05:00 --until 2026-09-21T23:59:59-05:00 --apply
+```
+
+Flags (from `run()` in `cmd/backfill-commit-signals/main.go:170-181`):
+
+- `--db` — SQLite scheduler database path (default `~/.hermes/coding-hermes/scheduler.db`)
+- `--since` / `--until` — inclusive window, RFC3339 (tool defaults cover the
+  2026-09-19..21 repair window; always pass your own window)
+- `--dry-run` — default `true`; reports only. An explicit `--dry-run=true`
+  always wins over `--apply`, so `--apply --dry-run` can never silently write
+  (`main.go:193-196`)
+- `--apply` — explicit write opt-in; updates ONLY `ticks.code_commits` /
+  `ticks.board_commits`, both in one transaction, and re-checks the 0/0
+  predicate in the UPDATE `WHERE` clause so a row the daemon stamped in the
+  meantime is skipped, not clobbered (`main.go:542-576`)
+- `--board` / `--board-row` / `--no-board` — optional board `tasks.jsonl` write
+  appending a `review_notes` entry census of unrecoverable ticks (idempotent
+  via a marker string; nothing else on the line is touched)
+
+Safety notes, per source:
+
+- **Irreversibility:** writes are plain UPDATEs — no undo. Run a dry-run first;
+  the report states the mode explicitly (`DRY-RUN (nothing written; pass
+  --apply to write)`, `main.go:708`).
+- Ticks that cannot be measured (workdir gone, not a git repo, git
+  unavailable, history under-reports) get the explicit unmeasured marker
+  `-1/-1`, never a fake `0/0` (`main.go:559`).
+- A 0-byte (truncated) database file is detected and refused before the open
+  (`main.go:218, 309`).
+
+**`queueprobe`** (`cmd/queueprobe/main.go`) is a one-shot render probe for
+SCHED-GAP-1589: it renders the `/queue` dashboard page against a DB path given
+as `os.Args[1]` and prints the HTML to stdout, proving acceptance against real
+DB state without running the daemon. It is hidden behind a build tag, so it is
+invisible to plain `go build ./...`:
+
+```bash
+go build -tags schedgap1589probe -o /tmp/queueprobe ./cmd/queueprobe/
+/tmp/queueprobe /path/to/a/COPY/of/scheduler.db
+```
+
+(Build command verbatim from `cmd/queueprobe/main.go:5`. Point it at a COPY of
+the live database — the probe is not written for concurrent access with the
+running daemon.)
 
 ### Project Structure
 
@@ -657,7 +860,8 @@ Full tracked layout — every top-level entry, verified against `git ls-files`
 (2026-09-26, CLN-1):
 
 ```
-cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe
+cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe,
+                # scheduler-query (federation read), scheduler-dispatch (work dispatch)
 internal/       # api, dashboard, database, blocks, clock, config, mcp, scheduler,
                 # sync, version, agentlog
 ops/            # fleet invariant checker (check-fleet-invariants.py) + testdata,
@@ -709,7 +913,8 @@ removed in the same pass; everything else below is deliberate and must not be
   tests all checked). Recover with `git show bf482a5a:<path>` if ever needed.
 - **`fleet.toml` (tracked)** is a curated *static mirror* of operator cooldown
   pins, NOT the live fleet config — the live file is `~/.hermes/fleet.toml`,
-  written only by `~/.hermes/scripts/fleet-cooldown-policy.py`. The two are
+  written by `~/.hermes/scripts/fleet-sync.py` (the DB→file mirror;
+  `fleet-cooldown-policy.py --apply` is retired as a writer). The two are
   different on purpose; never copy the live file into the repo (see the file's
   own header).
 - **The outer directory `/home/kara/coding-hermes-scheduler/` is not the repo**
@@ -746,14 +951,12 @@ removed in the same pass; everything else below is deliberate and must not be
   are live; the integration-tagged root test and the simulation smoke exist ONLY
   in `ci.yaml`. Merging them is filed as a finding, not done blind.
 
-**Known layout drift (found by this inventory, filed — not fixed here):**
-`deploy/coding-hermes-scheduler.service` sets
-`ExecStart=%h/coding-hermes-scheduler/bin/schedulerd`, a path that does not exist
-(the repo is the doubly-nested checkout). The running daemon is the *user* unit
-`~/.config/systemd/user/coding-hermes-scheduler.service`, whose ExecStart is
-`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -config
-/home/kara/.hermes/fleet.toml`. The tracked unit file must be reconciled with the
-live one before anyone deploys it.
+**Layout drift, reconciled (README-7, 2026-10-08):** `deploy/coding-hermes-scheduler.service`
+previously pointed `ExecStart` at `%h/coding-hermes-scheduler/bin/schedulerd`, a path that does
+not exist (the repo is the doubly-nested checkout) while the live daemon is the *user* unit
+`~/.config/systemd/user/coding-hermes-scheduler.service`. The tracked unit is now byte-identical
+to that live user unit (ExecStart
+`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd -db /home/kara/.hermes/coding-hermes/scheduler.db -config /home/kara/.hermes/fleet.toml`, plus `ExecStartPre` rebuild, drop-in-armed env, and the operator note that drop-ins/EnvironmentFile paths are host-specific). NOTE: the live unit carries `%h`-anchored host paths; a fresh-clone deploy on a different box must still review the ExecStart path before enabling — `make deploy-install` installs it verbatim.
 
 ## Fleet & Skills
 
@@ -772,6 +975,11 @@ lives, the two admission modes and the board-ownership precondition, the 6h cool
 anti-snap rule, which store owns what, and the two gates that verify the result — see
 [docs/fleet-config-model.md](docs/fleet-config-model.md): every claim on that page is paired with
 the command that proves it.
+
+Board rows and close-out events carry `ch:trace` markers (`row=`, `spec=`, `test=`, `evidence=`,
+`witness=`, …) that bind every claim to the evidence that proves it; the marker grammar, evidence
+tiers (T0–T3), witness rules, and close-out block format are defined in
+[docs/traceability-doctrine.md](docs/traceability-doctrine.md).
 
 ---
 
@@ -841,7 +1049,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 48 tools listed in [MCP Tools](#mcp-tools) — the 18 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable) plus the groups/templates/deploy surface, `events_list`, the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), and the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads:
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 61 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP
@@ -850,7 +1058,7 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 
 ## Dashboard
 
-Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates: fleet overview and health panel every 10s, queue and tick history every 30s.
+Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates driven by a single user-configurable auto-refresh (default 10s; selectable 5s/10s/30s/60s/5m/off in the refresh bar, remembered in `localStorage` under `ch.autorefresh_ms`). One cadence serves every page, including the queue and tick history views.
 
 ![Dashboard](assets/dashboard.png)
 

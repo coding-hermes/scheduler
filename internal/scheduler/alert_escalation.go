@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
@@ -24,6 +25,10 @@ type AlertEscalator struct {
 	// autoDisable configures per-project failure-rate auto-disable
 	// (SCHED-GAP-018). failureRate <= 0 = feature off.
 	autoDisable autoDisablePolicy
+	// bus (REMOTE-004, §3) publishes lane-state transitions. The zero
+	// value (nil client) is the disabled/no-op bus — every publish is
+	// best-effort and cannot error.
+	bus *SchedulerBus
 	// budgetHolds (SCHED-GAP-1614) is the packer's CURRENT per-namespace
 	// in-hold view, installed per health pass by Loop.evaluate via
 	// SetBudgetHolds. A lane whose namespace is in this map AND in the
@@ -42,6 +47,17 @@ type AlertEscalator struct {
 // the feature off.
 func NewAlertEscalator(db *sql.DB, events *EventLogger, autoDisable autoDisablePolicy) *AlertEscalator {
 	return &AlertEscalator{db: db, events: events, autoDisable: autoDisable}
+}
+
+// SetSchedulerBus installs the lane-state publisher (REMOTE-004). nil or a
+// disabled bus leaves the escalator silent. Loop.SetSchedulerBus
+// propagates here (called once at boot, after the escalator exists).
+func (ae *AlertEscalator) SetSchedulerBus(b *SchedulerBus) {
+	if b == nil || !b.Enabled() {
+		ae.bus = nil
+		return
+	}
+	ae.bus = b
 }
 
 // NewAlertEscalatorWithPolicy builds an escalator whose auto-disable policy is
@@ -512,6 +528,14 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 		log.Printf("AUTO-DISABLE: disabled %s — failure_rate=%.4f (%d/%d, window=%d, threshold=%.2f)",
 			name, rate, failed, total, window, ae.autoDisable.failureRate)
 
+		// REMOTE-004 (§3): a lane just changed state (enabled → disabled by
+		// the auto-disable path). Publish the transition on the federation
+		// bus. Best-effort by construction: the nil/bus-less escalator and
+		// the disabled bus are no-ops, and the publish cannot error.
+		if ae.bus.Enabled() {
+			ae.bus.PublishLaneState(ctx, name, bus.LaneStateDisabled)
+		}
+
 		ae.events.Emit(ctx, SeverityHigh, "auto-disable",
 			fmt.Sprintf("project auto-disabled: %s — %.1f%% failure rate (%d/%d ticks)", name, rate*100, failed, total),
 			map[string]any{
@@ -574,6 +598,26 @@ func failureReasonClass(errText string) string {
 	// failed tick carrying it stamps failure_reason=instant_turn.
 	if strings.Contains(errText, GatewayInstantTurnSentinel) {
 		return FailureReasonInstantTurn
+	}
+	// SCHED-GAP-1707: the silence watchdog's verdict is its OWN class, not
+	// gateway transport — the scheduler stopped the session, the gateway
+	// carried it fine. Named session_silent so an operator reading
+	// ticks.failure_reason sees the watchdog, and the row stays out of
+	// per-project health accounting via the marker list in failureclass.go.
+	if strings.Contains(strings.ToLower(errText), sessionSilentMarker) {
+		return "session_silent"
+	}
+	// SCHED-GAP-1698: the poll-loop guard's verdict is its OWN class for the
+	// same reason — the scheduler stopped a zero-advancement sleep-poll
+	// session; the gateway carried it fine the whole time (which is exactly
+	// why no idle deadline ever fired). Named sleep_poll so an operator
+	// reading ticks.failure_reason sees the guard; the row stays out of
+	// per-project health accounting via the marker list in failureclass.go.
+	// Checked BEFORE the transport fallback: the marker is more specific
+	// than any transport class and the guard rides the same classification
+	// site as the silence watchdog.
+	if strings.Contains(strings.ToLower(errText), sessionPollLoopMarker) {
+		return "sleep_poll"
 	}
 	if strings.Contains(strings.ToLower(errText), "draining") {
 		return FailureReasonGatewayDrain

@@ -59,6 +59,34 @@ func HarnessFailure(errText string) bool {
 		// ErrGatewayTransient text and the SSE reader's own terminal phrase.
 		"gateway transient error",
 		"sse stream ended without a terminal event",
+		// SCHED-GAP-1684: a tick whose OWN session deadline tore down the
+		// gateway POST carries "tick-timeout wall <d>: … tick deadline
+		// exceeded: …" (Spawner.tickDeadlineTimeout, status=timeout). The
+		// wall fired inside a gateway POST, so the shared classifier must
+		// read the harness-side class like every other gateway-wall timeout
+		// (failure_reason=gateway_transport on the TickTimeout row). The
+		// phrase is deliberately distinct from TurnDeadlineError's "gateway
+		// turn deadline exceeded" — that abort is a stalled FAILURE with
+		// its own text, never a self-timeout.
+		"tick deadline exceeded",
+		// SCHED-GAP-1707: the session-silence watchdog's kill text
+		// (sessionSilentError). A zero-activity session is a HARNESS
+		// verdict — the scheduler stopped it — never the lane's own
+		// failure, so the row stamps failure_reason=session_silent through
+		// failureReasonClass and stays out of per-project health
+		// accounting (SCHED-GAP-134) exactly like every other harness-side
+		// kill. The silence duration itself rides ticks.session_silence_s.
+		sessionSilentMarker,
+		// SCHED-GAP-1698: the poll-loop idle guard's kill text
+		// (sessionPollLoopError). A confirmed sleep-poll session is a
+		// HARNESS verdict — the scheduler stopped it for zero-advancement
+		// cycling — never the lane's own failure, so the row stamps
+		// failure_reason=sleep_poll through failureReasonClass and stays
+		// out of per-project health accounting (SCHED-GAP-134) exactly
+		// like every other harness-side kill. The confirmed polling span
+		// rides ticks.session_silence_s (same column as the silence
+		// watchdog's quiet duration).
+		sessionPollLoopMarker,
 		// SCHED-GAP-1641: an instant one-shot gateway turn is a HARNESS
 		// verdict, not a project failure — a completed response that did a
 		// near-zero-output single turn must not count in any healthy-tick

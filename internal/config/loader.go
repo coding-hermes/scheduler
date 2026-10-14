@@ -254,6 +254,18 @@ func applyEnvOverrides(cfg *RootConfig) {
 			cfg.Scheduler.SpawnMemLimitMB = n
 		}
 	}
+	// SCHED-GAP-1707: session-silence watchdog grace env override — no
+	// parse gate here, validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"); v != "" {
+		cfg.Scheduler.SessionSilenceGrace = v
+	}
+	// SCHED-GAP-1698: poll-loop idle guard env override — no parse gate
+	// here, validation happens in Validate().
+	if v := os.Getenv("SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			cfg.Scheduler.SessionPollLoopMinTicks = n
+		}
+	}
 	// Namespace mode is a bool: only "true" flips it on. This mirrors the
 	// pre-FEAT-005 behavior in main.go (any value != "true" is a no-op).
 	if v := os.Getenv("SCHEDULER_NAMESPACE_MODE"); v == "true" {
@@ -277,6 +289,13 @@ func applyEnvOverrides(cfg *RootConfig) {
 	}
 	if v := os.Getenv("SCHEDULER_DUCK_BRAIN_URL"); v != "" {
 		cfg.DuckBrain.URL = v
+	}
+
+	// REMOTE-003 (§1): scheduler identity env override — the highest layer
+	// below a future CLI flag (there is none by design: identity is
+	// per-deployment). An unset SCHEDULER_ID leaves the TOML/default value.
+	if v := os.Getenv("SCHEDULER_ID"); v != "" {
+		cfg.Scheduler.ID = v
 	}
 }
 
@@ -327,6 +346,32 @@ func (r *RootConfig) Validate() error {
 	// normalizing one to "off" would hide a config typo from the operator.
 	if r.Scheduler.SpawnMemLimitMB < 0 {
 		errs = append(errs, fmt.Errorf("scheduler.spawn_mem_limit_mb (%d) must be >= 0 (0 = off; unset = off)", r.Scheduler.SpawnMemLimitMB))
+	}
+	// SCHED-GAP-1707: the session-silence watchdog grace is optional —
+	// empty or "0s" means disabled (the daemon flag default). When set it
+	// must parse and be strictly positive: the grace is the whole point of
+	// the knob, and the flag layer treats <= 0 as "keep default", so
+	// accepting a negative here would be a silent no-op rather than a real
+	// setting.
+	if v := r.Scheduler.SessionSilenceGrace; v != "" {
+		if d, err := parseDurationErr(v, "scheduler.session_silence_grace"); err != nil {
+			errs = append(errs, err)
+		} else if d < 0 {
+			errs = append(errs, fmt.Errorf("scheduler.session_silence_grace (%s) must be > 0 (unset or \"0s\" = disabled)", v))
+		}
+	}
+	// SCHED-GAP-1698: the poll-loop guard minimum is optional — 0 means
+	// disabled (the daemon flag default). Negative values are rejected
+	// (disabled is spelled 0, not -1) and values 1-5 are rejected with a
+	// pointer at the built-in floor: the flag layer clamps 1-5 up to 6, so
+	// accepting them in TOML would be a silent value change rather than a
+	// real setting. N >= 6 arms the guard at that (stricter) threshold.
+	if n := r.Scheduler.SessionPollLoopMinTicks; n != 0 {
+		if n < 0 {
+			errs = append(errs, fmt.Errorf("scheduler.session_poll_loop_min_ticks (%d) must be >= 0 (0 = disabled)", n))
+		} else if n < 6 {
+			errs = append(errs, fmt.Errorf("scheduler.session_poll_loop_min_ticks (%d) must be >= 6 — the built-in stride floor (0 = disabled)", n))
+		}
 	}
 	// SCHED-GAP-1575-B: the heavy-read API deadline is optional — empty means
 	// "not set" (the 5s daemon flag default applies). When set it must parse
@@ -528,11 +573,19 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 	return &cfg, nil
 }
 
-// LoadRootConfig reads and validates a TOML file into a RootConfig.
-// The same file may also contain fleet declarations alongside scheduler
-// config sections (blackout windows, etc.). Unlike LoadFleetConfig,
+// LoadRootConfig reads a TOML file into a RootConfig and applies the
+// SCHEDULER_* env overrides on top of it (layer 3 of the FEAT-005
+// precedence: defaults < TOML < env; CLI flags are applied afterwards by
+// the caller). The same file may also contain fleet declarations alongside
+// scheduler config sections (blackout windows, etc.). Unlike LoadFleetConfig,
 // this function does not validate project/namespace fields — call
-// ApplyFleetConfig separately with AsFleet() for that.
+// ApplyFleetConfig separately with AsFleet() for that. Like LoadConfig, the
+// decoded RootConfig is NOT validated here (most boot call sites decode
+// partial sections such as [crier] or [federation] only); call Validate
+// where the full config is consumed. TR-162: before this fix the function
+// returned the raw TOML decode, so the documented env precedence did not
+// hold on the daemon boot path (a systemd SCHEDULER_GATEWAY_URL drop-in was
+// a silent no-op).
 func LoadRootConfig(path string) (*RootConfig, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("stat config %s: %w", path, err)
@@ -541,6 +594,7 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
+	applyEnvOverrides(&cfg)
 	return &cfg, nil
 }
 
@@ -685,7 +739,30 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				}
 				log.Printf("Config: pinned namespace %q no_artifact_recon_floor=%s", nd.ID, v)
 			}
-			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 {
+			// SCHED-GAP-1712: the namespace gateway endpoint + credential
+			// pin the GatewayKey-conditional way — only an explicitly set
+			// key rewrites the row, so an API-assigned namespace endpoint
+			// survives a restart with a keyless fleet.toml entry.
+			if nd.GatewayURL != "" {
+				v := nd.GatewayURL
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					GatewayURL: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q gateway_url: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q gateway_url=%s", nd.ID, v)
+			}
+			if nd.GatewayKey != "" {
+				v := nd.GatewayKey
+				if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+					GatewayKey: &v,
+				}); err != nil {
+					return fmt.Errorf("update namespace %q gateway_key: %w", nd.ID, err)
+				}
+				log.Printf("Config: pinned namespace %q gateway_key (value redacted)", nd.ID)
+			}
+			if nd.DefaultPrompt == "" && nd.AdmissionMode == "" && nd.LoadGate == "" && nd.MaxConcurrent == 0 &&
+				nd.GatewayURL == "" && nd.GatewayKey == "" {
 				log.Printf("Config: namespace %q already exists, skipped", nd.ID)
 			}
 			continue
@@ -748,6 +825,13 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.GatewayKey != "" {
 				updates.GatewayKey = &pd.GatewayKey
 			}
+			// SCHED-GAP-1712: the lane's gateway endpoint pins the same
+			// GatewayKey-conditional way — only an explicitly set
+			// gateway_url rewrites the row, so an API-assigned endpoint
+			// survives a restart with a keyless fleet.toml entry.
+			if pd.GatewayURL != "" {
+				updates.GatewayURL = &pd.GatewayURL
+			}
 			// SCHED-GAP-064: fallback tiers pin the same way as GatewayKey —
 			// only when fleet.toml explicitly sets them, so an API-assigned
 			// fallback survives a restart with a keyless entry. The
@@ -783,6 +867,9 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.FinalBudgetUSD != nil {
 				updates.FinalBudgetUSD = pd.FinalBudgetUSD
 			}
+			if pd.TargetRunsPerDay != nil {
+				updates.TargetRunsPerDay = pd.TargetRunsPerDay
+			}
 			// Bane 2026-08-27: per-project prompt text + mode pin when
 			// explicitly set in fleet.toml (GatewayKey-style conditional).
 			if pd.Prompt != "" {
@@ -802,6 +889,12 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			// value untouched, so a DB-only flip survives a restart too.
 			if pd.BoardOwnership != "" {
 				updates.BoardOwnership = &pd.BoardOwnership
+			}
+			// SCHED-GAP-1682: the no-op override pins GatewayKey-conditionally
+			// — only an explicitly present key rewrites the row, so an
+			// API-set override survives a restart with a keyless entry.
+			if pd.NoopAllowed != nil {
+				updates.NoopAllowed = pd.NoopAllowed
 			}
 			// SCHED-GAP-150: a retired dagger-era driver must never be
 			// re-armed through the loader. The enabled re-pin is retired
@@ -903,6 +996,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		Weight:           weight,
 		Priority:         priority,
 		CooldownS:        cooldown,
+		TargetRunsPerDay: pd.TargetRunsPerDay,
 		DecayRate:        decay,
 		Model:            model,
 		Provider:         provider,
@@ -913,6 +1007,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		IdleModel:        pd.IdleModel,
 		IdleProvider:     pd.IdleProvider,
 		GatewayKey:       pd.GatewayKey,
+		GatewayURL:       pd.GatewayURL,
 		Command:          pd.Command,
 		Prompt:           pd.Prompt,
 		PromptMode:       pd.PromptMode,
@@ -921,6 +1016,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		AdaptiveCooldown: adaptive,
 		AdmissionMode:    pd.AdmissionMode,
 		BoardOwnership:   pd.BoardOwnership,
+		NoopAllowed:      pd.NoopAllowed,
 	}
 	// Normalize the adaptive policy for enabled projects so the stored row
 	// carries EFFECTIVE values: floor = the fleet cooldown, ceiling and
@@ -1002,15 +1098,19 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		waveWorkersCap = 0
 	}
 	return &database.Namespace{
-		ID:              nd.ID,
-		Weight:          weight,
-		Reserved:        reserved,
-		HardCap:         hardCap,
-		MaxConcurrent:   maxConcurrent,
-		Enabled:         enabled,
-		Description:     nd.Description,
-		DefaultPrompt:   nd.DefaultPrompt,
-		ModelChain:      serializeModelChain(nd.ModelChain),
+		ID:            nd.ID,
+		Weight:        weight,
+		Reserved:      reserved,
+		HardCap:       hardCap,
+		MaxConcurrent: maxConcurrent,
+		Enabled:       enabled,
+		Description:   nd.Description,
+		DefaultPrompt: nd.DefaultPrompt,
+		ModelChain:    serializeModelChain(nd.ModelChain),
+		// SCHED-GAP-1712: the namespace gateway endpoint + credential
+		// (the middle tier of lane > namespace > global).
+		GatewayURL:      nd.GatewayURL,
+		GatewayKey:      nd.GatewayKey,
 		WaveEnabled:     waveEnabled,
 		WaveTickTimeout: nd.WaveTickTimeout,
 		WaveWorkersCap:  waveWorkersCap,

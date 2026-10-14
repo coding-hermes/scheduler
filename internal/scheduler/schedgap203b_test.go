@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // SCHED-GAP-203-B acceptance: the SPAWN side of "a transient gateway blip is a
@@ -122,12 +124,15 @@ func schedGap203BAssertConnectFailureDeferred(t *testing.T) {
 	gap170ResetGate(t) // and no client left installed for the next test
 
 	db := newTestDB(t)
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
 	const projectName = "sgap203b-connect"
 	const tickID = "sgap203b-connect-2026-09-21-00-00-01"
 	mustCreateProjectINFRA012(t, db, projectName)
 	insertRunningTick(t, db, tickID, projectName, 0)
 
 	spawner := NewSpawner(db, 4)
+	spawner.SetClock(sim)
 	spawner.SetGatewayClient(NewGatewayClient(schedGap203BClosedGatewayURL(t), "sk-daemon-shared", 5*time.Second))
 	spawner.SetNoExecFallback(true)
 
@@ -160,6 +165,7 @@ func schedGap203BAssertConnectFailureDeferred(t *testing.T) {
 
 	// Full stack: the same shape through the slot pool, asserting the ROW.
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.SetClock(sim)
 	loop.SetNoDeliver(true)
 	loop.SetGatewayClient(NewGatewayClient(schedGap203BClosedGatewayURL(t), "sk-daemon-shared", 5*time.Second))
 	loop.SetNoExecFallback(true)
@@ -197,6 +203,8 @@ func schedGap203BAssertSSEDropDeferred(t *testing.T) {
 	gap170ResetGate(t)
 
 	db := newTestDB(t)
+	sim := clock.NewSimClockAt(1000, time.Now())
+	t.Cleanup(sim.Close)
 	const projectName = "sgap203b-sse"
 	const tickID = "sgap203b-sse-2026-09-21-00-00-01"
 	mustCreateProjectINFRA012(t, db, projectName)
@@ -206,6 +214,7 @@ func schedGap203BAssertSSEDropDeferred(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	spawner := NewSpawner(db, 4)
+	spawner.SetClock(sim)
 	spawner.SetGatewayClient(NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second))
 	spawner.SetNoExecFallback(true)
 	spawner.timeout = 30 * time.Second
@@ -252,6 +261,7 @@ func schedGap203BAssertSSEDropDeferred(t *testing.T) {
 	loop.SetGatewayClient(NewGatewayClient(srv.URL, "sk-daemon-shared", 5*time.Second))
 	loop.SetNoExecFallback(true)
 	loop.SetTickTimeout(30 * time.Second)
+	loop.SetClock(sim)
 	loop.SetGatewayResponseTimeout(2 * time.Second)
 
 	fsTickID := loop.slotPool.Spawn(PackedProject{Name: projectName, Workdir: t.TempDir()}, time.Now(), true, db)

@@ -12,18 +12,28 @@ import (
 
 // ── S12 §4.3 (SCHED-GAP-111): effective tick deadline ────────────────────
 //
-// DECISION 1: the tick wall-clock deadline for a wave-enabled namespace is a
-// STATIC, namespace-scoped override of --tick-timeout. It is resolved in ONE
-// place — this resolver, called from Spawn() — and never extended at runtime
-// (no heartbeat lease, no mid-tick renegotiation). Every failure path falls
-// back to the base --tick-timeout, so a fleet with waves off is byte-identical
-// to pre-S12 behavior (spec §15).
+// DECISION 1: the tick wall-clock deadline for a namespace with an explicit
+// per-namespace deadline configuration is a STATIC, namespace-scoped override
+// of --tick-timeout. It is resolved in ONE place — this resolver, called from
+// Spawn() — and never extended at runtime (no heartbeat lease, no mid-tick
+// renegotiation). Every failure path falls back to the base --tick-timeout.
 //
-// Resolution order for a project whose namespace has wave_enabled=1:
+// Resolution order for a project whose namespace carries a tick-deadline
+// override (see nsCarriesDeadline):
 //
 //	1. SCHEDULER_WAVE_TICK_TIMEOUT env (when set and parseable)
 //	2. namespaces.wave_tick_timeout (when non-empty and parseable)
 //	3. s.timeout (--tick-timeout)
+//
+// SCHED-GAP-1691: the override is DECOUPLED from wave_enabled. A namespace
+// with wave_enabled=0 that carries a non-empty wave_tick_timeout (e.g. the
+// qa namespace's 3h tick wall) resolves the same cascade as a wave-enabled
+// namespace; only the FeatureWaveTicks metric stays wave-gated (it marks
+// wave scheduling, not deadline configuration). Namespaces with NO explicit
+// deadline config (wave_enabled=0 AND empty wave_tick_timeout) are
+// byte-identical to pre-S12 behavior — including env immunity, so a global
+// SCHEDULER_WAVE_TICK_TIMEOUT bump cannot silently extend every plain
+// namespace (spec §15).
 //
 // An unparseable env value logs a WARN and falls back to the namespace value —
 // never panics, never silently zeroes the deadline. An unparseable namespace
@@ -53,6 +63,18 @@ const envWaveTickTimeout = "SCHEDULER_WAVE_TICK_TIMEOUT"
 type nsWaveRow struct {
 	waveEnabled bool
 	waveTimeout string
+}
+
+// nsCarriesDeadline reports whether a namespace row activates the
+// env > ns > --tick-timeout deadline cascade (SCHED-GAP-1691). It carries a
+// deadline when EITHER wave column is set: wave_enabled=1 (wave scheduling
+// historically implies an extended tick wall) OR a non-empty
+// wave_tick_timeout (a namespace-scoped tick wall independent of waves —
+// e.g. the qa namespace's 3h cap with wave_enabled=0). A namespace with
+// neither value is unchanged: it inherits --tick-timeout and the env
+// override never touches it.
+func nsCarriesDeadline(row nsWaveRow) bool {
+	return row.waveEnabled || row.waveTimeout != ""
 }
 
 // waveNamespace loads the wave columns for the project's namespace. Returns
@@ -92,20 +114,28 @@ func (s *Spawner) waveNamespace(ctx context.Context, namespaceID string) (nsWave
 // effectiveTickTimeout returns the deadline Spawn() must apply to the foreman
 // session it is about to start (the ONE resolution site, S12 §4.3 item 2).
 //
+// The cascade activates for any namespace carrying a tick-deadline override
+// (nsCarriesDeadline: wave_enabled=1 OR a non-empty wave_tick_timeout,
+// SCHED-GAP-1691) — not only wave-enabled namespaces.
+//
 // The returned duration is already clamped to waveTickTimeoutCeiling: a
-// wave-enabled namespace whose resolved override exceeds 4h (possible only
+// namespace whose resolved override exceeds 4h (possible only
 // via env or a hand-edited row — config validation rejects it) gets 4h, not
-// an immortal tick. A non-wave resolution (base --tick-timeout) is returned
+// an immortal tick. A plain resolution (base --tick-timeout) is returned
 // untouched.
 func (s *Spawner) effectiveTickTimeout(project PackedProject) time.Duration {
 	ns, ok := s.waveNamespace(context.Background(), project.NamespaceID)
-	if !ok || !ns.waveEnabled {
+	if !ok || !nsCarriesDeadline(ns) {
 		return s.timeout
 	}
-	// SCHED-GAP-131: a tick is being dispatched into a wave-enabled namespace
-	// — record the wave-tick feature use (the ONE resolution site, so it fires
-	// exactly once per wave-enabled spawn).
-	database.RecordFeatureUse(database.FeatureWaveTicks)
+	// SCHED-GAP-131: a tick dispatched into a wave-ENABLED namespace records
+	// the wave-tick feature use (the ONE fire site, exactly once per
+	// wave-enabled spawn). SCHED-GAP-1691: a wave_enabled=0 namespace that
+	// only carries a deadline override does NOT count — the metric marks
+	// wave scheduling, not deadline configuration.
+	if ns.waveEnabled {
+		database.RecordFeatureUse(database.FeatureWaveTicks)
+	}
 
 	// Layer 1: env override. Set → wins over the namespace value (operator
 	// knob for incident response). Unparseable → WARN + fall through to the
@@ -119,8 +149,9 @@ func (s *Spawner) effectiveTickTimeout(project PackedProject) time.Duration {
 	}
 
 	// Layer 2: namespace wave_tick_timeout. Empty → inherit (spec §15:
-	// wave_enabled without a timeout still inherits --tick-timeout).
-	// Unparseable (hand-edited row) → WARN + inherit, same as a lookup miss.
+	// a wave-enabled namespace without a timeout still inherits
+	// --tick-timeout). Unparseable (hand-edited row) → WARN + inherit, same
+	// as a lookup miss.
 	if ns.waveTimeout != "" {
 		if d, err := time.ParseDuration(ns.waveTimeout); err == nil {
 			return clampWaveTimeout(d, "namespace wave_tick_timeout "+ns.waveTimeout)
@@ -155,7 +186,8 @@ func nsIDOf(p database.Project) string {
 // HISTORY. tick_process.go's per-evaluation CleanupStaleProjects call passed a
 // hardcoded 90 * time.Minute. That pre-dated SCHED-GAP-111 (S12 §4.3), which
 // let wave-enabled namespaces extend --tick-timeout to 3h (env > ns > flag,
-// ceiling 4h). A 90m backstop on a 3h tick is a 2x-earlier kill: live ticks
+// ceiling 4h; since SCHED-GAP-1691 any namespace carrying a wave_tick_timeout
+// regardless of wave_enabled). A 90m backstop on a 3h tick is a 2x-earlier kill: live ticks
 // were reaped with error="stale - timeout at 1h30m0s" while the in-process
 // deadline ctx (spawn.go:1193) was still 1.5h away. The phantom timeouts fed
 // the failure-rate counters, the auto-disable window, and the board foreman
@@ -205,8 +237,9 @@ const (
 //     resolves it through the project's current namespace assignment).
 //  2. For each non-empty namespace_id, look up wave_enabled / wave_tick_timeout
 //     in one query per namespace and apply the env > ns > --tick-timeout
-//     cascade — same resolution as Spawner.effectiveTickTimeout. A wave-off
-//     namespace (or unnamespaced tick) inherits s.timeout.
+//     cascade — same resolution as Spawner.effectiveTickTimeout. A namespace
+//     with no deadline config (wave off AND empty wave_tick_timeout,
+//     SCHED-GAP-1691) — or an unnamespaced tick — inherits s.timeout.
 //  3. Take the MAX across the per-tick effective deadlines.
 //  4. Add backstopGrace. Apply the backstopFloor. Return.
 //
@@ -281,7 +314,13 @@ func (l *Loop) backstopMaxAge() time.Duration {
 // resolveNamespaceDeadline returns the effective tick deadline for a single
 // namespace id, applying the same env > ns > --tick-timeout cascade as
 // Spawner.effectiveTickTimeout. ok=false means "unnamespaced / not found /
-// wave-off" — caller inherits s.timeout in that case.
+// carries no deadline override" — caller inherits s.timeout in that case.
+// SCHED-GAP-1691: the cascade activates for ANY namespace with a deadline
+// override (nsCarriesDeadline: wave_enabled=1 OR non-empty
+// wave_tick_timeout), so the reaper's cutoff tracks a wave_enabled=0
+// namespace's 3h tick wall exactly as it does a wave-enabled one — otherwise
+// the backstop would reap a 3h tick at base+30m and reintroduce the
+// phantom-timeout class this helper exists to prevent (SCHED-GAP-217).
 func (l *Loop) resolveNamespaceDeadline(namespaceID string) (time.Duration, bool) {
 	if l == nil || l.spawner == nil {
 		return 0, false
@@ -298,12 +337,13 @@ func (l *Loop) resolveNamespaceDeadline(namespaceID string) (time.Duration, bool
 		log.Printf("WARN: backstopMaxAge: namespace %q lookup failed (%v) — inheriting --tick-timeout", namespaceID, err)
 		return 0, false
 	}
-	if enabled == 0 {
-		// Wave-off namespace: inherits the base --tick-timeout, so its
-		// effective deadline is the same as an unnamespaced tick. We
-		// return ok=false so the caller's max() math treats it as
-		// "nothing bigger than base", and the fallback at the call site
-		// (graceBase) covers it.
+	row := nsWaveRow{waveEnabled: enabled != 0, waveTimeout: waveTimeout}
+	if !nsCarriesDeadline(row) {
+		// No deadline config (wave off AND no timeout): the namespace
+		// inherits the base --tick-timeout, so its effective deadline is
+		// the same as an unnamespaced tick. We return ok=false so the
+		// caller's max() math treats it as "nothing bigger than base",
+		// and the fallback at the call site (graceBase) covers it.
 		return 0, false
 	}
 

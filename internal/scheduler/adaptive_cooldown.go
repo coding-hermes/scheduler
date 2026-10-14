@@ -333,6 +333,12 @@ const boardPrefix = ".coding-hermes/"
 // family — see boardRowIsFixture (fixture_registry.go), which this
 // function shares with countPendingBoard so both consumers exclude
 // identically.
+//
+// SCHED-GAP-1727: deferred rows (deferred:true, the BT-076 boardctl
+// contract) are excluded too — a deferred row is searchable/returnable
+// board state, not open actionable work, exactly like a NEVER-DONE
+// fixture. Exclusion is counting-only: result/report APIs still surface
+// deferred rows.
 func boardOpenRows(workdir string) (int, bool) {
 	boardPath, hasBoard := findBoardFile(workdir)
 	if !hasBoard {
@@ -368,6 +374,7 @@ func boardOpenRows(workdir string) (int, bool) {
 			ID        string `json:"id"`
 			Status    string `json:"status"`
 			Perpetual bool   `json:"perpetual"`
+			Deferred  bool   `json:"deferred"`
 		}
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			count++ // malformed row — count as open, never hide work
@@ -375,6 +382,9 @@ func boardOpenRows(workdir string) (int, bool) {
 		}
 		if isFixtureRow(row.ID, row.Perpetual) || registryDeclares(row.ID, fixtureIDs) {
 			continue // declared/perpetual fixture — not work (SCHED-GAP-106, ADV-R05)
+		}
+		if row.Deferred {
+			continue // deferred:true — visible but not actionable (SCHED-GAP-1727)
 		}
 		s := strings.ToLower(row.Status)
 		switch s {
@@ -399,7 +409,8 @@ func boardOpenRows(workdir string) (int, bool) {
 // malformed row contributes ONE synthetic id ("" — it is open work whose id
 // cannot be read, never hidden). Markdown boards have no ids by
 // construction: their unchecked headers each count as one unique id (the
-// header text IS the id).
+// header text IS the id). SCHED-GAP-1727: deferred rows are excluded
+// here too, so the unique-id metric agrees with boardOpenRows.
 func boardOpenUniqueIDs(workdir string) (int, bool) {
 	boardPath, hasBoard := findBoardFile(workdir)
 	if !hasBoard {
@@ -433,6 +444,7 @@ func boardOpenUniqueIDs(workdir string) (int, bool) {
 			ID        string `json:"id"`
 			Status    string `json:"status"`
 			Perpetual bool   `json:"perpetual"`
+			Deferred  bool   `json:"deferred"`
 		}
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			ids[""] = true // malformed row — open work, id unreadable
@@ -440,6 +452,9 @@ func boardOpenUniqueIDs(workdir string) (int, bool) {
 		}
 		if isFixtureRow(row.ID, row.Perpetual) || registryDeclares(row.ID, fixtureIDs) {
 			continue // declared/perpetual fixture — not work (SCHED-GAP-106, ADV-R05)
+		}
+		if row.Deferred {
+			continue // deferred:true — visible but not actionable (SCHED-GAP-1727)
 		}
 		s := strings.ToLower(row.Status)
 		switch s {

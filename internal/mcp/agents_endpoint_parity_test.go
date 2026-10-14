@@ -366,6 +366,7 @@ func TestAgentsEndpointTableParity_SelfCheck(t *testing.T) {
 		exact: map[string]bool{
 			"/":                     true,
 			"/health":               true,
+			"/healthz":              true,
 			"/api/v1/health":        true,
 			"/api/v1/status":        true,
 			"/api/v1/metrics":       true,
@@ -385,7 +386,7 @@ func TestAgentsEndpointTableParity_SelfCheck(t *testing.T) {
 		},
 	}
 	real := []string{
-		"/", "/health",
+		"/", "/health", "/healthz",
 		"/api/v1/health", "/api/v1/status", "/api/v1/metrics",
 		"/api/v1/events", "/api/v1/events/stream",
 		"/api/v1/groups", "/api/v1/projects", "/api/v1/templates", "/api/v1/ticks",
@@ -418,7 +419,7 @@ func TestAgentsEndpointTableParity_SelfCheck(t *testing.T) {
 		name: "subtree registration covered by a deeper documented path passes",
 		documented: []string{
 			"/api/v1/groups/{name}/deploy", "/api/v1/namespaces/{id}",
-			"/", "/health",
+			"/", "/health", "/healthz",
 			"/api/v1/health", "/api/v1/status", "/api/v1/metrics",
 			"/api/v1/events", "/api/v1/events/stream",
 			"/api/v1/groups", "/api/v1/projects", "/api/v1/projects/{name}",
@@ -430,7 +431,7 @@ func TestAgentsEndpointTableParity_SelfCheck(t *testing.T) {
 	}, {
 		name: "exact registration is NOT covered by a deeper documented path",
 		documented: []string{
-			"/", "/health",
+			"/", "/health", "/healthz",
 			"/api/v1/health", "/api/v1/status", "/api/v1/metrics",
 			// "/api/v1/events" itself is dropped; only its deeper twin is
 			// documented — an exact route must have its own row.

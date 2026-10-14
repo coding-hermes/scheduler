@@ -80,6 +80,8 @@ var mutatingTools = map[string]bool{
 	"project_spawn":          true,
 	"project_bump":           true,
 	"project_unbump":         true,
+	"peers_register":         true,
+	"peers_heartbeat":        true,
 }
 
 // readOnlyTools is the complement: everything not listed here but in the
@@ -88,15 +90,20 @@ var mutatingTools = map[string]bool{
 // surface — cron probes, the ops watchdog, Observatory-style pullers — are
 // read-only, and the mutation is the danger, not the observation.
 var readOnlyTools = map[string]bool{
-	"fleet_status":              true,
-	"fleet_projects":            true,
-	"fleet_project_detail":      true,
-	"fleet_ticks":               true,
-	"groups_list":               true,
-	"groups_get":                true,
-	"templates_list":            true,
-	"templates_get":             true,
-	"events_list":               true,
+	"fleet_status":         true,
+	"fleet_projects":       true,
+	"fleet_project_detail": true,
+	"fleet_ticks":          true,
+	"groups_list":          true,
+	"groups_get":           true,
+	"templates_list":       true,
+	"templates_get":        true,
+	"events_list":          true,
+	"fleet_lane_tree":      true,
+	"observatory_snapshot": true,
+	// SCHED-GAP-1654: a count of already-committed events — a read, and an
+	// open one like every other introspection surface above.
+	"gateway_errors":            true,
 	"namespaces_list":           true,
 	"namespaces_get":            true,
 	"namespaces_projects":       true,
@@ -107,6 +114,18 @@ var readOnlyTools = map[string]bool{
 	"features_get":              true,
 	"features_prune_candidates": true,
 	"cooldown_residue":          true,
+	"peers_list":                true,
+	// REMOTE-010: the federation query tools are READS — the transport
+	// carries a peer's/read-path answer, it never mutates state (spec §7:
+	// queries are read-only by construction). Same open-reads doctrine as
+	// every other read tool above.
+	"fed_query":         true,
+	"fed_peer_status":   true,
+	"fed_fleet_status":  true,
+	"fed_projects_list": true,
+	"fed_queue_get":     true,
+	"fed_ticks_list":    true,
+	"fed_events_list":   true,
 }
 
 // MutatingToolNames returns the mutating tool set sorted — the classification

@@ -77,8 +77,8 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 		}
 	}
 	const q = `INSERT INTO projects
-(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, parent, enabled, created_at, updated_at, adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s, no_progress_threshold, no_progress_ticks, board_rows_seen, admission_mode, board_ownership)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, gateway_url, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, parent, enabled, created_at, updated_at, adaptive_cooldown, cooldown_floor_s, cooldown_ceiling_s, no_progress_threshold, no_progress_ticks, board_rows_seen, admission_mode, board_ownership, target_runs_per_day, scheduler_id, noop_allowed)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 	// A zero-valued BoardRowsSeen on a brand-new row would read as "board
 	// observed with 0 rows"; store the unseen sentinel instead so the first
 	// adaptive observation only ever establishes a baseline.
@@ -92,14 +92,19 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
 	// this they were dropped at creation and only re-applied on the NEXT
 	// restart's pin pass, so a brand-new lane ran one full load on the
 	// inherited defaults while the file said otherwise.
+	// REMOTE-003 (§1): every row the daemon writes carries its scheduler_id
+	// — the writer-attribution join key. The identity is installed once at
+	// boot (SetSchedulerID); "" keeps the historical shape (tests, tooling).
+	sid := stampSchedulerID()
 	_, err := db.ExecContext(ctx, q,
 		p.Name, p.RepoURL, p.Workdir, p.Weight, p.Priority, p.CooldownS,
 		p.DecayRate, p.Model, p.Provider, p.FallbackModel, p.FallbackProvider, boolToInt(p.NoGlobalFallback),
 		p.IdleModel, p.IdleProvider,
 		p.DailyBudgetUSD, p.WeeklyBudgetUSD, p.FinalBudgetUSD,
-		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.Command, p.Prompt, p.PromptMode, p.NamespaceID, p.Deliver, p.DeliverMode, p.Parent, boolToInt(p.Enabled),
+		p.WorkerModel, p.WorkerProvider, p.GatewayKey, p.GatewayURL, p.Command, p.Prompt, p.PromptMode, p.NamespaceID, p.Deliver, p.DeliverMode, p.Parent, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt,
-		boolToInt(p.AdaptiveCooldown), p.CooldownFloorS, p.CooldownCeilingS, p.NoProgressThreshold, p.NoProgressTicks, boardRowsSeen, p.AdmissionMode, p.BoardOwnership)
+		boolToInt(p.AdaptiveCooldown), p.CooldownFloorS, p.CooldownCeilingS, p.NoProgressThreshold, p.NoProgressTicks, boardRowsSeen, p.AdmissionMode, p.BoardOwnership,
+		p.TargetRunsPerDay, sid, nilPtrToInt(p.NoopAllowed))
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Name, err)
 	}
@@ -135,22 +140,25 @@ const (
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0)
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, gateway_url, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0), target_runs_per_day, noop_allowed
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	var pinS sql.NullInt64
+	var targetRunsPerDay sql.NullFloat64
+	var noopAllowed sql.NullInt64
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
-		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
+		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.GatewayURL, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
 		&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent,
 		&p.QAOutputCount, &p.QAZeroOutputStreak, &p.PMOutputCount, &p.PMZeroOutputStreak,
-		&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak)
+		&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak,
+		&targetRunsPerDay, &noopAllowed)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -165,6 +173,14 @@ FROM projects WHERE name = ?`
 		v := int(pinS.Int64)
 		p.CooldownPinS = &v
 	}
+	if targetRunsPerDay.Valid {
+		v := targetRunsPerDay.Float64
+		p.TargetRunsPerDay = &v
+	}
+	if noopAllowed.Valid {
+		v := noopAllowed.Int64 != 0
+		p.NoopAllowed = &v
+	}
 	return &p, nil
 }
 
@@ -172,7 +188,7 @@ FROM projects WHERE name = ?`
 // ListProjects and ListProjectsPage (SCHED-GAP-1622) both build their queries
 // from it and both scan through scanProjectRow, so a future column addition
 // or reorder is one edit here, not a two-surface drift.
-const listProjectsColumns = `name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0)
+const listProjectsColumns = `name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, gateway_url, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0), target_runs_per_day, noop_allowed
 FROM projects`
 
 // scanProjectRow scans one ListProjects-shaped row (listProjectsColumns
@@ -182,17 +198,20 @@ func scanProjectRow(rows *sql.Rows) (Project, error) {
 	var enabled int
 	var nsID sql.NullString
 	var pinS sql.NullInt64
+	var targetRunsPerDay sql.NullFloat64
+	var noopAllowed sql.NullInt64
 	if err := rows.Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 		&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 		&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
-		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
+		&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.GatewayURL, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
 		&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 		&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 		&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
 		&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent,
 		&p.QAOutputCount, &p.QAZeroOutputStreak, &p.PMOutputCount, &p.PMZeroOutputStreak,
-		&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak); err != nil {
+		&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak,
+		&targetRunsPerDay, &noopAllowed); err != nil {
 		return Project{}, fmt.Errorf("scan project row: %w", err)
 	}
 	p.Enabled = enabled != 0
@@ -202,6 +221,14 @@ func scanProjectRow(rows *sql.Rows) (Project, error) {
 	if pinS.Valid {
 		v := int(pinS.Int64)
 		p.CooldownPinS = &v
+	}
+	if targetRunsPerDay.Valid {
+		v := targetRunsPerDay.Float64
+		p.TargetRunsPerDay = &v
+	}
+	if noopAllowed.Valid {
+		v := noopAllowed.Int64 != 0
+		p.NoopAllowed = &v
 	}
 	return p, nil
 }
@@ -343,7 +370,7 @@ func ListProjectsPage(ctx context.Context, db *sql.DB, enabledOnly bool, opts Li
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0)
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, fallback_model, fallback_provider, no_global_fallback, model_chain, idle_model, idle_provider, daily_budget_usd, weekly_budget_usd, final_budget_usd, worker_model, worker_provider, gateway_key, gateway_url, command, prompt, prompt_mode, namespace_id, deliver, deliver_mode, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, ''), COALESCE(adaptive_cooldown, 0), COALESCE(cooldown_floor_s, 0), COALESCE(cooldown_ceiling_s, 0), COALESCE(no_progress_threshold, 0), COALESCE(no_progress_ticks, 0), COALESCE(board_rows_seen, -1), COALESCE(bump_active, 0), COALESCE(bump_remaining_ticks, 0), COALESCE(bump_cooldown_s, 0), COALESCE(bump_reason, ''), COALESCE(bump_saved_cooldown_s, 0), COALESCE(bump_saved_floor_s, 0), COALESCE(bump_saved_ceiling_s, 0), COALESCE(bump_saved_no_progress_ticks, 0), COALESCE(bump_started_at, ''), COALESCE(admission_mode, ''), COALESCE(board_ownership, ''), cooldown_pin_s, COALESCE(cooldown_pin_by, ''), COALESCE(cooldown_pin_at, ''), COALESCE(last_tick_status, ''), COALESCE(parent, ''), COALESCE(qa_output_count, 0), COALESCE(qa_zero_output_streak, 0), COALESCE(pm_output_count, 0), COALESCE(pm_zero_output_streak, 0), COALESCE(sync_output_count, 0), COALESCE(sync_zero_output_streak, 0), COALESCE(dogfood_output_count, 0), COALESCE(dogfood_zero_output_streak, 0), target_runs_per_day
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -358,17 +385,19 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		var enabled int
 		var nsID sql.NullString
 		var pinS sql.NullInt64
+		var targetRunsPerDay sql.NullFloat64
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.FallbackModel, &p.FallbackProvider, &p.NoGlobalFallback, &p.ModelChain, &p.IdleModel, &p.IdleProvider,
 			&p.DailyBudgetUSD, &p.WeeklyBudgetUSD, &p.FinalBudgetUSD,
-			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
+			&p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.GatewayURL, &p.Command, &p.Prompt, &p.PromptMode, &nsID, &p.Deliver, &p.DeliverMode, &enabled,
 			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason,
 			&p.AdaptiveCooldown, &p.CooldownFloorS, &p.CooldownCeilingS, &p.NoProgressThreshold, &p.NoProgressTicks, &p.BoardRowsSeen,
 			&p.BumpActive, &p.BumpRemainingTicks, &p.BumpCooldownS, &p.BumpReason, &p.BumpSavedCooldownS, &p.BumpSavedFloorS, &p.BumpSavedCeilingS, &p.BumpSavedNoProgress, &p.BumpStartedAt, &p.AdmissionMode, &p.BoardOwnership,
 			&pinS, &p.CooldownPinBy, &p.CooldownPinAt, &p.LastTickStatus, &p.Parent,
 			&p.QAOutputCount, &p.QAZeroOutputStreak, &p.PMOutputCount, &p.PMZeroOutputStreak,
-			&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak); err != nil {
+			&p.SyncOutputCount, &p.SyncZeroOutputStreak, &p.DogfoodOutputCount, &p.DogfoodZeroOutputStreak,
+			&targetRunsPerDay); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -378,6 +407,10 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		if pinS.Valid {
 			v := int(pinS.Int64)
 			p.CooldownPinS = &v
+		}
+		if targetRunsPerDay.Valid {
+			v := targetRunsPerDay.Float64
+			p.TargetRunsPerDay = &v
 		}
 		out = append(out, p)
 	}
@@ -413,13 +446,16 @@ type ProjectUpdates struct {
 	WorkerModel      *string  `json:"worker_model"`
 	WorkerProvider   *string  `json:"worker_provider"`
 	GatewayKey       *string  `json:"gateway_key"` // per-foreman Hermes gateway key; "" clears back to shared key
-	Command          *string  `json:"command"`
-	Prompt           *string  `json:"prompt"`       // Bane 2026-08-27: extra foreman prompt; "" clears back to namespace default only
-	PromptMode       *string  `json:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
-	NamespaceID      *string  `json:"namespace_id"` // set to "" to unassign from namespace
-	ModelChain       *string  `json:"model_chain"`  // SCHED-GAP-095: ordered "model@provider" hops (JSON array); "" clears
-	Deliver          *string  `json:"deliver"`      // SCHED-GAP-095: delivery target platform:chat_id:thread_id; "" clears
-	DeliverMode      *string  `json:"deliver_mode"` // SCHED-GAP-1607: "full" (default) | "file" | "link"; "" resets to full
+	// SCHED-GAP-1712: per-lane gateway endpoint; "" clears back to the
+	// namespace (then the daemon's global) URL.
+	GatewayURL  *string `json:"gateway_url"`
+	Command     *string `json:"command"`
+	Prompt      *string `json:"prompt"`       // Bane 2026-08-27: extra foreman prompt; "" clears back to namespace default only
+	PromptMode  *string `json:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
+	NamespaceID *string `json:"namespace_id"` // set to "" to unassign from namespace
+	ModelChain  *string `json:"model_chain"`  // SCHED-GAP-095: ordered "model@provider" hops (JSON array); "" clears
+	Deliver     *string `json:"deliver"`      // SCHED-GAP-095: delivery target platform:chat_id:thread_id; "" clears
+	DeliverMode *string `json:"deliver_mode"` // SCHED-GAP-1607: "full" (default) | "file" | "link"; "" resets to full
 	// SCHED-GAP-1586: parent lane reference — the name of the lane this lane
 	// is a satellite of; "" clears back to a primary/root lane. Every write
 	// is cycle-checked (self-parenting and any chain that loops back to the
@@ -451,6 +487,15 @@ type ProjectUpdates struct {
 	// namespace, "cooldown" or "tasks" otherwise (validated).
 	AdmissionMode *string `json:"admission_mode"`
 
+	// SCHED-GAP-1682: the no-op verdict override — nil = leave the row
+	// untouched; non-nil sets/clears it. Writing null (the JSON key present
+	// with value null) is NOT distinguishable from an absent key through
+	// *bool, so clearing an explicit override back to lane-class
+	// derivation is a direct SQL UPDATE (the same convention as
+	// clear_cooldown_pin). "false" arms re-entry on any lane class;
+	// "true" closes a lane's no-op ticks clean.
+	NoopAllowed *bool `json:"noop_allowed"`
+
 	// SCHED-GAP-141: per-project board-ownership override; "" = auto
 	// (derived from the board walk), "owner" or "shared" otherwise
 	// (validated).
@@ -469,6 +514,14 @@ type ProjectUpdates struct {
 	// ClearCooldownPin — true removes the pin (and its provenance).
 	CooldownPinS     *int  `json:"cooldown_pin_s"`
 	ClearCooldownPin *bool `json:"clear_cooldown_pin"`
+
+	// TargetRunsPerDay (SOL-CADENCE) is the optional per-lane cadence target.
+	// A pointer distinguishes the three states the read path depends on:
+	// nil = leave the target unchanged (NULL on the row → derive it from the
+	// durable cooldown pin), pointer-to-zero = an explicit "no cadence
+	// opinion" opt-out, >0 = an override that wins over the pin. A negative
+	// value is refused at the write path.
+	TargetRunsPerDay *float64 `json:"target_runs_per_day"`
 }
 
 // UnmarshalJSON decodes ProjectUpdates from JSON. Canonical keys are
@@ -520,6 +573,10 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 		var v int
 		fill("CooldownS", &v, func() { u.CooldownS = &v })
 	}
+	if u.TargetRunsPerDay == nil {
+		var v float64
+		fill("TargetRunsPerDay", &v, func() { u.TargetRunsPerDay = &v })
+	}
 	if u.DecayRate == nil {
 		var v float64
 		fill("DecayRate", &v, func() { u.DecayRate = &v })
@@ -563,6 +620,10 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 	if u.GatewayKey == nil {
 		var v string
 		fill("GatewayKey", &v, func() { u.GatewayKey = &v })
+	}
+	if u.GatewayURL == nil {
+		var v string
+		fill("GatewayURL", &v, func() { u.GatewayURL = &v })
 	}
 	if u.Command == nil {
 		var v string
@@ -735,6 +796,13 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		setClauses = append(setClauses, "cooldown_s = ?")
 		args = append(args, *updates.CooldownS)
 	}
+	if updates.TargetRunsPerDay != nil {
+		if *updates.TargetRunsPerDay < 0 {
+			return fmt.Errorf("target_runs_per_day must be >= 0 for project %q", name)
+		}
+		setClauses = append(setClauses, "target_runs_per_day = ?")
+		args = append(args, *updates.TargetRunsPerDay)
+	}
 	if updates.DecayRate != nil {
 		setClauses = append(setClauses, "decay_rate = ?")
 		args = append(args, *updates.DecayRate)
@@ -790,6 +858,10 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.GatewayKey != nil {
 		setClauses = append(setClauses, "gateway_key = ?")
 		args = append(args, *updates.GatewayKey)
+	}
+	if updates.GatewayURL != nil {
+		setClauses = append(setClauses, "gateway_url = ?")
+		args = append(args, *updates.GatewayURL)
 	}
 	if updates.Command != nil {
 		setClauses = append(setClauses, "command = ?")
@@ -886,6 +958,15 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		default:
 			return fmt.Errorf("invalid board_ownership %q for project %q (want \"\", \"owner\" or \"shared\")", o, name)
 		}
+	}
+
+	// SCHED-GAP-1682: the no-op verdict override — plain tri-state write.
+	// nil = untouched; non-nil = set to 0/1 (NULL → the lane-class
+	// derivation is restored only by writing SQL directly, mirroring the
+	// clear_cooldown_pin convention).
+	if updates.NoopAllowed != nil {
+		setClauses = append(setClauses, "noop_allowed = ?")
+		args = append(args, nilPtrToInt(updates.NoopAllowed))
 	}
 
 	// SCHED-GAP-219: cooldown pin writes. The pin is the durable operator
@@ -1007,6 +1088,19 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// nilPtrToInt maps a *bool onto SQLite's nullable-INTEGER convention
+// (SCHED-GAP-1682): nil → SQL NULL (the column-level "unset" — the row
+// falls back to the lane-class derivation), otherwise 0/1. The literal
+// nil is accepted by the driver as NULL without a helper, but routing
+// every nullable-bool write through ONE function keeps the convention
+// greppable and the failure modes in one place.
+func nilPtrToInt(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	return boolToInt(*b)
+}
+
 // CooldownPinImportBy is the cooldown_pin_by value stamped on pins imported
 // from fleet.toml by the boot loader (SCHED-GAP-219) or by the v38 migration
 // backfill. Distinct from "api" so an operator can always tell where a pin
@@ -1097,12 +1191,13 @@ func BoolPtr(b bool) *bool { return &b }
 // and churn 130+ rows on every boot.
 func (u *ProjectUpdates) IsEmpty() bool {
 	return u.RepoURL == nil && u.Workdir == nil && u.Weight == nil &&
-		u.Priority == nil && u.CooldownS == nil && u.DecayRate == nil &&
+		u.Priority == nil && u.CooldownS == nil && u.TargetRunsPerDay == nil && u.DecayRate == nil &&
 		u.Model == nil && u.Provider == nil &&
 		u.FallbackModel == nil && u.FallbackProvider == nil &&
 		u.NoGlobalFallback == nil && u.IdleModel == nil && u.IdleProvider == nil &&
 		u.DailyBudgetUSD == nil && u.WeeklyBudgetUSD == nil && u.FinalBudgetUSD == nil &&
 		u.WorkerModel == nil && u.WorkerProvider == nil && u.GatewayKey == nil &&
+		u.GatewayURL == nil &&
 		u.Command == nil && u.Prompt == nil && u.PromptMode == nil &&
 		u.NamespaceID == nil && u.ModelChain == nil && u.Deliver == nil &&
 		u.DeliverMode == nil && u.Parent == nil &&
@@ -1110,7 +1205,8 @@ func (u *ProjectUpdates) IsEmpty() bool {
 		u.DisabledReason == nil && u.AdaptiveCooldown == nil &&
 		u.CooldownFloorS == nil && u.CooldownCeilingS == nil &&
 		u.NoProgressThreshold == nil && u.AdmissionMode == nil &&
-		u.BoardOwnership == nil && u.CooldownPinS == nil && u.ClearCooldownPin == nil
+		u.BoardOwnership == nil && u.CooldownPinS == nil && u.ClearCooldownPin == nil &&
+		u.NoopAllowed == nil
 }
 
 // ---------------------------------------------------------------------------

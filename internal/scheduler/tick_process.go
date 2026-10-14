@@ -36,6 +36,38 @@ func (l *Loop) evaluate() {
 	// escalator); no second read of the seam happens inside evaluate().
 	now := l.nowLocked()
 	l.lastEval = now
+	// SCHED-GAP-1621: keep the lock-free mirror in sync (write-through under
+	// the write lock we already hold) so LastEvalTime() never needs mu.
+	l.lastEvalNs.Store(now.UnixNano())
+
+	// SCHED-GAP-1678: pass-scope the board-stasis gate BEFORE the packers
+	// run. A ForceEvaluate-triggered pass consumes the bypass flag
+	// (atomic Swap — exactly one pass ever observes a raised flag) and
+	// disarms the gate for that pass (escape hatch (b): an operator's
+	// explicit evaluate always spawns); every other pass arms it with the
+	// loop-level switch. The baseline recording happens later, at the
+	// spawn sites (evaluate's spawn loop / SpawnNow).
+	// NOTE: the loop fields are read INLINE, never under a second lock —
+	// evaluate() already holds l.mu (acquired at entry) through the whole
+	// Phase-1 section below, and Go's RWMutex is not reentrant, so any
+	// Lock()/Unlock() pair here self-deadlocks or releases the entry lock
+	// early. boardStasisForce is an atomic for that reason.
+	gate := l.boardStasisGate
+	forced := l.boardStasisForce.Swap(false)
+	enabled := l.boardStasisOn && !forced
+	if gate != nil {
+		gate.SetEnabled(enabled)
+		// Wire the gate into BOTH selection paths exactly like the
+		// budget gate above — a namespace-mode pass gates in the
+		// multi-pool packer, the flat fallback and the legacy Packer
+		// mirror it, so all three selection sites share one predicate.
+		if l.multiPoolPacker != nil {
+			l.multiPoolPacker.SetBoardStasisGate(gate)
+		}
+		if l.packer != nil {
+			l.packer.SetBoardStasisGate(gate)
+		}
+	}
 
 	// ADV-R13: persist exactly ONE host load/memory sample per evaluation
 	// pass, immediately at entry — after the paused-loop gate (a paused
@@ -103,6 +135,21 @@ func (l *Loop) evaluate() {
 	if l.multiPoolPacker != nil {
 		l.multiPoolPacker.SetWaveShedDB(l.db)
 	}
+	if l.multiPoolPacker != nil || l.packer != nil {
+		cadenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rates, err := database.LoadCadenceRates(cadenceCtx, l.db, now, CadenceWindow)
+		cancel()
+		if err != nil {
+			log.Printf("cadence target: achieved-rate query failed open: %v", err)
+		} else {
+			if l.multiPoolPacker != nil {
+				l.multiPoolPacker.SetCadenceRates(rates)
+			}
+			if l.packer != nil {
+				l.packer.SetCadenceRates(rates)
+			}
+		}
+	}
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
@@ -112,6 +159,17 @@ func (l *Loop) evaluate() {
 		nss, _ := database.ListNamespaces(ctx, l.db, false)
 		if len(nss) > 0 {
 			projs, _ := database.ListProjects(ctx, l.db, false)
+			// SCHED-GAP-1686: inject the trailing-window completed-tick
+			// counts per namespace so the packer can enforce the cadence
+			// ceiling. Fail-open — a broken count query must never halt
+			// scheduling, so nil (no ceiling) is armed on error.
+			nsCounts, err := database.LoadNamespaceTickCounts(ctx, l.db, now, CadenceCeilingWindow)
+			if err != nil {
+				log.Printf("cadence ceiling: namespace tick-count query failed open: %v", err)
+				l.multiPoolPacker.SetNamespaceTickCounts(nil)
+			} else {
+				l.multiPoolPacker.SetNamespaceTickCounts(nsCounts)
+			}
 			running, lastComp := l.evalContext(ctx)
 			result := l.multiPoolPacker.Pack(projs, nss, l.calculator, lastComp, running, now)
 			packed = result.Projects
@@ -237,9 +295,24 @@ func (l *Loop) evaluate() {
 	//     re-nudge) rides the first project the gate admits again —
 	//     noteGatewayReconnectedOnce — so it still runs BEFORE this pass's
 	//     spawns, exactly as before.
-	// gatewayDeferred counts this pass's deferrals: a pass that deferred
-	// anything is an outage pass and (as before) does not run the escalator.
+	// gatewayDeferred counts this pass's GLOBAL-endpoint deferrals: a pass that
+	// deferred anything on the daemon's own gateway is an outage pass and (as
+	// before) does not run the escalator. gatewayEndpointDeferred counts the
+	// deferrals charged to a FOREIGN lane endpoint (t_cadba34c): one lane's
+	// remote gateway being down is a lane-level event, not a fleet outage, so it
+	// must not suppress the fleet's escalation pass.
 	gatewayDeferred := 0
+	gatewayEndpointDeferred := 0
+
+	// t_cadba34c: resolve the pass's endpoints in ONE batched indexed query
+	// (only while the gate is armed) so admission can judge the endpoint each
+	// spawn will actually use — lane > namespace > global. A fleet with no
+	// per-lane endpoints resolves every project to the global tier, which is the
+	// pre-1712 behaviour exactly.
+	var endpoints map[string]GatewayEndpoint
+	if l.gatewayClientOrNil() != nil && !l.simulate {
+		endpoints = l.spawner.resolvePackedEndpoints(context.Background(), packed)
+	}
 
 	// Fire each project into the slot pool. The pool's semaphore limits
 	// concurrency — projects acquire a slot, spawn via gateway in their
@@ -266,7 +339,13 @@ func (l *Loop) evaluate() {
 			tickID := l.simTickID(proj.Name, now)
 			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 				log.Printf("SIM: spawn %s failed: %v", proj.Name, err)
+				continue
 			}
+			// SCHED-GAP-1678: baseline the lane's board at SPAWN time (the sim
+			// path spawns a real tick row, so it must arm the gate identically
+			// to the real path — otherwise a --simulate daemon would gate a
+			// lane whose baseline it never recorded).
+			l.recordBoardStasisSpawn(proj.Name, proj.Workdir, tickID)
 			continue
 		}
 		// SCHED-GAP-171: consult the load gate BEFORE the spawn — and
@@ -284,29 +363,54 @@ func (l *Loop) evaluate() {
 			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
 			continue
 		}
-		// SCHED-GAP-170: the gateway-health gate — the same defer-not-drop
-		// contract as the load gate above, for the gateway dependency. A spawn
-		// into an unreachable gateway is a spawn that WILL fail (793 of the
-		// fleet's 859 failures in the 7 days to 2026-09-18), so it is not made:
-		// the project keeps its selection, and `continue` costs no row, no
-		// reservation, no slot, no cooldown, no failure and no nudge. The
-		// verdict is cached for gatewayHealthTTL, so this consults one clock
-		// read per project and at most ONE probe per pass (not per project).
+		// SCHED-GAP-170 / t_cadba34c: the gateway-health gate — the same
+		// defer-not-drop contract as the load gate above, for the gateway
+		// dependency. A spawn into an unreachable gateway is a spawn that WILL
+		// fail (793 of the fleet's 859 failures in the 7 days to 2026-09-18), so
+		// it is not made: the project keeps its selection, and `continue` costs
+		// no row, no reservation, no slot, no cooldown, no failure and no nudge.
+		//
+		// 1724: the gate judges the endpoint THIS project resolves to, not the
+		// daemon's gateway. A lane addressed at its own endpoint is admitted on
+		// ITS endpoint's health, so one dead daemon gateway no longer idles every
+		// remote lane — and an unreachable lane endpoint defers only its own lane.
+		// The verdict is cached per endpoint for gatewayHealthTTL, so a pass costs
+		// one clock read per project and at most ONE probe per endpoint.
 		//
 		// Guarded like the pre-existing liveness block: only a loop that owns a
 		// gateway client can probe, and simulation never touches the gateway
 		// (DOGFOOD-007). Fail-open on an absent client is the gate's own
 		// contract (gateway_health_gate.go).
 		if l.gatewayClientOrNil() != nil && !l.simulate {
-			if deferSpawn, reason, probeErr := GatewayHealthGateShouldDefer(); deferSpawn {
-				l.noteGatewayDeadOnce(reason)
-				l.emitGatewayDeferred(proj.Name, proj.NamespaceID, "", reason, probeErr)
-				gatewayDeferred++
-				continue
+			ep := endpoints[proj.Name]
+			if gw := l.spawner.endpointClient(ep.URL); gw != nil {
+				// global drives the FLEET-WIDE transitions: only the daemon's own
+				// endpoint may latch gatewayDead / release slots / trigger the
+				// reconnect orphan-nudge. A foreign endpoint's outage is that
+				// lane's, and must not touch fleet state (t_cadba34c).
+				global := l.spawner.isGlobalEndpointURL(ep.URL)
+				if deferSpawn, reason, probeErr := GatewayHealthGateShouldDeferEndpoint(gw, ep.Key); deferSpawn {
+					if global {
+						l.noteGatewayDeadOnce(reason)
+						gatewayDeferred++
+					} else {
+						gatewayEndpointDeferred++
+					}
+					l.emitGatewayDeferred(proj.Name, proj.NamespaceID, "", reason, probeErr, ep)
+					continue
+				}
+				if global {
+					l.noteGatewayReconnectedOnce()
+				}
 			}
-			l.noteGatewayReconnectedOnce()
 		}
-		l.slotPool.Spawn(proj, now, noDeliver, l.db)
+		spawnedTickID := l.slotPool.Spawn(proj, now, noDeliver, l.db)
+		// SCHED-GAP-1678: baseline the lane's board fingerprint at spawn
+		// time, carrying the id the pool actually stored (Spawn returns it).
+		// Deliberately AFTER the gates above: a deferred spawn never reached
+		// here, so it records nothing and the next pass decides from the
+		// pre-deferral state (fail-open).
+		l.recordBoardStasisSpawn(proj.Name, proj.Workdir, spawnedTickID)
 	}
 
 	// Alert escalation runs while pool processes ticks. SCHED-GAP-170: a pass
@@ -321,12 +425,17 @@ func (l *Loop) evaluate() {
 		// after the pack — a lane in it escalates as "held by budget",
 		// not "starved".
 		holdViews := l.budgetHoldViews
+		// REMOTE-004: the lane-state publisher rides the same snapshot —
+		// the escalator this pass constructs publishes auto-disable
+		// transitions through the process bus (nil = disabled, a no-op).
+		passBus := l.schedulerBus
 		l.mu.RUnlock()
 		escalator := NewAlertEscalator(l.db, l.events, policy)
 		// SCHED-GAP-169: the escalator reads/writes timestamps and throttle
 		// windows, so it follows the loop's clock like every other component.
 		escalator.SetClock(l.clock())
 		escalator.SetBudgetHolds(holdViews)
+		escalator.SetSchedulerBus(passBus)
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}
@@ -398,11 +507,25 @@ func (l *Loop) emitLoadGateDeferred(project, nsID, tickID string) {
 //     single lane can then be ruled in/out), and `deferred=true` mirrors the
 //     load-gate payload so both deferral kinds can be counted by one query.
 //
+// t_cadba34c adds the ENDPOINT the gate judged, in the tick row's own audit
+// vocabulary, so a deferral shows WHY and AGAINST WHICH endpoint — the
+// evaluation path defers BEFORE any row can exist, so the event detail is the
+// only place it can be recorded (no new `ticks` column):
+//
+//   - `gateway_url` / `gateway_source` / `gateway_key_source` — the resolved
+//     endpoint and the tier each field came from, exactly the columns a
+//     dispatched tick would have carried;
+//   - `gateway_health_endpoint` — the endpoint whose health verdict deferred it
+//     (the daemon's own URL for a global deferral, the lane's URL otherwise).
+//
+// Both keys are omitted entirely when no endpoint resolved (an exec/sim shape),
+// so the payload never invents an endpoint that does not exist.
+//
 // tickID is "" when the deferral precedes any row (the evaluation path, where
 // nothing was enqueued). Loop.SpawnNow passes the stored row's id — the row
 // stays `queued` there because the API contract requires the returned id to
 // resolve, so the id is how a caller tells "deferred" from "spawned".
-func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeErr error) {
+func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeErr error, ep GatewayEndpoint) {
 	if reason == "" && probeErr != nil {
 		reason = probeErr.Error()
 	}
@@ -422,6 +545,12 @@ func (l *Loop) emitGatewayDeferred(project, nsID, tickID, reason string, probeEr
 		"event_type": "gateway_defer",
 		"reason":     reason,
 		"deferred":   true,
+	}
+	if ep.URL != "" || ep.URLSource != "" {
+		details["gateway_url"] = ep.URL
+		details["gateway_source"] = ep.URLSource
+		details["gateway_key_source"] = ep.KeySource
+		details["gateway_health_endpoint"] = ep.URL
 	}
 	if tickID != "" {
 		details["tick_id"] = tickID
@@ -496,8 +625,8 @@ type staleGatewayTick struct {
 
 // staleGatewayTicks returns running pid=0 ticks whose liveness signal is
 // older than gatewayZombieMaxAge. Rows are consumed and closed inside the
-// helper so callers can issue UPDATEs immediately (SQLite single-writer —
-// an UPDATE while a SELECT still holds the pool's only connection deadlocks).
+// helper so callers can issue UPDATEs immediately (SQLite single-writer — an
+// UPDATE while a SELECT still holds the pool's only connection deadlocks).
 func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
 	rows, err := l.db.QueryContext(ctx, staleGatewayTicksSQL)
 	if err != nil {
@@ -516,6 +645,69 @@ func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
 	return out
 }
 
+// liveGatewayTicksSQL selects the complementary handoff set for startup:
+// running gateway ticks with a fresh heartbeat, or legacy rows with no
+// heartbeat whose spawn is still inside the same grace window used by the
+// reaper. A timestamp must parse successfully; malformed liveness data is not
+// adopted and remains eligible for the existing fail-safe cleanup path.
+var liveGatewayTicksSQL = fmt.Sprintf(`
+SELECT id, project_name FROM ticks
+WHERE status='running' AND pid = 0 AND (
+    (heartbeat_at IS NOT NULL AND heartbeat_at <> ''
+        AND julianday(heartbeat_at) IS NOT NULL
+        AND julianday(heartbeat_at) >= julianday('now', '-%d minutes'))
+ OR ((heartbeat_at IS NULL OR heartbeat_at = '')
+        AND spawned_at IS NOT NULL
+        AND julianday(spawned_at) IS NOT NULL
+        AND julianday(spawned_at) >= julianday('now', '-%d minutes'))
+)`, int(gatewayZombieMaxAge/time.Minute), int(gatewayZombieMaxAge/time.Minute))
+
+// adoptLiveGatewayTicksAtStartup restores the in-process dedup/slot claim for
+// gateway work that is provably still live when a new scheduler process boots.
+// This is a bounded handoff, not socket activation: the old process's
+// outbound HTTP response cannot be transferred to this process, so adoption
+// never issues a second request. If the heartbeat later goes stale,
+// cleanDanglingOnStartup reaps the row, releases this claim, and the existing
+// orphan resume path starts a continuation. Returning the number of newly
+// claimed projects makes repeated reconciliation observable and idempotent.
+func (l *Loop) adoptLiveGatewayTicksAtStartup() int {
+	rows, err := l.db.Query(liveGatewayTicksSQL)
+	if err != nil {
+		log.Printf("HANDOFF: live-gateway adoption query failed: %v", err)
+		return 0
+	}
+	var live []staleGatewayTick
+	for rows.Next() {
+		var tick staleGatewayTick
+		if err := rows.Scan(&tick.id, &tick.project); err != nil {
+			continue
+		}
+		live = append(live, tick)
+	}
+	rows.Close()
+
+	adopted := 0
+	seen := make(map[string]bool, len(live))
+	for _, tick := range live {
+		if seen[tick.project] {
+			continue
+		}
+		seen[tick.project] = true
+		if l.slotPool.RunningSet()[tick.project] {
+			continue
+		}
+		if !l.slotPool.AdoptRunning(tick.project) {
+			// The DB running-row merge in evaluate() still prevents a
+			// duplicate spawn when the local pool is full.
+			log.Printf("HANDOFF: live gateway tick %s (%s) not claimed — slot pool at capacity; DB dedup remains active", tick.id, tick.project)
+			continue
+		}
+		adopted++
+		log.Printf("HANDOFF: adopted live gateway tick %s (%s) without replaying its request", tick.id, tick.project)
+	}
+	return adopted
+}
+
 // timeoutReapSQL marks a running tick as timed out. GAP-045: completed_at is
 // stamped exactly like the failed/completed paths (lifecycle.Complete,
 // CleanupStale) so a timeout row is terminal for duration / failure-window /
@@ -530,7 +722,10 @@ const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=? WHERE 
 // daemon, so a heartbeat older than gatewayZombieMaxAge means the session's
 // owner is gone. LIVE gateway ticks — fresh heartbeat, or NULL heartbeat with
 // a fresh spawned_at (pre-S-GAP-003 rows inside the grace window) — are left
-// 'running': their HTTP sessions SURVIVE a daemon restart.
+// 'running' for SCHED-GAP-1685 startup claim adoption. The new process does
+// not replay the gateway request because its response stream is not
+// transferable; an adopted claim only prevents duplicate execution until the
+// normal stale-owner reap can hand the tick to the continuation path.
 // Regression: INFRA-012 (2026-08-01) — restart marked live gateway ticks
 // 'timeout' and the packer spawned duplicate ticks for in-flight projects.
 func (l *Loop) cleanDanglingOnStartup() {

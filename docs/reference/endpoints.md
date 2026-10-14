@@ -9,12 +9,18 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/` | Fleet dashboard (full HTML page; `/dashboard` is an alias) |
 | `/dashboard/partial` | htmx partial: project table refresh |
 | `/static/htmx.min.js` | Bundled htmx asset (Go embed) |
-| `/projects/{name}` | Per-project detail page |
+| `/static/js/events-toast.js` | Bundled live-event toast client (Go embed; SCHED-GAP-1599) — opens `GET /api/v1/events/stream` with `EventSource`, renders bounded severity-toned toasts, resolves click-through targets, and requests browser-notification permission ONLY on an explicit settings click |
+| `/projects/{name}` | Per-lane detail page; if `{name}` is a fleet project name with no exact lane row, redirects to its `<name>-foreman` primary lane (SCHED-GAP-1731) |
 | `/queue` | Global queue view |
+| `/lanes/tree` | Lane tree page (SCHED-GAP-1587) — the fleet's nested lane hierarchy: primaries at level 0, satellites indented under their parents (└ rail), per-row `L<depth>` marker, disabled lanes in position, dangling parents flagged visibly |
 | `/ticks?page=N` | Paginated tick history — server-side search/filter: `q` (substring over tick id + project name), `project`, `status`, `outcome` (SCHED-GAP-1593) |
 | `/ticks/{id}` | One-tick drill-down: the tick's row, its scheduler log events (window scan), and the agent's generated text resolved via `gateway_trace.session_id` → the agent state database (read-only, lazily opened; every unresolvable case renders an explicit notice — SCHED-GAP-1593) |
 | `/namespaces/{id}` | Namespace drill-down |
-| `/health` | Dashboard health panel |
+| `/health` | Dashboard health panel (`/healthz` is an alias; SCHED-GAP-1731) |
+| `/healthz` | Alias of the dashboard health panel at `/health` (SCHED-GAP-1731) |
+| `/observatory` | Observatory (SCHED-GAP-1592) — live tick-rate graph, namespace allocation chart and failure-rate heatmap over the tick history; the time-range (1h/6h/24h/7d) and namespace controls reload with the filter and the SSE stream `/api/v1/observatory/stream` pushes recomputed snapshots for it. Degrades honestly: a quiet stream shows STALE, a dead one shows LOST — never a silent frozen chart |
+| `/remote` | REMOTE-006 Remote section — every registered peer with its last-seen event (kind/status/timestamp) + staleness (the registry's freshness window; STALE, never "down"); htmx polls return the peer-rows fragment |
+| `/remote/partial` | REMOTE-006 htmx partial — the Remote section's peer rows only |
 | `/blocks` | Deploy blocks console (SCHED-GAP-1601) — groups + templates listed read-only; every write flows through `/dashboard/control` |
 | `/dashboard/control` | Operator control proxy (SCHED-GAP-1601, POST-only) — one urlencoded instruction (`action`+`target`+`confirm`/…) forwarded to the mapped mutating `/api/v1/*` operation IN-PROCESS: identical auth gate, identical handlers, identical audit; the API's status/body — success AND refusal — return verbatim |
 | `/tape` | Fleet Tape — stock-ticker fleet view (index bar, marquee, market board); htmx polls return the board-rows fragment (SCHED-GAP-1596) |
@@ -27,6 +33,9 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/features/prune-candidates` | Dead-feature reaper report — mechanisms never used or last used more than `?weeks=N` ago (default 8); flag only, no auto-delete (SCHED-GAP-131) |
 | `/api/v1/cooldown/residue` | Cooldown-pin residue detector — ENABLED lanes live BELOW their own pin, read-only, `count` + named lanes (SCHED-GAP-1670) |
 | `/api/v1/projects` | List/manage projects (GET/POST) |
+| `/api/v1/lanes/tree` | Lane hierarchy (SCHED-GAP-1587): the fleet's parent→children tree from `projects.parent` via the shared `BuildLaneTree` resolver — roots + nested children, per-node `depth` (`is_root`/`enabled` on every node); disabled lanes keep their position, a dangling parent keeps its name visible and surfaces as a root (GET) |
+| `/api/v1/lanes` | Flat lane listing (GET) — **deprecated** (SCHED-GAP-1587) in favour of `/api/v1/lanes/tree`; kept for backward compatibility: `{"lanes": [<Project>, ...], "total": N}` |
+| `/api/v1/cadence` | Configured vs achieved starts/day per lane over the trailing seven-day window; target source is explicit override, durable cooldown pin, disabled, or none (GET) |
 | `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes |
 | `/api/v1/namespaces` | List namespaces |
 | `/api/v1/namespaces/{id}` | Namespace detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true` soft-deletes: enabled=false, member projects unassigned, row retained; `?confirm=true&purge=true` hard-deletes the row permanently, SCHED-GAP-097) |
@@ -38,12 +47,21 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/ticks` | List ticks |
 | `/api/v1/ticks/{id}` | One tick by id (GET) |
 | `/api/v1/events` | List event log (GET) |
-| `/api/v1/events/stream` | SSE push stream of the event log (CTL-002) |
+| `/api/v1/events/stream` | SSE push stream of the event log (CTL-002); accepts the same `severity`/`component` filters as `GET /api/v1/events` (SCHED-GAP-1737) |
+| `/api/v1/observatory` | Observatory snapshot (JSON, SCHED-GAP-1592) — tick-rate buckets, namespace allocation shares and failure-rate heatmap for `?window=` (seconds or 1h/6h/24h/7d, default 6h) and `?namespace=`; 503 without a wired collector |
+| `/api/v1/observatory/stream` | SSE push stream of Observatory snapshots (SCHED-GAP-1592) — recomputed every 10s for the query's filter, `: heartbeat` comments while quiet, and `: error collect:` comments instead of fabricated snapshots on compute failure |
+| `/api/v1/gateway-errors` | Ticks NOT run because of gateway unavailability, over a fixed 24h window (SCHED-GAP-1654): `total`, `by_class` (`unavailable_503` / `rate_limited_429` / `connection_refused`, every class present even at 0) and `by_project` (counts per lane, ordered by total desc), counted from the spawn path's `gateway_availability` events |
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/api/v1/pause` | Pause scheduling (POST) |
 | `/api/v1/resume` | Resume scheduling (POST) |
 | `/api/v1/queue` | Global queue (JSON) |
 | `/api/v1/openapi.json` | OpenAPI schema (JSON) |
+| `/api/v1/peers` | Federation peer registry (REMOTE-003, operator-token gated): GET lists every registered peer `{id, url, last_contact, stale, version}` — a peer past the freshness window renders `stale:true` with its `last_contact`, never a "down" state; POST upserts `{id, url, version, capabilities}` → 200 |
+| `/api/v1/peers/{id}/heartbeat` | POST: liveness ping — stamps the peer's `last_contact`; unknown id → 404 (heartbeat does not auto-register) |
+| `/api/v1/peers/events` | REMOTE-006 durable event slice, every scheduler (GET): last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops` |
+| `/api/v1/peers/{id}/events` | REMOTE-006 durable event slice, one scheduler (GET); unknown id → 404 |
+| `/api/v1/federation/query` | REMOTE-008 federation query (POST, operator-token gated): the query envelope `{op, args, corr_id, budget_ms, want}` in, the response envelope `{corr_id, op, peer, status, as_of, age_ms, data, gaps, error, contract}` out (docs/federation-query-spec.md §2) — one contract, six read ops, replay window keyed (caller, corr_id, op); unknown op → `status="error" code="unknown_op"`; REMOTE-013 read policy: an op not published for the caller ([federation] allow config, deny-all by default) → `status="error" code="op_not_allowed"` (HTTP 403, audited) |
+| `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 
-**MCP surface:** `POST /mcp` serves **48 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
+**MCP surface:** `POST /mcp` serves **61 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](../../README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.

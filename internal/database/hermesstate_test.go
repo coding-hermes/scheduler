@@ -35,6 +35,7 @@ func newHermesStateFixture(t *testing.T) (*sql.DB, string) {
 		t.Fatalf("open fixture %s: %v", path, err)
 	}
 	t.Cleanup(func() { db.Close() })
+	applyTestDurabilityOff(t, db) // QA-CHS-182: test-only fsync bypass
 	_, err = db.Exec(`CREATE TABLE sessions (
 	    id              TEXT PRIMARY KEY,
 	    source          TEXT NOT NULL,
@@ -343,6 +344,7 @@ func TestReapStaleHermesSessions_FailsClosedOnWrongShape(t *testing.T) {
 			t.Fatalf("open: %v", err)
 		}
 		defer db.Close()
+		applyTestDurabilityOff(t, db) // QA-CHS-182: test-only fsync bypass
 		if _, err := db.Exec(`CREATE TABLE sessions (
 		    id TEXT PRIMARY KEY, platform TEXT NOT NULL DEFAULT '',
 		    created_at TEXT NOT NULL, updated_at TEXT, ended_at TEXT)`); err != nil {

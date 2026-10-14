@@ -119,7 +119,7 @@ def _seed_db(path: Path, lanes: list[dict], ns_defaults: dict[str, int] | None =
                 " workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER,"
                 " admission_mode TEXT, default_prompt TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks', '')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks', '')")
     defaults = dict(MEASURED_NS_DEFAULTS)
     defaults.update(ns_defaults or {})
     for ns in SATELLITE_NS:
@@ -215,13 +215,15 @@ def test_auger_releng_shape_short_own_no_fallback_fires(tmp_path):
     namespace fallback — short on its own, exactly what the sweep judged
     uninstructed."""
     rc, out = _run_gate(tmp_path, [
-        {"name": "fixture-releng", "namespace_id": "auger",
+        # SCHED-GAP-1604: a role-LESS base name keeps the namespace-membership
+        # class quiet while preserving the measured 296-char incident shape.
+        {"name": "fixture-lonerel", "namespace_id": "auger",
          "prompt": "x" * AUGER_RELENG_INCIDENT_CHARS},
     ], ns_defaults={"auger": 0})
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     lines = _violations(out, "lane-instructions")
-    assert lines == [_violation_line("fixture-releng", "auger",
+    assert lines == [_violation_line("fixture-lonerel", "auger",
                                      AUGER_RELENG_INCIDENT_CHARS, 0)], lines
     assert _other_violations(out, "lane-instructions") == [], \
         f"unexpected extra violations:\n{out}"
@@ -351,7 +353,7 @@ def test_schema_without_prompt_columns_skips_with_info(tmp_path):
                 " cooldown_s INTEGER, command TEXT, prompt TEXT, workdir TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER,"
                 " admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY[ns]))

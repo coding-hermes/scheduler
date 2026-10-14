@@ -49,6 +49,11 @@ type ResolvedConfig struct {
 	// gateway /v1/responses POST — "0s" means disabled (the POST runs on the
 	// tick deadline alone).
 	GatewayResponseTimeout string `json:"gateway_response_timeout"`
+	// GatewayTransientRetries (SCHED-GAP-1681): the bounded transient-gateway
+	// retry count — how many times a transient POST failure is retried on
+	// the same model/provider pair with the same session key. 0 = single
+	// attempt (retry loop off). Default 3.
+	GatewayTransientRetries int `json:"gateway_transient_retries"`
 	// APIReadTimeout (SCHED-GAP-1575-B): the per-request deadline armed for
 	// the heavy DB-backed read surfaces (/api/v1/status, /projects,
 	// /namespaces, /ticks). A step that exceeds it answers 504 naming the
@@ -76,6 +81,16 @@ type ResolvedConfig struct {
 	// still spawns; the cap constrains the spawned process's resources at
 	// spawn time and is inherited by its workers.
 	SpawnMemLimitMB int64 `json:"spawn_mem_limit_mb"`
+	// SessionSilenceGrace (SCHED-GAP-1707): the session-silence watchdog's
+	// grace period — a gateway tick whose session shows no token delta and
+	// no tool activity for this long is terminated with
+	// failure_reason=session_silent. "0s" = disabled (the default).
+	SessionSilenceGrace string `json:"session_silence_grace"`
+	// SessionPollLoopMinTicks (SCHED-GAP-1698): the poll-loop idle guard's
+	// per-stride tool-call minimum — a gateway tick whose session shows a
+	// confirmed sleep-poll tool cycle at this density is terminated with
+	// failure_reason=sleep_poll. 0 = disabled (the default).
+	SessionPollLoopMinTicks int `json:"session_poll_loop_min_ticks"`
 	// ModelRatesFile (ADV-R09/G8): path to a JSON price-sticker file applied
 	// over the builtin maps at startup (refresh without rebuild). Empty = the
 	// builtin 2026-08 stickers.

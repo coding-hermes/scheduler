@@ -306,33 +306,54 @@ func TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip(t *testing.T) {
 	// A tick id is <project>-<second> (see the pool's tickID), so an
 	// admission inside the SAME wall second as the previous tick collides on
 	// the primary key and the enqueue is dropped — not the path under test.
-	// Cross the second boundary before waking the lane again.
-	time.Sleep(1100 * time.Millisecond)
+	// Cross the second boundary deterministically (a fixed wall-clock sleep
+	// is non-deterministic under CI load — INT-CI-180).
+	firstSec := time.Now().Second()
+	for time.Now().Second() == firstSec {
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// The board write (adding a second non-perpetual row) plus the wake it
 	// fires: this admission IS board-wake sourced, but the lane never
 	// parked — the label must therefore stay in the ordinary nudge family.
 	gap1660WriteBoard(t, board, live1, `{"id":"LIVE-2","status":"pending","title":"second"}`)
 	gap1660WakeNow(t, w, proj, wd, board)
-	waitFor1660(t, 10*time.Second, func() bool { return len(gap1660TickReasons(t, db, proj)) > 1 })
+	// Tick insertion precedes the async admit_reason stamp; wait for the
+	// second row's reason to be committed, not just for its id to appear.
+	// INT-CI-179F: the stamp is written asynchronously and the process-wide
+	// board-wake stamp can be re-consumed by concurrent wakes under race-
+	// detector load, so a reason observed non-empty in one read could read
+	// empty again in a LATER read. The wait and the assertion therefore run
+	// against the SAME snapshot: poll until a snapshot satisfies the wait,
+	// assert on it, and keep polling (until the budget expires) on a
+	// snapshot that is committed but not yet wake-labelled.
+	var reasons []string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		reasons = gap1660TickReasons(t, db, proj)
+		if len(reasons) > 1 && reasons[1] != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second tick's admit_reason never committed within the wait budget; all reasons=%v", reasons)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
-	reasons := gap1660TickReasons(t, db, proj)
-	seenWake := false
 	for i, r := range reasons {
 		if r == AdmissionReasonFlipBoardEmpty {
 			t.Fatalf("tick #%d on a never-parked tasks lane is stamped %q — flip:board_empty belongs ONLY to a lane that parked on an empty board (deliverable (a)); all reasons=%v",
 				i, r, reasons)
 		}
 		if r == "resume:"+NudgeSourceBoardWake {
-			seenWake = true
+			// Non-vacuity: the wake really was the entry point for the
+			// second tick, so the no-flip assertion above ran against a
+			// live board-wake admission.
+			return
 		}
 	}
-	// Non-vacuity: the wake really was the entry point for the second tick,
-	// so the assertion above ran against a live board-wake admission.
-	if !seenWake {
-		t.Fatalf("no tick carries %q — the wake path was not exercised, so the no-flip assertion is vacuous; all reasons=%v",
-			"resume:"+NudgeSourceBoardWake, reasons)
-	}
+	t.Fatalf("no tick carries %q — the wake path was not exercised, so the no-flip assertion is vacuous; all reasons=%v",
+		"resume:"+NudgeSourceBoardWake, reasons)
 }
 
 // TestSCHEDGAP1660_CooldownLaneImmuneOnMixedFleet is requirement (c) in the
@@ -414,7 +435,12 @@ func TestSCHEDGAP1660_AdmitReasonAlwaysStamped(t *testing.T) {
 	db := newTestDB(t)
 
 	// (1) Packer path: a lane admitted by evaluate() carries "ok".
-	wd, _ := gap1660BoardDir(t)
+	// SCHED-GAP-1655 note: the board carries a pending row — the test's
+	// subject is the admit_reason STAMP (requirement d), not the board;
+	// under the 1655 policy a cooldown builder on a proven-drained board
+	// is deferred (reason no_work) and would never produce the tick this
+	// test reads.
+	wd, _ := gap1660BoardDir(t, `{"id":"S0","status":"pending","title":"work"}`)
 	const proj = "gap1660-stamp-packer"
 	insertGap1660Project(t, db, proj, wd, 21600, database.AdmissionModeCooldown)
 	gap1660SetLastCompleted(t, db, proj, 24*time.Hour) // pin long elapsed
@@ -431,8 +457,10 @@ func TestSCHEDGAP1660_AdmitReasonAlwaysStamped(t *testing.T) {
 	}
 
 	// (2) Sim-spawn path: the row the SimSpawner inserts itself (the path
-	// that never had a stamp before SCHED-GAP-1660).
-	wd2, _ := gap1660BoardDir(t)
+	// that never had a stamp before SCHED-GAP-1660). The board carries a
+	// pending row — same SCHED-GAP-1655 note as arm (1): the subject is
+	// the stamp, not the board.
+	wd2, _ := gap1660BoardDir(t, `{"id":"S0","status":"pending","title":"work"}`)
 	const simProj = "gap1660-stamp-sim"
 	insertGap1660Project(t, db, simProj, wd2, 21600, database.AdmissionModeCooldown)
 	l.SetSimulation(1.0)

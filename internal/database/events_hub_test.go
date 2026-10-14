@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -12,14 +11,15 @@ import (
 // subscribers of its database, must never block a writer on a slow subscriber,
 // and must keep subscribers of one database isolated from another's.
 
+// hubTestDB returns a ready database for the hub tests. GAP-060 / QA-CHS-182:
+// this used to call InitDB directly, paying the full open + migration chain
+// per call (7 databases across this file); under host load that alone pushed
+// TestEventsHub_NoCrossDatabaseLeakage past 19s and the package past its
+// timeout. It now shares the session-scoped schema template via newTestDB
+// (byte-copy + per-connection pragmas), keeping identical WAL/FK semantics.
 func hubTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := InitDB(filepath.Join(t.TempDir(), "scheduler.db"))
-	if err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDB(t)
 }
 
 func logHubEvent(t *testing.T, db *sql.DB, msg string) Event {
@@ -94,8 +94,14 @@ func TestEventsHub_FullBufferDropsInsteadOfBlocking(t *testing.T) {
 			slowest = d
 		}
 	}
-	if slowest > time.Second {
-		t.Errorf("slowest LogEvent with a full subscriber buffer = %s, want < 1s (a blocking publish would hang)", slowest)
+	// QA-CHS-182: the ceiling is a HANG guard, not a latency gate — a publish
+	// that blocks on the full buffer never returns at ANY threshold, so 10s
+	// (vs 1s, observed 150ms/event worst under load ~30 from modernc fsync)
+	// keeps the guard's discriminating power while tolerating loaded-host
+	// wall-clock noise (off-by-one class 0262). The real assertions are the
+	// drop counts below.
+	if slowest > 10*time.Second {
+		t.Errorf("slowest LogEvent with a full subscriber buffer = %s, want < 10s (a blocking publish would hang)", slowest)
 	}
 	// The one-deep buffer holds exactly the first event; the other 49 were
 	// dropped instead of queueing.

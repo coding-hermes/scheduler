@@ -376,3 +376,7 @@ effective_consumption = namespace_allocation × (w_job / Σw_all_jobs_in_namespa
 ```
 
 This means a job with `weight=60` in the `data-cleanup` namespace (gets ~9 units global) has an effective weight of `9 × (60/200) = 2.7 → 2` units. The same `weight=60` in `coding-hermes` (gets ~61 units global) has an effective weight of `61 × (60/230) = 15.9 → 15` units. Same intra-namespace weight, fundamentally different global impact — exactly the "airline cargo" two-axis model.
+
+### 12. Orthogonal named usage pools (SCHED-GAP-1726)
+
+S04's packer and S07's namespace allocation select/weight work; they are not the authoritative multi-resource concurrency admission system. A selected tick may consume several independently named usage pools, including a local host pool, a remote bunker/host pool, and an optional per-project pool. Membership is independent of `namespace_id`; a single lane can be charged to multiple pools. Admission is atomically enforced at `SlotPool.spawn`, with all-or-none reservations and observable defer reasons. See [`docs/usage-pools-spec.md`](../docs/usage-pools-spec.md) for the contract, rollout, and test matrix. This extension does not change the S04 weight-packing algorithm.

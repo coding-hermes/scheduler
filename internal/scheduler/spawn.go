@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,8 +98,30 @@ type Spawner struct {
 	// classifies the tick as a stalled failure instead of waiting for the 2h
 	// backstop.
 	gatewayResponseTimeout time.Duration
-	model                  string
-	provider               string
+	// idleIntervention (SCHED-GAP-1688) arms the end-of-tick hook: when true,
+	// a tick that completes with ZERO artifacts (no commits AND no new board
+	// rows in the tick window) gets ONE extra bounded turn fired into the SAME
+	// live gateway session before it closes — do the work now, or write WHY
+	// not (persisted in DuckBrain). Global, default OFF (env
+	// SCHEDULER_IDLE_INTERVENTION). The extra turn is never counted as work:
+	// the tick's outcome is still decided by the artifacts re-measured after
+	// it, so an explained idle tick stays an idle tick.
+	idleIntervention bool
+	// gatewayTransientRetries (SCHED-GAP-1681) is the bounded transient-retry
+	// count for the GAP-080 loop: how many times a transient gateway failure
+	// (5xx, refused dial, SSE stream ended without a terminal event, body
+	// read/unmarshal) is retried on the SAME model/provider pair with the
+	// SAME session key (X-Hermes-Session-Key: tickID) before the spawn path
+	// classifies the tick (stalled / deferred / drop / exec fallback).
+	// Default gatewayRetryDefaultMax (3, the pre-1681 hardcoded value);
+	// 0 = single attempt, the retry loop is skipped entirely; negative
+	// values are ignored by the setter. The session-key reuse on every
+	// attempt IS the session continuation: the gateway scopes the run under
+	// the tick id, so a retry re-attaches to the same session instead of
+	// starting a fresh one (see gateway_client.go's SendResponse docs).
+	gatewayTransientRetries int
+	model                   string
+	provider                string
 	// SCHED-GAP-064: global (env) fallback tier for the spawn model/provider
 	// chain. Applied AFTER the project's primary and fallback tiers; skipped
 	// entirely when a project sets NoGlobalFallback.
@@ -133,6 +156,29 @@ type Spawner struct {
 	foremanHome    string         // HERMES_HOME for foreman config
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
+
+	// SCHED-GAP-1594: per-tick git push behind a flag. Default false — the
+	// pre-flag behavior (push at tick exit) is kept for backward compat.
+	// When true, Wait()'s completed branch skips pushTickWork entirely: the
+	// web dashboard becomes the primary update surface, and the strand-push
+	// cron is the only remaining pusher. Never fails a tick either way.
+	tickPushDisabled bool // SCHED-GAP-1594: skip the per-tick git push at tick exit
+
+	// SCHED-GAP-1712: the GLOBAL tier of the endpoint resolution — captured
+	// from the client SetGatewayClient installed, so the resolver can name
+	// the global source without re-deriving it. Empty means this daemon has
+	// no global endpoint at all (exec-fallback shape).
+	gatewayURL string
+	gatewayKey string
+	// gatewayEndpoints caches the derived per-endpoint clients: one
+	// GatewayClient per non-global resolved URL, created on first use and
+	// kept for the daemon's lifetime (same timeout + clock as the daemon
+	// client, empty implicit key — the resolved key is passed per request).
+	// Guarded by gwMu, deliberately NOT s.mu: the dispatch path must never
+	// contend on the active-tick lock to read an endpoint. nil until the
+	// first non-global endpoint is seen.
+	gatewayEndpoints map[string]*GatewayClient
+	gwMu             sync.Mutex
 
 	// events is an optional EventLogger. When set, terminal gateway-key
 	// rejections (GAP-035) emit a HIGH event so a key regression is
@@ -178,6 +224,20 @@ type Spawner struct {
 	// builder no-artifact guard cancelled, consumed exactly once by the
 	// spawn path to classify the outcome. Guarded by s.mu.
 	guardAbortedTicks map[string]bool
+
+	// silenceTicks (SCHED-GAP-1707) marks ticks the session-silence
+	// watchdog terminated, carrying the session_silent partial-telemetry
+	// tuple (with the measured quiet duration). Consumed exactly once by
+	// the spawn path's classification site — the same consume-once
+	// contract as guardAbortedTicks. Guarded by s.mu.
+	silenceTicks map[string]partialTelemetry
+
+	// pollLoopTicks (SCHED-GAP-1698) marks ticks the poll-loop idle guard
+	// terminated, carrying the sleep_poll partial-telemetry tuple (with the
+	// confirmed polling span on silenceS). Consumed exactly once by the
+	// spawn path's classification site — the same consume-once contract as
+	// silenceTicks. Guarded by s.mu.
+	pollLoopTicks map[string]partialTelemetry
 }
 
 // sendTurn (SCHED-GAP-119) is the single dispatch seam for one gateway
@@ -190,14 +250,14 @@ type Spawner struct {
 //
 // Every attempt (primary + GAP-080 retry + chain hops) merges its
 // GatewayPOSTTrace into *tickTrace; logPOSTTrace persists + logs it (AC 1).
-func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
+func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
 	prompt, model, provider, key, tickID, project string, tickTrace **GatewayPOSTTrace, stall *bool) (*Response, error) {
 	if supervise {
 		deadline := s.gatewayResponseTimeout
 		if deadline > effectiveTimeout {
 			deadline = effectiveTimeout
 		}
-		r, trace, err := s.gateway.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
+		r, trace, err := gw.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
 		trace.Model, trace.Provider = model, provider
 		trace.TickID, trace.Project = tickID, project
 		mergePostTrace(tickTrace, trace)
@@ -216,26 +276,46 @@ func (s *Spawner) sendTurn(sessionCtx, turnCtx context.Context, supervise bool, 
 				(*tickTrace).Classification = "aborted-by-turn-deadline"
 				(*tickTrace).IdleFired = true
 			}
+		} else if errors.Is(err, ErrTickDeadlineExceeded) {
+			// SCHED-GAP-1684: the TICK wall (session ctx) tore the POST
+			// down — name it in the trace so gateway_trace audits a
+			// self-timeout instead of a generic transport error.
+			if *tickTrace != nil {
+				(*tickTrace).Classification = "aborted-by-tick-deadline"
+			}
 		}
 		return r, err
 	}
-	r, err := s.gateway.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
-	if err == nil {
-		// Legacy path carries no per-POST supervision, but AC 1 still wants
-		// the trace: record a minimal completed/wall entry for the attempt.
-		now := s.clock().Now()
-		mergePostTrace(tickTrace, &GatewayPOSTTrace{
-			TickID:         tickID,
-			Project:        project,
-			Model:          model,
-			Provider:       provider,
-			Start:          now.Add(-s.clock().Since(now)),
-			Finish:         now,
-			DeadlineMode:   "wall",
-			Classification: "completed",
-			Attempts:       1,
-		})
+	// SCHED-GAP-1681: the legacy path records a trace for EVERY attempt —
+	// failed ones included — so the merged tick trace's Attempts count is
+	// honest on every outcome (the GAP-080 retry loop re-sends through this
+	// seam, and a failed retry used to vanish: postTrace showed 1 attempt
+	// even when 4 POSTs were made). A failed attempt carries
+	// classification=transport-error (the same string SendResponseStream
+	// stamps); a successful one completed/wall, unchanged. The session-key
+	// contract is the same on both paths: tickID rides X-Hermes-Session-Key
+	// (SendResponseWithSessionKey), so a retry CONTINUES the tick's gateway
+	// session instead of minting a new one.
+	start := s.clock().Now()
+	r, err := gw.SendResponseWithSessionKey(turnCtx, prompt, model, provider, key, tickID)
+	now := s.clock().Now()
+	attemptTrace := &GatewayPOSTTrace{
+		TickID:   tickID,
+		Project:  project,
+		Model:    model,
+		Provider: provider,
+		Start:    start,
+		Finish:   now,
+		// DeadlineMode "wall": no activity signal on the legacy path.
+		DeadlineMode: "wall",
+		Attempts:     1,
 	}
+	if err != nil {
+		attemptTrace.Classification = "transport-error"
+	} else {
+		attemptTrace.Classification = "completed"
+	}
+	mergePostTrace(tickTrace, attemptTrace)
 	return r, err
 }
 
@@ -280,12 +360,17 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		active:                 make(map[string]*exec.Cmd),
 		timeout:                to,
 		gatewayResponseTimeout: gatewayResponseTimeoutFromEnv(),
-		model:                  getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
-		provider:               getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
-		fallbackModel:          getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
-		fallbackProvider:       getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
-		idleModel:              getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
-		idleProvider:           getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
+		// SCHED-GAP-1681: the transient-retry count resolves the same
+		// precedence chain as the deadline — env default here, daemon
+		// flag/TOML override via SetGatewayTransientRetries at boot.
+		gatewayTransientRetries: gatewayTransientRetriesFromEnv(),
+		idleIntervention:        idleInterventionFromEnv(),
+		model:                   getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "deepseek-v4-flash"),
+		provider:                getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "deepseek-foreman"),
+		fallbackModel:           getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_MODEL", "deepseek-v4-flash"),
+		fallbackProvider:        getEnvOrDefault("SCHEDULER_FOREMAN_FALLBACK_PROVIDER", "deepseek-foreman"),
+		idleModel:               getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_MODEL", ""),
+		idleProvider:            getEnvOrDefault("SCHEDULER_FOREMAN_IDLE_PROVIDER", ""),
 		// TASK-ROUTER-001: the task router is OPT-IN via env — hosts
 		// without SCHEDULER_ROUTER_CMD (and every test) keep the
 		// pre-router resolution exactly (fail-open default). The command
@@ -364,6 +449,54 @@ func (s *Spawner) SetGatewayResponseTimeout(d time.Duration) {
 // (SCHED-GAP-117); 0 when no deadline is armed.
 func (s *Spawner) GatewayResponseTimeout() time.Duration {
 	return s.gatewayResponseTimeout
+}
+
+// envGatewayTransientRetries (SCHED-GAP-1681) is the env layer for the
+// transient-retry count, mirroring envGatewayResponseTimeout's precedence:
+// TOML [scheduler] gateway_transient_retries < this env var < the
+// --gateway-transient-retries flag.
+const envGatewayTransientRetries = "SCHEDULER_GATEWAY_TRANSIENT_RETRIES"
+
+// gatewayTransientRetriesFromEnv resolves the library-level default for the
+// transient-retry count: the env var when set (a negative value is rejected
+// as nonsensical — the default stands), else gatewayRetryDefaultMax (3, the
+// pre-1681 hardcoded value).
+func gatewayTransientRetriesFromEnv() int {
+	if v := os.Getenv(envGatewayTransientRetries); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			log.Printf("WARN: %s=%q unparseable — using default %d",
+				envGatewayTransientRetries, v, gatewayRetryDefaultMax)
+			return gatewayRetryDefaultMax
+		}
+		if n < 0 {
+			log.Printf("WARN: %s=%q negative — using default %d",
+				envGatewayTransientRetries, v, gatewayRetryDefaultMax)
+			return gatewayRetryDefaultMax
+		}
+		return n
+	}
+	return gatewayRetryDefaultMax
+}
+
+// SetGatewayTransientRetries arms the bounded transient-retry count for the
+// GAP-080 loop (SCHED-GAP-1681). 0 DISABLES the retry loop (one attempt per
+// POST — the pre-080 behavior, byte-for-byte); only negative values are
+// ignored as nonsensical. The daemon wires --gateway-transient-retries here
+// (after the env + TOML layers resolved it); tests shrink it so a retry
+// scenario costs real POSTs without waiting out the full default count.
+func (s *Spawner) SetGatewayTransientRetries(n int) {
+	if n < 0 {
+		return
+	}
+	s.gatewayTransientRetries = n
+}
+
+// GatewayTransientRetries returns the armed transient-retry count
+// (SCHED-GAP-1681); surfaced by /api/v1/status so the knob's ARMED value is
+// introspectable like its GAP-117 sibling.
+func (s *Spawner) GatewayTransientRetries() int {
+	return s.gatewayTransientRetries
 }
 
 // routerFromEnv wires the task router from SCHEDULER_ROUTER_CMD
@@ -445,6 +578,68 @@ func (s *Spawner) noteTransientGatewayDeferral(project, reason string) {
 	gatewayHealth.NoteTransientGatewayDeferral(project, reason)
 }
 
+// GatewayAvailabilityEventComponent is the events.component value of every
+// gateway-availability loss event (SCHED-GAP-1654). It is a stable query
+// anchor: /api/v1/gateway-errors counts exactly these rows, and an operator
+// can grep the events table (or the SSE stream, CTL-002) for the same token.
+const GatewayAvailabilityEventComponent = "gateway_availability"
+
+// GatewayAvailabilityEventType is the machine marker carried in the event
+// details, mirroring the gateway_health_* / board_closure convention: the
+// class is queryable with json_extract(details,'$.event_type') without
+// matching on message prose.
+const GatewayAvailabilityEventType = "gateway_error"
+
+// noteGatewayAvailabilityError records ONE tick lost (or deferred) to gateway
+// unavailability, classified by ClassifyGatewayError (SCHED-GAP-1654).
+//
+// THE DEFECT THIS SERVES. During the 2026-09-27 03:00 incident
+// (SCHED-GAP-1644) the gateway logged nothing for two hours and the scheduler
+// could not say how many ticks had been lost to gateway unavailability as
+// opposed to any other failure: every class — 503 drain, 429 rate limit, and
+// a refused dial — reached the events table either as the generic
+// "gateway spawn dropped" HIGH event, or, for the refused-dial blip, as a
+// deferral that is not a failure at all. The three classes are different
+// operational problems (restart/drain vs provider pacing vs dead listener)
+// with different operator responses, so they must be countable apart.
+//
+// Placement contract: called ONLY from the no-exec-fallback terminal site in
+// Spawn() — i.e. when the tick is genuinely not run (dropped on 503/429,
+// deferred on a refused dial). A tick rescued by exec fallback, an auth
+// rejection (GAP-035), a per-turn stall, and our own tick deadline each have
+// their own classification and are never counted here, so the endpoint's
+// numbers cannot be inflated by failures that were not gateway availability.
+//
+// Best-effort observability, exactly like recordGatewayDrop: an unwired
+// EventLogger (tests, exec-only hosts) logs the line and emits nothing, and a
+// failed event write is logged by EventLogger.Emit, never propagated — the
+// spawn path's outcome must not depend on an audit write.
+func (s *Spawner) noteGatewayAvailabilityError(project, tickID string, gwErr error) {
+	class := ClassifyGatewayError(gwErr)
+	if class == "" {
+		return
+	}
+	at := s.clock().Now().UTC().Format(time.RFC3339)
+	log.Printf("GATEWAY-UNAVAILABLE: %s tick=%s class=%s at=%s — tick not run (gateway availability): %v",
+		project, tickID, class, at, gwErr)
+	if s.events == nil {
+		return
+	}
+	s.events.Emit(context.Background(), SeverityHigh, GatewayAvailabilityEventComponent,
+		"gateway unavailable: "+class,
+		map[string]any{
+			// event_type is the machine marker; timestamp is written into the
+			// payload as well as the row's created_at so a consumer that only
+			// reads details (or a forwarded copy of the row) still has WHEN.
+			"event_type":  GatewayAvailabilityEventType,
+			"error_class": class,
+			"project":     project,
+			"tick_id":     tickID,
+			"error":       gwErr.Error(),
+			"timestamp":   at,
+		})
+}
+
 // transientGatewayDeferral books a transient gateway blip as a DEFERRAL
 // instead of a lane failure (SCHED-GAP-203), returning the non-completed tick
 // whose Wait() yields TickDeferred.
@@ -503,6 +698,75 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 		// deferral must be auditable, not silent (the row's acceptance asks
 		// for "the gateway reason recorded").
 		gwDeferReason: gwErr.Error(),
+		model:         model,
+		provider:      provider,
+		rate:          rate,
+		workdir:       project.Workdir,
+		reqStart:      reqStart,
+		Trigger:       "prompt",
+		gwFailCounted: true,
+		gwFailCommits: commits,
+		gwFailFiles:   files,
+	}
+}
+
+// tickDeadlineTimeout (SCHED-GAP-1684) books a tick whose OWN session deadline
+// tore down the in-flight gateway POST as TickTimeout instead of a
+// SCHED-GAP-203 deferral: the SSE reader reports that shape as
+// ErrTickDeadlineExceeded (the stream "ended" because WE cancelled it), and
+// booking it deferred charged the gateway for our wall — 30 of 41 deferred
+// ticks in the 2026-09-30 sample died at exactly 120/180 min while outcome
+// `timeout` was used only 9x in 7 days. The runaway foreman a 2-3h wall exists
+// to catch becomes visible in the status vocabulary the ledger already has
+// ("no timeout backoff" keeps governing: the cooldown chain is untouched).
+//
+// Mirrors transientGatewayDeferral's contract everywhere the deferral is
+// load-bearing, except the terminal class:
+//   - git work is pre-counted at the classification site (a turn that ran
+//     for hours may have committed before the wall hit);
+//   - no noteSpawnFailure / recordGatewayDrop (Wait()'s timeout branch
+//     neither resets nor increments consecutive_failures — lifecycle.go);
+//   - the deferral counter does NOT move (this is not a blip).
+//
+// gwFailErr carries "tick-timeout wall <effectiveTimeout>: <gateway error>" —
+// the row's acceptance asks for the wall in the reason. lifecycle.Complete
+// stamps failure_reason=gateway_transport via failureReasonClass (the
+// deadline fired inside a gateway POST), and the status/outcome columns carry
+// timeout/timeout through TickTimeout.Outcome().
+//
+// SCHED-GAP-1707: the row is PARTIAL — telemetry_partial=1 named
+// tick_deadline, carrying whatever usage the turn's SSE trace observed before
+// the wall (the trace's folded token probe; zero when the turn never
+// streamed). Cost derives from the same observed tokens through the tick's
+// own price rate, never a fabricated estimate. The wave-commits
+// pre-count (gwFailCommits/gwFailFiles) keeps its SCHED-GAP-119 rule.
+func (s *Spawner) tickDeadlineTimeout(project PackedProject, tickID string, gwErr error, reqStart time.Time,
+	wall time.Duration, model, provider string, rate routerRate, postTrace *GatewayPOSTTrace) *SpawnedTick {
+	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+	reason := fmt.Sprintf("tick-timeout wall %s: %v", wall, gwErr)
+	log.Printf("TIMEOUT: %s tick=%s session deadline expired during gateway POST — booking timeout (NOT a gateway blip): %v",
+		project.Name, tickID, gwErr)
+	// SCHED-GAP-1707 deliverable 1: capture the partial telemetry NOW, at
+	// the kill site — the SSE trace's folded usage is whatever the turn
+	// streamed before the deadline tore the POST down.
+	tin, tout := 0, 0
+	if postTrace != nil {
+		tin, tout = postTrace.TokensIn, postTrace.TokensOut
+	}
+	partial := markPartialTelemetry(TelemetryPartialTickDeadline, tin, tout, computeCostUSD(provider, model, rate, tin, tout))
+	return &SpawnedTick{
+		TickID:        tickID,
+		Project:       project.Name,
+		SessionID:     tickID, // placeholder — no terminal event, no gateway session persisted
+		Started:       reqStart,
+		Deliver:       project.Deliver,
+		DeliverMode:   project.DeliverMode,
+		spawner:       s,
+		completed:     false,
+		completeAt:    s.clock().Now(),
+		gwFailErr:     reason,
+		gwTickTimeout: true,
+		gwPartial:     partial,
 		model:         model,
 		provider:      provider,
 		rate:          rate,
@@ -647,6 +911,13 @@ func (s *Spawner) RunningSet() map[string]bool {
 // HTTP over process spawning. Pass nil to disable and fall back to exec.Command.
 func (s *Spawner) SetGatewayClient(client *GatewayClient) {
 	s.gateway = client
+	// SCHED-GAP-1712: capture the daemon's own endpoint as the GLOBAL tier of
+	// the resolution. A nil client clears both (exec-fallback shape).
+	if client == nil {
+		s.gatewayURL, s.gatewayKey = "", ""
+		return
+	}
+	s.gatewayURL, s.gatewayKey = client.baseURL, client.apiKey
 }
 
 // RegisterTickSessionContext arms the SCHED-GAP-1674 cancel registry for one
@@ -722,6 +993,24 @@ func (s *Spawner) SetNoExecFallback(v bool) {
 	s.noExecFallback = v
 }
 
+// SetTickPushDisabled (SCHED-GAP-1594) turns the per-tick git push at tick
+// exit (tick_push.go) on or off. Default is off — disabled=false keeps the
+// SCHED-GAP-1694 push-at-exit behavior byte-identical. When disabled=true a
+// completed tick only updates the web dashboard (tick rows, /api/v1/status,
+// /health), no `git push` runs, and the fleet-strand-push cron is the only
+// remaining pusher. Reads happen on the Wait() completion path without a
+// lock; the daemon sets this once at boot before any tick can complete.
+func (s *Spawner) SetTickPushDisabled(v bool) {
+	s.tickPushDisabled = v
+}
+
+// TickPushDisabled reports whether the per-tick git push is disabled
+// (SCHED-GAP-1594). Consumed by the API status block and the dashboard's
+// live/pushed indicator.
+func (s *Spawner) TickPushDisabled() bool {
+	return s.tickPushDisabled
+}
+
 // SetEventLogger wires an optional EventLogger for HIGH events on terminal
 // gateway-key rejections (GAP-035). Nil (the default) disables emission.
 func (s *Spawner) SetEventLogger(el *EventLogger) {
@@ -756,15 +1045,20 @@ func (s *Spawner) SetCircuitClient(cc *CircuitClient) {
 // latency to a spawn, and a slow probe must not stall the tick.
 const gatewayKeyProbeTimeout = 5 * time.Second
 
-// SCHED-GAP-080: bounded transient-gateway retry. gatewayRetryMaxAttempts is
-// the number of retries AFTER the initial attempt (so a persistently-failing
-// gateway sees 1 + gatewayRetryMaxAttempts = 4 POSTs). gatewayRetryBackoff
+// SCHED-GAP-080: bounded transient-gateway retry. gatewayRetryDefaultMax
+// attempts is the number of retries AFTER the initial attempt (so a
+// persistently-failing gateway sees 1 + N = 4 POSTs at the default). The
+// SCHED-GAP-1681 knob (--gateway-transient-retries /
+// scheduler.gateway_transient_retries / SCHEDULER_GATEWAY_TRANSIENT_RETRIES)
+// replaces the hardcoded value: 0 disables the retry loop entirely
+// (single-attempt behavior, pre-080), negative values are ignored as
+// nonsensical. gatewayRetryBackoff
 // returns the exponential backoff for retry attempt k: 500ms → 1s → 2s → 4s
 // cap (≈3.5s worst-case added latency, far below the tick timeout). The tick
 // context is the outer bound: a ctx cancel anywhere in the loop aborts
 // immediately, so a persistently-5xx gateway still fails the tick instead of
 // hanging it (SCHED-GAP-080 acceptance: bounded attempts, ctx-bounded).
-const gatewayRetryMaxAttempts = 3
+const gatewayRetryDefaultMax = 3
 
 // gatewayRetryBackoff returns the backoff duration for the given retry
 // attempt (1-based), capped at 4s. When the failed attempt carried a
@@ -886,6 +1180,10 @@ const builtinForemanPrompt = "" +
 	"Load skills coding-hermes-map and coding-hermes-foreman at start. " +
 	"Use the map to pull additional skills LAZILY as each phase needs them " +
 	"(board read, worker dispatch, gitreins, debugging, etc.) — never preload the whole toolbox. " +
+	"UNATTENDED EXECUTION (SCHED-GAP-226): This tick runs on an unattended surface (api_server/cron). " +
+	"Load skill `unattended-session-execution` BEFORE any terminal work — it documents which command forms " +
+	"(execute_code, python3 -c, heredocs, bash -lic) are approval-gated and will hang waiting for a user " +
+	"who does not exist. Use write_file + bash /tmp/<script>.sh (background+pty) instead. " +
 	"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. " +
 	"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. " +
 	"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. " +
@@ -895,11 +1193,11 @@ const builtinForemanPrompt = "" +
 	"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. " +
 	"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. " +
 	"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. " +
-	"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. " +
-	"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. " +
-	"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. " +
-	"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean (optional — the fleet default keeps completed tasks for audit). " +
-	"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. " +
+	"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `~/.local/bin/gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `~/.local/bin/gitreins task start <TASK-ID>` for the board task you picked. " +
+	"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `~/.local/bin/gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. " +
+	"NEVER end a tick without running `~/.local/bin/gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. " +
+	"(3) Then delete the gitreins task with `~/.local/bin/gitreins task delete <TASK-ID>` to keep tasks.yaml clean (optional — the fleet default keeps completed tasks for audit). " +
+	"If the worker committed but you missed the gitreins lifecycle, run `~/.local/bin/gitreins task complete` on the committed work before finishing. " +
 	"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. " +
 	"Format your final output as clean, well-structured markdown with tables and sections. " +
 	"Report result."
@@ -929,8 +1227,55 @@ func buildForemanPrompt(project PackedProject, tickID string) string {
 	}
 	return "[Scheduler tick: " + tickID + "] " + base +
 		"\nWorkdir: " + project.Workdir + "." +
-		"\nWorker model/provider: " + WorkerDefaults(project) + "."
+		"\nWorker model/provider: " + WorkerDefaults(project) + "." +
+		syncScopeBudgetClause(project)
 }
+
+// syncScopeBudgetClause (SCHED-GAP-1651) appends the scope/read-budget block
+// to duckbrain-sync lanes — the mechanical fact-writers whose per-tick input
+// (1.2–8.3M tokens) came mostly from out-of-scope context reads. The
+// namespace prompt stays the authoritative procedure; this adds the boundary.
+// Idempotent: when the namespace prompt already carries the block (the live
+// fleet config has it baked into duckbrain-sync's default_prompt), the
+// append is skipped — no duplicate block on the wire. Non-sync lanes return
+// "" and their prompts are byte-identical to pre-1651.
+func syncScopeBudgetClause(project PackedProject) string {
+	if !strings.HasSuffix(project.Name, "-sync") {
+		return ""
+	}
+	if strings.Contains(project.NamespacePrompt, "SCOPE AND READ BUDGET (SCHED-GAP-1651)") {
+		return ""
+	}
+	return "\n\n" + SyncScopeBudgetPrompt
+}
+
+// SyncScopeBudgetPrompt (SCHED-GAP-1651) is the scope/read-budget block the
+// spawn path appends to every duckbrain-sync tick prompt, after the
+// namespace's default_prompt. The canonical sync procedure leaves scope
+// open ("do not sweep unless the data skill requires it") and the lanes
+// still read 1.2–8.3M input tokens per tick — mostly context reads outside
+// the target namespace. This block makes the boundary mechanical:
+//
+//   - SCOPE — one namespace, named by the lane; no cross-namespace reads;
+//   - the read budget — every large read is bounded and justified, not
+//     exploratory; skills and reference docs load per procedure, never wholesale;
+//   - the failure shape — a token-splat tick is a bad tick even when the
+//     keys verify.
+//
+// Appended (not replacing) so the namespace prompt stays the authoritative
+// procedure (fleet-lane-config-writes doctrine). Exported so the config
+// layer and tests can assert the canonical text.
+const SyncScopeBudgetPrompt = "SCOPE AND READ BUDGET (SCHED-GAP-1651): This tick syncs ONE namespace — " +
+	"the one your project prompt names. Read only the namespace specified: do not sweep other " +
+	"namespaces, do not load cross-references or related namespaces, and do not explore sibling " +
+	"projects' repos. TOKEN/READ BUDGET: keep total context reads inside the target namespace — " +
+	"cap any single source read (git log, board file, session scan, JSONL table) at roughly " +
+	"2000 lines / one command's worth of output, prefer targeted flags over full dumps, and " +
+	"stop reading once the Intended Facts table is populated (max 50 entries). Load skills " +
+	"lazily per procedure; never cat a whole skill or data file. Do not sweep ChromaDB, " +
+	"Obsidian, GitHub, or any other namespace unless the data skill explicitly requires it. " +
+	"A tick that writes N verified keys and stays inside this budget is a success; a tick " +
+	"that splurges millions of tokens on out-of-scope reads is a failure even if its keys verify."
 
 // chainEntry is one step of the model/provider fallback chain (SCHED-GAP-064).
 // An entry is PRESENT when at least one of model/provider is non-empty; a
@@ -1226,6 +1571,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					model, provider = m, p
 				}
 			}
+			// SCHED-GAP-1651: the primary dispatch pair carries the router's
+			// PUBLIC price — not only the 401/403 retry hops. Without this
+			// wiring a router-priced FREE head (e.g. qwen3.7-plus:free@xkiro-2,
+			// usd_1m=0) left rate unknown, computeCostUSD fell through to the
+			// static maps, the model id was unknown there, and every such tick
+			// was billed at the unknown-model fallback ($2/M in, $8/M out):
+			// measured 2026-10-10, 348 duckbrain-sync ticks in 7 days carried
+			// $828.77 of phantom cost for a $0 lane. A known-but-$0 rate is
+			// load-bearing — computeCostUSD never falls through for a known
+			// lane — and pairs the router never priced still fall back to the
+			// static maps exactly as before.
+			if rr, ok := routerRes.HopRate(provider, model); ok {
+				rate = rr
+			}
 		}
 		chainKind := "work"
 		if idle {
@@ -1244,25 +1603,43 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// even though the flag says to stay idle. The background reconnector
 		// will SetGatewayClient when the gateway recovers, re-engaging HTTP.
 		if s.gateway == nil && s.noExecFallback {
-			log.Printf("SKIPPED: %s tick=%s no gateway client and exec fallback disabled — staying idle", project.Name, tickID)
-			s.noteSpawnFailure(project.Name)
+			// SCHED-GAP-1664: a nil gateway client with exec fallback
+			// disabled is a TRANSPORT DEFERRAL, not a lane failure. This is
+			// the residual nil-client race SCHED-GAP-170's pre-pick health
+			// gate cannot cover (the client can go nil between the gate and
+			// the pick, e.g. during the gateway restart cluster measured
+			// 2026-09-28: 209 such ticks in one hour, every one booked as a
+			// LANE failure — consecutive_failures bump, GAP-133 backoff-gate
+			// credit, recordGatewayDrop alert noise, a cooldown burn per
+			// lane — while the scheduler itself was up and the fleet was
+			// healthy). The tick must wait for the background reconnector
+			// instead of charging the lane for the gateway's death, so it
+			// reuses the SCHED-GAP-203 machinery:
+			//   - NO noteSpawnFailure* (consecutive_failures untouched);
+			//   - NO bumpConsecutiveDrops / recordGatewayDrop (a deferral is
+			//     not a drop — see transientGatewayDeferral's contract);
+			//   - a single HIGH event keeps the outage auditable, with
+			//     details saying DEFERRED, not dropped;
+			//   - the returned SpawnedTick carries gwDeferred/gwDeferReason,
+			//     so Wait() yields TickDeferred and slot_pool's existing
+			//     lifecycle.Complete path persists status=deferred /
+			//     outcome=deferred with the real reason text.
+			// The exec-fallback-enabled path below is untouched, and the
+			// ErrGatewayKeyRejected terminal path never sees a nil client.
 			dropErr := fmt.Errorf("no gateway client and exec fallback disabled for %s", project.Name)
+			log.Printf("DEFERRED: %s tick=%s no gateway client and exec fallback disabled — deferring (NOT a lane failure)", project.Name, tickID)
 			if s.events != nil {
 				s.events.Emit(context.Background(), SeverityHigh, "spawn",
-					"gateway unavailable and exec fallback disabled — tick dropped", map[string]any{
+					"gateway unavailable and exec fallback disabled — tick deferred", map[string]any{
 						"project":          project.Name,
 						"tick_id":          tickID,
 						"gateway":          "nil",
 						"no_exec_fallback": true,
+						"deferred":         true,
 						"error":            dropErr.Error(),
 					})
 			}
-			// GAP-050: a nil gateway is a gateway-caused drop too — advance
-			// the consecutive-drop counter (the event above is this tick's
-			// per-drop HIGH event, so bumpConsecutiveDrops emits only the
-			// >=2-consecutive alert, keeping one event per dropped tick).
-			s.bumpConsecutiveDrops(project.Name, dropErr)
-			return nil, dropErr
+			return s.transientGatewayDeferral(project, tickID, dropErr, s.clock().Now(), model, provider, routerRate{}), nil
 		}
 
 		// Try HTTP gateway spawn first (zero process overhead).
@@ -1274,6 +1651,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// wave-enabled namespace it now wraps the resolved
 			// effectiveTickTimeout (env > namespace > --tick-timeout).
 			ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout)
+
+			// SCHED-GAP-1712: resolve THIS tick's gateway endpoint at
+			// dispatch time — lane (projects.gateway_url) > namespace
+			// (namespaces.gateway_url) > global ([gateway].url) — and
+			// stamp the RESOLVED fact on the tick row before the first
+			// POST, so a dispatch can be audited after the fact. With no
+			// per-lane/per-namespace endpoint configured the resolution
+			// yields the daemon client and the global key: the
+			// pre-1712 behavior, byte for byte.
+			endpoint := s.resolveTickEndpoint(ctx, project.Name, project.GatewayKey)
+			gwClient := s.endpointClient(endpoint.URL)
+			s.recordTickEndpoint(ctx, tickID, endpoint)
+			log.Printf("GATEWAY ENDPOINT: %s tick=%s url=%s url_source=%s key_source=%s",
+				project.Name, tickID, endpoint.URL, endpoint.URLSource, endpoint.KeySource)
 
 			// SCHED-GAP-1674: arm the guard's cancel registry for this tick
 			// and drop the entry on every return path (the same scope the
@@ -1324,6 +1715,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			var turnStalled bool
 			var postTrace *GatewayPOSTTrace
 
+			// SCHED-GAP-1681: the merged trace's Attempts count (every POST
+			// this tick made — primary, GAP-080 retries, chain hops), read
+			// at each SpawnedTick construction site. postTrace is nil until
+			// the first POST merges a trace, so 0 = no POST (the honest
+			// default for the nil-gateway site below).
+			traceAttempts := func() int {
+				if postTrace != nil {
+					return postTrace.Attempts
+				}
+				return 0
+			}
+
 			// GAP-035: validate a per-project gateway key BEFORE dispatch.
 			// The 2026-08-04 outage had the fleet send revoked fk-* keys
 			// blindly — every spawn burned a full gateway cycle, failed, and
@@ -1332,9 +1735,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// event. Non-auth probe errors (network blip, slow gateway) are
 			// non-terminal: dispatch proceeds and the SendResponse 401
 			// classification backstops.
-			if project.GatewayKey != "" {
+			// SCHED-GAP-1712: probe the LANE/NAMESPACE tier credential
+			// (never the global shared key — that one is validated at boot
+			// by the daemon Ping, and probing it per tick would add a
+			// /health round-trip to every lane in the fleet). An empty key
+			// or a key that resolved from the global tier keeps the legacy
+			// no-probe behavior.
+			if endpoint.Key != "" && endpoint.KeySource != gatewaySourceGlobal {
 				vctx, vcancel := context.WithTimeout(ctx, gatewayKeyProbeTimeout)
-				verr := s.gateway.ValidateKey(vctx, project.GatewayKey)
+				verr := gwClient.ValidateKey(vctx, endpoint.Key)
 				vcancel()
 				if errors.Is(verr, ErrGatewayKeyRejected) {
 					cancel()
@@ -1344,6 +1753,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					log.Printf("GATEWAY KEY PROBE: %s tick=%s error=%v — proceeding to dispatch", project.Name, tickID, verr)
 				}
 			}
+
+			// SCHED-GAP-1682: the commit trigger's BEFORE capture — the
+			// (HEAD sha, branch) pair plus the board fingerprint of the
+			// lane's workdir, stamped on the tick row before the foreman
+			// runs, so the tick-close verdict (unchanged pair + unchanged
+			// board = no-op) is auditable from the row. Best-effort: a
+			// failed capture reads UNMEASURED and can never produce a
+			// no-op verdict (the safe failure direction).
+			noopPreCommit, noopPreBranch, noopPreBoard := s.recordNoopPreCapture(tickID, project.Workdir)
 
 			// S-GAP-003: the gateway call below is synchronous and blocks for
 			// the whole tick (up to --tick-timeout). Persist a placeholder
@@ -1426,7 +1844,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// POST when the knob is armed, else the legacy non-streaming
 				// POST under turnCtx — one seam for every attempt below.
 				send := func(m, p string) (*Response, error) {
-					return s.sendTurn(ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, project.GatewayKey, tickID, project.Name, &postTrace, &turnStalled)
+					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
 				}
 				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
@@ -1439,11 +1857,22 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// enter this path — auth stays terminal (GAP-035) and the
 				// chain-hop logic below is untouched. The tick context bounds the
 				// loop, so a persistently-5xx gateway still fails the tick.
-				if err != nil && IsTransientGatewayErr(err) {
+				//
+				// SCHED-GAP-1681: the retry count is the configurable
+				// --gateway-transient-retries knob (0 = single attempt, loop
+				// skipped), and every attempt — including this first one and
+				// every retry — carries the SAME session key (sendTurn passes
+				// tickID as X-Hermes-Session-Key on every path), so the gateway
+				// re-attaches the session instead of minting a new one: the
+				// agent resumes where the stream died rather than restarting.
+				// postTrace.Attempts counts every POST (mergePostTrace folds
+				// attempt traces; the legacy path now records failed attempts
+				// too, so the count is honest on every outcome).
+				if err != nil && IsTransientGatewayErr(err) && s.gatewayTransientRetries > 0 {
 					atomic.AddInt64(&s.spawnGatewayErrors, 1)
-					for attempt := 1; attempt <= gatewayRetryMaxAttempts; attempt++ {
-						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q error=%v",
-							project.Name, tickID, attempt, gatewayRetryMaxAttempts, model, provider, err)
+					for attempt := 1; attempt <= s.gatewayTransientRetries; attempt++ {
+						log.Printf("GATEWAY RETRY: %s tick=%s attempt=%d/%d model=%q provider=%q session_key=%s error=%v",
+							project.Name, tickID, attempt, s.gatewayTransientRetries, model, provider, tickID, err)
 						select {
 						case <-turnCtx.Done():
 							return r, err
@@ -1532,6 +1961,96 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
 			// outcome (completed, aborted-by-turn-deadline, transport-error).
 			s.logPOSTTrace(tickID, postTrace)
+			// SCHED-GAP-1698: the poll-loop idle guard cancelled this
+			// session (confirmed sleep-poll cycling). Checked BEFORE the
+			// silence block below — the guard's verdict is the more
+			// specific statement about the row — with the identical
+			// consume-once / did-not-complete contract: act only when the
+			// POST did not complete (a cancel that races a finished turn
+			// leaves the tick its own honest outcome), consume the
+			// guardAborted marker too, and yield the TickTimeout carrying
+			// the sleep_poll partial tuple through Wait() → lifecycle.
+			// Complete (failure_reason=sleep_poll via failureReasonClass).
+			if stPoll, ok := s.sessionPollLoopFor(tickID); ok && (gwErr != nil || resp == nil) {
+				log.Printf("POLL-LOOP: %s tick=%s guard cancel recorded — confirmed span %ds (reason %s)",
+					project.Name, tickID, stPoll.silenceS, stPoll.reason)
+				// Consume the guard marker: CancelTickSession stamped
+				// guardAbortedTicks on the way to the cancel, and this
+				// return path skips the guard's own consume site — an
+				// unconsumed entry would leak the map and could mislabel a
+				// later retry of the same tick id.
+				s.guardAborted(tickID)
+				commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+				return &SpawnedTick{
+					TickID:        tickID,
+					Project:       project.Name,
+					SessionID:     tickID,
+					Started:       reqStart,
+					Deliver:       project.Deliver,
+					DeliverMode:   project.DeliverMode,
+					spawner:       s,
+					completed:     false,
+					completeAt:    s.clock().Now(),
+					gwFailErr:     sessionPollLoopError(fmt.Sprintf("%ds", stPoll.silenceS)),
+					gwTickTimeout: true,
+					gwPartial:     stPoll,
+					gwAttempts:    traceAttempts(),
+					model:         model,
+					provider:      provider,
+					rate:          rate,
+					workdir:       project.Workdir,
+					reqStart:      reqStart,
+					Trigger:       "prompt",
+					gwFailCounted: true,
+					gwFailCommits: commits,
+					gwFailFiles:   files,
+				}, nil
+			}
+			// SCHED-GAP-1707: the session-silence watchdog cancelled this
+			// session. Consume the verdict exactly once (the guard's
+			// consume-once contract) and record the kill BEFORE the tick
+			// deadline classification below can read it as tick_deadline —
+			// the watchdog is the terminal statement about this row. Act
+			// only when the POST did not complete (a cancel that races a
+			// finished turn leaves the tick its own honest outcome). The
+			// verdict rides SpawnedTick.silenceKill into Wait(), which
+			// yields TickTimeout carrying the session_silent partial tuple
+			// through lifecycle.Complete.
+			if stSilence, ok := s.sessionSilenceFor(tickID); ok && (gwErr != nil || resp == nil) {
+				log.Printf("SESSION-SILENCE: %s tick=%s watchdog cancel recorded — quiet %ds (reason %s)",
+					project.Name, tickID, stSilence.silenceS, stSilence.reason)
+				// Consume the guard marker too: CancelTickSession stamped
+				// guardAbortedTicks on the way to the cancel, and this
+				// return path skips the guard's own consume site — an
+				// unconsumed entry would leak the map and could mislabel a
+				// later retry of the same tick id.
+				s.guardAborted(tickID)
+				commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
+				return &SpawnedTick{
+					TickID:        tickID,
+					Project:       project.Name,
+					SessionID:     tickID,
+					Started:       reqStart,
+					Deliver:       project.Deliver,
+					DeliverMode:   project.DeliverMode,
+					spawner:       s,
+					completed:     false,
+					completeAt:    s.clock().Now(),
+					gwFailErr:     sessionSilentError(fmt.Sprintf("%ds", stSilence.silenceS)),
+					gwTickTimeout: true,
+					gwPartial:     stSilence,
+					gwAttempts:    traceAttempts(),
+					model:         model,
+					provider:      provider,
+					rate:          rate,
+					workdir:       project.Workdir,
+					reqStart:      reqStart,
+					Trigger:       "prompt",
+					gwFailCounted: true,
+					gwFailCommits: commits,
+					gwFailFiles:   files,
+				}, nil
+			}
 			// SCHED-GAP-1674: the builder no-artifact guard cancelled this
 			// session. Consume the marker exactly once; act on it only when
 			// the POST did not complete (a cancel that races a finished turn
@@ -1670,6 +2189,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						completed:   false,
 						completeAt:  now,
 						gwFailErr:   errText,
+						gwAttempts:  traceAttempts(),
 						usage:       resp.Usage,
 						model:       model,
 						provider:    provider,
@@ -1709,6 +2229,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						completed:   false,
 						completeAt:  now,
 						gwFailErr:   errText,
+						gwAttempts:  traceAttempts(),
 						usage:       resp.Usage,
 						model:       model,
 						provider:    provider,
@@ -1719,6 +2240,37 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					}, nil
 				}
 
+				// SCHED-GAP-1688: end-of-tick hook. A completed turn that
+				// landed ZERO artifacts (no commits, no changed files in the
+				// tick window) gets ONE bounded follow-up turn fired into
+				// THIS SAME live session (ctx is still alive): do the work
+				// now, or leave a written, stored reason. Off by default. The
+				// extra turn is never counted as work — the tick's outcome is
+				// still decided by the artifacts re-measured after it in
+				// Wait(), so an explained idle tick stays an idle tick.
+				if s.resolveIdleIntervention(project) && s.gateway != nil {
+					if c0, f0 := countGitChanges(project.Workdir, reqStart, s.clock().Now()); c0 == 0 && f0 == 0 {
+						log.Printf("IDLE-INTERVENTION: %s tick=%s zero artifacts — firing ONE bounded in-session turn", project.Name, tickID)
+						ivCtx, ivCancel := context.WithTimeout(ctx, idleInterventionTimeout)
+						_, _, ierr := gwClient.SendResponseStream(ivCtx,
+							idleInterventionPrompt(project.Name, tickID, project.Workdir),
+							model, provider, endpoint.Key, tickID, idleInterventionTimeout)
+						ivCancel()
+						if ierr != nil {
+							log.Printf("IDLE-INTERVENTION: %s tick=%s follow-up turn error (ignored; tick outcome unchanged): %v",
+								project.Name, tickID, ierr)
+						}
+					}
+				}
+				// SCHED-GAP-1682: the commit trigger's AFTER capture and the
+				// lane-class verdict. Runs while the session ctx is alive so
+				// the enforcement branch can re-enter the SAME session; a
+				// satellite's (or override-permitted) no-op closes clean with
+				// the noop_allowed event, a foreman's gets noop_flag=1 plus
+				// the do-it-or-explain re-entry. Best-effort: the verdict
+				// never changes the tick's outcome.
+				s.closeNoopVerdict(gwClient, ctx, project, tickID,
+					noopPreCommit, noopPreBranch, noopPreBoard, model, provider, endpoint.Key)
 				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
 				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
 				// removed in GAP-002 — it referenced non-existent columns
@@ -1763,8 +2315,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 							"session_id": sessionID,
 						})
 				}
-				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
-					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d attempts=%d",
+					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens, traceAttempts())
 				return &SpawnedTick{
 					TickID:      tickID,
 					Project:     project.Name,
@@ -1776,6 +2328,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					spawner:     s,
 					completed:   true,
 					completeAt:  now,
+					gwAttempts:  traceAttempts(),
 					// SCHED-GAP-029: carry real usage + context for outcome metrics.
 					usage:    resp.Usage,
 					model:    model,
@@ -1785,9 +2338,27 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					reqStart: reqStart,
 					// Gateway spawns are always prompt-based (Bane 2026-08-27).
 					Trigger: "prompt",
+					// SCHED-GAP-1655: zero-tool-call detection at the ONE
+					// site where the terminal envelope and the merged SSE
+					// trace are both in scope. A completed session with no
+					// tool-call item and no observed tool event is the
+					// "lane had nothing to do" signature; Wait()'s
+					// completed branch turns this into outcome='no_work'.
+					zeroTools: zeroToolSession(resp, postTrace),
 				}, nil
 			}
-			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			// SCHED-GAP-1687: the pre-classification "GATEWAY FAIL … falling
+			// back to exec.Command" line that used to sit here is GONE — it
+			// fired on EVERY gateway failure before the branches below chose
+			// the real outcome, naming an exec fallback this deployment never
+			// takes (--no-exec-fallback DEFAULT true) and one the SCHED-GAP-117
+			// early return below never reaches even with the flag off (15 live
+			// occurrences on 2026-09-30, every one followed by FAIL, 9 by
+			// DEFERRED, not one exec). Each branch now logs its own truth:
+			// GATEWAY STALLED / GATEWAY KEY REJECTED / TIMEOUT / DEFERRED /
+			// the SKIPPED drop; the "falling back to exec" wording lives ONLY
+			// at the exec.Command call site below, where it is true.
+			// sgap1687_gatewayfail_wording_test.go pins all four arms.
 			// SCHED-GAP-117: the per-turn deadline tripped while the tick
 			// deadline is still alive — the gateway POST made zero progress
 			// for gatewayResponseTimeout (the measured hang: a wedged
@@ -1805,8 +2376,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// the pair's circuit breaker gets its cooldown from
 			// recordCircuitFailure below.
 			if turnStalled {
-				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure",
-					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout)
+				// SCHED-GAP-1687: this line is the branch's OWN announcement —
+				// the pre-classification "falling back to exec" line is gone,
+				// and this early return never execs (see the SKIPPED-block
+				// comment below for the double-run rationale), so the wording
+				// names the real outcome (stalled failure) and carries the
+				// gateway error text the old FAIL line used to relay.
+				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure: %v",
+					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout, gwErr)
 				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
 					s.gatewayResponseTimeout, effectiveTimeout)
 				// SCHED-GAP-119: preserve the REAL gateway session id on the
@@ -1853,6 +2430,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					completed:   false,
 					completeAt:  s.clock().Now(),
 					gwFailErr:   stallErr,
+					gwAttempts:  traceAttempts(),
 					model:       model,
 					provider:    provider,
 					rate:        rate,
@@ -1923,10 +2501,64 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// is NOT wrapped in ErrGatewayTransient, while our own
 				// deadline expiries and HTTP 5xx refusals ARE in the retryable
 				// set but are not blips. See its doc for the full split.
-				if gatewayTransientBlip(gwErr) {
-					return s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate), nil
+				// SCHED-GAP-1684: a self-timeout must not read as a gateway
+				// blip. When OUR OWN deadline tore the POST down, the SSE
+				// reader reports that shape as ErrTickDeadlineExceeded, and
+				// the tick must land TickTimeout with the wall named in the
+				// reason; everything else keeps the SCHED-GAP-203 deferral
+				// byte-for-byte.
+				// SCHED-GAP-1693: the error class alone is authoritative —
+				// do NOT gate it on ctx.Err()==DeadlineExceeded. The ctx
+				// flag at this site is an ORDERING ACCIDENT: the POST
+				// closure's deferred cancel() has already run by now, so
+				// ctx reads context.Canceled whenever the session wall is
+				// still alive, and the deadline that minted the sentinel
+				// can be any teardown INSIDE the call (e.g. the gateway
+				// client's own http.Client timeout — the read ends
+				// DeadlineExceeded-Is while the session ctx is untouched).
+				// Requiring the flag re-booked 34 of 50 wall kills on
+				// 2026-09-30/10-01 as failed/gateway_transport through the
+				// drop wrapper below while session readbacks showed active
+				// work. What makes the class alone safe lives at the
+				// SOURCE: the sentinel is minted only by our own deadline
+				// teardown (gateway_stream.go — the SSE read ended
+				// DeadlineExceeded-Is) and never wraps a genuine transport
+				// failure, so a DeadlineExceeded that raced a real drop
+				// still defers — this branch reclassifies OUR wall, not
+				// every error that happens to share a deadline with a drop.
+				if errors.Is(gwErr, ErrTickDeadlineExceeded) {
+					td := s.tickDeadlineTimeout(project, tickID, gwErr, reqStart, effectiveTimeout, model, provider, rate, postTrace)
+					// SCHED-GAP-1681: carry the POST count onto the timeout
+					// row so ticks.attempts records what the wall consumed.
+					td.gwAttempts = traceAttempts()
+					return td, nil
 				}
-				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
+				// SCHED-GAP-1654: classify the refusal that is about to cost
+				// this tick its run — 503 (drain/unavailable), 429 (rate
+				// limited) and a refused dial all land here, and until this
+				// row the events table could not tell them apart (or, for the
+				// refused-dial deferral below, could not see the loss at all
+				// in the availability vocabulary). Placement is load-bearing:
+				// AFTER the key-rejected / stall / deadline branches (those
+				// are different classes) and BEFORE the drop/deferral
+				// branches, so ONE event covers both outcomes of a genuine
+				// availability refusal and a rescued tick is never counted.
+				// ClassifyGatewayError returns "" for anything outside the
+				// three classes, so this is a no-op for every other failure.
+				s.noteGatewayAvailabilityError(project.Name, tickID, gwErr)
+				if gatewayTransientBlip(gwErr) {
+					td := s.transientGatewayDeferral(project, tickID, gwErr, reqStart, model, provider, rate)
+					// SCHED-GAP-1681: a deferral that exhausted its retries
+					// records every attempt (ticks.attempts) — the honest
+					// "we tried N+1 times" evidence for the next wake.
+					td.gwAttempts = traceAttempts()
+					return td, nil
+				}
+				// SCHED-GAP-1687: this SKIPPED line is the drop's OWN
+				// announcement now — the pre-classification "GATEWAY FAIL …
+				// falling back to exec" line above this block is gone, so the
+				// drop wording carries the gateway error text it used to relay.
+				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick: %v", project.Name, tickID, gwErr)
 				// SCHED-GAP-143: classify against the GATEWAY error itself,
 				// never the wrapper text below — the wrapper ("gateway
 				// unreachable and exec fallback disabled: ...") would make
@@ -1953,6 +2585,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						"error":   gwErr.Error(),
 					})
 			}
+			// SCHED-GAP-1687: the REAL exec fallback. This is the only path
+			// that runs exec.Command, so this is the only place the "falling
+			// back to exec.Command" wording may appear — the old
+			// pre-classification line above the branchy outcomes fired it on
+			// every gateway failure. Reached only when fallback is enabled
+			// and no classified branch (stalled / key-rejected / deadline /
+			// transient blip / drop) already returned.
+			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
 		}
 
 		// SCHED-GAP-074: the exec fallback cannot carry the tick id as a
@@ -2262,7 +2902,9 @@ type SpawnedTick struct {
 	// or empty-output-AND-empty-session. Wait() yields TickFailed with
 	// this text so slot_pool's lifecycle.Complete records status=failed,
 	// outcome=failed and the gateway's error text in the error column —
-	// never completed/committed.
+	// never completed/committed. SCHED-GAP-1684 also stores a tick-timeout
+	// reason here (session deadline tore down the POST); Wait() branches on
+	// gwTickTimeout BEFORE this gate and yields TickTimeout.
 	gwFailErr string
 	// gwFailCounted/gwFailCommits/gwFailFiles (SCHED-GAP-119): git work
 	// pre-counted at the failure site for ticks that failed AFTER doing
@@ -2292,6 +2934,25 @@ type SpawnedTick struct {
 	gwDeferred    bool
 	gwDeferReason string
 
+	// gwTickTimeout (SCHED-GAP-1684) marks a tick whose OWN session deadline
+	// tore down the in-flight gateway POST (ErrTickDeadlineExceeded at the
+	// deferral site). Wait() yields TickTimeout carrying gwFailErr so
+	// lifecycle.Complete persists status=timeout / outcome=timeout with the
+	// "tick-timeout wall …" text in ticks.error — never status=deferred,
+	// which booked our wall as a gateway blip (30 of 41 deferred ticks in the
+	// 2026-09-30 sample died at exactly 120/180 min). Set by
+	// Spawner.tickDeadlineTimeout ONLY.
+	gwTickTimeout bool
+
+	// gwPartial (SCHED-GAP-1707): the partial-telemetry tuple captured at
+	// the kill site — measured-or-probed tokens/cost plus the partial mark
+	// and its closed-vocabulary reason. Wait() spreads it onto the
+	// TickOutcome so lifecycle.Complete writes the v64 columns in the same
+	// single finalization UPDATE. Today's producers: tickDeadlineTimeout
+	// (tick_deadline) and the silence watchdog (session_silence.go,
+	// session_silent).
+	gwPartial partialTelemetry
+
 	// guardAbort (SCHED-GAP-1674) marks a tick whose gateway session the
 	// builder no-artifact guard cancelled: the tick ran past two full
 	// no-write windows with zero write-class artifacts and an interaction
@@ -2301,6 +2962,18 @@ type SpawnedTick struct {
 	// dry_run and never committed. Set by the spawn path's guard
 	// classification branch ONLY (Spawner.guardAborted consumed it there).
 	guardAbort bool
+
+	// zeroTools (SCHED-GAP-1655) marks a COMPLETED gateway tick whose
+	// session ran ZERO tool calls — the response envelope carried no
+	// tool-call output item and the SSE trace never saw a tool event.
+	// Wait()'s completed branch carries it into TickOutcome.NoTools so
+	// terminalOutcome records outcome='no_work' (migration v55's verdict)
+	// instead of 'dry_run': the fleet's measured dominant waste class
+	// (261 zero-tool sessions/week) is only measurable when it has its
+	// own verdict. Set at the gateway success-return site ONLY, where
+	// both the envelope and the merged trace are in scope; exec ticks
+	// and every non-completed path leave it false (no signal, no claim).
+	zeroTools bool
 
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
@@ -2322,6 +2995,22 @@ type SpawnedTick struct {
 	rate     routerRate
 	workdir  string    // project workdir for git commit/file counting
 	reqStart time.Time // request start time (before SendResponse) for git window
+
+	// remoteOutcome (SCHED-GAP-1710) is set for a tick whose work was HANDED
+	// TO A NAMED AGENT over the bus (internal/scheduler/dispatch_leg.go).
+	// Such a tick has no process, no pipes and no gateway session — the leg
+	// waits for the agent's correlated answer itself and hands Wait() the
+	// verdict it built, so the whole completion/delivery/accounting tail in
+	// slot_pool reuses the ordinary path. Nil for every local spawn.
+	remoteOutcome *TickOutcome
+
+	// gwAttempts (SCHED-GAP-1681) is the gateway POST count folded from the
+	// merged GatewayPOSTTrace (trace.Attempts) — primary + GAP-080 retries +
+	// chain hops — stamped onto TickOutcome.Attempts by Wait() so
+	// lifecycle.Complete persists it on the v67 ticks.attempts column. 0 on
+	// every non-gateway path (exec spawns, spawn-site refusals, remote
+	// dispatch): the column's honest default.
+	gwAttempts int
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -2339,6 +3028,17 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()
 	}()
+
+	// SCHED-GAP-1710: a REMOTE-DISPATCHED tick already has its verdict — the
+	// dispatch leg waited for the agent's correlated answer (or its absence)
+	// and built the outcome. There is no process to reap and no gateway
+	// session to gate: return the leg's verdict verbatim.
+	if st.remoteOutcome != nil {
+		out := *st.remoteOutcome
+		log.Printf("TICK: %s %s → %s (%v): remote dispatch to %s", st.Project, st.TickID, out.Status,
+			out.Duration.Round(time.Second), out.SessionID)
+		return out
+	}
 
 	// SCHED-GAP-1674: a GUARD-ABORTED tick (the builder no-artifact guard
 	// cancelled the session after two full no-write windows) yields a
@@ -2380,6 +3080,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// the persistence layer maps it to outcome='aborted:no_artifact'
 			// (legal only on this failed status).
 			GuardAbort: true,
+			// SCHED-GAP-1681: POSTs the guard's cancel raced — carried
+			// onto the row like every other gateway outcome.
+			Attempts: st.gwAttempts,
 			// Git artifacts are pre-counted at the abort site when present,
 			// mirroring the SCHED-GAP-119 rule: a cancelled turn may have
 			// committed mid-window, and zero-accounting real work is the
@@ -2399,6 +3102,55 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	// only) and are NOT considered by the orphan-resume scan, which selects
 	// status IN ('failed','timeout') rows — a blip the harness absorbed is not
 	// a lost session to continue.
+	//
+	// SCHED-GAP-1684: a tick whose OWN session deadline tore down the gateway
+	// POST is a TIMEOUT, not a deferral — the deferral charged the gateway
+	// for our wall (see tickDeadlineTimeout). Checked before the deferral:
+	// the timeout is the terminal statement about the tick, and the deferred
+	// branch below must never reclassify it. Complete persists
+	// status=timeout / outcome=timeout (TickTimeout.Outcome()) with
+	// failure_reason=gateway_transport — the existing classifier path for
+	// TickTimeout rows — and leaves consecutive_failures alone, like every
+	// other gateway-wall timeout.
+	if st.gwTickTimeout {
+		dur := st.completeAt.Sub(st.Started)
+		log.Printf("TICK: %s %s → %s (%v): %s",
+			st.Project, st.TickID, TickTimeout, dur.Round(time.Second), st.gwFailErr)
+		out := TickOutcome{
+			TickID:    st.TickID,
+			Project:   st.Project,
+			SessionID: st.SessionID,
+			Started:   st.Started,
+			Finished:  st.completeAt,
+			Status:    TickTimeout,
+			ExitCode:  -1,
+			Error:     st.gwFailErr,
+			Duration:  dur,
+			// No gateway usage exists (no terminal event arrived); the
+			// source is still stamped gateway-sourced, matching the deferral.
+			CostSource: CostSourceGateway,
+			// Pre-counted at the classification site: a turn that ran into
+			// the wall may have committed mid-window.
+			Commits:      st.gwFailCommits,
+			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: the POSTs the wall consumed (retries
+			// included) land on ticks.attempts with the timeout verdict.
+			Attempts: st.gwAttempts,
+		}
+		// SCHED-GAP-1707 deliverable 1: the row is PARTIAL. Spread the
+		// kill-site capture (the SSE trace's token probe + its derived cost)
+		// over the zero defaults, so a productive-but-too-big wave never
+		// reads 0/0/0 unmarked.
+		if st.gwPartial.partial {
+			out.TokensIn = st.gwPartial.tokensIn
+			out.TokensOut = st.gwPartial.tokensOut
+			out.CostUSD = st.gwPartial.costUSD
+			out.TelemetryPartial = true
+			out.TelemetryPartialReason = st.gwPartial.reason
+			out.TelemetrySilenceS = st.gwPartial.silenceS
+		}
+		return out
+	}
 	if st.gwDeferred {
 		dur := st.completeAt.Sub(st.Started)
 		log.Printf("TICK: %s %s → %s (%v): %s",
@@ -2427,6 +3179,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// drop can abort a turn that already committed.
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: every POST the retry loop burned before the
+			// blip exhausted the knob lands on ticks.attempts — the
+			// deferral is auditable as "attempted N+1 times".
+			Attempts: st.gwAttempts,
 		}
 	}
 
@@ -2448,7 +3204,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	if st.gwFailErr != "" {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
-		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
+		// SCHED-GAP-1651-R3: cost and its price-list vintage come back together
+		// from the call — no shared completion-path global (the old one was
+		// written by every concurrent SlotPool completion goroutine: data race,
+		// CI run 38080365263).
+		cost, priceAsOf := computeCostUSDWithAsOf(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		log.Printf("TICK: %s %s → %s (%v): %s",
 			st.Project, st.TickID, TickFailed,
 			st.completeAt.Sub(st.Started).Round(time.Second), st.gwFailErr)
@@ -2465,12 +3225,16 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
 			CostUSD:   cost,
+			PriceAsOf: priceAsOf,
 			// ADV-R09/G8: gateway response usage = gateway-sourced figures.
 			CostSource: CostSourceGateway,
 			// SCHED-GAP-119: keep real work on failed rows (stalled ticks
 			// that landed commits mid-window — see 2026-09-15 evidence).
 			Commits:      st.gwFailCommits,
 			FilesChanged: st.gwFailFiles,
+			// SCHED-GAP-1681: the POST count rides the failed row too
+			// (079-gate failures and stalled turns included).
+			Attempts: st.gwAttempts,
 		}
 	}
 
@@ -2482,7 +3246,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	if st.completed {
 		tokensIn := st.usage.InputTokens
 		tokensOut := st.usage.OutputTokens
-		cost := computeCostUSD(st.provider, st.model, st.rate, tokensIn, tokensOut)
+		// SCHED-GAP-1651-R3: cost and its price-list vintage come back together
+		// from the call — no shared completion-path global (see
+		// computeCostUSDWithAsOf).
+		cost, priceAsOf := computeCostUSDWithAsOf(st.provider, st.model, st.rate, tokensIn, tokensOut)
 		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
 		// SCHED-GAP-085: closure-evidence gate. A row closed within this
 		// tick's window with NO reasoning/commit_hash/worker_summary rejects
@@ -2503,27 +3270,60 @@ func (st *SpawnedTick) Wait() TickOutcome {
 				st.Project, st.TickID, TickFailed,
 				st.completeAt.Sub(st.Started).Round(time.Second), err)
 			return TickOutcome{
-				TickID:       st.TickID,
-				Project:      st.Project,
-				SessionID:    st.SessionID,
-				Started:      st.Started,
-				Finished:     st.completeAt,
-				Status:       TickFailed,
-				ExitCode:     -1,
-				Error:        err.Error(),
-				Duration:     st.completeAt.Sub(st.Started),
-				TokensIn:     tokensIn,
-				TokensOut:    tokensOut,
-				CostUSD:      cost,
+				TickID:    st.TickID,
+				Project:   st.Project,
+				SessionID: st.SessionID,
+				Started:   st.Started,
+				Finished:  st.completeAt,
+				Status:    TickFailed,
+				ExitCode:  -1,
+				Error:     err.Error(),
+				Duration:  st.completeAt.Sub(st.Started),
+				TokensIn:  tokensIn,
+				TokensOut: tokensOut,
+				CostUSD:   cost,
+				// SCHED-GAP-1651-R3: the vintage of the price list that
+				// produced this call's own cost figure, returned alongside it.
+				PriceAsOf:    priceAsOf,
 				CostSource:   CostSourceGateway,
 				Commits:      commits,
 				FilesChanged: files,
+				// SCHED-GAP-1681: the closure-rejected row keeps its POST
+				// count like every other gateway outcome.
+				Attempts: st.gwAttempts,
 			}
 		}
 		log.Printf("TICK: %s %s → %s (%v) %s",
 			st.Project, st.TickID, TickCompleted,
 			st.completeAt.Sub(st.Started).Round(time.Second),
 			formatCostSummary(st.provider, st.model, tokensIn, tokensOut, cost, commits, files))
+		// SCHED-GAP-1694: push at tick exit. The prompt asks the lane to push
+		// after every commit, but a lane that commits and forgets strands the
+		// work locally — the 30-min fleet-strand-push cron is only a backstop.
+		// The spawner pushes here the moment a tick lands commits, so no lane
+		// depends on the model remembering. Best-effort: a push failure never
+		// fails the tick (the cron re-covers it), but it IS logged at the tick
+		// line so a strand is visible now, not 30 minutes later.
+		// SCHED-GAP-1594: behind the --disable-tick-push flag. When set, no
+		// per-tick push runs — the web dashboard is the primary update
+		// surface and the strand-push cron is the only remaining pusher.
+		// Default false: pre-flag behavior unchanged.
+		if commits > 0 {
+			if st.spawner != nil && st.spawner.tickPushDisabled {
+				log.Printf("TICK: %s %s → push skipped (tick-push disabled, web-primary; SCHED-GAP-1594)", st.Project, st.TickID)
+			} else if ok, detail := pushTickWork(st.workdir); ok {
+				log.Printf("TICK: %s %s → push %s", st.Project, st.TickID, detail)
+			} else {
+				log.Printf("TICK: %s %s → push STRANDED (%s)", st.Project, st.TickID, detail)
+			}
+		}
+		// SCHED-GAP-1655: the no-work verdict is recorded (not just
+		// derived) — the operator watching the TICK lines sees the
+		// zero-tool verdict at the tick's completion, the same way the
+		// guard-abort line names its verdict.
+		if st.zeroTools {
+			log.Printf("%s", noWorkTickLine(st.Project, st.TickID))
+		}
 		return TickOutcome{
 			TickID:    st.TickID,
 			Project:   st.Project,
@@ -2531,6 +3331,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			Started:   st.Started,
 			Finished:  st.completeAt,
 			Status:    TickCompleted,
+			// SCHED-GAP-1681: the committed row carries its POST count —
+			// attempts=2 on the tick this row's acceptance names (one
+			// dropped stream + one completed retry).
+			Attempts: st.gwAttempts,
 			// SCHED-GAP-1597: 0 is the gateway-completed CONVENTION (the
 			// gateway session never exposes a process exit status), stated
 			// here explicitly — a zero left by struct-default omission and
@@ -2544,6 +3348,24 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			CostSource:   CostSourceGateway,
 			Commits:      commits,
 			FilesChanged: files,
+			// SCHED-GAP-1655: carried into terminalOutcome — a zero-tool
+			// completed tick records outcome='no_work', never dry_run.
+			// Artifacts still outrank it (terminalOutcome checks
+			// commits/files first): a tick that landed work the transcript
+			// misses keeps 'committed'.
+			NoTools: st.zeroTools,
+			// SCHED-GAP-1680: the non-commit artifact leg. A lane whose
+			// product is DuckBrain memory keys (the whole -sync family)
+			// records them here so commits=0 is not read as a no-op.
+			// Measured from the tick's own gateway session transcript; 0
+			// when the transcript is unavailable (which can only fall back
+			// to the git artifacts, never fabricate a no-op).
+			MemoryKeys: countMemoryKeysInSession(st.TickID),
+			// SCHED-GAP-1651 (vintage), SCHED-GAP-1651-R3 (transport): the
+			// price-list as-of returned alongside this call's own cost figure —
+			// no shared completion-path global. Rendered by the sync cost
+			// footer's "prices as of".
+			PriceAsOf: priceAsOf,
 		}
 	}
 
@@ -2593,6 +3415,14 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		Started:   st.Started,
 		Finished:  finished,
 	}
+	// SCHED-GAP-1707: an exec tick killed by the scanner ctx (the effective
+	// session deadline) is a PARTIAL row — mark it now, before the status
+	// classification below lands TickTimeout. The exec path has no gateway
+	// usage to spread (cost resolution below measures the window), so the
+	// partial mark is the visibility: telemetry_partial=1 named
+	// tick_deadline on a row that would otherwise read 0/0/0.
+	execTimedOut := err != nil &&
+		(strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed"))
 
 	if err != nil {
 		if strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed") {
@@ -2665,6 +3495,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			log.Printf("WARN: tick %s git delta NOT measured: no usable baseline (preCommits=%d, cmdDir=%q) — commits/files stamped -1 (unknown), NOT evidence of no work",
 				st.TickID, st.preCommits, dir)
 		}
+	}
+
+	// SCHED-GAP-1707: stamp the partial mark on the exec timeout row (after
+	// cost/git resolution so the mark describes the FINAL telemetry legs).
+	if execTimedOut {
+		outcome.TelemetryPartial = true
+		outcome.TelemetryPartialReason = TelemetryPartialTickDeadline
 	}
 
 	// SCHED-GAP-085: closure-evidence gate on the EXEC completion path. Runs

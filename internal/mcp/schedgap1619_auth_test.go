@@ -461,9 +461,14 @@ func TestMCPAuth_MutationClassificationCoversRegistry(t *testing.T) {
 
 	// external cross-check: every non-GET REST operation the parity contract
 	// maps to MCP tools must be covered by MUTATING tools only — reads are
-	// GET-shaped, so a mutator hiding in the read list fails here.
+	// GET-shaped, so a mutator hiding in the read list fails here. ONE
+	// documented exception (REMOTE-010): POST /api/v1/federation/query is
+	// the federation query ENVELOPE route — POST is the transport shape,
+	// the operation is a READ (federation-query-spec §7: queries are
+	// read-only by construction), and its fed_query tool is correctly
+	// read-only.
 	for op, tools := range apiToolCoverage {
-		if strings.HasPrefix(op, "GET ") {
+		if strings.HasPrefix(op, "GET ") || op == "POST /api/v1/federation/query" {
 			continue
 		}
 		for _, name := range tools {

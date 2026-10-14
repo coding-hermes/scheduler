@@ -56,6 +56,12 @@ type DuckBrainSync struct {
 	alertedDown     bool   // HIGH event already emitted for current outage
 	keyRejectedFlag bool   // API key rejected (SCHED-GAP-072) — sync cycles skipped until a probe succeeds
 	rateLimitedFlag bool   // daemon returned 429 this cycle — sweep stops early, no batch re-blasting
+	// duplicatesSkipped counts writes suppressed by change detection
+	// (SCHED-GAP-1572): the payload (minus synced_at) was byte-identical to
+	// the last successful post for that key. Exposed via HealthSnapshot so
+	// suppression is VISIBLE — a counter stuck at 0 next to high write
+	// volume is the defect signature this row was filed for.
+	duplicatesSkipped int
 
 	// pendingSpool buffers failed writes during a sync cycle. They are
 	// flushed to sync_spool AFTER all syncs complete, because sync
@@ -97,8 +103,13 @@ type HealthSnapshot struct {
 	LastError      string `json:"last_error,omitempty"`
 	LastOKAt       string `json:"last_ok_at,omitempty"`
 	Spooled        int    `json:"spooled_pending"`
-	BaseURL        string `json:"base_url"`
-	Interval       string `json:"interval"`
+	// DuplicatesSkipped is the change-detection suppression counter
+	// (SCHED-GAP-1572): identical snapshots NOT re-written. High and
+	// climbing is healthy; 0 against heavy write volume means the
+	// duplicate-snapshot defect is back.
+	DuplicatesSkipped int    `json:"duplicates_skipped"`
+	BaseURL           string `json:"base_url"`
+	Interval          string `json:"interval"`
 }
 
 // NewDuckBrainSync creates a DuckBrain syncer.
@@ -127,14 +138,23 @@ func (d *DuckBrainSync) Health() HealthSnapshot {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return HealthSnapshot{
-		Reachable:      d.reachable,
-		ConsecutiveErr: d.consecutiveErr,
-		LastError:      d.lastErr,
-		LastOKAt:       d.lastOKAt,
-		Spooled:        d.spooled,
-		BaseURL:        d.baseURL,
-		Interval:       d.interval.String(),
+		Reachable:         d.reachable,
+		ConsecutiveErr:    d.consecutiveErr,
+		LastError:         d.lastErr,
+		LastOKAt:          d.lastOKAt,
+		Spooled:           d.spooled,
+		DuplicatesSkipped: d.duplicatesSkipped,
+		BaseURL:           d.baseURL,
+		Interval:          d.interval.String(),
 	}
+}
+
+// DuplicatesSkipped reports the change-detection suppression counter
+// (SCHED-GAP-1572): how many byte-identical snapshot re-writes were skipped.
+func (d *DuckBrainSync) DuplicatesSkipped() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.duplicatesSkipped
 }
 
 // Run starts the periodic sync loop. Blocks until ctx is cancelled.
@@ -418,8 +438,17 @@ func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
 		if sendDomain != e.Domain {
 			log.Printf("SYNC: replay remapped domain %q -> %q for %s", e.Domain, sendDomain, e.MemKey)
 		}
-		// Parse the original content JSON back into raw bytes for posting.
+		// Empty-payload guard (SCHED-GAP-1573): a spooled row that is empty
+		// after trim is junk (e.g. pre-guard rows or a failed write of nothing).
+		// Drop it — bump the attempt counter so the 50-strike prune reaps it,
+		// but do NOT re-post empty content to DuckBrain.
 		contentJSON := []byte(e.Content)
+		if err := validatePayloadContent(e.MemKey, contentJSON); err != nil {
+			log.Printf("SYNC: skipping spooled %s — %v (dropped, not replayed)", e.MemKey, err)
+			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID, err.Error())
+			continue
+		}
+		// Parse the original content JSON back into raw bytes for posting.
 		body := map[string]any{
 			"key":        e.MemKey,
 			"domain":     sendDomain,
@@ -897,6 +926,27 @@ func canonicalPayloadHash(content any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// validatePayloadContent is the empty-payload guard (SCHED-GAP-1573): the
+// content that reaches DuckBrain must carry data. "Empty" means: nothing
+// after trim, a bare JSON string that is empty/whitespace, or a bare JSON
+// null — all of which is what the 60,925 junk rows looked like. Returns a
+// wrapped ErrDuckBrainEmptyPayload otherwise.
+func validatePayloadContent(key string, payload []byte) error {
+	trimmed := strings.TrimSpace(string(payload))
+	empty := trimmed == "" || trimmed == `""` || trimmed == "null"
+	if !empty {
+		var s string
+		if err := json.Unmarshal(payload, &s); err == nil && strings.TrimSpace(s) == "" {
+			empty = true
+		}
+	}
+	if empty {
+		return fmt.Errorf("%w: key %s has empty content after trim (%d raw bytes)",
+			ErrDuckBrainEmptyPayload, key, len(payload))
+	}
+	return nil
+}
+
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {
 	// Domain validation (SCHED-GAP-1669): DuckBrain rejects a domain outside
 	// its enum with 400 VALIDATION_ERROR. Resolve it BEFORE anything else —
@@ -913,9 +963,31 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		log.Printf("SYNC: remapped domain %q -> %q for %s", domain, sendDomain, key)
 	}
 
+	// Empty-content guard (SCHED-GAP-1573): an empty or whitespace-only
+	// content value is a client-side defect that no retry or replay can
+	// fix. Posting it is what wrote 60,925 empty rows into the DuckBrain
+	// scheduler namespace (33.9%). Skip the write loudly — no POST, no
+	// spool, no health change (same terminal-and-local policy as a
+	// rejected domain). Checked on the pre-marshal VALUE: json.Marshal("")
+	// is `""`, which no bytes-level whitespace check would catch.
+	if isEffectivelyEmptyContent(content) {
+		log.Printf("SYNC: SKIP %s — content is empty after trim (domain %q); not sent, not spooled (SCHED-GAP-1573)",
+			key, sendDomain)
+		return fmt.Errorf("%w: key %s", ErrDuckBrainEmptyPayload, key)
+	}
+
 	payload, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	// Empty-payload guard (SCHED-GAP-1573): a write whose serialized content
+	// is empty after trim is a defect, not data. Reject it loudly BEFORE the
+	// change-detection/POST path so it can never reach DuckBrain — and never
+	// spool it (replaying an empty payload just re-writes junk).
+	if err := validatePayloadContent(key, payload); err != nil {
+		log.Printf("SYNC: SKIP %s — %v; not sent, not spooled", key, err)
+		return err
 	}
 
 	// Change detection: skip the POST entirely when the payload (minus the
@@ -927,6 +999,9 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		prev, seen := d.lastPayloads[key]
 		d.mu.Unlock()
 		if seen && prev == hash {
+			d.mu.Lock()
+			d.duplicatesSkipped++ // SCHED-GAP-1572: suppression is counted, not silent
+			d.mu.Unlock()
 			return nil // unchanged — nothing to sync
 		}
 	}

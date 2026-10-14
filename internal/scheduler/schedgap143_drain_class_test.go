@@ -178,9 +178,10 @@ func gap143Cooldown(t *testing.T, db *sql.DB, name string) (cooldownS, streak in
 	return cooldownS, streak
 }
 
-// gap143PollCooldown re-reads the adaptive-cooldown row every 20ms until it
-// matches (wantCooldownS, wantStreak) or the 2s deadline expires, returning
-// the LAST OBSERVED values either way.
+// gap143PollCooldown re-reads the adaptive-cooldown row until it matches
+// (wantCooldownS, wantStreak) or the deadline expires, returning the LAST
+// OBSERVED values either way. Delegates to gap143PollCooldownDB with this
+// battery's default cadence (20ms poll / 2s deadline).
 //
 // The adaptive-cooldown persist lands AFTER the ticks row reaches its
 // terminal state (the same completion path writes both), so a synchronous
@@ -191,8 +192,14 @@ func gap143Cooldown(t *testing.T, db *sql.DB, name string) (cooldownS, streak in
 // numbers instead of "timeout".
 func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wantStreak int) (lastCooldownS, lastStreak int) {
 	t.Helper()
-	const wait = 2 * time.Second
-	deadline := time.Now().Add(wait)
+	return gap143PollCooldownDB(t, db, name, wantCooldownS, wantStreak, 20*time.Millisecond, 2*time.Second)
+}
+
+// gap143PollCooldownDB is gap143PollCooldown with explicit budget knobs for
+// callers whose tick budget differs from the default 20ms/2s cadence.
+func gap143PollCooldownDB(t *testing.T, db *sql.DB, name string, wantCooldownS, wantStreak int, interval, timeout time.Duration) (lastCooldownS, lastStreak int) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for {
 		lastCooldownS, lastStreak = gap143Cooldown(t, db, name)
 		if lastCooldownS == wantCooldownS && lastStreak == wantStreak {
@@ -201,13 +208,13 @@ func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wa
 		if time.Now().After(deadline) {
 			return lastCooldownS, lastStreak
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(interval)
 	}
 }
 
 // gap143InsertFailedTick records a terminal failed tick row directly. Used to
 // fill an auto-disable window without paying the gateway retry backoff
-// (1 + gatewayRetryMaxAttempts POSTs, ≈3.5s) per row.
+// (1 + gatewayRetryDefaultMax POSTs, ≈3.5s) per row.
 func gap143InsertFailedTick(t *testing.T, db *sql.DB, tickID, project, errText, failureReason string, at time.Time) {
 	t.Helper()
 	ts := at.UTC().Format(time.RFC3339)
@@ -307,7 +314,7 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 //
 // Two of the ten rows are produced END TO END by the real drain path (so the
 // fixture carries production's own text); the remaining eight reuse that exact
-// captured text, because each real drain tick costs 1 + gatewayRetryMaxAttempts
+// captured text, because each real drain tick costs 1 + gatewayRetryDefaultMax
 // POSTs with backoff.
 //
 // KNOWN FLAKE — see INT-CI-158 (2026-09-23, tick #670 follow-up). The CI race-detector

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
@@ -33,6 +35,12 @@ type Server struct {
 	// in /api/v1/status. Kept as a func so the API package doesn't import
 	// the sync package (no dependency cycle; nil = feature off).
 	duckbrainHealth func() map[string]interface{}
+
+	// observatorySnapshot (SCHED-GAP-1592) is the dashboard-side collector
+	// behind /api/v1/observatory and /api/v1/observatory/stream. An
+	// interface, not a concrete type, so neither package imports the other;
+	// main.go wires them. Nil = fail-closed 503 (never an empty stream).
+	observatorySnapshot observatorySnapshotter
 
 	// resolvedConfig is the startup-time snapshot of the active
 	// three-layer config served by GET /api/v1/config (SCHED-GAP-034).
@@ -93,6 +101,36 @@ type Server struct {
 	// Immutable after SetFeaturePruneWeeks; zero = package default
 	// (featurePruneWeeksDefault). The ?weeks= query overrides per request.
 	featurePruneWeeks int
+
+	// peerWindow (REMOTE-003 §2) is the peer-freshness window in seconds for
+	// the /api/v1/peers surfaces. Immutable after SetPeerFreshnessWindow;
+	// zero = database.PeerFreshnessWindowDefault (5m). A peer whose last
+	// heartbeat is older renders stale=true — never "down".
+	peerWindow int
+
+	// fedReplay (REMOTE-008 §2.5) is the federation query replay window:
+	// (caller, corr_id, op) → the reply already produced, so a retried
+	// query returns the identical answer instead of re-reading. Built
+	// lazily on the first federation query (it needs the clock seam, which
+	// SetClock can install after construction); fedReplayOnce guards the
+	// build.
+	fedReplay     *federationReplay
+	fedReplayOnce sync.Once
+
+	// aggTransport (REMOTE-012 §5) is the aggregate's ask-side seam — the
+	// per-peer transport the fan-out dials. Installed by main.go via
+	// SetAggregateTransport (the bus client's Query, REMOTE-009); nil is a
+	// documented posture: every leg renders as a named
+	// transport_unavailable row and the aggregate still answers.
+	aggTransport AggregateTransport
+
+	// fedPolicy (REMOTE-013, federation-query-spec §4) is the per-caller
+	// read policy for the federation query surface. Immutable after
+	// SetFederationReadPolicy; the ZERO value is the deny-all policy —
+	// every read refused with op_not_allowed — so a Server without an
+	// armed policy is safe by construction (fail-closed, the SCHED-GAP-1602
+	// posture carried to the read path).
+	fedPolicy FederationReadPolicy
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
@@ -135,8 +173,42 @@ func (s *Server) SetClock(c clock.Clock) {
 	s.started = c.Now()
 }
 
+// SetObservatorySnapshot wires the dashboard-side collector behind
+// /api/v1/observatory and /api/v1/observatory/stream (SCHED-GAP-1592).
+// The implementation satisfies observatorySnapshotter (the dashboard's
+// *Generator does, via CollectObservatory). Nil (never wired) = both routes
+// fail closed with 503 — there is no honest snapshot to serve.
+func (s *Server) SetObservatorySnapshot(o observatorySnapshotter) {
+	s.observatorySnapshot = o
+}
+
 // clock returns the server's clock, never nil.
 func (s *Server) clock() clock.Clock { return s.clk.Get() }
+
+// clockStatus renders the server clock's mode + sim scale for /api/v1/health
+// (SCHED-GAP-1632). The mode word is derived from the SAME clock.Describe()
+// string the boot line prints ("real", "sim (scale=1000 …)"), so the API can
+// never disagree with the boot log; an unknown/future implementation still
+// reports mode "custom" (clock.Describe's contract). scale is 1 for the real
+// clock and the current multiplier for a sim clock.
+func (s *Server) clockStatus() map[string]interface{} {
+	clk := s.clock()
+	describe := clock.Describe(clk)
+	scale := 1.0
+	if sc, ok := clk.(interface{ Scale() float64 }); ok {
+		scale = sc.Scale()
+	}
+	mode := describe
+	// "sim (scale=… …)" → "sim"; describe is a single word for every
+	// in-repo non-sim clock, kept verbatim ("real" / "fixed …" / "custom").
+	if i := strings.IndexByte(describe, ' '); i >= 0 {
+		mode = describe[:i]
+	}
+	return map[string]interface{}{
+		"mode":  mode,
+		"scale": scale,
+	}
+}
 
 // SetFailureWindow sets the number of recent ticks per project used for the
 // /api/v1/status per-project failure-rate breakdown (SCHED-GAP-018).
@@ -198,6 +270,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
+	// SCHED-GAP-1587: lane tree views. /lanes/tree is the hierarchical
+	// parent→children surface resolved through database.BuildLaneTree;
+	// /lanes is the flat listing kept for backward compatibility but
+	// deprecated in docs/api.md §5 in favour of the tree.
+	mux.HandleFunc("/api/v1/lanes/tree", s.handleLanesTree)
+	mux.HandleFunc("/api/v1/lanes", s.handleLanes)
+	mux.HandleFunc("/api/v1/cadence", s.cadence)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)
 	// JSONL-backed deploy groups + templates (internal/blocks).
@@ -214,6 +293,15 @@ func (s *Server) Handler() http.Handler {
 	// CTL-002: the live push counterpart of the poll-only event log above —
 	// one SSE connection instead of a client poll loop.
 	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
+	// SCHED-GAP-1592: the Observatory — one snapshot JSON (poll fallback)
+	// and its SSE live stream. Both fail closed (503) without a wired
+	// collector.
+	mux.HandleFunc("/api/v1/observatory", s.observatoryGet)
+	mux.HandleFunc("/api/v1/observatory/stream", s.observatoryStream)
+	// SCHED-GAP-1654: ticks lost to gateway unavailability (503 / 429 /
+	// refused dial), counted by error class and lane over the last 24h from
+	// the spawn path's gateway_availability events.
+	mux.HandleFunc("/api/v1/gateway-errors", s.handleGatewayErrors)
 	mux.HandleFunc("/api/v1/queue", s.queue)
 	mux.HandleFunc("/api/v1/openapi.json", s.openapi)
 	// SCHED-GAP-156: the single read-only fleet-metrics endpoint (one request
@@ -223,6 +311,17 @@ func (s *Server) Handler() http.Handler {
 	// reaper's prune-candidate list (flag only, no auto-delete).
 	mux.HandleFunc("/api/v1/features", s.features)
 	mux.HandleFunc("/api/v1/features/prune-candidates", s.featurePruneCandidates)
+	// REMOTE-003 (§2): the federation peer registry — operator-token gated
+	// like every other mutating surface (see server_peers.go for the
+	// rendering law: stale + last_contact, never "down").
+	mux.HandleFunc("/api/v1/peers", s.handlePeers)
+	mux.HandleFunc("/api/v1/peers/", s.handlePeerByID)
+	// REMOTE-008 (federation-query-spec §2 + §3 HTTP row): the read half of
+	// federation — one envelope, one internal entry point, every transport
+	// an adapter. Operator-gated (spec §4: fail-closed, no credential
+	// configured = 503); every answered query writes an audit row.
+	mux.HandleFunc("/api/v1/federation/query", s.handleFederationQuery)
+	mux.HandleFunc("/api/v1/federation/catalogue", s.handleFederationCatalogue)
 	// SCHED-GAP-1670: read-only cooldown-pin residue detector — enabled
 	// lanes whose live cooldown_s sits strictly BELOW their own pin.
 	mux.HandleFunc("/api/v1/cooldown/residue", s.cooldownResidue)
@@ -285,9 +384,14 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// freshness guard and any restart script read build_sha). Same
 		// resolution seam as version: ldflags injection wins, then vcs
 		// build info, then "unknown".
-		"version":                version.Current(),
-		"build_sha":              version.CurrentCommit(),
-		"build_time":             version.CurrentBuildDate(),
+		"version":    version.Current(),
+		"build_sha":  version.CurrentCommit(),
+		"build_time": version.CurrentBuildDate(),
+		// SCHED-GAP-1632: the daemon's clock mode + sim scale, from the same
+		// clock.Describe() source the boot line ("TIME: clock sim (scale=…)")
+		// prints. Without this, a --simulate daemon is indistinguishable
+		// from a real one on the API surface.
+		"clock":                  s.clockStatus(),
 		"uptime":                 s.clock().Since(s.started).String(),
 		"db":                     dbOK,
 		"active_ticks":           activeTicks,
@@ -418,6 +522,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// ADV-R09/G8: the effective budget from the budget authority chain —
 	// the Loop the resolved --budget/SCHEDULER_BUDGET/TOML value built.
 	budgetTotal := s.effectiveBudget()
+	// SCHED-GAP-1696: the admission-law violation count — the operator-visible
+	// number that must read 0 (enabled foremen all tasks, enabled satellites
+	// all cooldown, every enabled foreman in a tasks-mode namespace).
+	nsAdmission := map[string]string{}
+	if nss, nerr := database.ListNamespaces(ctx, s.db, false); nerr == nil {
+		for _, ns := range nss {
+			nsAdmission[ns.ID] = ns.AdmissionMode
+		}
+	}
+	admissionLawViolations := len(scheduler.AdmissionLawViolations(projects, nsAdmission))
 	status := map[string]interface{}{
 		// SCHED-GAP-148: build identity on the fleet-overview endpoint too.
 		// version is the operator-facing summary; build_sha is the field the
@@ -436,9 +550,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// false-green shape the tightened completion gate now fails at
 		// spawn time — watch it drain to 0 to verify the live fix.
 		"zero_output_committed_24h": zeroOutputCommitted24h,
-		"projects_failure_rates":    failureRates,
-		"failure_window":            s.failureWindow,
-		"last_evaluation":           lastEval,
+		// SCHED-GAP-1696: enabled lanes whose admission contradicts their class
+		// (foreman=tasks, everything else=cooldown) + foremen outside a
+		// tasks-mode namespace. Reads 0 on a clean fleet.
+		"admission_law_violations": admissionLawViolations,
+		"projects_failure_rates":   failureRates,
+		"failure_window":           s.failureWindow,
+		"last_evaluation":          lastEval,
 		// ADV-R09/G8 — budget authority chain. budget_total was a literal
 		// 100 at this spot (coincidentally equal to the --budget flag
 		// DEFAULT, which is what a hardcoded surface pretends to report);
@@ -461,6 +579,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"min_ticks": adMinTicks,
 		},
 	}
+	obs.enter("usagePoolStats")
+	usagePools, poolErr := database.UsagePoolStats(ctx, s.db)
+	if !obs.check(w, ctx) {
+		return
+	}
+	if poolErr != nil {
+		writeError(w, 500, "usage-pool stats: "+poolErr.Error())
+		return
+	}
+	status["usage_pools"] = usagePools
 	// ADV-R09/G8 — spend reality block: what "recorded spend" actually is.
 	// Splits ticks.cost_usd by cost_source so measured/gateway money is
 	// never silently blended with the estimate tier, and states the price
@@ -520,12 +648,27 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// disabled; a stalled POST fails the tick as "stalled" before
 		// --tick-timeout).
 		status["gateway_response_timeout"] = s.loop.GatewayResponseTimeout().String()
+		// SCHED-GAP-1681: the armed transient-retry count (0 = single
+		// attempt) sits next to its GAP-117 sibling so the knob is
+		// introspectable from the same surface.
+		status["gateway_transient_retries"] = s.loop.GatewayTransientRetries()
 		// SCHED-GAP-155: per-reason admission-decision counters, so an
 		// operator can see WHY projects are not spawning without grepping
 		// the scheduler log. Every reason in the vocabulary is present
 		// (0 = never seen this process), plus "admitted:<namespace>"
 		// totals and "passes". Counterpart of the `ADMIT ` log lines.
 		status["admission_counters"] = s.loop.AdmissionCounters()
+		// SCHED-GAP-1678: the process-lifetime count of board-unchanged
+		// skips — a skip increments WITHOUT a tick row existing, so
+		// counting tick rows undercounts the gate's work. Own field (not
+		// folded into admission_counters) because it is counted at the
+		// packers' selection site, once per lane per pass.
+		status["board_unchanged_skips"] = s.loop.BoardUnchangedSkips()
+		// SCHED-GAP-1594: whether the per-tick git push is disabled
+		// (--disable-tick-push). false = per-tick push runs at tick exit
+		// (SCHED-GAP-1694, default); true = web-primary updates, the
+		// fleet-strand-push cron is the only remaining pusher.
+		status["tick_push_disabled"] = s.loop.TickPushDisabled()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()

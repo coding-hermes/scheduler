@@ -257,6 +257,19 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if p.DecayRate == 0 {
 		p.DecayRate = 1.0
 	}
+	// SCHED-GAP-1729 (born-disarmed): create NEVER stores an enabled row.
+	// The row is provisioned exactly as the body configured it — pacing,
+	// namespace, admission mode all ride along — but parked: enabled is
+	// clamped to false before the write, so the documented
+	// create -> configure -> enable order can never leave an armed,
+	// empty-prompt row one evaluation away from admission (the measured
+	// 2026-10-06 MSF-022 incident). An explicit enabled:true is not an
+	// error (the reconciler-style bodies stay valid); the enable step is
+	// the operator's own later PUT, where the SCHED-GAP-138 auto-arm and
+	// the SCHED-GAP-1696 admission law both run. The SCHED-GAP-138
+	// satellite shape gate above still refuses an enabled-and-unarmed
+	// satellite body outright, so the clamp can never mask that defect.
+	p.Enabled = false
 	// SCHED-GAP-1607: deliver_mode is stored as given — settable exactly the
 	// way deliver is (free-form string; no API-side validation). The delivery
 	// path fails safe: '' and unknown values resolve to full.
@@ -405,10 +418,23 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, name string)
 	if err != nil {
 		log.Printf("project detail: dispatch split for %s: %v", name, err)
 	}
+	// SCHED-GAP-1655: the lane's outcome split rides the detail payload —
+	// no_work is the zero-tool-call waste count, per lane, next to the
+	// dispatch split. Same zero-filled-vocabulary pattern; a failed
+	// aggregate logs and returns the zero-filled shape rather than 500ing.
+	obs.enter("CountProjectOutcomes")
+	outcomes, err := database.CountProjectOutcomes(ctx, s.db, name)
+	if !obs.check(w, ctx) {
+		return
+	}
+	if err != nil {
+		log.Printf("project detail: outcome split for %s: %v", name, err)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"project":        p,
 		"latest_tick":    tick,
 		"dispatch_split": dispatch,
+		"outcome_split":  outcomes,
 	})
 }
 
@@ -474,6 +500,58 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	// refused — satellite-coverage-reconcile.py enables lanes with a bare
 	// {"enabled": true} and never reads the response status, so a refusal there
 	// would silently strip QA/pm/sync/dogfood coverage from a live foreman.
+	// SCHED-GAP-1696: the ADMISSION LAW at the boundary. A lane-level
+	// admission_mode that contradicts the lane's class — a satellite carrying
+	// tasks, or a foreman carrying cooldown — is refused here (400) BEFORE the
+	// DB write, so the row can never be left in the contradicting state.
+	//
+	// SCHED-GAP-1729: the class is derived from the lane's explicit facts
+	// only (ClassifyLane) — never from the namespace. The measured defect was
+	// the create -> configure order: the admission PUT lands BEFORE the
+	// namespace PUT, the row's namespace is still NULL, and the old check
+	// refused the cooldown a foreman-in-a-cooldown-namespace must carry,
+	// leaving the documented provisioning order broken. The class is
+	// identical with and without the namespace, so the deferral below is the
+	// only window: a foreman-classed lane with NO namespace yet has no
+	// tasks-mode namespace to violate (the packer packs an unassigned lane
+	// flat on cooldown semantics), so its cooldown PUT is accepted; once the
+	// namespace PUT lands, the full law applies again. Satellite-classed
+	// lanes are keyed on the name/parent rule alone and are never deferred —
+	// the tasks refusal below holds in the window (test:
+	// TestSchedGap1729_SatelliteTasksRefusedWithoutNamespace).
+	if updates.AdmissionMode != nil {
+		all := map[string]bool{}
+		if ps, perr := database.ListProjects(ctx, s.db, false); perr == nil {
+			for _, pp := range ps {
+				all[pp.Name] = true
+			}
+		}
+		cls := scheduler.ClassifyLane(*cur, all)
+		// The EFFECTIVE namespace (this patch may assign one), per the same
+		// effective-row rule the SCHED-GAP-138 gate above applies: a PUT that
+		// sets namespace_id and admission_mode together is already configured
+		// and gets no deferral.
+		nsID := ""
+		if cur.NamespaceID != nil {
+			nsID = *cur.NamespaceID
+		}
+		if updates.NamespaceID != nil {
+			nsID = *updates.NamespaceID
+		}
+		mode := *updates.AdmissionMode
+		want := scheduler.ExpectedAdmission(cls)
+		// The deferral window (SCHED-GAP-1729): an UNASSIGNED foreman-classed
+		// lane has no tasks-mode namespace to violate yet, so its cooldown
+		// PUT is accepted; the window closes the moment a namespace is set.
+		deferred := cls == scheduler.LaneClassForeman && nsID == "" &&
+			mode == database.AdmissionModeCooldown
+		if mode != want && !deferred {
+			writeError(w, 400, fmt.Sprintf(
+				"admission law (SCHED-GAP-1696): a %s lane must carry admission_mode=%q (every foreman is tasks, every other lane is cooldown); %q is refused",
+				cls, want, mode))
+			return
+		}
+	}
 	updates, laneArmed := laneAutoArm(cur, updates, name)
 	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -597,7 +675,7 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 // cascade recognizes (SCHED-GAP-180). Name suffix is the sanctioned detection
 // for this row; board-ownership/symlink detection is SCHED-GAP-141's concern
 // and is deliberately NOT walked here.
-var satelliteLaneSuffixes = []string{"-qa", "-pm", "-sync", "-dogfood"}
+var satelliteLaneSuffixes = scheduler.LaneRoleSuffixes()
 
 // cascadeMarker is the disabled_by value stamped on satellites disabled by
 // the pause/resume cascade (distinct from "api-pause" / "api" / "api-delete"

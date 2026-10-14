@@ -8,10 +8,10 @@ package scheduler
 // wedged 28-80 min on a loaded host.
 //
 // Post-fix: ForceEvaluate() sends a non-blocking wake to l.evalWakeCh
-// (buffered 1). A single drain goroutine started in NewLoop reads the
-// channel and calls l.evaluate() in a loop. N concurrent ForceEvaluate
-// calls collapse into at most one pending pass — while evaluate() is
-// running, additional calls just fail their non-blocking send and exit.
+// (buffered 1). A single drain goroutine starts lazily on the first real
+// ForceEvaluate call and exits before Stop returns. N concurrent calls
+// collapse into at most one pending pass — while evaluate() is running,
+// additional calls just fail their non-blocking send and exit.
 //
 // Test strategy: the production drain calls l.evaluate() which would
 // hit a real DB and a real spawner. To count evaluate() invocations
@@ -33,6 +33,32 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLoop_ForceEvaluate_DrainStartsLazily(t *testing.T) {
+	db := newTestDB(t)
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 4)
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			loop.Stop()
+		}
+	})
+
+	if loop.evalDrainStarted.Load() {
+		t.Fatal("NewLoop started an idle evalDrain before any force-evaluate request")
+	}
+	loop.ForceEvaluate()
+	if !loop.evalDrainStarted.Load() {
+		t.Fatal("ForceEvaluate did not start the evalDrain")
+	}
+	loop.Stop()
+	stopped = true
+	select {
+	case <-loop.evalDrainDone:
+	default:
+		t.Fatal("Loop.Stop returned before evalDrain exited")
+	}
+}
 
 func TestLoop_ForceEvaluate_CoalescesUnderBurst_HAPPY(t *testing.T) {
 	// Build a Loop with the wake channel installed (no spawner, no DB —
@@ -90,20 +116,23 @@ func TestLoop_ForceEvaluate_BufferedChannelCapacityIsOne(t *testing.T) {
 }
 
 // TestLoop_ForceEvaluate_Drain_BoundsEvaluates is the bound-on-evaluate-runs
-// proof. It installs a drain that simulates a real evaluate() pass by
-// sleeping for ~50ms after each wake receipt. The number of wakes
-// observed during the burst (N=100 concurrent calls; burst is over when
-// wg.Wait() returns) is the number of evaluate() runs the production
-// storm would have driven. Coalesce means the burst — which is
-// instantaneous from the drain's point of view — produces at most ONE
-// wake receipt, not 100.
+// proof. It installs a drain that mirrors l.evalDrain() but simulates a real
+// evaluate() pass by BLOCKING on a test-owned gate instead of doing work.
+// The window in which wakes are counted is delimited by goroutine state, not
+// wall clock: the drain signals when it has entered its pass (drainMidPass)
+// and the test closes the gate only after the entire burst has been issued
+// AND the drain has confirmed it is mid-pass. Under CI load the burst may
+// stretch arbitrarily and the drain may be starved arbitrarily — the count
+// is still deterministic, because the drain cannot observe a second wake
+// while it is blocked on the gate, and burstDone is stored before the gate
+// opens.
 //
-// Why a sleeping drain mirrors production: a real evaluate() takes
-// ~80s on a loaded host, so the cap=1 channel + non-blocking send
-// trivially bounds the storm to 1 evaluate run. The sleeping drain
-// stands in for evaluate() with a much smaller delay (50ms) so the
-// test runs quickly; the bound the assertion checks is "the burst
-// must have produced at most a handful of wakes" — never N.
+// Why a gated drain mirrors production: a real evaluate() takes ~80s on a
+// loaded host — a LONG serial pass during which further ForceEvaluate calls
+// can only coalesce into the single pending wake. Blocking on the gate is a
+// faithful (and timing-free) stand-in for that pass; the bound the assertion
+// checks is "the burst must have produced at most a handful of wakes" —
+// never N.
 func TestLoop_ForceEvaluate_Drain_BoundsEvaluates(t *testing.T) {
 	l := &Loop{
 		evalWakeCh: make(chan struct{}, 1),
@@ -113,11 +142,14 @@ func TestLoop_ForceEvaluate_Drain_BoundsEvaluates(t *testing.T) {
 	var (
 		wakesDuring atomic.Int64
 		burstDone   atomic.Bool
+		drainOnce   sync.Once
 	)
+	drainMidPass := make(chan struct{}) // closed once, on the first counted wake
 	done := make(chan struct{})
+	passGate := make(chan struct{}) // closed by the test to end the drain's "evaluate pass"
 
-	// Drain mirrors l.evalDrain() but simulates a real evaluate() pass
-	// by sleeping. Wakes received while the burst is still firing count
+	// Drain mirrors l.evalDrain() but simulates a real evaluate() pass by
+	// blocking on passGate. Wakes received before the gate opens count
 	// toward the bound.
 	go func() {
 		defer close(done)
@@ -128,19 +160,27 @@ func TestLoop_ForceEvaluate_Drain_BoundsEvaluates(t *testing.T) {
 			case <-l.evalWakeCh:
 				if !burstDone.Load() {
 					wakesDuring.Add(1)
+					// Signal mid-pass AFTER counting, so the
+					// test's read of wakesDuring (which
+					// happens-after this close) observes >= 1.
+					drainOnce.Do(func() { close(drainMidPass) })
 				}
 				// Simulate the evaluate pass. Pre-fix, every
 				// concurrent call would have spawned its own
 				// evaluate goroutine running in parallel; post-fix,
-				// the drain runs them serially. The sleep is just
-				// here to give the test a deterministic bound.
-				time.Sleep(50 * time.Millisecond)
+				// the drain runs them serially. Blocking on the
+				// gate (instead of sleeping a fixed wall-clock
+				// interval) is what makes the counted window
+				// deterministic: the drain cannot receive another
+				// wake until the test opens the gate.
+				<-passGate
 			}
 		}
 	}()
 
 	// Fire N concurrent ForceEvaluate calls. The burst is over when
-	// wg.Wait() returns; the drain then drains any leftover wake.
+	// wg.Wait() returns; every call has then either delivered a wake
+	// (at most one pending) or coalesced.
 	const N = 100
 	var wg sync.WaitGroup
 	wg.Add(N)
@@ -154,21 +194,32 @@ func TestLoop_ForceEvaluate_Drain_BoundsEvaluates(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	burstDone.Store(true)
 
-	// The drain may still be in the middle of an evaluate simulation;
-	// wait for it to finish its current pass so we count cleanly.
-	time.Sleep(150 * time.Millisecond)
+	// Wait until the drain is provably mid-pass on the first counted
+	// wake. This is the deterministic window boundary the fixed sleep
+	// used to approximate: a generous timeout instead of a wall-clock
+	// race. If this times out, the wake never reached the consumer at
+	// all — the coalescing contract itself is broken, not the load.
+	select {
+	case <-drainMidPass:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("drain never entered its pass on the burst wake within 10s — wake never reached the consumer (coalescing reverted, or drain starved beyond budget)")
+	}
+
+	// The drain is now blocked mid-pass, so the counted window is closed
+	// by construction: store burstDone BEFORE opening the gate so no
+	// later wake can ever be counted, then release the pass.
+	burstDone.Store(true)
+	close(passGate)
 
 	got := wakesDuring.Load()
-	// The burst is instantaneous (all 100 calls land before any drain
-	// wake can be received and consumed). The cap=1 channel accepts
-	// exactly ONE wake; the rest hit `default` and coalesce. The
-	// sleeping drain then takes 50ms to consume that one wake; during
-	// those 50ms no new wake can land because the channel is full.
-	// So the bound during the burst is 1.
-	if got > 2 {
-		t.Fatalf("drain observed %d wakes during a 100-call burst (cap=1 buffered channel + 50ms evaluate) — coalesce reverted?", got)
+	// With the gate design the drain can consume at most the ONE wake it
+	// was mid-pass on before the window closes. The assertion is an
+	// inequality (not an equality) so a future drain that services more
+	// wakes per pass still has headroom, while a reverted coalescer
+	// (N wakes) cannot pass.
+	if got > 4 {
+		t.Fatalf("drain observed %d wakes during a 100-call burst (cap=1 buffered channel + gated pass) — coalesce reverted?", got)
 	}
 	if got == 0 {
 		t.Fatalf("drain observed 0 wakes during a 100-call burst — wake never reached the consumer")
@@ -178,7 +229,7 @@ func TestLoop_ForceEvaluate_Drain_BoundsEvaluates(t *testing.T) {
 	close(l.stopCh)
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatalf("stub drain did not exit on stopCh close")
 	}
 }

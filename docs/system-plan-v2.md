@@ -87,18 +87,22 @@ This plan fixes all three: structured logging everywhere, a value ledger that ac
 
 ### 2.3 Cooldown durability — fleet.toml is now the source of truth
 - The chimera cooldown reversion saga (6 documented reversions, ticks #51–#63) is **fixed** — fleet.toml pins now survive daemon restarts. 
-- **Standardize (verified 2026-08-10, SCHED-GAP-025):** `fleet-cooldown-policy.py`
-  (`~/.hermes/scripts`) is the ONLY writer of `fleet.toml`. Authority model as
+- **Standardize (verified 2026-08-10, SCHED-GAP-025; writer updated 2026-10-06,
+  SCHED-GAP-211):** the writer of `fleet.toml` is now `fleet-sync.py`
+  (`~/.hermes/scripts`) — a pure DB→file mirror (Bane 2026-09-19: the DB is the
+  single source of truth, the scheduler API the only writer of cooldowns/pins).
+  `fleet-cooldown-policy.py --apply` is RETIRED as a writer (owner ruling
+  2026-10-02): only its report / `--verify` (SCHED-GAP-121 tripwire) and
+  `--dry-run` modes remain, and it no longer normalizes pins. Authority model as
   implemented (`internal/config/loader.go`, called at startup from main.go):
   API PUT writes SQLite and takes effect immediately but is ephemeral across
   restarts — at every daemon startup, fleet.toml pins re-apply
-  (cooldown/model/provider/enabled) for existing projects. The policy script
-  reads live API (SQLite) state FIRST, computes the pending-based policy
-  (900s/7200s + ELEVATED_PINS whitelist), PUTs normalized cooldowns, then
-  regenerates fleet.toml from the corrected state so restarts re-pin to the
-  policy decision. Custom durable pins require both a fleet.toml entry AND an
-  ELEVATED_PINS whitelist entry (SCHED-GAP-012), or the next policy run
-  normalizes them away.
+  (cooldown/model/provider/enabled) for existing projects. `fleet-sync.py`
+  re-reads live API state and regenerates fleet.toml from it, one direction, so
+  no correction rules fight operator intent. Custom durable pins require a
+  fleet.toml entry (SCHED-GAP-012), and to survive even a drifted DB they also
+  need an entry in `fleet-sync.py`'s hand-held `OVERRIDES` block (read, never
+  rewritten by the script).
 
 ---
 

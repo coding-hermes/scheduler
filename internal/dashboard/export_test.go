@@ -18,3 +18,9 @@ func TapeIndexMoveForTest(curr, prior int64) (label, class string) {
 func (g *Generator) QueueEntriesForTest(ctx context.Context) (QueueData, error) {
 	return g.queueEntries(ctx)
 }
+
+// OverviewDataForTest exposes cachedOverview to dashboard_test
+// (SCHED-GAP-1730 copy-isolation test reads the snapshot data directly).
+func (g *Generator) OverviewDataForTest(ctx context.Context) FleetData {
+	return g.cachedOverview(ctx)
+}

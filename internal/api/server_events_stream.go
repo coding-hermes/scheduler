@@ -41,7 +41,9 @@ const (
 	// client that connects without a usable Last-Event-ID. Replaying the whole
 	// log for a fresh connection would be an unbounded read; the tail matches
 	// the default page size of the poll endpoint (GET /api/v1/events?limit=100)
-	// so a fresh SSE client and a fresh poll client see the same window.
+	// so a fresh SSE client and a fresh poll client see the same window — both
+	// counting the newest events that match the client's filters, when it sends
+	// any (SCHED-GAP-1737).
 	streamReplayTail = 100
 )
 
@@ -50,6 +52,64 @@ const (
 // package-level var (not a const) so tests can shorten it instead of sleeping
 // 15 seconds.
 var streamHeartbeatInterval = 15 * time.Second
+
+// streamFilter is the severity/component selection of one stream request. The
+// zero value accepts every event, which is what keeps the pre-existing
+// unfiltered contract intact: a client that sends no params sees exactly the
+// frames it saw before this endpoint honored filters (SCHED-GAP-1737).
+type streamFilter struct {
+	severity  string
+	component string
+}
+
+// streamFilterFromQuery builds the filter for one stream request. Only the
+// severity and component query params are honored — every other param on this
+// endpoint is deliberately ignored, including `limit`, which belongs to the
+// poll endpoint and has no meaning on a push stream. Both are documented in
+// docs/api.md §8 so a client can tell "param ignored" from "no matching data".
+func streamFilterFromQuery(r *http.Request) streamFilter {
+	q := r.URL.Query()
+	return streamFilter{severity: q.Get("severity"), component: q.Get("component")}
+}
+
+// matchesStreamFilter reports whether ev satisfies f — the single definition of
+// "the client asked for this event", applied before every writeSSEEvent call so
+// no code path can leak an unrelated severity/component onto a filtered stream.
+// An empty field accepts every value; a non-empty field requires an EXACT,
+// case-sensitive match, the same comparison GET /api/v1/events applies to the
+// same two params (so an unrecognized severity matches nothing on either
+// endpoint rather than silently widening).
+func matchesStreamFilter(ev database.Event, f streamFilter) bool {
+	if f.severity != "" && string(ev.Severity) != f.severity {
+		return false
+	}
+	if f.component != "" && ev.Component != f.component {
+		return false
+	}
+	return true
+}
+
+// applyLiveEvent folds one received live event into the client's cursor and
+// reports whether the event must go on the wire.
+//
+// The invariant it encodes, and the reason it is a named function rather than
+// two inline branches: the cursor is the id WATERMARK of the log this client
+// has consumed, not "the id of the last frame written". An event that is above
+// the cursor but filtered out is therefore CONSUMED — it advances the cursor
+// without being written. Leaving the cursor behind would make every later
+// matching event look like an id gap, so the handler would re-scan the log range
+// in between on each delivery, and a reconnect's Last-Event-ID would derive from
+// a watermark that does not describe what the client has actually seen.
+func applyLiveEvent(ev database.Event, cursor int64, f streamFilter) (write bool, next int64) {
+	if ev.ID <= cursor {
+		// Already consumed (a duplicate from a previous catch-up).
+		return false, cursor
+	}
+	if !matchesStreamFilter(ev, f) {
+		return false, ev.ID
+	}
+	return true, ev.ID
+}
 
 // eventsStream serves GET /api/v1/events/stream as a Server-Sent Events feed
 // (CTL-002).
@@ -61,10 +121,18 @@ var streamHeartbeatInterval = 15 * time.Second
 // the two is buffered here and cannot be lost; duplicates between the buffer
 // and the replay are dropped by the ID comparison.
 //
+// Filter contract (SCHED-GAP-1737): ?severity= and ?component= select which
+// events this connection receives, with the same semantics as the matching
+// params on GET /api/v1/events. The filter is applied on every write path —
+// the tail-seed window, the Last-Event-ID replay, gap-repair catch-up and the
+// live loop — while the CURSOR stays purely id-based: filtered-out events still
+// advance it (see applyLiveEvent), so a filtered reconnect can neither
+// re-deliver nor skip a matching event.
+//
 // An absent, empty or malformed Last-Event-ID (anything that is not a plain
 // decimal integer) is treated as "no cursor" and replays the newest
-// streamReplayTail events. Malformed input can never reach the query layer and
-// can never panic.
+// streamReplayTail events MATCHING the filter. Malformed input can never reach
+// the query layer and can never panic.
 func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET only")
@@ -80,6 +148,7 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	cursor := parseLastEventID(r.Header.Get("Last-Event-ID"))
+	filter := streamFilterFromQuery(r)
 
 	// Subscribe first, replay second (see the reconnect contract above).
 	events, unsubscribe := database.SubscribeEvents(s.db, streamBufferSize)
@@ -98,9 +167,9 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 	// Replay (or tail-seed) before waiting for live events.
 	var err error
 	if cursor > 0 {
-		cursor, err = s.streamReplay(ctx, w, flusher, cursor, 0)
+		cursor, err = s.streamReplay(ctx, w, flusher, cursor, 0, filter)
 	} else {
-		cursor, err = s.streamTail(ctx, w, flusher, streamReplayTail)
+		cursor, err = s.streamTail(ctx, w, flusher, streamReplayTail, filter)
 	}
 	if err != nil {
 		s.streamError(w, flusher, "replay", err)
@@ -123,29 +192,32 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 				// would otherwise spin this loop on zero-value events.
 				return
 			}
-			// An event at or below the cursor is a duplicate of one the
-			// replay already sent (or a late arrival from a previous gap
-			// repair).
-			if ev.ID <= cursor {
-				continue
-			}
 			// A skip means the subscriber dropped events while this client was
-			// slow: repair from the log before emitting the live event.
+			// slow: repair from the log before emitting the live event. The
+			// repair scans the whole range (writing only matching events) and
+			// returns the id watermark it reached, so a filtered client is
+			// caught up exactly once.
 			if ev.ID > cursor+1 {
-				repaired, rerr := s.streamReplay(ctx, w, flusher, cursor, ev.ID)
+				repaired, rerr := s.streamReplay(ctx, w, flusher, cursor, ev.ID, filter)
 				cursor = repaired
 				if rerr != nil {
 					s.streamError(w, flusher, "catch-up", rerr)
 					return
 				}
-				if ev.ID <= cursor {
-					continue
-				}
+			}
+			// The filter runs AFTER the repair (so a matching event inside a
+			// dropped range is never skipped) and applies the cursor rule: an
+			// event at or below the cursor is a duplicate of one the replay
+			// already sent, and an event filtered out still advances the
+			// cursor (see applyLiveEvent for why).
+			emit, next := applyLiveEvent(ev, cursor, filter)
+			cursor = next
+			if !emit {
+				continue
 			}
 			if err := writeSSEEvent(w, flusher, ev); err != nil {
 				return
 			}
-			cursor = ev.ID
 		case <-heartbeat.C:
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
@@ -155,33 +227,67 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// streamTail emits the newest n events (chronological) and returns the ID of
-// the last one written (0 when the log is empty). Used for a client that
-// connects without a usable Last-Event-ID — a bounded read, never the whole
-// log.
-func (s *Server) streamTail(ctx context.Context, w io.Writer, flusher http.Flusher, n int) (int64, error) {
-	events, err := database.ListEventsAfterID(ctx, s.db, 0, n)
+// streamTail emits the newest n events MATCHING f (chronological) and returns
+// the cursor the live loop must start from (0 when the log itself is empty).
+// Used for a client that connects without a usable Last-Event-ID — a bounded
+// read, never the whole log.
+//
+// The window is selected by SQL (database.ListEventsTailFiltered), so a
+// filtered client gets the newest matching events rather than "the newest n
+// events of any severity, filtered afterwards" — the same thing
+// GET /api/v1/events?severity=X&limit=n returns, which is the parity this
+// endpoint's docs promise. Without that, a CRITICAL-only client on a busy log
+// would seed zero frames and look like the filter had been dropped again.
+//
+// The cursor is the log HEAD at query time, never lower than the newest frame
+// written: a client with no cursor is joining "now", and starting it at the
+// head means the handler can never hold cursor 0 while the log is non-empty, so
+// the first live event can never be misread as a gap. The head is read BEFORE
+// the window query on purpose: an event committing in between is then above the
+// cursor and is delivered by the live loop (matching) or consumed by it
+// (filtered), instead of falling into a hole between the two reads.
+func (s *Server) streamTail(ctx context.Context, w io.Writer, flusher http.Flusher, n int, f streamFilter) (int64, error) {
+	head, err := database.MaxEventID(ctx, s.db)
 	if err != nil {
 		return 0, err
 	}
-	var cursor int64
+	events, err := database.ListEventsTailFiltered(ctx, s.db, f.severity, f.component, n)
+	if err != nil {
+		return head, err
+	}
+	cursor := head
 	for _, e := range events {
+		if !matchesStreamFilter(e, f) {
+			// The query already applied the filter; the predicate is repeated
+			// here so that every write path in this file shares ONE definition
+			// of what may go on the wire.
+			continue
+		}
 		if err := writeSSEEvent(w, flusher, e); err != nil {
 			return cursor, err
 		}
-		cursor = e.ID
+		if e.ID > cursor {
+			cursor = e.ID
+		}
 	}
 	return cursor, nil
 }
 
-// streamReplay pages events with id > afterID and emits them in ID order,
-// stopping at upTo (0 = no upper bound) or when the log is exhausted. It
-// returns the ID of the last event written plus an error. The loop terminates
-// because every page strictly advances the cursor; each query is capped at
-// streamReplayPageSize rows and the whole loop at streamMaxReplayPages pages.
-// A tripped page cap emits a `: replay truncated` comment so the client can
-// tell the difference between "quiet" and "incomplete".
-func (s *Server) streamReplay(ctx context.Context, w io.Writer, flusher http.Flusher, afterID, upTo int64) (int64, error) {
+// streamReplay pages events with id > afterID and emits those matching f in ID
+// order, stopping at upTo (0 = no upper bound) or when the log is exhausted. It
+// returns the id WATERMARK reached (the last event scanned, whether it was
+// written or filtered out) plus an error. The loop terminates because every page
+// strictly advances the cursor; each query is capped at streamReplayPageSize
+// rows and the whole loop at streamMaxReplayPages pages. A tripped page cap
+// emits a `: replay truncated` comment so the client can tell the difference
+// between "quiet" and "incomplete".
+//
+// Advancing past filtered events is what keeps the reconnect contract intact: a
+// client that reconnects with Last-Event-ID=N and a filter resumes scanning from
+// N, so it neither re-delivers an event it already saw nor leaves a matching
+// event behind, and the live loop it hands off to sees a cursor that describes
+// the log range already consumed.
+func (s *Server) streamReplay(ctx context.Context, w io.Writer, flusher http.Flusher, afterID, upTo int64, f streamFilter) (int64, error) {
 	cursor := afterID
 	for page := 0; page < streamMaxReplayPages; page++ {
 		events, err := database.ListEventsAfterID(ctx, s.db, cursor, streamReplayPageSize)
@@ -195,8 +301,10 @@ func (s *Server) streamReplay(ctx context.Context, w io.Writer, flusher http.Flu
 			if upTo > 0 && e.ID > upTo {
 				return cursor, nil
 			}
-			if err := writeSSEEvent(w, flusher, e); err != nil {
-				return cursor, err
+			if matchesStreamFilter(e, f) {
+				if err := writeSSEEvent(w, flusher, e); err != nil {
+					return cursor, err
+				}
 			}
 			cursor = e.ID
 		}

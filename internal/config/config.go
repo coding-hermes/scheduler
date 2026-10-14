@@ -70,6 +70,19 @@ type SchedulerConfig struct {
 	// 2h slot. Empty = the daemon flag default (30m).
 	GatewayResponseTimeout string `toml:"gateway_response_timeout"`
 
+	// GatewayTransientRetries (SCHED-GAP-1681) is the bounded
+	// transient-gateway retry count for the GAP-080 loop. A pointer because
+	// 0 is a MEANING (single attempt, retry loop off) that must be
+	// distinguishable from unset: nil = the daemon flag default (3), 0 =
+	// explicitly one attempt, N = up to N retries after the initial POST.
+	// Every retry re-sends the SAME session key (X-Hermes-Session-Key:
+	// tickID), so the gateway continues the session instead of minting a
+	// new one. Negative values are rejected at the apply site (WARN, keep
+	// default). Applies only when --gateway-transient-retries was never
+	// passed (default-guard pattern; SCHEDULER_GATEWAY_TRANSIENT_RETRIES
+	// still outranks TOML).
+	GatewayTransientRetries *int `toml:"gateway_transient_retries"`
+
 	// SlotPatience (ADV-R08/G3) is how long a spawn waits for a free slot
 	// before the project is dropped (the drop emits a MEDIUM slot_pool
 	// event), stored as a duration string (e.g. "5m"). Empty = the daemon
@@ -106,6 +119,34 @@ type SchedulerConfig struct {
 	// TOML < env SCHEDULER_SPAWN_MEM_LIMIT_MB < flag --spawn-mem-limit-mb.
 	SpawnMemLimitMB int64 `toml:"spawn_mem_limit_mb"`
 
+	// SessionSilenceGrace (SCHED-GAP-1707) is the session-silence
+	// watchdog's grace period, stored as a duration string (e.g. "45m").
+	// A gateway tick whose Hermes-state telemetry shows no token delta and
+	// no tool activity for this long is cancelled early with
+	// failure_reason=session_silent and the quiet duration recorded on the
+	// tick row. Empty or "0s" = disabled (the default — the watchdog only
+	// runs when an operator arms it; library/embedding behavior is
+	// byte-identical). It never kills a producing session. Precedence:
+	// TOML < env SCHEDULER_SESSION_SILENCE_GRACE < flag
+	// --session-silence-grace.
+	SessionSilenceGrace string `toml:"session_silence_grace"`
+
+	// SessionPollLoopMinTicks (SCHED-GAP-1698) is the poll-loop idle
+	// guard's per-stride tool-call minimum, stored as an integer. A gateway
+	// tick whose session shows >= N tool calls in each of two consecutive
+	// 5-minute strides — every call a sleep-led or read-only status probe
+	// at a fixed cadence, with zero advancement — for 4 consecutive guard
+	// passes is cancelled with failure_reason=sleep_poll. 0 = disabled
+	// (the default — the guard only runs when an operator arms it;
+	// library/embedding behavior is byte-identical). Values 1-5 are
+	// rejected in favor of the built-in floor of 6 (the knob can only make
+	// the guard STRICTER, never looser than the measured classification).
+	// It never kills a producing session: any non-poll call in a stride
+	// spares the tick. Precedence: TOML < env
+	// SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS < flag
+	// --session-poll-loop-min-ticks.
+	SessionPollLoopMinTicks int `toml:"session_poll_loop_min_ticks"`
+
 	// MeteredBudgetEnabled (SCHED-GAP-127) switches USD-cap enforcement from
 	// per-tick cost_usd to the fleet-wide Hermes state.db cash ledger. Default
 	// false preserves historical behavior; enable explicitly with TOML
@@ -128,6 +169,14 @@ type SchedulerConfig struct {
 	// auto-disable window so the dashboard can stay readable even when
 	// auto-disable is off.
 	FailureWindow int `toml:"failure_window"`
+
+	// ID (REMOTE-003, §1) is this scheduler's federation identity — the
+	// value stamped on every projects/ticks/events row it writes and the
+	// id peers use to address it. Empty = the host-derived default (the
+	// short hostname, resolved by ResolveDefaultSchedulerID in main.go).
+	// Precedence: TOML [scheduler] id < SCHEDULER_ID env. There is no CLI
+	// flag layer: identity is per-deployment, not per-invocation.
+	ID string `toml:"id"`
 }
 
 // BlackoutWindow defines a peak-pricing window during which the scheduler
@@ -205,10 +254,61 @@ type GatewayConfig struct {
 	ForemanHome string `toml:"foreman_home"`
 }
 
+// CrierConfig (REMOTE-004, §3 visibility flow) covers the Crier bus client —
+// the transport that publishes tick-terminal and lane-state events to the
+// federation topic and subscribes to peer events. `enabled` defaults to
+// FALSE: off is a pure no-op (no connections are ever opened), and a
+// disabled or unreachable bus must never block or fail a tick (the
+// autonomy law — publish is best-effort, failures are logged and dropped).
+// `token` is the opt-in relay bearer credential (Crier CR_AUTH_TOKEN);
+// it may also come from the CRIER_AUTH_TOKEN environment variable, which
+// wins over the TOML value (credentials never live in argv, GAP-038).
+// `topics` is the subscriber's wildcard topic list (default
+// `sched.tick.>` — every scheduler's tick topic); an empty list disables
+// subscription while publishing stays armed.
+type CrierConfig struct {
+	URL     string   `toml:"url"`
+	Token   string   `toml:"token"`
+	Enabled bool     `toml:"enabled"`
+	Topics  []string `toml:"topics"`
+}
+
 // DuckBrainConfig covers the DuckBrain memory sync subsystem.
 type DuckBrainConfig struct {
 	Namespace string `toml:"namespace"`
 	URL       string `toml:"url"`
+}
+
+// FederationAllowConfig is one caller's published read-allow list
+// (REMOTE-013, federation-query-spec §4: "Read is scoped, not open"). The
+// key is the CALLER identity as it appears in the federation audit rows —
+// "*" names the fleet-wide default every caller inherits; a specific
+// caller's own row wins over "*" in both directions. `ops` is the set of
+// §2.3 catalogue op ids the caller may read ("peer.status", "queue.get",
+// …). Blank ops are dropped at resolve time (a blank allow is unset, never
+// a grant). There is deliberately NO [federation] allow = [...] scalar
+// form in the wire schema: the table form is the per-peer scoping the spec
+// names, and a bare list would silently widen every caller.
+type FederationAllowConfig struct {
+	Ops []string `toml:"ops"`
+}
+
+// FederationConfig (REMOTE-013, federation-query-spec §4) configures the
+// per-caller read policy for THIS scheduler's federation query surface.
+// Empty = the deny-all policy (fail-closed): every federation read — on
+// every transport — is refused with op_not_allowed until the operator
+// explicitly publishes ops. Resolved once at boot into
+// api.ResolveFederationReadPolicy and armed via
+// api.Server.SetFederationReadPolicy (main.go).
+type FederationConfig struct {
+	// Allow maps caller identity → published op set. TOML key: the caller
+	// id, or "*" for the fleet-wide default:
+	//
+	//   [federation.allow."*"]
+	//   ops = ["fleet.status", "queue.get"]
+	//   [federation.allow."primary-01"]
+	//   ops = ["fleet.status"]
+	Allow map[string]FederationAllowConfig `toml:"allow"`
 }
 
 // RootConfig is the top-level structure decoded from a schedulerd.toml
@@ -224,8 +324,38 @@ type RootConfig struct {
 	Gateway    GatewayConfig   `toml:"gateway"`
 	DuckBrain  DuckBrainConfig `toml:"duckbrain"`
 	API        APIConfig       `toml:"api"`
+	Crier      CrierConfig     `toml:"crier"`
 	Projects   []ProjectDef    `toml:"projects"`
 	Namespaces []NamespaceDef  `toml:"namespaces"`
+
+	// Federation (REMOTE-013) is the per-caller read-policy layer; kept as
+	// its own alignment group so adding it does not reflow the accepted
+	// field block above.
+	Federation FederationConfig `toml:"federation"`
+	UsagePools UsagePoolsConfig `toml:"usage_pools"`
+}
+
+// UsagePoolsConfig defines the opt-in durable admission pools owned by this scheduler DB.
+type UsagePoolsConfig struct {
+	Enabled     bool                  `toml:"enabled"`
+	ObserveOnly bool                  `toml:"observe_only"`
+	LocalPoolID string                `toml:"local_pool_id"`
+	Pools       []UsagePoolDef        `toml:"pools"`
+	Memberships []UsagePoolMembership `toml:"memberships"`
+}
+
+// UsagePoolDef is one named concurrency pool in root configuration.
+type UsagePoolDef struct {
+	ID          string `toml:"id"`
+	Kind        string `toml:"kind"`
+	ActiveLimit int    `toml:"active_limit"`
+	Enabled     *bool  `toml:"enabled"`
+}
+
+// UsagePoolMembership assigns a lane to an explicit pool.
+type UsagePoolMembership struct {
+	Lane    string   `toml:"lane"`
+	PoolIDs []string `toml:"pool_ids"`
 }
 
 // APIConfig covers the HTTP API surface knobs (SCHED-GAP-1575-B).
@@ -287,12 +417,18 @@ type ProjectDef struct {
 	WeeklyBudgetUSD  *float64 `toml:"weekly_budget_usd"`  // SCHED-GAP-066: per-UTC-week spend cap (Monday 00:00 UTC reset); nil or <= 0 = unlimited
 	FinalBudgetUSD   *float64 `toml:"final_budget_usd"`   // SCHED-GAP-066: one-time lifetime spend cap, never resets; nil or <= 0 = unlimited
 	GatewayKey       string   `toml:"gateway_key"`        // per-foreman Hermes gateway key; empty = shared --gateway-key
-	Command          string   `toml:"command"`
-	Prompt           string   `toml:"prompt"`       // Bane 2026-08-27: extra foreman prompt; appended to namespace default_prompt unless prompt_mode="replace"
-	PromptMode       string   `toml:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
-	NamespaceID      string   `toml:"namespace_id"` // optional FK → namespaces.id
-	Deliver          string   `toml:"deliver"`
-	Enabled          *bool    `toml:"enabled"` // default true if nil
+	// SCHED-GAP-1712: the per-LANE gateway endpoint. Empty = inherit the
+	// lane's namespace gateway_url, then the daemon's [gateway].url — the
+	// three-level resolution (lane > namespace > global) the dispatch path
+	// applies per tick. Additive: a fleet that never sets it behaves exactly
+	// as before this key existed.
+	GatewayURL  string `toml:"gateway_url"`
+	Command     string `toml:"command"`
+	Prompt      string `toml:"prompt"`       // Bane 2026-08-27: extra foreman prompt; appended to namespace default_prompt unless prompt_mode="replace"
+	PromptMode  string `toml:"prompt_mode"`  // Bane 2026-08-27: "append" (default) | "replace"
+	NamespaceID string `toml:"namespace_id"` // optional FK → namespaces.id
+	Deliver     string `toml:"deliver"`
+	Enabled     *bool  `toml:"enabled"` // default true if nil
 	// Adaptive cooldown (auto slow-down / speed-up) — OPT-IN per project.
 	// adaptive_cooldown = true arms the no-progress streak escalator:
 	// no_progress_threshold consecutive ticks with 0 commits AND no new
@@ -318,6 +454,21 @@ type ProjectDef struct {
 	// lane reads a foreign board — always cooldown-paced). Pins only
 	// when explicitly set (GatewayKey-style conditional pin).
 	BoardOwnership string `toml:"board_ownership"`
+
+	// SOL-CADENCE: the optional per-lane cadence target. nil leaves the row's
+	// value untouched (NULL on the row → the target derives from the durable
+	// cooldown pin), a pointer-to-zero is an explicit "no cadence opinion"
+	// opt-out, and a positive value overrides the derived target. Pins only
+	// when explicitly set (GatewayKey-style conditional pin), and drives
+	// ORDERING ONLY — no admission gate reads it.
+	TargetRunsPerDay *float64 `toml:"target_runs_per_day"`
+
+	// SCHED-GAP-1682: the per-lane no-op verdict override. nil = the key is
+	// absent — the row falls back to the lane-class derivation (satellites
+	// may no-op, foremen may not); true/false is the explicit operator
+	// override that wins in both directions and pins GatewayKey-conditionally
+	// at boot (a keyless entry never rewrites an API-set value).
+	NoopAllowed *bool `toml:"noop_allowed"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are
@@ -332,6 +483,13 @@ type NamespaceDef struct {
 	Description   string   `toml:"description"`
 	DefaultPrompt string   `toml:"default_prompt"` // Bane 2026-08-27: foreman prompt default for all projects in this namespace; empty = built-in
 	ModelChain    []string `toml:"model_chain"`    // Bane 2026-08-27: namespace-level model chain ("model@provider" hops); tier between project chain and router
+	// SCHED-GAP-1712: the namespace's gateway endpoint and credential — the
+	// MIDDLE tier of the three-level resolution. A member lane with no
+	// gateway_url of its own inherits GatewayURL; its gateway_key resolves
+	// lane > namespace > shared --gateway-key the same way. Empty = inherit
+	// from below (global), so an unset namespace changes nothing.
+	GatewayURL string `toml:"gateway_url"`
+	GatewayKey string `toml:"gateway_key"`
 	// S12 concurrent wave scheduling (SCHED-GAP-109), all default-off:
 	// wave_enabled = false leaves namespace behavior byte-identical.
 	WaveEnabled     *bool  `toml:"wave_enabled"`      // optional; default false (waves off)

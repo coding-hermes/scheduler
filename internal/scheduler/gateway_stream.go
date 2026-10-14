@@ -137,6 +137,59 @@ const (
 	GatewayInstantTurnSentinel = "instant one-shot gateway turn"
 )
 
+// SCHED-GAP-1655 zero-tool detection.
+//
+// responseHasToolCall reports whether a terminal response envelope carries
+// ANY tool-call output item — the OpenAI Responses wire shapes the gateway
+// streams back ("function_call", "tool_use", "custom_tool_call", and the
+// local shell/apply variants). A completed response with output text but no
+// tool item means the agent talked and never acted.
+//
+// Unknown item types (a future wire shape) are NOT counted as tools: the
+// classifier must under-count (leave a acted-on tick honestly classified
+// by its artifacts) rather than over-count (hide a real zero-tool tick
+// behind an unrecognized type name).
+func responseHasToolCall(resp *Response) bool {
+	if resp == nil {
+		return false
+	}
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "function_call", "tool_use", "custom_tool_call",
+			"local_shell_call", "apply_patch_call":
+			return true
+		}
+	}
+	return false
+}
+
+// zeroToolSession reports whether a completed gateway tick's session ran
+// ZERO tool calls (SCHED-GAP-1655 deliverable 2) — the terminal statement
+// that the lane had nothing to do. Two arms, both required to stay silent:
+//
+//   - the response envelope carries no tool-call item (responseHasToolCall
+//     false), AND
+//   - the SSE trace observed fewer than 2 real events. The trace is the
+//     belt to the envelope's braces: a mid-stream tool item arrives as its
+//     own SSE event before the terminal envelope, so a turn that acted
+//     always shows >= 2 events (the tool event + the terminal event) even
+//     if the terminal envelope's output were truncated by a gateway bug.
+//     A trace with Events == 0 observed nothing (pre-119 legacy, or the
+//     JSON fallback) — the envelope alone decides there.
+//
+// TokensIn is deliberately unconstrained: the fleet's zero-tool ticks are
+// PROMPTED sessions (44k-token foreman prompt in, tiny reply out) — billing
+// input is what makes them waste, not evidence of work.
+func zeroToolSession(resp *Response, trace *GatewayPOSTTrace) bool {
+	if responseHasToolCall(resp) {
+		return false
+	}
+	if trace != nil && trace.Events >= 2 {
+		return false
+	}
+	return true
+}
+
 // isInstantOneShotTurn (SCHED-GAP-1641) reports whether a merged tick trace
 // carries the one-shot fingerprint: the usage fields are PRESENT (non-zero —
 // zero means the legacy trace never recorded them) AND both output-side
@@ -494,6 +547,17 @@ func readSSEResponse(body io.Reader, watch *turnWatch) (*Response, error) {
 					if werr := watch.abortErr(nil); werr != nil {
 						return nil, werr
 					}
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					// SCHED-GAP-1684: the READ ended because the SESSION
+					// context hit its deadline — the tick's own wall (the
+					// per-turn abort is the TurnDeadlineError above). WE tore
+					// the stream down; the gateway did not. Wrap the deadline
+					// itself so the spawn path can book a self-timeout
+					// instead of charging our wall to the gateway as a
+					// transient blip (30 of 41 deferred ticks in the
+					// 2026-09-30 sample died at exactly 120/180 min).
+					return nil, fmt.Errorf("%w: session context deadline expired during sse stream", ErrTickDeadlineExceeded)
 				}
 				return nil, fmt.Errorf("%w: sse stream ended without a terminal event", ErrGatewayTransient)
 			}

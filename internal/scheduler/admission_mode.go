@@ -21,6 +21,12 @@ import (
 //	still apply). When the board is drained — including the case where
 //	only NEVER-DONE / perpetual fixture rows remain, which GAP-106
 //	excludes from the count — the wall-clock cooldown pin applies again.
+//	SCHED-GAP-1656 narrows that fallback for BUILDER lanes: a builder lane
+//	whose OWN board was read and holds no dispatchable row is deferred by
+//	the packers (reason tasks_no_work) instead of being dispatched on the
+//	pin, and the row that lands later re-admits it through the waiver.
+//	Reporter-class lanes and lanes that do not own their board keep the
+//	documented pin fallback.
 //
 // The mode is pure config: namespaces carry the default, projects may
 // override, and both are settable through the API, fleet.toml, and the CLI.

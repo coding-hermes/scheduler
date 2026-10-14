@@ -550,6 +550,17 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	// The recovery pass is a NORMAL pass: the outage itself levied nothing, so
 	// the lane comes back at its own cooldown/streak (never escalated by the
 	// outage) and the successful tick is what resets the failure counter.
+	//
+	// The counter reset is ASYNC relative to the spawn the waitUntil above
+	// observes: the stub counts the POST at request start, while the reset is
+	// written later by the completion goroutine — once at spawn time (S-GAP-001)
+	// and once in lifecycle.Complete (SCHED-GAP-137a). A synchronous read here
+	// raced it on a loaded CI runner and saw the seeded residue (INT-CI-186,
+	// run 38610870171: cf=2, want 0). Poll until the reset lands (the
+	// gap143PollCooldown / INT-CI-185 precedent); the assertions below then
+	// hold on the final read. A real regression — a recovery path that never
+	// resets — still fails at the deadline with the last-observed value.
+	gap170PollCounterReset(t, db, name)
 	after := gap146ReadState(t, db, name)
 	if after.cooldownS != want.cooldownS || after.noProgressTicks != want.noProgressTicks {
 		t.Errorf("after the recovery tick cooldown/streak = %d/%d, want %d/%d — the outage must not escalate the lane",
@@ -557,6 +568,26 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	}
 	if after.consecutiveFailures != 0 {
 		t.Errorf("consecutive_failures after a successful recovery tick = %d, want 0 (SCHED-GAP-137a reset)", after.consecutiveFailures)
+	}
+}
+
+// gap170PollCounterReset polls the lane's row until the asynchronous
+// consecutive_failures reset lands (counter back to 0), so the acceptance read
+// in TestGatewayHealthGate_Recovery synchronizes with the completion goroutine
+// instead of racing it. Bounded by design: if the reset never lands this
+// returns anyway after the deadline and the caller's assertion fails naming
+// the last-observed value — a poll must not mask a real reset regression.
+func gap170PollCounterReset(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		if gap146ReadState(t, db, name).consecutiveFailures == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -656,15 +687,15 @@ func gap170LogCount(buf *admitLogBuf, substr string) int {
 // gate is package state, so a test that needs a FRESH PROCESS has to save the
 // state it found, clear it, and restore it afterwards — the same seam the
 // load-gate tests use when they swap the package-level sampler.
+//
+// t_cadba34c: the per-endpoint verdicts live in one map keyed by endpoint
+// baseURL (the daemon's own endpoint included), so the snapshot carries the map
+// wholesale.
 type gap170GateState struct {
-	client           *GatewayClient
-	healthy          bool
-	probedAt         time.Time
-	lastErr          string
-	events           *EventLogger
-	episodeActive    bool
-	episodeDeferrals uint64
-	wired            bool
+	client    *GatewayClient
+	endpoints map[string]*gatewayHealthEndpointVerdict
+	events    *EventLogger
+	wired     bool
 }
 
 // gap170BootState clears the gate to its boot values (no client, cold cache,
@@ -682,34 +713,22 @@ func gap170BootState(t *testing.T) {
 	g := gatewayHealth
 	g.mu.Lock()
 	saved := gap170GateState{
-		client:           g.client,
-		healthy:          g.healthy,
-		probedAt:         g.probedAt,
-		lastErr:          g.lastErr,
-		events:           g.events,
-		episodeActive:    g.episodeActive,
-		episodeDeferrals: g.episodeDeferrals,
-		wired:            g.wired,
+		client:    g.client,
+		endpoints: g.endpoints,
+		events:    g.events,
+		wired:     g.wired,
 	}
 	g.client = nil
-	g.healthy = false
-	g.probedAt = time.Time{}
-	g.lastErr = ""
+	g.endpoints = nil
 	g.events = nil
-	g.episodeActive = false
-	g.episodeDeferrals = 0
 	g.wired = false
 	g.mu.Unlock()
 
 	t.Cleanup(func() {
 		g.mu.Lock()
 		g.client = saved.client
-		g.healthy = saved.healthy
-		g.probedAt = saved.probedAt
-		g.lastErr = saved.lastErr
+		g.endpoints = saved.endpoints
 		g.events = saved.events
-		g.episodeActive = saved.episodeActive
-		g.episodeDeferrals = saved.episodeDeferrals
 		g.wired = saved.wired
 		g.mu.Unlock()
 	})

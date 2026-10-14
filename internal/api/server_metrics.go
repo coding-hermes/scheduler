@@ -227,7 +227,8 @@ ORDER BY ns`, cutoff)
 	// by_outcome.committed without a presence check. SCHED-GAP-1674: the
 	// builder no-artifact guard's verdict is seeded too, so
 	// by_outcome["aborted:no_artifact"] reads without a presence check.
-	byOutcome := map[string]int{"committed": 0, "dry_run": 0, "failed": 0, "timeout": 0, "aborted:no_artifact": 0}
+	// SCHED-GAP-1655: the zero-tool-call verdict is seeded the same way.
+	byOutcome := map[string]int{"committed": 0, "dry_run": 0, "failed": 0, "timeout": 0, "aborted:no_artifact": 0, "no_work": 0}
 	orows, err := s.db.QueryContext(ctx, `
 SELECT outcome, COUNT(*)
 FROM ticks

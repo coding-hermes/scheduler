@@ -219,6 +219,27 @@ func markTickWaveRecovery(ctx context.Context, db *sql.DB, tickID string) error 
 	return nil
 }
 
+// workerBranchesFromManifests collects the distinct branch names across the
+// given manifests (SCHED-GAP-1699 board-guard input), in first-seen order,
+// skipping empty ones.
+func workerBranchesFromManifests(manifests []*WaveManifest) []string {
+	seen := map[string]bool{}
+	var branches []string
+	for _, m := range manifests {
+		if m == nil {
+			continue
+		}
+		for _, w := range m.Workers {
+			if w.Branch == "" || seen[w.Branch] {
+				continue
+			}
+			seen[w.Branch] = true
+			branches = append(branches, w.Branch)
+		}
+	}
+	return branches
+}
+
 // waveRecoveryPreamble renders the recover-before-dispatch preamble (S12
 // §8.2 item 5): a short fenced block listing the unfinished worker set from
 // the manifest(s) and instructing the foreman to recover that work FIRST —
@@ -246,6 +267,13 @@ func waveRecoveryPreamble(manifests []*WaveManifest) string {
 	b.WriteString("1. For each worker below: re-run the gates on its branch tip.\n")
 	b.WriteString("   - green → merge into main (serially, one merge at a time, gates re-run on the merged tree).\n")
 	b.WriteString("   - red   → dispatch a fixup worker in a FRESH worktree (never hand-resolve).\n")
+	b.WriteString("   STALE-BASE RULE (SCHED-GAP-1609): before each merge, verify the branch base against the CURRENT\n")
+	b.WriteString("   main HEAD (git merge-base main <branch> vs git rev-parse main). If main advanced past the\n")
+	b.WriteString("   branch's base (STALE), SKIP the merge — rebase the branch onto main and re-run the gates\n")
+	b.WriteString("   first; a branch cut before an earlier same-wave merge silently reverts that merge.\n")
+	b.WriteString("   BOARD RULE (SCHED-GAP-1699): a branch whose diff mixes .coding-hermes/board/ paths\n")
+	b.WriteString("   with code paths is REFUSED — never merge it; split the changeset first\n")
+	b.WriteString("   (board-only truthkeeping OR code-only). Check with scheduler.EnsureNoBoardTouchingDiff.\n")
 	b.WriteString("2. Board truth: every affected task complete, or failed WITH a reason.\n")
 	b.WriteString("3. Remove worktrees of merged branches; delete merged branches; preserve unmerged\n")
 	b.WriteString("   branches as evidence. Close the recovered manifest(s): set finished_at when done.\n")

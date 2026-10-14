@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/agentlog"
 	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/blocks"
+	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
@@ -31,6 +33,23 @@ import (
 	"github.com/coding-hermes/scheduler/internal/sync"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
+
+// BulkSimBeat is RunBulkSim's ticker period: at most 8 ticks fire per beat.
+const BulkSimBeat = 500 * time.Millisecond
+
+// BulkSimWindow derives the --sim-count context timeout from the requested
+// tick count (SCHED-GAP-1629): ceil(count/8) beats of 500ms plus a fixed
+// headroom for fixture load and the 1s simulated-completion sleep. Beats are
+// consumed on ANY clock — under SCHEDULER_TIME_MODE=sim they cost ~0 real
+// time, on the real clock they are wall time.
+func BulkSimWindow(count int) time.Duration {
+	beats := (count + 7) / 8
+	if beats < 1 {
+		beats = 1
+	}
+	const bulkHeadroom = 10 * time.Second
+	return time.Duration(beats)*BulkSimBeat + bulkHeadroom
+}
 
 func main() {
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
@@ -60,6 +79,16 @@ func main() {
 	// fails the tick as "stalled". Effective POST deadline is
 	// min(--gateway-response-timeout, --tick-timeout).
 	gatewayResponseTimeout := flag.Duration("gateway-response-timeout", 30*time.Minute, "Per-turn deadline for a gateway /v1/responses POST; a stalled POST fails the tick before --tick-timeout (SCHED-GAP-117; 0 disables)")
+	// SCHED-GAP-1681: bounded transient-gateway retry count (the GAP-080
+	// loop). A transient failure (HTTP 5xx, refused dial, SSE stream ended
+	// without a terminal event, body read/unmarshal) is retried up to N
+	// times on the SAME model/provider pair with the SAME session key
+	// (X-Hermes-Session-Key: the tick id), so the gateway re-attaches the
+	// session and the agent resumes where the stream died. Every POST is
+	// counted on gateway_trace.Attempts and the new ticks.attempts column.
+	// 0 = single attempt (retry loop off); negative is ignored at the
+	// setter. Default 3 = the pre-1681 hardcoded value.
+	gatewayTransientRetries := flag.Int("gateway-transient-retries", 3, "Bounded transient-gateway retry count for the GAP-080 loop (SCHED-GAP-1681): a 5xx/refused-dial/SSE-drop is retried up to N times on the same model/provider pair with the SAME session key (session continuation); every POST lands on gateway_trace.Attempts and ticks.attempts. 0 = single attempt (retry off); default 3. Env: SCHEDULER_GATEWAY_TRANSIENT_RETRIES")
 	// ADV-R08/G3: slot-wait patience — how long a spawn waits for a free
 	// slot before the project is dropped (the drop emits a MEDIUM
 	// slot_pool event). Default keeps the historical hardcoded 5m window.
@@ -67,7 +96,32 @@ func main() {
 	tasksPacing := flag.Duration("tasks-pacing", 60*time.Second, "Minimum post-tick spacing before a tasks-mode project re-admits, +up to 20% jitter (SCHED-GAP-136); 0 = disabled. Library default 0; the fleet binary ships 60s. Composes with (never replaces) failure backoff")
 	loadGateThreshold := flag.Float64("load-gate-threshold", 0, "Defer new spawns while the 1-minute load average is at or above this value (SCHED-GAP-125); 0 = disabled. Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'")
 	featurePruneWeeks := flag.Int("feature-prune-weeks", 8, "Prune window (weeks) for the dead-feature reaper (SCHED-GAP-131): /api/v1/features/prune-candidates flags mechanisms whose last proven use is older than this (or never used). Flag only — nothing is auto-deleted")
+	// REMOTE-003 (§2): peer freshness window — a peer whose last heartbeat is
+	// older than this renders stale=true (never "down") on GET /api/v1/peers.
+	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
+	boardStasisGate := flag.Bool("board-stasis-gate", true, "SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (mtime+size fingerprint; tasks-mode and reporter-class lanes are exempt, an unreadable board fails open, no cooldown is consumed, and an operator ForceEvaluate bypasses it for one pass). true = armed (fleet default); false = pre-gate scheduling, byte-identical. Env: SCHEDULER_BOARD_STASIS_GATE")
+	// SCHED-GAP-1707: session-silence watchdog grace. A gateway tick whose
+	// Hermes-state telemetry shows no token delta and no tool activity for
+	// this long is cancelled early with failure_reason=session_silent and
+	// the quiet duration on ticks.session_silence_s. 0 = off (the default —
+	// the watchdog only arms when an operator says so). It never kills a
+	// producing session; cooldowns and the "no timeout backoff" chain are
+	// untouched.
+	sessionSilenceGrace := flag.Duration("session-silence-grace", 0, "SCHED-GAP-1707: terminate a gateway tick whose session shows no token delta and no tool activity for this long (failure_reason=session_silent, quiet duration on the tick row); 0 = disabled (default). Never kills a producing session. Env: SCHEDULER_SESSION_SILENCE_GRACE")
+	// SCHED-GAP-1698: poll-loop idle guard. A gateway tick whose session's
+	// tool activity is a confirmed sleep-poll cycle — sleep-led or
+	// read-only status probes at a fixed cadence in two consecutive
+	// 5-minute strides, zero advancement, 4 consecutive guard passes — is
+	// cancelled with failure_reason=sleep_poll. The value is the per-stride
+	// tool-call minimum; the built-in floor is 6 (values 1-5 clamp up), 0 =
+	// off (the default). It never kills a producing session: any non-poll
+	// call in a stride, any gap past 10 minutes, or any unreadable telemetry
+	// spares the tick; cooldowns and the no-timeout-backoff chain are
+	// untouched.
+	sessionPollLoopMinTicks := flag.Int("session-poll-loop-min-ticks", 0, "SCHED-GAP-1698: terminate a gateway tick whose session shows a confirmed sleep-poll tool cycle (sleep-led/read-only status probes at a fixed cadence, zero advancement) — this many tool calls per 5-minute stride, 4 consecutive passes (failure_reason=sleep_poll); 0 = disabled (default), values 1-5 clamp to the built-in floor of 6. Never kills a producing session. Env: SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS")
+	// SCHED-GAP-1594: per-tick git push behind a flag — web-primary updates.
+	disableTickPush := flag.Bool("disable-tick-push", false, "SCHED-GAP-1594: skip the per-tick git push at tick exit (SCHED-GAP-1694's push-at-exit); ticks only update the web dashboard (tick rows, /api/v1/status, /health) and the fleet-strand-push cron is the only remaining pusher. Default false = backward compat (per-tick push stays on). Env: SCHEDULER_DISABLE_TICK_PUSH")
 	meteredBudgetEnabled := false
 	testVerifyFlag := flag.Int("test-verify", 0, "Run N-cycle correctness verification and exit")
 	verifyBoardPath := flag.String("verify-board", "", "Check board closure-evidence violations (SCHED-GAP-085): exit 0 when no closed row is missing all of reasoning/commit_hash/worker_summary, exit 1 when any")
@@ -81,7 +135,7 @@ func main() {
 	simulate := flag.Bool("simulate", false, "Run in dry-run/simulation mode (no real spawning)")
 	simSuccess := flag.Float64("sim-success", 0.85, "Simulated success rate (0.0-1.0)")
 	simIdle := flag.Float64("sim-idle", 0.0, "Fraction of completed sim ticks with zero commits (0-1) — exercises adaptive-cooldown slow-down in dry-runs")
-	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop)")
+	simCount := flag.Int("sim-count", 0, "Generate N simulated ticks and exit (0 = run loop). NOTE: with the default real clock each 500ms ticker fires at most 8 ticks, so --sim-count N needs ~ceil(N/8)*0.5s + ~2s headroom; the 120s context window supports ~1900 ticks. On the real clock set SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 (with --simulate) or keep --sim-count low")
 	gatewayURL := flag.String("gateway-url", "http://127.0.0.1:8642", "Hermes gateway API URL (empty = use exec.Command)")
 	gatewayKey := flag.String("gateway-key", os.Getenv("API_SERVER_KEY"), "Hermes gateway API key")
 	modelRatesFile := flag.String("model-rates-file", os.Getenv("SCHEDULER_MODEL_RATES_FILE"), "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild")
@@ -246,6 +300,60 @@ func main() {
 			log.Printf("WARN: SCHEDULER_SPAWN_MEM_LIMIT_MB=%q invalid — limit stays %d MiB", v, *spawnMemLimitMB)
 		}
 	}
+	// SCHED-GAP-1678: board-stasis spawn-gate env override — same pattern. A
+	// parseable bool wins (including an explicit false, which restores the
+	// pre-gate scheduling behavior); an invalid value WARNs and keeps the
+	// current value.
+	if v := os.Getenv("SCHEDULER_BOARD_STASIS_GATE"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			*boardStasisGate = b
+		} else {
+			log.Printf("WARN: SCHEDULER_BOARD_STASIS_GATE=%q invalid — gate stays %v", v, *boardStasisGate)
+		}
+	}
+	// SCHED-GAP-1594: per-tick push env override — same pattern. A parseable
+	// bool wins (including an explicit false, which keeps the per-tick push
+	// on); an invalid value WARNs and keeps the current value.
+	if v := os.Getenv("SCHEDULER_DISABLE_TICK_PUSH"); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			*disableTickPush = b
+		} else {
+			log.Printf("WARN: SCHEDULER_DISABLE_TICK_PUSH=%q invalid — tick-push stays disabled=%v", v, *disableTickPush)
+		}
+	}
+	// SCHED-GAP-1707: session-silence watchdog grace env override — same
+	// pattern. A positive parseable duration arms the watchdog; 0 keeps it
+	// off (the library default). Invalid values WARN and keep the current
+	// value (the watchdog must never silently change).
+	if v := os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			*sessionSilenceGrace = d
+		} else {
+			log.Printf("WARN: SCHEDULER_SESSION_SILENCE_GRACE=%q invalid — watchdog stays %v", v, *sessionSilenceGrace)
+		}
+	}
+	// SCHED-GAP-1698: poll-loop idle guard env override — same pattern. A
+	// value >= 1 arms the guard (1-5 clamp up to the built-in floor of 6 at
+	// the setter); 0 keeps it off (the library default). Invalid values
+	// WARN and keep the current value.
+	if v := os.Getenv("SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			*sessionPollLoopMinTicks = n
+		} else {
+			log.Printf("WARN: SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS=%q invalid — poll-loop guard stays %d", v, *sessionPollLoopMinTicks)
+		}
+	}
+	// SCHED-GAP-1681: transient-retry count env override — same pattern. A
+	// parseable non-negative int wins (0 = single attempt, retry off);
+	// negative/invalid WARN and keep the current value (the retry count
+	// must never silently change).
+	if v := os.Getenv("SCHEDULER_GATEWAY_TRANSIENT_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			*gatewayTransientRetries = n
+		} else {
+			log.Printf("WARN: SCHEDULER_GATEWAY_TRANSIENT_RETRIES=%q invalid — transient retries stay %d", v, *gatewayTransientRetries)
+		}
+	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			*autoDisableRate = f
@@ -286,11 +394,13 @@ func main() {
 			*minInterval, *maxInterval,
 			*numLevels, *weightBudget, *maxConcurrent, *namespaceMode,
 			*tickTimeout, *gatewayResponseTimeout, *slotPatience, *tasksPacing,
+			*gatewayTransientRetries,
 			*gatewayURL, *gatewayKey, *foremanHome, *noExecFallback,
 			*duckbrainNS, *duckbrainURL,
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
-			*loadGateThreshold, *modelRatesFile)
+			*loadGateThreshold, *modelRatesFile,
+			*sessionSilenceGrace, *sessionPollLoopMinTicks)
 		return
 	}
 
@@ -428,6 +538,31 @@ func main() {
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
 
+	// ── REMOTE-003 (§1): the scheduler identity ──
+	// Resolved ONCE at boot: SCHEDULER_ID env > [scheduler] id TOML > the
+	// short hostname. Assigned to the daemon for its whole lifetime (stable
+	// across restarts — never derived per-tick), stamped on every
+	// projects/ticks/events row it writes, and the id peers address it by.
+	// There is deliberately no CLI flag: identity is per-deployment.
+	schedID := strings.TrimSpace(os.Getenv("SCHEDULER_ID"))
+	if schedID == "" && *configFile != "" {
+		if rootCfg, cfgErr := config.LoadRootConfig(*configFile); cfgErr == nil {
+			schedID = strings.TrimSpace(rootCfg.Scheduler.ID)
+		}
+	}
+	if schedID == "" {
+		schedID = database.ResolveDefaultSchedulerID()
+	}
+	database.SetSchedulerID(schedID)
+	log.Printf("SCHEDULER: id=%s", schedID)
+	// Backfill (spec §1: "backfilled with the local id at first boot"):
+	// claim every pre-identity row ('' scheduler_id) in projects/ticks/
+	// events for THIS scheduler — the rows live in its own database, so the
+	// ownership law (§4) makes it their writer of record.
+	if bfErr := database.BackfillSchedulerID(context.Background(), db, schedID); bfErr != nil {
+		log.Printf("WARN: scheduler_id backfill: %v", bfErr)
+	}
+
 	// Declarative fleet seeding: if a fleet.toml was supplied, load and
 	// apply it before any other subsystem touches the DB. Already-existing
 	// rows are skipped (idempotent startup; create-only, never overwrite).
@@ -442,6 +577,55 @@ func main() {
 		log.Printf("Loaded %d projects, %d namespaces from %s",
 			len(cfg.Projects), len(cfg.Namespaces), *configFile)
 	}
+	usagePoolsConfig := config.UsagePoolsConfig{}
+	if *configFile != "" {
+		rootCfg, cfgErr := config.LoadRootConfig(*configFile)
+		if cfgErr != nil {
+			log.Fatalf("FATAL: load usage-pool config: %v", cfgErr)
+		}
+		usagePoolsConfig = rootCfg.UsagePools
+	}
+	localUsagePoolID := strings.TrimSpace(usagePoolsConfig.LocalPoolID)
+	if localUsagePoolID == "" {
+		localUsagePoolID = "local:" + schedID
+	}
+	if usagePoolsConfig.Enabled {
+		if len(usagePoolsConfig.Pools) == 0 {
+			log.Fatalf("FATAL: usage_pools.enabled requires at least one configured pool")
+		}
+		pools := make([]database.UsagePool, 0, len(usagePoolsConfig.Pools))
+		localPoolConfigured := false
+		for _, pool := range usagePoolsConfig.Pools {
+			enabled := pool.Enabled == nil || *pool.Enabled
+			if pool.ID == localUsagePoolID && pool.Kind == "local" && enabled {
+				localPoolConfigured = true
+			}
+			pools = append(pools, database.UsagePool{ID: pool.ID, Kind: pool.Kind, ActiveLimit: pool.ActiveLimit, Enabled: enabled})
+		}
+		if !localPoolConfigured {
+			log.Fatalf("FATAL: usage_pools requires an enabled local pool %q", localUsagePoolID)
+		}
+		memberships := make(map[string][]string, len(usagePoolsConfig.Memberships))
+		for _, membership := range usagePoolsConfig.Memberships {
+			if _, exists := memberships[membership.Lane]; exists {
+				log.Fatalf("FATAL: duplicate usage-pool membership for lane %q", membership.Lane)
+			}
+			memberships[membership.Lane] = membership.PoolIDs
+		}
+		if err := database.ConfigureUsagePools(context.Background(), db, pools, memberships); err != nil {
+			log.Fatalf("FATAL: configure usage pools: %v", err)
+		}
+		if recovered, err := database.RecoverUsagePoolLeases(context.Background(), db); err != nil {
+			log.Fatalf("FATAL: recover usage-pool leases: %v", err)
+		} else if recovered > 0 {
+			log.Printf("USAGE_POOL: startup recovery released %d terminal leases", recovered)
+		}
+	}
+
+	// SCHED-GAP-1696: boot-time admission-law correction. A lane whose
+	// LANE-LEVEL admission_mode contradicts its class is corrected to the class
+	// value; a clean fleet logs nothing.
+	applyAdmissionLaw(context.Background(), db)
 
 	// ── Create the evaluation loop.
 	// ADV-R09/G8: price-sticker refresh path. Applied BEFORE the loop is
@@ -457,6 +641,10 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
+	if usagePoolsConfig.Enabled {
+		loop.SetUsagePoolPolicy(scheduler.UsagePoolPolicy{Enabled: true, ObserveOnly: usagePoolsConfig.ObserveOnly, LocalPoolID: localUsagePoolID})
+		log.Printf("USAGE_POOL: enabled observe_only=%t local_pool=%s authority_db=%s", usagePoolsConfig.ObserveOnly, localUsagePoolID, *dbPath)
+	}
 	// SCHED-GAP-169: install the process clock (wall clock by default) and
 	// propagate it to every component the loop owns — spawner, slot pool,
 	// lifecycle tracker, sim spawner. The API and MCP servers are constructed
@@ -470,6 +658,11 @@ func main() {
 	// carries the env override resolved above; 0 disables the per-turn
 	// deadline (POST runs on the tick deadline alone, pre-117 behavior).
 	loop.SetGatewayResponseTimeout(*gatewayResponseTimeout)
+	// SCHED-GAP-1681: apply the bounded transient-retry count. The flag var
+	// already carries the env + TOML overrides resolved above; negative
+	// values are ignored by the spawner's setter.
+	loop.SetGatewayTransientRetries(*gatewayTransientRetries)
+	log.Printf("GATEWAY RETRIES: transient_retry_count=%d (SCHED-GAP-1681; 0 = single attempt)", *gatewayTransientRetries)
 	// ADV-R08/G3: apply the configured slot-wait patience; the drop emits
 	// a MEDIUM slot_pool event. The flag var already carries the env
 	// override resolved above; <= 0 keeps the 5m default in the pool.
@@ -493,6 +686,41 @@ func main() {
 	// [scheduler] spawn_mem_limit_mb applies below only when the flag sat
 	// at its 0 default (same precedence chain as the load gate).
 	scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
+	// SCHED-GAP-1707: arm the session-silence watchdog (0 = off, the
+	// default — embedding tests and unit suites keep byte-identical
+	// behavior). The flag var carries the env override; the TOML
+	// [scheduler] session_silence_grace applies later in the config block
+	// below only when the flag sat at its 0 default.
+	scheduler.SetSessionSilenceGrace(*sessionSilenceGrace)
+	// SCHED-GAP-1698: arm the poll-loop idle guard (0 = off, the default —
+	// embedding tests and unit suites keep byte-identical behavior). The
+	// flag var carries the env override; the TOML [scheduler]
+	// session_poll_loop_min_ticks applies later in the config block below
+	// only when the flag sat at its 0 default.
+	scheduler.SetSessionPollLoopMinTicks(*sessionPollLoopMinTicks)
+	// SCHED-GAP-1678: arm the board-stasis spawn gate. The LOOP-level gate is
+	// constructed DISABLED on purpose (see board_stasis.go) so embedders and
+	// every existing unit test keep byte-identical selection until someone
+	// arms it; the daemon arms it here from the flag/env layer. A tick on a
+	// cooldown-mode BUILDER lane whose board has not moved since its previous
+	// completed tick is excluded at selection time (no LLM tick, no tick row,
+	// no cooldown consumed) and counted under board_unchanged on
+	// /api/v1/status. Passing --board-stasis-gate=false (or
+	// SCHEDULER_BOARD_STASIS_GATE=false) restores the pre-gate behavior.
+	loop.SetBoardStasisGateEnabled(*boardStasisGate)
+	if *boardStasisGate {
+		log.Printf("BOARD-STASIS: gate armed (SCHED-GAP-1678) — stale-board builder lanes will not spawn")
+	} else {
+		log.Printf("BOARD-STASIS: gate disabled (SCHED-GAP-1678) — pre-gate scheduling")
+	}
+	// SCHED-GAP-1594: per-tick push behind a flag. Default false keeps the
+	// SCHED-GAP-1694 push-at-exit behavior (backward compat). When enabled,
+	// ticks only update the web dashboard — no git push at tick exit — and
+	// the fleet-strand-push cron is the only remaining pusher.
+	loop.SetTickPushDisabled(*disableTickPush)
+	if *disableTickPush {
+		log.Printf("TICK-PUSH: disabled (SCHED-GAP-1594) — web-primary updates; per-tick git push skipped")
+	}
 	loop.SetForemanHome(*foremanHome)
 	loop.SetNoExecFallback(*noExecFallback)
 	if *simulate {
@@ -507,6 +735,110 @@ func main() {
 			loop.SetBlackoutWindows(rootCfg.Scheduler.BlackoutWindows)
 			log.Printf("Blackout: loaded %d windows", len(rootCfg.Scheduler.BlackoutWindows))
 		}
+	}
+
+	// ── REMOTE-004 (§3 visibility flow): the Crier bus ──
+	// Config resolution follows the REMOTE-003 identity precedent: TOML
+	// [crier] is the base layer, CRIER_* env vars override (env > TOML),
+	// and there is deliberately NO CLI flag layer — the token is a
+	// credential and credentials never live in argv (GAP-038). Defaults:
+	// url http://127.0.0.1:8767, enabled=false (off is a pure no-op — no
+	// connection is ever opened), subscriber topics sched.tick.>.
+	crierCfg := config.CrierConfig{}
+	if *configFile != "" {
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			crierCfg = rootCfg.Crier
+		}
+	}
+	if v := os.Getenv("CRIER_URL"); v != "" {
+		crierCfg.URL = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("CRIER_AUTH_TOKEN"); v != "" {
+		crierCfg.Token = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("CRIER_ENABLED"); v != "" {
+		if b, perr := strconv.ParseBool(strings.TrimSpace(v)); perr == nil {
+			crierCfg.Enabled = b
+		} else {
+			log.Printf("WARN: CRIER_ENABLED=%q not a bool — ignoring", v)
+		}
+	}
+	crierClient := bus.NewClient(crierCfg.Enabled, crierCfg.URL, crierCfg.Token, schedID)
+	if len(crierCfg.Topics) > 0 {
+		crierClient.SetSubscribeTopics(crierCfg.Topics)
+	}
+	loop.SetSchedulerBus(scheduler.NewSchedulerBus(crierClient))
+	// SCHED-GAP-1710: arm the scheduler's own bus inbox so a tick dispatched
+	// to a named agent can receive the correlated ANSWER. Optional by design —
+	// without CRIER_AGENT_ID + CRIER_AGENT_KEY_FILE the receive leg stays
+	// unarmed, and a lane that declares a remote target then fails loudly at
+	// dispatch time rather than handing out work whose answer could never be
+	// matched. The failure is reported here, at boot, so it is not a surprise
+	// in the tick log.
+	if err := scheduler.SetDispatchIdentityFromEnv(crierClient); err != nil {
+		log.Printf("CRIER: inbox identity NOT armed — %v (remote dispatch will refuse until this is fixed)", err)
+	} else if id := crierClient.InboxAgentID(); id != "" {
+		log.Printf("CRIER: inbox identity armed — agent=%s (dispatch replies are correlated here)", id)
+	}
+	if crierClient.Enabled() {
+		log.Printf("CRIER: bus enabled — url=%s topic=%s subscribe=%v",
+			crierCfg.URL, crierClient.Topic(), strings.Join(crierClient.Topics(), ","))
+	} else {
+		log.Printf("CRIER: bus disabled (no-op)")
+	}
+	// The subscriber runs one long-lived connection per topic pattern.
+	// The autonomy law covers it too: a down relay is a backoff-and-retry
+	// loop inside Run, never an error; a disabled client never dials.
+	crierSubscriber := bus.NewSubscriber(crierClient)
+	if crierClient.Enabled() {
+		go crierSubscriber.Run(context.Background())
+		// REMOTE-004 deliverable 3: ingest = store. Each valid,
+		// deduped peer event is persisted as a local bus audit row
+		// (component "bus") so it is visible on /api/v1/events — the
+		// merged/federated view and the durable replay dedupe remain
+		// REMOTE-006's job (§4: foreign rows are read-only, displayed,
+		// never mutated). A failed insert costs a log line, never the
+		// receive path (autonomy law). The goroutine exits when Close
+		// closes the channel during shutdown.
+		// REMOTE-006 deliverable 1: the durable idempotent ingest. Each
+		// valid, deduped peer event is persisted into remote_events keyed by
+		// (scheduler_id, event_id) — a duplicate is a COUNTED dedupe drop,
+		// never an error. The bus audit row (component "bus") is kept so the
+		// event stream stays visible; the durable store is what replay and
+		// the Remote section read.
+		remoteIngest := bus.NewIngestStore(db)
+		go func() {
+			for ev := range crierSubscriber.Events() {
+				res, err := remoteIngest.IngestEvent(context.Background(), ev, database.RemoteSourceLive)
+				if err != nil {
+					continue // logged inside the store wrapper (autonomy law)
+				}
+				_ = res // Stored / DedupeDrop are surfaced via remote_events_stats
+				details, merr := json.Marshal(map[string]string{
+					"scheduler_id": ev.SchedulerID,
+					"event_id":     ev.EventID,
+					"kind":         ev.Kind,
+					"project":      ev.Project,
+					"tick_id":      ev.TickID,
+					"status":       ev.Status,
+					"topic":        ev.Topic,
+					"pattern":      ev.Pattern,
+					"ts":           ev.TS,
+				})
+				if merr != nil {
+					details = []byte(`{}`)
+				}
+				if err := database.LogEvent(context.Background(), db, &database.Event{
+					Severity:  database.SeverityLow,
+					Component: "bus",
+					Message: fmt.Sprintf("peer %s: %s/%s project=%s tick=%s status=%s",
+						ev.Kind, ev.SchedulerID, ev.EventID, ev.Project, ev.TickID, ev.Status),
+					Details: string(details),
+				}); err != nil {
+					log.Printf("CRIER: peer event audit dropped: %v", err)
+				}
+			}
+		}()
 	}
 
 	// SCHED-GAP-018: auto-disable + failure-rate window. Apply TOML values
@@ -545,6 +877,18 @@ func main() {
 					*gatewayResponseTimeout = d
 				} else {
 					log.Printf("WARN: scheduler.gateway_response_timeout=%q invalid — using %v", rootCfg.Scheduler.GatewayResponseTimeout, *gatewayResponseTimeout)
+				}
+			}
+			// SCHED-GAP-1681: TOML layer for the transient-retry count —
+			// same default-guard pattern (applies only while the flag sits
+			// at its 3 default, so CLI and env keep precedence). A
+			// non-negative int wins (0 = single attempt); negative/invalid
+			// WARN and keep the default.
+			if rootCfg.Scheduler.GatewayTransientRetries != nil && *gatewayTransientRetries == 3 {
+				if n := *rootCfg.Scheduler.GatewayTransientRetries; n >= 0 {
+					*gatewayTransientRetries = n
+				} else {
+					log.Printf("WARN: scheduler.gateway_transient_retries=%d invalid — using %d", n, *gatewayTransientRetries)
 				}
 			}
 		}
@@ -643,6 +987,46 @@ func main() {
 				scheduler.SetSpawnMemLimitMB(*spawnMemLimitMB)
 				log.Printf("ADV-R11: spawn mem limit enabled from config — %d MiB RLIMIT_AS per spawned process", *spawnMemLimitMB)
 			}
+			// SCHED-GAP-1707: TOML layer for the session-silence watchdog
+			// grace — same default-guard pattern (only when the flag sits
+			// at its 0 default, so CLI and env keep precedence). Positive
+			// values arm the watchdog; a TOML 0 keeps it off.
+			// SCHED-GAP-220 re-arm rule (the tasks_pacing lesson): the
+			// SetSessionSilenceGrace wiring call ran BEFORE this TOML
+			// block, so a TOML-only grace was silently DEAD — the config
+			// snapshot reported the TOML number while the running
+			// watchdog stayed off. Re-arm the setter here.
+			if rootCfg.Scheduler.SessionSilenceGrace != "" && *sessionSilenceGrace == 0 {
+				if d, derr := time.ParseDuration(rootCfg.Scheduler.SessionSilenceGrace); derr == nil && d > 0 {
+					*sessionSilenceGrace = d
+					scheduler.SetSessionSilenceGrace(*sessionSilenceGrace)
+					log.Printf("SESSION-SILENCE: watchdog armed from config — grace %v (0 = off; never kills a producing session)", d)
+				} else {
+					log.Printf("WARN: scheduler.session_silence_grace=%q invalid — using %v", rootCfg.Scheduler.SessionSilenceGrace, *sessionSilenceGrace)
+				}
+			}
+			// SCHED-GAP-1698: TOML layer for the poll-loop idle guard —
+			// same default-guard + re-arm pattern (the setter call ran
+			// before this block). A value >= 1 arms the guard (1-5 clamp
+			// up to the built-in floor of 6 at the setter); a TOML 0 keeps
+			// it off.
+			if rootCfg.Scheduler.SessionPollLoopMinTicks != 0 && *sessionPollLoopMinTicks == 0 {
+				if n := rootCfg.Scheduler.SessionPollLoopMinTicks; n > 0 {
+					*sessionPollLoopMinTicks = n
+					scheduler.SetSessionPollLoopMinTicks(*sessionPollLoopMinTicks)
+					log.Printf("POLL-LOOP: guard armed from config — %d tool calls per 5-minute stride (0 = off; never kills a producing session)", n)
+				} else {
+					log.Printf("WARN: scheduler.session_poll_loop_min_ticks=%d invalid — using %d", rootCfg.Scheduler.SessionPollLoopMinTicks, *sessionPollLoopMinTicks)
+				}
+			}
+		}
+	}
+	// REMOTE-003 (§2): env layer for the peer freshness window (same shape
+	// as the flag's env-echo convention; the flag's default IS the named
+	// database constant, so an env-set path surfaces in the resolved value).
+	if v := os.Getenv("SCHEDULER_PEER_FRESHNESS_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && *peerWindow == database.PeerFreshnessWindowDefault {
+			*peerWindow = n
 		}
 	}
 	// SCHED-GAP-127: arm the budget reader only after every config layer has
@@ -715,9 +1099,22 @@ func main() {
 
 	// Simulation count mode: generate N ticks and exit.
 	if *simCount > 0 {
-		simCtx, simCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// SCHED-GAP-1629: the window derives from the requested tick count.
+		// RunBulkSim fires at most 8 ticks per 500ms ticker beat
+		// (min(8, len(projects)) per fire), so ceil(count/8) beats are
+		// needed on ANY clock — a real-clock run simply burns them as wall
+		// time. ceil(count/8)*500ms + fixed headroom (fixture load + the
+		// 1s simulated-completion sleep) replaces the old flat 30s window,
+		// which FATALed "context deadline exceeded" for --sim-count 2000
+		// (~480-tick ceiling) even though the run itself was healthy.
+		window := BulkSimWindow(*simCount)
+		simCtx, simCancel := context.WithTimeout(context.Background(), window)
 		defer simCancel()
 		if err := loop.RunBulkSim(simCtx, *simCount); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				log.Fatalf("FATAL: simulation: %v — %ds window supports ~%d ticks (8/fire, 500ms each); use SCHEDULER_TIME_MODE=sim SCHEDULER_TIME_SCALE=1000 or a lower --sim-count",
+					err, int(window.Seconds()), 8*int(window/BulkSimBeat))
+			}
 			log.Fatalf("FATAL: simulation: %v", err)
 		}
 		log.Printf("SIM: generated %d ticks", *simCount)
@@ -759,6 +1156,9 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// REMOTE-003 (§2): the peer freshness window for the /api/v1/peers
+	// surfaces (rendering law: stale + last_contact, never "down").
+	apiServer.SetPeerFreshnessWindow(*peerWindow)
 	// SCHED-GAP-131: the dead-feature reaper's prune window (weeks).
 	apiServer.SetFeaturePruneWeeks(*featurePruneWeeks)
 	// SCHED-GAP-1602: arm the operator-credential gate. Token mode wins when
@@ -767,11 +1167,39 @@ func main() {
 	// mutating route answers 503 until the operator configures one. Reads
 	// are never gated.
 	apiServer.SetAuthConfig(api.ResolveAuthConfig(operatorToken, operatorUser, operatorPassword))
+	// REMOTE-013 (federation-query-spec §4): arm the per-caller READ policy
+	// from the [federation] layer of the same root config. Empty/absent =
+	// the deny-all policy — every federation read on every transport is
+	// refused op_not_allowed until the operator publishes ops. Resolved
+	// once at boot, immutable after arming (the auth-config shape).
+	if rootFed, err := config.LoadRootConfig(*configFile); err == nil {
+		grants := make([]api.FederationReadGrant, 0, len(rootFed.Federation.Allow))
+		for caller, g := range rootFed.Federation.Allow {
+			grants = append(grants, api.FederationReadGrant{Caller: caller, Ops: g.Ops})
+		}
+		apiServer.SetFederationReadPolicy(api.ResolveFederationReadPolicy(grants))
+		log.Printf("FEDERATION: read policy armed (%d caller grant(s))", len(grants))
+	} else {
+		log.Printf("FEDERATION: read policy DENY-ALL ([federation] config not loadable: %v)", err)
+	}
 	// SCHED-GAP-1575-B: arm the heavy-read request deadline BEFORE the
 	// resolved-config snapshot below, so the deadline actually enforced and
 	// the value GET /api/v1/config reports are one number (both write
 	// api_read_timeout from the same resolved *apiReadTimeout).
 	apiServer.SetReadTimeout(*apiReadTimeout)
+
+	// ── REMOTE-009 (federation-query-spec §3, bus row): the query ANSWER side ──
+	// The responder subscribes to fed.query.<self> and answers every
+	// envelope through the SAME internal query entry point the HTTP
+	// surface uses (api.Server.FederationBusHandler → federationOps +
+	// the shared replay window), so a bus answer is the HTTP answer's
+	// sibling by construction. Autonomy law: a disabled bus yields a nil
+	// responder (a logged no-op — nothing ever dials); every runtime
+	// failure inside Run is log-and-retry; neither boot nor a tick can
+	// block on it. Closed with the subscriber at shutdown.
+	federationResponder := federationQueryResponder(crierClient, apiServer)
+	startFederationQueryResponder(federationResponder)
+
 	// Deploy blocks (groups/templates) JSONL store: default paths next to the
 	// DB when either flag is unset, overridable via --groups-file/--templates-file.
 	// Deploy blocks store: resolve default JSONL paths next to the DB when flags are empty.
@@ -803,19 +1231,24 @@ func main() {
 		MaxConcurrent:          *maxConcurrent,
 		TickTimeout:            tickTimeout.String(),
 		GatewayResponseTimeout: gatewayResponseTimeout.String(),
+		// SCHED-GAP-1681: the ARMED transient-retry count, so /api/v1/config
+		// reports the same number the retry loop enforces.
+		GatewayTransientRetries: *gatewayTransientRetries,
 		// SCHED-GAP-1575-B: the ARMED heavy-read request deadline, so
 		// /api/v1/config reports the same duration the handlers enforce.
-		APIReadTimeout:         apiReadTimeout.String(),
-		SlotPatience:           slotPatience.String(),
-		TasksPacing:            tasksPacing.String(),
-		LoadGateThreshold:      *loadGateThreshold,
-		SpawnMemLimitMB:        *spawnMemLimitMB,
-		ModelRatesFile:         *modelRatesFile,
-		NamespaceMode:          *namespaceMode,
-		AutoDisableFailureRate: *autoDisableRate,
-		AutoDisableWindow:      *autoDisableWindow,
-		AutoDisableMinTicks:    *autoDisableMinTicks,
-		FailureWindow:          *failureWindow,
+		APIReadTimeout:          apiReadTimeout.String(),
+		SlotPatience:            slotPatience.String(),
+		TasksPacing:             tasksPacing.String(),
+		LoadGateThreshold:       *loadGateThreshold,
+		SpawnMemLimitMB:         *spawnMemLimitMB,
+		SessionSilenceGrace:     sessionSilenceGrace.String(),
+		SessionPollLoopMinTicks: *sessionPollLoopMinTicks,
+		ModelRatesFile:          *modelRatesFile,
+		NamespaceMode:           *namespaceMode,
+		AutoDisableFailureRate:  *autoDisableRate,
+		AutoDisableWindow:       *autoDisableWindow,
+		AutoDisableMinTicks:     *autoDisableMinTicks,
+		FailureWindow:           *failureWindow,
 		Gateway: api.GatewayConfigSnapshot{
 			URL:            *gatewayURL,
 			Key:            *gatewayKey,
@@ -835,6 +1268,7 @@ func main() {
 			"last_error":           h.LastError,
 			"last_ok_at":           h.LastOKAt,
 			"spooled_pending":      h.Spooled,
+			"duplicates_skipped":   h.DuplicatesSkipped,
 			"base_url":             h.BaseURL,
 			"interval":             h.Interval,
 		}
@@ -849,6 +1283,17 @@ func main() {
 	// MCP serves the SAME JSONL block stores as the REST API (CTL-001):
 	// both transports read/write one groups.jsonl + templates.jsonl.
 	mcpServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// REMOTE-010: the fed_* MCP tools route through the ONE internal query
+	// entry point the HTTP surface runs (apiServer's
+	// FederationQueryHandler) — one replay window, one freshness clock,
+	// one audit row shared by every transport (federation-query-spec §3).
+	mcpServer.SetFederationQueryHandler(apiServer.FederationQueryHandler)
+	// REMOTE-012 (federation-query-spec §5): the aggregate's ask-side
+	// transport is the bus client's Query — the SAME library entry the
+	// CLI consumes. A disabled bus never dials: every aggregate leg then
+	// degrades to a named transport-level error row and the aggregate
+	// still answers (the §5 law — the primary answers with what it has).
+	apiServer.SetAggregateTransport(crierClient.Query)
 	// SCHED-GAP-174: /queue and /api/v1/queue must answer with ONE urgency.
 	// The dashboard ranks with the same calculator the API server builds from
 	// the resolved interval range (SetResolvedConfig →
@@ -861,6 +1306,15 @@ func main() {
 	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
+	// SCHED-GAP-1592: the Observatory's live data flows through the API —
+	// the generator collects (one code path for the page, the SSE stream,
+	// and the poll fallback), the API Server frames and pushes. The adapter
+	// satisfies api.observatorySnapshotter without either package importing
+	// the other.
+	apiServer.SetObservatorySnapshot(dashGen)
+	// SCHED-GAP-1592: the observatory_snapshot MCP tool collects through the
+	// SAME Generator adapter the API's /api/v1/observatory routes use.
+	mcpServer.SetObservatoryCollector(dashGen)
 	// SCHED-GAP-1593: the tick drill-down resolves gateway_trace.session_id
 	// into the agent's own state database to show what the agent generated.
 	// Default path matches the Hermes state database; opened lazily and
@@ -875,6 +1329,9 @@ func main() {
 	// ADV-R09/G8: the dashboard renders the SAME effective budget the loop
 	// was built with — never an independent literal.
 	dashGen.SetWeightBudget(loop.WeightBudget())
+	// SCHED-GAP-1594: the health panel's live/pushed card reads the same
+	// resolved flag the Loop was armed with — one resolution, both consumers.
+	dashGen.SetTickPushDisabled(*disableTickPush)
 	// SCHED-GAP-1601: the operator console proxies every control through the
 	// IN-PROCESS API handler (identical auth gate, identical handlers,
 	// identical audit — the API is the single mutation point), and reads the
@@ -884,6 +1341,9 @@ func main() {
 	dashGen.SetControlAPIHandler(apiServer.Handler())
 	dashGen.SetFleetPaused(loop.IsPaused)
 	dashGen.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// REMOTE-006: the dashboard's Remote section reads the SAME freshness
+	// window the API's peer surfaces resolve, so "stale" means one thing.
+	dashGen.SetPeerFreshnessWindow(*peerWindow)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -926,9 +1386,33 @@ func main() {
 		_, _ = w.Write(dashGen.HTMXJS())
 	})
 
+	// SCHED-GAP-1599: the live-event toast client. The pattern is written as a
+	// literal because the endpoint-table parity guard (internal/mcp) reads
+	// route patterns from this source; internal/dashboard's tests pin the
+	// literal, the dashboard constant (EventsToastAssetPath) and the layout's
+	// <script src> to the same string, so the three cannot drift apart.
+	mux.HandleFunc("GET /static/js/events-toast.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		_, _ = w.Write(dashGen.EventsToastJS())
+	})
+
 	// Project detail page: /projects/{name}.
 	mux.HandleFunc("GET /projects/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
+		resolved, redirect, err := dashGen.ResolveProjectDetailName(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if resolved == "" {
+			http.Error(w, "project not found: "+name, http.StatusNotFound)
+			return
+		}
+		if redirect {
+			http.Redirect(w, r, "/projects/"+resolved, http.StatusFound)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.GenerateProjectDetail(w, name); err != nil {
 			if errors.Is(err, database.ErrProjectNotFound) {
@@ -943,6 +1427,16 @@ func main() {
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.GenerateQueue(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Lane tree page: /lanes/tree (SCHED-GAP-1587) — the fleet's lane
+	// hierarchy rendered as a nested view: primaries at level 0, satellites
+	// indented under their parents, per-row depth, dangling parents marked.
+	mux.HandleFunc("GET /lanes/tree", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateLaneTree(w); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
@@ -1006,10 +1500,10 @@ func main() {
 		}
 	})
 
-	// Health page: /health (daemon, db, gateway status).
+	// Health page: /health (daemon, db, gateway status); /healthz is an alias.
 	// htmx polls return the .cards fragment only (HX-Request) — the full page
 	// must never be swapped into its own poller.
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		var err error
 		if r.Header.Get("HX-Request") != "" {
@@ -1018,6 +1512,44 @@ func main() {
 			err = dashGen.GenerateHealth(w)
 		}
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("GET /healthz", healthHandler)
+
+	// Observatory page: /observatory (SCHED-GAP-1592) — live graphs over the
+	// tick history. The query carries the filter (?window=&namespace=); the
+	// page's controls reload with new params and the SSE stream
+	// (/api/v1/observatory/stream, wired below) pushes re-computed
+	// snapshots for the same filter.
+	mux.HandleFunc("GET /observatory", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		q := r.URL.Query()
+		if err := dashGen.GenerateObservatory(w, q.Get("window"), q.Get("namespace")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// REMOTE-006: the Remote section — every registered peer with its
+	// last-seen event + staleness (the registry's window; stale ≠ down).
+	// htmx polls return the peer-rows fragment only (HX-Request) — the same
+	// contract as /health and /ticks.
+	mux.HandleFunc("GET /remote", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateRemoteRows(w)
+		} else {
+			err = dashGen.GenerateRemote(w)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("GET /remote/partial", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateRemoteRows(w); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
@@ -1119,6 +1651,17 @@ func main() {
 		duckbrain.Run(context.Background())
 	}()
 
+	// Wait for the shutdown signal — armed BEFORE the "ready" line below so
+	// that line is a true "handlers installed" barrier. The subprocess test
+	// (cmd/schedulerd/instance_identity_subproc_test.go) and any supervisor
+	// that greps the log FILE for "schedulerd ready" may then deliver SIGTERM
+	// with no window in which the default disposition kills the daemon
+	// mid-boot instead of running this graceful path. Registering it after
+	// printStatus() left such a window (wider under CI/host load) and was the
+	// INT-CI-178 flake: the child died with no "Shutdown complete".
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// SCHED-GAP-148: the startup announcement carries the build identity, so
 	// one grep of the boot log answers "which commit is this daemon running?"
 	// — the same sha this daemon serves as /api/v1/status build_sha, which
@@ -1129,14 +1672,18 @@ func main() {
 		version.Current(), version.CurrentCommit(), version.CurrentBuildDate())
 	printStatus(db)
 
-	// Wait for signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("Received %v, shutting down...", sig)
 
 	// ADV-R07: stop the board watcher before the loop drains.
 	boardWatcher.Stop()
+
+	// REMOTE-004: stop the bus subscriber before the loop drains — Close
+	// tears the connections down and joins the loops (no-op when disabled).
+	// REMOTE-009: the query responder (same no-op-when-disabled law) is
+	// torn down alongside it.
+	federationResponder.Close()
+	crierSubscriber.Close()
 
 	loop.Stop()
 	// Wait for in-flight ticks to complete (with a generous timeout).

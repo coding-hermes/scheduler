@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/database"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -58,14 +60,16 @@ func TestEffectiveTickTimeout_WaveNamespace(t *testing.T) {
 	}
 }
 
-// TestEffectiveTickTimeout_SerialNamespaceInherits (§12): every non-wave
-// shape inherits s.timeout — waves off, empty wave_tick_timeout, unknown
-// namespace, NULL/empty namespace id, waves off with a timeout set.
+// TestEffectiveTickTimeout_SerialNamespaceInherits (§12): every shape with NO
+// deadline configuration inherits s.timeout — no namespace id, unknown
+// namespace, wave_enabled=1 with an empty wave_tick_timeout, and an
+// unparseable timeout (WARN+inherit). SCHED-GAP-1691: a wave_enabled=0
+// namespace with a timeout set is NO LONGER in this list — it now resolves
+// the override (TestEffectiveTickTimeout_WaveOffNamespaceWithTimeout).
 func TestEffectiveTickTimeout_SerialNamespaceInherits(t *testing.T) {
 	base := 90 * time.Minute
 	s := newWaveTestSpawner(t, base)
 
-	insertWaveNamespace(t, s, "waves-off", false, "3h")  // waves off, timeout set
 	insertWaveNamespace(t, s, "empty-timeout", true, "") // waves on, no timeout → inherit
 	insertWaveNamespace(t, s, "garbage-timeout", true, "later")
 
@@ -74,7 +78,6 @@ func TestEffectiveTickTimeout_SerialNamespaceInherits(t *testing.T) {
 		ns   string
 	}{
 		{"no namespace id", ""},
-		{"waves off", "waves-off"},
 		{"wave enabled, empty timeout", "empty-timeout"},
 		{"wave enabled, unparseable timeout (WARN+inherit)", "garbage-timeout"},
 		{"unknown namespace", "does-not-exist"},
@@ -118,18 +121,21 @@ func TestEffectiveTickTimeout_UnparseableEnvFallsBack(t *testing.T) {
 	}
 }
 
-// TestEffectiveTickTimeout_EnvAppliesOnlyToWaveNamespaces: the env override
-// never touches a serial (waves-off) namespace — a global env bump must not
-// hand every project an extended deadline.
-func TestEffectiveTickTimeout_EnvAppliesOnlyToWaveNamespaces(t *testing.T) {
+// TestEffectiveTickTimeout_EnvIgnoredWithoutDeadlineConfig (SCHED-GAP-1691):
+// the env override never touches a namespace with NO deadline configuration
+// (wave_enabled=0 AND empty wave_tick_timeout) — a global env bump must not
+// hand every plain project an extended deadline. A wave-off namespace that
+// DOES carry a wave_tick_timeout participates in the env cascade normally
+// (TestEffectiveTickTimeout_EnvAppliesToWaveOffWithTimeout).
+func TestEffectiveTickTimeout_EnvIgnoredWithoutDeadlineConfig(t *testing.T) {
 	base := 2 * time.Hour
 	s := newWaveTestSpawner(t, base)
-	insertWaveNamespace(t, s, "serial", false, "3h")
+	insertWaveNamespace(t, s, "serial", false, "")
 
 	t.Setenv("SCHEDULER_WAVE_TICK_TIMEOUT", "4h")
 	got := s.effectiveTickTimeout(PackedProject{Name: "p", NamespaceID: "serial"})
 	if got != base {
-		t.Errorf("effectiveTickTimeout = %v, want base %v — env override leaked into a waves-off namespace", got, base)
+		t.Errorf("effectiveTickTimeout = %v, want base %v — env override leaked into a namespace with no deadline config", got, base)
 	}
 }
 
@@ -174,6 +180,87 @@ func TestEffectiveTickTimeout_DBLookupErrorInherits(t *testing.T) {
 	got := s.effectiveTickTimeout(PackedProject{Name: "p", NamespaceID: "any"})
 	if got != 2*time.Hour {
 		t.Errorf("effectiveTickTimeout on broken DB = %v, want base 2h", got)
+	}
+}
+
+// TestEffectiveTickTimeout_WaveOffNamespaceWithTimeout (SCHED-GAP-1691): a
+// namespace with wave_enabled=0 that carries wave_tick_timeout="3h" resolves
+// 3h — the per-namespace tick wall is decoupled from waves. The spawner's
+// base timeout is untouched: a project in the same fleet WITHOUT the
+// namespace override still inherits the base 2h.
+func TestEffectiveTickTimeout_WaveOffNamespaceWithTimeout(t *testing.T) {
+	base := 2 * time.Hour
+	s := newWaveTestSpawner(t, base)
+	insertWaveNamespace(t, s, "qa", false, "3h")
+
+	got := s.effectiveTickTimeout(PackedProject{Name: "qa-lane", NamespaceID: "qa"})
+	if got != 3*time.Hour {
+		t.Errorf("effectiveTickTimeout(qa, wave_enabled=0, 3h) = %v, want 3h (per-namespace deadline decoupled from waves)", got)
+	}
+	// Control: a plain (no-deadline-config) namespace in the same spawner
+	// still inherits the base — the 3h is not a fleet-wide bump.
+	insertWaveNamespace(t, s, "plain", false, "")
+	if got := s.effectiveTickTimeout(PackedProject{Name: "p", NamespaceID: "plain"}); got != base {
+		t.Errorf("effectiveTickTimeout(plain) = %v, want base %v — override leaked into a namespace with no deadline config", got, base)
+	}
+	if s.timeout != base {
+		t.Errorf("spawner base timeout mutated to %v, want %v", s.timeout, base)
+	}
+}
+
+// TestEffectiveTickTimeout_EnvAppliesToWaveOffWithTimeout (SCHED-GAP-1691):
+// once a wave_enabled=0 namespace carries an explicit wave_tick_timeout, the
+// env override governs its cascade exactly like a wave-enabled namespace —
+// and an unparseable env value still falls through to the namespace value.
+func TestEffectiveTickTimeout_EnvAppliesToWaveOffWithTimeout(t *testing.T) {
+	base := 2 * time.Hour
+	s := newWaveTestSpawner(t, base)
+	insertWaveNamespace(t, s, "qa", false, "3h")
+
+	t.Setenv("SCHEDULER_WAVE_TICK_TIMEOUT", "90m")
+	if got := s.effectiveTickTimeout(PackedProject{Name: "qa-lane", NamespaceID: "qa"}); got != 90*time.Minute {
+		t.Errorf("effectiveTickTimeout = %v, want 90m (env beats namespace 3h, wave_enabled=0)", got)
+	}
+
+	t.Setenv("SCHEDULER_WAVE_TICK_TIMEOUT", "not-a-duration")
+	if got := s.effectiveTickTimeout(PackedProject{Name: "qa-lane", NamespaceID: "qa"}); got != 3*time.Hour {
+		t.Errorf("effectiveTickTimeout = %v, want 3h (unparseable env falls back to the wave-off namespace's value)", got)
+	}
+}
+
+// TestEffectiveTickTimeout_CeilingClampWaveOff (SCHED-GAP-1691): the 4h
+// ceiling clamps a wave_enabled=0 namespace's resolved override too (here
+// via env; a hand-edited 5h row takes the same path through clampWaveTimeout).
+func TestEffectiveTickTimeout_CeilingClampWaveOff(t *testing.T) {
+	base := 2 * time.Hour
+	s := newWaveTestSpawner(t, base)
+	insertWaveNamespace(t, s, "qa", false, "3h")
+
+	t.Setenv("SCHEDULER_WAVE_TICK_TIMEOUT", "6h")
+	if got := s.effectiveTickTimeout(PackedProject{Name: "qa-lane", NamespaceID: "qa"}); got != 4*time.Hour {
+		t.Errorf("effectiveTickTimeout = %v, want 4h (ceiling clamp, wave_enabled=0 namespace)", got)
+	}
+}
+
+// TestFeatureNoWaveTickForWaveOffDeadlineOnly: the FeatureWaveTicks metric
+// stays wave-gated (SCHED-GAP-131 semantics preserved). A wave_enabled=0
+// namespace with a deadline override must NOT record a wave-tick feature use.
+func TestFeatureNoWaveTickForWaveOffDeadlineOnly(t *testing.T) {
+	featureUsageIsolated(t)
+	db := newTestDB(t)
+
+	if _, err := db.Exec(`INSERT INTO namespaces (id, weight, max_concurrent, wave_enabled, wave_tick_timeout) VALUES ('qa', 10, 0, 0, '3h')`); err != nil {
+		t.Fatalf("insert qa namespace: %v", err)
+	}
+	sp := NewSpawner(db, 4)
+	if got := sp.effectiveTickTimeout(PackedProject{NamespaceID: "qa"}); got != 3*time.Hour {
+		t.Fatalf("effectiveTickTimeout = %v, want 3h (precondition: the override resolves)", got)
+	}
+
+	counts := featureUsageCounts(t, db)
+	if counts[database.FeatureWaveTicks] != 0 {
+		t.Errorf("wave_ticks count = %d, want 0 (wave_enabled=0 namespace must not count as wave-tick feature use) (%v)",
+			counts[database.FeatureWaveTicks], counts)
 	}
 }
 

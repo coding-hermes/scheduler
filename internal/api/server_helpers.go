@@ -890,7 +890,7 @@ var openapiSpec = []byte(`{
       "get": {
         "summary": "Daemon health check",
         "responses": {
-          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count"}
+          "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count, clock (mode real|sim + sim scale, SCHED-GAP-1632)"}
         }
       }
     },
@@ -1085,6 +1085,27 @@ var openapiSpec = []byte(`{
           "200": {"description": "Bump cleared — returns the restored project"},
           "404": {"description": "Project not found"},
           "409": {"description": "No active bump to clear"}
+        }
+      }
+    },
+    "/api/v1/lanes": {
+      "get": {
+        "summary": "List lanes, flat (DEPRECATED — use /api/v1/lanes/tree)",
+        "description": "SCHED-GAP-1587: the flat lane listing is kept for backward compatibility but deprecated in favour of the hierarchical /api/v1/lanes/tree. Consumers that walk parents client-side should move to the tree.",
+        "deprecated": true,
+        "responses": {
+          "200": {"description": "{\"lanes\": [<Project>, ...], \"total\": N} — full project rows (parent included), enabled AND disabled, name-ASC; GET only (405 otherwise)"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/lanes/tree": {
+      "get": {
+        "summary": "Lane hierarchy (SCHED-GAP-1587) — the fleet's parent→children tree",
+        "description": "SCHED-GAP-1587: the projects table is a LANES list; a project is one primary lane plus its satellites. Roots carry is_root=true and depth 0; every child carries its parent name and depth = parent + 1, resolved through the shared database.BuildLaneTree resolver. Disabled lanes keep their position; a dangling parent (purged/renamed primary) keeps its name visible on the node and surfaces as a root.",
+        "responses": {
+          "200": {"description": "{\"roots\": [{\"name\", \"parent\", \"depth\", \"is_root\", \"enabled\", \"children\": [...]}, ...], \"total\": N} — roots and every children slice name-ASC ordered; total counts every lane exactly once"},
+          "405": {"description": "Non-GET method"}
         }
       }
     },
@@ -1362,11 +1383,61 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/observatory": {
+      "get": {
+        "summary": "Observatory snapshot: tick-rate buckets, namespace allocation and failure heatmap (SCHED-GAP-1592)",
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+          {"name": "namespace", "in": "query", "schema": {"type": "string"}, "description": "Namespace id filter (absent = all)"}
+        ],
+        "responses": {
+          "200": {"description": "Observatory snapshot object (rate buckets, allocation slices, heatmap rows, totals)"},
+          "405": {"description": "Non-GET method"},
+          "500": {"description": "Snapshot computation failed (error body names the step)"},
+          "503": {"description": "No observatory collector configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/observatory/stream": {
+      "get": {
+        "summary": "SSE stream of Observatory snapshots, recomputed every 10s (SCHED-GAP-1592)",
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
+          {"name": "namespace", "in": "query", "schema": {"type": "string"}, "description": "Namespace id filter (absent = all)"}
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream: one JSON snapshot per data frame, a comment heartbeat while quiet, and ': error collect:' comments instead of fabricated snapshots on compute failure",
+            "content": {
+              "text/event-stream": {
+                "schema": {"type": "string", "description": "SSE frames: \"data: <ObservatorySnapshot JSON>\" terminated by a blank line; \": heartbeat\" comments while idle"},
+                "example": "data: {\"generated_at\":\"2026-10-06T20:00:00Z\",\"window\":21600,\"window_label\":\"6h\",\"namespace\":\"\",\"rate\":[],\"allocation\":[],\"heatmap\":[],\"totals\":{\"spawned\":38,\"failed_pct\":51.3}}"
+              }
+            }
+          },
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No observatory collector configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/gateway-errors": {
+      "get": {
+        "summary": "Ticks not run because of gateway unavailability, by error class and lane (SCHED-GAP-1654)",
+        "description": "Counts the per-tick gateway_availability events the spawn path writes when a tick is genuinely not run because the gateway refused it: HTTP 503 (drain/unavailable), HTTP 429 (rate limited) or a refused dial (no HTTP response at all). Fixed 24-hour window; every known class is present even at 0; by_project is ordered by total descending. Failures with their own classification (exec-fallback rescues, auth rejections, tick deadlines, 5xx that is not 503) are excluded by construction.",
+        "responses": {
+          "200": {"description": "Counts object: generated_at, window_hours (24), cutoff, total, by_class (unavailable_503 / rate_limited_429 / connection_refused) and by_project rows (project, total, by_class)"},
+          "405": {"description": "Non-GET method"},
+          "500": {"description": "Event-table query failed (error body names the failure; never fabricated zeros)"}
+        }
+      }
+    },
     "/api/v1/events/stream": {
       "get": {
         "summary": "Server-Sent Events stream of newly committed events (push, not poll)",
-        "description": "Holds the connection open and emits each event row as soon as it commits, framed as an id line plus a one-line JSON data payload. A comment heartbeat is sent every 15 seconds while the log is quiet, so idle connections survive proxies. Reconnect with the Last-Event-ID header (set automatically by EventSource) to replay every persisted event with a greater id before live events resume; an absent, empty or non-numeric Last-Event-ID replays the newest 100 events instead. A slow client whose bounded buffer overflows has the missing range repaired from the event log before the next live event is emitted.",
+        "description": "Holds the connection open and emits each event row as soon as it commits, framed as an id line plus a one-line JSON data payload. A comment heartbeat is sent every 15 seconds while the log is quiet, so idle connections survive proxies. Reconnect with the Last-Event-ID header (set automatically by EventSource) to replay every persisted event with a greater id before live events resume; an absent, empty or non-numeric Last-Event-ID replays the newest 100 events instead. A slow client whose bounded buffer overflows has the missing range repaired from the event log before the next live event is emitted. Optional severity/component query params filter the stream with the same exact-match semantics as GET /api/v1/events, covering the catch-up window and the replay as well as live delivery; every other query param (including limit) is ignored on this endpoint.",
         "parameters": [
+          {"name": "severity", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Only events with this exact severity (INFO, LOW, MEDIUM, HIGH, CRITICAL). Absent or empty = every severity."},
+          {"name": "component", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Only events with this exact component name. Absent or empty = every component."},
           {"name": "Last-Event-ID", "in": "header", "required": false, "schema": {"type": "string"}, "description": "ID of the last event the client received. Every event with a greater id is replayed before live events resume. Missing, empty or non-numeric values are treated as \"no cursor\"."}
         ],
         "responses": {
@@ -1388,6 +1459,80 @@ var openapiSpec = []byte(`{
         "summary": "Ordered queue of eligible projects by urgency",
         "responses": {
           "200": {"description": "Array of queue items sorted by urgency descending"}
+        }
+      }
+    },
+    "/api/v1/peers": {
+      "get": {
+        "security": [{"operatorToken": []}],
+        "summary": "List registered federation peers with freshness (REMOTE-003)",
+        "description": "Every peer renders {id, url, last_contact, stale, version}. Rendering law: a peer past the freshness window is STALE with its last_contact timestamp — never \"down\"; last_contact is always present (empty string = never heartbeated).",
+        "responses": {
+          "200": {"description": "Peer list with per-peer stale flags"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      },
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Register or refresh a federation peer (upsert, REMOTE-003)",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PeerUpsert"}}}
+        },
+        "responses": {
+          "200": {"description": "Peer registered"},
+          "400": {"description": "Invalid body or missing id"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/peers/{id}/heartbeat": {
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Peer liveness ping — stamps last_contact (REMOTE-003)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
+        "responses": {
+          "200": {"description": "Heartbeat stamped"},
+          "404": {"description": "Unknown peer (heartbeat does not auto-register)"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/federation/query": {
+      "post": {
+        "security": [{"operatorToken": []}],
+        "summary": "Federation query (REMOTE-008) — the query envelope in, the response envelope out (docs/federation-query-spec.md §2)",
+        "description": "One contract over six read ops (peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list), each reusing the daemon's own read path. Replay window keyed (caller, corr_id, op): a retried query returns the identical body. peer always names THIS scheduler; data is []/{} never null; status=stale is a first-class answer, never conflated with error.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FederationQuery"}}}
+        },
+        "responses": {
+          "200": {"description": "Response envelope (status ok|partial|stale)"},
+          "400": {"description": "Error envelope: unknown_op | missing_op | missing_corr_id | bad_request"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "403": {"description": "Error envelope: op_not_allowed (REMOTE-013 read policy — the op is not published for the caller in the [federation] allow config; deny-all by default; the refusal is audited)"},
+          "405": {"description": "Non-POST method"},
+          "503": {"description": "No operator credential configured (fail-closed)"},
+          "504": {"description": "Error envelope: deadline_exceeded (read blew the caller-clamped budget)"}
+        }
+      }
+    },
+    "/api/v1/federation/catalogue": {
+      "get": {
+        "security": [{"operatorToken": []}],
+        "summary": "Federation read catalogue (REMOTE-008) — the supported ops with their arg shapes",
+        "responses": {
+          "200": {"description": "{peer, contract, ops: [{op, args, description, owner}], count}"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
         }
       }
     }
@@ -1432,6 +1577,7 @@ var openapiSpec = []byte(`{
           "worker_model": {"type": "string"},
           "worker_provider": {"type": "string"},
           "gateway_key": {"type": "string"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: per-LANE Hermes gateway endpoint; empty = inherit the namespace's gateway_url, then the daemon's [gateway].url"},
           "command": {"type": "string"},
           "prompt": {"type": "string", "description": "Optional: extra foreman prompt text; appended to the namespace default_prompt unless prompt_mode is \"replace\""},
           "prompt_mode": {"type": "string", "enum": ["append", "replace"], "description": "\"append\" (default): project prompt appends to the namespace default; \"replace\": project prompt replaces it entirely"},
@@ -1481,6 +1627,7 @@ var openapiSpec = []byte(`{
           "worker_model": {"type": "string"},
           "worker_provider": {"type": "string"},
           "gateway_key": {"type": "string", "description": "Per-foreman gateway key; \"\" clears back to the daemon's shared key"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: per-LANE gateway endpoint; \"\" clears back to the namespace's endpoint, then the daemon's global URL"},
           "command": {"type": "string"},
           "prompt": {"type": "string", "description": "Extra foreman prompt; \"\" clears back to namespace default only"},
           "prompt_mode": {"type": "string", "enum": ["append", "replace"], "description": "\"append\" (default): project prompt appends to the namespace default; \"replace\": project prompt replaces it entirely"},
@@ -1517,7 +1664,9 @@ var openapiSpec = []byte(`{
           "reserved": {"type": "integer", "minimum": 0},
           "hard_cap": {"type": "integer", "minimum": 0},
           "enabled": {"type": "boolean"},
-          "description": {"type": "string"}
+          "description": {"type": "string"},
+          "gateway_url": {"type": "string", "description": "SCHED-GAP-1712: namespace gateway endpoint, inherited by member lanes with no endpoint of their own; \"\" clears back to the daemon's global URL"},
+          "gateway_key": {"type": "string", "description": "SCHED-GAP-1712: namespace gateway key, inherited by member lanes with no gateway_key of their own; \"\" clears back to the daemon's shared key"}
         }
       },
       "NamespaceMoveRequest": {
@@ -1597,10 +1746,45 @@ var openapiSpec = []byte(`{
           "reason": {"type": "string", "description": "REQUIRED. Why the bump was issued (auditable)"}
         }
       },
+      "FederationQuery": {
+        "type": "object",
+        "required": ["op", "corr_id"],
+        "properties": {
+          "op": {"type": "string", "description": "Catalogue op id — peer.status | fleet.status | projects.list | queue.get | ticks.list | events.list. REQUIRED; anything else answers status=error code=unknown_op naming the supported ops."},
+          "args": {"type": "object", "description": "Op-specific args, all optional: filter (projects.list), since/limit (ticks.list, events.list), severity (events.list)."},
+          "corr_id": {"type": "string", "description": "Caller-assigned idempotency key (unique per caller+minute, spec §2.1). REQUIRED. The replay window keys on (caller, corr_id, op) for 5 minutes."},
+          "budget_ms": {"type": "integer", "description": "Per-peer wall budget; the peer clamps to its own cap (30s). Absent = peer default."},
+          "want": {"type": "string", "enum": ["answer", "partial"], "description": "answer = all-or-error; partial = best-effort with named gaps. Absent = answer."}
+        },
+        "description": "The federation Query envelope (federation-query-spec.md §2.1), carried verbatim by every transport."
+      },
       "EmptyBody": {
         "type": "object",
         "additionalProperties": false,
         "description": "This endpoint accepts no body fields — send an empty JSON object {} or no body."
+      },
+      "PeerUpsert": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "description": "The peer's scheduler identity (REMOTE-003 §1) — the join key for the whole federation."},
+          "url": {"type": "string", "description": "Base URL of the peer's HTTP API (its existing operator-token-gated surface)."},
+          "version": {"type": "string", "description": "The peer's reported version string."},
+          "capabilities": {"type": "string", "description": "Free-form capability string (e.g. \"control,query\")."}
+        },
+        "description": "POST /api/v1/peers body (REMOTE-003 §2). Upsert keyed by id; a re-registration refreshes identity but never fabricates liveness — only a heartbeat stamps last_contact."
+      },
+      "PeerView": {
+        "type": "object",
+        "required": ["id", "url", "last_contact", "stale", "version"],
+        "properties": {
+          "id": {"type": "string"},
+          "url": {"type": "string"},
+          "last_contact": {"type": "string", "description": "RFC3339 instant of the peer's most recent heartbeat; empty string = never heartbeated. ALWAYS present — never omitted."},
+          "stale": {"type": "boolean", "description": "True when the peer has no heartbeat within the freshness window (--peer-freshness-window, default 180s). THE rendering law: stale + last_contact, never a \"down\" state."},
+          "version": {"type": "string"}
+        },
+        "description": "One GET /api/v1/peers list entry (REMOTE-003 §2). There is no \"down\" field anywhere in this surface."
       }
     }
   }

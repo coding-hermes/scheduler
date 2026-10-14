@@ -3,10 +3,13 @@
 # install-hooks.sh — install the gitreins + lint-guard pre-commit hook
 # (SCHED-GAP-221) into .git/hooks/pre-commit.
 #
-# Idempotent: safe to re-run. The hook always invokes gitreins guard first
-# (the primary Tier-1 signal) and then scripts/lint-guard.sh (the additive
-# safety net for the lint class the gitreins scaffold check cannot see).
-# If either fails the commit is blocked.
+# Idempotent: safe to re-run. The hook ALWAYS invokes the board-commit
+# guard first (SCHED-GAP-1699 — a CODE commit must never touch
+# .coding-hermes/board/*; enforced fail-closed before anything else), then
+# gitreins guard (the primary Tier-1 signal) and then
+# scripts/lint-guard.sh (the additive safety net for the lint class the
+# gitreins scaffold check cannot see). If any of them fails the commit is
+# blocked.
 #
 # Use:
 #   ./scripts/install-hooks.sh          # install
@@ -33,11 +36,16 @@ cd "$REPO_ROOT"
 GIT_COMMON_DIR="$(git rev-parse --git-common-dir)"
 HOOK="$GIT_COMMON_DIR/hooks/pre-commit"
 MARKER="policy-script-deploy-hash-guard.sh"  # presence = hook already installed (SCHED-PERF-006 block)
+BOARD_MARKER="board-commit-guard.sh"         # presence of the SCHED-GAP-1699 step (added later than the marker above)
 
 if [ "${1:-}" = "--check" ]; then
     if [ -f "$HOOK" ] && grep -q "$MARKER" "$HOOK"; then
-        echo "install-hooks: OK (lint-guard pre-commit hook present)"
-        exit 0
+        if grep -q "$BOARD_MARKER" "$HOOK"; then
+            echo "install-hooks: OK (lint-guard + board-commit-guard pre-commit hook present)"
+            exit 0
+        fi
+        echo "install-hooks: STALE (board-commit-guard step missing — re-run scripts/install-hooks.sh)" >&2
+        exit 1
     fi
     echo "install-hooks: MISSING (run scripts/install-hooks.sh to install)" >&2
     exit 1
@@ -52,18 +60,35 @@ mkdir -p "$(dirname "$HOOK")"
 
 cat > "$HOOK" <<'HOOK'
 #!/usr/bin/env bash
-# GitReins + lint-guard pre-commit hook (SCHED-GAP-221).
+# GitReins + lint-guard + board-commit-guard pre-commit hook (SCHED-GAP-221,
+# board step SCHED-GAP-1699).
 #
-# Order matters: gitreins guard is the primary Tier-1 signal (secrets +
-# build + tests). scripts/lint-guard.sh is the ADDITIVE safety net for
-# the lint class the gitreins scaffold check cannot see — the divergence
-# that bit d775344a (prealloc finding only caught by CI, fixed
-# foreman-direct in 86da1e92). Set LINT_GUARD_SKIP=1 to bypass the
+# Order matters: the board-commit guard runs FIRST and unconditionally —
+# a CODE commit must never touch .coding-hermes/board/* (worker worktrees
+# hold a stale board snapshot; committing it with code deletes every row
+# appended since the branch — incidents REMOTE-006, REMOTE-008). It must
+# never be bypassable by LINT_GUARD_SKIP. gitreins guard is the primary
+# Tier-1 signal (secrets + build + tests); scripts/lint-guard.sh is the
+# ADDITIVE safety net for the lint class the gitreins scaffold check cannot
+# see — the divergence that bit d775344a (prealloc finding only caught by
+# CI, fixed foreman-direct in 86da1e92). Set LINT_GUARD_SKIP=1 to bypass the
 # lint check on board-only / docs-only commits.
 
 set -u
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# 0. board-commit-guard.sh (SCHED-GAP-1699) — ALWAYS enforced, fail-closed,
+#    BEFORE the gitreins-config early exit (a checkout without gitreins must
+#    still refuse board-mixing commits). Exit non-zero blocks the commit.
+if [ -x "$REPO_ROOT/scripts/board-commit-guard.sh" ]; then
+    "$REPO_ROOT/scripts/board-commit-guard.sh"
+    BOARD_RC=$?
+    if [ "$BOARD_RC" -ne 0 ]; then
+        exit "$BOARD_RC"
+    fi
+fi
+
 if [ ! -f "$REPO_ROOT/.gitreins/config.yaml" ]; then
     exit 0
 fi

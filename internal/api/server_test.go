@@ -49,6 +49,7 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 
 	// budget=0 ensures Pick returns empty so ForceEvaluate is a no-op (no real spawning).
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
+	t.Cleanup(loop.Stop)
 	// DOGFOOD-015: the spawn endpoint now enqueues synchronously and fires a
 	// real spawn session. Disable the exec fallback so the session cannot
 	// launch an actual `hermes` process from the test host — the tick row is
@@ -60,6 +61,17 @@ func newAPITestServer(t *testing.T) *apiTestServer {
 	// behave like the real (credentialed) operator's; the do helper below
 	// sends the credential on every request.
 	srv.SetAuthConfig(api.ResolveAuthConfig(testOperatorToken, "", ""))
+	// REMOTE-013: arm the allow-all federation read policy so the shared
+	// stack's federation cells (REMOTE-008/012) keep answering — the
+	// deny-all default would refuse every read. The access policy itself
+	// (refusals, per-caller scoping) is proven in the REMOTE-013 battery,
+	// which builds its own deny-all servers.
+	srv.SetFederationReadPolicy(api.ResolveFederationReadPolicy([]api.FederationReadGrant{
+		{Caller: api.FederationAllowAll, Ops: []string{
+			"peer.status", "fleet.status", "projects.list",
+			"queue.get", "ticks.list", "events.list", "fleet.aggregate",
+		}},
+	}))
 	// Wire a temp-dir JSONL groups/templates store so the new
 	// /api/v1/groups* + /api/v1/templates* routes are live in every test.
 	storeDir := t.TempDir()
@@ -1076,11 +1088,14 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 
 // --- openapi ---
 
-// documentedPaths mirrors the route table in docs/api.md (§4–§11, 29 paths).
+// documentedPaths mirrors the route table in docs/api.md (§4–§17, 32 paths).
 // The openapi.json spec must contain exactly this set — a client generator
 // needs every live route (GAP-057). /api/v1/live is the DB-free liveness
 // probe (SCHED-GAP-204-A, surfaced in OpenAPI+docs by SCHED-GAP-222) and
 // MUST stay pinned here so the parity test cannot silently drop it again.
+// REMOTE-003 (§2): /api/v1/peers + /api/v1/peers/{id}/heartbeat join the
+// served surface (registered in server.go Handler()); docs/api.md carries
+// the full per-endpoint section (§12).
 var documentedPaths = []string{
 	"/api/v1/health",
 	"/api/v1/live",
@@ -1088,6 +1103,8 @@ var documentedPaths = []string{
 	"/api/v1/config",
 	"/api/v1/projects",
 	"/api/v1/projects/{name}",
+	"/api/v1/lanes",
+	"/api/v1/lanes/tree",
 	"/api/v1/projects/{name}/pause",
 	"/api/v1/projects/{name}/resume",
 	"/api/v1/projects/{name}/spawn",
@@ -1106,6 +1123,9 @@ var documentedPaths = []string{
 	"/api/v1/ticks/{id}",
 	"/api/v1/events",
 	"/api/v1/events/stream",
+	"/api/v1/observatory",
+	"/api/v1/observatory/stream",
+	"/api/v1/gateway-errors",
 	"/api/v1/queue",
 	"/api/v1/metrics",
 	"/api/v1/features",
@@ -1114,6 +1134,10 @@ var documentedPaths = []string{
 	"/api/v1/evaluate",
 	"/api/v1/pause",
 	"/api/v1/resume",
+	"/api/v1/peers",
+	"/api/v1/peers/{id}/heartbeat",
+	"/api/v1/federation/query",
+	"/api/v1/federation/catalogue",
 }
 
 func TestAPI_OpenAPI_Success(t *testing.T) {
@@ -1135,7 +1159,7 @@ func TestAPI_OpenAPI_Success(t *testing.T) {
 		t.Fatalf("openapi.json paths missing or not an object: %v", body["paths"])
 	}
 
-	// (b) path set == docs/api.md route table (27 paths, incl. the two
+	// (b) path set == docs/api.md route table (31 paths, incl. the two
 	// namespace sub-routes that were missing before GAP-057, the five
 	// JSONL groups/templates paths, and /api/v1/metrics from SCHED-GAP-156).
 	if len(paths) != len(documentedPaths) {

@@ -116,8 +116,19 @@ func TestClockSimulator_E2E_DrainWindowAndTwoHourCooldownExpiry(t *testing.T) {
 	if status, _, _ := gap143TickRow(t, db, okTick); status != string(TickCompleted) {
 		t.Fatalf("recovery tick %s status = %s, want completed", okTick, status)
 	}
-	cd, streak := gap143Cooldown(t, db, project)
+	// The adaptive-cooldown persist is async relative to the ticks row's
+	// terminal state (lifecycle.Complete writes the row, then the same
+	// completion goroutine reaches bumpTickCompleted → adaptiveCooldown),
+	// so poll until it lands instead of racing it — the FND-002 class,
+	// INT-CI-185 for this file (CI run 38533630548, load-only; the
+	// wall-clock control asserts the same rows through gap143PollCooldown).
+	cd, streak := gap143PollCooldownDB(t, db, project, 900, 0, 10*time.Millisecond, 4*time.Second)
 	if cd != 900 || streak != 0 {
+		// INT-CI-185: CI (run 38533630548) failed this exact assertion
+		// with the pre-poll synchronous read; if it fires again the poll
+		// has genuinely expired, i.e. the recovery tick consumed the
+		// recovery signal — a real adaptive-cooldown regression, not the
+		// documented persist race.
 		t.Fatalf("after the recovery tick cooldown_s = %d / streak = %d, want 900 / 0", cd, streak)
 	}
 

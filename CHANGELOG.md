@@ -31,7 +31,33 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-09-30
+## [Unreleased] — 2026-10-03
+
+### Features
+- scheduler: **dispatch from the tick path** (SCHED-GAP-1710) — a tick now HANDS ITS WORK to a named agent over the Crier bus instead of only announcing that it ran. A lane declares its execution target in `dispatch-targets.jsonl` (`SCHEDULER_DISPATCH_TARGETS`); the leg hands over one unit carrying the lane + a board/workdir reference + a correlation id (never a task id), records the receipt against the tick (`tick_dispatch`, migration 62), and correlates the agent's answer back to the originating tick through the scheduler's own relay inbox (`CRIER_AGENT_ID` + `CRIER_AGENT_KEY_FILE`). An unreachable or refusing target fails the tick loudly with NO fallback to the shared gateway, and a lane with no declared target behaves exactly as before.
+- bus: the agent-scoped inbox receive leg (`internal/bus/inbox.go`) — signed retrieve/ack implemented in Go, so the scheduler can read and acknowledge its own mailbox without a second runtime.
+- scheduler: per-lane and per-namespace gateway endpoints — the tick path resolves its endpoint at dispatch time through lane > namespace > global (independently for URL and key), records the RESOLVED endpoint and the tier that supplied it on the tick row (`gateway_url` / `gateway_source` / `gateway_key_source`, migration v61), and derives one `GatewayClient` per non-global endpoint so an unreachable lane fails alone instead of degrading the fleet (SCHED-GAP-1712) — `da2143df`.
+- scheduler: **gateway admission is per endpoint** (t_cadba34c) — the daemon-wide gateway HEALTH GATE now judges the endpoint a lane RESOLVES to, not the daemon's own gateway: verdicts are cached per endpoint (one probe per 30 s window per endpoint, bounded at 64, each with its own outage episode and event), a lane addressed at a remote gateway is admitted while the daemon's gateway is down, and an unreachable lane endpoint defers only the lanes behind it. The fleet-wide `gatewayDead` latch and the reconnect/orphan-nudge stay GLOBAL-only, and a deferral event now carries `gateway_url`/`gateway_source`/`gateway_key_source` + `gateway_health_endpoint`. Decision measured against the live store: 6 global-outage episodes 09-21→09-27 (one idling 121 spawns in 15 min) while 0 lanes were addressed — so the harm is real and the isolation law settles it.
+
+## [1.12.0] — 2026-10-01
+
+### Features
+- scheduler: no-work policy — board gate for cooldown builders + no_work outcome (SCHED-GAP-1655) — `957045d4`.
+
+### Fixes
+- scheduler: a tick killed by its own tick-timeout is booked status=timeout, not a deferred gateway blip (SCHED-GAP-1684) — `8b6713e8`.
+- scheduler: skip sends to unconfigured platform targets with once-per-day warn (SCHED-GAP-1679) — `6fbb2595`.
+- verify first-cycle window computed with truncated layout, not RFC3339 (INT-CI-169) — `15d342c0`.
+
+## [1.11.7] — 2026-09-30
+
+### Performance
+- scheduler: cut dashboard render 3.9s and /health 1.58s hot-path cost (DOGFOOD-024) — `61e21d9c`.
+
+## [1.11.6] — 2026-09-30
+
+### Fixed
+- scheduler: cadence-target ordering (rebased onto main) — admission now sorts by cadence-target urgency so a lane's next-due tick is ordered against the packer correctly (SCHED-GAP-1668, SOL-CADENCE) — `a6c00862`.
 
 ## [1.11.5] — 2026-09-30
 

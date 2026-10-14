@@ -1,0 +1,10 @@
+[Unit]
+Description=Fleet config mirror: scheduler DB -> fleet.toml (one-way, DB is authority)
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/mkdir -p %h/.hermes/logs
+ExecStart=/usr/bin/env python3 %h/.hermes/scripts/fleet-sync.py --write
+StandardOutput=append:%h/.hermes/logs/fleet-sync.log
+StandardError=append:%h/.hermes/logs/fleet-sync.log
+TimeoutStartSec=60

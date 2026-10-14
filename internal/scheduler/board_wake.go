@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -170,8 +171,19 @@ func (w *BoardWakeWatcher) SetIntervals(poll, debounce, heartbeat time.Duration)
 // board file. Projects without boards are simply absent — absence is an
 // ordinary condition, never an error (fail-open).
 func (w *BoardWakeWatcher) listBoardsFromDB(ctx context.Context) (map[string]boardWakeTarget, error) {
+	// SCHED-GAP-1695 WAKE LAW: board_wake is a TASK-MODE privilege. A
+	// cooldown-mode lane — every role-suffix satellite, every parented
+	// ownerless lane — is gated by its COOLDOWN ALONE and must never be a
+	// board_wake target. The gate lives HERE, at target enumeration, so a
+	// cooldown satellite can never be armed, woken, or stamped board_wake
+	// (the earlier shape filtered too late and let 580 cooldown ticks through
+	// in 7d). Resolved mode = project override → namespace default → cooldown.
 	rows, err := w.db.QueryContext(ctx,
-		`SELECT name, COALESCE(workdir, '') FROM projects WHERE enabled = 1`)
+		`SELECT p.name, COALESCE(p.workdir, '')
+		   FROM projects p
+		   LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+		  WHERE p.enabled = 1
+		    AND COALESCE(NULLIF(p.admission_mode, ''), ns.admission_mode, 'cooldown') = 'tasks'`)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +315,19 @@ func (w *BoardWakeWatcher) pollOnce(now time.Time) {
 		// !had: a board file that appeared since the baseline — a new
 		// board is itself a write (freshly-filed work).
 		if _, armed := w.pendingWake[name]; !armed {
+			// SCHED-GAP-1727: a board write only wakes a parked
+			// tasks-admission foreman when the board actually carries
+			// open actionable work. A deferred-only board change (BT-076)
+			// records its mtime but arms NOTHING — the row is visible
+			// board state, not work. The predicate is the ONE shared
+			// open-work scanner (builderBoardHasWork → boardOpenRows:
+			// fixture + deferred exclusion) — no second parser. Fail-open:
+			// an unreadable board keeps today's wake behavior (never hide
+			// real work behind a read failure).
+			if !builderBoardHasWork(t.workdir) {
+				log.Printf("BOARD-WAKE: %s board changed but holds no actionable work (deferred/fixture-only) — no wake", name)
+				continue
+			}
 			w.pendingWake[name] = now
 			log.Printf("BOARD-WAKE: %s board changed — wake armed (debounce %v)", name, w.debounce)
 		}
@@ -355,12 +380,56 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 		t.project, rep.WorkToSpawn, rep.TotalRows, rep.CanVerify)
 	// SCHED-GAP-157: stamp the board_wake nudge source BEFORE forcing the
 	// evaluation, so every tick this wake's pass admits records board_wake.
+	// SCHED-GAP-1666 (b): the target lane rides the hook call, so the
+	// wrapper can apply the ONE shared admission predicate to THIS lane —
+	// the process-wide stamp alone is lane-agnostic.
 	if w.onWake != nil {
+		setBoardWakeFiredTarget(t.project)
 		w.onWake()
+		setBoardWakeFiredTarget("")
 	}
 	if w.forceEval != nil {
 		w.forceEval()
 	}
+}
+
+// boardWakeFiredTarget carries the lane a FIRED wake belongs to for the
+// duration of its onWake hook call (SCHED-GAP-1666). The watcher sets it
+// immediately before invoking the hook and clears it immediately after, so
+// the hook can judge the RIGHT lane with the shared admission predicate. It
+// reads as "" outside a hook call: a caller that invokes the hook directly
+// (no watcher, e.g. the SCHED-GAP-157 stamp test) keeps the pre-1666
+// fleet-wide behaviour rather than being judged against a stale lane.
+var boardWakeFiredTarget atomic.Value // string
+
+// setBoardWakeFiredTarget / boardWakeFiredTargetFor scope the FIRED wake's
+// lane across the hook call.
+func setBoardWakeFiredTarget(project string) { boardWakeFiredTarget.Store(project) }
+
+// boardWakeFiredTargetFor returns the lane of the wake currently being
+// dispatched ("" when no wake is in flight).
+func boardWakeFiredTargetFor() string {
+	s, _ := boardWakeFiredTarget.Load().(string)
+	return s
+}
+
+// boardWakeCooldownGate applies the ONE shared admission predicate
+// (SCHED-GAP-1666) to the lane a board write just touched — deliverable (b).
+// The board-wake entry claims exactly ONE bypass: the SCHED-GAP-1660
+// park-flip of a tasks-admission lane parked on an empty board. The
+// predicate grants it only when the lane really carries the park mark AND
+// really resolves to tasks-admission, so no other effect of a board write can
+// admit a lane ahead of its cooldown. ok=false means the lane's facts could
+// not be read (fail-open; see schedgap1666.go).
+func boardWakeCooldownGate(l *Loop, project string) (CooldownGateDecision, bool) {
+	if l == nil || project == "" {
+		return CooldownGateDecision{}, false
+	}
+	return l.effectiveCooldownGate(cooldownGateCall{
+		Project:     project,
+		Bypass:      CooldownBypassTasksParkedFlip,
+		ParkedEmpty: isParkedEmpty(project),
+	})
 }
 
 // runWatchdog is the watcher's own heartbeat watchdog (GAP-042 applied to

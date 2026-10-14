@@ -67,6 +67,7 @@ var deferralGloss = map[string]string{
 	"budget":          "budget - the weight budget or a spend cap left no room for this lane",
 	"tasks_deferred":  "deferred - failure backoff or post-tick pacing after the last pass",
 	"failed_cooldown": "failed cooldown - the last tick failed, so the full cooldown applies",
+	"no_work":         "no work - the lane's board holds no dispatchable row (SCHED-GAP-1655)",
 	"ok":              "admitted normally on the last pass",
 }
 

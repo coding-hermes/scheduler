@@ -449,6 +449,19 @@ func ingestWaveManifest(ctx context.Context, db *sql.DB, workdir, project, tickI
 				strings.Join(driftIDs[:min(5, len(driftIDs))], ", "), extra))
 	}
 
+	// SCHED-GAP-1707 deliverable 3: wave-convergence visibility. Count the
+	// workers already at a terminal verdict when the tick ended — "how much
+	// of the wave finished before the cap" becomes one SQL column
+	// (ticks.workers_terminal) instead of a join the operator must know to
+	// write. Counted from the manifest's verdicts via the SAME predicate
+	// waveWorkerTerminalState applies to the tick_workers rows.
+	terminalWorkers := 0
+	for _, w := range m.Workers {
+		if waveWorkerTerminalState(w) == database.TickWorkerStateDone {
+			terminalWorkers++
+		}
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("wave manifest ingest %s: begin tx: %w", tickID, err)
@@ -456,7 +469,7 @@ func ingestWaveManifest(ctx context.Context, db *sql.DB, workdir, project, tickI
 	defer func() { _ = tx.Rollback() }() // no-op on commit; the only error path is already returned
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE ticks SET worker_count = ? WHERE id = ?`, len(m.Workers), tickID)
+		`UPDATE ticks SET worker_count = ?, workers_terminal = ? WHERE id = ?`, len(m.Workers), terminalWorkers, tickID)
 	if err != nil {
 		return 0, fmt.Errorf("wave manifest ingest %s: set worker_count: %w", tickID, err)
 	}

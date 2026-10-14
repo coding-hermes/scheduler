@@ -4,10 +4,11 @@
 Drives ``ops/check-fleet-invariants.py`` in-process against a seeded fixture
 DB so neither class can degrade into a green no-op:
 
-  * caps — the foreman namespace must sit at its guaranteed cap (8); every
-    satellite namespace must sit at its SCHED-GAP-215 policy cap
-    (qa/pm/dogfood/releases = 9, duckbrain-sync = 12, doc-writer = 1); a
-    missing satellite namespace is itself a caps violation;
+  * caps — the foremen namespace must sit at its guaranteed cap (16, R3.2);
+    every satellite namespace must sit at its R3.3 cap (all 1, ruled
+    2026-10-02, docs/scheduler-rules.md; supersedes SCHED-GAP-215's
+    per-family 9/12 policy); a missing satellite namespace is itself a
+    caps violation;
   * admission — every namespace carries an admission_mode; ``tasks`` ONLY on
     ``coding-hermes``; every satellite namespace on ``cooldown``.
 
@@ -45,27 +46,29 @@ def _load_gate():
 gate = _load_gate()
 
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
-# Mirror of ops/check-fleet-invariants.py SATELLITE_CAP_POLICY (SCHED-GAP-215):
-# the per-family satellite caps. The fixture seeder and the violation tests
-# read this so a policy edit changes the fixtures, not just the assertions.
+# Mirror of ops/check-fleet-invariants.py SATELLITE_CAP_POLICY (R3.3,
+# 2026-10-02): every satellite namespace back at the flat 1, superseding
+# SCHED-GAP-215's per-family 9/12 raise. The fixture seeder and the violation
+# tests read this so a policy edit changes the fixtures, not just the
+# assertions.
 SATELLITE_CAP_POLICY = {
-    "qa": 9,
-    "pm": 9,
-    "dogfood": 9,
-    "releases": 9,
-    "duckbrain-sync": 12,
+    "qa": 1,
+    "pm": 1,
+    "dogfood": 1,
+    "releases": 1,
+    "duckbrain-sync": 1,
     "doc-writer": 1,
 }
 
 
-def _seed_ns_db(path: Path, foreman: tuple[int, str] = (8, "tasks"),
+def _seed_ns_db(path: Path, foreman: tuple[int, str] = (16, "tasks"),
                 sat_caps: dict[str, int] | None = None,
                 sat_modes: dict[str, str] | None = None,
                 drop: tuple[str, ...] = ()) -> Path:
     """Mint a namespaces-only scheduler DB (no projects → every project-level
     check is vacuously clean). *foreman* is (max_concurrent, admission_mode);
     per-satellite overrides come via *sat_caps* / *sat_modes* (defaults are the
-    SCHED-GAP-215 policy caps); names in *drop* get no row at all (the
+    R3.3 policy caps); names in *drop* get no row at all (the
     missing-namespace shape)."""
     con = sqlite3.connect(path)
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
@@ -109,40 +112,40 @@ def _other_violations(out: str, *classes: str) -> list[str]:
 # ── constants pin ─────────────────────────────────────────────────────────
 
 def test_caps_constants_are_the_documented_shape():
-    """The foreman cap is 8, the satellite-namespace roster is the six
-    families, and the per-family SCHED-GAP-215 cap policy map matches the
-    fixture mirror; drifting any of these silently re-levels the fleet."""
+    """The foremen cap is 16 (R3.2), the satellite-namespace roster is the six
+    families, and the R3.3 cap policy map (all 1) matches the fixture mirror;
+    drifting any of these silently re-levels the fleet."""
     assert gate.FOREMAN_NS == "coding-hermes"
-    assert gate.FOREMAN_CAP_EXPECTED == 8, gate.FOREMAN_CAP_EXPECTED
+    assert gate.FOREMAN_CAP_EXPECTED == 16, gate.FOREMAN_CAP_EXPECTED
     assert gate.SATELLITE_NS == SATELLITE_NS, gate.SATELLITE_NS
     assert gate.SATELLITE_CAP_POLICY == SATELLITE_CAP_POLICY, gate.SATELLITE_CAP_POLICY
 
 
 # ── caps: seeded violations must fire ─────────────────────────────────────
 
-def test_foreman_cap_below_8_fires(tmp_path):
+def test_foreman_cap_below_16_fires(tmp_path):
     rc, out = _run_gate(tmp_path, foreman=(4, "tasks"))
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     lines = _violations(out, "caps")
-    assert lines == ["VIOLATION caps coding-hermes: max_concurrent=4 expected 8 "
+    assert lines == ["VIOLATION caps coding-hermes: max_concurrent=4 expected 16 "
                      "(the foremen's guaranteed room)"], lines
     assert _other_violations(out, "caps") == [], f"unexpected extra violations:\n{out}"
 
 
 def test_satellite_cap_off_policy_fires(tmp_path):
-    """Both directions: a satellite BELOW its SCHED-GAP-215 policy cap (qa=3
-    vs the policy 9) and one ABOVE it (doc-writer=3 vs its flat 1) each get
-    their own line naming the expected value."""
-    rc, out = _run_gate(tmp_path, sat_caps={"qa": 3, "doc-writer": 3})
+    """Both directions: a satellite ABOVE its R3.3 cap (qa=3 vs the flat 1)
+    and one holding a stale SCHED-GAP-215 value (duckbrain-sync=12 vs its
+    flat 1) each get their own line naming the expected value."""
+    rc, out = _run_gate(tmp_path, sat_caps={"qa": 3, "duckbrain-sync": 12})
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     lines = _violations(out, "caps")
     assert len(lines) == 2, lines
-    assert ("VIOLATION caps qa: max_concurrent=3 expected 9 "
-            "(SCHED-GAP-215 satellite cap policy)") in lines, lines
-    assert ("VIOLATION caps doc-writer: max_concurrent=3 expected 1 "
-            "(SCHED-GAP-215 satellite cap policy)") in lines, lines
+    assert ("VIOLATION caps qa: max_concurrent=3 expected 1 "
+            "(R3.3 satellite cap policy)") in lines, lines
+    assert ("VIOLATION caps duckbrain-sync: max_concurrent=12 expected 1 "
+            "(R3.3 satellite cap policy)") in lines, lines
     assert _other_violations(out, "caps") == [], f"unexpected extra violations:\n{out}"
 
 
@@ -160,7 +163,7 @@ def test_missing_satellite_namespace_fires(tmp_path):
 def test_admission_defects_all_fire(tmp_path):
     """Three admission shapes at once: foreman off ``tasks``, a satellite on
     ``tasks``, and a satellite with NO mode. Each must get its own line."""
-    rc, out = _run_gate(tmp_path, foreman=(8, "cooldown"),
+    rc, out = _run_gate(tmp_path, foreman=(16, "cooldown"),
                         sat_modes={"qa": "tasks", "pm": ""})
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"

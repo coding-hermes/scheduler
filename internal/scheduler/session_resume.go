@@ -49,6 +49,48 @@ const (
 	OrphanReasonZombieReap = "zombie_reap"
 )
 
+// inFlightOrphanReasons is the CLOSED vocabulary of drop paths that prove a
+// tick was interrupted IN FLIGHT — the row was running/queued when its owner
+// went away. It is the entitlement evidence for the SCHED-GAP-1666 (c)
+// continuity bypass: startup resume admits only a lane whose orphan row
+// carries one of these marks, because only then is re-spawning the tick a
+// CONTINUITY event rather than a cadence reset.
+var inFlightOrphanReasons = []string{
+	OrphanReasonStartupReap,
+	OrphanReasonDrainTimeout,
+	OrphanReasonZombieReap,
+}
+
+// isInFlightInterruption reports whether an orphan row's drop reason is part
+// of the in-flight vocabulary above. A row with an empty or unknown reason
+// carries no evidence that a tick was interrupted mid-run, so the resume scan
+// (and the shared cooldown gate's continuity bypass) treats it as NOT
+// resumable — SCHED-GAP-1666 (c).
+func isInFlightInterruption(reason string) bool {
+	for _, r := range inFlightOrphanReasons {
+		if r == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// inFlightOrphanReasonSQL renders the closed vocabulary as a SQL IN list
+// (single-quoted, comma-separated). Built from the Go constants so the
+// scanner and the entitlement check can never drift apart.
+func inFlightOrphanReasonSQL() string {
+	var b strings.Builder
+	for i, r := range inFlightOrphanReasons {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("'")
+		b.WriteString(r)
+		b.WriteString("'")
+	}
+	return b.String()
+}
+
 // orphanedTick is one resumable tick row selected by orphansToResume.
 type orphanedTick struct {
 	id         string
@@ -79,6 +121,12 @@ func (l *Loop) stampOrphaned(tickID, reason string) {
 // The project prompt is joined in so the continuation prompt can carry the
 // project's original instructions (state snapshot inside the nudge).
 func (l *Loop) orphansToResume(ctx context.Context) []orphanedTick {
+	// SCHED-GAP-1666 (c): startup resume is a CONTINUITY event, never a
+	// cadence reset. Only a row the previous instance left running/queued —
+	// i.e. one carrying an in-flight drop reason — is eligible. A row marked
+	// orphaned without that mark is not evidence of an interrupted tick, so
+	// re-spawning it would be a fresh admission the lane's cooldown never
+	// sanctioned.
 	rows, err := l.db.QueryContext(ctx, `
 SELECT t.id, t.project_name, COALESCE(t.session_id, ''), t.nudge_count,
        COALESCE(t.orphan_reason, ''), COALESCE(p.prompt, '')
@@ -87,6 +135,7 @@ JOIN projects p ON p.name = t.project_name
 WHERE t.orphaned_at IS NOT NULL
   AND t.status IN ('failed','timeout')
   AND t.nudge_count < ?
+  AND COALESCE(t.orphan_reason, '') IN (`+inFlightOrphanReasonSQL()+`)
   AND p.enabled = 1
   AND NOT EXISTS (
       SELECT 1 FROM ticks r
@@ -182,6 +231,14 @@ func (l *Loop) resumeOrphans(trigger string) {
 	// non-packer spawn paths; this keeps the boot burst inside the caps.
 	admitted := make(map[string]int)
 	capacity := make(map[string]int)
+	// SCHED-GAP-1666: the pool dedups by LANE (tryReserve), so a second
+	// orphan of the same lane inside one pass would be refused by the pool
+	// AFTER its nudge row was enqueued — a stranded 'queued' row that nothing
+	// in this process dispatches (measured in the 7-day simulation: a lane
+	// interrupted twice had both rows offered in the same pass). Mirror
+	// Loop.SpawnNow's pre-check instead: one nudge per lane per pass, the
+	// other orphan stays untouched for the next trigger.
+	resumedLane := make(map[string]bool)
 
 	// Project rows are re-fetched fresh (Workdir/chain config may have
 	// changed while the tick was orphaned) — GetProject, never a stale
@@ -196,6 +253,14 @@ func (l *Loop) resumeOrphans(trigger string) {
 		nsID := ""
 		if proj.NamespaceID != nil {
 			nsID = *proj.NamespaceID
+		}
+		// SCHED-GAP-1666: never spend a nudge on a lane this pass already
+		// admitted (or one the pool is still holding) — the pool would refuse
+		// the spawn and strand the row we just enqueued.
+		if resumedLane[o.project] || l.slotPool.RunningSet()[o.project] {
+			log.Printf("RESUME: skipping orphaned tick %s (project %s) — lane already admitted or holding a slot this pass; no nudge consumed, no row enqueued",
+				o.id, o.project)
+			continue
 		}
 		if nsID != "" {
 			cap, ok := capacity[nsID]
@@ -233,6 +298,25 @@ func (l *Loop) resumeOrphans(trigger string) {
 			continue
 		}
 
+		// SCHED-GAP-1666 (a)/(c): the SAME shared admission predicate the
+		// packer applies decides whether the nudge may be spent. The resume
+		// entry claims the ONE bypass this path is entitled to — continuity
+		// for a tick the previous instance left running/queued — and the
+		// predicate validates that claim against the row's in-flight mark
+		// (isInFlightInterruption). A lane whose cooldown has not elapsed and
+		// whose tick was NOT interrupted in flight is DEFERRED here, before
+		// the nudge is consumed: no row, no nudge, no failure, and — the
+		// defect this closes — no admission a restart never earned.
+		if dec, ok := l.effectiveCooldownGate(cooldownGateCall{
+			Project:            o.project,
+			Bypass:             CooldownBypassInFlightContinuity,
+			InFlightContinuity: isInFlightInterruption(o.reason),
+		}); ok && dec.Defer {
+			log.Printf("RESUME: deferring orphaned tick %s (project %s) — shared cooldown gate: %s (remaining=%.0fs of %.0fs, reason=%s, in_flight=%t); no nudge consumed",
+				o.id, o.project, dec.Reason, dec.RemainingS, dec.EffectiveS, o.reason, isInFlightInterruption(o.reason))
+			continue
+		}
+
 		count := l.bumpNudgeCount(o.id)
 		tickID := fmt.Sprintf("%s-nudge%d", o.id, count)
 		// Enqueue the nudge row BEFORE SpawnEnqueued — the pool's spawn
@@ -258,6 +342,7 @@ func (l *Loop) resumeOrphans(trigger string) {
 		l.slotPool.SpawnEnqueued(packed, tickID, l.clock().Now(), noDeliver, l.db)
 		resumed++
 		admitted[nsID]++
+		resumedLane[o.project] = true
 		log.Printf("RESUME: nudged orphaned tick %s (project %s, reason=%s, nudge %d/%d) as %s",
 			o.id, o.project, o.reason, count, MaxNudgesPerTick, tickID)
 		l.EmitHighEvent("resume", fmt.Sprintf(

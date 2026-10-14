@@ -53,6 +53,9 @@ QA_PIN = gate.SATELLITE_FAMILY_PINS["qa"]
 SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")
 FAMILIES = tuple(gate.SATELLITE_FAMILY_PINS)  # qa, pm, sync, dogfood, releng, perf, review, readme, docs
 NS_FOR_SUFFIX = {s: ("duckbrain-sync" if s == "sync" else s) for s in FAMILIES}
+# SCHED-GAP-1604: releng/readme/docs/review/perf satellites live in the ROLE's
+# shared family namespace — mirror the gate's map so membership stays quiet.
+NS_FOR_SUFFIX.update(gate.SATELLITE_FAMILY_NAMESPACES)
 
 
 def _board_dir(root: Path, name: str) -> Path:
@@ -74,7 +77,7 @@ def _make_db(path: Path, rows: list[dict], workdirs: dict[str, Path]) -> Path:
                 " cooldown_floor_s INTEGER, adaptive_cooldown INTEGER, command TEXT, prompt TEXT,"
                 " workdir TEXT, namespace_id TEXT)")
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in SATELLITE_NS:
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))

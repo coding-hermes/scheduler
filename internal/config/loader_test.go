@@ -597,3 +597,105 @@ func TestApplyRootConfigBadDuration(t *testing.T) {
 		t.Errorf("error should mention min_interval: %v", err)
 	}
 }
+
+// TestLoadRootConfigAppliesEnvOverrides pins the TR-162 precedence fix on
+// the daemon boot path: LoadRootConfig must apply the SCHEDULER_* env layer
+// (applyEnvOverrides, layer 3 of the FEAT-005 precedence) on top of the TOML
+// decode, mirroring LoadConfig. Before TR-162 it returned the decoded TOML
+// untouched, so a systemd drop-in SCHEDULER_GATEWAY_URL was a silent no-op.
+//
+// The one authority chain is: CLI flag > SCHEDULER_* env > root TOML >
+// built-in default. The flag layer is NOT this function's job — it is
+// applied by the caller (cmd/schedulerd/main.go, default-guard pattern) —
+// so these tests pin only env-over-TOML and env-over-default; they
+// deliberately make no claim about flags. Tests stay non-parallel
+// (t.Setenv forbids parallel siblings).
+func TestLoadRootConfigAppliesEnvOverrides(t *testing.T) {
+	writeToml := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "schedulerd.toml")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write toml: %v", err)
+		}
+		return path
+	}
+	const gatewayBody = `
+[daemon]
+db_path = "/tmp/tr162.db"
+listen = "127.0.0.1:9099"
+
+[gateway]
+url = "http://toml-gw:8642"
+key = "toml-key"
+`
+
+	t.Run("env beats TOML (SCHEDULER_GATEWAY_URL, the TR-162 incident case)", func(t *testing.T) {
+		clearSchedulerEnv(t)
+		path := writeToml(t, gatewayBody)
+		t.Setenv("SCHEDULER_GATEWAY_URL", "http://env-gw:8642")
+
+		cfg, err := LoadRootConfig(path)
+		if err != nil {
+			t.Fatalf("LoadRootConfig: %v", err)
+		}
+		if cfg.Gateway.URL != "http://env-gw:8642" {
+			t.Errorf("env layer lost on the boot path: gateway.url = %q, want %q (TOML value must NOT win over SCHEDULER_GATEWAY_URL)",
+				cfg.Gateway.URL, "http://env-gw:8642")
+		}
+	})
+
+	t.Run("env applies over the default when TOML omits the key", func(t *testing.T) {
+		clearSchedulerEnv(t)
+		path := writeToml(t, `
+[daemon]
+db_path = "/tmp/tr162b.db"
+listen = "127.0.0.1:9099"
+`)
+		t.Setenv("SCHEDULER_GATEWAY_URL", "http://env-gw:8642")
+
+		cfg, err := LoadRootConfig(path)
+		if err != nil {
+			t.Fatalf("LoadRootConfig: %v", err)
+		}
+		if cfg.Gateway.URL != "http://env-gw:8642" {
+			t.Errorf("env layer lost over the zero value: gateway.url = %q, want %q",
+				cfg.Gateway.URL, "http://env-gw:8642")
+		}
+	})
+
+	t.Run("no env set: TOML wins (control arm)", func(t *testing.T) {
+		clearSchedulerEnv(t)
+		path := writeToml(t, gatewayBody)
+
+		cfg, err := LoadRootConfig(path)
+		if err != nil {
+			t.Fatalf("LoadRootConfig: %v", err)
+		}
+		if cfg.Gateway.URL != "http://toml-gw:8642" {
+			t.Errorf("control arm broken: gateway.url = %q, want the TOML value %q",
+				cfg.Gateway.URL, "http://toml-gw:8642")
+		}
+	})
+
+	t.Run("env layer does not stomp unrelated TOML keys", func(t *testing.T) {
+		clearSchedulerEnv(t)
+		path := writeToml(t, gatewayBody+"\n"+`
+[crier]
+url = "http://crier-toml:8767"
+`)
+		t.Setenv("SCHEDULER_GATEWAY_URL", "http://env-gw:8642")
+
+		cfg, err := LoadRootConfig(path)
+		if err != nil {
+			t.Fatalf("LoadRootConfig: %v", err)
+		}
+		// Only the env var's own field moves; every other layer-2 value
+		// (gateway.key from TOML, [crier] url) must survive untouched.
+		if cfg.Gateway.Key != "toml-key" {
+			t.Errorf("gateway.key = %q, want the TOML value (env must not stomp unrelated keys)", cfg.Gateway.Key)
+		}
+		if cfg.Crier.URL != "http://crier-toml:8767" {
+			t.Errorf("crier.url = %q, want the TOML value (env must not stomp unrelated keys)", cfg.Crier.URL)
+		}
+	})
+}

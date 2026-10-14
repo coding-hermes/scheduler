@@ -39,16 +39,20 @@ func printSchema() {
         "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
         "gateway_response_timeout": { "type": "string", "default": "30m0s", "description": "Per-turn deadline for a gateway /v1/responses POST (SCHED-GAP-117). A POST that makes no progress for this long fails the tick as 'stalled' BEFORE --tick-timeout; '0s' disables (POST runs on the tick deadline alone). Effective POST deadline = min(this, tick_timeout).", "env": "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", "cli": "--gateway-response-timeout" },
+        "gateway_transient_retries": { "type": "integer", "default": 3, "minimum": 0, "description": "Bounded transient-gateway retry count for the GAP-080 loop (SCHED-GAP-1681): a transient POST failure (HTTP 5xx, refused dial, SSE stream ended without a terminal event, body read/unmarshal) is retried up to N times on the same model/provider pair with the SAME session key (X-Hermes-Session-Key: tick id — session continuation), so the agent resumes where the stream died. Every POST lands on gateway_trace.Attempts and ticks.attempts. 0 = single attempt (retry off); negative values are rejected (WARN, default stands).", "env": "SCHEDULER_GATEWAY_TRANSIENT_RETRIES", "cli": "--gateway-transient-retries" },
         "slot_patience":  { "type": "string", "default": "5m0s", "description": "How long a tick waits for a free slot before being dropped; the drop emits a MEDIUM slot_pool event (ADV-R08/G3). Must be > 0 — the drop always exists; unset means the 5m default.", "env": "SCHEDULER_SLOT_PATIENCE", "cli": "--slot-patience" },
         "tasks_pacing": { "type": "string", "default": "1m0s", "description": "Minimum post-tick spacing before a tasks-mode project re-admits, plus up to 20 percent jitter (SCHED-GAP-136); '0s' disables. Composes with the failure backoff (S-GAP-001), never replaces it. Unset means the 1m fleet default.", "env": "SCHEDULER_TASKS_PACING", "cli": "--tasks-pacing" },
         "spawn_mem_limit_mb": { "type": "integer", "default": 0, "minimum": 0, "description": "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default — no limit call at all). NOT an admission gate: every selected project still spawns; the cap constrains the spawned process's resources at spawn time and is inherited by its workers. Best-effort — a failed cap WARNs and the spawn continues. Linux (prlimit); other platforms degrade to the documented no-op.", "env": "SCHEDULER_SPAWN_MEM_LIMIT_MB", "cli": "--spawn-mem-limit-mb" },
+        "session_silence_grace": { "type": "string", "default": "0s", "description": "Session-silence watchdog grace (SCHED-GAP-1707): terminate a gateway tick whose Hermes-state session shows no token delta and no tool activity for this long — failure_reason=session_silent, quiet duration on ticks.session_silence_s. '0s' = disabled (default; the watchdog only runs when armed). Never kills a producing session; cooldowns and the no-timeout-backoff chain are untouched.", "env": "SCHEDULER_SESSION_SILENCE_GRACE", "cli": "--session-silence-grace" },
+        "session_poll_loop_min_ticks": { "type": "integer", "default": 0, "minimum": 0, "description": "Poll-loop idle guard (SCHED-GAP-1698): terminate a gateway tick whose session shows a confirmed sleep-poll tool cycle — sleep-led or read-only status probes at a fixed cadence in two consecutive 5-minute strides, zero advancement — for 4 consecutive guard passes. failure_reason=sleep_poll, confirmed span on ticks.session_silence_s. 0 = disabled (default); values 1-5 clamp to the built-in floor of 6 (the knob can only make the guard stricter). Never kills a producing session: any non-poll call in a stride, any gap past 10 minutes, or unreadable telemetry spares the tick.", "env": "SCHEDULER_SESSION_POLL_LOOP_MIN_TICKS", "cli": "--session-poll-loop-min-ticks" },
         "load_gate_threshold": { "type": "number", "default": 0.0, "minimum": 0.0, "description": "Defer new spawns while the 1-minute load average is at or above this threshold; 0 = disabled (SCHED-GAP-125). Work is deferred, not dropped — it runs once load drops. Namespaces opt out via load_gate='off'.", "env": "SCHEDULER_LOAD_GATE_THRESHOLD", "cli": "--load-gate-threshold" },
         "model_rates_file": { "type": "string", "default": "", "description": "JSON price-sticker file applied over the builtin model rates at startup (ADV-R09/G8): {as_of, models:{name:{in_per_m,out_per_m}}, providers:{...}} — refresh stickers without a rebuild. Empty = builtin rates only. The flag's default IS the env value, so an env-set path always surfaces in the resolved config.", "env": "SCHEDULER_MODEL_RATES_FILE", "cli": "--model-rates-file" },
         "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" },
         "auto_disable_failure_rate": { "type": "number", "default": 0.0, "minimum": 0.0, "maximum": 1.0, "description": "Per-project failure-rate threshold (0 = off). SCHED-GAP-018.", "env": "SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "cli": "--auto-disable-failure-rate" },
         "auto_disable_window":       { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project over which auto-disable failure rate is computed.", "env": "SCHEDULER_AUTO_DISABLE_WINDOW", "cli": "--auto-disable-window" },
         "auto_disable_min_ticks":    { "type": "integer", "default": 50, "minimum": 1, "description": "Minimum ticks in window before auto-disable can fire.", "env": "SCHEDULER_AUTO_DISABLE_MIN_TICKS", "cli": "--auto-disable-min-ticks" },
-        "failure_window":            { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project for /api/v1/status per-project failure-rate breakdown.", "env": "SCHEDULER_FAILURE_WINDOW", "cli": "--failure-window" }
+        "failure_window":            { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project for /api/v1/status per-project failure-rate breakdown.", "env": "SCHEDULER_FAILURE_WINDOW", "cli": "--failure-window" },
+        "id": { "type": "string", "default": "<short hostname>", "description": "REMOTE-003 (§1): this scheduler's federation identity — stamped on every projects/ticks/events row it writes and the id peers address it by. Resolved ONCE at boot, logged as 'SCHEDULER: id=<id>'. Default = the short hostname; empty = the host-derived default applies. There is no CLI flag: identity is per-deployment.", "env": "SCHEDULER_ID" }
       }
     },
     "gateway": {
@@ -135,6 +139,7 @@ func printConfig(
 	numLevels, weightBudget, maxConcurrent int,
 	namespaceMode bool,
 	tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing time.Duration,
+	gatewayTransientRetries int,
 	gatewayURL, gatewayKey, foremanHome string,
 	noExecFallback bool,
 	duckbrainNS, duckbrainURL string,
@@ -143,6 +148,8 @@ func printConfig(
 	spawnMemLimitMB int64,
 	loadGateThreshold float64,
 	modelRatesFile string,
+	sessionSilenceGrace time.Duration,
+	sessionPollLoopMinTicks int,
 ) {
 	fmt.Printf(`# schedulerd resolved configuration (CLI flags + SCHEDULER_* env overrides; the root TOML [scheduler] layer resolves later in boot and is NOT reflected here)
 # source: CLI flags + SCHEDULER_* env overrides (CLI > env). TOML [scheduler] (FEAT-005, applied via default-guard in main.go) resolves after this print and is not shown
@@ -160,11 +167,14 @@ weight_budget = %d
 max_concurrent = %d
 tick_timeout = %q
 gateway_response_timeout = %q
+gateway_transient_retries = %d
 slot_patience = %q
 tasks_pacing = %q
 spawn_mem_limit_mb = %d
 load_gate_threshold = %v
 model_rates_file = %q
+session_silence_grace = %q
+session_poll_loop_min_ticks = %d
 namespace_mode = %v
 auto_disable_failure_rate = %v
 auto_disable_window = %d
@@ -184,9 +194,11 @@ url = %q
 		dbPath, listen, logFile,
 		minInterval, maxInterval,
 		numLevels, weightBudget, maxConcurrent,
-		tickTimeout, gatewayResponseTimeout, slotPatience, tasksPacing,
+		tickTimeout, gatewayResponseTimeout, gatewayTransientRetries, slotPatience, tasksPacing,
 		spawnMemLimitMB,
 		loadGateThreshold, modelRatesFile,
+		sessionSilenceGrace,
+		sessionPollLoopMinTicks,
 		namespaceMode, autoDisableRate, autoDisableWindow, autoDisableMinTicks, failureWindow,
 		gatewayURL, gatewayKey, foremanHome, noExecFallback,
 		duckbrainNS, duckbrainURL,
@@ -206,9 +218,11 @@ url = %q
 		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
 		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
 		"SCHEDULER_GATEWAY_RESPONSE_TIMEOUT":  os.Getenv("SCHEDULER_GATEWAY_RESPONSE_TIMEOUT"),
+		"SCHEDULER_GATEWAY_TRANSIENT_RETRIES": os.Getenv("SCHEDULER_GATEWAY_TRANSIENT_RETRIES"),
 		"SCHEDULER_SLOT_PATIENCE":             os.Getenv("SCHEDULER_SLOT_PATIENCE"),
 		"SCHEDULER_SPAWN_MEM_LIMIT_MB":        os.Getenv("SCHEDULER_SPAWN_MEM_LIMIT_MB"),
 		"SCHEDULER_WAVE_TICK_TIMEOUT":         os.Getenv("SCHEDULER_WAVE_TICK_TIMEOUT"),
+		"SCHEDULER_SESSION_SILENCE_GRACE":     os.Getenv("SCHEDULER_SESSION_SILENCE_GRACE"),
 		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
 		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
 		"SCHEDULER_AUTO_DISABLE_WINDOW":       os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),

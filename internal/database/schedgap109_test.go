@@ -36,6 +36,10 @@ func TestMigrateV27_WaveColumnsAndTickWorkers(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
+	// QA-CHS-182: raw open = synchronous=FULL default; the ladder below runs
+	// the migration chain twice (initial + v27 re-apply) and every DDL step
+	// fsyncs. Test-only durability bypass, correctness unchanged.
+	applyTestDurabilityOff(t, db)
 	ctx := context.Background()
 	if err := Migrate(ctx, db); err != nil {
 		t.Fatalf("Migrate (initial): %v", err)

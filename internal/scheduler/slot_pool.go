@@ -74,6 +74,10 @@ type SlotPool struct {
 	// Nil for a standalone pool (tests) — no stamp, no panic. Written once
 	// by SetLoop before any spawn; read under mu.
 	owner *Loop
+
+	// usagePolicy is installed once during daemon startup. Nil preserves
+	// historical behavior for embedded/test pools.
+	usagePolicy *UsagePoolPolicy
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
@@ -154,6 +158,14 @@ func (p *SlotPool) SetLoop(l *Loop) {
 	p.owner = l
 }
 
+// SetUsagePoolPolicy installs the opt-in durable pool admission policy.
+func (p *SlotPool) SetUsagePoolPolicy(policy UsagePoolPolicy) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	copy := policy
+	p.usagePolicy = &copy
+}
+
 // Available returns the number of free slots.
 func (p *SlotPool) Available() int {
 	return p.maxSlots - len(p.sem)
@@ -162,6 +174,27 @@ func (p *SlotPool) Available() int {
 // Running returns the number of currently occupied slots.
 func (p *SlotPool) Running() int {
 	return len(p.sem)
+}
+
+// AdoptRunning claims one slot for a running tick that was persisted by a
+// previous scheduler process. Adoption is deliberately a claim-only handoff:
+// it does not start another gateway request. Returning true for an existing
+// claim makes repeated startup reconciliation idempotent; false means the
+// local pool is at capacity and the durable DB running-row dedup remains the
+// safety backstop until a slot is available.
+func (p *SlotPool) AdoptRunning(project string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running[project] > 0 || p.reserved[project] {
+		return true
+	}
+	select {
+	case p.sem <- struct{}{}:
+		p.running[project]++
+		return true
+	default:
+		return false
+	}
 }
 
 // RunningSet returns the set of project names currently occupying slots —
@@ -268,6 +301,11 @@ func (p *SlotPool) Release(name string) {
 // later Release from the goroutine finds the refcount at zero and no-ops,
 // exactly like a Release for a name that holds no slot.
 func (p *SlotPool) releaseReaped(names []string) {
+	if p.spawner != nil && p.spawner.db != nil {
+		if err := database.ReleaseTerminalUsagePoolLeases(context.Background(), p.spawner.db, names); err != nil {
+			log.Printf("usage-pool: release reaped leases: %v", err)
+		}
+	}
 	for _, name := range names {
 		p.mu.Lock()
 		_, hadReservation := p.reserved[name]
@@ -365,6 +403,24 @@ func (p *SlotPool) SpawnEnqueued(proj PackedProject, tickID string, now time.Tim
 // selection, no cooldown is consumed, no failure is recorded, and no slot is
 // taken. The predicate itself (load_gate.go) and the `load_gate='off'`
 // namespace opt-out are unchanged and remain callable from anywhere.
+//
+// SCHED-GAP-1666 — the SAME shape, applied to the per-lane EFFECTIVE
+// COOLDOWN. This function still does not consult it (a deferral here would
+// strand an already-enqueued row exactly as SCHED-GAP-171's load gate did),
+// so the one shared predicate lives with the callers instead:
+//
+//	effectiveCooldownGate(CooldownGateRequest{...}, now)  // schedgap1666.go
+//
+// Callers: the packer's gates (packer.go via effectiveCooldownDur,
+// packer_select.go ×2, multipool_packer.go), loop.go's countEligibleProjects
+// mirror, Loop.SpawnNow (the manual/operator bypass, (e)),
+// Loop.resumeOrphans (the in-flight continuity bypass, (c)) and the
+// board-wake entry (boardWakeCooldownGate; the tasks-parked-flip bypass,
+// (b)). A caller that had no cooldown re-derivation before — the nudge
+// paths, measured at 123 of 402 dogfood/perf/docs/readme ticks in 7 days —
+// now reaches the identical decision the packer does, and
+// TestSCHEDGAP1666_GateConsultsAllEntryPoints fails the moment a new entry
+// point is added without it. See schedgap1666.go for the full contract.
 func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDeliver bool, db *sql.DB, enqueued bool) {
 	// SCHED-GAP-103: atomically check-and-reserve BEFORE launching the
 	// goroutine. Spawn is fire-and-forget: the caller launches the goroutine
@@ -392,7 +448,14 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// exit before Acquire succeeds, Release is a no-op (running[name]
 		// == 0) and clearReserve alone frees the claim.
 		defer p.clearReserve(proj.Name)
-		defer p.Release(proj.Name)
+		localSlotAcquired := false
+		usageLeaseID := ""
+		defer func() {
+			if localSlotAcquired {
+				p.Release(proj.Name)
+			}
+			releaseUsagePoolLeaseAfterSpawn(db, usageLeaseID, proj.Name)
+		}()
 
 		// SCHED-GAP-157: consume the caller's pending nudge-source stamp
 		// (Loop.SetNudgeSource) FIRST — "startup" | "manual" | "board_wake",
@@ -436,6 +499,51 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 		}
 
+		var target DispatchTarget
+		remoteLane := false
+		p.mu.Lock()
+		usagePolicy := p.usagePolicy
+		p.mu.Unlock()
+		if usagePolicy != nil && usagePolicy.Enabled {
+			// Make tick ownership durable before taking a cross-resource lease.
+			// A crash after ReserveAll can then be recovered against this queued
+			// row instead of leaving a reservation with no tick identity.
+			if !usagePolicy.ObserveOnly && !enqueued {
+				if err := p.lifecycle.Enqueue(proj.Name, tickID); err != nil {
+					log.Printf("SPAWN: enqueue %s before usage-pool admission: %v", proj.Name, err)
+					return
+				}
+				enqueued = true
+			}
+			var targetErr error
+			target, remoteLane, targetErr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			if targetErr != nil {
+				p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr, target)
+				if !usagePolicy.ObserveOnly {
+					return
+				}
+				target, remoteLane = DispatchTarget{}, false
+			}
+			var reserveErr error
+			usageLease, reserveErr := p.reserveUsagePools(context.Background(), db, proj.Name, tickID, target, remoteLane)
+			if reserveErr != nil {
+				reason := "usage_pool_authority_unavailable"
+				if isUsagePoolMisconfiguration(reserveErr) {
+					reason = "usage_pool_missing"
+				}
+				p.emitUsagePoolRefusal(proj, tickID, reason, reserveErr, target)
+				if !usagePolicy.ObserveOnly {
+					return
+				}
+			}
+			if !usagePolicy.ObserveOnly {
+				if !usageLease {
+					return
+				}
+				usageLeaseID = tickID
+			}
+		}
+
 		// Wait for a free slot. The patience is configurable
 		// (ADV-R08/G3); the default keeps the historical 5-minute
 		// window byte-identical.
@@ -443,7 +551,8 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		patience := p.Patience()
 		ctx, cancel := context.WithTimeout(context.Background(), patience)
 		defer cancel()
-		if !p.Acquire(ctx, proj.Name) {
+		localSlotRequired := !remoteLane || usagePolicy == nil || !usagePolicy.Enabled || usagePolicy.ObserveOnly
+		if localSlotRequired && !p.Acquire(ctx, proj.Name) {
 			waited := p.clock().Since(waitStart)
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			// ADV-R08/G3: the drop was previously invisible to the
@@ -469,8 +578,11 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 			return
 		}
+		localSlotAcquired = localSlotRequired
 
-		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+		if localSlotRequired {
+			log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
+		}
 
 		// SCHED-GAP-157: the slot wait and the admission decision are
 		// stamped onto the tick row the moment the slot is acquired —
@@ -535,7 +647,27 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			case nudgeSource != "":
 				admitReason = "resume:" + nudgeSource
 			}
-			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight)
+			// SCHED-GAP-1695 req 3 (STAMP): how early did this tick run? 'ok'
+			// means "on schedule", so an admission AHEAD of the lane's
+			// cooldown must name its own reason — the invariant (no row with
+			// cooldown_remaining_s > 0 AND admit_reason='ok') then holds by
+			// construction, not by luck. The wake/manual families above carry
+			// their precise names already; this catches the residual.
+			cdRemainingS := admissionCooldownRemainingS(db, proj.Name, p.clock().Now())
+			if cdRemainingS > 0 && admitReason == AdmissionReasonOK {
+				admitReason = AdmissionReasonEarly
+			}
+			stampTickAdmission(db, tickID, p.clock().Since(waitStart), admitReason, nudgeSource, proj.Urgency, proj.Weight, cdRemainingS)
+			// SCHED-GAP-1695 req 4: the human ADMIT line names WHY this tick
+			// was let in, so an operator reading the log never has to guess
+			// whether a tick ran on schedule or ahead of its cooldown.
+			if cdRemainingS > 0 {
+				log.Printf("ADMIT: %s tick=%s reason=%s nudge=%s cooldown_remaining=%.0fs (EARLY)",
+					proj.Name, tickID, admitReason, nudgeSource, cdRemainingS)
+			} else {
+				log.Printf("ADMIT: %s tick=%s reason=%s nudge=%s",
+					proj.Name, tickID, admitReason, nudgeSource)
+			}
 		}
 
 		// Start.
@@ -559,7 +691,47 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// wave-success branch is the one place a tick KNOWS workers were
 		// dispatched. Both ride the TickOutcome the existing
 		// lifecycle.Complete path persists.
-		st, err := p.spawner.Spawn(proj, tickID)
+		// SCHED-GAP-1710: a lane that DECLARES an execution target
+		// (dispatch-targets.jsonl) hands its work to that NAMED AGENT over the
+		// Crier bus instead of running it on the shared gateway. The branch is
+		// additive: no target declared — the fleet default, and every lane
+		// today — takes the identical local path below.
+		//
+		// A broken target FILE is logged loudly and the lane runs locally as
+		// before: a config typo in one line must not silently re-point a lane,
+		// but it also must not halt every other lane on the box while it is
+		// being fixed. The log line names the lane and the problem.
+		if usagePolicy == nil || !usagePolicy.Enabled {
+			var terr error
+			target, remoteLane, terr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			if terr != nil {
+				log.Printf("DISPATCH: %s tick=%s dispatch targets unreadable (%v) — running locally as before", proj.Name, tickID, terr)
+				remoteLane = false
+			}
+		}
+		var st *SpawnedTick
+		var err error
+		if remoteLane {
+			st, err = p.dispatchRemote(context.Background(), proj, tickID, target, db)
+			if err != nil {
+				// LOUD, and deliberately WITHOUT a fallback to the gateway:
+				// a dispatch is what the scheduler decided to schedule, so a
+				// refused hand-out must be visible, not silently re-pointed
+				// (dispatch-spec.md §2). The tick fails below via the ordinary
+				// completion path; the reason is the named dispatch error.
+				if events := p.events; events != nil {
+					events.Emit(context.Background(), SeverityHigh, "dispatch",
+						"remote dispatch refused — tick failed with NO local fallback", map[string]any{
+							"project": proj.Name,
+							"tick_id": tickID,
+							"agent":   target.Agent,
+							"error":   err.Error(),
+						})
+				}
+			}
+		} else {
+			st, err = p.spawner.Spawn(proj, tickID)
+		}
 		if err != nil {
 			// This branch is the PROJECT-SIDE / terminal-error completion
 			// path (auth rejection, max-concurrency, a nil gateway with exec
@@ -652,8 +824,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		}
 
 		// Deliver output (suppressed in test-verify mode).
+		// SCHED-GAP-1651: sync-family deliveries append the per-tick
+		// cost/keys footer so cost-per-key is visible on the delivered
+		// message. Non-sync deliveries are byte-identical to pre-1651.
 		if !noDeliver {
-			deliverOutputWithMode(clock.Real(), outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &st.Output, st.DeliverMode)
+			body := st.Output
+			if line := syncTickCostFooter(outcome); line != "" {
+				body.WriteString("\n\n" + line)
+			}
+			deliverOutputWithMode(clock.Real(), outcome.Project, outcome.TickID, st.Deliver, st.Trigger, &body, st.DeliverMode)
 		}
 
 		// Auto-slowdown: if tick signals IDLE, gently slow down.
@@ -687,6 +866,15 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			}
 		}
 	}()
+}
+
+func releaseUsagePoolLeaseAfterSpawn(db *sql.DB, leaseID, lane string) {
+	if leaseID == "" || db == nil {
+		return
+	}
+	if err := database.ReleaseUsagePoolLease(context.Background(), db, leaseID); err != nil {
+		log.Printf("USAGE_POOL: release lease=%s lane=%s failed: %v", leaseID, lane, err)
+	}
 }
 
 // SlotFreed returns a channel that receives when any slot is released.

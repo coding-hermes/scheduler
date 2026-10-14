@@ -121,7 +121,7 @@ def _seed_namespaces(con: sqlite3.Connection) -> None:
     """Minimal namespaces table; the coverage/family-floor checks do not read it
     but the caps check does, so seed enough to keep it quiet."""
     con.execute("CREATE TABLE namespaces (id TEXT PRIMARY KEY, max_concurrent INTEGER, admission_mode TEXT)")
-    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 8, 'tasks')")
+    con.execute("INSERT INTO namespaces VALUES ('coding-hermes', 16, 'tasks')")
     for ns in ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer"):
         con.execute("INSERT INTO namespaces VALUES (?, ?, 'cooldown')",
                     (ns, gate.SATELLITE_CAP_POLICY.get(ns, 1)))
@@ -159,7 +159,9 @@ def _all_clean_satellites() -> dict[str, dict]:
     out = {}
     for prefix in (PRIMARY, OTHER_PRIMARY):
         for suffix, family in gate.SATELLITE_FAMILY_PINS.items():
-            ns = "duckbrain-sync" if suffix == "sync" else suffix
+            # SCHED-GAP-1604: the role's family namespace, not a per-suffix one
+            # (releng -> releases, readme -> docs), or membership cross-fires.
+            ns = gate.SATELLITE_FAMILY_NAMESPACES[suffix]
             out[f"{prefix}-{suffix}"] = {
                 "enabled": 1, "cooldown_s": family, "cooldown_floor_s": family,
                 "namespace_id": ns,
@@ -174,7 +176,7 @@ def test_satellite_family_pins_table_values():
     Bane 2026-09-29). The four-family table it replaced held qa/sync at 43200
     and knew nothing of releng/perf/review/readme/docs."""
     assert gate.SATELLITE_FAMILY_PINS == {
-        "qa": 21600, "pm": 86400, "sync": 21600, "dogfood": 259200,
+        "qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200,
         "releng": 86400, "perf": 604800, "review": 604800,
         "readme": 604800, "docs": 604800,
     }, gate.SATELLITE_FAMILY_PINS
