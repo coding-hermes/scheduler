@@ -5111,3 +5111,11 @@ tasks:
   status: complete
   created_at: '2026-10-11T23:13:18.843010+00:00'
   completed_at: '2026-10-13T15:27:07.736943+00:00'
+- id: SCHED-GAP-1703
+  title: Align GitReins hook_timeout with test_timeout
+  criteria:
+  - hook_timeout >= test_timeout so full-suite guard completes or records explicit
+    timeout
+  status: complete
+  created_at: '2026-10-14T04:58:23.035131+00:00'
+  completed_at: '2026-10-14T05:00:14.111630+00:00'
