@@ -1,0 +1,16 @@
+[Unit]
+Description=Coding Hermes wake-residue detector — daily read-only cooldown audit
+Requires=cooldown-residue.service
+
+[Timer]
+# Daily so residue cannot accumulate silently for a whole review cycle; the
+# detector itself is read-only, so running it often costs nothing but a
+# SELECT. RandomizedDelaySec keeps it off the exact midnight boundary where
+# the rest of the daily fleet work already lands.
+OnCalendar=daily
+RandomizedDelaySec=300
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

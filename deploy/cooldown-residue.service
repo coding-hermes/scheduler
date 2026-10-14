@@ -1,0 +1,17 @@
+[Unit]
+Description=Coding Hermes wake-residue detector (read-only, SCHED-GAP-1670)
+Documentation=https://github.com/coding-hermes/scheduler/blob/main/docs/fleet-config-model.md
+After=network.target
+
+[Service]
+Type=oneshot
+# READ-ONLY: opens the scheduler DB mode=ro and reads the fleet.toml seed. It
+# never PUTs, never runs the policy tool's --apply path, and never migrates —
+# which is why it is safe to run on the box whose daemon owns the DB file.
+# The unit only reports: exit 0 clean, 1 residue found, 2 could not read,
+# 3 wrapper/build fault. A failed unit in the journal IS the alert.
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.hermes/scripts/cooldown-residue-detector.sh
+StandardOutput=journal
+StandardError=journal
