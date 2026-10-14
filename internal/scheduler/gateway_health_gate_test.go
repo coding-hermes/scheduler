@@ -550,6 +550,17 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	// The recovery pass is a NORMAL pass: the outage itself levied nothing, so
 	// the lane comes back at its own cooldown/streak (never escalated by the
 	// outage) and the successful tick is what resets the failure counter.
+	//
+	// The counter reset is ASYNC relative to the spawn the waitUntil above
+	// observes: the stub counts the POST at request start, while the reset is
+	// written later by the completion goroutine — once at spawn time (S-GAP-001)
+	// and once in lifecycle.Complete (SCHED-GAP-137a). A synchronous read here
+	// raced it on a loaded CI runner and saw the seeded residue (INT-CI-186,
+	// run 38610870171: cf=2, want 0). Poll until the reset lands (the
+	// gap143PollCooldown / INT-CI-185 precedent); the assertions below then
+	// hold on the final read. A real regression — a recovery path that never
+	// resets — still fails at the deadline with the last-observed value.
+	gap170PollCounterReset(t, db, name)
 	after := gap146ReadState(t, db, name)
 	if after.cooldownS != want.cooldownS || after.noProgressTicks != want.noProgressTicks {
 		t.Errorf("after the recovery tick cooldown/streak = %d/%d, want %d/%d — the outage must not escalate the lane",
@@ -557,6 +568,26 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	}
 	if after.consecutiveFailures != 0 {
 		t.Errorf("consecutive_failures after a successful recovery tick = %d, want 0 (SCHED-GAP-137a reset)", after.consecutiveFailures)
+	}
+}
+
+// gap170PollCounterReset polls the lane's row until the asynchronous
+// consecutive_failures reset lands (counter back to 0), so the acceptance read
+// in TestGatewayHealthGate_Recovery synchronizes with the completion goroutine
+// instead of racing it. Bounded by design: if the reset never lands this
+// returns anyway after the deadline and the caller's assertion fails naming
+// the last-observed value — a poll must not mask a real reset regression.
+func gap170PollCounterReset(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		if gap146ReadState(t, db, name).consecutiveFailures == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
