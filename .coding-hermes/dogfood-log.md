@@ -256,3 +256,23 @@ Time-to-first-success: <10 min clone→refusal-probe→sim boot (all probes pass
 Friction count: 1 (SCALE silent-ignore).
 Bunker leg: SKIPPED-install-bunker — las-02/03/04 all ssh connect-timeout (100.116.99.35, 100.69.3.13, 100.95.199.98 port 22, 4s timeouts). Local fresh-install smoke run instead (clone+build+refusal+boot probes on scratch DB, port 9097). Nothing left in flight; fresh-install cell last PASSED 2026-09-25 (SCHED-GAP-1628, 63s cold build).
 Artifacts: board rows SCHED-GAP-1735/1736 (tasks.jsonl, this commit); scratch /tmp/dg-fresh-install, /tmp/dg_new_rows.jsonl; dogfood probes saved under /tmp/dg_*.log
+# 2026-10-13 23:57 tick | coding-hermes-scheduler | dogfood lane (rotation rule: unexercised surface)
+
+Prior runs covered: control surface (REST+MCP), dashboard at scale, simulator engine, groups/templates deploy. Board had 40+ pending rows and repo/daemon had moved (live daemon now v1.12.0-356-ga54b7564, 11 commits behind HEAD / 2 non-board), so per the rotation rule I picked an UNEXERCISED product surface: the SSE events stream (`/api/v1/events/stream`, docs/api.md §8) driven as a real monitoring client.
+
+## What was driven (all read-only, live :9090)
+- Cold connect, no cursor: 200 text/event-stream; newest-100 replay, ids ascending, first frame = oldest of the tail (id 576934, MEDIUM/escalation). 75.8KB / 100 frames in a 20s window; 15s heartbeat seen.
+- Resume with `Last-Event-ID: 577033`: replays exactly the gap — first frame 577034, zero duplicates. Matches docs/api.md §8 verbatim.
+- Malformed cursor `Last-Event-ID: NOT-A-NUMBER`: degrades to no-cursor 100-tail, never an error. Matches docs.
+- REST cross-check: `GET /api/v1/events?limit=5` returns 577034..577030 — agrees with stream frames.
+- 35s `?severity=CRITICAL` connect: 200, 100 frames replayed, ZERO CRITICAL among them.
+
+## Findings
+1. SCHED-GAP-1737 (P3, filed): the stream silently ignores `severity`/`component` query params — §8 documents those filters on `GET /api/v1/events` (line 1040) and the stream 4 lines later with no note; a client adding `?severity=CRITICAL` gets a full MEDIUM replay with no hint. Handler (`internal/api/server_events_stream.go:68-82`) reads only Last-Event-ID. Either honor the filter on replay+live frames or 400 unknown params.
+2. Perf (Step 2b, NOT filed — nobody can feel it): `GET /api/v1/metrics` cold 2.09s / warm 0.41s (n=3) vs `/status` warm 0.31s; direct SQLite replay of the endpoint's own tick-duration query = 0.01s over `idx_ticks_status_completed`. Sub-second warm = not user-noticeable.
+3. Install leg: N/A per DOGFOOD-025 precedent — scheduler is a running daemon, not installable software; no bunker leg needed (and bunker hosts las-03/02/04 were ssh-dead as of the 10-13 pulse run anyway).
+
+## Verdict
+The stream's reconnect/gap-repair/heartbeat contract is exactly as documented — a real SSE client works first try. One silent-param gap filed as SCHED-GAP-1737.
+
+Artifacts: board row SCHED-GAP-1737 (tasks.jsonl, this commit); scratch /tmp/dg4_*.txt probes.
