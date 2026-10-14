@@ -784,8 +784,8 @@ This scheduler is part of the Coding Hermes ecosystem. See [`coding-hermes/skill
 
 ```bash
 make build       # Build binaries
-make test        # Run tests
-make test-full   # Full test suite
+make test        # Fast suite: go test -short -count=1 ./... (short mode, quick feedback)
+make test-full   # SLOW trust gate: go test -count=1 ./... (no -short; ~8+ min) — run before merge
 make lint        # Go vet
 make fmt         # Format code
 ```
