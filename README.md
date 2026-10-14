@@ -977,6 +977,11 @@ anti-snap rule, which store owns what, and the two gates that verify the result 
 [docs/fleet-config-model.md](docs/fleet-config-model.md): every claim on that page is paired with
 the command that proves it.
 
+Board rows and close-out events carry `ch:trace` markers (`row=`, `spec=`, `test=`, `evidence=`,
+`witness=`, …) that bind every claim to the evidence that proves it; the marker grammar, evidence
+tiers (T0–T3), witness rules, and close-out block format are defined in
+[docs/traceability-doctrine.md](docs/traceability-doctrine.md).
+
 ---
 
 ## REST API
