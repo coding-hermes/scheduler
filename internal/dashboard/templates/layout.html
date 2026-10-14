@@ -15,6 +15,11 @@
 --bg:#0a0c11;--panel:#0e1117;--surface:#131722;--surface2:#1a2030;
 --fg:#e6ebf4;--text:#b6bfd0;--muted:#7a8398;--faint:#566075;
 --signal:#e8a33d;--signal-hi:#f4b95f;--live:#2dd4a7;--ok:#37d399;--err:#ff6b6b;--warn:#e8a33d;
+/* SCHED-GAP-1599: the toast layer's only palette addition. INFO/neutral events
+   need a tone that is distinguishable from both the MEDIUM amber (--warn) and
+   the HIGH red (--err) without inventing a second accent for the rest of the
+   dashboard, so one desaturated blue is scoped to the toasts. */
+--info:#6aa6f5;
 --border:rgba(255,255,255,0.07);--border-hi:rgba(255,255,255,0.14);
 --ease-out:cubic-bezier(0.23,1,0.32,1);
 --sidebar-w:216px;
@@ -197,9 +202,64 @@ body.sb-collapsed .sidebar{display:none}
 .ctl-result.ctl-err{color:var(--err)}
 .signal.fleet-paused{color:var(--err);border-color:rgba(255,107,107,0.5)}
 .signal.fleet-paused .dot{background:var(--err);box-shadow:0 0 0 3px rgba(255,107,107,0.15)}
+/* ── SCHED-GAP-1599: live event toasts ──
+   The stack sits above the auto-refresh bar (bottom-right) and NEVER intercepts
+   pointer events itself — only the individual toasts do, so the dashboard stays
+   usable while a toast is on screen. Severity tones: LOW faint, INFO blue
+   (--info), MEDIUM amber (--warn), HIGH/CRITICAL red (--err). Every tone is
+   named in TEXT too (the severity chip), so the state never rests on colour. */
+.toast-stack{position:fixed;right:12px;bottom:54px;z-index:70;display:flex;flex-direction:column;gap:8px;width:min(390px,calc(100vw - 24px));pointer-events:none}
+.toast{pointer-events:auto;background:var(--surface);border:1px solid var(--border-hi);border-left:4px solid var(--muted);border-radius:9px;padding:9px 11px;box-shadow:0 8px 24px rgba(0,0,0,0.45);font-size:0.8rem;animation:toastin 200ms var(--ease-out)}
+@keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){.toast{animation:none}}
+.toast-head{display:flex;align-items:center;gap:7px;margin-bottom:4px;font-family:var(--mono);font-size:0.62rem;letter-spacing:0.08em;text-transform:uppercase}
+.toast-sev{font-weight:700}
+.toast-comp{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast-when{color:var(--faint);font-variant-numeric:tabular-nums}
+.toast-x{background:transparent;border:none;color:var(--faint);font-family:var(--mono);font-size:15px;line-height:1;cursor:pointer;padding:0 2px}
+.toast-x:hover{color:var(--fg)}
+.toast-x:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+.toast-msg{color:var(--text);line-height:1.35;overflow-wrap:anywhere}
+.toast-link{color:var(--text)}
+.toast-link:hover{color:var(--fg)}
+.toast-foot{color:var(--faint);font-family:var(--mono);font-size:0.62rem;margin-top:5px;overflow-wrap:anywhere}
+.toast-clickable{cursor:pointer}
+.toast-clickable:hover{border-color:var(--signal);background:var(--surface2)}
+.toast-low{border-left-color:var(--faint)}.toast-low .toast-sev{color:var(--faint)}
+.toast-info{border-left-color:var(--info)}.toast-info .toast-sev{color:var(--info)}
+.toast-medium{border-left-color:var(--warn)}.toast-medium .toast-sev{color:var(--warn)}
+.toast-high{border-left-color:var(--err)}.toast-high .toast-sev{color:var(--err)}
+.toast-critical{border-left-color:var(--err)}.toast-critical .toast-sev{color:var(--err)}
+.toast-aggregate{border-left-color:var(--muted)}.toast-aggregate .toast-sev{color:var(--muted)}
+/* Settings popover: quiet by default (collapsed to one button), fixed
+   bottom-left so it never fights the refresh bar or the toast stack. */
+.toast-ctl{position:fixed;left:12px;bottom:12px;z-index:70;font-family:var(--mono);font-size:0.7rem}
+.toast-ctl-btn{padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font-family:var(--mono);font-size:0.7rem;cursor:pointer}
+.toast-ctl-btn:hover{color:var(--fg);border-color:var(--border-hi)}
+.toast-ctl-btn:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+.toast-panel{position:absolute;bottom:34px;left:0;width:min(340px,calc(100vw - 24px));background:var(--panel);border:1px solid var(--border-hi);border-radius:9px;padding:11px;box-shadow:0 8px 24px rgba(0,0,0,0.45);line-height:1.4}
+.toast-panel .tp-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+.toast-panel label,.toast-panel .tp-lbl{color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;font-size:0.6rem}
+.toast-panel select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:5px;font-family:var(--mono);font-size:0.7rem;padding:2px 5px}
+.toast-panel .tp-note{color:var(--faint);font-size:0.64rem;margin:6px 0;overflow-wrap:anywhere}
+.toast-panel .tp-note.tp-up{color:var(--live)}
+.toast-panel .tp-note.tp-down{color:var(--warn)}
+.toast-panel .tp-chk{display:flex;align-items:center;gap:6px;color:var(--text);font-size:0.68rem;text-transform:none;letter-spacing:0}
+.toast-panel hr{border:none;border-top:1px solid var(--border);margin:9px 0}
+.toast-panel button{padding:5px 9px;border-radius:6px;border:1px solid var(--border-hi);background:var(--surface2);color:var(--text);font-family:var(--mono);font-size:0.68rem;cursor:pointer}
+.toast-panel button:hover:not(:disabled){border-color:var(--signal);color:var(--fg)}
+.toast-panel button:disabled{opacity:0.5;cursor:not-allowed}
+@media(max-width:820px){
+  .toast-stack{left:12px;right:12px;width:auto;bottom:96px}
+  .toast-ctl{bottom:60px}
+}
 </style>
 </head>
 <body>
+{{/* SCHED-GAP-1599: the live-event toast stack + its settings popover live in the
+     shared layout, so every dashboard page gets them; the client is a separate
+     embedded asset served from EventsToastAssetPath. */}}
+{{template "events_toast"}}
 <a class="skip" href="#main">Skip to content</a>
 <button id="sbExpand" type="button" title="Show sidebar" aria-label="Show sidebar" aria-expanded="false">&#187;</button>
 <div class="refresh-bar" id="refreshBar">
@@ -481,6 +541,39 @@ body.sb-collapsed .sidebar{display:none}
 })();
 </script>
 </aside>
+{{end}}
+
+{{define "events_toast"}}
+<div class="toast-stack" id="chToastStack" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions text" aria-label="Live scheduler event notifications"></div>
+<div class="toast-ctl">
+<button type="button" class="toast-ctl-btn" id="chToastCtlBtn" aria-expanded="false" aria-controls="chToastPanel" title="Toast and browser-notification settings">notifications</button>
+<div class="toast-panel" id="chToastPanel" hidden>
+<div class="tp-row"><label for="chToastSev">toast threshold</label>
+<select id="chToastSev" aria-label="Minimum severity that renders a toast">
+<option value="LOW">LOW and up (everything)</option>
+<option value="INFO">INFO and up</option>
+<option value="MEDIUM" selected>MEDIUM and up (default)</option>
+<option value="HIGH">HIGH / CRITICAL only</option>
+</select></div>
+<div class="tp-note">Routine churn (evaluation started/completed) never toasts, at any threshold.</div>
+<div class="tp-note" id="chToastFeed">connecting to the event stream…</div>
+<div class="tp-note" id="chToastCounts"></div>
+<hr>
+<div class="tp-lbl">browser notifications (opt-in)</div>
+<div class="tp-note" id="chNotifSec"></div>
+<div class="tp-row">
+<label class="tp-chk"><input type="checkbox" id="chNotifINFO" aria-label="Notify for INFO events"> INFO</label>
+<label class="tp-chk"><input type="checkbox" id="chNotifMEDIUM" aria-label="Notify for MEDIUM events"> MEDIUM</label>
+<label class="tp-chk"><input type="checkbox" id="chNotifHIGH" checked aria-label="Notify for HIGH and CRITICAL events"> HIGH/CRITICAL</label>
+</div>
+<div class="tp-row">
+<button type="button" id="chNotifEnable">Enable notifications</button>
+<button type="button" id="chToastTest">Send test toast</button>
+</div>
+<div class="tp-note">Bounded by design: max 5 toasts per 10s, identical events collapse for 60s, max 5 on screen.</div>
+</div>
+</div>
+<script src="/static/js/events-toast.js" defer></script>
 {{end}}
 
 {{define "ready_js"}}<script>

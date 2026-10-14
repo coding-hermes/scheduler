@@ -9,6 +9,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/` | Fleet dashboard (full HTML page; `/dashboard` is an alias) |
 | `/dashboard/partial` | htmx partial: project table refresh |
 | `/static/htmx.min.js` | Bundled htmx asset (Go embed) |
+| `/static/js/events-toast.js` | Bundled live-event toast client (Go embed; SCHED-GAP-1599) — opens `GET /api/v1/events/stream` with `EventSource`, renders bounded severity-toned toasts, resolves click-through targets, and requests browser-notification permission ONLY on an explicit settings click |
 | `/projects/{name}` | Per-lane detail page; if `{name}` is a fleet project name with no exact lane row, redirects to its `<name>-foreman` primary lane (SCHED-GAP-1731) |
 | `/queue` | Global queue view |
 | `/lanes/tree` | Lane tree page (SCHED-GAP-1587) — the fleet's nested lane hierarchy: primaries at level 0, satellites indented under their parents (└ rail), per-row `L<depth>` marker, disabled lanes in position, dangling parents flagged visibly |

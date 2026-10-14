@@ -1386,6 +1386,17 @@ func main() {
 		_, _ = w.Write(dashGen.HTMXJS())
 	})
 
+	// SCHED-GAP-1599: the live-event toast client. The pattern is written as a
+	// literal because the endpoint-table parity guard (internal/mcp) reads
+	// route patterns from this source; internal/dashboard's tests pin the
+	// literal, the dashboard constant (EventsToastAssetPath) and the layout's
+	// <script src> to the same string, so the three cannot drift apart.
+	mux.HandleFunc("GET /static/js/events-toast.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		_, _ = w.Write(dashGen.EventsToastJS())
+	})
+
 	// Project detail page: /projects/{name}.
 	mux.HandleFunc("GET /projects/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")

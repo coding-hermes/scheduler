@@ -26,7 +26,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
-//go:embed static/htmx.min.js
+//go:embed static/htmx.min.js static/js/events-toast.js
 var staticFS embed.FS
 
 //go:embed templates/*.html
@@ -35,6 +35,17 @@ var templatesFS embed.FS
 // htmxJS is the bundled htmx library, loaded via Go embed so the dashboard
 // works offline (no CDN dependency at runtime).
 var htmxJS = mustReadStatic("static/htmx.min.js")
+
+// EventsToastAssetPath is the URL path the live-event toast client is served
+// from (SCHED-GAP-1599). main.go mounts the route at this constant and
+// templates/layout.html references the same literal; dashboard_test pins the
+// two together, so the page can never point at a path nothing serves.
+const EventsToastAssetPath = "/static/js/events-toast.js"
+
+// eventsToastJS is the bundled toast client (SCHED-GAP-1599). It is a real
+// file rather than an inline <script> so the policy it implements (dedupe,
+// rate cap, notification opt-in) is reviewable and testable on its own.
+var eventsToastJS = mustReadStatic("static/js/events-toast.js")
 
 // Generator produces the fleet dashboard as a single-file HTML page.
 type Generator struct {
@@ -260,6 +271,10 @@ func (g *Generator) SetDB(db *sql.DB) {
 
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
 func (g *Generator) HTMXJS() []byte { return htmxJS }
+
+// EventsToastJS returns the bundled live-event toast client bytes (SCHED-GAP-1599)
+// for serving via HTTP at EventsToastAssetPath.
+func (g *Generator) EventsToastJS() []byte { return eventsToastJS }
 
 // Generate writes the dashboard HTML to w, applying the per-table controls
 // with their defaults (SCHED-GAP-1598). Template is pre-parsed — zero
