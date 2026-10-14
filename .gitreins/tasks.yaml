@@ -5138,3 +5138,12 @@ tasks:
   status: complete
   created_at: '2026-10-14T06:15:11.781051+00:00'
   completed_at: '2026-10-14T06:16:01.352291+00:00'
+- id: INT-CI-185
+  title: Fix clock simulator E2E race flake
+  criteria:
+  - TestClockSimulator_E2E_DrainWindowAndTwoHourCooldownExpiry is deterministic under
+    -race -count=6 and preserves the virtual cooldown assertions without wall-time
+    flaking; focused and full Go tests pass.
+  status: complete
+  created_at: '2026-10-14T09:35:41.148433+00:00'
+  completed_at: '2026-10-14T16:45:47.481076+00:00'
