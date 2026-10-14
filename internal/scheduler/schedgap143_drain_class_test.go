@@ -178,9 +178,10 @@ func gap143Cooldown(t *testing.T, db *sql.DB, name string) (cooldownS, streak in
 	return cooldownS, streak
 }
 
-// gap143PollCooldown re-reads the adaptive-cooldown row every 20ms until it
-// matches (wantCooldownS, wantStreak) or the 2s deadline expires, returning
-// the LAST OBSERVED values either way.
+// gap143PollCooldown re-reads the adaptive-cooldown row until it matches
+// (wantCooldownS, wantStreak) or the deadline expires, returning the LAST
+// OBSERVED values either way. Delegates to gap143PollCooldownDB with this
+// battery's default cadence (20ms poll / 2s deadline).
 //
 // The adaptive-cooldown persist lands AFTER the ticks row reaches its
 // terminal state (the same completion path writes both), so a synchronous
@@ -191,8 +192,14 @@ func gap143Cooldown(t *testing.T, db *sql.DB, name string) (cooldownS, streak in
 // numbers instead of "timeout".
 func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wantStreak int) (lastCooldownS, lastStreak int) {
 	t.Helper()
-	const wait = 2 * time.Second
-	deadline := time.Now().Add(wait)
+	return gap143PollCooldownDB(t, db, name, wantCooldownS, wantStreak, 20*time.Millisecond, 2*time.Second)
+}
+
+// gap143PollCooldownDB is gap143PollCooldown with explicit budget knobs for
+// callers whose tick budget differs from the default 20ms/2s cadence.
+func gap143PollCooldownDB(t *testing.T, db *sql.DB, name string, wantCooldownS, wantStreak int, interval, timeout time.Duration) (lastCooldownS, lastStreak int) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for {
 		lastCooldownS, lastStreak = gap143Cooldown(t, db, name)
 		if lastCooldownS == wantCooldownS && lastStreak == wantStreak {
@@ -201,7 +208,7 @@ func gap143PollCooldown(t *testing.T, db *sql.DB, name string, wantCooldownS, wa
 		if time.Now().After(deadline) {
 			return lastCooldownS, lastStreak
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(interval)
 	}
 }
 
