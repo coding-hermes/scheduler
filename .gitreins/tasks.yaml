@@ -5119,3 +5119,22 @@ tasks:
   status: complete
   created_at: '2026-10-14T04:58:23.035131+00:00'
   completed_at: '2026-10-14T05:00:14.111630+00:00'
+- id: SCHED-GAP-1690
+  title: "Duplicate board row ids: 24 boards / 410 extra copies \u2014 merge divergent\
+    \ copies AND fix the filing lane"
+  criteria:
+  - Census shows 0 duplicate ids across all boards after cleanup; boardctl validate
+    returns rc=0 for every touched board; writer fix committed so recurrence mints
+    fresh id; summary JSON at /tmp/SCHED-GAP-1690-summary.json with before/after counts
+  status: in_progress
+  created_at: '2026-10-14T05:31:33.139097+00:00'
+- id: SCHED-GAP-1651
+  title: 'Sync-lane cost closure: explain 3 luna resolutions + bound >2M tail'
+  criteria:
+  - All sync-lane ticks since 2026-10-13 resolve to free qwen models per gateway_trace
+    (zero paid luna on sync lanes); the three 10-12 luna resolutions are attributed
+    with evidence; post-deploy per-tick input-token distribution measured and reported
+    vs pre-fix baseline.
+  status: complete
+  created_at: '2026-10-14T06:15:11.781051+00:00'
+  completed_at: '2026-10-14T06:16:01.352291+00:00'
