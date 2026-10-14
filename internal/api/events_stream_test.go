@@ -46,9 +46,17 @@ func newStreamTestServer(t *testing.T) (*Server, *sql.DB, *httptest.Server) {
 // row (with its database-assigned ID).
 func logStreamEvent(t *testing.T, db *sql.DB, msg string) database.Event {
 	t.Helper()
+	return logStreamEventFiltered(t, db, database.SeverityHigh, "ctltest", msg)
+}
+
+// logStreamEventFiltered commits one event with an explicit severity and
+// component through the real LogEvent write path (SCHED-GAP-1737, which needs
+// mixed severities/components in one log).
+func logStreamEventFiltered(t *testing.T, db *sql.DB, sev database.EventSeverity, component, msg string) database.Event {
+	t.Helper()
 	ev := database.Event{
-		Severity:  database.SeverityHigh,
-		Component: "ctltest",
+		Severity:  sev,
+		Component: component,
 		Message:   msg,
 		Details:   "{}",
 	}
@@ -58,13 +66,26 @@ func logStreamEvent(t *testing.T, db *sql.DB, msg string) database.Event {
 	return ev
 }
 
-// openStream dials the SSE endpoint. The returned cancel simulates the client
-// disconnecting; both the cancel and the body close are registered as
-// cleanups so every test tears its stream down.
+// openStream dials the SSE endpoint with no query params. The returned cancel
+// simulates the client disconnecting; both the cancel and the body close are
+// registered as cleanups so every test tears its stream down.
 func openStream(t *testing.T, ts *httptest.Server, lastEventID string) (*http.Response, context.CancelFunc) {
 	t.Helper()
+	return openStreamQuery(t, ts, "", lastEventID)
+}
+
+// openStreamQuery dials the SSE endpoint with a raw query string ("severity=
+// MEDIUM", "" for none) and an optional Last-Event-ID header. It exists so the
+// filter contract (SCHED-GAP-1737) is exercised over the REAL route, exactly as
+// a browser's EventSource would reach it.
+func openStreamQuery(t *testing.T, ts *httptest.Server, query, lastEventID string) (*http.Response, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events/stream", nil)
+	target := ts.URL + "/api/v1/events/stream"
+	if query != "" {
+		target += "?" + query
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("new stream request: %v", err)
@@ -732,5 +753,255 @@ func TestCTL002_EventsStream_PollEndpointUnchanged(t *testing.T) {
 	}
 	if body.Count != 1 || len(body.Events) != 1 || body.Events[0].Message != "poll-me" {
 		t.Errorf("poll response = %+v, want one event (poll-me)", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SCHED-GAP-1737 — /api/v1/events/stream honors the severity/component filters.
+//
+// Before this, the handler read only Last-Event-ID: a client that added
+// ?severity=CRITICAL got HTTP 200 and a full replay of unrelated severities,
+// with nothing in the response to say the filter had been dropped. These tests
+// pin the fixed contract over the real route.
+// ---------------------------------------------------------------------------
+
+// expectNoEventFrame fails if an EVENT frame arrives within timeout. Comment
+// frames (heartbeats) are not data and are skipped, so this asserts "the filter
+// held" rather than "the socket stayed byte-silent".
+func expectNoEventFrame(t *testing.T, frames <-chan string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		frame, ok := nextFrame(t, frames, remaining)
+		if !ok {
+			return
+		}
+		if isCommentFrame(frame) {
+			continue
+		}
+		t.Fatalf("unexpected event frame on a filtered stream: %q", frame)
+	}
+}
+
+// TestSCHEDGAP1737_StreamFilterPredicate pins the cursor rule the whole filter
+// contract rests on, on the pure function the live loop uses: an event above the
+// cursor that does NOT match the filter is CONSUMED — it advances the cursor
+// without being written — while an event at or below the cursor is a duplicate
+// and leaves the cursor alone. This is the half of "non-matching events are
+// skipped" that a frame-level test cannot observe.
+func TestSCHEDGAP1737_StreamFilterPredicate(t *testing.T) {
+	medium := database.Event{ID: 7, Severity: database.SeverityMedium, Component: "loop"}
+
+	cases := []struct {
+		name       string
+		filter     streamFilter
+		cursor     int64
+		wantWrite  bool
+		wantCursor int64
+	}{
+		{"no filter writes everything", streamFilter{}, 6, true, 7},
+		{"empty fields accept every value", streamFilter{severity: "", component: ""}, 6, true, 7},
+		{"matching severity is written", streamFilter{severity: "MEDIUM"}, 6, true, 7},
+		{"lowercase severity matches nothing (exact match, like the poll endpoint)", streamFilter{severity: "medium"}, 6, false, 7},
+		{"unrecognized severity matches nothing", streamFilter{severity: "BOGUS"}, 6, false, 7},
+		{"non-matching severity advances the cursor without writing", streamFilter{severity: "CRITICAL"}, 6, false, 7},
+		{"non-matching component advances the cursor without writing", streamFilter{component: "sync"}, 6, false, 7},
+		{"both filters matching is written", streamFilter{severity: "MEDIUM", component: "loop"}, 6, true, 7},
+		{"both filters must hold (AND, not OR)", streamFilter{severity: "MEDIUM", component: "sync"}, 6, false, 7},
+		{"duplicate at the cursor is dropped and does not move it", streamFilter{}, 7, false, 7},
+		{"matching event at the cursor is still a duplicate", streamFilter{severity: "MEDIUM"}, 7, false, 7},
+		{"event below the cursor is dropped", streamFilter{}, 9, false, 9},
+		{"filtered event below the cursor does not rewind it", streamFilter{severity: "CRITICAL"}, 9, false, 9},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			write, next := applyLiveEvent(medium, tc.cursor, tc.filter)
+			if write != tc.wantWrite {
+				t.Errorf("write = %v, want %v", write, tc.wantWrite)
+			}
+			if next != tc.wantCursor {
+				t.Errorf("cursor = %d, want %d", next, tc.wantCursor)
+			}
+		})
+	}
+}
+
+// TestSCHEDGAP1737_EventsStream_TailSeedHonorsSeverityFilter is the acceptance
+// case: a filtered tail-seed emits ONLY matching frames. The severities are
+// interleaved so the pre-fix behaviour would deliver an INFO frame FIRST —
+// exactly the symptom in the ticket.
+func TestSCHEDGAP1737_EventsStream_TailSeedHonorsSeverityFilter(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", "info-1")
+	firstMedium := logStreamEventFiltered(t, db, database.SeverityMedium, "ctltest", "medium-1")
+	logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", "info-2")
+	secondMedium := logStreamEventFiltered(t, db, database.SeverityMedium, "ctltest", "medium-2")
+
+	resp, _ := openStreamQuery(t, ts, "severity=MEDIUM", "")
+	frames := readFrames(resp.Body)
+
+	got := collectEvents(t, frames, 2, 5*time.Second)
+	if got[0].ID != firstMedium.ID || got[1].ID != secondMedium.ID {
+		t.Fatalf("filtered tail ids = [%d %d], want [%d %d] (only the MEDIUM events)",
+			got[0].ID, got[1].ID, firstMedium.ID, secondMedium.ID)
+	}
+	for i, ev := range got {
+		if ev.Severity != database.SeverityMedium {
+			t.Errorf("frame %d severity = %q, want MEDIUM", i, ev.Severity)
+		}
+	}
+	// Nothing else may follow: the log holds two more (INFO) events, and a
+	// dropped filter would have emitted them.
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+}
+
+// TestSCHEDGAP1737_EventsStream_TailWindowSelectsNewestMatching pins the
+// catch-up window semantics: the tail is the newest streamReplayTail events
+// MATCHING the filter, not "the newest streamReplayTail events of any severity,
+// filtered afterwards". The only CRITICAL event is buried under more than a
+// window's worth of unrelated events, so a filter applied after the window would
+// deliver nothing — the same "my filter did nothing" complaint, for a different
+// reason. This is the stream's parallel to
+// GET /api/v1/events?severity=CRITICAL&limit=100.
+func TestSCHEDGAP1737_EventsStream_TailWindowSelectsNewestMatching(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	crit := logStreamEventFiltered(t, db, database.SeverityCritical, "ctltest", "the-critical")
+	for i := 0; i < streamReplayTail+5; i++ {
+		logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", fmt.Sprintf("noise-%d", i))
+	}
+
+	resp, _ := openStreamQuery(t, ts, "severity=CRITICAL", "")
+	frames := readFrames(resp.Body)
+
+	got := collectEvents(t, frames, 1, 5*time.Second)
+	if got[0].ID != crit.ID {
+		t.Fatalf("filtered tail reached id %d, want the CRITICAL event %d (window must select the newest matching events)",
+			got[0].ID, crit.ID)
+	}
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+}
+
+// TestSCHEDGAP1737_EventsStream_LiveSkipsNonMatchingAndDeliversLater covers the
+// live path: a committed event that does not match the filter is never written,
+// and the matching event after it is still delivered exactly once — i.e. the
+// stream neither leaks an unrelated severity nor stalls behind one.
+func TestSCHEDGAP1737_EventsStream_LiveSkipsNonMatchingAndDeliversLater(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	// The matching seed doubles as the readiness signal that the server-side
+	// subscription exists: it is tail-seeded, so it is the first frame.
+	seed := logStreamEventFiltered(t, db, database.SeverityCritical, "ctltest", "critical-seed")
+
+	resp, _ := openStreamQuery(t, ts, "severity=CRITICAL", "")
+	frames := readFrames(resp.Body)
+	got := collectEvents(t, frames, 1, 5*time.Second)
+	if got[0].ID != seed.ID {
+		t.Fatalf("first frame id = %d, want the CRITICAL seed %d", got[0].ID, seed.ID)
+	}
+
+	// A live non-matching event must not reach the client...
+	logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", "info-live")
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+
+	// ...and must not stall the stream: the next matching event arrives, once.
+	live := logStreamEventFiltered(t, db, database.SeverityCritical, "ctltest", "critical-live")
+	after := collectEvents(t, frames, 1, 5*time.Second)
+	if after[0].ID != live.ID || after[0].Message != "critical-live" {
+		t.Fatalf("frame after the filtered event = {id:%d msg:%q}, want {id:%d msg:critical-live}",
+			after[0].ID, after[0].Message, live.ID)
+	}
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+}
+
+// TestSCHEDGAP1737_EventsStream_ComponentFilter covers the second param, alone
+// and combined with severity (the two filters AND together).
+func TestSCHEDGAP1737_EventsStream_ComponentFilter(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	logStreamEventFiltered(t, db, database.SeverityInfo, "alpha", "a-1")
+	beta := logStreamEventFiltered(t, db, database.SeverityInfo, "beta", "b-1")
+	logStreamEventFiltered(t, db, database.SeverityInfo, "alpha", "a-2")
+
+	resp, _ := openStreamQuery(t, ts, "component=beta", "")
+	frames := readFrames(resp.Body)
+	got := collectEvents(t, frames, 1, 5*time.Second)
+	if got[0].ID != beta.ID || got[0].Component != "beta" {
+		t.Fatalf("component-filtered frame = {id:%d comp:%q}, want {id:%d comp:beta}", got[0].ID, got[0].Component, beta.ID)
+	}
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+
+	// Both params hold: the only beta event is INFO, so severity=CRITICAL
+	// excludes it and the stream must stay empty.
+	both, _ := openStreamQuery(t, ts, "severity=CRITICAL&component=beta", "")
+	framesBoth := readFrames(both.Body)
+	expectNoEventFrame(t, framesBoth, 300*time.Millisecond)
+}
+
+// TestSCHEDGAP1737_EventsStream_NoFilterUnchangedAndOtherParamsIgnored guards the
+// other direction: a client that sends no filter (or params this endpoint does
+// not honor, such as `limit`) still receives every event, in order — the
+// pre-existing contract is untouched.
+func TestSCHEDGAP1737_EventsStream_NoFilterUnchangedAndOtherParamsIgnored(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	want := []int64{
+		logStreamEventFiltered(t, db, database.SeverityInfo, "alpha", "e-1").ID,
+		logStreamEventFiltered(t, db, database.SeverityCritical, "beta", "e-2").ID,
+		logStreamEventFiltered(t, db, database.SeverityMedium, "alpha", "e-3").ID,
+	}
+
+	for _, query := range []string{"", "severity=", "limit=1", "foo=bar&unknown=1"} {
+		t.Run("query="+query, func(t *testing.T) {
+			resp, _ := openStreamQuery(t, ts, query, "")
+			frames := readFrames(resp.Body)
+			got := collectEvents(t, frames, len(want), 5*time.Second)
+			for i, ev := range got {
+				if ev.ID != want[i] {
+					t.Fatalf("frame %d id = %d, want %d (query %q must not change the unfiltered stream)", i, ev.ID, want[i], query)
+				}
+			}
+			expectNoEventFrame(t, frames, 150*time.Millisecond)
+		})
+	}
+}
+
+// TestSCHEDGAP1737_EventsStream_ReconnectWithFilterResumesCleanly is the
+// subtlety the ticket calls out: a reconnecting filtered client (Last-Event-ID +
+// filter) must not re-deliver an event it already saw and must not skip a
+// matching one — the cursor advances over filtered events without emitting them.
+func TestSCHEDGAP1737_EventsStream_ReconnectWithFilterResumesCleanly(t *testing.T) {
+	_, db, ts := newStreamTestServer(t)
+
+	logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", "i-1")
+	cursorEvent := logStreamEventFiltered(t, db, database.SeverityMedium, "ctltest", "m-1")
+	logStreamEventFiltered(t, db, database.SeverityInfo, "ctltest", "i-2")
+	newest := logStreamEventFiltered(t, db, database.SeverityMedium, "ctltest", "m-2")
+
+	resp, _ := openStreamQuery(t, ts, "severity=MEDIUM", strconv.FormatInt(cursorEvent.ID, 10))
+	frames := readFrames(resp.Body)
+
+	// Exactly the MEDIUM event above the cursor: no re-delivery of m-1, no INFO
+	// leak, nothing skipped.
+	got := collectEvents(t, frames, 1, 5*time.Second)
+	if got[0].ID != newest.ID {
+		t.Fatalf("replayed id = %d, want %d (cursor %d must not re-deliver or skip)",
+			got[0].ID, newest.ID, cursorEvent.ID)
+	}
+	if got[0].ID <= cursorEvent.ID {
+		t.Errorf("replay re-delivered id %d at or below the client's cursor %d", got[0].ID, cursorEvent.ID)
+	}
+	expectNoEventFrame(t, frames, 300*time.Millisecond)
+
+	// Live delivery continues from the cursor watermark, still filtered.
+	live := logStreamEventFiltered(t, db, database.SeverityMedium, "ctltest", "m-3")
+	after := collectEvents(t, frames, 1, 5*time.Second)
+	if after[0].ID != live.ID {
+		t.Errorf("live frame id = %d, want %d", after[0].ID, live.ID)
 	}
 }

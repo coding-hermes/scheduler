@@ -46,7 +46,7 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/ticks` | List ticks |
 | `/api/v1/ticks/{id}` | One tick by id (GET) |
 | `/api/v1/events` | List event log (GET) |
-| `/api/v1/events/stream` | SSE push stream of the event log (CTL-002) |
+| `/api/v1/events/stream` | SSE push stream of the event log (CTL-002); accepts the same `severity`/`component` filters as `GET /api/v1/events` (SCHED-GAP-1737) |
 | `/api/v1/observatory` | Observatory snapshot (JSON, SCHED-GAP-1592) — tick-rate buckets, namespace allocation shares and failure-rate heatmap for `?window=` (seconds or 1h/6h/24h/7d, default 6h) and `?namespace=`; 503 without a wired collector |
 | `/api/v1/observatory/stream` | SSE push stream of Observatory snapshots (SCHED-GAP-1592) — recomputed every 10s for the query's filter, `: heartbeat` comments while quiet, and `: error collect:` comments instead of fabricated snapshots on compute failure |
 | `/api/v1/gateway-errors` | Ticks NOT run because of gateway unavailability, over a fixed 24h window (SCHED-GAP-1654): `total`, `by_class` (`unavailable_503` / `rate_limited_429` / `connection_refused`, every class present even at 0) and `by_project` (counts per lane, ordered by total desc), counted from the spawn path's `gateway_availability` events |

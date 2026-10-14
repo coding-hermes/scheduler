@@ -1058,6 +1058,26 @@ stream after a successful INSERT, so an event written by any component (the
 scheduler loop, the API, the MCP server, the DuckBrain sync) appears on the
 stream as it lands.
 
+**Query params:** the stream accepts the same `severity` and `component`
+filters as `GET /api/v1/events` (SCHED-GAP-1737).
+
+| Param | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `severity` | string | — | Only events with this exact severity (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) |
+| `component` | string | — | Only events with this exact component name |
+
+Both are optional, and omitting them streams every event — the behaviour
+before the filters existed. The comparison is exact and case-sensitive, the
+same one `GET /api/v1/events` uses, so a value that matches nothing (a
+misspelling, or the wrong case) yields a stream with no data frames rather
+than an error. Every other query param is ignored on this endpoint: in
+particular `limit` belongs to the poll endpoint and has no meaning on a push
+stream. The filter covers the catch-up window as well as live delivery: a
+client with no `Last-Event-ID` is seeded with the newest 100 events MATCHING
+the filter (the stream's parallel to
+`GET /api/v1/events?severity=…&limit=100`), and the replay after a
+`Last-Event-ID` sends every matching event with a greater id.
+
 **Response 200:** `Content-Type: text/event-stream`, `Cache-Control: no-cache`.
 One frame per event:
 
@@ -1074,9 +1094,12 @@ While the log is quiet a comment heartbeat (`: heartbeat`) is written every
 request header. Every persisted event with a greater id is replayed before live
 events resume. A missing, empty or malformed `Last-Event-ID` (anything that is
 not a plain decimal integer) is treated as "no cursor" and replays the newest
-100 events — never an error, never an unbounded read. Each replay query is
-capped at 500 rows and a whole replay at 100 pages; if that bound is reached
-the stream emits a `: replay truncated` comment.
+100 events matching the filter — never an error, never an unbounded read. The
+resume cursor is id-based: an event the filter excludes still advances it, so a
+filtered reconnect neither re-delivers an event the client already saw nor
+skips a matching one. Each replay query is capped at 500 rows and a whole
+replay at 100 pages; if that bound is reached the stream emits a
+`: replay truncated` comment.
 
 **Slow clients:** each subscriber has a bounded (64-event) buffer. A client that
 falls that far behind drops its overflow rather than blocking event writers; the
@@ -1092,6 +1115,9 @@ context is canceled.
 curl -N http://127.0.0.1:9090/api/v1/events/stream
 # Resume after event 12345.
 curl -N -H 'Last-Event-ID: 12345' http://127.0.0.1:9090/api/v1/events/stream
+# Only CRITICAL events from the spawner, resuming after event 12345.
+curl -N -H 'Last-Event-ID: 12345' \
+  'http://127.0.0.1:9090/api/v1/events/stream?severity=CRITICAL&component=spawner'
 ```
 
 ## 9. Queue
