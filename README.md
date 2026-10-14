@@ -30,19 +30,18 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 ## Getting Started (5 minutes)
 
-> **Note (2026-10-06): the earlier "broken/stale" caution is resolved.** The
-> latest release is [v1.12.0](https://github.com/coding-hermes/scheduler/releases/tag/v1.12.0)
-> (published 2026-09-30) and the `CI` workflow (build, lint, race, multiarch,
-> end-to-end) is green on today's `main` head (`44691f21`). A fresh checkout of
-> `main` passes `make test` (all 18 packages) and `make build`, which produces
-> `bin/schedulerd` + `bin/migrate` as used in the steps below. One known
-> race-flaky CI job (`INT-CI-181`) is tracked on the project board; it does not
-> affect this guide.
+> **Note:** releases are published on the
+> [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
+> checkout of `main` passes `make test` (all 18 packages) and `make build`,
+> which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
+> run both on a fresh checkout before trusting any step here. Past flaky-CI
+> episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
+> board and do not affect this guide.
 >
-> The fleet's internal checkout can still move ahead of this public repo between
-> pushes, so `make test` remains the trust gate for the steps below. If it fails
-> or a step misbehaves, open a [release-check task](.github/ISSUE_TEMPLATE/release-check.md)
-> and let a human gate the fix and push — agents never auto-push.
+> The fleet's internal checkout can move ahead of this public repo between
+> pushes. If a step misbehaves, open a
+> [release-check task](.github/ISSUE_TEMPLATE/release-check.md) and a human
+> gates the fix — agents never auto-push.
 
 This guide takes you from zero to a running scheduler with your existing cron jobs imported.
 
@@ -298,11 +297,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 59 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 60 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
-table drifts from the registry). Verify the running daemon's surface (a
-daemon built from this tree reports 58; an older deployed build reports
-fewer):
+table drifts from the registry). Verify the running daemon's surface (older
+deployed builds report fewer tools):
 
 ```sh
 curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
@@ -1059,7 +1057,7 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 
 ## Dashboard
 
-Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates: fleet overview and health panel every 10s, queue and tick history every 30s.
+Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates driven by a single user-configurable auto-refresh (default 10s; selectable 5s/10s/30s/60s/5m/off in the refresh bar, remembered in `localStorage` under `ch.autorefresh_ms`). One cadence serves every page, including the queue and tick history views.
 
 ![Dashboard](assets/dashboard.png)
 
