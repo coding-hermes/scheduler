@@ -1070,6 +1070,111 @@ func TestListEvents_Pagination(t *testing.T) {
 	}
 }
 
+// TestListEventsTailFiltered covers the SSE stream's catch-up window helper
+// (SCHED-GAP-1737): newest events MATCHING the filters, chronological output,
+// and the empty-filter delegation that keeps the unfiltered path byte-identical
+// to ListEventsAfterID.
+func TestListEventsTailFiltered(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	seed := []Event{
+		{Severity: SeverityInfo, Component: "alpha", Message: "m1"},
+		{Severity: SeverityMedium, Component: "beta", Message: "m2"},
+		{Severity: SeverityInfo, Component: "alpha", Message: "m3"},
+		{Severity: SeverityMedium, Component: "beta", Message: "m4"},
+		{Severity: SeverityHigh, Component: "beta", Message: "m5"},
+	}
+	ids := make([]int64, len(seed))
+	for i := range seed {
+		if err := LogEvent(ctx, db, &seed[i]); err != nil {
+			t.Fatalf("LogEvent: %v", err)
+		}
+		ids[i] = seed[i].ID
+	}
+
+	cases := []struct {
+		name      string
+		severity  string
+		component string
+		limit     int
+		want      []int64
+	}{
+		{"no filter delegates to ListEventsAfterID", "", "", 0, ids},
+		{"severity filter", string(SeverityMedium), "", 0, []int64{ids[1], ids[3]}},
+		{"component filter", "", "alpha", 0, []int64{ids[0], ids[2]}},
+		{"both filters", string(SeverityHigh), "beta", 0, []int64{ids[4]}},
+		{"limit keeps the NEWEST matching rows", string(SeverityMedium), "", 1, []int64{ids[3]}},
+		{"unrecognized severity matches nothing", "BOGUS", "", 0, nil},
+		{"filter matching nothing", "", "nope", 0, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ListEventsTailFiltered(ctx, db, tc.severity, tc.component, tc.limit)
+			if err != nil {
+				t.Fatalf("ListEventsTailFiltered: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d events, want %d (%v)", len(got), len(tc.want), tc.want)
+			}
+			for i, ev := range got {
+				if ev.ID != tc.want[i] {
+					t.Errorf("event %d id = %d, want %d", i, ev.ID, tc.want[i])
+				}
+				if i > 0 && got[i-1].ID > ev.ID {
+					t.Errorf("events are not chronological: %d before %d", got[i-1].ID, ev.ID)
+				}
+			}
+		})
+	}
+
+	// The unfiltered window must be exactly what the stream used before the
+	// filter existed — that identity is the delegation's whole point.
+	ref, err := ListEventsAfterID(ctx, db, 0, 3)
+	if err != nil {
+		t.Fatalf("ListEventsAfterID: %v", err)
+	}
+	got, err := ListEventsTailFiltered(ctx, db, "", "", 3)
+	if err != nil {
+		t.Fatalf("ListEventsTailFiltered: %v", err)
+	}
+	if len(got) != len(ref) {
+		t.Fatalf("delegated window = %d events, want %d", len(got), len(ref))
+	}
+	for i := range ref {
+		if got[i].ID != ref[i].ID {
+			t.Errorf("delegated window event %d id = %d, want %d", i, got[i].ID, ref[i].ID)
+		}
+	}
+}
+
+// TestMaxEventID pins the cursor source for a tail-seeded SSE client: 0 on an
+// empty log (never a NULL scan error), otherwise the newest id.
+func TestMaxEventID(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	id, err := MaxEventID(ctx, db)
+	if err != nil {
+		t.Fatalf("MaxEventID on an empty log: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("MaxEventID on an empty log = %d, want 0", id)
+	}
+
+	e := &Event{Severity: SeverityInfo, Component: "test", Message: "only"}
+	if err := LogEvent(ctx, db, e); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+	id, err = MaxEventID(ctx, db)
+	if err != nil {
+		t.Fatalf("MaxEventID: %v", err)
+	}
+	if id != e.ID {
+		t.Errorf("MaxEventID = %d, want %d", id, e.ID)
+	}
+}
+
 func TestLogEvent_CheckConstraintSeverity(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
