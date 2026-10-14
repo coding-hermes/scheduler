@@ -593,3 +593,4 @@
 {"id":1791329767656702762,"task_id":"DOC-12","type":null,"created_at":null,"detail":"{\"status\":\"complete\"}","timestamp":"2026-10-14T08:08:55.855504+00:00","event_type":"task_completed","actor":"foreman"}
 {"id":1791329767656702763,"task_id":"README-17","type":null,"created_at":null,"detail":"{\"status\":\"complete\"}","timestamp":"2026-10-14T08:08:55.883136+00:00","event_type":"task_completed","actor":"foreman"}
 {"id":1791329767656702764,"task_id":"SCHED-GAP-1735","type":null,"created_at":null,"detail":"{\"status\":\"complete\"}","timestamp":"2026-10-14T08:08:55.912063+00:00","event_type":"task_completed","actor":"foreman"}
+{"id":1791329767656702765,"task_id":"INT-CI-185","type":null,"created_at":null,"detail":"{\"id\":\"INT-CI-185\",\"status\":\"pending\"}","timestamp":"2026-10-14T08:40:41.692717+00:00","event_type":"task_created","actor":"foreman"}
