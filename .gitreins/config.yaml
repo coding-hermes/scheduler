@@ -1,4 +1,5 @@
 guards:
+  allow_skips: true
   secrets: true
   lint: false
   tests: false
