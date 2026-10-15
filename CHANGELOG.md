@@ -39,6 +39,63 @@ range cited under its heading. The rollover itself is done by
 - scheduler: per-lane and per-namespace gateway endpoints — the tick path resolves its endpoint at dispatch time through lane > namespace > global (independently for URL and key), records the RESOLVED endpoint and the tier that supplied it on the tick row (`gateway_url` / `gateway_source` / `gateway_key_source`, migration v61), and derives one `GatewayClient` per non-global endpoint so an unreachable lane fails alone instead of degrading the fleet (SCHED-GAP-1712) — `da2143df`.
 - scheduler: **gateway admission is per endpoint** (t_cadba34c) — the daemon-wide gateway HEALTH GATE now judges the endpoint a lane RESOLVES to, not the daemon's own gateway: verdicts are cached per endpoint (one probe per 30 s window per endpoint, bounded at 64, each with its own outage episode and event), a lane addressed at a remote gateway is admitted while the daemon's gateway is down, and an unreachable lane endpoint defers only the lanes behind it. The fleet-wide `gatewayDead` latch and the reconnect/orphan-nudge stay GLOBAL-only, and a deferral event now carries `gateway_url`/`gateway_source`/`gateway_key_source` + `gateway_health_endpoint`. Decision measured against the live store: 6 global-outage episodes 09-21→09-27 (one idling 121 spawns in 15 min) while 0 lanes were addressed — so the harm is real and the isolation law settles it.
 
+- scheduler: pick-time admission gates — heads blocked by an open dependency or a held sibling wave are refused at PICK time, not dispatched into a stuck tick (SCHED-GAP-1658) — `82a6fabe`.
+- cooldown: scheduled cooldown-residue detector (`cmd/cooldown-residue`, `internal/cooldownaudit`, `internal/api/cooldown_residue.go`) — finds lanes whose live cooldown diverges from the ratified policy matrix (SCHED-GAP-1670) — `2937f10f`.
+- api: SSE stream honors severity/component query filters on all paths (tail, replay, catch-up, live); OpenAPI + endpoint docs updated (SCHED-GAP-1737) — `42bfaf61`.
+- dashboard: live event toasts with bounded throttling + opt-in browser notifications (SCHED-GAP-1599) — `1368e252`.
+- scheduler: sync lanes route to cheap models with a scope-budget prompt append (SCHED-GAP-1651) — `fb350ca5`.
+- scheduler: stale-premise pick gate — a pending row already satisfied in the tree defers its lane instead of dispatching redundant work — `8d07e198`.
+- scheduler: no-op by lane class — per-lane `noop_allowed` + pre/post commit trigger + foreman re-entry (SCHED-GAP-1682) — `d6465070`.
+- scheduler: per-namespace cadence ceiling + a ceiling-crossed event naming the boost (SCHED-GAP-1686) — `a989d35f`.
+- scheduler: board-aware admission for tasks BUILDER lanes (SCHED-GAP-1656) — `0e97b0b1`.
+- scheduler: per-namespace tick deadline decoupled from waves (SCHED-GAP-1691) — `6fcd57e7`.
+- scheduler: configurable transient-gateway retry with session continuation (SCHED-GAP-1681) — `265707b3`.
+- perf: simulator flags connected to `SCHEDULER_TIME_*` + bulk-sim window derived from `--sim-count` (SCHED-GAP-1629) — `4178b9b7`.
+- dashboard: observatory page with live graphs (SCHED-GAP-1592) — `13a75d72`.
+- api: lane tree view replaces the flat topology (deprecated) (SCHED-GAP-1587) — `f3531e40`.
+- dashboard: per-tick push behind a flag, web-primary (SCHED-GAP-1594) — `fb832ca4`.
+- gate: namespace-membership invariant — satellites must live in their family namespace (SCHED-GAP-1604) — `61d37b3b`.
+- scheduler: one shared effective-cooldown admission gate for every slot-pool entry point — `76e4d1a1`.
+- scheduler: durable composable usage pools with lease recovery and observability (t_686fea73) — `2b5ba342`.
+- scheduler: partial telemetry on timeout + heartbeat-silence watchdog (SCHED-GAP-1707) — `bea0155f`.
+- scheduler: board-touching commit guard — pre-merge refusal for commits that edit the board with no corresponding work (SCHED-GAP-1699) — `9f705f9c`.
+- scheduler: board-stasis spawn gate + non-commit tick artifacts (SCHED-GAP-1678/1680) — `776ffff0`.
+
+### Fixes
+- scheduler: a tick killed by its own deadline books timeout as a lane failure for backoff (SCHED-GAP-1705) — `200f8ed0`.
+- scheduler: classify and expose gateway availability errors (SCHED-GAP-1654) — `3432b2ed`.
+- scheduler: idempotent restart handoff claims — `30bbddfe`.
+- scheduler: sync scope-budget prompt append made idempotent (SCHED-GAP-1651) — `cf84a4ff`.
+- scheduler: unsynchronized price-as-of global racing concurrent completions removed (SCHED-GAP-1651-R3) — `aeda8e81`.
+- config: SCHEDULER_* env overrides now apply on the daemon boot path (TR-162) — `391bdd25`.
+- scheduler: git-verify stale-premise reachability so fabricated hashes cannot defer lanes — `307b00dd`.
+- scheduler: serve LastEvalTime from an atomic mirror so /api/v1/status stops convoying behind evaluate() — `791a981d`.
+- scheduler: poll-loop idle guard — sleep-poll sessions past the idle deadline are cancelled (SCHED-GAP-1698) — `b484a38f`.
+- scheduler: defer nil-gateway ticks instead of failing lanes (SCHED-GAP-1664) — `28b58c74`.
+- scheduler: provisioning order — rows born disarmed + namespace-agnostic admission classification (SCHED-GAP-1729) — `391dab32`.
+- scheduler: deferred:true board rows excluded from open-work admission counting (SCHED-GAP-1727) — `252e971c`.
+- api: satellite-family pins aligned with the ratified qa=12h ruling (SCHED-GAP-1732 residue, INT-CI-181) — `5a0626cb`.
+- api: releng accepted in the lane onboarding gate (SCHED-GAP-1733) — `fc63bd08`.
+- scheduler: tick_workers rows stuck in state=running are reaped (SCHED-GAP-1706) — `3ce5b45d`.
+- scheduler: enforce dispatch deadlines and drain lifecycle — `27cf5357`.
+- sync: skipped duplicate snapshots counted in sync health (SCHED-GAP-1572) — `dbbce223`.
+- sync: empty DuckBrain payloads rejected before write (SCHED-GAP-1573) — `dd71ece9`.
+- dashboard: responsive tables, no horizontal scroll (SCHED-GAP-1588) — `6d13a5f4`.
+- wave: stale-base guard added to harvest merge (SCHED-GAP-1609) — `93b7ab14`.
+- api: expired dead-owner usage leases recovered (t_686fea73) — `246d9409`.
+- perf: 60s snapshot cache for the fleet-overview collect (SCHED-GAP-1730) — `60d13025`.
+- scripts: regenerate_fleet.py paginates /api/v1/projects so docs/fleet.md reflects the whole fleet — `5f14cb63`.
+- gitreins: hook_timeout aligned with test_timeout (900s) — `1a867b90`.
+- tests: TestGatewayHealthGate_Recovery synced with the async failure-counter reset (INT-CI-186) — `62b2fff5`.
+- tests: clock-sim E2E cooldown read synced with the async persist (INT-CI-185) — `e400ad82`.
+- tests: TestUsagePoolLeaseReleasedWhenStartFails no longer leaks live CLI sessions (SCHED-GAP-1734) — `f28ee925`.
+- tests: evalDrain lifecycle pinned + suite-exit goroutine census added (SCHED-GAP-1726) — `6d6281f6`.
+- tests: TestSCHEDGAP1660_WakeOnLiveTasksLaneIsNotAFlip race-detector flake deflaked (INT-CI-179F) — `b84041a8`.
+- docs: clock-modes.md — SCHEDULER_TIME_SCALE/AUTOADVANCE marked ignored unless TIME_MODE=sim (SCHED-GAP-1735) — `244772d6`.
+- docs: dashboard project links resolved via ResolveProjectDetailName; /healthz alias added (SCHED-GAP-1731) — `4e02f7b3`.
+- docs: README MCP tool count unified at 60; caution box de-staled; make test vs test-full distinguished (README-9/10/12/13/14/15/16) — `4727012b`.
+- docs: docs/fleet.md regenerated from the live daemon; traceability doctrine added (DOC-13) — `2908ee3f`.
+
 ## [1.12.0] — 2026-10-01
 
 ### Features
