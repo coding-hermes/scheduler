@@ -68,3 +68,6 @@ tmp/
 # Python bytecode / pytest caches (tests/ drives ops/check-fleet-invariants.py in-process)
 __pycache__/
 .pytest_cache/
+
+# Live config file, not repo truth (SCHED-GAP-213)
+fleet.toml
