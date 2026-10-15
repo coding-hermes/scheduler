@@ -73,16 +73,22 @@ range cited under its heading. The rollover itself is done by
 - scheduler: poll-loop idle guard — sleep-poll sessions past the idle deadline are cancelled (SCHED-GAP-1698) — `b484a38f`.
 - scheduler: defer nil-gateway ticks instead of failing lanes (SCHED-GAP-1664) — `28b58c74`.
 - scheduler: provisioning order — rows born disarmed + namespace-agnostic admission classification (SCHED-GAP-1729) — `391dab32`.
+- scheduler: self-wall tick kills classified as TickTimeout regardless of ctx.Err() flag order (SCHED-GAP-1693) — `29b6fedc`.
+- ops: satellite cap policy reconciled with the R3.3 ruling (SCHED-GAP-1732 residue) — `4b25296b`.
+- api: onboarding qa family pin 6h → 12h — parity with the ratified matrix — `ba599721`.
+- board: legacy status=done normalized to complete (QA-CHS-182, INT-CI-182) — `796bd2b0`.
+- board: SCHED-GAP-1632 wave-dispatch event renumbered below the 19-digit id floor — `a12161b1`.
+- lint: gofmt alignment in the /health clock-mode map (SCHED-GAP-1632 follow-up) — `006dfa92`.
 - scheduler: deferred:true board rows excluded from open-work admission counting (SCHED-GAP-1727) — `252e971c`.
 - api: satellite-family pins aligned with the ratified qa=12h ruling (SCHED-GAP-1732 residue, INT-CI-181) — `5a0626cb`.
 - api: releng accepted in the lane onboarding gate (SCHED-GAP-1733) — `fc63bd08`.
 - scheduler: tick_workers rows stuck in state=running are reaped (SCHED-GAP-1706) — `3ce5b45d`.
 - scheduler: enforce dispatch deadlines and drain lifecycle — `27cf5357`.
 - sync: skipped duplicate snapshots counted in sync health (SCHED-GAP-1572) — `dbbce223`.
-- sync: empty DuckBrain payloads rejected before write (SCHED-GAP-1573) — `dd71ece9`.
-- dashboard: responsive tables, no horizontal scroll (SCHED-GAP-1588) — `6d13a5f4`.
+- sync: empty DuckBrain payloads rejected before write (SCHED-GAP-1573) — `dd71ece9` (dup `f7384116`).
+- dashboard: responsive tables, no horizontal scroll (SCHED-GAP-1588) — `6d13a5f4` (dup `b3f9770c`).
 - wave: stale-base guard added to harvest merge (SCHED-GAP-1609) — `93b7ab14`.
-- api: expired dead-owner usage leases recovered (t_686fea73) — `246d9409`.
+- api: expired dead-owner usage leases recovered (t_686fea73) — `246d9409` (recovery-completion leg `0c554e39`).
 - perf: 60s snapshot cache for the fleet-overview collect (SCHED-GAP-1730) — `60d13025`.
 - scripts: regenerate_fleet.py paginates /api/v1/projects so docs/fleet.md reflects the whole fleet — `5f14cb63`.
 - gitreins: hook_timeout aligned with test_timeout (900s) — `1a867b90`.
