@@ -54,6 +54,12 @@ dagger.db-shm
 .coding-hermes/board/*.duckdb
 /.gitreins/usage.jsonl
 
+# Live fleet config — deliberately NOT tracked. The source of truth is the
+# live file ~/.hermes/fleet.toml on the scheduler host, written only by
+# ~/.hermes/scripts/fleet-cooldown-policy.py --apply. It is regenerated
+# constantly, so a tracked copy here goes stale immediately (SCHED-GAP-213).
+/fleet.toml
+
 # Untracked tick scratch (untracked noise every tick)
 tmp/
 .gitreins/logs/
