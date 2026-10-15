@@ -438,6 +438,15 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			if blocked, _ := stalePremiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
 				continue
 			}
+			// SCHED-GAP-1658: the blocked-head gate on the overdue rescue —
+			// the same bypass path, the NEXT two no-candidate shapes: every
+			// pending row dependency-blocked (incomplete depends_on) or
+			// sibling-held (explicit worker_status claim). Stale keeps
+			// priority; a stale board never reaches this gate, so a lane
+			// is deferred once per pass with one reason.
+			if blocked, _ := premiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				continue
+			}
 			if currRunning >= p.maxConcurrent {
 				log.Printf("PACKER: max concurrency reached (%d), stopping", p.maxConcurrent)
 				break
@@ -517,6 +526,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 				totalSkippedCooldown++
 				continue
 			}
+			// SCHED-GAP-1658: the blocked-head gate on the same waiver
+			// path — the open rows exist but NONE is a takeable head:
+			// every pending row is dependency-blocked or sibling-held.
+			// Stale keeps priority; one reason per pass, no double-defer.
+			if blocked, _ := premiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				totalSkippedCooldown++
+				continue
+			}
 		} else {
 			// SCHED-GAP-1655: the legacy-path mirror of the namespace and
 			// flat-fallback gates — a cooldown-mode BUILDER lane with no
@@ -563,6 +580,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			// no-work and board-stasis gates; strictly downstream of the
 			// pin. A board read, no git ops.
 			if blocked, _ := stalePremiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
+				totalSkippedCooldown++
+				continue
+			}
+			// SCHED-GAP-1658: the blocked-head gate's cooldown-mode half
+			// (same tasks-without-waiver no-op) — every pending row
+			// dependency-blocked or sibling-held. After stale (stale keeps
+			// priority); one board read, no git ops, one reason per pass.
+			if blocked, _ := premiseBlocks(s.name, s.workdir, mode, s.boardOwnership, ""); blocked {
 				totalSkippedCooldown++
 				continue
 			}

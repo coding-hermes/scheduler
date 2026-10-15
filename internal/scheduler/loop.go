@@ -94,6 +94,10 @@ type Loop struct {
 	// admissionPrevTickID, carrying the "row" the ADMIT line and the
 	// deferral record must name.
 	admissionStaleRowID string
+	// SCHED-GAP-1658: the blocked/held row ids the classifier's blocked-head
+	// verdict named (reason dependency_blocked or sibling_held) — the same
+	// stash-and-clear contract as admissionStaleRowID.
+	admissionBlockedRowID string
 	// evalWakeCh + evalDone are the SCHED-GAP-1575-A coalescing channel
 	// for ForceEvaluate(). Buffered(1); non-blocking sends collapse N
 	// concurrent calls into at most one pending pass. NewLoop enables a lazy
@@ -1690,6 +1694,15 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		if blocked, _ := stalePremiseBlockedQuiet(name, workdir, mode, boardOwnership, ""); blocked {
 			continue
 		}
+		// SCHED-GAP-1658 mirror: a BUILDER lane whose board's pending rows
+		// are all dependency-blocked or sibling-held is deferred by the
+		// packers' blocked-head gate, so it is not eligible either — the
+		// mirror must agree with all three selection paths or the GAP-043
+		// alarm lies about a lane that has no takeable head. After stale
+		// (stale keeps priority, same as the packers).
+		if blocked, _, _ := premiseBlockedQuiet(name, workdir, mode, boardOwnership, ""); blocked {
+			continue
+		}
 		// SCHED-GAP-1666: the shared gate's wall-clock verdict — the
 		// packer admits exactly when the gate does not defer.
 		if !gate.Defer {
@@ -1881,6 +1894,16 @@ var admissionReasonVocabulary = []string{
 	// satisfied. Distinct from no_work (an EMPTY board): the board HAS
 	// rows, they are just already done. Carries no cooldown_remaining_s.
 	AdmissionReasonStalePremise,
+	// SCHED-GAP-1658: the blocked-head pair — a BUILDER lane whose board
+	// holds pending rows but NONE is a takeable head. dependency_blocked:
+	// every pending row's depends_on names a row that is not complete.
+	// sibling_held: every pending row carries an explicit worker_status
+	// claim (claimed/in_progress). Distinct from stale_premise (the row is
+	// DONE) and from no_work (the board is EMPTY): the board HAS rows, the
+	// foreman just cannot take any of them yet. Both carry no
+	// cooldown_remaining_s (board-caused, not pin-caused).
+	AdmissionReasonDependencyBlocked,
+	AdmissionReasonSiblingHeld,
 }
 
 // admissionReasonIsKnown reports whether reason is part of the vocabulary.
@@ -1959,6 +1982,10 @@ type admissionDecision struct {
 	// rendered as row=<id> on the ADMIT line so the deferral names the
 	// blocking row(s).
 	StaleRowID string
+	// SCHED-GAP-1658: the blocked/held row id(s) for reason=
+	// dependency_blocked / sibling_held, rendered as row=<id> on the ADMIT
+	// line — the deferral names the untakeable head(s), not just the lane.
+	BlockedRowID string
 }
 
 // AdmissionCounters returns a snapshot of the SCHED-GAP-155 admission
@@ -2090,6 +2117,11 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	if d.StaleRowID != "" {
 		line += " row=" + sanitizeAdmitField(d.StaleRowID)
 	}
+	// SCHED-GAP-1658: name the untakeable head(s) for
+	// dependency_blocked/sibling_held — same "row=" contract.
+	if d.BlockedRowID != "" {
+		line += " row=" + sanitizeAdmitField(d.BlockedRowID)
+	}
 	line += loadSuffix
 	admitWriteLine(line)
 
@@ -2103,6 +2135,9 @@ func (l *Loop) emitAdmissionDecision(passID, eligible, admitted, deferred int, d
 	detail := fmt.Sprintf("pass_id=%d eligible=%d admitted=%d deferred=%d ns=%s", passID, eligible, admitted, deferred, ns) + loadSuffix
 	if d.StaleRowID != "" {
 		detail += " row=" + d.StaleRowID
+	}
+	if d.BlockedRowID != "" {
+		detail += " row=" + d.BlockedRowID
 	}
 	l.recordDeferral(d.Project, reason, int64(passID), detail)
 
@@ -2321,6 +2356,18 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 			l.admissionStaleRowID = rowID
 			return AdmissionReasonStalePremise, 0, false
 		}
+		// SCHED-GAP-1658: the blocked-head gate's tasks-mode half — the
+		// open rows exist but NONE is a takeable head: every pending row
+		// is dependency-blocked (incomplete depends_on) or sibling-held
+		// (explicit worker_status claim). AFTER stale (stale keeps
+		// priority: the reason the classifier reports is the reason the
+		// packers deferred on — one deferral, one reason, no double-count).
+		// QUIET, same split. The gate returns the winning vocabulary entry
+		// (dependency_blocked or sibling_held) and the blocked/held row ids.
+		if blocked, reason, rowID := premiseBlockedQuiet(c.Name, c.Workdir, database.AdmissionModeTasks, c.BoardOwnership, c.ReporterClass); blocked {
+			l.admissionBlockedRowID = rowID
+			return reason, 0, false
+		}
 		// Waiver granted: the block (if any) is structural, the
 		// SCHED-GAP-133/136 floors downstream, or the SCHED-GAP-214
 		// post-failure stand-down (last tick FAILED → full effective
@@ -2381,6 +2428,19 @@ func (l *Loop) classifyAdmissionDeferral(c admissionCandidate, now time.Time, st
 	if blocked, rowID := stalePremiseBlockedQuiet(c.Name, c.Workdir, database.AdmissionModeCooldown, c.BoardOwnership, c.ReporterClass); blocked {
 		l.admissionStaleRowID = rowID
 		return AdmissionReasonStalePremise, 0, false
+	}
+	// SCHED-GAP-1658: the blocked-head gate's cooldown-mode half — the
+	// board's pending rows exist but NONE is a takeable head: every one is
+	// dependency-blocked (incomplete depends_on) or sibling-held (explicit
+	// worker_status claim). AFTER stale (stale keeps priority — a stale
+	// row is the stronger, git-verified answer, and one deferral carries
+	// one reason) and BEFORE the structural gates ("why did it not run" —
+	// "no takeable head" outranks "no room to run it in"). QUIET, the same
+	// split as the tasks half. The gate returns the winning vocabulary
+	// entry (dependency_blocked or sibling_held) plus the row ids.
+	if blocked, reason, rowID := premiseBlockedQuiet(c.Name, c.Workdir, database.AdmissionModeCooldown, c.BoardOwnership, c.ReporterClass); blocked {
+		l.admissionBlockedRowID = rowID
+		return reason, 0, false
 	}
 	if r := l.admissionStructuralDeferral(c, st, packedWeight, globalRunning, globalSelected); r != "" {
 		return r, 0, false
@@ -2487,6 +2547,13 @@ func (l *Loop) emitAdmissionPass(now time.Time, packed []PackedProject) int64 {
 			if d.Reason == AdmissionReasonStalePremise {
 				d.StaleRowID = l.admissionStaleRowID
 				l.admissionStaleRowID = ""
+			}
+			// SCHED-GAP-1658: when the classifier answered dependency_blocked
+			// or sibling_held it stashed the blocked/held row id(s) — the
+			// same stash-and-clear contract.
+			if d.Reason == AdmissionReasonDependencyBlocked || d.Reason == AdmissionReasonSiblingHeld {
+				d.BlockedRowID = l.admissionBlockedRowID
+				l.admissionBlockedRowID = ""
 			}
 		}
 		decisions = append(decisions, d)

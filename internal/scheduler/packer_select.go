@@ -405,6 +405,15 @@ func (m *MultiPoolPacker) Pack(
 						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
 						continue
 					}
+					// SCHED-GAP-1658: the blocked-head gate on the same
+					// waiver path — the open rows exist but NONE is a
+					// takeable head: every pending row is
+					// dependency-blocked or sibling-held. Stale keeps
+					// priority; one reason per pass, no double-defer.
+					if blocked, _ := premiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
+						continue
+					}
 				} else {
 					// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose
 					// board holds no dispatchable row is deferred BEFORE
@@ -457,6 +466,15 @@ func (m *MultiPoolPacker) Pack(
 					// After the no-work and board-stasis gates; strictly
 					// downstream of the pin. A board read, no git ops.
 					if blocked, _ := stalePremiseBlocks(pu.Project.Name, pu.Project.Workdir,
+						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
+						continue
+					}
+					// SCHED-GAP-1658: the blocked-head gate's cooldown-mode
+					// half (same tasks-without-waiver no-op) — every pending
+					// row dependency-blocked or sibling-held. After stale
+					// (stale keeps priority); one board read, no git ops,
+					// one reason per pass.
+					if blocked, _ := premiseBlocks(pu.Project.Name, pu.Project.Workdir,
 						mode, pu.Project.BoardOwnership, ns.ReporterClass); blocked {
 						continue
 					}
@@ -588,6 +606,14 @@ func (m *MultiPoolPacker) Pack(
 					if blocked, _ := stalePremiseBlockedQuiet(pu.Project.Name, pu.Project.Workdir,
 						effectiveAdmissionModeFor(pu.Project, nsModes), pu.Project.BoardOwnership, st.ns.ReporterClass); blocked {
 						continue // stale-premise skip — not queued
+					}
+					// SCHED-GAP-1658: the blocked-head quiet mirror — a lane
+					// deferred on its all-blocked/all-held pending rows must
+					// not be re-admitted by BORROWED budget either. QUIET:
+					// the skip log is the selection site's job.
+					if blocked, _, _ := premiseBlockedQuiet(pu.Project.Name, pu.Project.Workdir,
+						effectiveAdmissionModeFor(pu.Project, nsModes), pu.Project.BoardOwnership, st.ns.ReporterClass); blocked {
+						continue // blocked-head skip — not queued
 					}
 					// SCHED-GAP-1666: the shared gate's wall-clock verdict.
 					if gate.Defer {

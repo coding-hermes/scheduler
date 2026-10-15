@@ -457,6 +457,14 @@ func (m *MultiPoolPacker) packFlat(
 					mode, s.proj.BoardOwnership, ""); blocked {
 					continue
 				}
+				// SCHED-GAP-1658: the blocked-head gate on the same waiver
+				// path — the open rows exist but NONE is a takeable head:
+				// every pending row is dependency-blocked or sibling-held.
+				// Stale keeps priority; one reason per pass, no double-defer.
+				if blocked, _ := premiseBlocks(s.proj.Name, s.proj.Workdir,
+					mode, s.proj.BoardOwnership, ""); blocked {
+					continue
+				}
 			} else {
 				// SCHED-GAP-1655: the flat-fallback mirror of the
 				// namespace gate (packer_select.go) — a cooldown-mode
@@ -497,6 +505,15 @@ func (m *MultiPoolPacker) packFlat(
 				// After the no-work and board-stasis gates; strictly
 				// downstream of the pin. A board read, no git ops.
 				if blocked, _ := stalePremiseBlocks(s.proj.Name, s.proj.Workdir,
+					mode, s.proj.BoardOwnership, ""); blocked {
+					continue
+				}
+				// SCHED-GAP-1658: the blocked-head gate's cooldown-mode
+				// half (same tasks-without-waiver no-op) — every pending
+				// row dependency-blocked or sibling-held. After stale
+				// (stale keeps priority); one board read, no git ops, one
+				// reason per pass.
+				if blocked, _ := premiseBlocks(s.proj.Name, s.proj.Workdir,
 					mode, s.proj.BoardOwnership, ""); blocked {
 					continue
 				}
