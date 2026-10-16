@@ -1,0 +1,5 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://coding-hermes.dev/schemas/execution/v1/execution-dispatch.schema.json","title":"Scheduler execution.dispatch envelope v1","type":"object","additionalProperties":false,
+  "required":["schema_version","method","run_id","attempt_id","generation","assignment_ref","brief_digest","lease_epoch","correlation_id","idempotency_key","reply_to"],
+  "properties":{"schema_version":{"const":"1.0"},"method":{"const":"execution.dispatch"},"run_id":{"$ref":"#/$defs/s"},"attempt_id":{"$ref":"#/$defs/s"},"generation":{"type":"integer","minimum":1},"assignment_ref":{"type":"string","format":"uri"},"brief_digest":{"$ref":"#/$defs/digest"},"lease_epoch":{"type":"integer","minimum":1},"correlation_id":{"$ref":"#/$defs/s"},"idempotency_key":{"$ref":"#/$defs/s"},"reply_to":{"$ref":"#/$defs/s"}},"$defs":{"s":{"type":"string","minLength":1},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}
+}

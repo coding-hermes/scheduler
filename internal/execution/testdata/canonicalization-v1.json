@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "positive": [
+    {
+      "name": "quotes-backslashes-controls-and-solidus",
+      "input": "{\"text\":\"quote\\\" slash\\/ back\\\\ control\\u0001\",\"brief_digest\":\"ignored\"}",
+      "canonical": "{\"text\":\"quote\\\" slash/ back\\\\ control\\u0001\"}",
+      "digest": "sha256:6a86b48700e811fafafd4b305b0fba0af42d68c3278954f685156cad7b509a45"
+    },
+    {
+      "name": "non-ascii-nfc-equivalence",
+      "input": "{\"é\":\"Café\",\"brief_digest\":\"ignored\"}",
+      "equivalent_input": "{\"é\":\"Café\",\"brief_digest\":\"different ignored value\"}",
+      "canonical": "{\"é\":\"Café\"}",
+      "digest": "sha256:6c85da6ae685258aa1dc3b381a9d634942cfc3676e3795cccb23c108f8c47aed"
+    },
+    {
+      "name": "explicit-null-and-integer-units",
+      "input": "{\"memory_mb\":512,\"expected_artifact\":null}",
+      "absent_input": "{\"memory_mb\":512}",
+      "canonical": "{\"expected_artifact\":null,\"memory_mb\":512}",
+      "digest": "sha256:0938c97fd6a6247f4c0ef51e585b5dca5c1c3bccb9c95be6e3008719c98a5c1f"
+    }
+  ],
+  "negative": [
+    {"name": "duplicate-after-normalization", "input": "{\"é\":1,\"é\":2}", "error_contains": "duplicate object member"},
+    {"name": "fraction", "input": "{\"memory_mb\":1.5}", "error_contains": "non-integer JSON number"},
+    {"name": "exponent", "input": "{\"memory_mb\":1e3}", "error_contains": "non-integer JSON number"},
+    {"name": "unsafe-integer", "input": "{\"memory_mb\":9007199254740992}", "error_contains": "I-JSON exact integer range"},
+    {"name": "unpaired-surrogate", "input": "{\"text\":\"\\ud800\"}", "error_contains": "not I-JSON"},
+    {"name": "unknown-member", "operation": "decode", "input": "{\"schema_version\":\"1.0\",\"credential\":\"not-allowed\"}", "error_contains": "unknown field"},
+    {"name": "digest-mismatch", "operation": "validate_digest", "input": "{\"brief_digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"text\":\"agent prose cannot override this\"}", "error_contains": "mismatch"}
+  ]
+}
