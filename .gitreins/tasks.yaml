@@ -4643,3 +4643,586 @@ tasks:
   status: complete
   created_at: '2026-10-15T01:59:58.977892+00:00'
   completed_at: '2026-10-15T02:24:22.306936+00:00'
+- id: SCHED-GAP-1663
+  title: Schedule fleet-cooldown-policy.py deliberately (daily read-only timer)
+  criteria:
+  - "Cron armed for daily dry-run; cadence recorded in the script header; --apply\
+    \ stays off until two clean runs; verify \n\u250C\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2510\n\u2502                         Scheduled Jobs      \
+    \                            \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+    \u2500\u2500\u2518\n\n  451bdae59694 [active]\n    Name:      Daily Summary Report\n\
+    \    Schedule:  0 21 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T21:00:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    obsidian, daily-report-generation\n   \
+    \ Last run:  2026-10-14T21:02:22.104327-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-14T21:00:00-05:00)\n\n  06f9a728a7bc [active]\n    Name:      OpenCode\
+    \ Daily Tracker\n    Schedule:  0 20 * * *\n    Repeat:    \u221E\n    Next run:\
+    \  2026-10-15T20:00:00-05:00\n    Deliver:   origin\n    Last run:  2026-10-14T20:06:01.141409-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-14T20:00:00-05:00)\n\n  7d08eeb8ee66\
+    \ [active]\n    Name:      Daily Relationship Update\n    Schedule:  0 14 * *\
+    \ *\n    Repeat:    \u221E\n    Next run:  2026-10-15T14:00:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808:2\n    Skills:    obsidian\n    Last run:  2026-10-14T14:04:30.907653-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-14T14:00:00-05:00)\n\n  d3593a1d92ef\
+    \ [active]\n    Name:      AI Intelligence Digest (daily + weekly + monthly tiers)\n\
+    \    Schedule:  0 13 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T13:00:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    blogwatcher, obsidian\n    Last run:  2026-10-14T13:02:50.163285-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-14T13:00:00-05:00)\n\n  ca924d3d8ae8\
+    \ [active]\n    Name:      skill-map-rebuild\n    Schedule:  0 12 * * 0\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-18T12:00:00-05:00\n    Deliver:   origin\n\
+    \    Skills:    skill-map\n    Last run:  2026-10-11T12:02:33.027812-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-11T12:00:00-05:00)\n\n  fd09dc919926\
+    \ [active]\n    Name:      Git Secret Scanner\n    Schedule:  0 5,11,17,23 * *\
+    \ *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n    Deliver:\
+    \   origin\n    Script:    scan-git-secrets.py\n    Last run:  2026-10-15T07:01:40.267033-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution:\
+    \ completed  3c3adaebdd0e4b3ca545e6459d5d909e\n\n  dac132b8fcd0 [active]\n   \
+    \ Name:      Daily CVE Scanner\n    Schedule:  0 13 * * *\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-15T13:00:00-05:00\n    Deliver:   origin\n    Script:\
+    \    scan-cves.py\n    Last run:  2026-10-14T13:10:00.530384-05:00  error: Interrupted\
+    \ by shutdown before terminal completion.\n    Dispatch:  on time (scheduled 2026-10-14T13:00:00-05:00)\n\
+    \n  9ecfe9d23fc0 [active]\n    Name:      Dreaming \u2014 Overnight Memory Synthesis\n\
+    \    Schedule:  0 12 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    dreaming\n    Last run:  2026-10-14T12:02:50.769175-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-14T12:00:00-05:00)\n\n  4687e3d9e99a\
+    \ [active]\n    Name:      Deep Reflection \u2014 12h Pattern Synthesis\n    Schedule:\
+    \  0 11,23 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    deep-reflection, obsidian\n    Last run:\
+    \  2026-10-14T23:02:54.534877-05:00  ok\n    Dispatch:  on time (scheduled 2026-10-14T23:00:00-05:00)\n\
+    \    Execution: completed  50e67f416dc44981aa6b619f1cb28d86\n\n  f7ba82a01e5e\
+    \ [active]\n    Name:      Cloudflared Tunnel Monitor\n    Schedule:  0 5,11,17,23\
+    \ * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n   \
+    \ Deliver:   origin\n    Script:    monitor-cloudflared.py\n    Last run:  2026-10-15T05:01:52.255149-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution:\
+    \ completed  0e7dfe48b9ce43aa812b6500aa7d3bda\n\n  909b3c4fac19 [active]\n   \
+    \ Name:      Chrome version watchdog\n    Schedule:  0 13 * * 1\n    Repeat: \
+    \   \u221E\n    Next run:  2026-10-19T13:00:00-05:00\n    Deliver:   origin\n\
+    \    Script:    chrome-version-watch.sh\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-12T13:01:02.566440-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-12T13:00:00-05:00)\n\n  ad7b9bc7cd9e\
+    \ [active]\n    Name:      Weekly Anti-Trump Developments Monitor\n    Schedule:\
+    \  0 14 * * 1\n    Repeat:    \u221E\n    Next run:  2026-10-19T14:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-12T14:05:38.361655-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-12T14:00:00-05:00)\n\n  1c360198763e\
+    \ [active]\n    Name:      Scan DuckBrain memory and recent chat sessions for\n\
+    \    Schedule:  0 8 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T08:00:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    blog-topic-scout, blog-writing\n    Last\
+    \ run:  2026-10-15T08:06:47.312101-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T08:00:00-05:00)\n    Execution: completed  9f458e30adac4bfcb982306f8dd19db2\n\
+    \n  d9df85bb18f9 [active]\n    Name:      Model Research Pipeline (benchmarks\
+    \ + stealth + sub-scout + slop)\n    Schedule:  0 4 * * *\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-16T04:00:00-05:00\n    Deliver:   origin\n    Skills:\
+    \    deep-research\n    Last run:  2026-10-15T04:04:34.718707-05:00  ok\n    Dispatch:\
+    \  on time (scheduled 2026-10-15T04:00:00-05:00)\n    Execution: completed  f151c4d55fd941649373fa619fe1d51a\n\
+    \n  55afdcd33d7f [active]\n    Name:      Coding Hermes Supervisor\n    Schedule:\
+    \  0 */4 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n\
+    \    Deliver:   local\n    Skills:    coding-hermes-supervisor, coding-hermes-cron\n\
+    \    Last run:  2026-10-15T08:24:13.222763-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T08:00:00-05:00)\n    Execution: completed  89215c4b5fed44948bcd08d4fcdd9157\n\
+    \n  2e15f34c64e4 [active]\n    Name:      Apocalyptic News Tracker\n    Schedule:\
+    \  0 9 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T09:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-15T09:02:19.706192-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T09:00:00-05:00)\n    Execution:\
+    \ completed  3139e152dde74ae4afe532fc3624fcd5\n\n  15800dfe698b [active]\n   \
+    \ Name:      Daily Free Exploration\n    Schedule:  0 11 * * *\n    Repeat:  \
+    \  \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n    Deliver:   origin\n \
+    \   Skills:    deep-research, model-intelligence, cve-briefing, secret-scan\n\
+    \    Last run:  2026-10-14T11:10:41.386258-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-14T11:00:00-05:00)\n\n  chimera-model-sync [active]\n    Name:     \
+    \ Chimera Model Sync (Weekly)\n    Schedule:  0 12 * * *\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-15T12:00:00-05:00\n    Deliver:   origin\n    Skills:\
+    \    chimera-development\n    Script:    model_sync_cron.py\n    Workdir:   /home/kara/chimera-v2\n\
+    \    Last run:  2026-10-14T12:05:57.486528-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-14T12:00:00-05:00)\n\n  c8609b5e0209 [active]\n    Name:      obsidian-namespace-sync\n\
+    \    Schedule:  0 5 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T05:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-15T05:05:58.238638-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution:\
+    \ completed  8de4125a0b2b4de2bc8939f089823f84\n\n  084e26ebcf4f [active]\n   \
+    \ Name:      Fleet Daily Report\n    Schedule:  0 13,20 * * *\n    Repeat:   \
+    \ \u221E\n    Next run:  2026-10-15T13:00:00-05:00\n    Deliver:   origin\n  \
+    \  Skills:    fleet-daily-report\n    Last run:  2026-10-14T20:05:00.130030-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-14T20:00:00-05:00)\n\n  3c0ea1a80b69\
+    \ [active]\n    Name:      duckbrain-namespace-health-check\n    Schedule:  0\
+    \ 5,11,17,23 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-15T05:01:54.533545-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution:\
+    \ completed  0dc1904655a84c9582db008bee31dcef\n\n  3ac3112f61b5 [active]\n   \
+    \ Name:      off-by-one-problem-feeder\n    Schedule:  0 5,11,17,23 * * *\n  \
+    \  Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n    Deliver: \
+    \  local\n    Last run:  2026-10-15T05:01:20.458577-05:00  ok\n    Dispatch: \
+    \ on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution: completed  6b9e60031f3d47e4b09f6b2bfd58d428\n\
+    \n  a6c047c8e5e8 [active]\n    Name:      Tailscale Auth Key Renewal\n    Schedule:\
+    \  0 0 1,15 * *\n    Repeat:    \u221E\n    Next run:  2026-11-01T00:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-15T00:02:10.038984-05:00  error:\
+    \ Interrupted by shutdown before terminal completion.  (2 failures in a row)\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T00:00:00-05:00)\n    Execution:\
+    \ failed  d02566a9e9764784a00533c02e650646\n\n  a56f0a55760a [active]\n    Name:\
+    \      Tailscale Health Watchdog\n    Schedule:  every 1m\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-15T09:54:28.908666-05:00\n    Deliver:   origin\n   \
+    \ Script:    tailscale-health.sh\n    Mode:      no-agent (script stdout delivered\
+    \ directly)\n    Last run:  2026-10-15T09:53:28.908666-05:00  ok\n    Dispatch:\
+    \  on time (scheduled 2026-10-15T09:52:28.826311-05:00)\n    Execution: completed\
+    \  f4b49bf59fbe402fa0d6829106d25f28\n\n  6d2a35117904 [active]\n    Name:    \
+    \  dagger-reliability-watchdog\n    Schedule:  0 5,11,17,23 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n    Deliver:   telegram:-1003310984808:1\n\
+    \    Last run:  2026-10-15T05:02:55.811736-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T05:00:00-05:00)\n    Execution: completed  234ff690f2e84c2093a63be946442403\n\
+    \n  613b834cec79 [active]\n    Name:      EduOS F2B/B2F Test Executor\n    Schedule:\
+    \  0 5,11,17,23 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n\
+    \    Deliver:   telegram:-1003310984808:50253\n    Skills:    coding-hermes-testing\n\
+    \    Last run:  2026-10-15T05:08:00.853619-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T05:00:00-05:00)\n    Execution: completed  280d593e7e034669976bd750dc3884ba\n\
+    \n  b33e106a78f3 [active]\n    Name:      fleet-value-report\n    Schedule:  0\
+    \ 14 * * 0\n    Repeat:    \u221E\n    Next run:  2026-10-18T14:00:00-05:00\n\
+    \    Deliver:   telegram:-1003310984808:50404\n    Last run:  2026-10-11T14:01:45.885965-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-11T14:00:00-05:00)\n\n  0741a5de4cba\
+    \ [active]\n    Name:      ob1-distribute (answers + public catalog)\n    Schedule:\
+    \  0 5,11,17,23 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n\
+    \    Deliver:   origin\n    Script:    ob1-distribute.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T05:01:53.359348-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution:\
+    \ completed  779eb8f96cca47b18a46f04700a80bfa\n\n  869aec0b1c15 [active]\n   \
+    \ Name:      KaraHermes daily chat summary \u2192 DuckBrain\n    Schedule:  0\
+    \ 12 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n\
+    \    Deliver:   local\n    Skills:    duckbrain-http-access\n    Script:    daily_chat_extract.py\n\
+    \    Last run:  2026-10-14T12:06:12.232114-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-14T12:00:00-05:00)\n\n  52708ad81638 [active]\n    Name:      Obsidian\
+    \ vault git+S3 sync (daily)\n    Schedule:  0 3 * * *\n    Repeat:    \u221E\n\
+    \    Next run:  2026-10-16T03:00:00-05:00\n    Deliver:   local\n    Script: \
+    \   obsidian-sync.sh\n    Mode:      no-agent (script stdout delivered directly)\n\
+    \    Last run:  2026-10-15T03:00:20.162513-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T03:00:00-05:00)\n    Execution: completed  53847da8b5cf408ebd69be9ffba0017a\n\
+    \n  9ff9de9f2743 [active]\n    Name:      GitReins Daily Check (merged)\n    Schedule:\
+    \  0 10 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:00:00-05:00\n\
+    \    Deliver:   origin\n    Last run:  2026-10-14T10:02:23.801430-05:00  ok\n\
+    \    Dispatch:  on time (scheduled 2026-10-14T10:00:00-05:00)\n\n  44e7aeb34cb6\
+    \ [active]\n    Name:      TMP Manager \u2014 smart /tmp lifecycle\n    Schedule:\
+    \  30 13 * * 0\n    Repeat:    \u221E\n    Next run:  2026-10-18T13:30:00-05:00\n\
+    \    Deliver:   origin\n    Script:    tmp-manager.py\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-11T13:33:32.344061-05:00\
+    \  error: Interrupted by shutdown before terminal completion.  (7 failures in\
+    \ a row)\n    Dispatch:  on time (scheduled 2026-10-11T13:30:00-05:00)\n\n  0afa74a506c3\
+    \ [active]\n    Name:      Gateway Memory Watchdog\n    Schedule:  every 15m\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-15T10:02:28.565157-05:00\n    Deliver:\
+    \   telegram\n    Script:    gateway-memory-watchdog.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:47:28.565157-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:47:24.380263-05:00)\n \
+    \   Execution: completed  27a16cc594a348d7a0c83b0316eee687\n\n  3ae1a1a5c2b6 [active]\n\
+    \    Name:      9router-upstream-backport\n    Schedule:  0 9 * * 1,4\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-19T09:00:00-05:00\n    Deliver:   origin\n\
+    \    Last run:  2026-10-15T09:01:16.129418-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T09:00:00-05:00)\n    Execution: completed  d9dd8df24d574167a4d5fe1ed60c1b18\n\
+    \n  09fe948fe4d0 [active]\n    Name:      Docker Orphan Audit\n    Schedule: \
+    \ 30 14 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T14:30:00-05:00\n\
+    \    Deliver:   origin\n    Script:    docker-orphan-audit.py\n    Mode:     \
+    \ no-agent (script stdout delivered directly)\n    Last run:  2026-10-14T16:30:35.037572-05:00\
+    \  error: Script timed out after 7200s: /home/kara/.hermes/scripts/docker-orphan-audit.py\
+    \  (2 failures in a row)\n    Dispatch:  on time (scheduled 2026-10-14T14:30:00-05:00)\n\
+    \n  f42cbcabdca0 [active]\n    Name:      Skill Health Watchdog\n    Schedule:\
+    \  0 5 */3 * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T05:00:00-05:00\n\
+    \    Deliver:   origin\n    Script:    skill-health.py\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-13T05:01:45.648998-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-13T05:00:00-05:00)\n\n  49f8a4ca5337\
+    \ [active]\n    Name:      fleet-cost-digest-weekly\n    Schedule:  0 9 * * 1\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-19T09:00:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808\n    Script:    fleet-cost-digest-weekly.sh\n    Mode:\
+    \      no-agent (script stdout delivered directly)\n    Last run:  2026-10-12T09:17:35.886513-05:00\
+    \  ok\n    Dispatch:  \u26A0 late: scheduled 2026-10-12T09:00:00-05:00, ran 2026-10-12T09:17:26.163913-05:00\
+    \ (17m late)\n\n  1229f45f3ea4 [active]\n    Name:      DuckBrain S3 unified backup\
+    \ (15min)\n    Schedule:  */15 * * * *\n    Repeat:    \u221E\n    Next run: \
+    \ 2026-10-15T10:00:00-05:00\n    Deliver:   local\n    Script:    duckbrain-s3-unified.sh\n\
+    \    Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:45:19.260135-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:30:00-05:00)\n    Execution:\
+    \ completed  c4511681dcb74f43a2757f75f87e1911\n\n  765ff12e994b [active]\n   \
+    \ Name:      fleet-quality-review (SCHED-GAP-069)\n    Schedule:  */30 * * * *\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-15T10:00:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808\n    Script:    fleet-quality-review-cron.sh\n   \
+    \ Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:31:56.878081-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:30:00-05:00)\n    Execution:\
+    \ completed  296923b58ddc449a87a5d6f55758587a\n\n  2b1f0734e567 [active]\n   \
+    \ Name:      provider-health-probe\n    Schedule:  0 * * * *\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-15T10:00:00-05:00\n    Deliver:   telegram:-1003310984808:1\n\
+    \    Script:    provider_health_publish.sh\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-15T09:10:24.775187-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-15T09:00:00-05:00)\n    Execution: completed\
+    \  3a77402bb2594c8da8b89bff28c3ea8d\n\n  2ee8eaa9612c [active]\n    Name:    \
+    \  reports-s3-git-push\n    Schedule:  50 3 * * *\n    Repeat:    \u221E\n   \
+    \ Next run:  2026-10-16T03:50:00-05:00\n    Deliver:   origin\n    Script:   \
+    \ reports-s3-push.sh\n    Mode:      no-agent (script stdout delivered directly)\n\
+    \    Last run:  2026-10-15T03:50:26.450048-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T03:50:00-05:00)\n    Execution: completed  2cd4570f83f64e80adb13da4aca207b2\n\
+    \n  0d0d49d5d657 [active]\n    Name:      Cron Output Archive \u2192 DuckBrain\n\
+    \    Schedule:  every 120m\n    Repeat:    \u221E\n    Next run:  2026-10-15T11:45:40.846363-05:00\n\
+    \    Deliver:   local\n    Script:    cron-output-archive.py\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:45:40.846363-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:45:09.400139-05:00)\n \
+    \   Execution: completed  13028825bbde4872bb1a1589383e33a5\n\n  427467758f92 [active]\n\
+    \    Name:      Infra Fleet Watchdog (all managed machines)\n    Schedule:  every\
+    \ 15m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:55:12.838066-05:00\n\
+    \    Deliver:   telegram:-1003310984808:1\n    Script:    infra-fleet-watchdog.sh\n\
+    \    Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:40:12.838066-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:39:06.062958-05:00)\n \
+    \   Execution: completed  34f064bf3be94f5a947864968b0221dc\n\n  52d19561484a [active]\n\
+    \    Name:      qa-foreman\n    Schedule:  45 6 * * *\n    Repeat:    \u221E\n\
+    \    Next run:  2026-10-16T06:45:00-05:00\n    Deliver:   origin\n    Skills:\
+    \    pm-injected-board-rows, coding-hermes-jsonl-board-append, bunker-agent-isolation\n\
+    \    Last run:  2026-10-15T07:34:21.629861-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T06:45:00-05:00)\n    Execution: completed  fbb71d2a054c4b3494941c1684a00159\n\
+    \n  baaf74ee5b48 [active]\n    Name:      pi-agent binary watchdog (off-by-one)\n\
+    \    Schedule:  every 15m\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:02:28.292090-05:00\n\
+    \    Deliver:   origin\n    Script:    pi-agent-watchdog.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:47:28.292090-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:47:24.487570-05:00)\n \
+    \   Execution: completed  dd52e8c983fd442a9a684f87546d8f29\n\n  a26c4522cfb1 [active]\n\
+    \    Name:      model-router-refresh (merged: reconfigure + data-quality + profile\
+    \ refresh)\n    Schedule:  30 5 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T05:30:00-05:00\n\
+    \    Deliver:   origin\n    Skills:    models-dev-registry-crosscheck, coding-hermes-model-router\n\
+    \    Script:    router-data-quality.sh\n    Last run:  2026-10-15T09:50:48.712987-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T05:30:00-05:00)\n    Execution:\
+    \ completed  580dfb3eedd346f19f637289058058ef\n\n  9ede4d23611e [active]\n   \
+    \ Name:      dagger-dogfooding\n    Schedule:  0 5,11,17,23 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-15T11:00:00-05:00\n    Deliver:   local\n\
+    \    Script:    dagger-dogfood-role.sh\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-15T05:00:34.703340-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-15T05:00:00-05:00)\n    Execution: completed\
+    \  38e07a876efd474eb6a276a9fc9df16a\n\n  99023b0c7e50 [active]\n    Name:    \
+    \  Fleet TOML namespace regression watchdog\n    Schedule:  30 5 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-16T05:30:00-05:00\n    Deliver:   origin\n\
+    \    Script:    fleet-policy-test-watchdog.sh\n    Mode:      no-agent (script\
+    \ stdout delivered directly)\n    Last run:  2026-10-15T05:31:16.461776-05:00\
+    \  error: Script exited with code 1\nstdout:\nREGISTRY COMPLETENESS REGRESSION:\
+    \ a fleet.toml project is missing from the task-router registry:\nREGISTRY COMPLETENESS\
+    \ REGRESSION: 2 fleet.toml project(s) missing from task-router registry.json \u2014\
+    \ their spawns degrade to static chains (ROUTER-MISS):\n  - wojons-mythos-releng\n\
+    \  - wojons-mythos-sync\nFix: add them to ~/task-router/data/tables/projects.jsonl\
+    \ (profile P6_DEFAULT for syncs) and re-run scripts/router_seed.py.  (2 failures\
+    \ in a row)\n    Dispatch:  on time (scheduled 2026-10-15T05:30:00-05:00)\n  \
+    \  Execution: failed  6e13f5bc1b3d4011bf6c4bbd0f00ed32\n\n  dcd135dcbd85 [active]\n\
+    \    Name:      state.db tiered backup \u2192 S3 + HDD\n    Schedule:  0 */6 *\
+    \ * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n    Deliver:\
+    \   local\n    Script:    backup-tiered.sh\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-15T07:16:45.351337-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-15T06:00:00-05:00)\n    Execution: completed\
+    \  49418c5c39a5497f8bf7e9655500ef18\n\n  8e11f37738e5 [active]\n    Name:    \
+    \  N100 remote state.db backup \u2192 S3\n    Schedule:  25 */6 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-15T12:25:00-05:00\n    Deliver:   local\n\
+    \    Script:    backup-remote.sh\n    Mode:      no-agent (script stdout delivered\
+    \ directly)\n    Last run:  2026-10-15T06:30:42.183365-05:00  ok\n    Dispatch:\
+    \  on time (scheduled 2026-10-15T06:25:00-05:00)\n    Execution: completed  de15b82d406544e59b4ac4bf8eeb6404\n\
+    \n  cdfec87bbc79 [active]\n    Name:      usage-dashboard-rebuild\n    Schedule:\
+    \  5 * * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:05:00-05:00\n\
+    \    Deliver:   all\n    Script:    rebuild-usage-dashboard.sh\n    Mode:    \
+    \  no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:05:27.855701-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:05:00-05:00)\n    Execution:\
+    \ completed  c40c2625653748c99d19c5968958bf99\n\n  f66edfd3bb75 [active]\n   \
+    \ Name:      observatory-hourly-update\n    Schedule:  35 * * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-15T10:35:00-05:00\n    Deliver:   origin\n\
+    \    Script:    observatory-update.sh\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-15T09:35:52.404397-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-15T09:35:00-05:00)\n    Execution: completed\
+    \  06273b238a8e432c80b2260bef038c6c\n\n  b0f572b4a1a0 [active]\n    Name:    \
+    \  cube-eduos tool currency\n    Schedule:  0 9 * * *\n    Repeat:    \u221E\n\
+    \    Next run:  2026-10-16T09:00:00-05:00\n    Deliver:   origin\n    Monitor:\
+    \   cube-tool-currency.py (agent runs only on output change)\n    Changed:   2026-09-03T09:00:27.596874-05:00\n\
+    \    Last run:  2026-10-15T09:01:14.712893-05:00  error: Script exited with code\
+    \ 1\nstdout:\nCUBE PROBE MISCONFIGURED: no agent user on cube owns .config/systemd/user/coding-hermes-scheduler.service\
+    \ (agent re-provisioned?)  (27 failures in a row)\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T09:00:00-05:00)\n    Execution: failed  a5658bc3ce30461f9ba2d5b1ec0fc0d5\n\
+    \n  4a2a01e173a8 [active]\n    Name:      task-router-registry-research (weekly\
+    \ filer)\n    Schedule:  0 9 * * 0\n    Repeat:    \u221E\n    Next run:  2026-10-18T09:00:00-05:00\n\
+    \    Deliver:   telegram:-1003310984808:137810\n    Workdir:   /home/kara/task-router\n\
+    \    Last run:  2026-10-11T09:49:22.053448-05:00  error: RuntimeError: \u26A0\uFE0F\
+    \ No reply: the turn was stopped because the state database file was replaced\
+    \ underneath this process. Do not run `hermes doctor --fix` or in-place FTS repair\
+    \ \u2014 stop the process, restore the intended state.db, then restart. Unwritten\
+    \ messages were diverted to sessions/<session_id>.jsonl and, on the gateway, pending_messages/pending-*.json.\n\
+    \    Dispatch:  \u26A0 late: scheduled 2026-10-11T09:00:00-05:00, ran 2026-10-11T09:49:07.443616-05:00\
+    \ (49m late)\n\n  73f2bca56ab1 [active]\n    Name:      state-db-sentinel\n  \
+    \  Schedule:  */30 * * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:00:00-05:00\n\
+    \    Deliver:   origin\n    Script:    state-db-sentinel.py\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:30:21.687841-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:30:00-05:00)\n    Execution:\
+    \ completed  fd25084b5a194bb6b76435a3563151ec\n\n  4a4c002a8676 [active]\n   \
+    \ Name:      mahoyo-availability-watchdog\n    Schedule:  0 14 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-15T14:00:00-05:00\n    Deliver:   telegram:-1003310984808:1981\n\
+    \    Script:    mahoyo_watchdog.sh\n    Mode:      no-agent (script stdout delivered\
+    \ directly)\n    Last run:  2026-10-14T14:01:00.774013-05:00  ok\n    Dispatch:\
+    \  on time (scheduled 2026-10-14T14:00:00-05:00)\n\n  9cfbba5e914c [active]\n\
+    \    Name:      jnsq-duckbrain-sync\n    Schedule:  20 6 * * *\n    Repeat:  \
+    \  \u221E\n    Next run:  2026-10-16T06:20:00-05:00\n    Deliver:   origin\n \
+    \   Last run:  2026-10-15T06:22:09.093836-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T06:20:00-05:00)\n    Execution: completed  300799994cf44878876668d6d79a0318\n\
+    \n  d929991e339c [active]\n    Name:      desktop-las-01-online-watch\n    Schedule:\
+    \  every 10m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:59:31.778232-05:00\n\
+    \    Deliver:   telegram\n    Monitor:   desktop-las-01-watch.sh (agent runs only\
+    \ on output change)\n    Changed:   2026-09-09T20:57:32.968803-05:00\n    Last\
+    \ run:  2026-10-15T09:49:31.778232-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T09:48:29.528612-05:00)\n    Execution: completed  016fa997814648bebcf06827ac36ddd9\n\
+    \n  dc9786e46a48 [active]\n    Name:      task-router averages refresh (TR-065\
+    \ hourly)\n    Schedule:  every 60m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:57:22.222109-05:00\n\
+    \    Deliver:   telegram:-1003310984808:1\n    Script:    router-averages-refresh.sh\n\
+    \    Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T08:57:22.222109-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T08:57:13.257344-05:00)\n \
+    \   Execution: completed  8ec458e10103461684333ec1ae76661d\n\n  5f95557b7067 [active]\n\
+    \    Name:      Tick digest (rate + failures, 3h vs 3h)\n    Schedule:  every\
+    \ 120m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:56:35.319048-05:00\n\
+    \    Deliver:   telegram:-1003310984808:9652\n    Script:    tick-digest.py\n\
+    \    Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T07:56:35.319048-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T07:55:26.254877-05:00)\n \
+    \   Execution: completed  f1e8e6abf4a24602ae4739fa9b83f234\n\n  cc26c2b65fc2 [active]\n\
+    \    Name:      Fleet Topology Warden\n    Schedule:  0 6 * * *\n    Repeat: \
+    \   \u221E\n    Next run:  2026-10-16T06:00:00-05:00\n    Deliver:   telegram:-1003310984808:83996\n\
+    \    Skills:    coding-hermes-fleet-topology\n    Last run:  2026-10-15T06:01:33.051241-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T06:00:00-05:00)\n    Execution:\
+    \ completed  84756e4f39fa4361b16c97a61cbf88c9\n\n  97fa0ddd5293 [active]\n   \
+    \ Name:      Daily project review \u2014 single pane\n    Schedule:  every day\
+    \ at 8am\n    Repeat:    \u221E\n    Next run:  2026-10-16T08:00:00-05:00\n  \
+    \  Deliver:   telegram:-1003310984808:182477\n    Skills:    coding-hermes-daily-review\n\
+    \    Last run:  2026-10-15T08:13:55.686072-05:00  error: Interrupted by shutdown\
+    \ before terminal completion.\n    Dispatch:  on time (scheduled 2026-10-15T08:00:00-05:00)\n\
+    \    Execution: failed  4125a13f364141fab09babe92ffd87aa\n\n  423a65222eb0 [active]\n\
+    \    Name:      heading CI re-board\n    Schedule:  every 360m\n    Repeat:  \
+    \  \u221E\n    Next run:  2026-10-15T10:22:29.712968-05:00\n    Deliver:   telegram:-1003310984808:182477\n\
+    \    Script:    heading-ci-reboard.py\n    Mode:      no-agent (script stdout\
+    \ delivered directly)\n    Last run:  2026-10-15T04:22:29.712968-05:00  ok\n \
+    \   Dispatch:  on time (scheduled 2026-10-15T04:22:18.916929-05:00)\n    Execution:\
+    \ completed  c6e39ad487cc4dcf931fed11f817e46b\n\n  996dfcbdf4d5 [active]\n   \
+    \ Name:      task-router outcomes import (TR-116 hourly)\n    Schedule:  every\
+    \ 60m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:58:01.379428-05:00\n\
+    \    Deliver:   telegram:-1003310984808:1\n    Script:    router-outcomes-import.sh\n\
+    \    Mode:      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T08:58:01.379428-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T08:56:57.611294-05:00)\n \
+    \   Execution: completed  a99b9935b33d40d6bad7c30cb90c4106\n\n  0fc86cd01e7c [active]\n\
+    \    Name:      destination-coverage-check\n    Schedule:  0 7 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-16T07:00:00-05:00\n    Deliver:   origin\n\
+    \    Script:    destination-coverage-check-cron.sh\n    Mode:      no-agent (script\
+    \ stdout delivered directly)\n    Last run:  2026-10-15T07:01:03.704812-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T07:00:00-05:00)\n    Execution:\
+    \ completed  224d37e0e93148128a02929748722a01\n\n  4330c5759368 [active]\n   \
+    \ Name:      gitreins mirror sync (GitHub canon \u2192 coding-hermes mirror)\n\
+    \    Schedule:  0 */6 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n\
+    \    Deliver:   origin\n    Script:    gitreins-mirror-sync.sh\n    Mode:    \
+    \  no-agent (script stdout delivered directly)\n    Workdir:   /home/kara/gitreins\n\
+    \    Last run:  2026-10-15T06:00:57.233997-05:00  ok\n    Dispatch:  on time (scheduled\
+    \ 2026-10-15T06:00:00-05:00)\n    Execution: completed  3bb7250cd15c4ea382f1c9be43ab6abe\n\
+    \n  f996274d352c [active]\n    Name:      cx53-hunter\n    Schedule:  every 15m\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-15T10:07:30.203602-05:00\n    Deliver:\
+    \   telegram:-1003310984808:173236\n    Script:    cx53-hunter.sh\n    Mode: \
+    \     no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:52:30.203602-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:52:27.288426-05:00)\n \
+    \   Execution: completed  408a1d32814f446fa205e10713c0df8f\n\n  3541777ce883 [active]\n\
+    \    Name:      DuckBrain agent-leg watchdog\n    Schedule:  every day at 8am\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-16T08:00:00-05:00\n    Deliver:\
+    \   origin\n    Script:    duckbrain-leg-watchdog.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T08:00:12.310964-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T08:00:00-05:00)\n    Execution:\
+    \ completed  2cefe45afe514ec3812d1e7676ea1256\n\n  3662cf6a1099 [active]\n   \
+    \ Name:      scheduler-watchdog (SCHED-GAP-1643 fix, gateway-aware)\n    Schedule:\
+    \  every 5m\n    Repeat:    \u221E\n    Next run:  2026-10-15T09:56:28.923711-05:00\n\
+    \    Deliver:   origin\n    Script:    scheduler-watchdog.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:51:28.923711-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:51:28.197423-05:00)\n \
+    \   Execution: completed  918f1108181c4ea9bdbba645775aa2e7\n\n  a9a80963d48e [active]\n\
+    \    Name:      fleet-strand-push (close-out push net)\n    Schedule:  0,30 *\
+    \ * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:00:00-05:00\n   \
+    \ Deliver:   origin\n    Script:    fleet-strand-push.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T09:32:35.619349-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:30:00-05:00)\n    Execution:\
+    \ completed  3e182bd660a44ab8baf765cca180a08c\n\n  510718dbb0ab [active]\n   \
+    \ Name:      duckbrain-ci-test-quality-audit\n    Schedule:  every day at 9am\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-16T09:00:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808:2065\n    Script:    duckbrain-test-quality-audit.py\n\
+    \    Workdir:   /home/kara/duckbrain\n    Last run:  2026-10-15T09:02:20.053989-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:00:00-05:00)\n    Execution:\
+    \ completed  ab3ace7179764040b6abca6570f44658\n\n  871baf7a3e7d [active]\n   \
+    \ Name:      Fleet run-rate audit (silent unless a lane beats its cadence)\n \
+    \   Schedule:  every monday 9am\n    Repeat:    \u221E\n    Next run:  2026-10-19T09:00:00-05:00\n\
+    \    Deliver:   origin\n    Script:    fleet_runrate_audit.py\n    Mode:     \
+    \ no-agent (script stdout delivered directly)\n    Last run:  2026-10-12T09:18:29.699188-05:00\
+    \  error: Script exited with code 1\nstdout:\nFLEET RUN-RATE AUDIT \u2014 7d,\
+    \ judged by lane class (foreman=tasks by design, satellite=cooldown)\n  enabled\
+    \ foremen: 38 owning satellites + 0 solo = 38   (on tasks: 34)\n  enabled satellites:\
+    \ 355   (on cooldown: 355)\n\n  1. SATELLITES over their own cooldown \u2014 real\
+    \ over-firing (3):\n       ratio  ticks    exp  cooldown  wakes  lane\n      \
+    \  2.4\xD7     33   14.0       12h      1  terminal-jail-qa\n        2.0\xD7 \
+    \     2    1.0      168h      0  bunker-docs\n        1.9\xD7     27   14.0  \
+    \     12h      1  trouble-qa\n\n  2. WAKE DEFECTS \u2014 cooldown lanes woken\
+    \ by a board write: 113 lanes, 138 ticks (law: a board write turns TASK-MODE lanes\
+    \ back on; satellites wait their cooldown):\n        3 wakes  mischief-chaos-dogfood\
+    \  (mode=cooldown)\n        3 wakes  guard-sync  (mode=cooldown)\n        2 wakes\
+    \  trouble-sync  (mode=cooldown)\n        2 wakes  terminal-jail-sync  (mode=cooldown)\n\
+    \        2 wakes  terminal-jail-pm  (mode=cooldown)\n        2 wakes  task-router-sync\
+    \  (mode=cooldown)\n        2 wakes  off-by-one-sync  (mode=cooldown)\n      \
+    \  2 wakes  monitoring-qa  (mode=cooldown)\n        2 wakes  mischief-chaos-pm\
+    \  (mode=cooldown)\n        2 wakes  lore-sync  (mode=cooldown)\n        2 wakes\
+    \  logsey-sync  (mode=cooldown)\n        2 wakes  hermes-canopy-qa  (mode=cooldown)\n\
+    \        2 wakes  hermes-agent-sync  (mode=cooldown)\n        2 wakes  heading-sync\
+    \  (mode=cooldown)\n        2 wakes  h3-sync  (mode=cooldown)\n        2 wakes\
+    \  dexdat-memory-sync  (mode=cooldown)\n        2 wakes  dexdat-core-sync  (mode=cooldown)\n\
+    \        2 wakes  crier-qa  (mode=cooldown)\n        2 wakes  coding-hermes-sync\
+    \  (mode=cooldown)\n        2 wakes  boardctl-qa  (mode=cooldown)\n\n  3. FOREMEN\
+    \ not in tasks mode \u2014 config defects (4):\n     logsey-foreman          \
+    \                 mode=cooldown\n     pulse-foreman                          \
+    \  mode=cooldown\n     lore-foreman                             mode=cooldown\n\
+    \     digest-foreman                           mode=cooldown\n\n  3b. SATELLITES\
+    \ carrying a lane-level tasks override \u2014 LAW VIOLATION (0):\n     none \u2014\
+    \ no satellite is board-driven; the law holds\n\n  3c. FOREMEN outside the tasks\
+    \ namespace \u2014 LAW VIOLATION (1):\n     mischief-chaos                   \
+    \        ns=monitoring ns_mode=cooldown (must be a tasks namespace)\n\n  NOT reported\
+    \ as over-firing by design: foremen running ahead of their pin (38 enabled lanes\
+    \ are board-driven; that is their job).\n  Foremen that ran this window: 34. Their\
+    \ runs are the work, not waste.\n  GAP (SCHED-GAP-1695): a tick row cannot yet\
+    \ say how far ahead of its cooldown it ran, so 'ran early because the board had\
+    \ work' (correct) and 'ran early on an empty board' (a defect) are still indistinguishable\
+    \ from ticks alone.  (2 failures in a row)\n    Dispatch:  \u26A0 late: scheduled\
+    \ 2026-10-12T09:00:00-05:00, ran 2026-10-12T09:17:26.163913-05:00 (17m late)\n\
+    \n  e874ea7c64bf [active]\n    Name:      fleet-ttl-warn\n    Schedule:  every\
+    \ day at 6am\n    Repeat:    \u221E\n    Next run:  2026-10-16T06:00:00-05:00\n\
+    \    Deliver:   local\n    Script:    fleet-ttl-warn.sh\n    Mode:      no-agent\
+    \ (script stdout delivered directly)\n    Last run:  2026-10-15T06:00:52.164417-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T06:00:00-05:00)\n    Execution:\
+    \ completed  45f7128cd5fa4866894ffc0f8567ca5a\n\n  dba3fd489075 [active]\n   \
+    \ Name:      Fleet agent TTL renewal + expiry warning\n    Schedule:  23 * * *\
+    \ *\n    Repeat:    \u221E\n    Next run:  2026-10-15T10:23:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808:1\n    Script:    fleet-agent-ttl-renew.py\n    Mode:\
+    \      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:24:53.517667-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:23:00-05:00)\n    Execution:\
+    \ completed  a1e49cf59f094a1cb6bc53295f2415ae\n\n  557f0c5cee6d [active]\n   \
+    \ Name:      Fleet agent-repo guard sweep\n    Schedule:  23 7 * * *\n    Repeat:\
+    \    \u221E\n    Next run:  2026-10-16T07:23:00-05:00\n    Deliver:   telegram:-1003310984808:1\n\
+    \    Script:    fleet-agent-repo-guard-sweep.py\n    Mode:      no-agent (script\
+    \ stdout delivered directly)\n    Last run:  2026-10-15T07:23:51.752719-05:00\
+    \  error: Script exited with code 1\nstdout:\nfleet-agent-repo-guard sweep \u2014\
+    \ check-all rc=1 \u2014 16 lane(s) UNREACHED/unverified\n  2026-10-15T12:23:04Z\
+    \  lanes=16/16 clones=0  full output: /home/kara/.hermes/state/agent-repo-guard/logs/checkall-20261015T122304Z.txt\n\
+    \n=== check asce @ coding-hermes-remote-bunker-03\n  UNREACHED \u2014 lane produced\
+    \ no check output (ssh/timeout/no home?); this is NOT a clean result\n  raw: \n\
+    \n=== check deepseek-dashboard @ coding-hermes-remote-bunker-02\n  UNREACHED \u2014\
+    \ lane produced no check output (ssh/timeout/no home?); this is NOT a clean result\n\
+    \  raw: \n\n=== check escalation-doctrine @ coding-hermes-remote-bunker-02\n \
+    \ UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check helix @ coding-hermes-remote-bunker-02\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check hermes4friends-infra @ coding-hermes-remote-bunker-03\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check imhotep @ coding-hermes-remote-bunker-03\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check inference-estimator @ coding-hermes-remote-bunker-01\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check kobayashi-maru @ coding-hermes-remote-bunker-04\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check musterflow @ coding-hermes-remote-bunker-02\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check rabbit-hole @ coding-hermes-remote-bunker-03\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check rethinkdb @ coding-hermes-remote-bunker-04\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check ring-runner @ coding-hermes-remote-bunker-01\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check speclang @ coding-hermes-remote-bunker-04\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check temple-runner @ coding-hermes-remote-bunker-04\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check totalstack @ coding-hermes-remote-bunker-01\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: \n\n=== check uhlp @ coding-hermes-remote-bunker-01\n\
+    \  UNREACHED \u2014 lane produced no check output (ssh/timeout/no home?); this\
+    \ is NOT a clean result\n  raw: checked 16 lane(s); rc=1 | FATAL: unknown box\
+    \ 'coding-hermes-remote-bunker-03' (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02\
+    \ hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-02' (known:\
+    \ hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL: unknown\
+    \ box 'coding-hermes-remote-bunker-02' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-02'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-03' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-03'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-01' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-04'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-02' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-03'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-04' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-01'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-04' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-04'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04) | FATAL:\
+    \ unknown box 'coding-hermes-remote-bunker-01' (known: hermes-fleet-01 hermes-fleet-03\
+    \ hermes-fleet-02 hermes-fleet-04) | FATAL: unknown box 'coding-hermes-remote-bunker-01'\
+    \ (known: hermes-fleet-01 hermes-fleet-03 hermes-fleet-02 hermes-fleet-04)\n\n\
+    fix: re-run `bash /home/kara/.hermes/scripts/fleet-agent-repo-guard.sh install-all`\
+    \ (or `install <agent>`) to restore the allowlist +\n     core.hooksPath hook,\
+    \ and remove any non-origin remote from the named clone.  (12 failures in a row)\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T07:23:00-05:00)\n    Execution:\
+    \ failed  68800caf2be549a08bc2f02e6ad14392\n\n  0633c41279d6 [active]\n    Name:\
+    \      DuckBrain S3 backup alert (S3-ALERT-001)\n    Schedule:  */15 * * * *\n\
+    \    Repeat:    \u221E\n    Next run:  2026-10-15T10:00:00-05:00\n    Deliver:\
+    \   telegram:-1003310984808:2065\n    Script:    duckbrain-s3-alert.sh\n    Mode:\
+    \      no-agent (script stdout delivered directly)\n    Last run:  2026-10-15T09:45:28.425114-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-15T09:45:00-05:00)\n    Execution:\
+    \ completed  d850ff802c3e4672b53839475d26f71c\n\n  6bebf202795d [active]\n   \
+    \ Name:      fleet-inventory-sweep\n    Schedule:  0 4 * * 1\n    Repeat:    \u221E\
+    \n    Next run:  2026-10-19T04:00:00-05:00\n    Deliver:   local\n    Workdir:\
+    \   /home/kara/fleet-monitoring\n    Last run:  2026-10-12T04:01:37.672474-05:00\
+    \  ok\n    Dispatch:  on time (scheduled 2026-10-12T04:00:00-05:00)\n\n  41493b3146b4\
+    \ [active]\n    Name:      GitLab Mirror Sync\n    Schedule:  0 */6 * * *\n  \
+    \  Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n    Deliver: \
+    \  local\n    Script:    sync-gitlab-mirror.py\n    Mode:      no-agent (script\
+    \ stdout delivered directly)\n    Workdir:   /home/kara/gitreins\n    Last run:\
+    \  2026-10-15T06:00:53.188848-05:00  ok\n    Dispatch:  on time (scheduled 2026-10-15T06:00:00-05:00)\n\
+    \    Execution: completed  769b2f0ea4334dad84abd35bfad83bb6\n\n  8efecceddde4\
+    \ [active]\n    Name:      task-router null census watch (TR-201)\n    Schedule:\
+    \  0 */6 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-15T12:00:00-05:00\n\
+    \    Deliver:   origin\n    Workdir:   /home/kara/task-router\n    Last run: \
+    \ 2026-10-15T06:01:30.287614-05:00  delivery_failed: live adapter send failed:\
+    \ API server uses HTTP request/response, not send(); live adapter delivery to\
+    \ api_server:21984363-04f2-470d-94bb-238b8bfd019a failed: API server uses HTTP\
+    \ request/response, not send(); delivery error: Adapter send failed: API server\
+    \ uses HTTP request/response, not send() (target api_server:21984363-04f2-470d-94bb-238b8bfd019a)\n\
+    \    Dispatch:  on time (scheduled 2026-10-15T06:00:00-05:00)\n    Execution:\
+    \ completed  a667a5ba5be24482844a1c2bbf6a0b0a\n    \u26A0 Delivery failed: live\
+    \ adapter send failed: API server uses HTTP request/response, not send(); live\
+    \ adapter delivery to api_server:21984363-04f2-470d-94bb-238b8bfd019a failed:\
+    \ API server uses HTTP request/response, not send(); delivery error: Adapter send\
+    \ failed: API server uses HTTP request/response, not send() (target api_server:21984363-04f2-470d-94bb-238b8bfd019a)\n\
+    \n  e6e302711709 [active]\n    Name:      Fleet cooldown policy daily check (SCHED-GAP-1663)\n\
+    \    Schedule:  20 5 * * *\n    Repeat:    \u221E\n    Next run:  2026-10-16T05:20:00-05:00\n\
+    \    Deliver:   origin\n    Script:    fleet-cooldown-policy-check.sh\n    Mode:\
+    \      no-agent (script stdout delivered directly) shows the job active"
+  status: complete
+  created_at: '2026-10-15T14:54:01.356445+00:00'
+  completed_at: '2026-10-15T14:55:18.550495+00:00'
+- id: SCHED-GAP-1728
+  title: 'v1.13.0 release prep: changelog completeness + release-prep dry-run (re-judge
+    on c5b3de96)'
+  criteria:
+  - CHANGELOG.md Unreleased extended with ALL feat/fix commits since 2026-10-03 (every
+    commit subject feat*/fix* in v1.12.0..HEAD after 2026-10-03 has a changelog line
+    citing its hash; judge's prior 6 omissions 29b6fedc/4b25296b/ba599721/796bd2b0/a12161b1/006dfa92
+    now covered), scripts/release-prep.sh --dry-run v1.13.0 exits 0, CI green on the
+    prep commit c5b3de96
+  status: complete
+  created_at: '2026-10-15T23:19:54.157830+00:00'
+  completed_at: '2026-10-15T23:20:04.536886+00:00'
+- id: SCHED-HARNESS-001
+  title: Separate fixed foreman routing from task-router worker selection
+  criteria:
+  - On canonical main, fixed mode bypasses task-router only for default-Hermes canonical
+    foremen, dispatches exactly the project model/provider with no auth fallback,
+    preserves router mode for satellites/unknown lanes and custom-command behavior,
+    carries canonical lane class through production packers, applies TOML/env mode
+    explicitly without process-env mutation, and passes focused/full scheduler-config-schedulerd
+    tests, vet, build, and diff checks.
+  status: complete
+  created_at: '2026-10-16T01:29:16.866892+00:00'
+  completed_at: '2026-10-16T01:32:13.799385+00:00'
