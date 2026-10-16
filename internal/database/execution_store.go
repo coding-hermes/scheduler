@@ -43,9 +43,11 @@ type ExecutionRun struct {
 	DurableCompletedAt                                     sql.NullString
 }
 
-// CreateExecutionRun creates a parent run or returns the existing run for an
-// identical submitting-authority/key/brief-digest replay. A changed digest is
-// an ErrExecutionConflict.
+// CreateExecutionRun creates a scheduler-controlled submitted parent run or
+// returns the existing run for an identical submitting-authority/key/brief-
+// digest replay. Callers may omit State or explicitly provide "submitted";
+// no other initial state is accepted. A changed digest is an
+// ErrExecutionConflict.
 func CreateExecutionRun(ctx context.Context, db *sql.DB, r ExecutionRun) (ExecutionRun, bool, error) {
 	if r.RunID == "" || r.SubmittingAuthority == "" || r.SubmissionIdempotencyKey == "" || r.BriefDigest == "" || r.Lane == "" || r.TaskID == "" {
 		return ExecutionRun{}, false, errors.New("create execution run: required field is empty")
@@ -53,8 +55,8 @@ func CreateExecutionRun(ctx context.Context, db *sql.DB, r ExecutionRun) (Execut
 	if r.State == "" {
 		r.State = "submitted"
 	}
-	if !executionStates[r.State] {
-		return ExecutionRun{}, false, fmt.Errorf("create execution run: invalid state %q", r.State)
+	if r.State != "submitted" {
+		return ExecutionRun{}, false, fmt.Errorf("create execution run: initial state must be submitted, got %q", r.State)
 	}
 	now := executionNow(ctx)
 	_, err := db.ExecContext(ctx, `INSERT INTO execution_runs
@@ -165,7 +167,15 @@ func AdmitExecutionAttempt(ctx context.Context, db *sql.DB, a AttemptAdmission) 
 	if existing, ok, e := findAttemptByKey(ctx, tx.conn, a.Attempt.AttemptIdempotencyKey); e != nil {
 		return ExecutionAttempt{}, false, e
 	} else if ok {
-		if existing.RunID != a.Attempt.RunID || existing.RouteDigest != a.Attempt.RouteDigest {
+		lease, e := findWorkspaceLease(ctx, tx.conn, existing.WorkspaceLeaseID)
+		if e != nil {
+			return ExecutionAttempt{}, false, e
+		}
+		dispatch, e := findExecutionOutboxByAttempt(ctx, tx.conn, existing.AttemptID)
+		if e != nil {
+			return ExecutionAttempt{}, false, e
+		}
+		if !sameAttemptAdmission(existing, lease, dispatch, a) {
 			return ExecutionAttempt{}, false, ErrExecutionConflict
 		}
 		return existing, true, tx.commit()
@@ -247,11 +257,59 @@ func findAttemptByKey(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, key string) (ExecutionAttempt, bool, error) {
 	var a ExecutionAttempt
-	err := q.QueryRowContext(ctx, `SELECT attempt_id,run_id,generation,attempt_idempotency_key,state,route_digest,connector_id,connector_version,workspace_lease_id,lease_epoch,submitted_at FROM execution_attempts WHERE attempt_idempotency_key=?`, key).Scan(&a.AttemptID, &a.RunID, &a.Generation, &a.AttemptIdempotencyKey, &a.State, &a.RouteDigest, &a.ConnectorID, &a.ConnectorVersion, &a.WorkspaceLeaseID, &a.LeaseEpoch, &a.SubmittedAt)
+	err := q.QueryRowContext(ctx, `SELECT attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,workspace_lease_id,lease_epoch,submitted_at FROM execution_attempts WHERE attempt_idempotency_key=?`, key).Scan(&a.AttemptID, &a.RunID, &a.Generation, &a.AttemptIdempotencyKey, &a.State, &a.SelectedCandidateRank, &a.RequestedModel, &a.RequestedProvider, &a.SelectedModel, &a.SelectedProvider, &a.SelectedBaseURL, &a.RouteDigest, &a.RouteReceiptJSON, &a.ConnectorID, &a.ConnectorVersion, &a.BunkerProfileID, &a.WorkspaceLeaseID, &a.LeaseEpoch, &a.SubmittedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, false, nil
 	}
 	return a, err == nil, err
+}
+
+func findWorkspaceLease(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, leaseID string) (WorkspaceLease, error) {
+	var l WorkspaceLease
+	err := q.QueryRowContext(ctx, `SELECT lease_id,repository_uri,base_revision,branch,host_id,workspace_path,owner_run_id,owner_attempt_id,lease_epoch,state,acquired_at,renewed_at,expires_at,revoked_at,revocation_reason FROM workspace_leases WHERE lease_id=?`, leaseID).Scan(&l.LeaseID, &l.Identity.RepositoryURI, &l.Identity.BaseRevision, &l.Identity.Branch, &l.Identity.HostID, &l.Identity.WorkspacePath, &l.OwnerRunID, &l.OwnerAttemptID, &l.LeaseEpoch, &l.State, &l.AcquiredAt, &l.RenewedAt, &l.ExpiresAt, &l.RevokedAt, &l.RevocationReason)
+	return l, err
+}
+
+func findExecutionOutboxByAttempt(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, attemptID string) (OutboxMessage, error) {
+	var m OutboxMessage
+	err := q.QueryRowContext(ctx, `SELECT outbox_id,run_id,attempt_id,kind,idempotency_key,payload_json,payload_digest,state,attempt_count,available_at,claimed_by,claimed_at,ack_id,last_error,created_at,updated_at FROM execution_outbox WHERE attempt_id=?`, attemptID).Scan(&m.OutboxID, &m.RunID, &m.AttemptID, &m.Kind, &m.IdempotencyKey, &m.PayloadJSON, &m.PayloadDigest, &m.State, &m.AttemptCount, &m.AvailableAt, &m.ClaimedBy, &m.ClaimedAt, &m.AckID, &m.LastError, &m.CreatedAt, &m.UpdatedAt)
+	return m, err
+}
+
+func sameAttemptAdmission(existing ExecutionAttempt, lease WorkspaceLease, dispatch OutboxMessage, proposed AttemptAdmission) bool {
+	kind := proposed.Dispatch.Kind
+	if kind == "" {
+		kind = "execution.dispatch"
+	}
+	return existing.AttemptID == proposed.Attempt.AttemptID &&
+		existing.RunID == proposed.Attempt.RunID &&
+		existing.AttemptIdempotencyKey == proposed.Attempt.AttemptIdempotencyKey &&
+		existing.SelectedCandidateRank == proposed.Attempt.SelectedCandidateRank &&
+		existing.RequestedModel == proposed.Attempt.RequestedModel &&
+		existing.RequestedProvider == proposed.Attempt.RequestedProvider &&
+		existing.SelectedModel == proposed.Attempt.SelectedModel &&
+		existing.SelectedProvider == proposed.Attempt.SelectedProvider &&
+		existing.SelectedBaseURL == proposed.Attempt.SelectedBaseURL &&
+		existing.RouteDigest == proposed.Attempt.RouteDigest &&
+		existing.RouteReceiptJSON == proposed.Attempt.RouteReceiptJSON &&
+		existing.ConnectorID == proposed.Attempt.ConnectorID &&
+		existing.ConnectorVersion == proposed.Attempt.ConnectorVersion &&
+		existing.BunkerProfileID == proposed.Attempt.BunkerProfileID &&
+		existing.WorkspaceLeaseID == proposed.Lease.LeaseID &&
+		existing.LeaseEpoch == proposed.Lease.LeaseEpoch &&
+		proposed.Lease.ExpectedEpoch == existing.LeaseEpoch-1 &&
+		lease.Identity == proposed.Lease.Identity &&
+		dispatch.OutboxID == proposed.Dispatch.OutboxID &&
+		dispatch.RunID == proposed.Attempt.RunID &&
+		dispatch.AttemptID == proposed.Attempt.AttemptID &&
+		dispatch.Kind == kind &&
+		dispatch.IdempotencyKey == proposed.Dispatch.IdempotencyKey &&
+		dispatch.PayloadDigest == proposed.Dispatch.PayloadDigest &&
+		dispatch.PayloadJSON == proposed.Dispatch.PayloadJSON
 }
 
 func acquireLeaseTx(ctx context.Context, q *sql.Conn, a LeaseAcquire, runID, attemptID string) error {
@@ -365,7 +423,7 @@ func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (Ex
 		old.AttemptID = e.AttemptID
 		old.Sequence = e.Sequence
 		old.Accepted = accepted == 1
-		if old.PayloadDigest != e.PayloadDigest || old.Kind != e.Kind || old.Generation != e.Generation {
+		if old.RunID != e.RunID || old.PayloadDigest != e.PayloadDigest || old.Kind != e.Kind || old.ProposedState != e.ProposedState || old.Generation != e.Generation {
 			return e, false, ErrExecutionConflict
 		}
 		return old, true, tx.commit()
@@ -425,17 +483,35 @@ func RecordVerificationReceipt(ctx context.Context, db *sql.DB, r VerificationRe
 	if r.State != "passed" && r.State != "failed" && r.State != "error" {
 		return false, errors.New("verification receipt: invalid state")
 	}
-	r.CreatedAt = executionNow(ctx)
-	_, err := db.ExecContext(ctx, `INSERT INTO verification_receipts(receipt_id,run_id,attempt_id,criterion_id,commit_sha,tree_sha,state,trusted_environment,argv_json,exit_code,artifact_digest,verifier_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ReceiptID, r.RunID, r.AttemptID, r.CriterionID, r.CommitSHA, r.TreeSHA, r.State, r.TrustedEnvironment, r.ArgvJSON, r.ExitCode, r.ArtifactDigest, r.VerifierID, r.CreatedAt)
+	tx, err := beginExecutionTx(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	defer tx.rollback()
+	var old VerificationReceipt
+	err = tx.conn.QueryRowContext(ctx, `SELECT receipt_id,run_id,attempt_id,criterion_id,commit_sha,tree_sha,state,trusted_environment,argv_json,exit_code,artifact_digest,verifier_id,created_at FROM verification_receipts WHERE receipt_id=? OR (run_id=? AND attempt_id=? AND criterion_id=? AND commit_sha=?) LIMIT 1`, r.ReceiptID, r.RunID, r.AttemptID, r.CriterionID, r.CommitSHA).Scan(&old.ReceiptID, &old.RunID, &old.AttemptID, &old.CriterionID, &old.CommitSHA, &old.TreeSHA, &old.State, &old.TrustedEnvironment, &old.ArgvJSON, &old.ExitCode, &old.ArtifactDigest, &old.VerifierID, &old.CreatedAt)
 	if err == nil {
-		return false, nil
+		if !sameVerificationReceipt(old, r) {
+			return false, ErrExecutionConflict
+		}
+		return true, tx.commit()
 	}
-	var d string
-	e := db.QueryRowContext(ctx, `SELECT artifact_digest FROM verification_receipts WHERE run_id=? AND attempt_id=? AND criterion_id=? AND commit_sha=?`, r.RunID, r.AttemptID, r.CriterionID, r.CommitSHA).Scan(&d)
-	if e == nil && d == r.ArtifactDigest {
-		return true, nil
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
 	}
-	return false, ErrExecutionConflict
+	r.CreatedAt = executionNow(ctx)
+	_, err = tx.conn.ExecContext(ctx, `INSERT INTO verification_receipts(receipt_id,run_id,attempt_id,criterion_id,commit_sha,tree_sha,state,trusted_environment,argv_json,exit_code,artifact_digest,verifier_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ReceiptID, r.RunID, r.AttemptID, r.CriterionID, r.CommitSHA, r.TreeSHA, r.State, r.TrustedEnvironment, r.ArgvJSON, r.ExitCode, r.ArtifactDigest, r.VerifierID, r.CreatedAt)
+	if err != nil {
+		return false, err
+	}
+	return false, tx.commit()
+}
+
+func sameVerificationReceipt(a, b VerificationReceipt) bool {
+	return a.ReceiptID == b.ReceiptID && a.RunID == b.RunID && a.AttemptID == b.AttemptID &&
+		a.CriterionID == b.CriterionID && a.CommitSHA == b.CommitSHA && a.TreeSHA == b.TreeSHA &&
+		a.State == b.State && a.TrustedEnvironment == b.TrustedEnvironment && a.ArgvJSON == b.ArgvJSON &&
+		a.ExitCode == b.ExitCode && a.ArtifactDigest == b.ArtifactDigest && a.VerifierID == b.VerifierID
 }
 
 // ExecutionProjection is a replay-safe external closeout step.
@@ -445,25 +521,50 @@ type ExecutionProjection struct {
 	LastError, UpdatedAt                                              string
 }
 
-// PutExecutionProjection creates or advances a projection. Reusing its key with a changed payload conflicts.
+// PutExecutionProjection creates or advances a projection. Its boolean is true
+// only for an exact replay; creation and a valid state advance both return
+// false. Reusing a projection with a changed key or payload digest conflicts.
 func PutExecutionProjection(ctx context.Context, db *sql.DB, p ExecutionProjection) (bool, error) {
 	if p.RunID == "" || p.Projection == "" || p.IdempotencyKey == "" || p.PayloadDigest == "" {
 		return false, errors.New("projection: required field empty")
 	}
-	p.UpdatedAt = executionNow(ctx)
-	res, err := db.ExecContext(ctx, `INSERT INTO execution_projections(run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,projection) DO UPDATE SET state=excluded.state,remote_id=excluded.remote_id,attempts=excluded.attempts,last_error=excluded.last_error,updated_at=excluded.updated_at WHERE execution_projections.idempotency_key=excluded.idempotency_key AND execution_projections.payload_digest=excluded.payload_digest`, p.RunID, p.Projection, p.State, p.IdempotencyKey, p.PayloadDigest, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt)
+	tx, err := beginExecutionTx(ctx, db)
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	defer tx.rollback()
+	var old ExecutionProjection
+	err = tx.conn.QueryRowContext(ctx, `SELECT run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at FROM execution_projections WHERE run_id=? AND projection=?`, p.RunID, p.Projection).Scan(&old.RunID, &old.Projection, &old.State, &old.IdempotencyKey, &old.PayloadDigest, &old.RemoteID, &old.Attempts, &old.LastError, &old.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		p.UpdatedAt = executionNow(ctx)
+		_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_projections(run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, p.RunID, p.Projection, p.State, p.IdempotencyKey, p.PayloadDigest, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt)
+		if err != nil {
+			return false, err
+		}
+		return false, tx.commit()
+	}
+	if err != nil {
+		return false, err
+	}
+	if old.IdempotencyKey != p.IdempotencyKey || old.PayloadDigest != p.PayloadDigest {
 		return false, ErrExecutionConflict
 	}
-	return n == 1, nil
+	if old.State == p.State && old.RemoteID == p.RemoteID && old.Attempts == p.Attempts && old.LastError == p.LastError {
+		return true, tx.commit()
+	}
+	p.UpdatedAt = executionNow(ctx)
+	_, err = tx.conn.ExecContext(ctx, `UPDATE execution_projections SET state=?,remote_id=?,attempts=?,last_error=?,updated_at=? WHERE run_id=? AND projection=?`, p.State, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt, p.RunID, p.Projection)
+	if err != nil {
+		return false, err
+	}
+	return false, tx.commit()
 }
 
 // ClaimExecutionOutbox atomically claims the oldest due dispatch row.
 func ClaimExecutionOutbox(ctx context.Context, db *sql.DB, worker string) (OutboxMessage, error) {
+	if worker == "" {
+		return OutboxMessage{}, errors.New("claim execution outbox: worker required")
+	}
 	tx, err := beginExecutionTx(ctx, db)
 	if err != nil {
 		return OutboxMessage{}, err
@@ -475,8 +576,8 @@ func ClaimExecutionOutbox(ctx context.Context, db *sql.DB, worker string) (Outbo
 	if err != nil {
 		return m, err
 	}
-	_, err = tx.conn.ExecContext(ctx, `UPDATE execution_outbox SET state='claimed',claimed_by=?,claimed_at=?,attempt_count=attempt_count+1,updated_at=? WHERE outbox_id=? AND state='pending'`, worker, now, now, m.OutboxID)
-	if err != nil {
+	res, err := tx.conn.ExecContext(ctx, `UPDATE execution_outbox SET state='claimed',claimed_by=?,claimed_at=?,attempt_count=attempt_count+1,updated_at=? WHERE outbox_id=? AND state='pending'`, worker, now, now, m.OutboxID)
+	if err = outboxCAS(res, err); err != nil {
 		return m, err
 	}
 	if err = tx.commit(); err != nil {
@@ -515,7 +616,9 @@ func outboxCAS(r sql.Result, e error) error {
 }
 
 // RecoverExecutionState returns all nonterminal runs, active leases, and
-// pending/claimed dispatches for restart reconciliation.
+// pending/claimed dispatches for restart reconciliation. In particular, it
+// never resets or reissues claimed rows: their ambiguous outcome must be
+// reconciled explicitly by AckExecutionOutbox or RetryExecutionOutbox.
 func RecoverExecutionState(ctx context.Context, db *sql.DB) ([]ExecutionRun, []WorkspaceLease, []OutboxMessage, error) {
 	rows, err := db.QueryContext(ctx, executionRunSelect+` WHERE state NOT IN ('completed','failed','canceled','rejected','expired') ORDER BY created_at,run_id`)
 	if err != nil {
