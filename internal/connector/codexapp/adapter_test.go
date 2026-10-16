@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/connector"
+	"github.com/coding-hermes/scheduler/internal/execution"
 )
 
 type fakeClock struct {
@@ -71,7 +73,7 @@ func newHarness(t *testing.T, handler func(*harness, map[string]any)) (*Adapter,
 			}
 		}
 	}()
-	a, err := New(Options{Transport: client, Supervisor: fakeSupervisor{zero: true}, Clock: &fakeClock{t: time.Unix(100, 0)}, Capabilities: connector.Capabilities{Events: true, Steer: true, Cancel: true, Quiescence: true}, EventBuffer: 16})
+	a, err := New(Options{Transport: client, Supervisor: fakeSupervisor{zero: true}, Clock: &fakeClock{t: time.Unix(100, 0)}, Capabilities: connector.Capabilities{Events: true, Steer: true, Cancel: true, Quiescence: true}, EventBuffer: 16, ConnectorProfileID: "profile", ConnectorProfileDigest: "profile-digest"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +120,8 @@ func baseHandler(model, provider, readStatus string) func(*harness, map[string]a
 			h.response(m, map[string]any{})
 		case "turn/steer":
 			h.response(m, map[string]any{"turnId": "turn-1"})
+		case "thread/delete":
+			h.response(m, map[string]any{})
 		}
 	}
 }
@@ -126,11 +130,34 @@ func corr() connector.Correlation {
 }
 func start(t *testing.T, a *Adapter) connector.StartResult {
 	t.Helper()
-	r, err := a.Start(context.Background(), connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: connector.ExecutionBrief{Goal: "implement", Rationale: "needed", Constraints: []string{"stay dark"}, Acceptance: []string{"tests pass"}, Proof: []string{"test output"}}})
+	a.mu.Lock()
+	ready := a.state == statePreflightReady
+	a.mu.Unlock()
+	if !ready {
+		p, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()})
+		if err != nil || !p.Ready {
+			t.Fatalf("preflight=%+v err=%v", p, err)
+		}
+	}
+	r, err := a.Start(context.Background(), connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: validBrief(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
+}
+
+func validBrief(t *testing.T) execution.ExecutionBrief {
+	t.Helper()
+	b := execution.ExecutionBrief{SchemaVersion: "1.0", BriefID: "brief", RevisionID: "rev", IssuedAt: "2026-10-16T00:00:00Z", IssuedBy: "foreman", Project: "scheduler", Lane: "main", TaskID: "task", TickID: "tick", Mission: "implement", RationaleSummary: "needed", Source: execution.Source{RepositoryURI: "repo", SourceRef: "main", BaseRevision: "abc", DiffBaseRevision: "abc"}, ContextRefs: []execution.ContextRef{{Namespace: "board", KeyOrID: "task", RevisionOrDigest: "rev", RetrievedAt: "2026-10-16T00:00:00Z", Authority: "board"}}, Scope: execution.Scope{AllowedPaths: []string{"internal/"}, ForbiddenPaths: []string{"config"}}, Constraints: []execution.Constraint{{ID: "c1", Level: "must", Statement: "stay dark"}}, NonGoals: []string{"deploy"}, CapabilityRequirements: execution.CapabilityRequirements{Required: []string{"events"}, Optional: []string{"steer"}}, WorkspacePolicy: execution.WorkspacePolicy{Kind: "worktree", Isolation: "exclusive", Network: "disabled", RequiredTools: []string{"go"}}, PermissionPolicy: execution.PermissionPolicy{Profile: "unattended", Unattended: true}, ResourcePolicy: execution.ResourcePolicy{CPU: 1, MemoryMB: 512, PIDs: 64, DiskMB: 1024, WallTimeoutS: 600, IdleTimeoutS: 60}, AcceptanceCriteria: []execution.AcceptanceCriterion{{ID: "a1", Statement: "tests pass", Required: true, ProofRequirements: []execution.ProofRequirement{{ID: "p1", Kind: "command", Argv: []string{"go", "test", "./..."}, CWD: ".", TimeoutS: 600, ExpectExit: 0}}}}, RequiredDeliverables: []string{"commit"}, CloseoutPolicy: execution.CloseoutPolicy{RequiresCommit: true, RequiresSourceOrTestDiff: true, TargetRemote: "origin", TargetBranch: "main"}, Provenance: execution.Provenance{ForemanRunID: "foreman-run", BoardRevision: "board-rev"}}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.BriefDigest, err = execution.BriefDigest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func TestHappyPathAndNativeActualIdentity(t *testing.T) {
@@ -165,6 +192,50 @@ func TestHappyPathAndNativeActualIdentity(t *testing.T) {
 				t.Fatal("hidden reasoning field rendered")
 			}
 		}
+	}
+}
+
+func TestCanonicalExecutionFixtureAcceptedAndFullyRendered(t *testing.T) {
+	raw, err := os.ReadFile("../../execution/testdata/canonicalization-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		ExecutionBrief json.RawMessage `json:"execution_brief"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	brief, err := execution.DecodeBrief(fixture.ExecutionBrief)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := execution.ValidateBriefDigest(fixture.ExecutionBrief); err != nil {
+		t.Fatal(err)
+	}
+	a, h := newHarness(t, baseHandler("served", "provider", "idle"))
+	if _, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Start(context.Background(), connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: *brief}); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	requests := append([]map[string]any(nil), h.requests...)
+	h.mu.Unlock()
+	var rendered string
+	for _, request := range requests {
+		if request["method"] == "thread/start" {
+			rendered = request["params"].(map[string]any)["baseInstructions"].(string)
+		}
+	}
+	for _, want := range []string{"mission", "rationale_summary", "source", "context_refs", "allowed_paths", "forbidden_paths", "constraints", "non_goals", "capability_requirements", "workspace_policy", "permission_policy", "resource_policy", "proof_requirements", "required_deliverables", "closeout_policy", "provenance"} {
+		if !strings.Contains(rendered, `"`+want+`"`) {
+			t.Errorf("rendered brief missing %s", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(rendered), "chain-of-thought") {
+		t.Fatal("hidden reasoning rendered")
 	}
 }
 
@@ -238,7 +309,7 @@ func TestWrongTerminalCorrelationKillsTransport(t *testing.T) {
 func TestUnsupportedFailsClosed(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
-	a, _ := New(Options{Transport: client})
+	a, _ := New(Options{Transport: client, ConnectorProfileID: "profile", ConnectorProfileDigest: "profile-digest"})
 	c := corr()
 	c.NativeSessionID = "x"
 	c.NativeTurnID = "y"
@@ -281,6 +352,244 @@ func TestErrorsDoNotLeakSecretPayloads(t *testing.T) {
 	_, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()})
 	if strings.Contains(fmt.Sprintf("%v", err), secret) || strings.Contains(fmt.Sprintf("%+v", err), secret) {
 		t.Fatalf("secret leaked: %v", err)
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatalf("upstream error was unwrap-exported: %v", errors.Unwrap(err))
+	}
+	var injected interface{ Secret() string }
+	if errors.As(err, &injected) {
+		t.Fatal("injected upstream error remained reachable")
+	}
+}
+
+func TestStartAuthorityValidationBeforeWire(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*connector.StartRequest)
+	}{
+		{"tampered brief", func(r *connector.StartRequest) { r.Brief.Mission = "tampered" }},
+		{"profile id", func(r *connector.StartRequest) { r.Correlation.ConnectorProfileID = "other" }},
+		{"profile digest", func(r *connector.StartRequest) { r.Correlation.ConnectorProfileDigest = "other" }},
+		{"route", func(r *connector.StartRequest) { r.Correlation.RouteDigest = "other" }},
+		{"lease", func(r *connector.StartRequest) { r.Correlation.WorkspaceLeaseEpoch++ }},
+		{"candidate", func(r *connector.StartRequest) { r.Correlation.Requested.Model = "other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, h := newHarness(t, baseHandler("served", "provider", "idle"))
+			if _, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()}); err != nil {
+				t.Fatal(err)
+			}
+			r := connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: validBrief(t)}
+			tc.edit(&r)
+			if _, err := a.Start(context.Background(), r); err == nil {
+				t.Fatal("start accepted")
+			}
+			h.mu.Lock()
+			methods := strings.Join(h.methods, ",")
+			h.mu.Unlock()
+			if strings.Contains(methods, "thread/start") {
+				t.Fatalf("wire start occurred: %s", methods)
+			}
+		})
+	}
+}
+
+func TestConcurrentInitializationAndStartAreSingleShot(t *testing.T) {
+	a, h := newHarness(t, baseHandler("served", "provider", "idle"))
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()})
+		}()
+	}
+	wg.Wait()
+	h.mu.Lock()
+	initCount := countMethod(h.methods, "initialize")
+	initializedCount := countMethod(h.methods, "initialized")
+	h.mu.Unlock()
+	if initCount != 1 || initializedCount != 1 {
+		t.Fatalf("initialize=%d initialized=%d", initCount, initializedCount)
+	}
+	if _, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()}); err != nil {
+		t.Fatal(err)
+	}
+	req := connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: validBrief(t)}
+	results := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := a.Start(context.Background(), req); results <- err }()
+	}
+	wg.Wait()
+	close(results)
+	success := 0
+	for err := range results {
+		if err == nil {
+			success++
+		}
+	}
+	h.mu.Lock()
+	threadStarts := countMethod(h.methods, "thread/start")
+	turnStarts := countMethod(h.methods, "turn/start")
+	h.mu.Unlock()
+	if success != 1 || threadStarts != 1 || turnStarts != 1 {
+		t.Fatalf("success=%d thread/start=%d turn/start=%d", success, threadStarts, turnStarts)
+	}
+}
+
+func countMethod(methods []string, want string) int {
+	n := 0
+	for _, method := range methods {
+		if method == want {
+			n++
+		}
+	}
+	return n
+}
+
+func TestAppliedPolicyMismatchDeletesThread(t *testing.T) {
+	for _, field := range []string{"cwd", "approval", "sandbox", "network"} {
+		t.Run(field, func(t *testing.T) {
+			handler := baseHandler("served", "provider", "idle")
+			a, h := newHarness(t, func(h *harness, m map[string]any) {
+				if m["method"] != "thread/start" {
+					handler(h, m)
+					return
+				}
+				result := threadResult("served", "provider", "idle").(map[string]any)
+				switch field {
+				case "cwd":
+					result["cwd"] = "/wrong"
+				case "approval":
+					result["approvalPolicy"] = "on-request"
+				case "sandbox":
+					result["sandbox"].(map[string]any)["type"] = "dangerFullAccess"
+				case "network":
+					result["sandbox"].(map[string]any)["networkAccess"] = true
+				}
+				h.response(m, result)
+			})
+			_, err := startResult(t, a)
+			if !connector.IsKind(err, connector.ErrorPartialStart) {
+				t.Fatalf("err=%v", err)
+			}
+			h.mu.Lock()
+			deletes := countMethod(h.methods, "thread/delete")
+			h.mu.Unlock()
+			if deletes != 1 {
+				t.Fatalf("deletes=%d", deletes)
+			}
+		})
+	}
+}
+
+func startResult(t *testing.T, a *Adapter) (connector.StartResult, error) {
+	t.Helper()
+	if _, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()}); err != nil {
+		t.Fatal(err)
+	}
+	return a.Start(context.Background(), connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: validBrief(t)})
+}
+
+func TestTurnFailureCleanupAndPoison(t *testing.T) {
+	for _, deleteFails := range []bool{false, true} {
+		t.Run(fmt.Sprint("delete-fails-", deleteFails), func(t *testing.T) {
+			base := baseHandler("served", "provider", "idle")
+			a, h := newHarness(t, func(h *harness, m map[string]any) {
+				switch m["method"] {
+				case "turn/start":
+					h.response(m, map[string]any{"turn": map[string]any{}})
+				case "thread/delete":
+					if deleteFails {
+						b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m["id"], "error": map[string]any{"code": -1, "message": "secret"}})
+						_, _ = h.conn.Write(append(b, '\n'))
+					} else {
+						h.response(m, map[string]any{})
+					}
+				default:
+					base(h, m)
+				}
+			})
+			_, err := startResult(t, a)
+			want := connector.ErrorPartialStart
+			if deleteFails {
+				want = connector.ErrorStartUnknown
+			}
+			if !connector.IsKind(err, want) {
+				t.Fatalf("err=%v", err)
+			}
+			_, retryErr := a.Start(context.Background(), connector.StartRequest{Correlation: corr(), WorkspacePath: "/lease", Brief: validBrief(t)})
+			if retryErr == nil {
+				t.Fatal("unsafe retry accepted")
+			}
+			h.mu.Lock()
+			starts := countMethod(h.methods, "thread/start")
+			h.mu.Unlock()
+			if starts != 1 {
+				t.Fatalf("thread starts=%d", starts)
+			}
+		})
+	}
+}
+
+func TestPreflightModelCaps(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		pages, models int
+		data          []any
+		next          any
+	}{{"pages", 1, 100, []any{}, "next"}, {"models", 10, 1, []any{map[string]any{"model": "x"}, map[string]any{"model": "requested"}}, nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := baseHandler("served", "provider", "idle")
+			a, _ := newHarness(t, func(h *harness, m map[string]any) {
+				if m["method"] == "model/list" {
+					h.response(m, map[string]any{"data": tc.data, "nextCursor": tc.next})
+					return
+				}
+				base(h, m)
+			})
+			a.maxModelPages, a.maxModels = tc.pages, tc.models
+			if _, err := a.Preflight(context.Background(), connector.PreflightRequest{Correlation: corr()}); err == nil {
+				t.Fatal("cap accepted")
+			}
+		})
+	}
+}
+
+func TestSecondEventSubscriberRejected(t *testing.T) {
+	a, _ := newHarness(t, baseHandler("served", "provider", "idle"))
+	r := start(t, a)
+	if _, err := a.Events(context.Background(), r.Correlation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Events(context.Background(), r.Correlation); err == nil {
+		t.Fatal("second subscriber accepted")
+	}
+}
+
+func TestCollectRejectsInvalidBundles(t *testing.T) {
+	a, _ := newHarness(t, baseHandler("served", "provider", "idle"))
+	r := start(t, a)
+	good := connector.ArtifactReference{URI: "cas://a", MediaType: "text/plain", SHA256: strings.Repeat("a", 64), Size: 1}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*connector.ArtifactBundle)
+	}{
+		{"correlation", func(b *connector.ArtifactBundle) { b.Correlation.RouteDigest = "bad" }},
+		{"manifest", func(b *connector.ArtifactBundle) { b.ManifestSHA256 = "ABC" }},
+		{"digest", func(b *connector.ArtifactBundle) { b.References[0].SHA256 = strings.Repeat("A", 64) }},
+		{"media", func(b *connector.ArtifactBundle) { b.References[0].MediaType = "" }},
+		{"duplicate", func(b *connector.ArtifactBundle) { b.References = append(b.References, b.References[0]) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := connector.ArtifactBundle{Correlation: r.Correlation, References: []connector.ArtifactReference{good}, ManifestSHA256: strings.Repeat("b", 64)}
+			tc.mutate(&b)
+			a.collector = fakeCollector{bundle: b}
+			if _, err := a.Collect(context.Background(), connector.CollectRequest{Correlation: r.Correlation}); err == nil {
+				t.Fatal("invalid bundle accepted")
+			}
+		})
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/execution"
 )
 
 // Capability declares a native lifecycle operation that a connector can prove.
@@ -55,16 +57,9 @@ type Capabilities struct{ Events, Steer, Cancel, AttachResume, Quiescence bool }
 // Description identifies and describes a connector implementation.
 type Description struct {
 	ID, Version, NativeProtocol string
+	ConnectorProfileID          string
+	ConnectorProfileDigest      string
 	Capabilities                Capabilities
-}
-
-// ExecutionBrief contains only execution-relevant authored intent, never hidden reasoning.
-type ExecutionBrief struct {
-	Goal        string   `json:"goal"`
-	Rationale   string   `json:"rationale,omitempty"`
-	Constraints []string `json:"constraints,omitempty"`
-	Acceptance  []string `json:"acceptance,omitempty"`
-	Proof       []string `json:"proof,omitempty"`
 }
 
 // PreflightRequest asks whether the correlated candidate can be started.
@@ -81,7 +76,7 @@ type PreflightReceipt struct {
 type StartRequest struct {
 	Correlation   Correlation
 	WorkspacePath string
-	Brief         ExecutionBrief
+	Brief         execution.ExecutionBrief
 }
 
 // StartResult records native IDs and initial actual identity; it is not completion authority.
@@ -198,17 +193,32 @@ const (
 	ErrorTimeout           ErrorKind = "timeout"
 	ErrorNotSettled        ErrorKind = "not_settled"
 	ErrorDescendantsRemain ErrorKind = "descendants_remain"
+	ErrorPartialStart      ErrorKind = "partial_start"
+	ErrorStartUnknown      ErrorKind = "start_unknown"
 )
 
 // Error is a sanitized connector failure.
 type Error struct {
 	Kind               ErrorKind
 	Operation, Message string
-	Err                error
+	cause              error
 }
 
 func (e *Error) Error() string { return "connector " + e.Operation + ": " + e.Message }
-func (e *Error) Unwrap() error { return e.Err }
+func (e *Error) Unwrap() error { return e.cause }
+
+// NewError constructs a sanitized connector failure. Only the safe context
+// cancellation sentinels may be retained as an unwrap cause.
+func NewError(kind ErrorKind, operation, message string, cause error) *Error {
+	if !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+		cause = nil
+	} else if errors.Is(cause, context.DeadlineExceeded) {
+		cause = context.DeadlineExceeded
+	} else {
+		cause = context.Canceled
+	}
+	return &Error{Kind: kind, Operation: operation, Message: message, cause: cause}
+}
 
 // IsKind reports whether err has the requested connector taxonomy.
 func IsKind(err error, kind ErrorKind) bool {

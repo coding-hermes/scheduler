@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	schedulerclock "github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/connector"
+	"github.com/coding-hermes/scheduler/internal/execution"
 )
 
 const schemaVersion = "0.152.0"
@@ -37,27 +39,52 @@ type Options struct {
 	Clock                                         Clock
 	MaxLineBytes, MaxPendingRequests, EventBuffer int
 	Capabilities                                  connector.Capabilities
+	ConnectorProfileID, ConnectorProfileDigest    string
+	MaxModelPages, MaxModels                      int
+	PreflightTimeout                              time.Duration
 }
+
+type lifecycleState uint8
+
+const (
+	stateNew lifecycleState = iota
+	statePreflightReady
+	stateStarting
+	stateActive
+	stateTerminal
+	stateStartUnknown
+	stateDisposed
+)
 
 // Adapter implements connector.Connector for Codex app-server 0.152.0.
 type Adapter struct {
-	rpc                   *rpcClient
-	supervisor            Supervisor
-	collector             Collector
-	clock                 Clock
-	caps                  connector.Capabilities
-	mu                    sync.Mutex
-	initialized, disposed bool
-	corr                  connector.Correlation
-	actual                connector.ActualIdentity
-	active                bool
-	terminal              connector.TerminalStatus
-	threadStatus          string
-	terminalAt            time.Time
-	seq                   uint64
-	events                chan connector.Event
-	changed               chan struct{}
-	deferred              []deferredNotification
+	rpc              *rpcClient
+	supervisor       Supervisor
+	collector        Collector
+	clock            Clock
+	caps             connector.Capabilities
+	profileID        string
+	profileDigest    string
+	maxModelPages    int
+	maxModels        int
+	preflightTimeout time.Duration
+	initMu           sync.Mutex
+	preflightMu      sync.Mutex
+	mu               sync.Mutex
+	initialized      bool
+	state            lifecycleState
+	preflight        connector.PreflightReceipt
+	eventsClaimed    bool
+	corr             connector.Correlation
+	actual           connector.ActualIdentity
+	active           bool
+	terminal         connector.TerminalStatus
+	threadStatus     string
+	terminalAt       time.Time
+	seq              uint64
+	events           chan connector.Event
+	changed          chan struct{}
+	deferred         []deferredNotification
 }
 
 type deferredNotification struct {
@@ -70,6 +97,9 @@ func New(o Options) (*Adapter, error) {
 	if o.Transport == nil {
 		return nil, errors.New("codex app-server: transport is required")
 	}
+	if o.ConnectorProfileID == "" || o.ConnectorProfileDigest == "" {
+		return nil, errors.New("codex app-server: connector profile id and digest are required")
+	}
 	if o.MaxLineBytes <= 0 {
 		o.MaxLineBytes = 1 << 20
 	}
@@ -79,20 +109,31 @@ func New(o Options) (*Adapter, error) {
 	if o.EventBuffer <= 0 {
 		o.EventBuffer = 64
 	}
+	if o.MaxModelPages <= 0 {
+		o.MaxModelPages = 16
+	}
+	if o.MaxModels <= 0 {
+		o.MaxModels = 1000
+	}
+	if o.PreflightTimeout <= 0 {
+		o.PreflightTimeout = 15 * time.Second
+	}
 	if o.Clock == nil {
 		o.Clock = schedulerclock.Real()
 	}
-	a := &Adapter{supervisor: o.Supervisor, collector: o.Collector, clock: o.Clock, caps: o.Capabilities, events: make(chan connector.Event, o.EventBuffer), changed: make(chan struct{})}
+	a := &Adapter{supervisor: o.Supervisor, collector: o.Collector, clock: o.Clock, caps: o.Capabilities, profileID: o.ConnectorProfileID, profileDigest: o.ConnectorProfileDigest, maxModelPages: o.MaxModelPages, maxModels: o.MaxModels, preflightTimeout: o.PreflightTimeout, events: make(chan connector.Event, o.EventBuffer), changed: make(chan struct{})}
 	a.rpc = newRPC(o.Transport, o.MaxLineBytes, o.MaxPendingRequests, a.notification)
 	return a, nil
 }
 
 // Describe describes this pinned native adapter.
 func (a *Adapter) Describe(context.Context) (connector.Description, error) {
-	return connector.Description{ID: "codex-app-server", Version: schemaVersion, NativeProtocol: "codex-app-server-jsonrpc-v2", Capabilities: a.caps}, nil
+	return connector.Description{ID: "codex-app-server", Version: schemaVersion, NativeProtocol: "codex-app-server-jsonrpc-v2", ConnectorProfileID: a.profileID, ConnectorProfileDigest: a.profileDigest, Capabilities: a.caps}, nil
 }
 
 func (a *Adapter) ensureInitialized(ctx context.Context) error {
+	a.initMu.Lock()
+	defer a.initMu.Unlock()
 	a.mu.Lock()
 	if a.initialized {
 		a.mu.Unlock()
@@ -102,12 +143,15 @@ func (a *Adapter) ensureInitialized(ctx context.Context) error {
 	var out struct{ UserAgent, CodexHome, PlatformFamily, PlatformOS string }
 	err := a.rpc.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "coding-hermes-scheduler", "version": "dark-connector"}, "capabilities": map[string]any{"experimentalApi": false}}, &out)
 	if err != nil {
+		_ = a.rpc.close()
 		return wrap("initialize", connector.ErrorTransport, err)
 	}
 	if out.UserAgent == "" || out.CodexHome == "" || out.PlatformFamily == "" || out.PlatformOS == "" {
+		_ = a.rpc.close()
 		return wrap("initialize", connector.ErrorProtocol, errors.New("incomplete initialize response"))
 	}
 	if err := a.rpc.notify("initialized", map[string]any{}); err != nil {
+		_ = a.rpc.close()
 		return wrap("initialize", connector.ErrorTransport, err)
 	}
 	a.mu.Lock()
@@ -118,9 +162,22 @@ func (a *Adapter) ensureInitialized(ctx context.Context) error {
 
 // Preflight performs account/read and exhausts model/list pagination.
 func (a *Adapter) Preflight(ctx context.Context, r connector.PreflightRequest) (connector.PreflightReceipt, error) {
+	a.preflightMu.Lock()
+	defer a.preflightMu.Unlock()
 	if err := validCorrelation(r.Correlation, false); err != nil {
 		return connector.PreflightReceipt{}, err
 	}
+	if err := a.matchProfile(r.Correlation); err != nil {
+		return connector.PreflightReceipt{}, err
+	}
+	a.mu.Lock()
+	if a.state != stateNew && a.state != statePreflightReady {
+		a.mu.Unlock()
+		return connector.PreflightReceipt{}, wrap("preflight", connector.ErrorInvalid, errors.New("connector lifecycle does not permit preflight"))
+	}
+	a.preflight = connector.PreflightReceipt{}
+	a.state = stateNew
+	a.mu.Unlock()
 	if err := a.ensureInitialized(ctx); err != nil {
 		return connector.PreflightReceipt{}, err
 	}
@@ -128,7 +185,9 @@ func (a *Adapter) Preflight(ctx context.Context, r connector.PreflightRequest) (
 		Account  json.RawMessage `json:"account"`
 		Requires bool            `json:"requiresOpenaiAuth"`
 	}
-	if err := a.rpc.call(ctx, "account/read", map[string]any{"refreshToken": false}, &acct); err != nil {
+	bounded, cancel := context.WithTimeout(ctx, a.preflightTimeout)
+	defer cancel()
+	if err := a.rpc.call(bounded, "account/read", map[string]any{"refreshToken": true}, &acct); err != nil {
 		return connector.PreflightReceipt{}, wrap("preflight", connector.ErrorTransport, err)
 	}
 	auth := !acct.Requires || string(acct.Account) != "null"
@@ -136,7 +195,10 @@ func (a *Adapter) Preflight(ctx context.Context, r connector.PreflightRequest) (
 	found := false
 	checked := 0
 	seen := map[string]bool{}
-	for {
+	for pages := 0; ; pages++ {
+		if pages >= a.maxModelPages {
+			return connector.PreflightReceipt{}, wrap("preflight", connector.ErrorProtocol, errors.New("model page limit exceeded"))
+		}
 		var page struct {
 			Data []struct {
 				Model string `json:"model"`
@@ -147,11 +209,14 @@ func (a *Adapter) Preflight(ctx context.Context, r connector.PreflightRequest) (
 		if cursor != "" {
 			p["cursor"] = cursor
 		}
-		if err := a.rpc.call(ctx, "model/list", p, &page); err != nil {
+		if err := a.rpc.call(bounded, "model/list", p, &page); err != nil {
 			return connector.PreflightReceipt{}, wrap("preflight", connector.ErrorTransport, err)
 		}
 		for _, m := range page.Data {
 			checked++
+			if checked > a.maxModels {
+				return connector.PreflightReceipt{}, wrap("preflight", connector.ErrorProtocol, errors.New("model count limit exceeded"))
+			}
 			if m.Model == r.Correlation.Requested.Model {
 				found = true
 			}
@@ -165,7 +230,14 @@ func (a *Adapter) Preflight(ctx context.Context, r connector.PreflightRequest) (
 		seen[*page.Next] = true
 		cursor = *page.Next
 	}
-	return connector.PreflightReceipt{Correlation: r.Correlation, Ready: auth && found, Authenticated: auth, ModelAvailable: found, ModelsChecked: checked}, nil
+	receipt := connector.PreflightReceipt{Correlation: r.Correlation, Ready: auth && found, Authenticated: auth, ModelAvailable: found, ModelsChecked: checked}
+	a.mu.Lock()
+	if receipt.Ready {
+		a.preflight = receipt
+		a.state = statePreflightReady
+	}
+	a.mu.Unlock()
+	return receipt, nil
 }
 
 // Start creates a thread in the leased cwd, then starts its first turn.
@@ -173,32 +245,63 @@ func (a *Adapter) Start(ctx context.Context, r connector.StartRequest) (connecto
 	if err := validCorrelation(r.Correlation, false); err != nil {
 		return connector.StartResult{}, err
 	}
+	if err := a.matchProfile(r.Correlation); err != nil {
+		return connector.StartResult{}, err
+	}
 	if r.WorkspacePath == "" || !strings.HasPrefix(r.WorkspacePath, "/") {
 		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("workspace path must be absolute"))
 	}
-	if err := a.ensureInitialized(ctx); err != nil {
-		return connector.StartResult{}, err
+	briefJSON, err := json.Marshal(r.Brief)
+	if err != nil || execution.ValidateBriefDigest(briefJSON) != nil {
+		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("execution brief digest is missing or invalid"))
 	}
 	instructions := renderBrief(r.Brief)
+	a.mu.Lock()
+	if a.state != statePreflightReady || !a.preflight.Ready || !same(r.Correlation, a.preflight.Correlation) {
+		a.mu.Unlock()
+		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("matching ready preflight is required"))
+	}
+	// Authority is consumed before any start wire I/O. No concurrent or later
+	// caller can create another native thread.
+	a.state = stateStarting
+	a.mu.Unlock()
 	var ts struct {
-		Model         string          `json:"model"`
-		ModelProvider string          `json:"modelProvider"`
-		CWD           string          `json:"cwd"`
-		Approval      json.RawMessage `json:"approvalPolicy"`
-		Sandbox       json.RawMessage `json:"sandbox"`
-		Thread        struct {
+		Model         string `json:"model"`
+		ModelProvider string `json:"modelProvider"`
+		CWD           string `json:"cwd"`
+		Approval      string `json:"approvalPolicy"`
+		Sandbox       struct {
+			Type          string `json:"type"`
+			NetworkAccess *bool  `json:"networkAccess"`
+		} `json:"sandbox"`
+		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
-	p := map[string]any{"cwd": r.WorkspacePath, "model": r.Correlation.Requested.Model, "modelProvider": r.Correlation.Requested.Provider, "sandbox": "workspace-write", "approvalPolicy": "never", "baseInstructions": instructions, "ephemeral": false}
-	if err := a.rpc.call(ctx, "thread/start", p, &ts); err != nil {
-		return connector.StartResult{}, wrap("start", connector.ErrorTransport, err)
+	network := r.Brief.WorkspacePolicy.Network
+	if network != "disabled" && network != "restricted" {
+		a.mu.Lock()
+		a.state = stateTerminal
+		a.mu.Unlock()
+		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("workspace network policy must be disabled or restricted"))
 	}
-	if ts.Thread.ID == "" || ts.Model == "" || ts.ModelProvider == "" || ts.CWD != r.WorkspacePath || len(ts.Approval) == 0 || len(ts.Sandbox) == 0 {
-		return connector.StartResult{}, wrap("start", connector.ErrorProtocol, errors.New("incomplete or mismatched thread/start response"))
+	p := map[string]any{"cwd": r.WorkspacePath, "model": r.Correlation.Requested.Model, "modelProvider": r.Correlation.Requested.Provider, "sandbox": "workspace-write", "approvalPolicy": "never", "baseInstructions": instructions, "ephemeral": false, "networkAccess": false}
+	if err := a.rpc.call(ctx, "thread/start", p, &ts); err != nil {
+		return connector.StartResult{}, a.poisonStart("thread/start outcome is unknown", err)
 	}
 	c := r.Correlation
 	c.NativeSessionID = ts.Thread.ID
+	if ts.Thread.ID != "" {
+		a.mu.Lock()
+		a.corr = c
+		a.mu.Unlock()
+	}
+	if ts.Thread.ID == "" {
+		return connector.StartResult{}, a.poisonStart("thread/start returned no cleanup identity", nil)
+	}
+	if ts.Model == "" || ts.ModelProvider == "" || ts.CWD != r.WorkspacePath || ts.Approval != "never" || ts.Sandbox.Type != "workspaceWrite" || ts.Sandbox.NetworkAccess == nil || *ts.Sandbox.NetworkAccess {
+		return connector.StartResult{}, a.cleanupPartial(ctx, ts.Thread.ID, "applied native policy mismatch")
+	}
 	var tr struct {
 		Turn struct {
 			ID     string `json:"id"`
@@ -207,21 +310,18 @@ func (a *Adapter) Start(ctx context.Context, r connector.StartRequest) (connecto
 	}
 	tr.Turn.Status = ""
 	if err := a.rpc.call(ctx, "turn/start", map[string]any{"threadId": ts.Thread.ID, "input": []any{map[string]any{"type": "text", "text": instructions}}}, &tr); err != nil {
-		return connector.StartResult{}, wrap("start", connector.ErrorTransport, err)
+		return connector.StartResult{}, a.cleanupPartial(ctx, ts.Thread.ID, "turn/start failed")
 	}
 	if tr.Turn.ID == "" {
-		return connector.StartResult{}, wrap("start", connector.ErrorProtocol, errors.New("turn/start response missing turn id"))
+		return connector.StartResult{}, a.cleanupPartial(ctx, ts.Thread.ID, "turn/start response missing turn id")
 	}
 	c.NativeTurnID = tr.Turn.ID
 	actual := connector.ActualIdentity{Model: ts.Model, Provider: ts.ModelProvider, EvidenceSource: "thread/start response", ObservedAt: a.clock.Now()}
 	a.mu.Lock()
-	if a.corr.RunID != "" {
-		a.mu.Unlock()
-		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("adapter already owns an attempt"))
-	}
 	a.corr = c
 	a.actual = actual
 	a.active = true
+	a.state = stateActive
 	a.threadStatus = "active"
 	a.emitLocked(connector.EventStarted, connector.TerminalNone, &actual, "native thread and turn started")
 	deferred := a.deferred
@@ -235,6 +335,37 @@ func (a *Adapter) Start(ctx context.Context, r connector.StartRequest) (connecto
 	}
 	a.mu.Unlock()
 	return connector.StartResult{Correlation: c, Actual: actual}, nil
+}
+
+func (a *Adapter) cleanupPartial(ctx context.Context, threadID, reason string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.preflightTimeout)
+	defer cancel()
+	var out struct{}
+	if err := a.rpc.call(cleanupCtx, "thread/delete", map[string]any{"threadId": threadID}, &out); err != nil {
+		return a.poisonStart("partial start cleanup could not be proven", err)
+	}
+	a.mu.Lock()
+	a.state = stateTerminal
+	a.active = false
+	a.mu.Unlock()
+	_ = a.rpc.close()
+	return wrap("start", connector.ErrorPartialStart, errors.New(reason))
+}
+
+func (a *Adapter) poisonStart(message string, cause error) error {
+	a.mu.Lock()
+	a.state = stateStartUnknown
+	a.active = false
+	a.mu.Unlock()
+	_ = a.rpc.close()
+	return wrap("start", connector.ErrorStartUnknown, causeOr(cause, errors.New(message)))
+}
+
+func causeOr(err, fallback error) error {
+	if err != nil {
+		return err
+	}
+	return fallback
 }
 
 type stream struct {
@@ -264,6 +395,12 @@ func (a *Adapter) Events(_ context.Context, c connector.Correlation) (connector.
 	if err := a.match(c); err != nil {
 		return nil, err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.eventsClaimed {
+		return nil, wrap("events", connector.ErrorInvalid, errors.New("event stream already has a consumer"))
+	}
+	a.eventsClaimed = true
 	return &stream{a: a, corr: c}, nil
 }
 
@@ -379,10 +516,22 @@ func (a *Adapter) Collect(ctx context.Context, r connector.CollectRequest) (conn
 	if err != nil {
 		return connector.ArtifactBundle{}, wrap("collect", connector.ErrorTransport, err)
 	}
+	if !same(b.Correlation, r.Correlation) {
+		return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("artifact bundle correlation mismatch"))
+	}
+	if !validSHA256(b.ManifestSHA256) {
+		return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("invalid artifact manifest digest"))
+	}
+	seen := make(map[string]struct{}, len(b.References))
 	for _, x := range b.References {
-		if x.URI == "" || len(x.SHA256) != 64 || x.Size < 0 {
+		if x.URI == "" || x.MediaType == "" || !validSHA256(x.SHA256) || x.Size < 0 {
 			return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("invalid artifact reference"))
 		}
+		key := x.URI + "\x00" + x.MediaType + "\x00" + x.SHA256
+		if _, ok := seen[key]; ok {
+			return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("duplicate artifact reference"))
+		}
+		seen[key] = struct{}{}
 	}
 	return b, nil
 }
@@ -393,11 +542,11 @@ func (a *Adapter) Dispose(_ context.Context, r connector.DisposeRequest) error {
 		return err
 	}
 	a.mu.Lock()
-	if a.disposed {
+	if a.state == stateDisposed {
 		a.mu.Unlock()
 		return nil
 	}
-	a.disposed = true
+	a.state = stateDisposed
 	a.mu.Unlock()
 	return a.rpc.close()
 }
@@ -445,6 +594,7 @@ func (a *Adapter) notificationLocked(method string, p json.RawMessage) error {
 			return errors.New("turn/completed carried nonterminal status")
 		}
 		a.active = false
+		a.state = stateTerminal
 		a.terminalAt = a.clock.Now()
 		a.emitLocked(connector.EventTerminal, a.terminal, nil, "native terminal evidence")
 		a.signalLocked()
@@ -526,6 +676,12 @@ func (a *Adapter) match(c connector.Correlation) error {
 	}
 	return nil
 }
+func (a *Adapter) matchProfile(c connector.Correlation) error {
+	if c.ConnectorProfileID != a.profileID || c.ConnectorProfileDigest != a.profileDigest {
+		return wrap("profile", connector.ErrorInvalid, errors.New("connector profile mismatch"))
+	}
+	return nil
+}
 func same(a, b connector.Correlation) bool {
 	return a.RunID == b.RunID && a.Generation == b.Generation && a.AttemptKey == b.AttemptKey && a.AttemptID == b.AttemptID && a.RouteDigest == b.RouteDigest && a.WorkspaceLeaseID == b.WorkspaceLeaseID && a.WorkspaceLeaseEpoch == b.WorkspaceLeaseEpoch && a.ConnectorProfileID == b.ConnectorProfileID && a.ConnectorProfileDigest == b.ConnectorProfileDigest && a.Requested == b.Requested && a.NativeSessionID == b.NativeSessionID && a.NativeTurnID == b.NativeTurnID
 }
@@ -535,33 +691,15 @@ func validCorrelation(c connector.Correlation, native bool) error {
 	}
 	return nil
 }
-func renderBrief(b connector.ExecutionBrief) string {
-	var s strings.Builder
-	s.WriteString("Goal:\n")
-	s.WriteString(b.Goal)
-	sections := []struct {
-		name string
-		v    []string
-	}{{"Constraints", b.Constraints}, {"Acceptance", b.Acceptance}, {"Proof", b.Proof}}
-	if b.Rationale != "" {
-		s.WriteString("\n\nRationale:\n")
-		s.WriteString(b.Rationale)
-	}
-	for _, x := range sections {
-		if len(x.v) > 0 {
-			s.WriteString("\n\n" + x.name + ":\n")
-			for _, v := range x.v {
-				s.WriteString("- " + v + "\n")
-			}
-		}
-	}
-	return s.String()
+func renderBrief(b execution.ExecutionBrief) string {
+	raw, _ := json.MarshalIndent(b, "", "  ")
+	return "Execution brief (complete authored execution intent; no hidden reasoning):\n" + string(raw)
 }
 func wrap(op string, k connector.ErrorKind, err error) error {
 	if k == connector.ErrorTransport && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 		k = connector.ErrorTimeout
 	}
-	return &connector.Error{Kind: k, Operation: op, Message: safeMessage(k), Err: err}
+	return connector.NewError(k, op, safeMessage(k), err)
 }
 func safeMessage(k connector.ErrorKind) string { return string(k) }
 func unsupported(op string) error {
@@ -569,3 +707,7 @@ func unsupported(op string) error {
 }
 
 var _ connector.Connector = (*Adapter)(nil)
+
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func validSHA256(v string) bool { return sha256Pattern.MatchString(v) }

@@ -45,14 +45,21 @@ schemas. That directory is a read-only build input/reference and is not copied
 into the repository.
 
 The adapter accepts an already-created transport plus supervisor, collector,
-and clock seams. It never launches Codex itself. Preflight performs
-`account/read` and exhausts paginated `model/list`. Start uses the exact leased
-workspace as `cwd`, explicit model/provider, `workspace-write`, approval policy
-`never`, and a plain execution brief containing only goal, rationale,
-constraints, acceptance, and proof. Raw auth responses, credentials,
-environment dumps, and JSON-RPC payloads are never placed in events or errors.
+clock seams, and the exact assigned connector profile ID and digest. It never
+launches Codex itself. Preflight performs a bounded refreshing `account/read`
+and bounded paginated `model/list`, then retains the matching ready receipt.
+Start consumes that receipt exactly once before wire I/O, validates the Slice 1
+execution-brief digest, renders the complete authored brief, and uses the exact
+leased workspace as `cwd`, explicit model/provider, `workspace-write`, approval
+policy `never`, and disabled/restricted network policy. It validates the native
+applied policy before starting a turn and deletes a known partial thread on any
+failure. An uncertain start poisons and closes the transport. Raw auth
+responses, credentials, environment dumps, and JSON-RPC payloads are never
+placed in events or errors.
 
 The JSON-RPC client bounds line length, pending calls, request IDs, and event
 buffering. It demultiplexes responses and notifications, rejects unknown or
 duplicate response IDs, propagates EOF, respects context cancellation, and
 fails the connection on malformed or miscorrelated native lifecycle evidence.
+Initialization is serialized to one handshake, and the bounded event channel
+has one explicit consumer; a second subscriber is rejected.
