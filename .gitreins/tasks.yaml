@@ -5231,3 +5231,20 @@ tasks:
   status: complete
   created_at: '2026-10-16T02:25:32.919266+00:00'
   completed_at: '2026-10-16T02:26:11.784477+00:00'
+- id: SCHED-HARNESS-002
+  title: Typed execution brief and durable coding-run foundation
+  criteria:
+  - Seven versioned closed JSON Schemas compile and reject unknown credential-shaped
+    members; execution.dispatch remains distinct from work.dispatch.
+  - ExecutionBrief canonicalization NFC-normalizes, rejects duplicate normalized keys
+    and non-integer/non-I-JSON values, removes only brief_digest, serializes RFC 8785
+    JCS bytes, and passes checked-in positive/negative vectors.
+  - Migration v69 creates separate runs, attempts, events, workspace leases, verification
+    receipts, projections, and outbox authorities with closed state vocabularies.
+  - Parent, attempt, event, receipt, projection, lease, and outbox APIs enforce identical
+    replay/conflict, generation fencing, one active writer, transactional admission,
+    claimed-row recovery, and no Crier/connector completion authority.
+  - Focused and full short tests, go vet, golangci-lint, go build, module verification,
+    formatting, and diff checks pass on the integrated branch.
+  status: in_progress
+  created_at: '2026-10-16T04:10:17.411812+00:00'
