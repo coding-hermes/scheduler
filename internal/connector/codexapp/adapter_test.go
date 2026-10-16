@@ -99,7 +99,9 @@ func initResult() any {
 	return map[string]any{"userAgent": "codex/0.152.0", "codexHome": "/fake", "platformFamily": "unix", "platformOs": "linux"}
 }
 func threadResult(model, provider, status string) any {
-	return map[string]any{"model": model, "modelProvider": provider, "cwd": "/lease", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{}, "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}, "thread": map[string]any{"id": "thread-1", "status": map[string]any{"type": status}}}
+	// networkAccess is legally omitted by Codex: its generated schema defaults
+	// the field to false. The happy path pins that wire-compatible omission.
+	return map[string]any{"model": model, "modelProvider": provider, "cwd": "/lease", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{}, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}, "thread": map[string]any{"id": "thread-1", "status": map[string]any{"type": status}}}
 }
 func baseHandler(model, provider, readStatus string) func(*harness, map[string]any) {
 	return func(h *harness, m map[string]any) {
@@ -191,12 +193,15 @@ func TestHappyPathAndNativeActualIdentity(t *testing.T) {
 			if strings.Contains(fmt.Sprint(p), "chain-of-thought") {
 				t.Fatal("hidden reasoning field rendered")
 			}
+			if _, present := p["networkAccess"]; present {
+				t.Fatalf("thread/start sent unsupported top-level networkAccess: %#v", p)
+			}
 		}
 	}
 }
 
 func TestCanonicalExecutionFixtureAcceptedAndFullyRendered(t *testing.T) {
-	raw, err := os.ReadFile("../../execution/testdata/canonicalization-v1.json")
+	raw, err := os.ReadFile("testdata/execution-brief-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +334,7 @@ func TestCollectReferencesOnly(t *testing.T) {
 	a, _ := newHarness(t, baseHandler("served", "provider", "idle"))
 	r := start(t, a)
 	ref := connector.ArtifactReference{URI: "cas://abc", MediaType: "text/plain", SHA256: strings.Repeat("a", 64), Size: 12}
-	a.collector = fakeCollector{bundle: connector.ArtifactBundle{Correlation: r.Correlation, References: []connector.ArtifactReference{ref}, ManifestSHA256: strings.Repeat("b", 64)}}
+	a.collector = fakeCollector{bundle: connector.ArtifactBundle{Correlation: r.Correlation, References: []connector.ArtifactReference{ref}, ManifestSHA256: "sha256:" + strings.Repeat("b", 64)}}
 	b, err := a.Collect(context.Background(), connector.CollectRequest{Correlation: r.Correlation})
 	if err != nil || len(b.References) != 1 || b.References[0].URI != "cas://abc" {
 		t.Fatalf("bundle=%+v err=%v", b, err)
@@ -583,7 +588,7 @@ func TestCollectRejectsInvalidBundles(t *testing.T) {
 		{"duplicate", func(b *connector.ArtifactBundle) { b.References = append(b.References, b.References[0]) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := connector.ArtifactBundle{Correlation: r.Correlation, References: []connector.ArtifactReference{good}, ManifestSHA256: strings.Repeat("b", 64)}
+			b := connector.ArtifactBundle{Correlation: r.Correlation, References: []connector.ArtifactReference{good}, ManifestSHA256: "sha256:" + strings.Repeat("b", 64)}
 			tc.mutate(&b)
 			a.collector = fakeCollector{bundle: b}
 			if _, err := a.Collect(context.Background(), connector.CollectRequest{Correlation: r.Correlation}); err == nil {

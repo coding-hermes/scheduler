@@ -285,7 +285,10 @@ func (a *Adapter) Start(ctx context.Context, r connector.StartRequest) (connecto
 		a.mu.Unlock()
 		return connector.StartResult{}, wrap("start", connector.ErrorInvalid, errors.New("workspace network policy must be disabled or restricted"))
 	}
-	p := map[string]any{"cwd": r.WorkspacePath, "model": r.Correlation.Requested.Model, "modelProvider": r.Correlation.Requested.Provider, "sandbox": "workspace-write", "approvalPolicy": "never", "baseInstructions": instructions, "ephemeral": false, "networkAccess": false}
+	// ThreadStartParams exposes only the sandbox mode here. The detailed
+	// workspaceWrite policy (including networkAccess, whose native default is
+	// false) is returned by thread/start and verified below.
+	p := map[string]any{"cwd": r.WorkspacePath, "model": r.Correlation.Requested.Model, "modelProvider": r.Correlation.Requested.Provider, "sandbox": "workspace-write", "approvalPolicy": "never", "baseInstructions": instructions, "ephemeral": false}
 	if err := a.rpc.call(ctx, "thread/start", p, &ts); err != nil {
 		return connector.StartResult{}, a.poisonStart("thread/start outcome is unknown", err)
 	}
@@ -299,7 +302,7 @@ func (a *Adapter) Start(ctx context.Context, r connector.StartRequest) (connecto
 	if ts.Thread.ID == "" {
 		return connector.StartResult{}, a.poisonStart("thread/start returned no cleanup identity", nil)
 	}
-	if ts.Model == "" || ts.ModelProvider == "" || ts.CWD != r.WorkspacePath || ts.Approval != "never" || ts.Sandbox.Type != "workspaceWrite" || ts.Sandbox.NetworkAccess == nil || *ts.Sandbox.NetworkAccess {
+	if ts.Model == "" || ts.ModelProvider == "" || ts.CWD != r.WorkspacePath || ts.Approval != "never" || ts.Sandbox.Type != "workspaceWrite" || (ts.Sandbox.NetworkAccess != nil && *ts.Sandbox.NetworkAccess) {
 		return connector.StartResult{}, a.cleanupPartial(ctx, ts.Thread.ID, "applied native policy mismatch")
 	}
 	var tr struct {
@@ -519,7 +522,7 @@ func (a *Adapter) Collect(ctx context.Context, r connector.CollectRequest) (conn
 	if !same(b.Correlation, r.Correlation) {
 		return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("artifact bundle correlation mismatch"))
 	}
-	if !validSHA256(b.ManifestSHA256) {
+	if !validDigest(b.ManifestSHA256) {
 		return connector.ArtifactBundle{}, wrap("collect", connector.ErrorProtocol, errors.New("invalid artifact manifest digest"))
 	}
 	seen := make(map[string]struct{}, len(b.References))
@@ -709,5 +712,7 @@ func unsupported(op string) error {
 var _ connector.Connector = (*Adapter)(nil)
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func validSHA256(v string) bool { return sha256Pattern.MatchString(v) }
+func validDigest(v string) bool { return digestPattern.MatchString(v) }
