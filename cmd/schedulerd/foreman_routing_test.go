@@ -47,6 +47,21 @@ func TestHarness001Surfaces(t *testing.T) {
 	}
 }
 
+func TestHarness001ProductionRoutingWiring(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	const construction = "loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)"
+	if !strings.Contains(src, construction+"\n\tif err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {") {
+		t.Fatal("main must apply and validate the resolved routing mode immediately after Loop construction")
+	}
+	if strings.Contains(src, `os.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE"`) {
+		t.Fatal("main must not bridge routing configuration through process-wide env")
+	}
+}
+
 func TestHarness001BootMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.toml")
 	if err := os.WriteFile(path, []byte("[scheduler]\nforeman_routing_mode = 'fixed'\n"), 0600); err != nil {

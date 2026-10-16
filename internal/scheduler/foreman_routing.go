@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -52,6 +53,18 @@ func (l *Loop) laneClassForProject(p database.Project) (string, error) {
 		all[name] = true
 	}
 	return ClassifyLane(p, all), nil
+}
+
+// SetForemanRoutingMode applies the boot-resolved routing policy to the loop's
+// spawner without changing process environment. Call before starting any work;
+// the policy remains fixed for the lifetime of the running loop.
+func (l *Loop) SetForemanRoutingMode(mode string) error {
+	resolved, err := config.ParseForemanRoutingMode(mode)
+	if err != nil {
+		return err
+	}
+	l.spawner.foremanRoutingMode = resolved
+	return nil
 }
 
 func (s *Spawner) fixedForeman(project PackedProject) bool {

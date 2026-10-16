@@ -78,7 +78,7 @@ func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
-	foremanRoutingMode string // frozen at construction; empty retains router policy
+	foremanRoutingMode string // frozen after boot wiring; empty retains router policy
 	// clk is this component's time seam (SCHED-GAP-169). The zero value
 	// reads as the wall clock; NewLoop propagates its own clock here so a
 	// test that installs a simulator clock drives the whole component tree,
@@ -1485,7 +1485,7 @@ func (s *Spawner) canSpawn() bool {
 // Returns an error only if the process fails to start.
 // The spawned process is tracked internally and reaped by the lifecycle tracker.
 func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, error) {
-	fixedForeman := s.fixedForeman(project)
+	fixedForeman := project.Command == "" && s.fixedForeman(project)
 	if fixedForeman {
 		if err := validateFixedForemanRoute(project); err != nil {
 			return nil, err

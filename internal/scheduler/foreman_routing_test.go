@@ -114,15 +114,17 @@ func TestHarness001Routing(t *testing.T) {
 
 func TestHarness001MissingPair(t *testing.T) {
 	for _, missing := range []string{"model", "provider"} {
-		for _, custom := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/custom=%t", missing, custom), func(t *testing.T) {
+		for _, transport := range []string{"gateway", "exec"} {
+			t.Run(missing+"/"+transport, func(t *testing.T) {
 				t.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE", "fixed")
 				var requests atomic.Int32
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(500) }))
 				defer srv.Close()
 				s := NewSpawner(newTestDB(t), 1)
-				s.SetNoExecFallback(true)
-				s.SetGatewayClient(NewGatewayClient(srv.URL, "", time.Second))
+				s.SetNoExecFallback(transport == "gateway")
+				if transport == "gateway" {
+					s.SetGatewayClient(NewGatewayClient(srv.URL, "", time.Second))
+				}
 				marker := harness001Router(t, s)
 				p := harness001Project(t)
 				if missing == "model" {
@@ -130,13 +132,18 @@ func TestHarness001MissingPair(t *testing.T) {
 				} else {
 					p.Provider = ""
 				}
-				execMarker := filepath.Join(t.TempDir(), "exec-invoked")
-				if custom {
-					p.Command = "touch " + execMarker
+				dir := t.TempDir()
+				execMarker := filepath.Join(dir, "exec-invoked")
+				if err := os.WriteFile(filepath.Join(dir, "hermes"), []byte("#!/bin/sh\ntouch '"+execMarker+"'\n"), 0o700); err != nil {
+					t.Fatal(err)
 				}
+				t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 				tick, err := s.Spawn(p, "harness001-missing")
 				if err == nil || !strings.Contains(err.Error(), "fixed foreman route") || !strings.Contains(err.Error(), missing) {
 					t.Fatalf("tick=%v err=%v", tick, err)
+				}
+				if tick != nil {
+					t.Fatal("invalid pair started a tick")
 				}
 				if requests.Load() != 0 {
 					t.Fatal("gateway contacted for invalid pair")
@@ -148,6 +155,45 @@ func TestHarness001MissingPair(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHarness001CustomCommand(t *testing.T) {
+	for _, mode := range []string{"router", "fixed"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE", mode)
+			gw := &chainGatewayServer{}
+			s := harness001Spawner(t, gw)
+			s.SetTickPushDisabled(true)
+			routerMarker := harness001Router(t, s)
+			p := harness001Project(t)
+			p.Model, p.Provider = "", ""
+			marker := filepath.Join(p.Workdir, "command-invoked")
+			p.Command = filepath.Join(p.Workdir, "custom-command")
+			if err := os.WriteFile(p.Command, []byte("#!/bin/sh\nprintf 'invoked\\n' >> '"+marker+"'\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			tick, err := s.Spawn(p, "harness001-custom")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tick == nil {
+				t.Fatal("nil custom-command tick")
+			}
+			if outcome := tick.Wait(); outcome.ExitCode != 0 {
+				t.Fatalf("command outcome=%+v", outcome)
+			}
+			raw, err := os.ReadFile(marker)
+			if err != nil || string(raw) != "invoked\n" {
+				t.Fatalf("command marker=%q err=%v; want exactly one invocation", raw, err)
+			}
+			if _, err := os.Stat(routerMarker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("custom command invoked task-router: %v", err)
+			}
+			if got := gw.snapshot(); len(got) != 0 {
+				t.Fatalf("custom command contacted gateway: %v", got)
+			}
+		})
 	}
 }
 
@@ -188,6 +234,44 @@ func TestHarness001ExecPair(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("router invoked: %v", err)
+	}
+}
+
+func TestHarness001LoopRoutingMode(t *testing.T) {
+	t.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE", "router")
+	loop := NewLoop(newTestDB(t), time.Minute, time.Hour, 10, 100, 1)
+	if err := loop.SetForemanRoutingMode("fixed"); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"typo", "FIXED", " fixed "} {
+		if err := loop.SetForemanRoutingMode(mode); err == nil || !strings.Contains(err.Error(), "SCHEDULER_FOREMAN_ROUTING_MODE") {
+			t.Fatalf("invalid mode %q returned %v, want named validation error", mode, err)
+		}
+	}
+	if got := os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE"); got != "router" {
+		t.Fatalf("setter mutated ambient mode to %q", got)
+	}
+	gw := &chainGatewayServer{}
+	srv := httptest.NewServer(gw.handler())
+	defer srv.Close()
+	loop.SetGatewayClient(NewGatewayClient(srv.URL, "", time.Second))
+	loop.SetNoExecFallback(true)
+	routerMarker := harness001Router(t, loop.spawner)
+	p := harness001Project(t)
+	tick, err := loop.spawner.Spawn(p, "harness001-loop-wiring")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tick == nil {
+		t.Fatal("nil loop tick")
+	}
+	tick.Wait()
+	got := gw.snapshot()
+	if len(got) != 1 || got[0].model != p.Model || got[0].provider != p.Provider {
+		t.Fatalf("explicit fixed wiring dispatches=%v", got)
+	}
+	if _, err := os.Stat(routerMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("explicit fixed wiring invoked task-router: %v", err)
 	}
 }
 

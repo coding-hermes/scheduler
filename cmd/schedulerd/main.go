@@ -408,15 +408,6 @@ func main() {
 		return
 	}
 
-	// NewLoop constructs its spawner from process env. Carry an explicit TOML
-	// fixed policy into that seam without claiming a default is an env override
-	// on --show-config. This changes only this process, never an operator file.
-	if os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE") == "" && foremanRoutingMode == "fixed" {
-		if err := os.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE", foremanRoutingMode); err != nil {
-			log.Fatalf("FATAL: configure foreman routing policy: %v", err)
-		}
-	}
-
 	// ── SCHED-GAP-169: the process clock ──
 	// ONE clock for the whole daemon. Every component below is wired to this
 	// value, so there is a single choke point for all clock reads and waits.
@@ -654,6 +645,9 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
+	if err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {
+		log.Fatalf("FATAL: configure foreman routing policy: %v", err)
+	}
 	if usagePoolsConfig.Enabled {
 		loop.SetUsagePoolPolicy(scheduler.UsagePoolPolicy{Enabled: true, ObserveOnly: usagePoolsConfig.ObserveOnly, LocalPoolID: localUsagePoolID})
 		log.Printf("USAGE_POOL: enabled observe_only=%t local_pool=%s authority_db=%s", usagePoolsConfig.ObserveOnly, localUsagePoolID, *dbPath)
