@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/config"
 )
 
 // Cost estimation constants for real ticks where session export is unavailable
@@ -77,6 +78,7 @@ func estimateTickCost() (tokensIn, tokensOut int, costUSD float64) {
 
 // Spawner launches coding-hermes foreman processes.
 type Spawner struct {
+	foremanRoutingMode string // frozen at construction; empty retains router policy
 	// clk is this component's time seam (SCHED-GAP-169). The zero value
 	// reads as the wall clock; NewLoop propagates its own clock here so a
 	// test that installs a simulator clock drives the whole component tree,
@@ -350,11 +352,18 @@ func (s *Spawner) logPOSTTrace(tickID string, trace *GatewayPOSTTrace) {
 
 // NewSpawner creates a spawner with the given concurrency limit and defaults.
 func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawner {
+	mode, err := config.ParseForemanRoutingMode(os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE"))
+	if err != nil {
+		// Preserve the constructor API while refusing unsafe configuration before
+		// any tick can be dispatched. The daemon validates at boot as well.
+		panic(err)
+	}
 	to := 30 * time.Minute
 	if len(timeout) > 0 {
 		to = timeout[0]
 	}
 	return &Spawner{
+		foremanRoutingMode:     mode,
 		db:                     db,
 		maxConcurrent:          maxConcurrent,
 		active:                 make(map[string]*exec.Cmd),
@@ -1476,6 +1485,12 @@ func (s *Spawner) canSpawn() bool {
 // Returns an error only if the process fails to start.
 // The spawned process is tracked internally and reaped by the lifecycle tracker.
 func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, error) {
+	fixedForeman := s.fixedForeman(project)
+	if fixedForeman {
+		if err := validateFixedForemanRoute(project); err != nil {
+			return nil, err
+		}
+	}
 	if !s.canSpawn() {
 		return nil, fmt.Errorf("max concurrency %d reached", s.maxConcurrent)
 	}
@@ -1544,48 +1559,58 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// to the regular chain). The gateway 401/403 retry below walks
 		// THIS chain, so a rejected idle tick retries within the idle
 		// chain instead of jumping straight to the work lane.
-		idle := s.tickIsIdle(project)
-		chain := s.spawnChainForKind(project, idle)
-		model, provider = resolveChain(chain)
-		// TASK-ROUTER-001 + SCHED-GAP-075: single router resolve call.
-		// The router returns both the head (preferred model/provider) and
-		// the full chain (ordered eligible hops). The head overrides the
-		// resolved model/provider. The chain is merged INTO the spawn chain
-		// between project entries and global tiers, so 401/403 retry walks
-		// through all hops including router entries.
-		// Fail-open: any router unavailability keeps the chain-resolved values.
-		// SCHED-GAP-078: the resolved result is kept in scope so the price of
-		// the pair that ACTUALLY runs (head, retry hop, or foreman fallback)
-		// feeds the tick's cost — provider-aware, public-price-first.
-		if res, ok := s.resolveRouterFull(project); ok {
-			routerRes = res
-			if m, p, headOK := res.OpenHead(); headOK {
-				model, provider = m, p
-				log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
-			}
-			if routerChain := res.OpenChain(); len(routerChain) > 0 {
-				chain = s.mergedChain(project, chain, routerChain)
-				model, provider = resolveChain(chain)
-				// Re-apply router head after merge
+		idle := false
+		var chain []chainEntry
+		routePolicy := "router"
+		if fixedForeman {
+			routePolicy = "fixed"
+			chain = []chainEntry{{model: project.Model, provider: project.Provider}}
+			model, provider = project.Model, project.Provider
+		} else {
+			idle = s.tickIsIdle(project)
+			chain = s.spawnChainForKind(project, idle)
+			model, provider = resolveChain(chain)
+			// TASK-ROUTER-001 + SCHED-GAP-075: single router resolve call.
+			// The router returns both the head (preferred model/provider) and
+			// the full chain (ordered eligible hops). The head overrides the
+			// resolved model/provider. The chain is merged INTO the spawn chain
+			// between project entries and global tiers, so 401/403 retry walks
+			// through all hops including router entries.
+			// Fail-open: any router unavailability keeps the chain-resolved values.
+			// SCHED-GAP-078: the resolved result is kept in scope so the price of
+			// the pair that ACTUALLY runs (head, retry hop, or foreman fallback)
+			// feeds the tick's cost — provider-aware, public-price-first.
+			if res, ok := s.resolveRouterFull(project); ok {
+				routerRes = res
 				if m, p, headOK := res.OpenHead(); headOK {
 					model, provider = m, p
+					log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
+				}
+				if routerChain := res.OpenChain(); len(routerChain) > 0 {
+					chain = s.mergedChain(project, chain, routerChain)
+					model, provider = resolveChain(chain)
+					// Re-apply router head after merge
+					if m, p, headOK := res.OpenHead(); headOK {
+						model, provider = m, p
+					}
+				}
+				// SCHED-GAP-1651: the primary dispatch pair carries the router's
+				// PUBLIC price — not only the 401/403 retry hops. Without this
+				// wiring a router-priced FREE head (e.g. qwen3.7-plus:free@xkiro-2,
+				// usd_1m=0) left rate unknown, computeCostUSD fell through to the
+				// static maps, the model id was unknown there, and every such tick
+				// was billed at the unknown-model fallback ($2/M in, $8/M out):
+				// measured 2026-10-10, 348 duckbrain-sync ticks in 7 days carried
+				// $828.77 of phantom cost for a $0 lane. A known-but-$0 rate is
+				// load-bearing — computeCostUSD never falls through for a known
+				// lane — and pairs the router never priced still fall back to the
+				// static maps exactly as before.
+				if rr, ok := routerRes.HopRate(provider, model); ok {
+					rate = rr
 				}
 			}
-			// SCHED-GAP-1651: the primary dispatch pair carries the router's
-			// PUBLIC price — not only the 401/403 retry hops. Without this
-			// wiring a router-priced FREE head (e.g. qwen3.7-plus:free@xkiro-2,
-			// usd_1m=0) left rate unknown, computeCostUSD fell through to the
-			// static maps, the model id was unknown there, and every such tick
-			// was billed at the unknown-model fallback ($2/M in, $8/M out):
-			// measured 2026-10-10, 348 duckbrain-sync ticks in 7 days carried
-			// $828.77 of phantom cost for a $0 lane. A known-but-$0 rate is
-			// load-bearing — computeCostUSD never falls through for a known
-			// lane — and pairs the router never priced still fall back to the
-			// static maps exactly as before.
-			if rr, ok := routerRes.HopRate(provider, model); ok {
-				rate = rr
-			}
 		}
+		log.Printf("SPAWN ROUTE: %s tick=%s policy=%s lane_class=%q", project.Name, tickID, routePolicy, project.LaneClass)
 		chainKind := "work"
 		if idle {
 			chainKind = "idle"

@@ -380,6 +380,10 @@ func main() {
 		printSchema()
 		return
 	}
+	foremanRoutingMode, routingErr := resolveForemanRoutingMode(*configFile)
+	if routingErr != nil {
+		log.Fatalf("FATAL: foreman routing policy: %v", routingErr)
+	}
 	// SCHED-GAP-1647: resolve the effective log path BEFORE any early exit
 	// that prints config (--show-config must report the effective value).
 	// Explicit flag beats derived default (FEAT-005 default-guard shape):
@@ -400,8 +404,17 @@ func main() {
 			*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks, *failureWindow,
 			*spawnMemLimitMB,
 			*loadGateThreshold, *modelRatesFile,
-			*sessionSilenceGrace, *sessionPollLoopMinTicks)
+			*sessionSilenceGrace, *sessionPollLoopMinTicks, foremanRoutingMode)
 		return
+	}
+
+	// NewLoop constructs its spawner from process env. Carry an explicit TOML
+	// fixed policy into that seam without claiming a default is an env override
+	// on --show-config. This changes only this process, never an operator file.
+	if os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE") == "" && foremanRoutingMode == "fixed" {
+		if err := os.Setenv("SCHEDULER_FOREMAN_ROUTING_MODE", foremanRoutingMode); err != nil {
+			log.Fatalf("FATAL: configure foreman routing policy: %v", err)
+		}
 	}
 
 	// ── SCHED-GAP-169: the process clock ──
@@ -1243,6 +1256,7 @@ func main() {
 		SpawnMemLimitMB:         *spawnMemLimitMB,
 		SessionSilenceGrace:     sessionSilenceGrace.String(),
 		SessionPollLoopMinTicks: *sessionPollLoopMinTicks,
+		ForemanRoutingMode:      foremanRoutingMode,
 		ModelRatesFile:          *modelRatesFile,
 		NamespaceMode:           *namespaceMode,
 		AutoDisableFailureRate:  *autoDisableRate,

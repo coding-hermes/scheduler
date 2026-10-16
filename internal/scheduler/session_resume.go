@@ -323,11 +323,16 @@ func (l *Loop) resumeOrphans(trigger string) {
 		// body only transitions queued→running (StartRunning) and the
 		// completion UPDATE no-ops on a missing row, so without this the
 		// nudge tick would be invisible in /ticks and never terminal.
+		packed, err := l.packedProjectFrom(*proj)
+		if err != nil {
+			log.Printf("RESUME: classify nudge tick %s: %v", tickID, err)
+			continue
+		}
 		if err := l.lifecycle.Enqueue(o.project, tickID); err != nil {
 			log.Printf("RESUME: enqueue nudge tick %s: %v", tickID, err)
 			continue
 		}
-		packed := l.packedProjectFrom(*proj)
+
 		// Append semantics: the builtin base prompt (skill-loading etc.)
 		// stays, the continuation preamble + original project prompt ride
 		// on top — a resumed session loads the foreman skill AND knows it
@@ -456,8 +461,13 @@ WHERE t.orphaned_at IS NOT NULL AND t.status IN ('failed','timeout')
 // spawns — the same field set SpawnNow builds, plus the prompt fields the
 // normal eval path carries (the continuation preamble rides Prompt with
 // PromptMode=replace).
-func (l *Loop) packedProjectFrom(p database.Project) PackedProject {
+func (l *Loop) packedProjectFrom(p database.Project) (PackedProject, error) {
+	class, err := l.laneClassForProject(p)
+	if err != nil {
+		return PackedProject{}, err
+	}
 	return PackedProject{
+		LaneClass:        class,
 		Name:             p.Name,
 		Priority:         float64(p.Priority),
 		Weight:           p.Weight,
@@ -482,7 +492,7 @@ func (l *Loop) packedProjectFrom(p database.Project) PackedProject {
 		// SCHED-GAP-111: thread the namespace id so resume spawns also
 		// resolve the wave deadline (S12 §4.3 applies to every spawn).
 		NamespaceID: nsIDOf(p),
-	}
+	}, nil
 }
 
 // resumeOrphansAtStartup runs once from Loop.Run before the event loop

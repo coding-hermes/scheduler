@@ -49,7 +49,22 @@ Names and behavior only — never put key VALUES in argv, config committed to gi
 | `SCHEDULER_OPERATOR_TOKEN` | Shared operator credential gating every mutating API route (SCHED-GAP-1602). Whitespace-trimmed (a whitespace-only value counts as unset). Accepted on requests as `X-Operator-Token`, `Authorization: Bearer`/raw, or Basic (token as password). NEVER a CLI flag. `--show-config` lists it as SET but masked. | (empty → fail-closed: every mutation answers **503** until a credential exists) | env > TOML `[api] operator_token`; basic mode (`operator_user`+`operator_password`) resolves from TOML only and applies only when no token exists in any layer |
 | `DUCKBRAIN_API_KEY` | DuckBrain sync auth: when set, every sync request carries it as the `X-API-Key` header and the daemon probes the key once at startup — a rejected key (401/403) fails fast with a HIGH event and gates sync cycles off; 429 is backpressure, not error. | (empty → pre-auth compatibility mode: no header, no probe) | env only (DB-GAP-039); see the DuckBrain sync auth section in [flags.md](flags.md#duckbrain-sync-auth) |
 
-## Spawner defaults and model selection (env-only)
+## Spawner defaults and model selection
+
+`SCHEDULER_FOREMAN_ROUTING_MODE` (SCHED-HARNESS-001) is resolved at boot
+(env > TOML `[scheduler] foreman_routing_mode` > `router`) and frozen at
+spawner construction. Unset/`router` preserves existing routing. `fixed`
+bypasses task-router only for canonically classified foreman lanes and
+requires both explicit project `model` and `provider` (blank arms are refused
+before gateway or exec). The foreman route contains exactly that pair:
+project/namespace chains, idle tiers, project fallback and global defaults
+are not spliced in, and 401/403 cannot advance to another pair. Satellite
+and empty/unknown packed lane classes retain existing routing. Invalid mode
+values fail loudly; values are exact (case/whitespace are not normalized).
+`--schema`, `--show-config` and `/api/v1/config` expose the policy; unlike
+the older TOML-backed knobs, this policy resolves before `--show-config`.
+There is no CLI flag and no worker-dispatch or harness connector change.
+The global model defaults below apply to router policy, not fixed foremen.
 
 | Env var | Effect | Default when unset | Precedence |
 |---------|--------|--------------------|------------|

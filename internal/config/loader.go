@@ -72,13 +72,14 @@ func defaultRootConfig() *RootConfig {
 			Listen: defaultListen,
 		},
 		Scheduler: SchedulerConfig{
-			MinInterval:   defaultMinInterval,
-			MaxInterval:   defaultMaxInterval,
-			NumLevels:     defaultNumLevels,
-			WeightBudget:  defaultWeightBudget,
-			MaxConcurrent: defaultMaxConcurrent,
-			TickTimeout:   defaultTickTimeout,
-			NamespaceMode: false,
+			ForemanRoutingMode: "router",
+			MinInterval:        defaultMinInterval,
+			MaxInterval:        defaultMaxInterval,
+			NumLevels:          defaultNumLevels,
+			WeightBudget:       defaultWeightBudget,
+			MaxConcurrent:      defaultMaxConcurrent,
+			TickTimeout:        defaultTickTimeout,
+			NamespaceMode:      false,
 		},
 		Gateway: GatewayConfig{
 			URL:         defaultGatewayURL,
@@ -297,6 +298,9 @@ func applyEnvOverrides(cfg *RootConfig) {
 	if v := os.Getenv("SCHEDULER_ID"); v != "" {
 		cfg.Scheduler.ID = v
 	}
+	if v := os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE"); v != "" {
+		cfg.Scheduler.ForemanRoutingMode = v
+	}
 }
 
 // Validate sanity-checks the resolved RootConfig. It verifies that
@@ -305,6 +309,9 @@ func applyEnvOverrides(cfg *RootConfig) {
 // Returns an error aggregating all violations.
 func (r *RootConfig) Validate() error {
 	var errs []error
+	if _, err := ParseForemanRoutingMode(r.Scheduler.ForemanRoutingMode); err != nil {
+		errs = append(errs, err)
+	}
 
 	minD, err := parseDurationErr(r.Scheduler.MinInterval, "scheduler.min_interval")
 	if err != nil {

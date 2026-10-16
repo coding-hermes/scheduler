@@ -1089,7 +1089,12 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 
 	tickID := database.NextTickID(clock.WithClock(context.Background(), l.clock()), project.Name)
 
+	class, err := l.laneClassForProject(project)
+	if err != nil {
+		return "", err
+	}
 	proj := PackedProject{
+		LaneClass:        class,
 		Name:             project.Name,
 		Priority:         float64(project.Priority),
 		Weight:           project.Weight,

@@ -13,6 +13,7 @@ import (
 // PackedProject is a project selected to run in this tick.
 type PackedProject struct {
 	Name             string
+	LaneClass        string // canonical lane class; empty/unknown keeps legacy router behavior
 	Priority         float64
 	Weight           int
 	Urgency          float64
@@ -123,6 +124,7 @@ func (p *Packer) SetBoardStasisGate(g *BoardStasisGate) {
 
 // scored is a project with its computed urgency.
 type scored struct {
+	laneClass           string
 	name                string
 	priority            float64
 	weight              int
@@ -191,6 +193,10 @@ type scored struct {
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
 func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedProject, error) {
+	classes, err := loadLaneClasses(p.db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := p.db.Query(`
 		SELECT p.name, p.weight, p.priority, p.decay_rate, p.enabled, p.cooldown_s,
 		       COALESCE(p.cooldown_pin_s, 0),
@@ -237,6 +243,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
+		s.laneClass = classes[s.name]
+
 		// SCHED-GAP-1661: the operator pin rides the row into the shared
 		// effectiveCooldown (a NULL / <=0 pin scans as 0 = no pin).
 		if pinS > 0 {
@@ -760,6 +768,7 @@ func (p *Packer) isOverdue(s scored, now time.Time) bool {
 // packed renders the scored project as a PackedProject for selection output.
 func (s scored) packed() PackedProject {
 	return PackedProject{
+		LaneClass:        s.laneClass,
 		Name:             s.name,
 		Priority:         s.priority,
 		Weight:           s.weight,
@@ -797,6 +806,10 @@ func (p *Packer) Budget() int { return p.budget }
 
 // ListEnabled returns all enabled projects as PackedProject for simulation.
 func (p *Packer) ListEnabled(ctx interface{}) ([]PackedProject, error) {
+	classes, err := loadLaneClasses(p.db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := p.db.Query(`
 		SELECT name, weight, priority, workdir, repo_url
 		FROM projects WHERE enabled = 1
@@ -812,6 +825,7 @@ func (p *Packer) ListEnabled(ctx interface{}) ([]PackedProject, error) {
 		if err := rows.Scan(&pp.Name, &pp.Weight, &pp.Priority, &pp.Workdir, &pp.RepoURL); err != nil {
 			return nil, err
 		}
+		pp.LaneClass = classes[pp.Name]
 		out = append(out, pp)
 	}
 	return out, rows.Err()

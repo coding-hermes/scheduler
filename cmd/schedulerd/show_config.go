@@ -38,6 +38,7 @@ func printSchema() {
         "weight_budget":  { "type": "integer", "default": 100, "minimum": 1, "env": "SCHEDULER_BUDGET", "cli": "--budget" },
         "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
+        "foreman_routing_mode": { "type": "string", "default": "router", "enum": ["router", "fixed"], "description": "SCHED-HARNESS-001: fixed bypasses task-router only for canonical foreman lanes, using exactly the explicit project model/provider pair with no model fallback. Satellites and unknown lane classes retain router behavior. Invalid values fail at boot; resolved once, not per tick.", "env": "SCHEDULER_FOREMAN_ROUTING_MODE" },
         "gateway_response_timeout": { "type": "string", "default": "30m0s", "description": "Per-turn deadline for a gateway /v1/responses POST (SCHED-GAP-117). A POST that makes no progress for this long fails the tick as 'stalled' BEFORE --tick-timeout; '0s' disables (POST runs on the tick deadline alone). Effective POST deadline = min(this, tick_timeout).", "env": "SCHEDULER_GATEWAY_RESPONSE_TIMEOUT", "cli": "--gateway-response-timeout" },
         "gateway_transient_retries": { "type": "integer", "default": 3, "minimum": 0, "description": "Bounded transient-gateway retry count for the GAP-080 loop (SCHED-GAP-1681): a transient POST failure (HTTP 5xx, refused dial, SSE stream ended without a terminal event, body read/unmarshal) is retried up to N times on the same model/provider pair with the SAME session key (X-Hermes-Session-Key: tick id — session continuation), so the agent resumes where the stream died. Every POST lands on gateway_trace.Attempts and ticks.attempts. 0 = single attempt (retry off); negative values are rejected (WARN, default stands).", "env": "SCHEDULER_GATEWAY_TRANSIENT_RETRIES", "cli": "--gateway-transient-retries" },
         "slot_patience":  { "type": "string", "default": "5m0s", "description": "How long a tick waits for a free slot before being dropped; the drop emits a MEDIUM slot_pool event (ADV-R08/G3). Must be > 0 — the drop always exists; unset means the 5m default.", "env": "SCHEDULER_SLOT_PATIENCE", "cli": "--slot-patience" },
@@ -150,9 +151,15 @@ func printConfig(
 	modelRatesFile string,
 	sessionSilenceGrace time.Duration,
 	sessionPollLoopMinTicks int,
+	foremanRoutingMode ...string,
 ) {
+	mode := "router"
+	if len(foremanRoutingMode) > 0 {
+		mode = foremanRoutingMode[0]
+	}
 	fmt.Printf(`# schedulerd resolved configuration (CLI flags + SCHEDULER_* env overrides; the root TOML [scheduler] layer resolves later in boot and is NOT reflected here)
 # source: CLI flags + SCHEDULER_* env overrides (CLI > env). TOML [scheduler] (FEAT-005, applied via default-guard in main.go) resolves after this print and is not shown
+# exception: foreman_routing_mode resolves env > TOML > router before this print
 
 [daemon]
 db_path = %q
@@ -160,6 +167,7 @@ listen = %q
 log_file = %q
 
 [scheduler]
+foreman_routing_mode = %q
 min_interval = %q
 max_interval = %q
 num_levels = %d
@@ -192,6 +200,7 @@ namespace = %q
 url = %q
 `,
 		dbPath, listen, logFile,
+		mode,
 		minInterval, maxInterval,
 		numLevels, weightBudget, maxConcurrent,
 		tickTimeout, gatewayResponseTimeout, gatewayTransientRetries, slotPatience, tasksPacing,
@@ -209,6 +218,7 @@ url = %q
 
 	// Print env var overrides
 	envVars := map[string]string{
+		"SCHEDULER_FOREMAN_ROUTING_MODE":      os.Getenv("SCHEDULER_FOREMAN_ROUTING_MODE"),
 		"SCHEDULER_DB_PATH":                   os.Getenv("SCHEDULER_DB_PATH"),
 		"SCHEDULER_LISTEN":                    os.Getenv("SCHEDULER_LISTEN"),
 		"SCHEDULER_MIN_INTERVAL":              os.Getenv("SCHEDULER_MIN_INTERVAL"),

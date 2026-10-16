@@ -286,6 +286,7 @@ func (m *MultiPoolPacker) packFlat(
 	globalSelected int,
 	now time.Time,
 ) []PackedProject {
+	classes := laneClasses(projects)
 	if budgetRemaining <= 0 {
 		return nil
 	}
@@ -524,6 +525,7 @@ func (m *MultiPoolPacker) packFlat(
 			}
 		}
 		packed = append(packed, PackedProject{
+			LaneClass:        classes[s.proj.Name],
 			Name:             s.proj.Name,
 			Priority:         float64(s.proj.Priority),
 			Weight:           s.proj.Weight,

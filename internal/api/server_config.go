@@ -30,8 +30,10 @@ type DuckBrainConfigSnapshot struct {
 // GET /api/v1/config for operator introspection (SCHED-GAP-034).
 // Durations are rendered as Go duration strings (e.g. "30s", "2h").
 type ResolvedConfig struct {
-	DBPath string `json:"db_path"`
-	Listen string `json:"listen"`
+	// ForemanRoutingMode is the boot-resolved orchestration policy (router/fixed).
+	ForemanRoutingMode string `json:"foreman_routing_mode"`
+	DBPath             string `json:"db_path"`
+	Listen             string `json:"listen"`
 	// PublicURL (SCHED-GAP-1607): the dashboard base URL link-mode tick
 	// reports are built from; "" = not configured (link degrades to full).
 	PublicURL     string `json:"public_url"`

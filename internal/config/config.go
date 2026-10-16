@@ -52,14 +52,17 @@ type DaemonConfig struct {
 // MinInterval/MaxInterval/TickTimeout are stored as duration strings
 // (e.g. "20m", "24h", "2h") and parsed with time.ParseDuration by callers.
 type SchedulerConfig struct {
-	MinInterval     string           `toml:"min_interval"`
-	MaxInterval     string           `toml:"max_interval"`
-	NumLevels       int              `toml:"num_levels"`
-	WeightBudget    int              `toml:"weight_budget"`
-	MaxConcurrent   int              `toml:"max_concurrent"`
-	TickTimeout     string           `toml:"tick_timeout"`
-	NamespaceMode   bool             `toml:"namespace_mode"`
-	BlackoutWindows []BlackoutWindow `toml:"blackout_windows"`
+	// ForemanRoutingMode pins canonical foreman lanes to their explicit project
+	// pair in fixed mode; empty/router preserves existing task-router behavior.
+	ForemanRoutingMode string           `toml:"foreman_routing_mode"`
+	MinInterval        string           `toml:"min_interval"`
+	MaxInterval        string           `toml:"max_interval"`
+	NumLevels          int              `toml:"num_levels"`
+	WeightBudget       int              `toml:"weight_budget"`
+	MaxConcurrent      int              `toml:"max_concurrent"`
+	TickTimeout        string           `toml:"tick_timeout"`
+	NamespaceMode      bool             `toml:"namespace_mode"`
+	BlackoutWindows    []BlackoutWindow `toml:"blackout_windows"`
 
 	// GatewayResponseTimeout (SCHED-GAP-117) is the per-turn deadline for a
 	// single gateway /v1/responses POST, stored as a duration string

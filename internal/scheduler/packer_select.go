@@ -24,6 +24,9 @@ func (m *MultiPoolPacker) Pack(
 	running []string,
 	now time.Time,
 ) PackResult {
+	// Classify from the complete input roster BEFORE filtering admission or
+	// namespace eligibility, including disabled satellite ownership evidence.
+	classes := laneClasses(projects)
 
 	// --- Fallback: no namespaces → flat single-pool mode ---
 	runningSet := make(map[string]bool, len(running))
@@ -768,6 +771,7 @@ func (m *MultiPoolPacker) Pack(
 		}
 		for _, pu := range st.selected {
 			result.Projects = append(result.Projects, PackedProject{
+				LaneClass:        classes[pu.Project.Name],
 				Name:             pu.Project.Name,
 				Priority:         float64(pu.Project.Priority),
 				Weight:           pu.EffectiveWeight,
@@ -853,6 +857,11 @@ func (m *MultiPoolPacker) Pack(
 		}
 		flat := m.packFlat(unassigned, urgencyCalc, lastCompleted, runningSet,
 			remainingBudget, globalSelected, now)
+		// The unassigned subset may omit an owner's disabled/namespaced
+		// satellites. Retain the class from the complete production roster.
+		for i := range flat {
+			flat[i].LaneClass = classes[flat[i].Name]
+		}
 		result.Projects = append(result.Projects, flat...)
 		if len(flat) < len(unassigned) {
 			var dropped []string
