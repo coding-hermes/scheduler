@@ -5249,3 +5249,13 @@ tasks:
   status: complete
   created_at: '2026-10-16T04:10:17.411812+00:00'
   completed_at: '2026-10-16T08:59:24.627872+00:00'
+- id: SCHED-GAP-1579
+  title: Muster protocol scope decision
+  criteria:
+  - 'Written scope document covering: (1) surface to expose and rationale, (2) exact
+    muster consumer config block, (3) acceptance test commands and assertions, (4)
+    MCP safety boundary (agent-safe vs gated operations), (5) auth story. Document
+    must be concrete enough that the spec row needs no new decisions.'
+  status: complete
+  created_at: '2026-10-16T12:30:58.408561+00:00'
+  completed_at: '2026-10-16T13:06:55.128558+00:00'
