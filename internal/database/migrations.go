@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 68
+const latestMigration = 69
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1374,6 +1374,111 @@ ALTER TABLE ticks ADD COLUMN pre_board TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN post_commit TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN post_branch TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN noop_flag INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 69,
+		desc:    "SCHED-HARNESS-002B: durable coding execution runs, attempts, events, leases, verification, projections, and outbox",
+		stmt: `
+CREATE TABLE IF NOT EXISTS execution_runs (
+    run_id TEXT PRIMARY KEY,
+    submitting_authority TEXT NOT NULL,
+    submission_idempotency_key TEXT NOT NULL,
+    brief_id TEXT NOT NULL,
+    brief_revision TEXT NOT NULL,
+    brief_digest TEXT NOT NULL,
+    tick_id TEXT NOT NULL DEFAULT '', lane TEXT NOT NULL, task_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('submitted','workspace_ready','dispatched','working','input_required','auth_required','connector_completed','verifying','blocked','completed','failed','canceled','rejected','expired')),
+    blocked_reason TEXT NOT NULL DEFAULT '',
+    current_attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK(current_attempt_generation >= 0),
+    verification_state TEXT NOT NULL DEFAULT 'pending' CHECK(verification_state IN ('pending','running','passed','failed','blocked')),
+    verdict_id TEXT NOT NULL DEFAULT '', implementation_commit TEXT NOT NULL DEFAULT '',
+    integration_commit TEXT NOT NULL DEFAULT '', board_commit TEXT NOT NULL DEFAULT '',
+    routing_outcome_id TEXT NOT NULL DEFAULT '', duckbrain_namespace TEXT NOT NULL DEFAULT '',
+    duckbrain_key_or_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, durable_completed_at TEXT,
+    UNIQUE(submitting_authority, submission_idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS execution_runs_recovery_idx ON execution_runs(state, updated_at);
+
+CREATE TABLE IF NOT EXISTS workspace_leases (
+    lease_id TEXT PRIMARY KEY,
+    repository_uri TEXT NOT NULL, base_revision TEXT NOT NULL, branch TEXT NOT NULL,
+    host_id TEXT NOT NULL, workspace_path TEXT NOT NULL,
+    owner_run_id TEXT NOT NULL REFERENCES execution_runs(run_id), owner_attempt_id TEXT NOT NULL,
+    lease_epoch INTEGER NOT NULL CHECK(lease_epoch > 0),
+    state TEXT NOT NULL CHECK(state IN ('active','revoked','released','expired')),
+    acquired_at TEXT NOT NULL, renewed_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+    revoked_at TEXT, revocation_reason TEXT NOT NULL DEFAULT '',
+    UNIQUE(repository_uri, branch, host_id, workspace_path, lease_epoch)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_leases_one_writer_idx
+    ON workspace_leases(repository_uri, branch, host_id, workspace_path) WHERE state='active';
+CREATE INDEX IF NOT EXISTS workspace_leases_recovery_idx ON workspace_leases(state, expires_at);
+
+CREATE TABLE IF NOT EXISTS execution_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+    generation INTEGER NOT NULL CHECK(generation > 0),
+    attempt_idempotency_key TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK(state IN ('submitted','workspace_ready','dispatched','working','input_required','auth_required','connector_completed','verifying','blocked','completed','failed','canceled','rejected','expired')),
+    selected_candidate_rank INTEGER NOT NULL CHECK(selected_candidate_rank >= 0),
+    requested_model TEXT NOT NULL DEFAULT '', requested_provider TEXT NOT NULL DEFAULT '',
+    selected_model TEXT NOT NULL DEFAULT '', selected_provider TEXT NOT NULL DEFAULT '', selected_base_url TEXT NOT NULL DEFAULT '',
+    served_model TEXT NOT NULL DEFAULT '', served_provider TEXT NOT NULL DEFAULT '', served_base_url TEXT NOT NULL DEFAULT '',
+    route_digest TEXT NOT NULL, route_receipt_json TEXT NOT NULL,
+    connector_id TEXT NOT NULL, connector_version TEXT NOT NULL, bunker_profile_id TEXT NOT NULL DEFAULT '',
+    native_session_id TEXT NOT NULL DEFAULT '', crier_message_id TEXT NOT NULL DEFAULT '', crier_context_id TEXT NOT NULL DEFAULT '',
+    workspace_lease_id TEXT NOT NULL REFERENCES workspace_leases(lease_id), lease_epoch INTEGER NOT NULL CHECK(lease_epoch > 0),
+    pid INTEGER, pgid INTEGER, cgroup_or_container_id TEXT NOT NULL DEFAULT '', process_started_at TEXT,
+    submitted_at TEXT NOT NULL, started_at TEXT, settled_at TEXT,
+    error_json TEXT NOT NULL DEFAULT '', usage_json TEXT NOT NULL DEFAULT '',
+    artifact_manifest_uri TEXT NOT NULL DEFAULT '', artifact_manifest_digest TEXT NOT NULL DEFAULT '',
+    UNIQUE(run_id, generation)
+);
+CREATE INDEX IF NOT EXISTS execution_attempts_recovery_idx ON execution_attempts(state, submitted_at);
+
+CREATE TABLE IF NOT EXISTS execution_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+    attempt_id TEXT NOT NULL REFERENCES execution_attempts(attempt_id),
+    generation INTEGER NOT NULL CHECK(generation > 0), sequence INTEGER NOT NULL CHECK(sequence > 0),
+    kind TEXT NOT NULL, proposed_state TEXT NOT NULL DEFAULT '', payload_digest TEXT NOT NULL,
+    accepted INTEGER NOT NULL CHECK(accepted IN (0,1)), rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+    UNIQUE(attempt_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS execution_events_run_idx ON execution_events(run_id, event_id);
+
+CREATE TABLE IF NOT EXISTS verification_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES execution_runs(run_id), attempt_id TEXT NOT NULL REFERENCES execution_attempts(attempt_id),
+    criterion_id TEXT NOT NULL, commit_sha TEXT NOT NULL, tree_sha TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL CHECK(state IN ('passed','failed','error')),
+    trusted_environment TEXT NOT NULL, argv_json TEXT NOT NULL, exit_code INTEGER,
+    artifact_digest TEXT NOT NULL DEFAULT '', verifier_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE(run_id, attempt_id, criterion_id, commit_sha)
+);
+
+CREATE TABLE IF NOT EXISTS execution_projections (
+    run_id TEXT NOT NULL REFERENCES execution_runs(run_id),
+    projection TEXT NOT NULL CHECK(projection IN ('task_router','duckbrain','board','notification')),
+    state TEXT NOT NULL CHECK(state IN ('pending','working','succeeded','failed','blocked')),
+    idempotency_key TEXT NOT NULL, payload_digest TEXT NOT NULL, remote_id TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), last_error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+    PRIMARY KEY(run_id, projection), UNIQUE(projection, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS execution_outbox (
+    outbox_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES execution_runs(run_id), attempt_id TEXT NOT NULL REFERENCES execution_attempts(attempt_id),
+    kind TEXT NOT NULL CHECK(kind IN ('execution.dispatch')),
+    idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, payload_digest TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','claimed','acked','dead')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    available_at TEXT NOT NULL, claimed_by TEXT NOT NULL DEFAULT '', claimed_at TEXT,
+    ack_id TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS execution_outbox_pending_idx ON execution_outbox(state, available_at, created_at);
 `,
 	},
 }
