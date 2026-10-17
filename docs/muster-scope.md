@@ -3,6 +3,19 @@
 **Status:** DECIDED — 2026-10-16. This is the input the spec row (`SCHED-GAP-1580`) is built on.
 It changes no code, modifies no served surface, and starts no implementation row.
 
+> **UPDATE 2026-10-16 — what the spec row (SCHED-GAP-1580) then did.** SPEC-ROB-001 is CLOSED:
+> the `security-note` prose moved to the spec-legal `x-security-note`, so the served document
+> loads through muster's own validator (verified live: `Loaded spec: Coding Hermes Scheduler
+> API (…)` / `Generated 58 MCP tools`, exit 0 — it previously failed with
+> `extra sibling fields: [security-note]` and generated zero tools). The spec row also added an
+> `operationId` to **every** operation and described four served routes these measurements did
+> not include (`/api/v1/cadence`, `/api/v1/peers/events`, `/api/v1/peers/{id}/events` and the
+> document's own `/api/v1/openapi.json`, all of them served and listed in
+> docs/reference/endpoints.md while invisible to an OpenAPI consumer). The surface is therefore
+> now **45 paths / 58 operations / 58 generated tools** instead of the 41 / 54 measured below.
+> The two pins that changed are marked inline; the current contract is
+> [docs/reference/openapi.md](reference/openapi.md).
+
 **Design authority honored:** `muster/specs/PROTOCOLS.md` ("no protocol implementation row may
 start before its adapter satisfies this spec's pipeline and cross-cutting contracts on paper").
 The muster side of every claim below is grounded in that spec plus measured behavior of the real
@@ -74,6 +87,17 @@ renames every tool and breaks recorded agent sessions (PROTOCOLS.md §5.3: MCP t
 byte-identical). **Decision: do not add operationIds in v1.** If the spec row ever wants prettier
 names, that is a deliberate, separately-gated breaking change.
 
+> **OVERTURNED by the spec row (SCHED-GAP-1580) — deliberately, and before v1 shipped.**
+> operationIds are IN, in the derived `lowerCamel(method + path)` form (`getApiV1Live`,
+> `postApiV1ProjectsNamePause`) — the same words as the names measured above, so nothing a
+> reader of this document learned is invalidated. Two reasons this is the cheap moment rather
+> than the expensive one: the rename cost is zero **only** while no consumer and no recorded
+> agent session exists (which is the state today), and
+> [docs/muster-integration.md §5](muster-integration.md) — the design row — had already filed
+> the missing operationIds as the gap that degrades the whole surface. Deferring them would
+> have guaranteed the breaking rename this paragraph warns about. Rule and rationale:
+> [docs/reference/openapi.md](reference/openapi.md).
+
 ---
 
 ## 2 · CONSUMER CONFIG — the exact block
@@ -118,6 +142,11 @@ may be shared or synced):
 ```
 
 ### 2.2 Works-today state (derived copy) — use this until SPEC-ROB-001 lands
+
+> **OBSOLETE since 2026-10-16 (SCHED-GAP-1580): SPEC-ROB-001 is fixed.** The served document loads
+> through muster directly, so §2.1 with the URL `--spec` is the only form — no derived copy, no
+> `jq` step. Everything below is kept as the record of the pre-fix workaround and of the measured
+> defect it worked around.
 
 ```json
 {
@@ -207,7 +236,9 @@ printf '%s\n%s\n%s\n' \
 Assertions (non-vacuous):
 
 - exit 0; stderr contains `Generated 54 MCP tools` — **54**, matching the served operation count;
-  a drift in either direction fails the test.
+  a drift in either direction fails the test. (Post-SCHED-GAP-1580 the number is **58** — three
+  served-but-undescribed routes plus the document's own route joined the spec — and the rule is
+  unchanged: the count must equal the served operation count, so measure it, never assume it.)
 - The `id:2` response parses as JSON and `len(result.tools) == 54`.
 - Spot-check the schema fidelity that muster's DF-034 path guarantees: the
   `delete_api_v1_projects_name` tool advertises required `["name","confirm"]` (confirm is a
@@ -483,7 +514,13 @@ mechanical):**
 ## 6 · What this freezes (for SCHED-GAP-1580)
 
 1. Surface = served spec as-is, 54 operations, no operationIds, SSE tools registered-but-prohibited.
+   *Amended by SCHED-GAP-1580:* 58 operations (four served routes added) and an `operationId` on
+   every one — see the two inline notes above; tool names are now `getApiV1Live`-shaped MCP names
+   from the operationId, and the SSE prohibition is unchanged.
 2. Consumer config = §2.1 target / §2.2 interim (SPEC-ROB-001 moves `security-note`).
+   *Amended by SCHED-GAP-1580:* SPEC-ROB-001 is closed, so §2.1 alone applies — the served document
+   loads directly and §2.2 is historical. Copy-pasteable form:
+   [docs/reference/muster-consumer.md](reference/muster-consumer.md).
 3. Acceptance = §3 T1–T5 (T3 runnable against the live daemon; T4 scratch-only).
 4. Safety = §4's 27-operation gated list; agent consumers carry NO credential; the gate is
    server-side and audited.

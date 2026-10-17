@@ -112,6 +112,13 @@ var apiToolCoverage = map[string][]string{
 	// fed_* to any mutation cross-check.)
 	"POST /api/v1/federation/query": {"fed_query"},
 	"GET /api/v1/cooldown/residue":  {"cooldown_residue"},
+	// SCHED-GAP-1580: the three served routes the served-spec parity guard
+	// surfaced (they predate this map but were invisible to it — not in the
+	// OpenAPI document until now). Each maps to the read tool that mirrors
+	// the route's handler through the same database calls.
+	"GET /api/v1/peers/events":      {"peers_events"},
+	"GET /api/v1/peers/{id}/events": {"peers_events"},
+	"GET /api/v1/cadence":           {"cadence"},
 }
 
 // paritySkipList exempts NON-control routes from the parity contract.

@@ -10,6 +10,12 @@ package mcp_test
 // surface statement at all, so an agent building a capability or security
 // inventory from that table understated the daemon's write surface.
 //
+// SCHED-GAP-1580 added the second half of the same guard: the daemon's own
+// SERVED OpenAPI 3.x document (/api/v1/openapi.json) is now checked against
+// the same route surface, because that document — not this table — is what a
+// muster consumer (docs/reference/openapi.md) generates its CLI verbs and MCP
+// tools from.
+//
 // Both sides of the comparison are IN-REPO, never a live daemon process:
 //
 //   - the documented side is parsed out of docs/reference/endpoints.md, located
@@ -29,7 +35,11 @@ package mcp_test
 // internal/mcp/server.go lands here automatically.
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +47,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/coding-hermes/scheduler/internal/api"
+	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // agentsRouteRowRe matches one row of the endpoints table and
@@ -518,4 +533,632 @@ func removeRoute(routes []string, drop string) []string {
 		out = append(out, r)
 	}
 	return out
+}
+
+// ─── SCHED-GAP-1580 — the served OpenAPI 3.x contract ───────────────────────
+//
+// The muster integration (docs/muster-scope.md → docs/reference/openapi.md)
+// consumes the daemon's OWN OpenAPI document, which makes that document a
+// served contract like any other: it gets the same two-direction guard the
+// endpoint table above gets.
+//
+//   - every path in the spec must be a route the daemon actually serves,
+//     probed against the real *http.ServeMux the Handler() returns; and a path
+//     that lives inside a trailing-slash subtree registration must additionally
+//     name itself in the handler sources, so an invented nested path cannot
+//     hide behind a subtree pattern that would match anything;
+//   - every /api/v1 route documented in docs/reference/endpoints.md — which
+//     TestAgentsEndpointTableParity already pins to the route registrations in
+//     BOTH directions — must be described by the spec.
+//
+// That second leg is the drift this guard was written for: /api/v1/cadence,
+// /api/v1/peers/events and /api/v1/peers/{id}/events were served and documented
+// while the OpenAPI document did not describe them, so a muster consumer
+// silently lost three capabilities (and the spec's own /api/v1/openapi.json was
+// undescribed too). The api package's TestAPI_OpenAPI_Success could not catch
+// it: it compares the spec against a hand-maintained path list, which is exactly
+// the artifact that drifts.
+//
+// It also pins what a consumer's LOADER depends on, because each of these
+// fails the whole document rather than one operation:
+//
+//   - an operationId on every operation (muster derives both its CLI verb names
+//     and its MCP tool names from it, so an id-less operation is named by
+//     convention instead of by contract);
+//   - an absolute servers[] URL (a relative one leaves a standalone consumer
+//     with no host to call);
+//   - no top-level key outside the OpenAPI vocabulary and the x- extension
+//     space — the SPEC-ROB-001 defect class, where a top-level "security-note"
+//     sibling made kin-openapi's doc.Validate reject the entire document
+//     ("extra sibling fields: [security-note]") and muster generate ZERO tools.
+//     The prose lives in "x-security-note" now.
+
+const (
+	// Re-anchor floors for the served spec. Same purpose as the route floors
+	// above: a broken fetch or a decode that silently yields an empty document
+	// must fail loudly instead of comparing empty against empty.
+	minSpecPaths      = 40
+	minSpecOperations = 45
+)
+
+// openapiTopLevelKeys is the OpenAPI 3.0 vocabulary, plus the vendor-extension
+// space. Anything else at the document root is the SPEC-ROB-001 defect.
+var openapiTopLevelKeys = map[string]bool{
+	"openapi": true, "info": true, "jsonSchemaDialect": true, "servers": true,
+	"paths": true, "webhooks": true, "components": true, "security": true,
+	"tags": true, "externalDocs": true,
+}
+
+// openapiGatedReads is the allowlist of NON-mutating operations that carry the
+// operator-credential marker. The mutation is the danger, not the observation
+// (internal/api/auth.go ROUTE SPLIT) — but a peer-registry read is
+// anti-enumeration gated (SCHED-GAP-1602), so these four are deliberate. The
+// list is pinned in both directions: a read that grows a marker fails here, and
+// a mutating operation that loses one fails below.
+var openapiGatedReads = map[string]bool{
+	"get /api/v1/peers":                true,
+	"get /api/v1/peers/events":         true,
+	"get /api/v1/peers/{id}/events":    true,
+	"get /api/v1/federation/catalogue": true,
+}
+
+// openapiOperation is one operation reduced to the properties the guard checks.
+type openapiOperation struct {
+	ID          string
+	HasSecurity bool
+}
+
+// openapiSpec is the parsed view of the served document.
+type openapiSpec struct {
+	TopLevelKeys []string
+	Servers      []string
+	// Paths maps a path template to its operations by lower-case method.
+	Paths map[string]map[string]openapiOperation
+}
+
+// openapiOperationRef is one (path, method, operation) triple.
+type openapiOperationRef struct {
+	Path   string
+	Method string
+	Op     openapiOperation
+}
+
+// operations returns every operation in the document in a stable order.
+func (s openapiSpec) operations() []openapiOperationRef {
+	var refs []openapiOperationRef
+	for path, methods := range s.Paths {
+		for method, op := range methods {
+			refs = append(refs, openapiOperationRef{Path: path, Method: method, Op: op})
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Path != refs[j].Path {
+			return refs[i].Path < refs[j].Path
+		}
+		return refs[i].Method < refs[j].Method
+	})
+	return refs
+}
+
+// parseOpenAPISpec decodes the served document into the guard's view. The
+// top-level keys are decoded separately from the typed fields so an unknown
+// sibling field is SEEN rather than silently dropped by the decoder.
+func parseOpenAPISpec(t *testing.T, body []byte) openapiSpec {
+	t.Helper()
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		t.Fatalf("served OpenAPI document is not a JSON object: %v", err)
+	}
+	var typed struct {
+		Servers []struct {
+			URL string `json:"url"`
+		} `json:"servers"`
+		Paths map[string]map[string]struct {
+			OperationID string          `json:"operationId"`
+			Security    json.RawMessage `json:"security"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(body, &typed); err != nil {
+		t.Fatalf("served OpenAPI document does not decode: %v", err)
+	}
+	spec := openapiSpec{
+		Paths: map[string]map[string]openapiOperation{},
+	}
+	for k := range root {
+		spec.TopLevelKeys = append(spec.TopLevelKeys, k)
+	}
+	sort.Strings(spec.TopLevelKeys)
+	for _, s := range typed.Servers {
+		spec.Servers = append(spec.Servers, s.URL)
+	}
+	for path, methods := range typed.Paths {
+		ops := map[string]openapiOperation{}
+		for method, raw := range methods {
+			ops[strings.ToLower(method)] = openapiOperation{
+				ID:          raw.OperationID,
+				HasSecurity: len(raw.Security) > 0 && string(raw.Security) != "null",
+			}
+		}
+		spec.Paths[path] = ops
+	}
+	return spec
+}
+
+// deriveOperationID is the document's operationId rule, restated here so the
+// guard fails when an id stops being derivable from its route: operationId =
+// lower-camel(method + request path), where every path segment — brace-stripped
+// for parameters, split on '-', '_' and '.' — contributes a capitalized part.
+// ("get", "/api/v1/projects/{name}/pause") → "getApiV1ProjectsNamePause".
+func deriveOperationID(method, path string) string {
+	var b strings.Builder
+	b.WriteString(strings.ToLower(method))
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "" {
+			continue
+		}
+		seg = strings.Trim(seg, "{}")
+		for _, part := range strings.FieldsFunc(seg, func(r rune) bool {
+			return r == '-' || r == '_' || r == '.'
+		}) {
+			b.WriteString(strings.ToUpper(part[:1]))
+			b.WriteString(part[1:])
+		}
+	}
+	return b.String()
+}
+
+// concreteProbePath turns a spec path into a requestable one by giving every
+// {param} a value — the mux matches on shape, not on the value.
+func concreteProbePath(specPath string) string {
+	segs := strings.Split(specPath, "/")
+	out := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			seg = "probe"
+		}
+		out = append(out, seg)
+	}
+	return strings.Join(out, "/")
+}
+
+// muxServes reports whether the mux has a route pattern for the request path.
+// net/http documents that Handler returns an empty pattern when nothing
+// matches, which is exactly the question the spec must answer "yes" to.
+func muxServes(mux *http.ServeMux, path string) bool {
+	req, err := http.NewRequest(http.MethodGet, "http://spec-parity.invalid"+path, nil)
+	if err != nil {
+		return false
+	}
+	_, pattern := mux.Handler(req)
+	return pattern != ""
+}
+
+// openapiPathParamSegments returns the literal (non-parameter) sub-resource
+// segments of a spec path that sits inside a trailing-slash subtree
+// registration — the segments a handler must name to serve it. A path that is
+// its own registration (or is only parameters below the subtree, e.g.
+// /api/v1/projects/{name}) has none.
+func openapiPathParamSegments(subtree, specPath string) []string {
+	rest := strings.TrimPrefix(specPath, subtree)
+	var literals []string
+	for _, seg := range strings.Split(rest, "/") {
+		if seg == "" || (strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) {
+			continue
+		}
+		literals = append(literals, seg)
+	}
+	return literals
+}
+
+// apiSourceLiterals collects every double-quoted string literal in the API
+// sources, so a sub-resource segment is only accepted when the handler really
+// mentions it.
+func apiSourceLiterals(t *testing.T, paths []string) []string {
+	t.Helper()
+	literalRe := regexp.MustCompile(`"([^"\n]*)"`)
+	var literals []string
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, m := range literalRe.FindAllStringSubmatch(string(src), -1) {
+			literals = append(literals, m[1])
+		}
+	}
+	return literals
+}
+
+// openapiSpecFindings is the pure checker the live test and the self-check
+// both drive: empty findings = the served document describes the served
+// surface, and refuses to be loaded by a strict OpenAPI validator in no way.
+func openapiSpecFindings(
+	spec openapiSpec,
+	live routeSets,
+	apiLiterals []string,
+	documented []string,
+	served func(path string) bool,
+) []string {
+	var findings []string
+
+	// ── direction 0: the document must be loadable at all ───────────────
+	for _, key := range spec.TopLevelKeys {
+		if openapiTopLevelKeys[key] || strings.HasPrefix(key, "x-") {
+			continue
+		}
+		findings = append(findings, fmt.Sprintf("the served OpenAPI document carries top-level key %q, which is not OpenAPI vocabulary and not an x- extension — a strict validator (kin-openapi doc.Validate, used by muster) rejects the WHOLE document with \"extra sibling fields: [%s]\" and generates zero tools", key, key))
+	}
+	if len(spec.Servers) == 0 {
+		findings = append(findings, "the served OpenAPI document declares no servers[] — a standalone consumer (muster --spec <url>) has no host to call for any operation")
+	}
+	for _, srv := range spec.Servers {
+		if !strings.HasPrefix(srv, "http://") && !strings.HasPrefix(srv, "https://") {
+			findings = append(findings, fmt.Sprintf("servers[] url %q is not absolute — muster cannot dereference a relative server URL", srv))
+		}
+	}
+
+	// ── direction 1: every spec path must be a route the daemon serves ──
+	seenIDs := map[string]string{}
+	for _, ref := range spec.operations() {
+		opID := ref.Op.ID
+		if opID == "" {
+			findings = append(findings, fmt.Sprintf("spec %s %s has no operationId — muster names the CLI verb and the MCP tool from it, so the name would be a consumer convention instead of contract", ref.Method, ref.Path))
+		} else {
+			if want := deriveOperationID(ref.Method, ref.Path); opID != want {
+				findings = append(findings, fmt.Sprintf("spec %s %s operationId %q is not the derived name %q (rule: lower-camel(method + path))", ref.Method, ref.Path, opID, want))
+			}
+			if prev, dup := seenIDs[opID]; dup {
+				findings = append(findings, fmt.Sprintf("operationId %q is used twice (%s and %s %s) — tool names must be unique per consumer", opID, prev, ref.Method, ref.Path))
+			} else {
+				seenIDs[opID] = ref.Method + " " + ref.Path
+			}
+		}
+	}
+	for path := range spec.Paths {
+		if !served(concreteProbePath(path)) {
+			findings = append(findings, fmt.Sprintf("the served OpenAPI document describes path %q but the daemon's route table does not serve it — the document has drifted off the real surface", path))
+			continue
+		}
+		if live.exact[path] {
+			continue
+		}
+		// Inside a subtree registration the pattern matches anything, so the
+		// sub-resource must name itself in the handler sources.
+		for subtree := range live.subtree {
+			if !strings.HasPrefix(path, subtree+"/") {
+				continue
+			}
+			for _, seg := range openapiPathParamSegments(subtree, path) {
+				found := false
+				for _, lit := range apiLiterals {
+					if strings.Contains(lit, seg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					findings = append(findings, fmt.Sprintf("the served OpenAPI document describes %q under the %q subtree registration, but no API source names the %q sub-resource — that path looks served while the handler 404s it", path, subtree, seg))
+				}
+			}
+		}
+	}
+
+	// ── direction 2: every documented route must be described ───────────
+	described := map[string]bool{}
+	for path := range spec.Paths {
+		described[path] = true
+	}
+	for _, d := range documented {
+		if !strings.HasPrefix(d, "/api/v1/") || described[d] {
+			continue
+		}
+		findings = append(findings, fmt.Sprintf("docs/reference/endpoints.md documents %q but the served OpenAPI document does not describe it — an OpenAPI consumer cannot see a capability the daemon serves", d))
+	}
+
+	// ── direction 3: the credential markers are the served classification ─
+	for _, ref := range spec.operations() {
+		mutating := ref.Method == "post" || ref.Method == "put" || ref.Method == "delete" || ref.Method == "patch"
+		switch {
+		case mutating && !ref.Op.HasSecurity:
+			findings = append(findings, fmt.Sprintf("spec %s %s is a MUTATING operation with no security marker — the document advertises it as callable while the daemon refuses it", ref.Method, ref.Path))
+		case !mutating && ref.Op.HasSecurity && !openapiGatedReads[ref.Method+" "+ref.Path]:
+			findings = append(findings, fmt.Sprintf("spec %s %s is a gated READ with no entry in openapiGatedReads — either the marker is wrong or the allowlist must name it (a read gate is anti-enumeration, not observation doctrine)", ref.Method, ref.Path))
+		}
+	}
+
+	sort.Strings(findings)
+	return findings
+}
+
+// servedOpenAPISpec boots the real api.Server and returns its served OpenAPI
+// document plus the *http.ServeMux the same Handler() serves, so the parity
+// comparison is against the document a consumer actually fetches over the route
+// (not a copy of the constant that could drift from it).
+func servedOpenAPISpec(t *testing.T) (openapiSpec, *http.ServeMux) {
+	t.Helper()
+	db, err := database.InitDB(filepath.Join(t.TempDir(), "scheduler.db"))
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 0, 5)
+	loop.SetNoExecFallback(true)
+	t.Cleanup(loop.Stop)
+
+	handler := api.NewServer(db, loop).Handler()
+	mux, ok := handler.(*http.ServeMux)
+	if !ok {
+		t.Fatalf("api.Server.Handler() returned %T, want *http.ServeMux — the route probe cannot inspect it", handler)
+	}
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/v1/openapi.json")
+	if err != nil {
+		t.Fatalf("GET /api/v1/openapi.json: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/openapi.json status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return parseOpenAPISpec(t, body), mux
+}
+
+// TestServedOpenAPISpecParity is the SCHED-GAP-1580 guard: the OpenAPI 3.x
+// document the daemon SERVES must describe the surface the daemon serves, in
+// both directions, and must stay loadable by a strict validator.
+func TestServedOpenAPISpecParity(t *testing.T) {
+	root := agentsRepoRoot(t)
+
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "reference", "endpoints.md"))
+	if err != nil {
+		t.Fatalf("read docs/reference/endpoints.md: %v", err)
+	}
+	section, ok := agentsEndpointSection(string(raw))
+	if !ok {
+		t.Fatalf(`docs/reference/endpoints.md has no "## Endpoints" section — the route table is missing`)
+	}
+	documented := parseAgentsEndpointRoutes(section)
+	if len(documented) < minDocumentedRows {
+		t.Fatalf("parsed only %d route rows from docs/reference/endpoints.md (want >= %d)", len(documented), minDocumentedRows)
+	}
+
+	spec, mux := servedOpenAPISpec(t)
+	if len(spec.Paths) < minSpecPaths {
+		t.Fatalf("the served OpenAPI document parsed to only %d paths (want >= %d) — the document or the decode is broken", len(spec.Paths), minSpecPaths)
+	}
+	if ops := len(spec.operations()); ops < minSpecOperations {
+		t.Fatalf("the served OpenAPI document parsed to only %d operations (want >= %d) — the document or the decode is broken", ops, minSpecOperations)
+	}
+
+	live := routeSetsFromSources(t, sourcePathsForRoutes(t, root))
+	if len(live.exact) < minLiveExact {
+		t.Fatalf("source walk found only %d exact route registrations (want >= %d)", len(live.exact), minLiveExact)
+	}
+	literals := apiSourceLiterals(t, sourcePathsForRoutes(t, root))
+
+	findings := openapiSpecFindings(spec, live, literals, documented,
+		func(path string) bool { return muxServes(mux, path) })
+	if len(findings) > 0 {
+		t.Errorf("SCHED-GAP-1580 served-OpenAPI/route parity: %d divergences across %d paths / %d operations:",
+			len(findings), len(spec.Paths), len(spec.operations()))
+		for _, f := range findings {
+			t.Errorf("  DRIFT %s", f)
+		}
+	}
+}
+
+// cloneOpenAPISpec deep-copies the parsed document so a self-check case can
+// mutate one field without leaking that mutation into the next case (the
+// Paths maps are references).
+func cloneOpenAPISpec(s openapiSpec) openapiSpec {
+	out := openapiSpec{
+		TopLevelKeys: append([]string(nil), s.TopLevelKeys...),
+		Servers:      append([]string(nil), s.Servers...),
+		Paths:        make(map[string]map[string]openapiOperation, len(s.Paths)),
+	}
+	for path, methods := range s.Paths {
+		ops := make(map[string]openapiOperation, len(methods))
+		for method, op := range methods {
+			ops[method] = op
+		}
+		out.Paths[path] = ops
+	}
+	return out
+}
+
+// TestServedOpenAPISpecParity_SelfCheck proves the guard bites in every
+// direction and is not vacuous. All inputs are synthetic — nothing on disk is
+// touched — so this runs as an ordinary unit test.
+func TestServedOpenAPISpecParity_SelfCheck(t *testing.T) {
+	live := routeSets{
+		exact: map[string]bool{
+			"/api/v1/health": true,
+			"/api/v1/pause":  true,
+		},
+		subtree: map[string]bool{"/api/v1/projects": true},
+	}
+	literals := []string{"GET only", "POST only", "/api/v1/projects/", "pause", "resume"}
+
+	spec := openapiSpec{
+		TopLevelKeys: []string{"components", "info", "openapi", "paths", "servers", "x-security-note"},
+		Servers:      []string{"http://127.0.0.1:9090"},
+		Paths: map[string]map[string]openapiOperation{
+			"/api/v1/health":             {"get": {ID: "getApiV1Health"}},
+			"/api/v1/pause":              {"post": {ID: "postApiV1Pause", HasSecurity: true}},
+			"/api/v1/projects/{name}":    {"get": {ID: "getApiV1ProjectsName"}},
+			"/api/v1/projects/{n}/pause": {"post": {ID: "postApiV1ProjectsNPause", HasSecurity: true}},
+		},
+	}
+	servedReal := func(path string) bool {
+		if _, ok := live.exact[path]; ok {
+			return true
+		}
+		for sub := range live.subtree {
+			if strings.HasPrefix(path, sub+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	real := []string{"/api/v1/health", "/api/v1/pause", "/api/v1/projects/{name}"}
+
+	if findings := openapiSpecFindings(cloneOpenAPISpec(spec), live, literals, real, servedReal); len(findings) != 0 {
+		t.Fatalf("self-check: real shape reported findings %v — checker is over-firing", findings)
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(openapiSpec) openapiSpec
+		live    routeSets
+		docs    []string
+		served  func(string) bool
+		wantSub string
+	}{{
+		name:    "illegal top-level sibling fails",
+		mutate:  func(s openapiSpec) openapiSpec { s.TopLevelKeys = append(s.TopLevelKeys, "security-note"); return s },
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "extra sibling fields",
+	}, {
+		name:    "relative servers url fails",
+		mutate:  func(s openapiSpec) openapiSpec { s.Servers = []string{"/api/v1"}; return s },
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "is not absolute",
+	}, {
+		name: "missing operationId fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/health"] = map[string]openapiOperation{"get": {}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "has no operationId",
+	}, {
+		name: "non-derived operationId fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/health"] = map[string]openapiOperation{"get": {ID: "checkHealth"}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "is not the derived name",
+	}, {
+		name: "duplicate operationId fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/pause"] = map[string]openapiOperation{"post": {ID: "getApiV1Health"}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "is used twice",
+	}, {
+		name: "spec path the daemon does not serve fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/retired"] = map[string]openapiOperation{"get": {ID: "getApiV1Retired"}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "does not serve it",
+	}, {
+		name: "invented sub-resource under a subtree fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/projects/{name}/frobnicate"] = map[string]openapiOperation{"post": {ID: "postApiV1ProjectsNameFrobnicate", HasSecurity: true}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: `no API source names the "frobnicate" sub-resource`,
+	}, {
+		name:    "documented route missing from the spec fails",
+		mutate:  func(s openapiSpec) openapiSpec { return s },
+		live:    live,
+		docs:    append(append([]string(nil), real...), "/api/v1/cadence"),
+		served:  servedReal,
+		wantSub: "endpoints.md documents",
+	}, {
+		name: "mutating operation without a security marker fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/pause"] = map[string]openapiOperation{"post": {ID: "postApiV1Pause"}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "no security marker",
+	}, {
+		name: "unclassified gated read fails",
+		mutate: func(s openapiSpec) openapiSpec {
+			s.Paths["/api/v1/health"] = map[string]openapiOperation{"get": {ID: "getApiV1Health", HasSecurity: true}}
+			return s
+		},
+		live:    live,
+		docs:    real,
+		served:  servedReal,
+		wantSub: "no entry in openapiGatedReads",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := openapiSpecFindings(tc.mutate(cloneOpenAPISpec(spec)), tc.live, literals, tc.docs, tc.served)
+			if len(findings) == 0 {
+				t.Fatalf("self-check: expected a finding containing %q, got none — the guard is blind here", tc.wantSub)
+			}
+			found := false
+			for _, f := range findings {
+				if strings.Contains(f, tc.wantSub) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("self-check: findings %v do not mention %q", findings, tc.wantSub)
+			}
+		})
+	}
+
+	// The derivation rule itself is pinned, so a "fix" that changes the rule
+	// has to change this table too.
+	for _, tc := range []struct{ method, path, want string }{
+		{"get", "/api/v1/health", "getApiV1Health"},
+		{"get", "/api/v1/live", "getApiV1Live"},
+		{"get", "/api/v1/features/prune-candidates", "getApiV1FeaturesPruneCandidates"},
+		{"get", "/api/v1/openapi.json", "getApiV1OpenapiJson"},
+		{"post", "/api/v1/projects/{name}/pause", "postApiV1ProjectsNamePause"},
+		{"delete", "/api/v1/projects/{name}", "deleteApiV1ProjectsName"},
+		{"post", "/api/v1/namespaces/{id}/move", "postApiV1NamespacesIdMove"},
+		{"get", "/api/v1/peers/{id}/events", "getApiV1PeersIdEvents"},
+	} {
+		if got := deriveOperationID(tc.method, tc.path); got != tc.want {
+			t.Errorf("deriveOperationID(%q, %q) = %q, want %q", tc.method, tc.path, got, tc.want)
+		}
+	}
+
+	// The probe helper must turn a template into a requestable path.
+	if got := concreteProbePath("/api/v1/projects/{name}/pause"); got != "/api/v1/projects/probe/pause" {
+		t.Errorf("concreteProbePath = %q, want /api/v1/projects/probe/pause", got)
+	}
+
+	// And the "is it really served" probe must agree with a real mux: a
+	// registered path matches, an unregistered sibling does not.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/projects/", func(http.ResponseWriter, *http.Request) {})
+	if !muxServes(mux, "/api/v1/projects/probe/pause") {
+		t.Error("muxServes: a path under a subtree registration must read as served")
+	}
+	if muxServes(mux, "/api/v1/cadence") {
+		t.Error("muxServes: an unregistered path must not read as served")
+	}
 }

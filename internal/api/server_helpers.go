@@ -884,10 +884,21 @@ var openapiSpec = []byte(`{
     "description": "REST API for the Coding Hermes fleet scheduler — manage projects, namespaces, ticks, and fleet health."
   },
   "servers": [{"url": "http://127.0.0.1:9090", "description": "Local scheduler daemon"}],
-  "security-note": "SCHED-GAP-1602: every MUTATING operation (POST/PUT/DELETE below, marked per-operation with security) requires the operator credential — components.securitySchemes.operatorToken or operatorBasic. READ operations are deliberately open (tailnet-only bind; cron probes, the ops watchdog and Observatory-style pullers consume them unauthenticated). With NO credential configured the daemon fails CLOSED: mutating operations answer 503 Service Unavailable.",
+  "x-security-note": "SCHED-GAP-1602: every MUTATING operation (POST/PUT/DELETE below, marked per-operation with security) requires the operator credential — components.securitySchemes.operatorToken or operatorBasic. READ operations are deliberately open (tailnet-only bind; cron probes, the ops watchdog and Observatory-style pullers consume them unauthenticated). With NO credential configured the daemon fails CLOSED: mutating operations answer 503 Service Unavailable.",
   "paths": {
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getApiV1OpenapiJson",
+        "summary": "This document — the served OpenAPI 3.x contract for the scheduler API (SCHED-GAP-1580). Written verbatim from the build-time constant internal/api/server_helpers.go::openapiSpec with no DB access, so it stays byte-correct when the DB route wedges; info.version carries the daemon build.",
+        "responses": {
+          "200": {"description": "The OpenAPI 3.0.3 document (application/json)"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
+        "operationId": "getApiV1Health",
         "summary": "Daemon health check",
         "responses": {
           "200": {"description": "OK — returns uptime, DB status, active ticks, spawn counts, gateway error count, clock (mode real|sim + sim scale, SCHED-GAP-1632)"}
@@ -896,6 +907,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/live": {
       "get": {
+        "operationId": "getApiV1Live",
         "summary": "DB-free liveness probe (SCHED-GAP-204-A) — process-memory only, never touches SQLite or the loop. The ops watchdog's first probe; /api/v1/health is the rich DB-backed fallback.",
         "responses": {
           "200": {"description": "OK — returns status, version, build_sha, uptime, started (no DB access)"},
@@ -905,6 +917,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/status": {
       "get": {
+        "operationId": "getApiV1Status",
         "summary": "Fleet overview",
         "responses": {
           "200": {"description": "Returns budget, active projects, tick counts, recent outcomes, gateway_errors (transient gateway spawn failures since restart), gateway_health_gate (the gateway-health admission gate's armed state and cached verdict, SCHED-GAP-170), lane_output_families (SCHED-GAP-177 per-family rollup for qa/pm/sync/dogfood: lanes, output_ticks, max_zero_output_streak, lanes_at_alert_threshold)"}
@@ -913,6 +926,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/metrics": {
       "get": {
+        "operationId": "getApiV1Metrics",
         "summary": "Fleet metrics — one read-only request answers spawns by namespace/outcome, deferrals by reason, orphan nudges by path, active/queued ticks vs caps, cooldown-expired-unscheduled, tick duration p50/p90/p99, gateway drain-503s, zero-output committed ticks, stalled ticks bucketed by duration, escalation events per day by severity/class and lane churn (projects disabled per day with disabled_by provenance)",
         "responses": {
           "200": {"description": "Single JSON object: generated_at, uptime_s, sources, spawns, deferrals, nudges, ticks, tick_duration_ms, gateway, outcomes, stalls, escalations, lane_churn. Every block carries available=true|false; a block whose real source is absent reports {\"available\": false, \"reason\": \"...\"} instead of a fabricated number, and sources names the query/counter behind every block (SCHED-GAP-156; stalls/escalations/lane_churn added by SCHED-GAP-158)."},
@@ -922,6 +936,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/features": {
       "get": {
+        "operationId": "getApiV1Features",
         "summary": "Per-feature live usage counters (SCHED-GAP-131) — every tracked mechanism with use_count + first/last-used timestamps, plus the admission_mode row gauge",
         "responses": {
           "200": {"description": "features: [{feature, description, use_count, first_used_at, last_used_at}] (all five mechanisms always present, 0 = never used), admission_mode_rows: {projects_tasks, namespaces_tasks}, prune_weeks."},
@@ -931,6 +946,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/features/prune-candidates": {
       "get": {
+        "operationId": "getApiV1FeaturesPruneCandidates",
         "summary": "Dead-feature reaper report (SCHED-GAP-131) — mechanisms never used or last used more than N weeks ago (?weeks=N, default 8). Flag only: nothing is auto-deleted.",
         "responses": {
           "200": {"description": "prune_weeks, cutoff (RFC3339), candidates: [{feature, use_count, first_used_at, last_used_at}] — a feature is listed when last_used_at is empty (never used) or predates the cutoff."},
@@ -940,6 +956,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/cooldown/residue": {
       "get": {
+        "operationId": "getApiV1CooldownResidue",
         "summary": "Cooldown-pin residue detector (SCHED-GAP-1670) — ENABLED lanes whose live cooldown_s sits strictly BELOW their own stored operator pin (cooldown_pin_s). Read-only: never mutates; reconciliation happens on the pin write paths (fleet.toml import / API PUT), not here.",
         "responses": {
           "200": {"description": "residue: [{name, cooldown_s, pin_s, pin_by}], count — an empty residue serializes as [] with count 0."},
@@ -949,6 +966,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/config": {
       "get": {
+        "operationId": "getApiV1Config",
         "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",
         "responses": {
           "200": {"description": "Active config — min_interval, max_concurrent, gateway.url, auto_disable_failure_rate, etc. The gateway key is masked (SCHED-GAP-034)."}
@@ -957,6 +975,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects": {
       "get": {
+        "operationId": "getApiV1Projects",
         "summary": "List projects, paginated (SCHED-GAP-1622)",
         "parameters": [
           {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 200, "maximum": 500}, "description": "Page size; <= 0 falls back to the default, > 500 clamps to 500 (never a 4xx)"},
@@ -967,6 +986,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "operationId": "postApiV1Projects",
         "security": [{"operatorToken": []}],
         "summary": "Create a project",
         "requestBody": {
@@ -981,6 +1001,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}": {
       "get": {
+        "operationId": "getApiV1ProjectsName",
         "summary": "Get project detail with latest tick and dispatch split",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -988,6 +1009,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "operationId": "putApiV1ProjectsName",
         "security": [{"operatorToken": []}],
         "summary": "Update project fields",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -999,6 +1021,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "operationId": "deleteApiV1ProjectsName",
         "security": [{"operatorToken": []}],
         "summary": "Delete a project. confirm=true soft-deletes (enabled=false, row retained); confirm=true&purge=true permanently removes the row (DOGFOOD-009)",
         "parameters": [
@@ -1016,6 +1039,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/spawn": {
       "post": {
+        "operationId": "postApiV1ProjectsNameSpawn",
         "security": [{"operatorToken": []}],
         "summary": "Manually trigger a tick for this project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1030,6 +1054,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/pause": {
       "post": {
+        "operationId": "postApiV1ProjectsNamePause",
         "security": [{"operatorToken": []}],
         "summary": "Pause a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1044,6 +1069,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/resume": {
       "post": {
+        "operationId": "postApiV1ProjectsNameResume",
         "security": [{"operatorToken": []}],
         "summary": "Resume a project",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1058,6 +1084,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/bump": {
       "post": {
+        "operationId": "postApiV1ProjectsNameBump",
         "security": [{"operatorToken": []}],
         "summary": "Temporarily accelerate the project (SCHED-GAP-107): run at a small cooldown for N ticks, then auto-revert (Phase A restore + Phase B adaptive re-eval)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1075,6 +1102,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/projects/{name}/unbump": {
       "post": {
+        "operationId": "postApiV1ProjectsNameUnbump",
         "security": [{"operatorToken": []}],
         "summary": "Manually abort an active bump — restores the saved pre-bump cooldown state verbatim (no adaptive re-evaluation)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1088,8 +1116,20 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/cadence": {
+      "get": {
+        "operationId": "getApiV1Cadence",
+        "summary": "Configured vs achieved starts/day per lane over the trailing seven-day window. The target source is explicit override, durable cooldown pin, disabled, or none — a lane with no target reports target_source \"none\" instead of a fabricated interval.",
+        "responses": {
+          "200": {"description": "window_days plus one row per lane: name, enabled, configured_per_day, achieved_per_day, target_source."},
+          "405": {"description": "Non-GET method"},
+          "504": {"description": "Per-request read deadline exceeded — {error, helper, detail} naming the stalled step (SCHED-GAP-1575-B)"}
+        }
+      }
+    },
     "/api/v1/lanes": {
       "get": {
+        "operationId": "getApiV1Lanes",
         "summary": "List lanes, flat (DEPRECATED — use /api/v1/lanes/tree)",
         "description": "SCHED-GAP-1587: the flat lane listing is kept for backward compatibility but deprecated in favour of the hierarchical /api/v1/lanes/tree. Consumers that walk parents client-side should move to the tree.",
         "deprecated": true,
@@ -1101,6 +1141,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/lanes/tree": {
       "get": {
+        "operationId": "getApiV1LanesTree",
         "summary": "Lane hierarchy (SCHED-GAP-1587) — the fleet's parent→children tree",
         "description": "SCHED-GAP-1587: the projects table is a LANES list; a project is one primary lane plus its satellites. Roots carry is_root=true and depth 0; every child carries its parent name and depth = parent + 1, resolved through the shared database.BuildLaneTree resolver. Disabled lanes keep their position; a dangling parent (purged/renamed primary) keeps its name visible on the node and surfaces as a root.",
         "responses": {
@@ -1111,12 +1152,14 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/namespaces": {
       "get": {
+        "operationId": "getApiV1Namespaces",
         "summary": "List namespaces",
         "responses": {
           "200": {"description": "Array of namespace objects"}
         }
       },
       "post": {
+        "operationId": "postApiV1Namespaces",
         "security": [{"operatorToken": []}],
         "summary": "Create a namespace",
         "requestBody": {
@@ -1129,6 +1172,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/namespaces/{id}": {
       "get": {
+        "operationId": "getApiV1NamespacesId",
         "summary": "Get namespace",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1136,6 +1180,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "operationId": "putApiV1NamespacesId",
         "security": [{"operatorToken": []}],
         "summary": "Update namespace (partial — only supplied fields are applied)",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1149,6 +1194,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "operationId": "deleteApiV1NamespacesId",
         "security": [{"operatorToken": []}],
         "summary": "Delete a namespace. confirm=true soft-deletes (enabled=false, row retained, member projects unassigned); confirm=true&purge=true permanently removes the row (SCHED-GAP-097)",
         "parameters": [
@@ -1166,6 +1212,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/namespaces/{id}/projects": {
       "get": {
+        "operationId": "getApiV1NamespacesIdProjects",
         "summary": "List projects assigned to a namespace",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1176,6 +1223,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/namespaces/{id}/move": {
       "post": {
+        "operationId": "postApiV1NamespacesIdMove",
         "security": [{"operatorToken": []}],
         "summary": "Assign a project to a namespace (sets its namespace_id)",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1192,12 +1240,14 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/groups": {
       "get": {
+        "operationId": "getApiV1Groups",
         "summary": "List deploy groups (JSONL-backed)",
         "responses": {
           "200": {"description": "{\"groups\": [<Group>, ...]} sorted by name"}
         }
       },
       "post": {
+        "operationId": "postApiV1Groups",
         "security": [{"operatorToken": []}],
         "summary": "Create a deploy group",
         "requestBody": {
@@ -1213,6 +1263,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/groups/{name}": {
       "get": {
+        "operationId": "getApiV1GroupsName",
         "summary": "Get a deploy group",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1221,6 +1272,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "operationId": "putApiV1GroupsName",
         "security": [{"operatorToken": []}],
         "summary": "Partial-update a deploy group (name is immutable — comes from the path)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1234,6 +1286,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "operationId": "deleteApiV1GroupsName",
         "security": [{"operatorToken": []}],
         "summary": "Delete a deploy group (JSONL row removed)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1245,6 +1298,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/groups/{name}/deploy": {
       "post": {
+        "operationId": "postApiV1GroupsNameDeploy",
         "security": [{"operatorToken": []}],
         "summary": "Deploy a template to a group — appends the template's task rows to each member project's .coding-hermes/board/tasks.jsonl. Idempotent per (template, date, project): members whose board already carries the deployment are skipped. dry_run=true returns the plan without writing. One event-log entry per deploy.",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1261,12 +1315,14 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/templates": {
       "get": {
+        "operationId": "getApiV1Templates",
         "summary": "List deploy templates (JSONL-backed)",
         "responses": {
           "200": {"description": "{\"templates\": [<Template>, ...]} sorted by name"}
         }
       },
       "post": {
+        "operationId": "postApiV1Templates",
         "security": [{"operatorToken": []}],
         "summary": "Create a deploy template",
         "requestBody": {
@@ -1282,6 +1338,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/templates/{name}": {
       "get": {
+        "operationId": "getApiV1TemplatesName",
         "summary": "Get a deploy template",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1290,6 +1347,7 @@ var openapiSpec = []byte(`{
         }
       },
       "put": {
+        "operationId": "putApiV1TemplatesName",
         "security": [{"operatorToken": []}],
         "summary": "Partial-update a deploy template (name is immutable)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1303,6 +1361,7 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
+        "operationId": "deleteApiV1TemplatesName",
         "security": [{"operatorToken": []}],
         "summary": "Delete a deploy template (JSONL row removed)",
         "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1314,6 +1373,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/ticks": {
       "get": {
+        "operationId": "getApiV1Ticks",
         "summary": "List ticks with optional filters",
         "parameters": [
           {"name": "project", "in": "query", "schema": {"type": "string"}},
@@ -1327,6 +1387,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/ticks/{id}": {
       "get": {
+        "operationId": "getApiV1TicksId",
         "summary": "Get full tick detail",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {
@@ -1336,6 +1397,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/evaluate": {
       "post": {
+        "operationId": "postApiV1Evaluate",
         "security": [{"operatorToken": []}],
         "summary": "Force an evaluation cycle",
         "requestBody": {
@@ -1348,6 +1410,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/pause": {
       "post": {
+        "operationId": "postApiV1Pause",
         "security": [{"operatorToken": []}],
         "summary": "Pause the scheduler globally",
         "requestBody": {
@@ -1360,6 +1423,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/resume": {
       "post": {
+        "operationId": "postApiV1Resume",
         "security": [{"operatorToken": []}],
         "summary": "Resume the scheduler globally",
         "requestBody": {
@@ -1372,6 +1436,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/events": {
       "get": {
+        "operationId": "getApiV1Events",
         "summary": "List events with optional filters",
         "parameters": [
           {"name": "severity", "in": "query", "schema": {"type": "string"}},
@@ -1385,6 +1450,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/observatory": {
       "get": {
+        "operationId": "getApiV1Observatory",
         "summary": "Observatory snapshot: tick-rate buckets, namespace allocation and failure heatmap (SCHED-GAP-1592)",
         "parameters": [
           {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
@@ -1400,6 +1466,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/observatory/stream": {
       "get": {
+        "operationId": "getApiV1ObservatoryStream",
         "summary": "SSE stream of Observatory snapshots, recomputed every 10s (SCHED-GAP-1592)",
         "parameters": [
           {"name": "window", "in": "query", "schema": {"type": "string"}, "description": "Window in seconds or shorthand 1h/6h/24h/7d (default 6h)"},
@@ -1422,6 +1489,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/gateway-errors": {
       "get": {
+        "operationId": "getApiV1GatewayErrors",
         "summary": "Ticks not run because of gateway unavailability, by error class and lane (SCHED-GAP-1654)",
         "description": "Counts the per-tick gateway_availability events the spawn path writes when a tick is genuinely not run because the gateway refused it: HTTP 503 (drain/unavailable), HTTP 429 (rate limited) or a refused dial (no HTTP response at all). Fixed 24-hour window; every known class is present even at 0; by_project is ordered by total descending. Failures with their own classification (exec-fallback rescues, auth rejections, tick deadlines, 5xx that is not 503) are excluded by construction.",
         "responses": {
@@ -1433,6 +1501,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/events/stream": {
       "get": {
+        "operationId": "getApiV1EventsStream",
         "summary": "Server-Sent Events stream of newly committed events (push, not poll)",
         "description": "Holds the connection open and emits each event row as soon as it commits, framed as an id line plus a one-line JSON data payload. A comment heartbeat is sent every 15 seconds while the log is quiet, so idle connections survive proxies. Reconnect with the Last-Event-ID header (set automatically by EventSource) to replay every persisted event with a greater id before live events resume; an absent, empty or non-numeric Last-Event-ID replays the newest 100 events instead. A slow client whose bounded buffer overflows has the missing range repaired from the event log before the next live event is emitted. Optional severity/component query params filter the stream with the same exact-match semantics as GET /api/v1/events, covering the catch-up window and the replay as well as live delivery; every other query param (including limit) is ignored on this endpoint.",
         "parameters": [
@@ -1456,6 +1525,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/queue": {
       "get": {
+        "operationId": "getApiV1Queue",
         "summary": "Ordered queue of eligible projects by urgency",
         "responses": {
           "200": {"description": "Array of queue items sorted by urgency descending"}
@@ -1464,6 +1534,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/peers": {
       "get": {
+        "operationId": "getApiV1Peers",
         "security": [{"operatorToken": []}],
         "summary": "List registered federation peers with freshness (REMOTE-003)",
         "description": "Every peer renders {id, url, last_contact, stale, version}. Rendering law: a peer past the freshness window is STALE with its last_contact timestamp — never \"down\"; last_contact is always present (empty string = never heartbeated).",
@@ -1474,6 +1545,7 @@ var openapiSpec = []byte(`{
         }
       },
       "post": {
+        "operationId": "postApiV1Peers",
         "security": [{"operatorToken": []}],
         "summary": "Register or refresh a federation peer (upsert, REMOTE-003)",
         "requestBody": {
@@ -1490,6 +1562,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/peers/{id}/heartbeat": {
       "post": {
+        "operationId": "postApiV1PeersIdHeartbeat",
         "security": [{"operatorToken": []}],
         "summary": "Peer liveness ping — stamps last_contact (REMOTE-003)",
         "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
@@ -1504,8 +1577,37 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/peers/events": {
+      "get": {
+        "operationId": "getApiV1PeersEvents",
+        "security": [{"operatorToken": []}],
+        "summary": "Durable federation event slice across EVERY scheduler (REMOTE-006): the last-seen event, the replay high-water mark (last_event_id) and the counted dedupe_drops. Operator-token gated like the rest of the peer registry (anti-enumeration, SCHED-GAP-1602); scheduler_id is \"*\" on this aggregate form.",
+        "responses": {
+          "200": {"description": "{scheduler_id, last_event, last_event_id, dedupe_drops} — last_event is null when the slice is empty, never omitted."},
+          "401": {"description": "Operator credential required"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No operator credential configured (fail closed)"}
+        }
+      }
+    },
+    "/api/v1/peers/{id}/events": {
+      "get": {
+        "operationId": "getApiV1PeersIdEvents",
+        "security": [{"operatorToken": []}],
+        "summary": "Durable federation event slice for ONE scheduler (REMOTE-006). Same payload shape as the aggregate form, with scheduler_id set to the named peer.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{scheduler_id, last_event, last_event_id, dedupe_drops}"},
+          "401": {"description": "Operator credential required"},
+          "404": {"description": "Unknown peer id"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No operator credential configured (fail closed)"}
+        }
+      }
+    },
     "/api/v1/federation/query": {
       "post": {
+        "operationId": "postApiV1FederationQuery",
         "security": [{"operatorToken": []}],
         "summary": "Federation query (REMOTE-008) — the query envelope in, the response envelope out (docs/federation-query-spec.md §2)",
         "description": "One contract over six read ops (peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list), each reusing the daemon's own read path. Replay window keyed (caller, corr_id, op): a retried query returns the identical body. peer always names THIS scheduler; data is []/{} never null; status=stale is a first-class answer, never conflated with error.",
@@ -1526,6 +1628,7 @@ var openapiSpec = []byte(`{
     },
     "/api/v1/federation/catalogue": {
       "get": {
+        "operationId": "getApiV1FederationCatalogue",
         "security": [{"operatorToken": []}],
         "summary": "Federation read catalogue (REMOTE-008) — the supported ops with their arg shapes",
         "responses": {

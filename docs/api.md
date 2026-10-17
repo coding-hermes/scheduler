@@ -1428,6 +1428,8 @@ Verify the loop is back after resume: `curl -s http://127.0.0.1:9090/api/v1/heal
 
 **Response 200:** `application/json` OpenAPI document. **Errors:** 405 on non-GET.
 
+The document's contract, generation rule and parity guards: [docs/reference/openapi.md](reference/openapi.md). Generating a typed CLI / MCP server from it: [docs/reference/muster-consumer.md](reference/muster-consumer.md) (muster).
+
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/openapi.json | jq '.info, (.paths | keys)'
 ```

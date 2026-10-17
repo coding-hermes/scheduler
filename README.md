@@ -256,7 +256,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (61 tools)            │
+│  /mcp      → MCP server (63 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -297,7 +297,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 61 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 63 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (older
 deployed builds report fewer tools):
@@ -363,6 +363,8 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `peers_list` | Federation peers with freshness — `stale` computed against the peer freshness window (REMOTE-003) |
 | `peers_register` | Register or refresh a federation peer (identity only — liveness is heartbeat-only) |
 | `peers_heartbeat` | Stamp a registered peer's `last_contact` to now (no auto-register) |
+| `peers_events` | REMOTE-006 durable per-peer event slice — last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops`; `id` optional (omit = every scheduler) |
+| `cadence` | Configured-vs-achieved run rates per lane (SOL-CADENCE) — `target_runs_per_day`, `achieved_runs_per_day`, `target_deficit_per_day` over a 7-day window |
 | `fed_query` | Federation query envelope (REMOTE-010): op + args + required `corr_id`; returns the §2.2 response envelope verbatim |
 | `fed_peer_status` | Federation read op `peer.status` — identity, version, clock, load, uptime |
 | `fed_fleet_status` | Federation read op `fleet.status` — peers, projects, active ticks, budget |
@@ -1049,7 +1051,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 61 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 63 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP

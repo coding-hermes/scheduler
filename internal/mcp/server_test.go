@@ -1362,6 +1362,10 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		"fed_query",
 		"fed_peer_status", "fed_fleet_status", "fed_projects_list",
 		"fed_queue_get", "fed_ticks_list", "fed_events_list",
+		// SCHED-GAP-1580 (CTL-003): the two served routes the served-spec
+		// parity guard surfaced without MCP coverage.
+		"peers_events",
+		"cadence",
 	}
 	for _, w := range want {
 		if !names[w] {
@@ -1370,10 +1374,12 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 	}
 	// 18 fleet_* + 12 blocks/events + 18 CTL-003 parity tools (incl.
 	// fleet_lane_tree + observatory_snapshot + gateway_errors) + 2 features_*
-	// + cooldown_residue (SCHED-GAP-1670) + 3 peers + 7 REMOTE-010 federation
-	// tools (fed_query + 6 catalogue ops).
-	if len(toolsList) != 61 {
-		t.Errorf("tool count = %d, want 61 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 3 peers + 7 REMOTE-010 fed_*)", len(toolsList))
+	// + cooldown_residue (SCHED-GAP-1670) + 5 peers + 7 REMOTE-010 federation
+	// tools (fed_query + 6 catalogue ops). SCHED-GAP-1580 added
+	// peers_events (REMOTE-006) + cadence (SOL-CADENCE) — the two served
+	// routes the served-spec parity guard surfaced without MCP coverage.
+	if len(toolsList) != 63 {
+		t.Errorf("tool count = %d, want 63 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_*)", len(toolsList))
 	}
 }
 

@@ -115,6 +115,12 @@ var readOnlyTools = map[string]bool{
 	"features_prune_candidates": true,
 	"cooldown_residue":          true,
 	"peers_list":                true,
+	// SCHED-GAP-1580 (CTL-003 coverage): the REMOTE-006 durable event slice
+	// and the SOL-CADENCE rate read — both read-only mirrors of their REST
+	// GET routes (peers_events is gated on the REST side like every peers
+	// read; cadence is an open read).
+	"peers_events": true,
+	"cadence":      true,
 	// REMOTE-010: the federation query tools are READS — the transport
 	// carries a peer's/read-path answer, it never mutates state (spec §7:
 	// queries are read-only by construction). Same open-reads doctrine as

@@ -418,6 +418,11 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 		"/api/v1/peers":                true,
 		"/api/v1/federation/query":     true,
 		"/api/v1/federation/catalogue": true,
+		// REMOTE-006 durable event slice — every peers read is gated
+		// (anti-enumeration, SCHED-GAP-1602), including these two (added
+		// to the served spec by SCHED-GAP-1580).
+		"/api/v1/peers/events":      true,
+		"/api/v1/peers/{id}/events": true,
 	}
 	mutating, missing := 0, []string{}
 	readWithSec := 0
@@ -458,10 +463,12 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 		t.Errorf("mutating operations without security: %v", missing)
 	}
 	// GET /api/v1/peers (REMOTE-003) + GET /api/v1/federation/catalogue
-	// (REMOTE-008 §4) — the exact gated-read allowlist above. (The query is
-	// a POST: counted in the mutating total, not here.)
-	if readWithSec != 2 {
-		t.Errorf("%d read operations carry security, want exactly 2 (GET /api/v1/peers — REMOTE-003; GET /api/v1/federation/catalogue — REMOTE-008 §4)", readWithSec)
+	// (REMOTE-008 §4) + the two REMOTE-006 event slices (the peer-event
+	// surface is gated like every peers read — SCHED-GAP-1580 added them
+	// to the served spec). The query is a POST: counted in the mutating
+	// total, not here.
+	if readWithSec != 4 {
+		t.Errorf("%d read operations carry security, want exactly 4 (GET /api/v1/peers — REMOTE-003; GET /api/v1/federation/catalogue — REMOTE-008 §4; GET /api/v1/peers/events and /api/v1/peers/{id}/events — REMOTE-006)", readWithSec)
 	}
 }
 

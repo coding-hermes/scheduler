@@ -544,6 +544,21 @@ var tools = []ToolDefinition{
 			"required": []string{"id"},
 		},
 	},
+	{
+		Name:        "peers_events",
+		Description: "REMOTE-006 durable per-peer event slice (mirrors GET /api/v1/peers/events and GET /api/v1/peers/{id}/events): last-seen event, replay high-water mark (last_event_id), counted dedupe drops. Omit id for every scheduler ('*')",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id": map[string]interface{}{"type": "string", "description": "Peer id (optional; omit for all schedulers)"},
+			},
+		},
+	},
+	{
+		Name:        "cadence",
+		Description: "Configured-vs-achieved run rates per lane (mirrors GET /api/v1/cadence, SOL-CADENCE): target_runs_per_day, achieved_runs_per_day and target_deficit_per_day over a 7-day window",
+		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+	},
 	// ── CTL-003: parity with the remaining /api/v1 control + read routes ──
 	// One tool per uncovered openapi operation (namespaces CRUD/projects/move,
 	// project delete/spawn/bump/unbump, tick detail, config, queue, metrics).
@@ -904,6 +919,10 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolPeersRegister(ctx, args)
 	case "peers_heartbeat":
 		return s.toolPeersHeartbeat(ctx, args)
+	case "peers_events":
+		return s.toolPeersEvents(ctx, args)
+	case "cadence":
+		return s.toolCadence(ctx)
 	case "namespaces_list":
 		return s.toolNamespacesList(ctx)
 	case "namespaces_get":

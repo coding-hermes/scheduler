@@ -1096,6 +1096,14 @@ func TestAPI_Config_MethodNotAllowed(t *testing.T) {
 // REMOTE-003 (§2): /api/v1/peers + /api/v1/peers/{id}/heartbeat join the
 // served surface (registered in server.go Handler()); docs/api.md carries
 // the full per-endpoint section (§12).
+//
+// SCHED-GAP-1580 added the four served routes this hand-maintained list had
+// drifted off: /api/v1/cadence, the two REMOTE-006 peer-event slices and the
+// document's own /api/v1/openapi.json. The list stays hand-maintained for the
+// structure checks below, but the drift-proof half of this contract now lives
+// in internal/mcp/agents_endpoint_parity_test.go::TestServedOpenAPISpecParity,
+// which compares the SERVED document against the route registrations and the
+// endpoints.md table in both directions — a hand list cannot do that.
 var documentedPaths = []string{
 	"/api/v1/health",
 	"/api/v1/live",
@@ -1105,6 +1113,7 @@ var documentedPaths = []string{
 	"/api/v1/projects/{name}",
 	"/api/v1/lanes",
 	"/api/v1/lanes/tree",
+	"/api/v1/cadence",
 	"/api/v1/projects/{name}/pause",
 	"/api/v1/projects/{name}/resume",
 	"/api/v1/projects/{name}/spawn",
@@ -1136,8 +1145,11 @@ var documentedPaths = []string{
 	"/api/v1/resume",
 	"/api/v1/peers",
 	"/api/v1/peers/{id}/heartbeat",
+	"/api/v1/peers/events",
+	"/api/v1/peers/{id}/events",
 	"/api/v1/federation/query",
 	"/api/v1/federation/catalogue",
+	"/api/v1/openapi.json",
 }
 
 func TestAPI_OpenAPI_Success(t *testing.T) {

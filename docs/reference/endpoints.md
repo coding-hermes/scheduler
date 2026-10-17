@@ -1,6 +1,6 @@
 # Scheduler routes
 
-The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/main.go` and every `/api/v1/*` path registered by `internal/api/server.go`. The full per-endpoint reference (request/response bodies, status codes, curl recipes) lives in [docs/api.md](../api.md).
+The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/main.go` and every `/api/v1/*` path registered by `internal/api/server.go`. The full per-endpoint reference (request/response bodies, status codes, curl recipes) lives in [docs/api.md](../api.md); the served OpenAPI 3.x contract and its parity guards live in [docs/reference/openapi.md](openapi.md) (consumer wiring: [muster-consumer.md](muster-consumer.md)).
 
 ## Endpoints
 
@@ -64,4 +64,4 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/federation/catalogue` | REMOTE-008 read catalogue (GET, operator-token gated): the supported ops with their arg shapes + `contract` version + answering `peer` id |
 | `/mcp` | MCP JSON-RPC endpoint |
 
-**MCP surface:** `POST /mcp` serves **61 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](../../README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
+**MCP surface:** `POST /mcp` serves **63 tools** — the registry in `internal/mcp/server.go` is the source of truth and the full per-tool table is in the README's [MCP Tools](../../README.md#mcp-tools) section (not duplicated here). Two guards keep the documented surface honest against that registry: `internal/mcp/readme_tools_parity_test.go` (README tool table ↔ registry) and `internal/mcp/agents_endpoint_parity_test.go` (this endpoint table ↔ the route registrations). A running daemon built from an older tree reports fewer tools — measure, don't assume.
