@@ -692,6 +692,42 @@ func RetryExecutionOutbox(ctx context.Context, db *sql.DB, id, worker, available
 	res, err := db.ExecContext(ctx, `UPDATE execution_outbox SET state='pending',available_at=?,claimed_by='',claimed_at=NULL,last_error=?,updated_at=? WHERE outbox_id=? AND state='claimed' AND claimed_by=?`, availableAt, lastError, executionNow(ctx), id, worker)
 	return outboxCAS(res, err)
 }
+
+// ReconcileExecutionOutboxUndeliverable is the durable reconciliation path for
+// a dispatch that can no longer be delivered: pending/claimed rows move to the
+// terminal `dead` state with the reconciliation reason recorded on the row.
+// The row is never deleted — it stays as durable proof of the explicit
+// reconciled-undeliverable resolution that parent settlement accepts in place
+// of an acknowledgement. An identical repeat replays; reconciling an already
+// acknowledged (or differently reconciled) dispatch conflicts.
+func ReconcileExecutionOutboxUndeliverable(ctx context.Context, db *sql.DB, id, reason string) error {
+	if reason == "" {
+		return errors.New("reconcile execution outbox: reason required")
+	}
+	res, err := db.ExecContext(ctx, `UPDATE execution_outbox SET state='dead',last_error=?,updated_at=? WHERE outbox_id=? AND state IN ('pending','claimed')`, reason, executionNow(ctx), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	var state, lastError string
+	err = db.QueryRowContext(ctx, `SELECT state,last_error FROM execution_outbox WHERE outbox_id=?`, id).Scan(&state, &lastError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrExecutionNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if state == "dead" && lastError == reason {
+		return nil // identical replay
+	}
+	return ErrExecutionConflict
+}
 func outboxCAS(r sql.Result, e error) error {
 	if e != nil {
 		return e

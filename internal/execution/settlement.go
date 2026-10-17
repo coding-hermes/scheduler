@@ -85,7 +85,10 @@ type AttemptSettlement struct {
 
 // AttemptQuiescence is one descendant's quiescence fact as observed by the
 // store at parent settlement time. Process-backed work additionally needs the
-// connector zero-descendant quiescence receipt.
+// connector zero-descendant quiescence receipt. TransportSettled is derived
+// from the durable execution.dispatch outbox row: a dispatch that is still
+// pending or claimed may yet fire after the parent closes, so it must reach a
+// terminal transport state first.
 type AttemptQuiescence struct {
 	AttemptID         string
 	Terminal          bool
@@ -93,6 +96,7 @@ type AttemptQuiescence struct {
 	ReconciledNoStart bool
 	ProcessBacked     bool
 	QuiescenceRef     string
+	TransportSettled  bool
 }
 
 // ParentSettlement is the complete settlement evidence for the parent run.
@@ -121,8 +125,12 @@ func ValidateAttemptSettlement(s AttemptSettlement) error {
 // ValidateParentSettlement fail-closed validates parent settlement evidence
 // and the descendant quiescence facts. Cancellation additionally demands a
 // quiescence receipt: the parent settles only after every descendant has
-// settled or been proven never started. Cancellation is monotonic — a
-// requested cancellation can never settle as completed.
+// settled or been proven never started, and every descendant's dispatch has
+// reached a terminal transport state (acknowledged delivery or an explicitly
+// recorded reconciled-undeliverable resolution) — unsettled transport is
+// refused with ErrTransportSettlementOutstanding, never a quiescence error.
+// Cancellation is monotonic — a requested cancellation can never settle as
+// completed.
 func ValidateParentSettlement(s ParentSettlement) error {
 	if s.ParentRunID == "" {
 		return fmt.Errorf("%w: missing parent identity", ErrSettlementIncomplete)
@@ -151,6 +159,9 @@ func ValidateParentSettlement(s ParentSettlement) error {
 			return fmt.Errorf("%w: attempt %s has no connector settlement", ErrUnsettledDescendants, d.AttemptID)
 		case d.ProcessBacked && d.QuiescenceRef == "":
 			return fmt.Errorf("%w: attempt %s has no zero-descendant quiescence receipt", ErrQuiescenceEvidenceRequired, d.AttemptID)
+		}
+		if !d.TransportSettled {
+			return fmt.Errorf("%w: attempt %s dispatch transport unsettled", ErrTransportSettlementOutstanding, d.AttemptID)
 		}
 	}
 	if processBacked && s.QuiescenceReceiptRef == "" {

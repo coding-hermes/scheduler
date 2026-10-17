@@ -118,6 +118,7 @@ func TestRegressionInventedEvidenceRefsCannotSettle(t *testing.T) {
 	inventedParent := outcome
 	inventedParent.State = execution.AttemptStateCanceled
 	inventedParent.OutcomeRef = "invented-parent-outcome"
+	h.ackAllDispatches()
 	if _, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: execution.ParentSettlement{
 		ParentRunID: h.parentID, Outcome: inventedParent, Connector: connector, Independent: independent,
 		QuiescenceReceiptRef: "quiescence-1",
@@ -471,6 +472,7 @@ func TestRegressionCancellationCannotSettleCompleted(t *testing.T) {
 	if err != nil || settled.State != execution.AttemptStateCanceled {
 		t.Fatalf("cancelled result: %+v err=%v", settled, err)
 	}
+	h.ackAllDispatches()
 	parent, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: execution.ParentSettlement{
 		ParentRunID: h.parentID, Outcome: cancelled, Connector: connector, Independent: independent,
 		QuiescenceReceiptRef: "quiescence-1",
@@ -523,6 +525,7 @@ func TestRegressionConnectorQuiescenceRequiredAndResolved(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.ackAllDispatches()
 	// The parent needs its own zero-descendant authority reference too.
 	if _, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: execution.ParentSettlement{
 		ParentRunID: h.parentID, Outcome: outcome, Connector: connector, Independent: independent,

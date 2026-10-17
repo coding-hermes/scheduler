@@ -63,7 +63,7 @@ func parentStateOf(t *testing.T, ctx context.Context, db *sql.DB, id string) str
 	return state
 }
 
-// TestRegressionV69RowsUpgradeByDurableTruth proves the v70 backfill derives
+// TestRegressionV69RowsUpgradeByDurableTruth proves the v76 backfill derives
 // parent state from durable v69 connector/run truth: terminal rows stay
 // terminal (never queued or re-invokable), in-flight rows keep running.
 func TestRegressionV69RowsUpgradeByDurableTruth(t *testing.T) {
@@ -87,7 +87,7 @@ func TestRegressionV69RowsUpgradeByDurableTruth(t *testing.T) {
 		}
 	}
 
-	// v69 terminal rows remain terminal through v70: they are never queued
+	// v69 terminal rows remain terminal through v76: they are never queued
 	// or re-invokable as fresh parents, and active rows are not adoptable
 	// either — a legacy row is not a seam parent.
 	store := NewParentRunStore(db)
@@ -198,9 +198,9 @@ func assertParentRunSchemaComplete(t *testing.T, ctx context.Context, db *sql.DB
 }
 
 // TestRegressionPartialV70SchemaRepairedNotMarkedCompleteEarly proves a
-// partially present v70 schema is completed statement by statement, a hard
-// failure never records the version, and a false-complete ledger is repaired
-// by v71.
+// partially present ACP parent-run schema (v76 in this ladder) is completed
+// statement by statement, a hard failure never records the version, and a
+// false-complete ledger is repaired by v77.
 func TestRegressionPartialV70SchemaRepairedNotMarkedCompleteEarly(t *testing.T) {
 	t.Run("partial columns are completed before the version is recorded", func(t *testing.T) {
 		db, ctx := v69Fixture(t)
@@ -216,7 +216,7 @@ func TestRegressionPartialV70SchemaRepairedNotMarkedCompleteEarly(t *testing.T) 
 		}
 		assertParentRunSchemaComplete(t, ctx, db)
 		v, err := MigrationVersion(ctx, db)
-		if err != nil || v < 71 {
+		if err != nil || v < 77 {
 			t.Fatalf("migration version=%d err=%v", v, err)
 		}
 	})
@@ -232,11 +232,11 @@ func TestRegressionPartialV70SchemaRepairedNotMarkedCompleteEarly(t *testing.T) 
 			t.Fatal("migration over a broken schema unexpectedly succeeded")
 		}
 		var recorded int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM migrations WHERE version=70`).Scan(&recorded); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM migrations WHERE version=76`).Scan(&recorded); err != nil {
 			t.Fatal(err)
 		}
 		if recorded != 0 {
-			t.Fatal("migration 70 was marked complete early")
+			t.Fatal("migration 76 was marked complete early")
 		}
 		// Restoring the table lets the next boot repair and complete.
 		if _, err := db.ExecContext(ctx, `ALTER TABLE execution_attempts_hidden RENAME TO execution_attempts`); err != nil {
@@ -248,13 +248,13 @@ func TestRegressionPartialV70SchemaRepairedNotMarkedCompleteEarly(t *testing.T) 
 		assertParentRunSchemaComplete(t, ctx, db)
 	})
 
-	t.Run("false-complete ledger is repaired by v71", func(t *testing.T) {
+	t.Run("false-complete ledger is repaired by v77", func(t *testing.T) {
 		db, ctx := v69Fixture(t)
-		// A previous runner recorded version 70 with a partial schema.
+		// A previous runner recorded version 76 with a partial schema.
 		if _, err := db.ExecContext(ctx, `ALTER TABLE execution_runs ADD COLUMN parent_state TEXT NOT NULL DEFAULT 'queued'`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO migrations (version, desc) VALUES (70, 'partial: recorded early')`); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO migrations (version, desc) VALUES (76, 'partial: recorded early')`); err != nil {
 			t.Fatal(err)
 		}
 		if err := Migrate(ctx, db); err != nil {

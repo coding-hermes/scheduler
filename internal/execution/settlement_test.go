@@ -83,11 +83,25 @@ func TestValidateParentSettlementDescendantAndQuiescenceRules(t *testing.T) {
 
 	reconciled := base
 	reconciled.Descendants = []AttemptQuiescence{
-		{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true},
-		{AttemptID: "attempt-2", Terminal: true, ReconciledNoStart: true},
+		{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true, TransportSettled: true},
+		{AttemptID: "attempt-2", Terminal: true, ReconciledNoStart: true, TransportSettled: true},
 	}
 	if err := ValidateParentSettlement(reconciled); err != nil {
 		t.Fatalf("quiescent descendants refused: %v", err)
+	}
+
+	unsettledTransport := base
+	unsettledTransport.Descendants = []AttemptQuiescence{{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true}}
+	err := ValidateParentSettlement(unsettledTransport)
+	if !errors.Is(err, ErrTransportSettlementOutstanding) {
+		t.Fatalf("unsettled dispatch transport error=%v", err)
+	}
+	if errors.Is(err, ErrUnsettledDescendants) || errors.Is(err, ErrQuiescenceEvidenceRequired) {
+		t.Fatalf("transport refusal must be distinct from quiescence errors: %v", err)
+	}
+	unsettledTransport.Descendants[0].TransportSettled = true
+	if err := ValidateParentSettlement(unsettledTransport); err != nil {
+		t.Fatalf("settled dispatch transport refused: %v", err)
 	}
 
 	cancelling := base
@@ -110,7 +124,7 @@ func TestValidateParentSettlementDescendantAndQuiescenceRules(t *testing.T) {
 
 	// Process-backed descendants additionally need zero-descendant quiescence.
 	processBacked := base
-	processBacked.Descendants = []AttemptQuiescence{{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true, ProcessBacked: true}}
+	processBacked.Descendants = []AttemptQuiescence{{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true, ProcessBacked: true, TransportSettled: true}}
 	if err := ValidateParentSettlement(processBacked); !errors.Is(err, ErrQuiescenceEvidenceRequired) {
 		t.Fatalf("process-backed descendant without quiescence error=%v", err)
 	}

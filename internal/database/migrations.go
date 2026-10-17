@@ -10,8 +10,8 @@ import (
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
-// ACP-SCHED-001 lands v76+ (parent-run lifecycle, replay contract, outbox settlement).
-const latestMigration = 77
+// ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
+const latestMigration = 78
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1719,6 +1719,22 @@ PRAGMA foreign_keys=ON;
 		version: 77,
 		desc:    "ACP-SCHED-001-R1: repair partial parent-run schema and re-derive legacy parent state",
 		stmt:    parentRunSchemaStmt + parentRunBackfillStmt,
+	},
+	{
+		// ACP-SCHED-001-R2: the attempt policy (start/wall timeout, budget,
+		// cancellation) is caller-authoritative admission input and must be
+		// durable on the attempt row so the exact replay contract can compare
+		// every policy field instead of silently replaying a preparation whose
+		// policy changed. Additive only; legacy rows keep the zero defaults
+		// and are never adopted into a parent.
+		version: 78,
+		desc:    "ACP-SCHED-001-R2: persist attempt policy fields for the exact replay contract",
+		stmt: `
+ALTER TABLE execution_attempts ADD COLUMN start_timeout_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE execution_attempts ADD COLUMN wall_timeout_s INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE execution_attempts ADD COLUMN budget_units INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE execution_attempts ADD COLUMN cancellation_policy TEXT NOT NULL DEFAULT '';
+`,
 	},
 }
 

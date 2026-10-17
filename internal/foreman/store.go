@@ -89,24 +89,28 @@ type AttemptPreparation struct {
 
 // AttemptRecord is the durable just-in-time attempt state.
 type AttemptRecord struct {
-	AttemptID                  string
-	ParentRunID                string
-	StepID                     string
-	StepGeneration             int
-	Generation                 int
-	AttemptIdempotencyKey      string
-	State                      string
-	BriefDigest                string
-	RouteDigest                string
-	CandidateRank              int
-	ConnectorID                string
-	ConnectorVersion           string
-	SelectedModel              string
-	SelectedProvider           string
-	LeaseID                    string
-	LeaseEpoch                 int
-	ProfileID                  string
-	EnforcementReceiptRef      string
+	AttemptID             string
+	ParentRunID           string
+	StepID                string
+	StepGeneration        int
+	Generation            int
+	AttemptIdempotencyKey string
+	State                 string
+	BriefDigest           string
+	RouteDigest           string
+	CandidateRank         int
+	ConnectorID           string
+	ConnectorVersion      string
+	SelectedModel         string
+	SelectedProvider      string
+	LeaseID               string
+	LeaseEpoch            int
+	ProfileID             string
+	EnforcementReceiptRef string
+	// Policy is the durable timeout/budget/cancellation policy admitted with
+	// this attempt. It is caller-authoritative and part of the exact replay
+	// contract: a changed policy on replay is a conflict, never a replay.
+	Policy                     execution.AttemptPolicy
 	StartDeadlineAt            string
 	StartedAt                  string
 	NativeSessionID            string

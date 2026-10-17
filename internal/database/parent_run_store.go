@@ -39,7 +39,7 @@ const attemptActiveStatesSQL = `('submitted','workspace_ready','dispatched','wor
 
 const parentRunColumns = `run_id,submitting_authority,submission_idempotency_key,brief_id,brief_revision,brief_digest,tick_id,lane,task_id,state,current_attempt_generation,parent_state,parent_state_updated_at,parent_brief_json,foreman_invocation_id,foreman_invoked_at,cancel_requested_at,cancel_reason,max_active_attempts,parent_deadline_at,parent_budget_json,cancellation_policy,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,quiescence_receipt_ref,parent_settled_at,created_at,updated_at`
 
-const attemptColumns = `attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,started_at,settled_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,quiescence_receipt_ref,reconciled_no_start,pid,pgid,cgroup_or_container_id,process_started_at`
+const attemptColumns = `attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,started_at,settled_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,quiescence_receipt_ref,reconciled_no_start,pid,pgid,cgroup_or_container_id,process_started_at,start_timeout_s,wall_timeout_s,budget_units,cancellation_policy`
 
 // AdmitParentRun persists exactly one parent run on the landed
 // CreateExecutionRun idempotency, then fills the parent-plane columns in the
@@ -310,8 +310,11 @@ func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.At
 	if err != nil {
 		return foreman.AttemptRecord{}, false, err
 	}
+	// One clock read backs both submitted_at and the derived start deadline
+	// so the persisted deadline is exactly re-derivable from the persisted
+	// submission time and the attempt policy on every replay.
 	now := clock.FromContext(ctx).Now().UTC()
-	nowStr := executionNow(ctx)
+	nowStr := now.Format(time.RFC3339Nano)
 	if err := execution.EvaluateAttemptAdmission(now, intent, facts); err != nil {
 		return foreman.AttemptRecord{}, false, err
 	}
@@ -323,14 +326,15 @@ func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.At
 	}
 	head := intent.Route.Candidates[0]
 	chosen := intent.Route.Candidates[intent.Choice.CandidateRank-1]
-	_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_attempts(attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_attempts(attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at,start_timeout_s,wall_timeout_s,budget_units,cancellation_policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		prep.AttemptID, rec.ParentRunID, generation, key, execution.AttemptStateSubmitted,
 		intent.Choice.CandidateRank, head.Model, head.Provider,
 		chosen.Model, chosen.Provider, chosen.BaseURL,
 		intent.Route.ReceiptDigest, string(routeJSON),
 		intent.Choice.ConnectorID, intent.Choice.ConnectorVersion, intent.Lease.ProfileID,
 		"", intent.Lease.LeaseID, intent.Lease.LeaseEpoch, nowStr,
-		intent.StepID, intent.StepGeneration, intent.Lease.EnforcementReceiptRef, intent.BriefDigest, startDeadline)
+		intent.StepID, intent.StepGeneration, intent.Lease.EnforcementReceiptRef, intent.BriefDigest, startDeadline,
+		intent.Policy.StartTimeoutS, intent.Policy.WallTimeoutS, intent.Policy.BudgetUnits, intent.Policy.CancellationPolicy)
 	if err != nil {
 		return foreman.AttemptRecord{}, false, fmt.Errorf("insert step attempt: %w", err)
 	}
@@ -480,8 +484,12 @@ func dispatchPayload(parentRunID, attemptID string, generation int, key string, 
 }
 
 // sameStepAttempt is the exact replay contract: every route/tool/connector/
-// profile/lease/brief field must match the stored attempt, or the preparation
-// conflicts instead of silently producing a second attempt.
+// profile/lease/brief/policy field must match the stored attempt, or the
+// preparation conflicts instead of silently producing a second attempt. The
+// attempt policy is caller-authoritative admission input, so a changed
+// StartTimeoutS/WallTimeoutS/BudgetUnits/CancellationPolicy is a conflict —
+// never a replay — and the persisted start deadline must re-derive exactly
+// from the persisted submission time and the start-timeout policy.
 func sameStepAttempt(existing foreman.AttemptRecord, prep foreman.AttemptPreparation, key string) bool {
 	intent := prep.Intent
 	chosen := execution.RouteCandidate{}
@@ -503,7 +511,25 @@ func sameStepAttempt(existing foreman.AttemptRecord, prep foreman.AttemptPrepara
 		existing.LeaseID == intent.Lease.LeaseID &&
 		existing.LeaseEpoch == intent.Lease.LeaseEpoch &&
 		existing.ProfileID == intent.Lease.ProfileID &&
-		existing.EnforcementReceiptRef == intent.Lease.EnforcementReceiptRef
+		existing.EnforcementReceiptRef == intent.Lease.EnforcementReceiptRef &&
+		existing.Policy == intent.Policy &&
+		sameStartDeadline(existing.SubmittedAt, existing.StartDeadlineAt, intent.Policy.StartTimeoutS)
+}
+
+// sameStartDeadline re-derives the persisted start deadline from the
+// persisted submission time and the attempt's start-timeout policy, so the
+// stored deadline and the stored policy can never contradict each other on
+// replay.
+func sameStartDeadline(submittedAt, startDeadlineAt string, startTimeoutS int64) bool {
+	submitted, err := time.Parse(time.RFC3339Nano, submittedAt)
+	if err != nil {
+		return false
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, startDeadlineAt)
+	if err != nil {
+		return false
+	}
+	return deadline.Equal(submitted.Add(time.Duration(startTimeoutS) * time.Second))
 }
 
 func scanAttemptRow(row *sql.Row) (foreman.AttemptRecord, error) {
@@ -522,13 +548,15 @@ func scanAttempt(row interface{ Scan(...any) error }) (foreman.AttemptRecord, er
 	var quiescenceRef, cgroup string
 	var startedAt, settledAt, processStartedAt sql.NullString
 	var pid, pgid sql.NullInt64
+	var policy execution.AttemptPolicy
 	err := row.Scan(&a.AttemptID, &a.ParentRunID, &generation, &a.AttemptIdempotencyKey, &a.State,
 		&rank, &requestedModel, &requestedProvider, &selectedModel, &selectedProvider, &selectedBaseURL,
 		&a.RouteDigest, &routeJSON, &a.ConnectorID, &connectorVersion, &profileID, &a.NativeSessionID,
 		&a.LeaseID, &leaseEpoch, &a.SubmittedAt, &startedAt, &settledAt,
 		&a.StepID, &stepGeneration, &enforcementRef, &briefDigest, &startDeadline,
 		&a.TerminalOutcomeRef, &a.ConnectorSettlementRef, &a.IndependentVerificationRef, &quiescenceRef, &noStart,
-		&pid, &pgid, &cgroup, &processStartedAt)
+		&pid, &pgid, &cgroup, &processStartedAt,
+		&policy.StartTimeoutS, &policy.WallTimeoutS, &policy.BudgetUnits, &policy.CancellationPolicy)
 	if err != nil {
 		return a, err
 	}
@@ -542,6 +570,7 @@ func scanAttempt(row interface{ Scan(...any) error }) (foreman.AttemptRecord, er
 	a.ProfileID = profileID
 	a.EnforcementReceiptRef = enforcementRef
 	a.BriefDigest = briefDigest
+	a.Policy = policy
 	a.StartDeadlineAt = startDeadline
 	a.StartedAt = startedAt.String
 	a.SettledAt = settledAt.String
@@ -1115,10 +1144,14 @@ func scanAttemptRows(rows *sql.Rows) ([]foreman.AttemptRecord, error) {
 }
 
 // SettleParent settles the parent only on complete settlement evidence that
-// resolves to durable records bound to this parent, and full descendant
-// quiescence, then queues the DuckBrain projection as an outbox reference (no
-// network side effect). Parent connector state, timestamps, attempt state and
-// settlement/projection state commit in the same transaction.
+// resolves to durable records bound to this parent, full descendant
+// quiescence, and terminal dispatch transport for every descendant attempt
+// (acked delivery or an explicitly recorded reconciled-undeliverable
+// resolution) — a pending or claimed dispatch may still fire after the parent
+// closes and blocks settlement. It then queues the DuckBrain projection as an
+// outbox reference (no network side effect). Parent connector state,
+// timestamps, attempt state and settlement/projection state commit in the
+// same transaction.
 func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSettlementRequest) (foreman.ParentRecord, error) {
 	settlement := req.Settlement
 	tx, err := beginExecutionTx(ctx, s.DB)
@@ -1146,6 +1179,10 @@ func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSet
 	if err != nil {
 		return rec, err
 	}
+	transport, err := dispatchTransportStates(ctx, tx.conn, settlement.ParentRunID)
+	if err != nil {
+		return rec, err
+	}
 	settlement.FromParentState = rec.ParentState
 	settlement.CancelRequested = rec.CancelRequestedAt != ""
 	settlement.Descendants = settlement.Descendants[:0]
@@ -1157,6 +1194,7 @@ func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSet
 			ReconciledNoStart: a.ReconciledNoStart,
 			ProcessBacked:     a.ProcessBacked,
 			QuiescenceRef:     a.QuiescenceReceiptRef,
+			TransportSettled:  transport[a.AttemptID],
 		})
 	}
 	if err := execution.ValidateParentSettlement(settlement); err != nil {
@@ -1228,4 +1266,28 @@ func scanAttemptRowsForParent(ctx context.Context, conn *sql.Conn, parentRunID s
 	}
 	defer rows.Close()
 	return scanAttemptRows(rows)
+}
+
+// dispatchTransportStates derives each attempt's transport quiescence from
+// the durable execution.dispatch outbox rows, never from caller-supplied
+// claims: a dispatch is settled only when it was acknowledged (`acked`) or
+// explicitly reconciled as undeliverable (`dead` with the recorded reason).
+// Pending/claimed rows — and any attempt whose dispatch row is missing — are
+// unsettled transport, because the dispatch may still fire after the parent
+// closes.
+func dispatchTransportStates(ctx context.Context, conn *sql.Conn, parentRunID string) (map[string]bool, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT attempt_id,state,last_error FROM execution_outbox WHERE run_id=? AND kind='execution.dispatch'`, parentRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var attemptID, state, lastError string
+		if err := rows.Scan(&attemptID, &state, &lastError); err != nil {
+			return nil, err
+		}
+		out[attemptID] = state == "acked" || (state == "dead" && lastError != "")
+	}
+	return out, rows.Err()
 }

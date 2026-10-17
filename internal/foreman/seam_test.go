@@ -539,6 +539,7 @@ func TestRefuseCancellationSettlementWithDescendants(t *testing.T) {
 	if _, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: quiescenceless}); !errors.Is(err, execution.ErrQuiescenceEvidenceRequired) {
 		t.Fatalf("cancellation settlement without quiescence evidence error=%v", err)
 	}
+	h.ackAllDispatches()
 	rec, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: quiescent})
 	if err != nil || rec.ParentState != execution.ParentSettled {
 		t.Fatalf("parent=%+v err=%v", rec, err)
@@ -572,6 +573,7 @@ func TestVerifiedParentSettlement(t *testing.T) {
 		t.Fatalf("parent=%+v err=%v", reported, err)
 	}
 
+	h.ackAllDispatches()
 	rec, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: execution.ParentSettlement{
 		ParentRunID: h.parentID, Outcome: outcome, Connector: connector, Independent: independent,
 	}})
@@ -702,6 +704,7 @@ func TestRestartReplayIdempotency(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.ackAllDispatches()
 	final, err := h.store.SettleParent(h.ctx, foreman.ParentSettlementRequest{Settlement: execution.ParentSettlement{
 		ParentRunID: h.parentID, Outcome: outcome, Connector: connector, Independent: independent,
 	}})

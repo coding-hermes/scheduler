@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -270,6 +271,39 @@ func (h *harness) outboxCount() int {
 		h.t.Fatal(err)
 	}
 	return n
+}
+
+// ackAllDispatches moves every pending dispatch outbox row to `acked` through
+// the production claim/ack transport path — the transport receipt parent
+// settlement requires before it may close.
+func (h *harness) ackAllDispatches() {
+	h.t.Helper()
+	const worker = "test-transport-worker"
+	for {
+		m, err := database.ClaimExecutionOutbox(h.ctx, h.db, worker)
+		if errors.Is(err, sql.ErrNoRows) {
+			return
+		}
+		if err != nil {
+			h.t.Fatalf("claim dispatch: %v", err)
+		}
+		if err := database.AckExecutionOutbox(h.ctx, h.db, m.OutboxID, worker, "ack-"+m.AttemptID); err != nil {
+			h.t.Fatalf("ack dispatch %s: %v", m.OutboxID, err)
+		}
+	}
+}
+
+// reconcileDispatchUndeliverable resolves one attempt's dispatch through the
+// durable reconciled-undeliverable path (never a delete).
+func (h *harness) reconcileDispatchUndeliverable(attemptID, reason string) {
+	h.t.Helper()
+	var outboxID string
+	if err := h.db.QueryRowContext(h.ctx, `SELECT outbox_id FROM execution_outbox WHERE attempt_id=?`, attemptID).Scan(&outboxID); err != nil {
+		h.t.Fatalf("dispatch row for %s: %v", attemptID, err)
+	}
+	if err := database.ReconcileExecutionOutboxUndeliverable(h.ctx, h.db, outboxID, reason); err != nil {
+		h.t.Fatalf("reconcile dispatch %s: %v", outboxID, err)
+	}
 }
 
 func (h *harness) eventCount() int {

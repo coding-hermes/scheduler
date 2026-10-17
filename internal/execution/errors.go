@@ -57,9 +57,10 @@ var (
 	ErrReconciliationSettled   = errors.New("reconciliation cannot manufacture settled; settle through the normal settlement path")
 
 	// Settlement authority.
-	ErrTransportAckIsNotCompletion = errors.New("transport ack is not completion evidence")
-	ErrSettlementIncomplete        = errors.New("settlement requires durable terminal outcome, connector settlement and independent verification")
-	ErrUnsettledDescendants        = errors.New("unsettled descendant attempts block parent settlement")
-	ErrQuiescenceEvidenceRequired  = errors.New("quiescence evidence required for cancellation settlement")
-	ErrCancellationMonotonic       = errors.New("cancellation is monotonic: success cannot follow a cancellation request")
+	ErrTransportAckIsNotCompletion    = errors.New("transport ack is not completion evidence")
+	ErrTransportSettlementOutstanding = errors.New("dispatch transport settlement outstanding")
+	ErrSettlementIncomplete           = errors.New("settlement requires durable terminal outcome, connector settlement and independent verification")
+	ErrUnsettledDescendants           = errors.New("unsettled descendant attempts block parent settlement")
+	ErrQuiescenceEvidenceRequired     = errors.New("quiescence evidence required for cancellation settlement")
+	ErrCancellationMonotonic          = errors.New("cancellation is monotonic: success cannot follow a cancellation request")
 )
