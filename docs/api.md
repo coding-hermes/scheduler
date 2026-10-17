@@ -1568,6 +1568,13 @@ CLOSED: 503. Every answered query — allowed AND refused — writes one local
 audit row (`component=api.federation`): reads are observable, not silently
 free.
 
+The operator credential comes from `SCHEDULER_OPERATOR_TOKEN` (env) or
+`[api].operator_token` (config). The federation bus also needs
+`CRIER_AUTH_TOKEN` set in the daemon unit's `EnvironmentFile` for relay auth.
+The deny-all allow list lives in the `[federation]` config layer
+(`[federation.allow."*"] ops = [...]`, plus one row per specific caller
+with its own tool-to-ops mapping).
+
 The six ops (§2.3) reuse the daemon's OWN read paths — a federation query
 never invents an aggregation the peer could not answer about itself:
 

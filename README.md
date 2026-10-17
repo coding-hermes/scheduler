@@ -373,6 +373,8 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `fed_ticks_list` | Federation read op `ticks.list` — tick rows, newest first |
 | `fed_events_list` | Federation read op `events.list` — event rows, newest first |
 
+[^1]: `fed_*` and `peers_*` tools are deny-all by default — see [Federation tools — deny-all by default](#federation-tools-deny-all-by-default) for configuration.
+
 ---
 
 ## Scheduling Model
@@ -1057,6 +1059,38 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 // Example: List all projects via MCP
 {"jsonrpc":"2.0","method":"tools/call","params":{"name":"fleet_projects","arguments":{}}}
 ```
+
+### Authentication
+
+All mutating MCP tools (the `fleet_*` write tools, `project_*`, `groups_*`, `deploy_*`) require the operator credential — the same one used for REST mutations (see [§1.1 Operator Credential](#11-operator-credential)). The read-only tools (`fleet_projects`, `fleet_namespaces`, `tick_get`, `config_get`, `queue_get`, `metrics_get`, `features_*`, `cooldown_residue`, `events_list`, `gateway_errors`, `fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`) are accessible without authentication.
+
+Configure the operator credential via one of:
+
+- Environment variable: `SCHEDULER_OPERATOR_TOKEN=<token>`
+- Config file `[api]` section: `operator_token = "<token>"` in the scheduler config (e.g. `fleet.toml`)
+
+### Federation tools — deny-all by default
+
+The 13 `fed_<op>` tools (`fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`, `fed_query`) and the `peers_*` tools (`peers_list`, `peers_register`, `peers_heartbeat`, `peers_events`) are gated by a **deny-all** policy — they answer `op_not_allowed` until you explicitly allow the operations you need.
+
+Configure allowed operations in the `[federation]` section of your scheduler config (`fleet.toml` or the file passed via `--config`):
+
+```toml
+[federation]
+# Allow all read ops (or list specific ones: ["peer.status", "fleet.status", "projects.list"])
+allow = ["*"]
+
+# Or allow specific operations per tool:
+# [federation.allow.fed_fleet_status]
+# ops = ["fleet.status"]
+```
+
+The environment variables that feed the federation subsystem are:
+
+- `SCHEDULER_OPERATOR_TOKEN` — operator credential for auth (see above)
+- `CRIER_AUTH_TOKEN` — bus/relay authentication token for the federation bus (set in the daemon unit's `EnvironmentFile`, e.g. `~/.hermes/secrets/scheduler-crier.env`)
+
+Without a `[federation.allow]` block, all federation tools are denied and will return an `op_not_allowed` error.
 
 ## Dashboard
 
