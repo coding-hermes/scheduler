@@ -305,11 +305,17 @@ func TestREMOTE010_ReplyAuditRowWritten(t *testing.T) {
 // for its transport.
 func TestREMOTE010_ReplayReturnsFirstAnswer(t *testing.T) {
 	m, _ := newFedMCPStack(t)
+	// peer.status requires the identity the read is about (SCHED-GAP-1741);
+	// the replay window is keyed (caller, corr_id, op), so the peer assertion
+	// does not change what this cell proves.
+	peer := fedLocalPeer()
 	first := fedMCPCall(t, m, 1, "fed_peer_status", map[string]interface{}{
 		"federation_corr_id": "mcp-replay-1",
+		"args":               map[string]interface{}{"peer": peer},
 	})
 	second := fedMCPCall(t, m, 2, "fed_peer_status", map[string]interface{}{
 		"federation_corr_id": "mcp-replay-1",
+		"args":               map[string]interface{}{"peer": peer},
 	})
 	if first != second {
 		t.Errorf("replay drifted:\nfirst:  %s\nsecond: %s", first, second)
@@ -317,6 +323,7 @@ func TestREMOTE010_ReplayReturnsFirstAnswer(t *testing.T) {
 	// A different corr_id is a fresh query (new as_of is possible).
 	third := fedMCPCall(t, m, 3, "fed_peer_status", map[string]interface{}{
 		"federation_corr_id": "mcp-replay-2",
+		"args":               map[string]interface{}{"peer": peer},
 	})
 	var e2, e3 map[string]any
 	if err := json.Unmarshal([]byte(second), &e2); err != nil {
@@ -368,47 +375,85 @@ func fedLocalPeer() string {
 	return database.ResolveDefaultSchedulerID()
 }
 
-// TestSCHEDGAP1741_NoPeerDefaultsToThisScheduler is acceptance cell 2 for the
-// ABSENT arm: omitting peer is NOT a misroute — the tool answers about itself
-// and the §2.2 envelope's `peer` member names the scheduler that answered
-// (the named default the row asked for, replacing the silent fall-through).
-func TestSCHEDGAP1741_NoPeerDefaultsToThisScheduler(t *testing.T) {
+// TestSCHEDGAP1741_PeerStatusRequiresPeer is acceptance cell 1: peer.status is
+// ABOUT one identity, so a call that never names it is refused with a named
+// JSON-RPC error (-32000, the tool-error class this surface uses for argument
+// refusals) that names the missing field and this scheduler's id. Before this
+// row the omission was echoed into the envelope, ignored by the op, and
+// answered from the LOCAL read — the silent wrong answer the row reports.
+func TestSCHEDGAP1741_PeerStatusRequiresPeer(t *testing.T) {
 	m, _ := newFedMCPStack(t)
 
-	// Two shapes of "no peer": no args member at all, and an op-args object
-	// carrying an unrelated key.
+	// Three shapes of "no peer": no args member, an empty op-args object, and
+	// op args carrying an unrelated key.
 	for i, args := range []map[string]interface{}{
-		{"federation_corr_id": "gap1741-nopeer-1"},
+		{"federation_corr_id": "gap1741-nopeer-0"},
+		{"federation_corr_id": "gap1741-nopeer-1", "args": map[string]interface{}{}},
 		{"federation_corr_id": "gap1741-nopeer-2", "args": map[string]interface{}{"limit": 1}},
 	} {
-		text := fedMCPCall(t, m, i+1, "fed_peer_status", args)
-		var env struct {
-			Peer   string         `json:"peer"`
-			Op     string         `json:"op"`
-			Status string         `json:"status"`
-			Data   map[string]any `json:"data"`
+		text, err := callTool(t, m, i+1, "fed_peer_status", args)
+		if err == nil {
+			t.Fatalf("fed_peer_status without args.peer answered instead of refusing: %s", text)
 		}
-		if err := json.Unmarshal([]byte(text), &env); err != nil {
-			t.Fatalf("answer not a §2.2 envelope: %v (%s)", err, text)
+		if err.Code != -32000 {
+			t.Errorf("refusal code = %d, want -32000 (the surface's tool-error class)", err.Code)
 		}
-		if env.Status != "ok" {
-			t.Fatalf("status = %s, want ok (%s)", env.Status, text)
+		if !strings.Contains(err.Message, "peer is required") {
+			t.Errorf("refusal %q does not name the missing peer field", err.Message)
 		}
-		if env.Op != "peer.status" {
-			t.Errorf("op = %q, want peer.status", env.Op)
+		if !strings.Contains(err.Message, fedLocalPeer()) {
+			t.Errorf("refusal %q does not name this scheduler (%s) as the expected value", err.Message, fedLocalPeer())
 		}
-		// The default is NAMED: the envelope says which scheduler answered...
-		if env.Peer != database.SchedulerID() {
-			t.Errorf("peer = %q, want the answering scheduler id %q", env.Peer, database.SchedulerID())
-		}
-		// ...and the read is the LOCAL one (no fan-out, no aggregate rows):
-		// peer.status data is this scheduler's identity.
-		if _, ok := env.Data["scheduler_id"]; !ok {
-			t.Errorf("peer.status data lost scheduler_id: %v", env.Data)
-		}
-		if _, ok := env.Data["peers"]; ok {
-			t.Errorf("peer.status answered with a peer aggregate — an MCP read must not fan out: %v", env.Data)
-		}
+	}
+
+	// The generic escape hatch carries the same op, so it carries the same
+	// requirement — the rule is about the OP, not the tool name.
+	_, err := callTool(t, m, 9, "fed_query", map[string]interface{}{
+		"op":      "peer.status",
+		"corr_id": "gap1741-nopeer-generic",
+	})
+	if err == nil || !strings.Contains(err.Message, "peer is required") {
+		t.Fatalf("fed_query op=peer.status without args.peer = %+v, want the peer-required refusal", err)
+	}
+
+	// A refusal is not an answer: nothing reached the shared entry point, so
+	// no audit row and no replay slot were consumed.
+	var answered int
+	if err := m.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE component='api.federation' AND message LIKE '%gap1741-nopeer-%'`).Scan(&answered); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if answered != 0 {
+		t.Errorf("%d api.federation audit rows for refused calls — an argument refusal must not reach the shared entry point", answered)
+	}
+}
+
+// TestSCHEDGAP1741_OtherOpsDefaultToThisScheduler pins the other half of the
+// contract: the catalogue ops that are reads ABOUT this scheduler keep working
+// with no peer at all, and the §2.2 `peer` member names who answered (the named
+// default, instead of a silent fall-through).
+func TestSCHEDGAP1741_OtherOpsDefaultToThisScheduler(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+
+	text := fedMCPCall(t, m, 1, "fed_queue_get", map[string]interface{}{
+		"federation_corr_id": "gap1741-default-1",
+	})
+	var env struct {
+		Peer   string `json:"peer"`
+		Op     string `json:"op"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(text), &env); err != nil {
+		t.Fatalf("answer not a §2.2 envelope: %v (%s)", err, text)
+	}
+	if env.Status != "ok" {
+		t.Fatalf("status = %s, want ok — a local read needs no peer (%s)", env.Status, text)
+	}
+	if env.Op != "queue.get" {
+		t.Errorf("op = %q, want queue.get", env.Op)
+	}
+	if env.Peer != database.SchedulerID() {
+		t.Errorf("peer = %q, want the answering scheduler id %q (the named default)", env.Peer, database.SchedulerID())
 	}
 }
 
@@ -538,6 +583,9 @@ func TestSCHEDGAP1741_ToolSchemaNamesThePeerDefault(t *testing.T) {
 		}
 		if !strings.Contains(desc, "peer") {
 			t.Errorf("%s description does not name the peer argument: %q", name, desc)
+		}
+		if name == "fed_peer_status" && !strings.Contains(desc, "REQUIRED") {
+			t.Errorf("fed_peer_status description must state that args.peer is REQUIRED: %q", desc)
 		}
 		want[name] = true
 	}

@@ -107,11 +107,13 @@ Every adapter: parses its surface → builds the envelope → calls the SAME int
 returns the SAME response. An adapter that computes an answer itself is a bug (REMOTE-014 catches it).
 
 **MCP addressing (SCHED-GAP-1741).** The `fed_*` tools answer about the scheduler that serves them —
-the §2.2 `peer` member names it — so `args.peer` is an optional ASSERTION of that identity, not a
-selector. A `peer` naming a different scheduler is a named JSON-RPC error (never a local answer that
-looks like the remote peer's), and remote reads keep their own addressing: the CLI positional, the bus
-topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on the target peer. Omitting `peer` is
-supported and means "this scheduler" — the default is named in the tool schema and in the answer.
+the §2.2 `peer` member names it. `peer.status` is the one catalogue op ABOUT an identity, so the MCP
+`fed_peer_status` tool (and `fed_query` with `op=peer.status`) REQUIRES `args.peer`; omitting it is a
+named JSON-RPC error naming the missing field, never a local answer to an unstated question. The other
+ops default to this scheduler and accept `args.peer` only as an assertion of that same id. A `peer`
+naming a DIFFERENT scheduler is refused on every op (never a local answer that looks like the remote
+peer's), and remote reads keep their own addressing: the CLI positional, the bus topic
+`fed.query.<peer>`, or `POST /api/v1/federation/query` on the target peer.
 
 ## 4. Access model (REMOTE-013)
 

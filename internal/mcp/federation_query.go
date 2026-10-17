@@ -77,6 +77,17 @@ func federationOpToolName(op string) string {
 	return "fed_" + strings.ReplaceAll(op, ".", "_")
 }
 
+// federationPeerRequirementNote states, per op, whether the caller must name
+// the peer (SCHED-GAP-1741). peer.status is the one op ABOUT an identity, so
+// the assertion is mandatory; the other catalogue ops are reads about THIS
+// scheduler whose peer member the answer carries.
+func federationPeerRequirementNote(op string) string {
+	if op == "peer.status" {
+		return " args.peer is REQUIRED: it names the scheduler this read is about and must be this scheduler's id."
+	}
+	return " args are all optional; an optional args.peer asserts this scheduler's id as the target."
+}
+
 // federationOpFromToolName is the inverse mapping — a tool name outside
 // the catalogue never invents an op (the entry point's unknown_op refusal
 // is the named answer instead).
@@ -98,12 +109,12 @@ func federationTools() []ToolDefinition {
 	toolDefs := make([]ToolDefinition, 0, 1+len(federationOpToolIDs))
 	toolDefs = append(toolDefs, ToolDefinition{
 		Name:        "fed_query",
-		Description: "Federation query (REMOTE-010): ask THIS scheduler a read-catalogue question with the full §2.1 envelope. op is one of: peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list. corr_id is REQUIRED — caller-assigned, unique per (caller, minute), the idempotency key (a retried query returns the first answer). Returns the §2.2 response envelope verbatim: status (ok/partial/error/stale), peer, as_of/age_ms (the data's freshness), data, gaps, error, contract. The read is about THIS scheduler — the answer's peer member names it; an optional args.peer asserts that identity, and asking about a DIFFERENT peer over MCP is refused (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read).",
+		Description: "Federation query (REMOTE-010): ask THIS scheduler a read-catalogue question with the full §2.1 envelope. op is one of: peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list. corr_id is REQUIRED — caller-assigned, unique per (caller, minute), the idempotency key (a retried query returns the first answer). Returns the §2.2 response envelope verbatim: status (ok/partial/error/stale), peer, as_of/age_ms (the data's freshness), data, gaps, error, contract. The read is about THIS scheduler — the answer's peer member names it. args.peer is REQUIRED for op=peer.status (it names the scheduler the read is about) and optional for the other ops, where it asserts this scheduler's id; a peer naming a DIFFERENT scheduler is refused (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read).",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"op":        map[string]interface{}{"type": "string", "description": "Catalogue op id (e.g. queue.get, projects.list)"},
-				"args":      map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional (e.g. {\"filter\": \"name\"} for projects.list; {\"since\": RFC3339, \"limit\": int} for ticks.list/events.list); an optional \"peer\" asserts the target scheduler and must equal this scheduler's id (a different peer is refused)"},
+				"args":      map[string]interface{}{"type": "object", "description": "Op-specific arguments (e.g. {\"filter\": \"name\"} for projects.list; {\"since\": RFC3339, \"limit\": int} for ticks.list/events.list); args.peer is REQUIRED for op=peer.status and optional otherwise, and must equal this scheduler's id (a different peer is refused)"},
 				"corr_id":   map[string]interface{}{"type": "string", "description": "REQUIRED correlation/idempotency id, echoed in the reply"},
 				"budget_ms": map[string]interface{}{"type": "integer", "description": "Read budget in ms (default 10000); the peer clamps to its own cap"},
 				"want":      map[string]interface{}{"type": "string", "description": "\"answer\" (default, all-or-error) or \"partial\" (best-effort with named gaps)"},
@@ -123,11 +134,11 @@ func federationTools() []ToolDefinition {
 	for _, op := range ops {
 		toolDefs = append(toolDefs, ToolDefinition{
 			Name:        federationOpToolName(op),
-			Description: "Federation read op " + op + " — " + federationOpToolIDs[op] + ". Answers about THIS scheduler (the envelope's peer member names it): an optional args.peer asserts that identity and must equal this scheduler's id — a DIFFERENT peer is refused, never answered locally (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read). Same one contract as fed_query: returns the §2.2 response envelope verbatim (status ok/partial/error/stale, peer, as_of/age_ms, data, gaps, contract). federation_corr_id is required.",
+			Description: "Federation read op " + op + " — " + federationOpToolIDs[op] + ". Answers about THIS scheduler (the envelope's peer member names it)." + federationPeerRequirementNote(op) + " A peer that names a DIFFERENT scheduler is refused, never answered locally (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read). Same one contract as fed_query: returns the §2.2 response envelope verbatim (status ok/partial/error/stale, peer, as_of/age_ms, data, gaps, contract). federation_corr_id is required.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"args":               map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional; an optional \"peer\" asserts the target scheduler and must equal this scheduler's id (a different peer is refused)"},
+					"args":               map[string]interface{}{"type": "object", "description": "Op-specific arguments." + federationPeerRequirementNote(op)},
 					"federation_corr_id": map[string]interface{}{"type": "string", "description": "REQUIRED correlation/idempotency id, echoed in the reply"},
 					"budget_ms":          map[string]interface{}{"type": "integer", "description": "Read budget in ms (default 10000); the peer clamps to its own cap"},
 				},
@@ -169,7 +180,7 @@ func (s *Server) toolFedQuery(_ context.Context, args map[string]interface{}) (s
 	if err != nil {
 		return "", err
 	}
-	if err := fedPeerArgError(q.Args, fedAnsweringPeerID()); err != nil {
+	if err := fedPeerArgsError(op, q.Args, fedAnsweringPeerID()); err != nil {
 		return "", err
 	}
 	return s.federationExecForMCP(q)
@@ -191,7 +202,7 @@ func (s *Server) toolFedOpQuery(_ context.Context, tool string, args map[string]
 	if err != nil {
 		return "", err
 	}
-	if err := fedPeerArgError(q.Args, fedAnsweringPeerID()); err != nil {
+	if err := fedPeerArgsError(op, q.Args, fedAnsweringPeerID()); err != nil {
 		return "", err
 	}
 	return s.federationExecForMCP(q)
@@ -208,34 +219,48 @@ func fedAnsweringPeerID() string {
 	return database.ResolveDefaultSchedulerID()
 }
 
-// fedPeerArgError validates the OPTIONAL `peer` member of a tool's op-args
-// object (SCHED-GAP-1741). The MCP transport answers about THIS scheduler
-// (spec §3 MCP row — the tool set is how an agent asks the scheduler it is
-// talking to), so `peer` is an ASSERTION of that identity, not a selector:
+// fedPeerArgsError validates the `peer` member of a tool's op-args object
+// (SCHED-GAP-1741). The MCP transport answers about THIS scheduler (spec §3
+// MCP row — the tool set is how an agent asks the scheduler it is talking to),
+// so `peer` is an ASSERTION of that identity, not a selector. The catalogue
+// splits by what the op is ABOUT:
 //
-//   - absent → the named default (this scheduler); the §2.2 answer's `peer`
-//     member names it, and the tool schema states it;
-//   - present and equal to this scheduler's id → accepted (the caller's
-//     assertion is satisfied);
-//   - present and naming a DIFFERENT scheduler → a named refusal. Before this
-//     check the key was copied into the envelope, ignored by every §2.3 op and
-//     answered from the LOCAL read: a wrong answer the caller could not see.
-//     Remote reads have surfaces of their own (CLI positional, bus topic,
-//     HTTP on the target peer) and are named in the refusal.
+//   - peer.status is about one identity, so the caller MUST name it: a missing
+//     peer used to be accepted, ignored by the op and answered from the LOCAL
+//     read — a wrong answer the caller could not see. It is now a named
+//     refusal that names the missing field and this scheduler's id.
+//   - every other op is a local read whose default is this scheduler: absent
+//     peer is fine, and the §2.2 answer's `peer` member names who answered.
+//   - present and equal to this scheduler's id → accepted (the assertion is
+//     satisfied) on every op.
+//   - present and naming a DIFFERENT scheduler → a named refusal on every op;
+//     remote reads have surfaces of their own (CLI positional, bus topic, HTTP
+//     on the target peer) and the refusal names them.
 //   - present but not a non-empty string → a named refusal (a malformed
 //     assertion must never degrade into "as if absent").
 //
 // answering is the resolved identity (fedAnsweringPeerID); an empty answering
 // identity cannot verify the assertion, so an explicit peer fails closed
 // rather than being answered locally.
-func fedPeerArgError(args map[string]interface{}, answering string) error {
-	if len(args) == 0 {
-		return nil
+func fedPeerArgsError(op string, args map[string]interface{}, answering string) error {
+	if raw, ok := args["peer"]; ok {
+		return fedPeerAssertionError(raw, answering)
 	}
-	raw, ok := args["peer"]
-	if !ok {
-		return nil
+	// peer.status is ABOUT one identity: a caller that does not name it cannot
+	// be told apart from a caller that meant a different peer, so the omission
+	// is refused (SCHED-GAP-1741). Every other op is a read about THIS
+	// scheduler, whose default the answer's `peer` member names.
+	if op == "peer.status" {
+		return fmt.Errorf("peer is required in args (the scheduler this read is about, e.g. {\"args\": {\"peer\": %q}})", answering)
 	}
+	return nil
+}
+
+// fedPeerAssertionError validates an EXPLICIT peer value (already known to be
+// present): it must be a non-empty string naming this scheduler. A malformed
+// or foreign value is a named refusal, never "as if absent" and never a local
+// answer to a question about another peer.
+func fedPeerAssertionError(raw interface{}, answering string) error {
 	label := answering
 	if label == "" {
 		label = "identity not installed in this process"

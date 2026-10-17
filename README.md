@@ -373,7 +373,7 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `fed_ticks_list` | Federation read op `ticks.list` — tick rows, newest first |
 | `fed_events_list` | Federation read op `events.list` — event rows, newest first |
 
-Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it, and an optional `args.peer` is accepted only as an assertion of that same id — a different scheduler id is refused (SCHED-GAP-1741) instead of silently being answered from the local read. To read a *remote* peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
+Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it. `fed_peer_status` (op `peer.status`) **requires** `args.peer` — the identity the read is about — and the other reads default to this scheduler while accepting `args.peer` only as an assertion of that same id. A peer naming a *different* scheduler is refused (SCHED-GAP-1741) instead of silently being answered from the local read; to read a remote peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
 
 [^1]: `fed_*` and `peers_*` tools are deny-all by default — see [Federation tools — deny-all by default](#federation-tools-deny-all-by-default) for configuration.
 
