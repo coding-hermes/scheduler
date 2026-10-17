@@ -256,4 +256,4 @@ Time-to-first-success: ~25 min from docs to a fully-explained refusal (including
 Friction count: 3 (docs gap on the allow ladder; identity-invisible config; multi-key caller split).
 Bunker leg: SKIPPED-install-bunker — running-daemon premise (DOGFOOD-025), build+boot proven 09-25 (63s).
 Perf: overview warm 12-13ms n=5, cold-after-60s 1.36s; MCP fed 4ms, HTTP fed 19-96ms — all comfortably fast, no row.
-Artifacts: docs/dogfood/2026-10-17-federation-surface.md; rows SCHED-GAP-1738..1742 + DOGFOOD-029; commit <see git log>.
+Artifacts: docs/dogfood/2026-10-17-federation-surface.md; rows SCHED-GAP-1738..1742 + DOGFOOD-029; commit 84d7ef10.
