@@ -1,0 +1,8 @@
+# SCHED-GAP-1581 — openapi-cli get-api-v1-projects, two daemons
+
+## (a) no flags (servers[] default -> :9090, populated fleet DB)
+# cmd: openapi-cli get-api-v1-projects --raw | jq summary
+{"total":608,"limit":200,"first":"9router-docs","repo":"local:/home/kara/9router","admission":"cooldown"}
+
+## (b) --base-url http://127.0.0.1:19081 (eval daemon, empty DB)
+{"total":0,"limit":200}

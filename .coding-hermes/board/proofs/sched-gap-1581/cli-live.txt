@@ -1,0 +1,19 @@
+# SCHED-GAP-1581 — openapi-cli get-api-v1-live, two daemons
+
+## (a) no flags — spec servers[] is absolute, verb defaults to http://127.0.0.1:9090
+# cmd: openapi-cli get-api-v1-live   (generated from the :19081 spec)
+build_sha  33ceee01               
+started    2026-10-15T09:59:29Z   
+status     ok                     
+uptime     41h48m22.93516976s     
+version    v1.12.0-410-g33ceee01  
+[90m22:47:52[0m [32mINF[0m [1mHTTP response received[0m [36mstatus=[0m"200 OK" [36mstatus_code=[0m200
+
+## (b) runtime override --base-url
+# cmd: openapi-cli get-api-v1-live --base-url http://127.0.0.1:19081
+version    dev-88b441f9          
+build_sha  88b441f9              
+started    2026-10-17T03:02:54Z  
+status     ok                    
+uptime     44m58.118121987s      
+[90m22:47:52[0m [32mINF[0m [1mHTTP response received[0m [36mstatus=[0m"200 OK" [36mstatus_code=[0m200

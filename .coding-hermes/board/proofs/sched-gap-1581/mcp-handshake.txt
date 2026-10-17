@@ -1,0 +1,72 @@
+# SCHED-GAP-1581 — openapi-mcp handshake (muster d95acc02, rebuilt 2026-10-16 ~22:37)
+# spec: http://127.0.0.1:19081/api/v1/openapi.json (schedulerd built from 88b441f9 — production :9090 is deployment-stale, see cli-live.txt (a))
+# cmd: printf '%s\n%s\n%s\n' <initialize> <notifications/initialized> '<tools/list>' | \
+#        ~/wojons/muster/bin/openapi-mcp --spec http://127.0.0.1:19081/api/v1/openapi.json --base-url http://127.0.0.1:19081
+
+## stderr (load lines)
+Loaded spec: Coding Hermes Scheduler API (dev-88b441f9)
+Generated 58 MCP tools
+Using base URL: http://127.0.0.1:19081 (override=true)
+## JSON-RPC initialize response (id 1)
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"openapi-mcp","version":"v0.1.1-471-gd95acc02"}}}
+## tools/list (id 2) — count + names
+58
+--- names ---
+getApiV1ProjectsName  [GET /api/v1/projects/{name}]
+putApiV1ProjectsName  [PUT /api/v1/projects/{name}]
+getApiV1Peers  [GET /api/v1/peers]
+getApiV1TemplatesName  [GET /api/v1/templates/{name}]
+getApiV1Features  [GET /api/v1/features]
+getApiV1EventsStream  [GET /api/v1/events/stream]
+getApiV1Ticks  [GET /api/v1/ticks]
+getApiV1Namespaces  [GET /api/v1/namespaces]
+putApiV1GroupsName  [PUT /api/v1/groups/{name}]
+postApiV1Groups  [POST /api/v1/groups]
+getApiV1Events  [GET /api/v1/events]
+getApiV1FederationCatalogue  [GET /api/v1/federation/catalogue]
+getApiV1CooldownResidue  [GET /api/v1/cooldown/residue]
+getApiV1PeersEvents  [GET /api/v1/peers/events]
+postApiV1GroupsNameDeploy  [POST /api/v1/groups/{name}/deploy]
+postApiV1Resume  [POST /api/v1/resume]
+getApiV1ObservatoryStream  [GET /api/v1/observatory/stream]
+getApiV1Observatory  [GET /api/v1/observatory]
+getApiV1Projects  [GET /api/v1/projects]
+getApiV1GroupsName  [GET /api/v1/groups/{name}]
+postApiV1ProjectsNamePause  [POST /api/v1/projects/{name}/pause]
+deleteApiV1TemplatesName  [DELETE /api/v1/templates/{name}]
+getApiV1Groups  [GET /api/v1/groups]
+deleteApiV1GroupsName  [DELETE /api/v1/groups/{name}]
+getApiV1Queue  [GET /api/v1/queue]
+postApiV1Templates  [POST /api/v1/templates]
+getApiV1GatewayErrors  [GET /api/v1/gateway-errors]
+getApiV1NamespacesIdProjects  [GET /api/v1/namespaces/{id}/projects]
+getApiV1TicksId  [GET /api/v1/ticks/{id}]
+postApiV1ProjectsNameSpawn  [POST /api/v1/projects/{name}/spawn]
+postApiV1ProjectsNameBump  [POST /api/v1/projects/{name}/bump]
+putApiV1NamespacesId  [PUT /api/v1/namespaces/{id}]
+postApiV1Pause  [POST /api/v1/pause]
+getApiV1Templates  [GET /api/v1/templates]
+getApiV1Live  [GET /api/v1/live]
+getApiV1NamespacesId  [GET /api/v1/namespaces/{id}]
+postApiV1Namespaces  [POST /api/v1/namespaces]
+getApiV1Metrics  [GET /api/v1/metrics]
+getApiV1PeersIdEvents  [GET /api/v1/peers/{id}/events]
+getApiV1Health  [GET /api/v1/health]
+getApiV1OpenapiJson  [GET /api/v1/openapi.json]
+postApiV1Peers  [POST /api/v1/peers]
+putApiV1TemplatesName  [PUT /api/v1/templates/{name}]
+deleteApiV1NamespacesId  [DELETE /api/v1/namespaces/{id}]
+getApiV1FeaturesPruneCandidates  [GET /api/v1/features/prune-candidates]
+postApiV1FederationQuery  [POST /api/v1/federation/query]
+deleteApiV1ProjectsName  [DELETE /api/v1/projects/{name}]
+getApiV1LanesTree  [GET /api/v1/lanes/tree]
+postApiV1PeersIdHeartbeat  [POST /api/v1/peers/{id}/heartbeat]
+postApiV1ProjectsNameUnbump  [POST /api/v1/projects/{name}/unbump]
+getApiV1Status  [GET /api/v1/status]
+getApiV1Cadence  [GET /api/v1/cadence]
+getApiV1Lanes  [GET /api/v1/lanes]
+postApiV1Projects  [POST /api/v1/projects]
+postApiV1Evaluate  [POST /api/v1/evaluate]
+getApiV1Config  [GET /api/v1/config]
+postApiV1ProjectsNameResume  [POST /api/v1/projects/{name}/resume]
+postApiV1NamespacesIdMove  [POST /api/v1/namespaces/{id}/move]
