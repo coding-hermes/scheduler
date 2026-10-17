@@ -71,6 +71,31 @@ All gate outcomes:
 | Credential configured, none presented | 401 | `{"error":"operator credential required for mutations"}` + `WWW-Authenticate: Basic realm="scheduler operator"` |
 | Credential configured, wrong value presented | 401 | `{"error":"invalid operator credential"}` |
 
+### MCP credential presentation (SCHED-GAP-1619)
+
+Mutating MCP `tools/call` methods on `POST /mcp` sit behind the SAME operator
+credential and decision ladder as REST mutations above: `main.go` arms the MCP
+server with the resolved `api.ResolveAuthConfig` value, so one credential
+serves both surfaces and one rotation covers both. On the wire the accepted
+forms are identical to REST — `Authorization: Bearer <token>`,
+`Authorization: Basic <base64(...)>)`, or `X-Operator-Token: <token>` in token
+mode, `-u '<operator_user>:<operator_password>'` in basic mode (identity
+`operator:basic`).
+
+Refusals come back as JSON-RPC errors with HTTP status 200 — the envelope is
+`{code, message}` only (no `data` field), so match the message, not the status:
+
+| Gate arm (same ladder as REST) | Code | Message |
+|--------------------------------|------|---------|
+| No credential configured (fail-closed, authOff) | -32001 | `mutations disabled: no operator credential configured (set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)` |
+| Credential configured, none presented | -32001 | `operator credential required for mutations` |
+| Wrong value presented | -32001 | `invalid operator credential` |
+
+Allowed calls write an `mcp.auth` audit row (identity `operator:token` /
+`operator:basic`, method/path `MCP tools/call` / `/mcp`) — same sentence shape
+as `api.auth`, so one grep pattern covers both surfaces via
+`GET /api/v1/events`.
+
 ## 1. Overview
 
 The scheduler daemon exposes a JSON REST API under `/api/v1` for managing the
@@ -88,8 +113,7 @@ default (`--listen 127.0.0.1:9090`).
 | MCP (JSON-RPC) | `POST /mcp` (not part of the REST API) |
 
 Route index (every `/api/v1/*` route documented below; the JSONL deploy
-groups/templates routes are listed in the OpenAPI spec at
-`GET /api/v1/openapi.json`):
+groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-templates)):
 
 | Method | Path | Section |
 |--------|------|---------|
@@ -121,6 +145,46 @@ groups/templates routes are listed in the OpenAPI spec at
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
 | GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
 | POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
+
+## 1a. Deploy templates (JSONL deploy routes)
+
+These JSONL-backed routes (templates.jsonl / groups.jsonl) deploy a named list
+of tasks to every project in a group — one pending board row per task per
+member project, idempotent per template+date+project. Names must be non-empty
+and whitespace-free. PUT does not rename: the name in the URL is the template
+name; the `name` field in the body is ignored there.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/templates` | List templates |
+| POST | `/api/v1/templates` | Create a template |
+| GET | `/api/v1/templates/{name}` | Read one template |
+| PUT | `/api/v1/templates/{name}` | Replace description/tasks (name immutable) |
+| DELETE | `/api/v1/templates/{name}` | Delete a template |
+
+Trailing `/api/v1/groups` routes (list/create/update groups of member
+projects) follow the same patterns; the full machine-readable schema for both
+families stays at `GET /api/v1/openapi.json`.
+
+**Task shape.** Each element of `tasks` is a TemplateTask — `{"title":
+"required", "detail": "optional long-form spec written to the board row
+reasoning.note", "labels": ["optional capability_tags"], "id_pattern":
+"optional; defaults to {TEMPLATE}-{DATE}-{PROJECT}-{TASK}"}`. Placeholders
+substituted at deploy time: `{TEMPLATE}` template name, `{DATE}` UTC
+deploy date YYYYMMDD, `{PROJECT}` target project name, `{TASK}` 1-based task
+ordinal (zero-padded 01..). A pattern without a `{TASK}` (or `{N}`) ordinal
+gets `-{TASK}` appended automatically so multi-task templates cannot produce
+colliding ids. `title` and `detail` also substitute `{TEMPLATE}`/`{DATE}`/
+`{PROJECT}`. Unknown fields 400: a task cast as `{"id": "..."}` is rejected
+with `400 invalid JSON: unknown field id` — tasks have no first-class id
+field, the id comes from `id_pattern` (carter review finding, 2026-09-28).
+
+```sh
+curl -s -X POST http://127.0.0.1:9090/api/v1/templates \
+  -H 'Authorization: Bearer ***' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"example-template","tasks":[{"title":"Example task","detail":"Optional spec","labels":["example"],"id_pattern":"EX-{DATE}-{TASK}"}]}'
+```
 
 ## 2. Wire format
 
