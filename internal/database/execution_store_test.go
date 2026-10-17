@@ -68,8 +68,23 @@ func TestExecutionMigrationFreshDatabase(t *testing.T) {
 		}
 	}
 	var desc string
-	if err := db.QueryRowContext(ctx, `SELECT desc FROM migrations WHERE version=69`).Scan(&desc); err != nil || desc == "" {
+	if err := db.QueryRowContext(ctx, `SELECT desc FROM migrations WHERE version=70`).Scan(&desc); err != nil || desc == "" {
 		t.Fatalf("migration ledger: desc=%q err=%v", desc, err)
+	}
+	// ACP-SCHED-001: the parent-run lifecycle columns land additively on the
+	// same landed tables.
+	for _, col := range []struct{ table, name string }{
+		{"execution_runs", "parent_state"},
+		{"execution_runs", "parent_brief_json"},
+		{"execution_runs", "max_active_attempts"},
+		{"execution_attempts", "step_id"},
+		{"execution_attempts", "step_generation"},
+		{"execution_attempts", "reconciled_no_start"},
+	} {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('`+col.table+`') WHERE name = ?`, col.name).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("column %s.%s missing after migrate: n=%d err=%v", col.table, col.name, n, err)
+		}
 	}
 }
 

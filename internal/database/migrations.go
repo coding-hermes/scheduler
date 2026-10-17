@@ -10,7 +10,8 @@ import (
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
-const latestMigration = 75
+// ACP-SCHED-001 lands v76+ (parent-run lifecycle, replay contract, outbox settlement).
+const latestMigration = 76
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1683,6 +1684,53 @@ DROP TABLE namespaces;
 ALTER TABLE namespaces_new RENAME TO namespaces;
 COMMIT;
 PRAGMA foreign_keys=ON;
+`,
+	},
+	{
+		// ACP-SCHED-001: the parent-run → Hermes foreman seam. Additive only —
+		// the landed execution tables stay the single run/attempt/event store.
+		// execution_runs gains the closed parent lifecycle (queued →
+		// foreman_planning → executing → verifying → settled, plus cancelling /
+		// uncertain / reconciling) as its own column so the connector-plane
+		// `state` vocabulary is untouched, plus the canonical parent brief body
+		// and the settlement evidence references. execution_attempts gains the
+		// foreman step identity (step, generation) that the just-in-time
+		// idempotency key is derived from, the workspace enforcement receipt
+		// reference, the start deadline that makes a start timeout uncertain,
+		// and the settlement/reconciliation evidence columns.
+		version: 76,
+		desc:    "ACP-SCHED-001: parent-run lifecycle, foreman step identity and JIT attempt evidence columns",
+		stmt: `
+ALTER TABLE execution_runs ADD COLUMN parent_state TEXT NOT NULL DEFAULT 'queued';
+ALTER TABLE execution_runs ADD COLUMN parent_state_updated_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN parent_brief_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN foreman_invocation_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN foreman_invoked_at TEXT;
+ALTER TABLE execution_runs ADD COLUMN cancel_requested_at TEXT;
+ALTER TABLE execution_runs ADD COLUMN cancel_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN max_active_attempts INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE execution_runs ADD COLUMN parent_deadline_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN parent_budget_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN cancellation_policy TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN terminal_outcome_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN connector_settlement_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN independent_verification_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN quiescence_receipt_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_runs ADD COLUMN parent_settled_at TEXT;
+
+ALTER TABLE execution_attempts ADD COLUMN step_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN step_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE execution_attempts ADD COLUMN enforcement_receipt_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN start_deadline_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN terminal_outcome_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN connector_settlement_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN independent_verification_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN reconciled_no_start INTEGER NOT NULL DEFAULT 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS execution_attempts_step_gen_idx
+    ON execution_attempts(run_id, step_id, step_generation) WHERE step_id != '';
+CREATE INDEX IF NOT EXISTS execution_runs_parent_state_idx ON execution_runs(parent_state, updated_at);
+	},
 `,
 	},
 }

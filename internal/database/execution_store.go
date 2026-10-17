@@ -405,20 +405,32 @@ type ExecutionEvent struct {
 // by the parent's current generation. Crier acknowledgements and completed
 // proposals are evidence-only because neither has completion authority.
 func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (ExecutionEvent, bool, error) {
+	tx, err := beginExecutionTx(ctx, db)
+	if err != nil {
+		return e, false, err
+	}
+	defer tx.rollback()
+	e, replay, err := appendExecutionEventTx(ctx, tx.conn, e)
+	if err != nil {
+		return e, replay, err
+	}
+	return e, replay, tx.commit()
+}
+
+// appendExecutionEventTx is AppendExecutionEvent's transaction body so the
+// parent-run seam can append evidence inside its own transactions. The rules
+// are identical: append once by attempt/sequence, fence by current generation,
+// and refuse state authority to transport acks and completion proposals.
+func appendExecutionEventTx(ctx context.Context, conn *sql.Conn, e ExecutionEvent) (ExecutionEvent, bool, error) {
 	if e.RunID == "" || e.AttemptID == "" || e.Sequence < 1 || e.Generation < 1 || e.Kind == "" || e.PayloadDigest == "" {
 		return e, false, errors.New("append execution event: invalid fields")
 	}
 	if e.ProposedState != "" && !executionStates[e.ProposedState] {
 		return e, false, fmt.Errorf("invalid proposed state %q", e.ProposedState)
 	}
-	tx, err := beginExecutionTx(ctx, db)
-	if err != nil {
-		return e, false, err
-	}
-	defer tx.rollback()
 	var old ExecutionEvent
 	var accepted int
-	err = tx.conn.QueryRowContext(ctx, `SELECT event_id,run_id,generation,kind,proposed_state,payload_digest,accepted,rejection_reason,created_at FROM execution_events WHERE attempt_id=? AND sequence=?`, e.AttemptID, e.Sequence).Scan(&old.EventID, &old.RunID, &old.Generation, &old.Kind, &old.ProposedState, &old.PayloadDigest, &accepted, &old.RejectionReason, &old.CreatedAt)
+	err := conn.QueryRowContext(ctx, `SELECT event_id,run_id,generation,kind,proposed_state,payload_digest,accepted,rejection_reason,created_at FROM execution_events WHERE attempt_id=? AND sequence=?`, e.AttemptID, e.Sequence).Scan(&old.EventID, &old.RunID, &old.Generation, &old.Kind, &old.ProposedState, &old.PayloadDigest, &accepted, &old.RejectionReason, &old.CreatedAt)
 	if err == nil {
 		old.AttemptID = e.AttemptID
 		old.Sequence = e.Sequence
@@ -426,7 +438,7 @@ func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (Ex
 		if old.RunID != e.RunID || old.PayloadDigest != e.PayloadDigest || old.Kind != e.Kind || old.ProposedState != e.ProposedState || old.Generation != e.Generation {
 			return e, false, ErrExecutionConflict
 		}
-		return old, true, tx.commit()
+		return old, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return e, false, err
@@ -434,7 +446,7 @@ func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (Ex
 	var current int
 	var attemptRun string
 	var attemptGen int
-	if err = tx.conn.QueryRowContext(ctx, `SELECT r.current_attempt_generation,a.run_id,a.generation FROM execution_runs r JOIN execution_attempts a ON a.run_id=r.run_id WHERE r.run_id=? AND a.attempt_id=?`, e.RunID, e.AttemptID).Scan(&current, &attemptRun, &attemptGen); err != nil {
+	if err = conn.QueryRowContext(ctx, `SELECT r.current_attempt_generation,a.run_id,a.generation FROM execution_runs r JOIN execution_attempts a ON a.run_id=r.run_id WHERE r.run_id=? AND a.attempt_id=?`, e.RunID, e.AttemptID).Scan(&current, &attemptRun, &attemptGen); err != nil {
 		return e, false, err
 	}
 	e.Accepted = true
@@ -445,26 +457,29 @@ func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (Ex
 	if e.Kind == "crier_ack" && e.ProposedState != "" {
 		e.Accepted = false
 		e.RejectionReason = "crier_ack_has_no_state_authority"
+	} else if e.Kind == "transport_ack" && e.ProposedState != "" {
+		e.Accepted = false
+		e.RejectionReason = "transport_ack_has_no_state_authority"
 	} else if e.ProposedState == "completed" {
 		e.Accepted = false
 		e.RejectionReason = "completion_requires_verification_and_projections"
 	}
 	now := executionNow(ctx)
 	e.CreatedAt = now
-	res, err := tx.conn.ExecContext(ctx, `INSERT INTO execution_events(run_id,attempt_id,generation,sequence,kind,proposed_state,payload_digest,accepted,rejection_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, e.RunID, e.AttemptID, e.Generation, e.Sequence, e.Kind, e.ProposedState, e.PayloadDigest, e.Accepted, e.RejectionReason, now)
+	res, err := conn.ExecContext(ctx, `INSERT INTO execution_events(run_id,attempt_id,generation,sequence,kind,proposed_state,payload_digest,accepted,rejection_reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, e.RunID, e.AttemptID, e.Generation, e.Sequence, e.Kind, e.ProposedState, e.PayloadDigest, e.Accepted, e.RejectionReason, now)
 	if err != nil {
 		return e, false, err
 	}
 	e.EventID, _ = res.LastInsertId()
 	if e.Accepted && e.ProposedState != "" {
-		if _, err = tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET state=? WHERE attempt_id=? AND generation=?`, e.ProposedState, e.AttemptID, e.Generation); err != nil {
+		if _, err = conn.ExecContext(ctx, `UPDATE execution_attempts SET state=? WHERE attempt_id=? AND generation=?`, e.ProposedState, e.AttemptID, e.Generation); err != nil {
 			return e, false, err
 		}
-		if _, err = tx.conn.ExecContext(ctx, `UPDATE execution_runs SET state=?,updated_at=? WHERE run_id=? AND current_attempt_generation=?`, e.ProposedState, now, e.RunID, e.Generation); err != nil {
+		if _, err = conn.ExecContext(ctx, `UPDATE execution_runs SET state=?,updated_at=? WHERE run_id=? AND current_attempt_generation=?`, e.ProposedState, now, e.RunID, e.Generation); err != nil {
 			return e, false, err
 		}
 	}
-	return e, false, tx.commit()
+	return e, false, nil
 }
 
 // VerificationReceipt is deterministic verifier evidence keyed to the exact
@@ -525,23 +540,34 @@ type ExecutionProjection struct {
 // only for an exact replay; creation and a valid state advance both return
 // false. Reusing a projection with a changed key or payload digest conflicts.
 func PutExecutionProjection(ctx context.Context, db *sql.DB, p ExecutionProjection) (bool, error) {
-	if p.RunID == "" || p.Projection == "" || p.IdempotencyKey == "" || p.PayloadDigest == "" {
-		return false, errors.New("projection: required field empty")
-	}
 	tx, err := beginExecutionTx(ctx, db)
 	if err != nil {
 		return false, err
 	}
 	defer tx.rollback()
+	replay, err := putExecutionProjectionTx(ctx, tx.conn, p)
+	if err != nil {
+		return replay, err
+	}
+	return replay, tx.commit()
+}
+
+// putExecutionProjectionTx is PutExecutionProjection's transaction body so the
+// parent-run seam can queue its DuckBrain outbox reference atomically with
+// parent settlement.
+func putExecutionProjectionTx(ctx context.Context, conn *sql.Conn, p ExecutionProjection) (bool, error) {
+	if p.RunID == "" || p.Projection == "" || p.IdempotencyKey == "" || p.PayloadDigest == "" {
+		return false, errors.New("projection: required field empty")
+	}
 	var old ExecutionProjection
-	err = tx.conn.QueryRowContext(ctx, `SELECT run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at FROM execution_projections WHERE run_id=? AND projection=?`, p.RunID, p.Projection).Scan(&old.RunID, &old.Projection, &old.State, &old.IdempotencyKey, &old.PayloadDigest, &old.RemoteID, &old.Attempts, &old.LastError, &old.UpdatedAt)
+	err := conn.QueryRowContext(ctx, `SELECT run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at FROM execution_projections WHERE run_id=? AND projection=?`, p.RunID, p.Projection).Scan(&old.RunID, &old.Projection, &old.State, &old.IdempotencyKey, &old.PayloadDigest, &old.RemoteID, &old.Attempts, &old.LastError, &old.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		p.UpdatedAt = executionNow(ctx)
-		_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_projections(run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, p.RunID, p.Projection, p.State, p.IdempotencyKey, p.PayloadDigest, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt)
+		_, err = conn.ExecContext(ctx, `INSERT INTO execution_projections(run_id,projection,state,idempotency_key,payload_digest,remote_id,attempts,last_error,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, p.RunID, p.Projection, p.State, p.IdempotencyKey, p.PayloadDigest, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt)
 		if err != nil {
 			return false, err
 		}
-		return false, tx.commit()
+		return false, nil
 	}
 	if err != nil {
 		return false, err
@@ -550,14 +576,14 @@ func PutExecutionProjection(ctx context.Context, db *sql.DB, p ExecutionProjecti
 		return false, ErrExecutionConflict
 	}
 	if old.State == p.State && old.RemoteID == p.RemoteID && old.Attempts == p.Attempts && old.LastError == p.LastError {
-		return true, tx.commit()
+		return true, nil
 	}
 	p.UpdatedAt = executionNow(ctx)
-	_, err = tx.conn.ExecContext(ctx, `UPDATE execution_projections SET state=?,remote_id=?,attempts=?,last_error=?,updated_at=? WHERE run_id=? AND projection=?`, p.State, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt, p.RunID, p.Projection)
+	_, err = conn.ExecContext(ctx, `UPDATE execution_projections SET state=?,remote_id=?,attempts=?,last_error=?,updated_at=? WHERE run_id=? AND projection=?`, p.State, p.RemoteID, p.Attempts, p.LastError, p.UpdatedAt, p.RunID, p.Projection)
 	if err != nil {
 		return false, err
 	}
-	return false, tx.commit()
+	return false, nil
 }
 
 // ClaimExecutionOutbox atomically claims the oldest due dispatch row.

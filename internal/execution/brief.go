@@ -168,6 +168,14 @@ func DecodeBrief(data []byte) (*ExecutionBrief, error) {
 // CanonicalBrief returns RFC 8785 JCS bytes after normative NFC normalization,
 // number checks, and removal of only the top-level brief_digest member.
 func CanonicalBrief(data []byte) ([]byte, error) {
+	return canonicalBytesOmitting(data, "brief_digest")
+}
+
+// canonicalBytesOmitting returns RFC 8785 JCS bytes after normative NFC
+// normalization, number checks, and removal of only the named top-level
+// member. Both canonical digests in this package (brief_digest,
+// receipt_digest) are defined over this construction.
+func canonicalBytesOmitting(data []byte, omit string) ([]byte, error) {
 	v, err := parseAndNormalize(data)
 	if err != nil {
 		return nil, err
@@ -176,7 +184,7 @@ func CanonicalBrief(data []byte) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("execution brief must be a JSON object")
 	}
-	delete(obj, "brief_digest")
+	delete(obj, omit)
 	intermediate, err := json.Marshal(obj)
 	if err != nil {
 		return nil, fmt.Errorf("marshal normalized brief: %w", err)
