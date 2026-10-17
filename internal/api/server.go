@@ -378,6 +378,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	httpCount, execCount := s.loop.SpawnMethodCounts()
 	writeJSON(w, 200, map[string]interface{}{
 		"status": "ok",
+		// SCHED-GAP-1738: the scheduler's own identity — the same id the
+		// federation envelope carries as "peer". Without this, an operator
+		// probing /api/v1/health cannot tell WHICH scheduler answered.
+		"scheduler_id": database.SchedulerID(),
 		// SCHED-GAP-148: version + build identity. The human-facing version
 		// string stays first in source order as the operator summary;
 		// build_sha/build_time are the machine-comparable fields (the

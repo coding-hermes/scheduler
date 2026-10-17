@@ -152,6 +152,13 @@ func TestHealth(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("status field = %v, want ok", body["status"])
 	}
+	// SCHED-GAP-1738: scheduler_id must be present so an operator can tell
+	// WHICH scheduler answered (the same id the federation envelope carries).
+	// In tests, database.SchedulerID() returns the default (empty string)
+	// unless explicitly set, so we only verify the key exists.
+	if _, ok := body["scheduler_id"]; !ok {
+		t.Errorf("scheduler_id missing from /health response: %v", body)
+	}
 	if _, ok := body["uptime"]; !ok {
 		t.Errorf("uptime missing from response: %v", body)
 	}
@@ -1073,6 +1080,23 @@ func TestAPI_Config_Success(t *testing.T) {
 	}
 	if duck["namespace"] != "coding-hermes" {
 		t.Errorf("duckbrain.namespace = %v, want \"coding-hermes\"", duck["namespace"])
+	}
+	// SCHED-GAP-1738: federation summary must be present so an operator can
+	// see the deny-all posture (or armed callers) without parsing refusals.
+	fed, ok := body["federation"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing federation object (SCHED-GAP-1738)")
+	}
+	// The test server arms an allow-all policy (see newAPITestServer), so
+	// we verify the summary reflects that armed state, not the deny-all default.
+	if fed["deny_all"] != false {
+		t.Errorf("federation.deny_all = %v, want false (test server arms allow-all)", fed["deny_all"])
+	}
+	if fed["allow_count"] == nil || fed["allow_count"].(float64) <= 0 {
+		t.Errorf("federation.allow_count = %v, want > 0 (test server arms allow-all)", fed["allow_count"])
+	}
+	if callers, ok := fed["callers"].([]interface{}); !ok || len(callers) == 0 {
+		t.Errorf("federation.callers = %v, want non-empty array (test server arms allow-all)", fed["callers"])
 	}
 }
 

@@ -5259,3 +5259,11 @@ tasks:
   status: complete
   created_at: '2026-10-16T12:30:58.408561+00:00'
   completed_at: '2026-10-16T13:06:55.128558+00:00'
+- id: SCHED-GAP-1738
+  title: Federation identity visible in config snapshot and health endpoint
+  criteria:
+  - GET /api/v1/config response JSON contains a federation key with deny_all, scheduler_id,
+    and allow_count fields; GET /api/v1/health response JSON contains scheduler_id
+    field; go build succeeds; go test -short -p 1 ./internal/api/... passes
+  status: in_progress
+  created_at: '2026-10-17T06:14:33.991593+00:00'

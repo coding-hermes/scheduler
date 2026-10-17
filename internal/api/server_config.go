@@ -165,10 +165,21 @@ func maskGatewayKey(key string) string {
 
 // config returns the resolved three-layer configuration snapshot
 // (TOML < env vars < CLI flags) captured at startup (SCHED-GAP-034).
+// SCHED-GAP-1738: the federation read policy summary is rendered alongside
+// the static config so an operator who boots the daemon and probes
+// /api/v1/config sees the deny-all posture (or the armed callers) without
+// having to parse refusal envelopes.
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
 		return
 	}
-	writeJSON(w, 200, s.resolvedConfig)
+	out := struct {
+		ResolvedConfig
+		Federation FederationPolicySummary `json:"federation"`
+	}{
+		ResolvedConfig: s.resolvedConfig,
+		Federation:     s.federationReadPolicy().summary(),
+	}
+	writeJSON(w, 200, out)
 }

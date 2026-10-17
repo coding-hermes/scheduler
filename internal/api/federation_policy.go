@@ -42,6 +42,7 @@ package api
 // "configure the daemon, not the command" law keeps the surface honest).
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -166,5 +167,37 @@ func (s *Server) federationCheckRead(caller, op string) *federationError {
 		Code: fedErrOpNotAllowed,
 		Message: "op " + op + " is not published for caller " + caller +
 			" (spec §4: reads are scoped, not open — see [federation] allow config)",
+	}
+}
+
+// FederationPolicySummary is the operator-visible view of the armed read
+// policy for GET /api/v1/config (SCHED-GAP-1738). It reports the deny_all
+// posture, the count of armed allows, and the caller keys — without
+// exposing the internal per-op sets (those are authority, not telemetry).
+type FederationPolicySummary struct {
+	DenyAll    bool     `json:"deny_all"`
+	AllowCount int      `json:"allow_count"`
+	Callers    []string `json:"callers"`
+}
+
+// summary returns the operator-visible view of the policy. A nil/empty
+// policy (the zero value, never armed) reports deny_all=true with zero
+// callers — the fail-closed posture made visible.
+func (p FederationReadPolicy) summary() FederationPolicySummary {
+	if len(p.allow) == 0 {
+		return FederationPolicySummary{DenyAll: true, AllowCount: 0, Callers: []string{}}
+	}
+	callers := make([]string, 0, len(p.allow))
+	totalOps := 0
+	for caller, ops := range p.allow {
+		callers = append(callers, caller)
+		totalOps += len(ops)
+	}
+	// Sort callers for deterministic output (operators diff this).
+	sort.Strings(callers)
+	return FederationPolicySummary{
+		DenyAll:    totalOps == 0,
+		AllowCount: totalOps,
+		Callers:    callers,
 	}
 }
