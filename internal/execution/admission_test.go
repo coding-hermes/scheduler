@@ -69,6 +69,11 @@ func readyIntent(parentRunID, briefDigest string, route RouteReceipt) ReadyStepI
 			EnforcementReceiptRef: "enforcement-receipt-1",
 			VerifiedAt:            gateNow.Add(-time.Minute).Format(time.RFC3339Nano),
 			ValidUntil:            gateNow.Add(time.Hour).Format(time.RFC3339Nano),
+			RepositoryURI:         "https://example.invalid/repo.git",
+			BaseRevision:          "base",
+			Branch:                "work",
+			HostID:                "bunker-1",
+			WorkspacePath:         "/workspace/lease-1",
 		},
 		Policy: AttemptPolicy{
 			StartTimeoutS:      60,
@@ -81,13 +86,23 @@ func readyIntent(parentRunID, briefDigest string, route RouteReceipt) ReadyStepI
 
 func healthyFacts() AdmissionFacts {
 	return AdmissionFacts{
+		AttemptID:         "attempt-1",
 		ParentState:       ParentExecuting,
 		MaxActiveAttempts: 0, // default one
 		Lease: LeaseFact{
-			Present:   true,
-			State:     "active",
-			Epoch:     1,
-			ExpiresAt: gateNow.Add(time.Hour).Format(time.RFC3339Nano),
+			Present:        true,
+			State:          "active",
+			Epoch:          1,
+			ExpiresAt:      gateNow.Add(time.Hour).Format(time.RFC3339Nano),
+			OwnerRunID:     "parent-1",
+			OwnerAttemptID: "attempt-1",
+			Identity: WorkspaceIdentityFact{
+				RepositoryURI: "https://example.invalid/repo.git",
+				BaseRevision:  "base",
+				Branch:        "work",
+				HostID:        "bunker-1",
+				WorkspacePath: "/workspace/lease-1",
+			},
 		},
 	}
 }

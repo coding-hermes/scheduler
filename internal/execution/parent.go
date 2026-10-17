@@ -140,7 +140,9 @@ func DecodeParentBrief(data []byte) (*ParentBrief, error) {
 
 // ValidateParentBriefDigest compares the supplied brief_digest against the
 // canonical digest of the parent brief bytes, then checks the closed required
-// fields. Agent prose is never consulted.
+// fields. Agent prose is never consulted. Completeness is fail-closed: scope,
+// context, constraints, non-goals, acceptance criteria, budget and provenance
+// must all carry real content, not merely hashes and IDs.
 func ValidateParentBriefDigest(data []byte) (*ParentBrief, error) {
 	if err := ValidateBriefDigest(data); err != nil {
 		return nil, fmt.Errorf("parent brief digest: %w", err)
@@ -149,13 +151,77 @@ func ValidateParentBriefDigest(data []byte) (*ParentBrief, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateParentBrief(*brief); err != nil {
+		return nil, err
+	}
+	return brief, nil
+}
+
+// ValidateParentBrief checks the closed completeness rules of one decoded
+// parent brief.
+func ValidateParentBrief(brief ParentBrief) error {
 	if brief.SchemaVersion == "" || brief.BriefID == "" || brief.RevisionID == "" ||
 		brief.ParentRunID == "" || brief.Lane == "" || brief.TaskID == "" ||
 		brief.Mission == "" || brief.DeadlineAt == "" || brief.CancellationPolicy == "" {
-		return nil, ErrParentBriefIncomplete
+		return ErrParentBriefIncomplete
+	}
+	if brief.IssuedAt == "" || brief.IssuedBy == "" || brief.Project == "" {
+		return fmt.Errorf("%w: issuance/project identity missing", ErrParentBriefIncomplete)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, brief.IssuedAt); err != nil {
+		return fmt.Errorf("%w: issued_at: %v", ErrParentBriefIncomplete, err)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, brief.DeadlineAt); err != nil {
-		return nil, fmt.Errorf("%w: deadline_at: %v", ErrParentBriefIncomplete, err)
+		return fmt.Errorf("%w: deadline_at: %v", ErrParentBriefIncomplete, err)
 	}
-	return brief, nil
+	if len(brief.ContextRefs) == 0 {
+		return fmt.Errorf("%w: context references missing", ErrParentBriefIncomplete)
+	}
+	for _, ref := range brief.ContextRefs {
+		if ref.Namespace == "" || ref.KeyOrID == "" || ref.RetrievedAt == "" || ref.Authority == "" {
+			return fmt.Errorf("%w: context reference incomplete", ErrParentBriefIncomplete)
+		}
+	}
+	if len(brief.Scope.AllowedPaths) == 0 && len(brief.Scope.ForbiddenPaths) == 0 {
+		return fmt.Errorf("%w: scope is empty", ErrParentBriefIncomplete)
+	}
+	if len(brief.Constraints) == 0 {
+		return fmt.Errorf("%w: constraints missing", ErrParentBriefIncomplete)
+	}
+	for _, c := range brief.Constraints {
+		if c.ID == "" || c.Level == "" || c.Statement == "" {
+			return fmt.Errorf("%w: constraint incomplete", ErrParentBriefIncomplete)
+		}
+	}
+	if len(brief.NonGoals) == 0 {
+		return fmt.Errorf("%w: non-goals missing", ErrParentBriefIncomplete)
+	}
+	for _, ng := range brief.NonGoals {
+		if ng == "" {
+			return fmt.Errorf("%w: empty non-goal", ErrParentBriefIncomplete)
+		}
+	}
+	if len(brief.AcceptanceCriteria) == 0 {
+		return fmt.Errorf("%w: acceptance criteria missing", ErrParentBriefIncomplete)
+	}
+	for _, ac := range brief.AcceptanceCriteria {
+		if ac.ID == "" || ac.Statement == "" {
+			return fmt.Errorf("%w: acceptance criterion incomplete", ErrParentBriefIncomplete)
+		}
+		if ac.Required && len(ac.ProofRequirements) == 0 {
+			return fmt.Errorf("%w: acceptance criterion %s has no proof requirements", ErrParentBriefIncomplete, ac.ID)
+		}
+		for _, p := range ac.ProofRequirements {
+			if p.ID == "" || p.Kind == "" || len(p.Argv) == 0 || p.TimeoutS < 1 {
+				return fmt.Errorf("%w: proof requirement %s incomplete", ErrParentBriefIncomplete, p.ID)
+			}
+		}
+	}
+	if brief.Budget.MaxCostUnits < 1 || brief.Budget.MaxWallTimeoutS < 1 || brief.Budget.MaxTokens < 0 {
+		return fmt.Errorf("%w: budget has no substance", ErrParentBriefIncomplete)
+	}
+	if brief.Provenance.ForemanRunID == "" || brief.Provenance.BoardRevision == "" {
+		return fmt.Errorf("%w: provenance missing", ErrParentBriefIncomplete)
+	}
+	return nil
 }

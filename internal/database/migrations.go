@@ -11,7 +11,7 @@ import (
 // Bump it when adding a new migration to the migrations slice below.
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76+ (parent-run lifecycle, replay contract, outbox settlement).
-const latestMigration = 76
+const latestMigration = 77
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1698,9 +1698,36 @@ PRAGMA foreign_keys=ON;
 		// idempotency key is derived from, the workspace enforcement receipt
 		// reference, the start deadline that makes a start timeout uncertain,
 		// and the settlement/reconciliation evidence columns.
+		//
+		// ACP-SCHED-001-R1: the statement is applied idempotently per required
+		// column/index (see applyMigrationStatement), so a partially present
+		// schema is completed instead of being skipped while the version is
+		// recorded, and the backfill derives parent state from durable v69
+		// connector/run truth — legacy terminal rows become terminal parents
+		// and are never re-queued or re-invokable.
 		version: 76,
 		desc:    "ACP-SCHED-001: parent-run lifecycle, foreman step identity and JIT attempt evidence columns",
-		stmt: `
+		stmt:    parentRunSchemaStmt + parentRunBackfillStmt,
+	},
+	{
+		// ACP-SCHED-001-R1: repair migration. An interrupted v76 recorded
+		// early by a previous runner (or a hand-partial schema) leaves missing
+		// columns behind the ledger. Every statement is idempotent per
+		// column/index and the backfill is guarded, so this completes the
+		// schema and re-derives legacy parent state on any database that
+		// believes v76 is done.
+		version: 77,
+		desc:    "ACP-SCHED-001-R1: repair partial parent-run schema and re-derive legacy parent state",
+		stmt:    parentRunSchemaStmt + parentRunBackfillStmt,
+	},
+}
+
+// parentRunSchemaStmt is the complete ACP-SCHED-001 parent-run schema
+// addition. It is shared by v76 and the v77 repair migration and is applied
+// idempotently per statement: each ALTER/CREATE either lands or is skipped as
+// already present, and the version is recorded only once every required
+// column and index exists.
+const parentRunSchemaStmt = `
 ALTER TABLE execution_runs ADD COLUMN parent_state TEXT NOT NULL DEFAULT 'queued';
 ALTER TABLE execution_runs ADD COLUMN parent_state_updated_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_runs ADD COLUMN parent_brief_json TEXT NOT NULL DEFAULT '';
@@ -1722,18 +1749,33 @@ ALTER TABLE execution_attempts ADD COLUMN step_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN step_generation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE execution_attempts ADD COLUMN enforcement_receipt_ref TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN start_deadline_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN brief_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN terminal_outcome_ref TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN connector_settlement_ref TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN independent_verification_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE execution_attempts ADD COLUMN quiescence_receipt_ref TEXT NOT NULL DEFAULT '';
 ALTER TABLE execution_attempts ADD COLUMN reconciled_no_start INTEGER NOT NULL DEFAULT 0;
 
 CREATE UNIQUE INDEX IF NOT EXISTS execution_attempts_step_gen_idx
     ON execution_attempts(run_id, step_id, step_generation) WHERE step_id != '';
 CREATE INDEX IF NOT EXISTS execution_runs_parent_state_idx ON execution_runs(parent_state, updated_at);
-	},
-`,
-	},
-}
+`
+
+// parentRunBackfillStmt derives parent state from durable v69 connector/run
+// truth exactly once per legacy row: terminal rows (completed/failed/canceled/
+// rejected/expired) become terminal parents and can never be queued or
+// re-invoked as fresh parents, while in-flight rows keep running as
+// executing. The guard `parent_brief_json=”` restricts the backfill to
+// pre-seam rows; seam-admitted parents carry their canonical brief from the
+// first transaction. Re-running it is a no-op on already-derived rows.
+const parentRunBackfillStmt = `
+UPDATE execution_runs SET parent_state='settled',
+    parent_state_updated_at=COALESCE(durable_completed_at, updated_at)
+    WHERE parent_brief_json='' AND parent_state='queued'
+      AND state IN ('completed','failed','canceled','rejected','expired');
+UPDATE execution_runs SET parent_state='executing', parent_state_updated_at=updated_at
+    WHERE parent_brief_json='' AND parent_state='queued';
+`
 
 // laneOutputBackfillStmt initializes the four family output counts from tick
 // history in the SAME migration that adds the columns, so the counters are
@@ -1781,6 +1823,13 @@ const LaneOutputTickWhere = `AND status IN ('completed','timeout')
 // are skipped, so this is safe to call on every startup (including against
 // a freshly created schema).
 func Migrate(ctx context.Context, db *sql.DB) error {
+	return applyMigrations(ctx, db, migrations)
+}
+
+// applyMigrations runs the given ordered migrations against db. Tests use it
+// to build partially migrated databases (for example a populated v69 schema)
+// without a second migration runner.
+func applyMigrations(ctx context.Context, db *sql.DB, list []migration) error {
 	if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS migrations (
     version   INTEGER PRIMARY KEY,
@@ -1791,7 +1840,7 @@ CREATE TABLE IF NOT EXISTS migrations (
 		return fmt.Errorf("create migrations table: %w", err)
 	}
 
-	for _, m := range migrations {
+	for _, m := range list {
 		applied, err := migrationApplied(ctx, db, m.version)
 		if err != nil {
 			return err
@@ -1829,35 +1878,117 @@ CREATE TABLE IF NOT EXISTS migrations (
 			continue
 		}
 
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin tx for migration %d: %w", m.version, err)
-		}
-		defer func() { _ = tx.Rollback() }()
-
-		if _, err := tx.ExecContext(ctx, m.stmt); err != nil {
-			// SQLite ALTER TABLE ADD COLUMN is not idempotent — if the column
-			// already exists (e.g. added in a later revision of the initial
-			// CREATE TABLE), treat "duplicate column name" as success.
-			if strings.Contains(err.Error(), "duplicate column name") {
-				// Fall through to record the migration as applied.
-			} else {
-				return fmt.Errorf("migration %d (%s): %w", m.version, m.desc, err)
-			}
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO migrations (version, desc) VALUES (?, ?)`,
-			m.version, m.desc,
-		); err != nil {
-			return fmt.Errorf("record migration %d: %w", m.version, err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d: %w", m.version, err)
+		if err := applyMigrationTx(ctx, db, m); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// applyMigrationTx applies one migration's statements in a single
+// transaction, statement by statement so a partially present schema is
+// completed instead of aborting the remaining statements at the first
+// duplicate column. A statement that already landed ("duplicate column name")
+// is skipped; any other failure aborts the whole migration and the version is
+// recorded only after every statement has landed.
+func applyMigrationTx(ctx context.Context, db *sql.DB, m migration) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for migration %d: %w", m.version, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range splitMigrationStatements(m.stmt) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			// SQLite ALTER TABLE ADD COLUMN is not idempotent — if the column
+			// already exists (e.g. a partial earlier application), treat
+			// "duplicate column name" as success for THAT statement and keep
+			// going; everything else fails the migration.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("migration %d (%s): %w", m.version, m.desc, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO migrations (version, desc) VALUES (?, ?)`,
+		m.version, m.desc,
+	); err != nil {
+		return fmt.Errorf("record migration %d: %w", m.version, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %d: %w", m.version, err)
+	}
+	return nil
+}
+
+// splitMigrationStatements splits a migration body into individual SQL
+// statements on top-level semicolons. Semicolons inside single/double-quoted
+// strings and inside -- or /* */ comments do not split.
+func splitMigrationStatements(body string) []string {
+	var out []string
+	var b strings.Builder
+	inSingle, inDouble, inLine, inBlock := false, false, false, false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case inLine:
+			b.WriteByte(c)
+			if c == '\n' {
+				inLine = false
+			}
+		case inBlock:
+			b.WriteByte(c)
+			if c == '*' && i+1 < len(body) && body[i+1] == '/' {
+				b.WriteByte(body[i+1])
+				i++
+				inBlock = false
+			}
+		case inSingle:
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < len(body) && body[i+1] == '\'' {
+					b.WriteByte(body[i+1])
+					i++
+				} else {
+					inSingle = false
+				}
+			}
+		case inDouble:
+			b.WriteByte(c)
+			if c == '"' {
+				inDouble = false
+			}
+		default:
+			switch {
+			case c == '\'':
+				inSingle = true
+				b.WriteByte(c)
+			case c == '"':
+				inDouble = true
+				b.WriteByte(c)
+			case c == '-' && i+1 < len(body) && body[i+1] == '-':
+				inLine = true
+				b.WriteByte(c)
+			case c == '/' && i+1 < len(body) && body[i+1] == '*':
+				inBlock = true
+				b.WriteByte(c)
+			case c == ';':
+				if s := strings.TrimSpace(b.String()); s != "" {
+					out = append(out, s)
+				}
+				b.Reset()
+			default:
+				b.WriteByte(c)
+			}
+		}
+	}
+	if s := strings.TrimSpace(b.String()); s != "" {
+		out = append(out, s)
+	}
+	return out
 }
 
 // migrationApplied reports whether version v has been recorded in the

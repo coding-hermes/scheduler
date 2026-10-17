@@ -46,6 +46,58 @@ func IsTerminalAttemptState(state string) bool {
 	return false
 }
 
+// IsPreStartAttemptState reports whether an attempt is still awaiting native
+// start evidence — the only window in which a start timeout can make the
+// parent uncertain.
+func IsPreStartAttemptState(state string) bool {
+	switch state {
+	case AttemptStateSubmitted, AttemptStateWorkspaceReady, AttemptStateDispatched:
+		return true
+	}
+	return false
+}
+
+// attemptProgressRank is the closed monotonic ordering of the active attempt
+// vocabulary. A proposal may move an active attempt forward (rank to >= from)
+// or stop it in a terminal state; nothing ever moves backward and nothing
+// leaves a terminal state.
+var attemptProgressRank = map[string]int{
+	AttemptStateSubmitted:          1,
+	AttemptStateWorkspaceReady:     2,
+	AttemptStateDispatched:         3,
+	AttemptStateWorking:            4,
+	AttemptStateInputRequired:      4,
+	AttemptStateAuthRequired:       4,
+	AttemptStateBlocked:            4,
+	AttemptStateConnectorCompleted: 5,
+	AttemptStateVerifying:          6,
+}
+
+// CanTransitionAttempt reports whether from → to is a legal attempt edge under
+// the closed monotonic rules: active attempts only move forward or stop, and
+// terminal attempts never regress or resurrect.
+func CanTransitionAttempt(from, to string) error {
+	if !IsActiveAttemptState(from) && !IsTerminalAttemptState(from) {
+		return fmt.Errorf("%w: unknown source state %q", ErrAttemptTransition, from)
+	}
+	if !IsActiveAttemptState(to) && !IsTerminalAttemptState(to) {
+		return fmt.Errorf("%w: unknown target state %q", ErrAttemptTransition, to)
+	}
+	if IsTerminalAttemptState(from) {
+		return fmt.Errorf("%w: %q → %q", ErrAttemptTerminal, from, to)
+	}
+	if IsTerminalAttemptState(to) {
+		return nil
+	}
+	if from == to {
+		return nil
+	}
+	if attemptProgressRank[to] < attemptProgressRank[from] {
+		return fmt.Errorf("%w: %q → %q", ErrAttemptTransition, from, to)
+	}
+	return nil
+}
+
 // StepGenerationFact is one recorded generation of one step.
 type StepGenerationFact struct {
 	Generation int
@@ -56,32 +108,89 @@ type StepGenerationFact struct {
 	Quiescent bool
 }
 
-// LeaseFact is the durable workspace-lease side of the authority check.
+// WorkspaceIdentityFact is the durable workspace identity a lease is bound to.
+type WorkspaceIdentityFact struct {
+	RepositoryURI string
+	BaseRevision  string
+	Branch        string
+	HostID        string
+	WorkspacePath string
+}
+
+// LeaseFact is the durable workspace-lease side of the authority check:
+// ownership, workspace identity, epoch, state and expiry.
 type LeaseFact struct {
-	Present   bool
-	State     string
-	Epoch     int
-	ExpiresAt string // RFC3339Nano
+	Present    bool
+	State      string
+	Epoch      int
+	ExpiresAt  string // RFC3339Nano
+	OwnerRunID string
+	// OwnerAttemptID is empty while the lease is unbound to a specific
+	// attempt; otherwise it names the one attempt that may write.
+	OwnerAttemptID string
+	Identity       WorkspaceIdentityFact
+}
+
+// DependencyFact is the durable readiness fact of one prerequisite step: its
+// latest generation must have stopped quiescently in the required outcome and,
+// when policy demands it, carried a passing independent verification.
+type DependencyFact struct {
+	StepID string
+	// Present is true when a quiescent terminal attempt exists for the step.
+	Present bool
+	// State is the terminal state of the prerequisite's latest generation.
+	State string
+	// VerifiedPass is true when durable independent verification passed.
+	VerifiedPass bool
 }
 
 // AdmissionFacts are the durable facts the admission gate consults. The store
 // gathers them inside the admitting transaction so the checks cannot race the
 // insert.
 type AdmissionFacts struct {
+	// AttemptID is the proposed attempt identity; lease ownership is checked
+	// against it.
+	AttemptID         string
 	ParentState       ParentState
 	MaxActiveAttempts int
 	ActiveAttempts    int
 	StepGenerations   []StepGenerationFact
 	Lease             LeaseFact
+	Dependencies      []DependencyFact
+}
+
+// Closed dependency policy outcomes. The default (empty) is the strictest:
+// a successful terminal result plus a passing independent verification.
+const (
+	// DependencyOutcomeCompletedVerified requires the prerequisite to be
+	// terminal `completed` with durable passing independent verification.
+	DependencyOutcomeCompletedVerified = "completed_verified"
+	// DependencyOutcomeCompleted is an explicit policy that waives the
+	// independent-verification requirement but still demands success.
+	DependencyOutcomeCompleted = "completed"
+	// DependencyOutcomeTerminal is an explicit policy that admits any
+	// terminal outcome of the prerequisite.
+	DependencyOutcomeTerminal = "terminal"
+)
+
+// ValidateDependencyOutcome reports whether name is one of the closed
+// dependency policy outcomes.
+func ValidateDependencyOutcome(name string) bool {
+	switch name {
+	case "", DependencyOutcomeCompletedVerified, DependencyOutcomeCompleted, DependencyOutcomeTerminal:
+		return true
+	}
+	return false
 }
 
 // EvaluateAttemptAdmission is the single fail-closed just-in-time gate. An
 // attempt may be persisted only when every check passes; the first refusal
 // wins and names exactly one sentinel error.
 //
-// Order matches the authority model: parent executability, step generation
-// freshness, route receipt currency, candidate order, tool/connector
-// compatibility, workspace lease authority, then concurrency.
+// Order matches the authority model: parent executability, dependency
+// readiness, step generation freshness, route receipt currency, candidate
+// order, tool/connector compatibility, workspace lease authority, then
+// concurrency.
 func EvaluateAttemptAdmission(now time.Time, intent ReadyStepIntent, facts AdmissionFacts) error {
 	if err := ValidateReadyStepIntent(intent); err != nil {
 		return err
@@ -99,6 +208,9 @@ func EvaluateAttemptAdmission(now time.Time, intent ReadyStepIntent, facts Admis
 	default:
 		return fmt.Errorf("%w: parent state %q", ErrParentNotExecutable, facts.ParentState)
 	}
+	if err := evaluateDependencies(intent.Dependencies, facts.Dependencies); err != nil {
+		return err
+	}
 	if err := evaluateStepGeneration(intent, facts.StepGenerations); err != nil {
 		return err
 	}
@@ -111,7 +223,7 @@ func EvaluateAttemptAdmission(now time.Time, intent ReadyStepIntent, facts Admis
 	if err := evaluateConnector(intent); err != nil {
 		return err
 	}
-	if err := evaluateLease(now, intent.Lease, facts.Lease); err != nil {
+	if err := evaluateLease(now, intent, facts); err != nil {
 		return err
 	}
 	maxActive := facts.MaxActiveAttempts
@@ -120,6 +232,40 @@ func EvaluateAttemptAdmission(now time.Time, intent ReadyStepIntent, facts Admis
 	}
 	if facts.ActiveAttempts >= maxActive {
 		return fmt.Errorf("%w: %d active of %d allowed", ErrTooManyActiveAttempts, facts.ActiveAttempts, maxActive)
+	}
+	return nil
+}
+
+func evaluateDependencies(required []StepDependency, facts []DependencyFact) error {
+	byStep := map[string]DependencyFact{}
+	for _, f := range facts {
+		byStep[f.StepID] = f
+	}
+	for _, dep := range required {
+		policy := dep.RequiredOutcome
+		if policy == "" {
+			policy = DependencyOutcomeCompletedVerified
+		}
+		fact, ok := byStep[dep.StepID]
+		if !ok || !fact.Present {
+			return fmt.Errorf("%w: prerequisite %s has no quiescent terminal result", ErrDependencyNotReady, dep.StepID)
+		}
+		switch policy {
+		case DependencyOutcomeCompletedVerified:
+			if fact.State != AttemptStateCompleted || !fact.VerifiedPass {
+				return fmt.Errorf("%w: prerequisite %s is %s (verified=%v)", ErrDependencyNotReady, dep.StepID, fact.State, fact.VerifiedPass)
+			}
+		case DependencyOutcomeCompleted:
+			if fact.State != AttemptStateCompleted {
+				return fmt.Errorf("%w: prerequisite %s is %s", ErrDependencyNotReady, dep.StepID, fact.State)
+			}
+		case DependencyOutcomeTerminal:
+			if !IsTerminalAttemptState(fact.State) {
+				return fmt.Errorf("%w: prerequisite %s is %s", ErrDependencyNotReady, dep.StepID, fact.State)
+			}
+		default:
+			return fmt.Errorf("%w: unknown dependency policy %q", ErrDependencyNotReady, policy)
+		}
 	}
 	return nil
 }
@@ -207,7 +353,9 @@ func evaluateConnector(intent ReadyStepIntent) error {
 	return nil
 }
 
-func evaluateLease(now time.Time, authority WorkspaceLeaseAuthority, fact LeaseFact) error {
+func evaluateLease(now time.Time, intent ReadyStepIntent, facts AdmissionFacts) error {
+	authority := intent.Lease
+	fact := facts.Lease
 	if authority.LeaseID == "" || authority.LeaseEpoch < 1 || authority.ProfileID == "" || authority.EnforcementReceiptRef == "" {
 		return ErrLeaseAuthorityMissing
 	}
@@ -227,6 +375,21 @@ func evaluateLease(now time.Time, authority WorkspaceLeaseAuthority, fact LeaseF
 	expires, _ := time.Parse(time.RFC3339Nano, fact.ExpiresAt)
 	if !now.Before(expires) {
 		return fmt.Errorf("%w: lease expires_at %s", ErrLeaseAuthorityStale, fact.ExpiresAt)
+	}
+	if fact.OwnerRunID != intent.ParentRunID {
+		return fmt.Errorf("%w: lease %s is owned by parent %q", ErrLeaseOwnership, authority.LeaseID, fact.OwnerRunID)
+	}
+	if fact.OwnerAttemptID != "" && fact.OwnerAttemptID != facts.AttemptID {
+		return fmt.Errorf("%w: lease %s is owned by attempt %q", ErrLeaseOwnership, authority.LeaseID, fact.OwnerAttemptID)
+	}
+	if fact.Identity != (WorkspaceIdentityFact{
+		RepositoryURI: authority.RepositoryURI,
+		BaseRevision:  authority.BaseRevision,
+		Branch:        authority.Branch,
+		HostID:        authority.HostID,
+		WorkspacePath: authority.WorkspacePath,
+	}) {
+		return fmt.Errorf("%w: lease %s workspace identity mismatch", ErrLeaseOwnership, authority.LeaseID)
 	}
 	return nil
 }

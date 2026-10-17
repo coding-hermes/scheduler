@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/execution"
 )
 
 // Errors returned by the durable execution store.
@@ -153,8 +154,13 @@ type AttemptAdmission struct {
 	Dispatch OutboxMessage
 }
 
-// AdmitExecutionAttempt is the only admission path: generation allocation,
-// write authority, and dispatch persistence commit together.
+// AdmitExecutionAttempt is the older raw admission path. It runs the same
+// fail-closed parent authority gates as the parent-run seam before any row
+// exists — the parent must be executable with the foreman invoked, the default
+// one-active-attempt concurrency policy is enforced, and the workspace lease
+// must be owned by this parent/attempt — so it can never bypass the
+// parent/readiness/route/tool/lease/concurrency gates. Generation allocation,
+// write authority, and dispatch persistence still commit together.
 func AdmitExecutionAttempt(ctx context.Context, db *sql.DB, a AttemptAdmission) (ExecutionAttempt, bool, error) {
 	if a.Attempt.AttemptID == "" || a.Attempt.RunID == "" || a.Attempt.AttemptIdempotencyKey == "" || a.Attempt.RouteDigest == "" || a.Attempt.ConnectorID == "" || a.Lease.LeaseID == "" || a.Dispatch.OutboxID == "" || a.Dispatch.IdempotencyKey == "" {
 		return ExecutionAttempt{}, false, errors.New("admit execution attempt: required field is empty")
@@ -180,11 +186,44 @@ func AdmitExecutionAttempt(ctx context.Context, db *sql.DB, a AttemptAdmission) 
 		}
 		return existing, true, tx.commit()
 	}
-	var current int
-	if err := tx.conn.QueryRowContext(ctx, `SELECT current_attempt_generation FROM execution_runs WHERE run_id=?`, a.Attempt.RunID).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+	// A lease owned by another parent or attempt can never authorize work.
+	if a.Lease.OwnerRunID != "" && a.Lease.OwnerRunID != a.Attempt.RunID {
+		return ExecutionAttempt{}, false, fmt.Errorf("%w: lease %s is owned by parent %q", execution.ErrLeaseOwnership, a.Lease.LeaseID, a.Lease.OwnerRunID)
+	}
+	if a.Lease.OwnerAttemptID != "" && a.Lease.OwnerAttemptID != a.Attempt.AttemptID {
+		return ExecutionAttempt{}, false, fmt.Errorf("%w: lease %s is owned by attempt %q", execution.ErrLeaseOwnership, a.Lease.LeaseID, a.Lease.OwnerAttemptID)
+	}
+	var current, maxActive, active int
+	var parentState, invocationID string
+	if err := tx.conn.QueryRowContext(ctx, `SELECT current_attempt_generation,parent_state,foreman_invocation_id,max_active_attempts FROM execution_runs WHERE run_id=?`, a.Attempt.RunID).Scan(&current, &parentState, &invocationID, &maxActive); errors.Is(err, sql.ErrNoRows) {
 		return ExecutionAttempt{}, false, ErrExecutionNotFound
 	} else if err != nil {
 		return ExecutionAttempt{}, false, err
+	}
+	switch execution.ParentState(parentState) {
+	case execution.ParentQueued:
+		return ExecutionAttempt{}, false, fmt.Errorf("%w: legacy admission on a queued parent", execution.ErrForemanNotInvoked)
+	case execution.ParentCancelling:
+		return ExecutionAttempt{}, false, execution.ErrParentCancelling
+	case execution.ParentSettled:
+		return ExecutionAttempt{}, false, execution.ErrParentSettled
+	case execution.ParentUncertain, execution.ParentReconciling:
+		return ExecutionAttempt{}, false, execution.ErrReconciliationRequired
+	case execution.ParentForemanPlanning, execution.ParentExecuting:
+	default:
+		return ExecutionAttempt{}, false, fmt.Errorf("%w: parent state %q", execution.ErrParentNotExecutable, parentState)
+	}
+	if invocationID == "" {
+		return ExecutionAttempt{}, false, execution.ErrForemanNotInvoked
+	}
+	if err := tx.conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM execution_attempts WHERE run_id=? AND state IN `+attemptActiveStatesSQL, a.Attempt.RunID).Scan(&active); err != nil {
+		return ExecutionAttempt{}, false, err
+	}
+	if maxActive < 1 {
+		maxActive = 1
+	}
+	if active >= maxActive {
+		return ExecutionAttempt{}, false, fmt.Errorf("%w: %d active of %d allowed", execution.ErrTooManyActiveAttempts, active, maxActive)
 	}
 	a.Attempt.Generation = current + 1
 	a.Attempt.State = "submitted"
@@ -419,10 +458,13 @@ func AppendExecutionEvent(ctx context.Context, db *sql.DB, e ExecutionEvent) (Ex
 
 // appendExecutionEventTx is AppendExecutionEvent's transaction body so the
 // parent-run seam can append evidence inside its own transactions. The rules
-// are identical: append once by attempt/sequence, fence by current generation,
-// and refuse state authority to transport acks and completion proposals.
+// are identical: the sequence is allocated from (or validated against) the
+// durable per-attempt stream inside the transaction, an event appends once by
+// attempt/sequence, state authority is fenced by the parent's current
+// generation and by the closed monotonic attempt transitions, and transport
+// acks and completion proposals never carry state authority.
 func appendExecutionEventTx(ctx context.Context, conn *sql.Conn, e ExecutionEvent) (ExecutionEvent, bool, error) {
-	if e.RunID == "" || e.AttemptID == "" || e.Sequence < 1 || e.Generation < 1 || e.Kind == "" || e.PayloadDigest == "" {
+	if e.RunID == "" || e.AttemptID == "" || e.Generation < 1 || e.Kind == "" || e.PayloadDigest == "" {
 		return e, false, errors.New("append execution event: invalid fields")
 	}
 	if e.ProposedState != "" && !executionStates[e.ProposedState] {
@@ -443,10 +485,20 @@ func appendExecutionEventTx(ctx context.Context, conn *sql.Conn, e ExecutionEven
 	if !errors.Is(err, sql.ErrNoRows) {
 		return e, false, err
 	}
+	var nextSeq int
+	if err = conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM execution_events WHERE attempt_id=?`, e.AttemptID).Scan(&nextSeq); err != nil {
+		return e, false, err
+	}
+	if e.Sequence < 1 {
+		e.Sequence = nextSeq
+	} else if e.Sequence != nextSeq {
+		// The caller cannot go backward, collide or skip the durable stream.
+		return e, false, fmt.Errorf("%w: sequence %d, next is %d", execution.ErrEvidenceSequence, e.Sequence, nextSeq)
+	}
 	var current int
-	var attemptRun string
+	var attemptRun, attemptState string
 	var attemptGen int
-	if err = conn.QueryRowContext(ctx, `SELECT r.current_attempt_generation,a.run_id,a.generation FROM execution_runs r JOIN execution_attempts a ON a.run_id=r.run_id WHERE r.run_id=? AND a.attempt_id=?`, e.RunID, e.AttemptID).Scan(&current, &attemptRun, &attemptGen); err != nil {
+	if err = conn.QueryRowContext(ctx, `SELECT r.current_attempt_generation,a.run_id,a.generation,a.state FROM execution_runs r JOIN execution_attempts a ON a.run_id=r.run_id WHERE r.run_id=? AND a.attempt_id=?`, e.RunID, e.AttemptID).Scan(&current, &attemptRun, &attemptGen, &attemptState); err != nil {
 		return e, false, err
 	}
 	e.Accepted = true
@@ -454,15 +506,28 @@ func appendExecutionEventTx(ctx context.Context, conn *sql.Conn, e ExecutionEven
 		e.Accepted = false
 		e.RejectionReason = "stale_generation"
 	}
-	if e.Kind == "crier_ack" && e.ProposedState != "" {
+	// State authority is denied with exactly one reason, in precedence order:
+	// stale generation first, then ack/completion authority, then the closed
+	// monotonic attempt transitions.
+	if e.Accepted && e.Kind == "crier_ack" && e.ProposedState != "" {
 		e.Accepted = false
 		e.RejectionReason = "crier_ack_has_no_state_authority"
-	} else if e.Kind == "transport_ack" && e.ProposedState != "" {
+	} else if e.Accepted && e.Kind == "transport_ack" && e.ProposedState != "" {
 		e.Accepted = false
 		e.RejectionReason = "transport_ack_has_no_state_authority"
-	} else if e.ProposedState == "completed" {
+	} else if e.Accepted && e.ProposedState == "completed" {
 		e.Accepted = false
 		e.RejectionReason = "completion_requires_verification_and_projections"
+	} else if e.Accepted && e.ProposedState != "" {
+		// Closed monotonic attempt transitions: a terminal attempt never
+		// resurrects and an active attempt never regresses.
+		if execution.IsTerminalAttemptState(attemptState) {
+			e.Accepted = false
+			e.RejectionReason = "terminal_attempt_cannot_resurrect"
+		} else if terr := execution.CanTransitionAttempt(attemptState, e.ProposedState); terr != nil {
+			e.Accepted = false
+			e.RejectionReason = "illegal_transition"
+		}
 	}
 	now := executionNow(ctx)
 	e.CreatedAt = now

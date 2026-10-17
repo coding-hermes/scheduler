@@ -26,6 +26,7 @@ var (
 	ErrConnectorCapabilities = errors.New("tool/connector missing required capabilities")
 	ErrLeaseAuthorityMissing = errors.New("workspace lease/profile authority missing")
 	ErrLeaseAuthorityStale   = errors.New("workspace lease/profile authority stale")
+	ErrLeaseOwnership        = errors.New("workspace lease is owned by another parent or attempt")
 
 	// Attempt admission.
 	ErrForemanNotInvoked        = errors.New("foreman was never invoked on this parent")
@@ -35,10 +36,30 @@ var (
 	ErrGenerationNotIncremented = errors.New("step generation must increment by exactly one")
 	ErrTooManyActiveAttempts    = errors.New("max active attempts per parent reached")
 	ErrReconciliationRequired   = errors.New("reconciliation required before a new attempt generation")
+	ErrDependencyNotReady       = errors.New("dependency is not a verified successful terminal result")
+
+	// Evidence and transition authority.
+	ErrEvidenceSequence      = errors.New("evidence sequence violates the durable append-only stream")
+	ErrAttemptTransition     = errors.New("illegal attempt state transition")
+	ErrAttemptTerminal       = errors.New("attempt is terminal and cannot accept state authority")
+	ErrEvidenceNotAccepted   = errors.New("evidence was not accepted by the durable stream")
+	ErrEvidenceNotDurable    = errors.New("evidence reference does not resolve to a durable record")
+	ErrVerificationAuthority = errors.New("independent verification authority contradicts durable receipts")
+
+	// Foreman invocation seam.
+	ErrInvocationUncertain = errors.New("foreman invocation crossing is uncertain; reconcile before resend")
+	ErrInvocationIdentity  = errors.New("foreman invocation identity is not stable")
+
+	// Start uncertainty and reconciliation.
+	ErrStartDeadlineNotElapsed = errors.New("persisted start deadline has not elapsed")
+	ErrAttemptNotStartPending  = errors.New("attempt is not awaiting native start evidence")
+	ErrNoStartContradiction    = errors.New("no-start proof contradicts recorded process authority")
+	ErrReconciliationSettled   = errors.New("reconciliation cannot manufacture settled; settle through the normal settlement path")
 
 	// Settlement authority.
 	ErrTransportAckIsNotCompletion = errors.New("transport ack is not completion evidence")
 	ErrSettlementIncomplete        = errors.New("settlement requires durable terminal outcome, connector settlement and independent verification")
 	ErrUnsettledDescendants        = errors.New("unsettled descendant attempts block parent settlement")
 	ErrQuiescenceEvidenceRequired  = errors.New("quiescence evidence required for cancellation settlement")
+	ErrCancellationMonotonic       = errors.New("cancellation is monotonic: success cannot follow a cancellation request")
 )

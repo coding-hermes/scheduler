@@ -33,7 +33,30 @@ func createTestRun(t *testing.T, ctx context.Context, db *sql.DB, id string) Exe
 	if err != nil || replay {
 		t.Fatalf("create run: replay=%v err=%v", replay, err)
 	}
+	makeParentExecutable(t, ctx, db, id)
 	return r
+}
+
+// makeParentExecutable is the raw-store fixture for the legacy admission
+// path's precondition: a foreman-invoked, executable parent. The parent-run
+// seam writes this state through AdmitParentRun/BeginForemanInvocation/
+// ConfirmForemanInvocation; these tests set it directly.
+func makeParentExecutable(t *testing.T, ctx context.Context, db *sql.DB, runID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `UPDATE execution_runs SET parent_state='executing',foreman_invocation_id='inv-legacy',foreman_invoked_at=?,max_active_attempts=1 WHERE run_id=?`,
+		executionTestNow.Format(time.RFC3339Nano), runID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// finishAttempt stops one attempt so the one-active-attempt policy admits the
+// next generation.
+func finishAttempt(t *testing.T, ctx context.Context, db *sql.DB, attemptID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `UPDATE execution_attempts SET state='failed',settled_at=? WHERE attempt_id=?`,
+		executionTestNow.Format(time.RFC3339Nano), attemptID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func admission(runID, attemptID, key, leaseID string, epoch, expected int) AttemptAdmission {
@@ -45,8 +68,10 @@ func admission(runID, attemptID, key, leaseID string, epoch, expected int) Attem
 		},
 		Lease: LeaseAcquire{WorkspaceLease: WorkspaceLease{
 			LeaseID: leaseID, LeaseEpoch: epoch,
-			Identity:  WorkspaceIdentity{RepositoryURI: "https://example.invalid/repo.git", BaseRevision: "base", Branch: "work", HostID: "bunker-1", WorkspacePath: "/workspace/task"},
-			ExpiresAt: executionTestNow.Add(time.Hour).Format(time.RFC3339Nano),
+			Identity:       WorkspaceIdentity{RepositoryURI: "https://example.invalid/repo.git", BaseRevision: "base", Branch: "work", HostID: "bunker-1", WorkspacePath: "/workspace/task"},
+			OwnerRunID:     runID,
+			OwnerAttemptID: attemptID,
+			ExpiresAt:      executionTestNow.Add(time.Hour).Format(time.RFC3339Nano),
 		}, ExpectedEpoch: expected},
 		Dispatch: OutboxMessage{OutboxID: "out-" + attemptID, IdempotencyKey: "dispatch-" + attemptID, PayloadJSON: `{}`, PayloadDigest: "payload-" + attemptID},
 	}
@@ -210,6 +235,9 @@ func TestAttemptGenerationLeaseCASAndAtomicRollback(t *testing.T) {
 	if err != nil || !replay || got.AttemptID != "attempt-1" {
 		t.Fatalf("attempt replay: %+v replay=%v err=%v", got, replay, err)
 	}
+	finishAttempt(t, ctx, db, "attempt-1")
+	// One workspace identity admits one active writer: the second lease is a
+	// compare-and-set conflict even though the prior attempt has stopped.
 	if _, _, err := AdmitExecutionAttempt(ctx, db, admission("run-1", "attempt-blocked", "akey-blocked", "lease-blocked", 2, 1)); !errors.Is(err, ErrLeaseConflict) {
 		t.Fatalf("second active writer error=%v", err)
 	}
@@ -229,6 +257,7 @@ func TestAttemptGenerationLeaseCASAndAtomicRollback(t *testing.T) {
 	if err := RevokeWorkspaceLease(ctx, db, "lease-2", 2, "atomic rollback test"); err != nil {
 		t.Fatal(err)
 	}
+	finishAttempt(t, ctx, db, "attempt-2")
 	bad := admission("run-1", "attempt-3", "akey-3", "lease-3", 3, 2)
 	bad.Dispatch.Kind = "not-a-dispatch"
 	if _, _, err := AdmitExecutionAttempt(ctx, db, bad); err == nil {
@@ -252,6 +281,7 @@ func TestEventFencingAndCompletionAuthority(t *testing.T) {
 	if err := RevokeWorkspaceLease(ctx, db, "lease-1", 1, "retry"); err != nil {
 		t.Fatal(err)
 	}
+	finishAttempt(t, ctx, db, "attempt-1")
 	a2, _, _ := AdmitExecutionAttempt(ctx, db, admission("run-1", "attempt-2", "akey-2", "lease-2", 2, 1))
 	stale, _, err := AppendExecutionEvent(ctx, db, ExecutionEvent{RunID: "run-1", AttemptID: a1.AttemptID, Generation: 1, Sequence: 1, Kind: "progress", ProposedState: "working", PayloadDigest: "stale"})
 	if err != nil || stale.Accepted || stale.RejectionReason != "stale_generation" {

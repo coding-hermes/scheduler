@@ -19,20 +19,30 @@ var (
 )
 
 // Seam is the explicit dark composition seam: one parent run in, one foreman
-// invocation, just-in-time attempts behind the closed fail-closed gate, and
-// settlement only on complete evidence.
+// invocation under a stable durable identity, just-in-time attempts behind the
+// closed fail-closed gate, and settlement only on complete evidence.
 //
 // It holds no routing, harness or A2A capability by construction.
 type Seam struct {
-	store     Store
-	foreman   execution.ForemanInvoker
-	duckbrain execution.DuckBrainProjector
+	store      Store
+	foreman    execution.ForemanInvoker
+	reconciler execution.InvocationReconciler
+	duckbrain  execution.DuckBrainProjector
 }
 
 // NewSeam composes the dark seam. The projector is recorded as an outbox
-// reference only in this slice and is never invoked here.
+// reference only in this slice and is never invoked here. Without an
+// invocation reconciler an uncertain crossing fails closed instead of
+// re-invoking.
 func NewSeam(store Store, invoker execution.ForemanInvoker, projector execution.DuckBrainProjector) *Seam {
 	return &Seam{store: store, foreman: invoker, duckbrain: projector}
+}
+
+// NewSeamWithReconciler composes the dark seam with the explicit model of the
+// crash window: after an uncertain external crossing the scheduler reconciles
+// the stable invocation identity before any resend.
+func NewSeamWithReconciler(store Store, invoker execution.ForemanInvoker, reconciler execution.InvocationReconciler, projector execution.DuckBrainProjector) *Seam {
+	return &Seam{store: store, foreman: invoker, reconciler: reconciler, duckbrain: projector}
 }
 
 // AdmitParent admits exactly one parent execution run. The canonical parent
@@ -59,22 +69,55 @@ func (s *Seam) AdmitParent(ctx context.Context, spec ParentRunSpec) (ParentRecor
 }
 
 // InvokeForeman invokes Hermes as the foreman with the canonical parent brief
-// and applies queued → foreman_planning. A repeat after the foreman was
-// invoked replays the recorded receipt without invoking again.
+// under one stable, durably persisted invocation identity and applies
+// queued → foreman_planning. The identity is persisted BEFORE the external
+// boundary is crossed; after a crash the identity is reconciled before any
+// resend, and concurrent callers never both invoke. This is at-least-once
+// delivery with a stable receiver-facing identity — never a claim of
+// distributed exactly-once.
 func (s *Seam) InvokeForeman(ctx context.Context, parentRunID string) (execution.ForemanReceipt, error) {
-	rec, err := s.store.GetParentRun(ctx, parentRunID)
+	intent, crossing, err := s.store.BeginForemanInvocation(ctx, parentRunID)
 	if err != nil {
 		return execution.ForemanReceipt{}, err
 	}
-	if rec.ForemanInvocationID != "" {
-		return execution.ForemanReceipt{
-			InvocationID: rec.ForemanInvocationID,
-			ParentRunID:  parentRunID,
-			AcceptedAt:   rec.ForemanInvokedAt,
-		}, nil
+	if intent.Confirmed() {
+		return intent.Receipt, nil
 	}
-	if rec.ParentState != execution.ParentQueued {
-		return execution.ForemanReceipt{}, fmt.Errorf("%w: cannot invoke foreman in state %q", execution.ErrParentTransitionIllegal, rec.ParentState)
+	if intent.Uncertain {
+		if s.reconciler == nil {
+			return execution.ForemanReceipt{}, fmt.Errorf("%w: invocation %s", execution.ErrInvocationUncertain, intent.InvocationID)
+		}
+		resolution, err := s.reconciler.ReconcileInvocation(ctx, intent.InvocationID, parentRunID)
+		if err != nil {
+			return execution.ForemanReceipt{}, err
+		}
+		switch resolution.Status {
+		case execution.InvocationAccepted:
+			receipt := execution.ForemanReceipt{
+				InvocationID: intent.InvocationID,
+				ParentRunID:  parentRunID,
+				AcceptedAt:   resolution.AcceptedAt,
+			}
+			if _, _, err := s.store.ConfirmForemanInvocation(ctx, parentRunID, receipt); err != nil {
+				return execution.ForemanReceipt{}, err
+			}
+			return receipt, nil
+		case execution.InvocationNotStarted:
+			// The receiver never saw it: a resend with the SAME identity is
+			// safe because the receiver deduplicates on it.
+			crossing = true
+		default:
+			return execution.ForemanReceipt{}, fmt.Errorf("%w: invocation %s", execution.ErrInvocationUncertain, intent.InvocationID)
+		}
+	}
+	if !crossing {
+		// A concurrent caller must not invoke Hermes while another crossing
+		// is in flight.
+		return execution.ForemanReceipt{}, fmt.Errorf("%w: invocation %s in flight", execution.ErrInvocationUncertain, intent.InvocationID)
+	}
+	rec, err := s.store.GetParentRun(ctx, parentRunID)
+	if err != nil {
+		return execution.ForemanReceipt{}, err
 	}
 	brief, err := execution.ValidateParentBriefDigest(rec.BriefJSON)
 	if err != nil {
@@ -83,14 +126,18 @@ func (s *Seam) InvokeForeman(ctx context.Context, parentRunID string) (execution
 	if s.foreman == nil {
 		return execution.ForemanReceipt{}, fmt.Errorf("%w: no ForemanInvoker configured", ErrSeamInvoked)
 	}
-	receipt, err := s.foreman.InvokeForeman(ctx, *brief)
+	receipt, err := s.foreman.InvokeForeman(ctx, execution.ForemanInvocation{
+		InvocationID: intent.InvocationID,
+		ParentRunID:  parentRunID,
+		Brief:        *brief,
+	})
 	if err != nil {
 		return execution.ForemanReceipt{}, err
 	}
-	if receipt.InvocationID == "" || receipt.ParentRunID != parentRunID {
-		return execution.ForemanReceipt{}, fmt.Errorf("%w: foreman receipt identity incomplete", ErrSeamInvoked)
+	if receipt.InvocationID != intent.InvocationID || receipt.ParentRunID != parentRunID {
+		return execution.ForemanReceipt{}, fmt.Errorf("%w: receipt %s for parent %s", execution.ErrInvocationIdentity, receipt.InvocationID, receipt.ParentRunID)
 	}
-	if _, _, err := s.store.InvokeForeman(ctx, parentRunID, receipt); err != nil {
+	if _, _, err := s.store.ConfirmForemanInvocation(ctx, parentRunID, receipt); err != nil {
 		return execution.ForemanReceipt{}, err
 	}
 	return receipt, nil
@@ -129,13 +176,17 @@ func (s *Seam) BeginReconciliation(ctx context.Context, req ReconcileRequest) (P
 }
 
 // CompleteReconciliation records the proven reconciliation result and applies
-// reconciling → executing|settled. A proven no-start is what permits a bounded
-// retry with a new generation.
+// reconciling → executing. A proven no-start is what permits a bounded retry
+// with a new generation; reconciliation can never manufacture settled — that
+// is the normal settlement path with full evidence.
 func (s *Seam) CompleteReconciliation(ctx context.Context, req ReconcileOutcome) (ParentRecord, error) {
 	if req.ParentRunID == "" || req.AttemptID == "" || req.Generation < 1 {
 		return ParentRecord{}, fmt.Errorf("%w: reconcile outcome incomplete", ErrSeamInvoked)
 	}
-	if req.Next != execution.ParentExecuting && req.Next != execution.ParentSettled {
+	if req.Next == execution.ParentSettled {
+		return ParentRecord{}, execution.ErrReconciliationSettled
+	}
+	if req.Next != execution.ParentExecuting {
 		return ParentRecord{}, fmt.Errorf("%w: reconciliation next state %q", execution.ErrParentTransitionIllegal, req.Next)
 	}
 	switch req.Result.Kind {

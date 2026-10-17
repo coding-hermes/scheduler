@@ -2,7 +2,19 @@ package execution
 
 import "context"
 
-// ForemanReceipt is the durable record that Hermes accepted one parent brief.
+// ForemanInvocation is the scheduler's outward call identity: a stable
+// invocation id, persisted durably before the external boundary is crossed,
+// plus the canonical parent brief. The receiver-facing identity never changes
+// on replay — a resend after an uncertain crossing presents the same
+// invocation id so the receiver can deduplicate.
+type ForemanInvocation struct {
+	InvocationID string      `json:"invocation_id"`
+	ParentRunID  string      `json:"parent_run_id"`
+	Brief        ParentBrief `json:"brief"`
+}
+
+// ForemanReceipt is the durable record that Hermes accepted one parent brief
+// under one stable invocation identity.
 type ForemanReceipt struct {
 	InvocationID string `json:"invocation_id"`
 	ParentRunID  string `json:"parent_run_id"`
@@ -14,10 +26,40 @@ type ForemanReceipt struct {
 // calls Task Router, never chooses a harness and never sends A2A through this
 // seam — those are the foreman's.
 //
-// Implementations must tolerate an at-least-once invocation across scheduler
-// restarts: the parent run ID is the correlation identity.
+// The contract is at-least-once with a STABLE invocation identity, not
+// impossible distributed exactly-once: the scheduler persists the invocation
+// id before calling, reconciles an uncertain crossing before any resend, and
+// the receiver deduplicates on the invocation id. Implementations must echo
+// the InvocationID they were given.
 type ForemanInvoker interface {
-	InvokeForeman(ctx context.Context, brief ParentBrief) (ForemanReceipt, error)
+	InvokeForeman(ctx context.Context, inv ForemanInvocation) (ForemanReceipt, error)
+}
+
+// InvocationStatus is the reconciled truth of one uncertain external
+// crossing. Closed.
+type InvocationStatus string
+
+const (
+	// InvocationNotStarted means the receiver never accepted the invocation:
+	// a resend with the same identity is safe (the receiver deduplicates).
+	InvocationNotStarted InvocationStatus = "not_started"
+	// InvocationAccepted means the receiver accepted the invocation: the
+	// recorded receipt is confirmed and nothing is re-sent.
+	InvocationAccepted InvocationStatus = "accepted"
+)
+
+// InvocationResolution is the outcome of reconciling one uncertain crossing.
+type InvocationResolution struct {
+	Status     InvocationStatus
+	AcceptedAt string
+}
+
+// InvocationReconciler resolves an uncertain external crossing before any
+// resend. It is the explicit model of the crash window: after the stable
+// invocation identity is persisted, the scheduler never blindly re-invokes —
+// it asks what actually happened at the receiver first.
+type InvocationReconciler interface {
+	ReconcileInvocation(ctx context.Context, invocationID, parentRunID string) (InvocationResolution, error)
 }
 
 // ForemanReport is the one settled parent result Hermes reports back: the

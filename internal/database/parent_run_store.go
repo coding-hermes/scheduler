@@ -23,7 +23,9 @@ import (
 //
 // Every admission is fail-closed: the just-in-time gate runs inside the
 // admitting transaction, the attempt idempotency key is re-derived rather than
-// trusted, and planned or blocked foreman steps have no write path at all.
+// trusted, planned or blocked foreman steps have no write path at all, and
+// every settlement/reconciliation reference must resolve to a durable record
+// bound to this parent/attempt/generation.
 type ParentRunStore struct {
 	DB *sql.DB
 }
@@ -37,10 +39,12 @@ const attemptActiveStatesSQL = `('submitted','workspace_ready','dispatched','wor
 
 const parentRunColumns = `run_id,submitting_authority,submission_idempotency_key,brief_id,brief_revision,brief_digest,tick_id,lane,task_id,state,current_attempt_generation,parent_state,parent_state_updated_at,parent_brief_json,foreman_invocation_id,foreman_invoked_at,cancel_requested_at,cancel_reason,max_active_attempts,parent_deadline_at,parent_budget_json,cancellation_policy,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,quiescence_receipt_ref,parent_settled_at,created_at,updated_at`
 
-const attemptColumns = `attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,started_at,settled_at,step_id,step_generation,enforcement_receipt_ref,start_deadline_at,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,reconciled_no_start`
+const attemptColumns = `attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,started_at,settled_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at,terminal_outcome_ref,connector_settlement_ref,independent_verification_ref,quiescence_receipt_ref,reconciled_no_start,pid,pgid,cgroup_or_container_id,process_started_at`
 
 // AdmitParentRun persists exactly one parent run on the landed
-// CreateExecutionRun idempotency, then fills the parent-plane columns once.
+// CreateExecutionRun idempotency, then fills the parent-plane columns in the
+// SAME transaction: a second-write failure or crash leaves no visible
+// half-parent. A pre-seam (legacy) row is never adopted into a parent.
 func (s *ParentRunStore) AdmitParentRun(ctx context.Context, spec foreman.ParentRunSpec) (foreman.ParentRecord, bool, error) {
 	brief, err := execution.ValidateParentBriefDigest(spec.ParentBriefJSON)
 	if err != nil {
@@ -60,33 +64,70 @@ func (s *ParentRunStore) AdmitParentRun(ctx context.Context, spec foreman.Parent
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
 	}
-	_, replay, err := CreateExecutionRun(ctx, s.DB, ExecutionRun{
-		RunID:                    spec.ParentRunID,
-		SubmittingAuthority:      spec.SubmittingAuthority,
-		SubmissionIdempotencyKey: spec.SubmissionIdempotencyKey,
-		BriefID:                  brief.BriefID,
-		BriefRevision:            brief.RevisionID,
-		BriefDigest:              brief.BriefDigest,
-		TickID:                   brief.TickID,
-		Lane:                     brief.Lane,
-		TaskID:                   brief.TaskID,
-	})
+	tx, err := beginExecutionTx(ctx, s.DB)
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
 	}
+	defer tx.rollback()
 	now := executionNow(ctx)
-	// Fill the parent-plane columns exactly once; a crash between the landed
-	// insert and this update is repaired by the same guarded statement.
-	if _, err := s.DB.ExecContext(ctx, `UPDATE execution_runs SET parent_brief_json=?,max_active_attempts=?,parent_deadline_at=?,parent_budget_json=?,cancellation_policy=?,parent_state='queued',parent_state_updated_at=? WHERE run_id=? AND parent_brief_json=''`,
-		spec.ParentBriefJSON, maxActive, brief.DeadlineAt, string(budgetJSON), brief.CancellationPolicy, now, spec.ParentRunID); err != nil {
+	var existingBrief, existingState, existingParentState, existingAuthority, existingKey string
+	err = tx.conn.QueryRowContext(ctx, `SELECT parent_brief_json,state,parent_state,submitting_authority,submission_idempotency_key FROM execution_runs WHERE run_id=?`, spec.ParentRunID).Scan(&existingBrief, &existingState, &existingParentState, &existingAuthority, &existingKey)
+	replay := false
+	switch {
+	case err == nil:
+		// The row already exists. Only an identical seam parent replays; a
+		// pre-seam (legacy) row is never adopted into a parent, and a bare row
+		// only repairs an interrupted admission of THIS submission.
+		if existingBrief == "" {
+			halfParent := existingState == "submitted" && existingParentState == "queued" &&
+				existingAuthority == spec.SubmittingAuthority &&
+				existingKey == spec.SubmissionIdempotencyKey
+			if !halfParent {
+				return foreman.ParentRecord{}, false, fmt.Errorf("%w: run %s is a pre-seam row and cannot be admitted as a parent", foreman.ErrParentConflict, spec.ParentRunID)
+			}
+		} else {
+			replay = true
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		// First stage: the base execution row.
+		if _, err := tx.conn.ExecContext(ctx, `INSERT INTO execution_runs
+			(run_id,submitting_authority,submission_idempotency_key,brief_id,brief_revision,brief_digest,tick_id,lane,task_id,state,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,'submitted',?,?)`,
+			spec.ParentRunID, spec.SubmittingAuthority, spec.SubmissionIdempotencyKey,
+			brief.BriefID, brief.RevisionID, brief.BriefDigest, brief.TickID, brief.Lane, brief.TaskID, now, now); err != nil {
+			// The submission identity may already exist under another run id:
+			// that is an idempotent replay, not a second parent.
+			alt, lerr := scanParentRun(tx.conn.QueryRowContext(ctx, `SELECT `+parentRunColumns+` FROM execution_runs WHERE submitting_authority=? AND submission_idempotency_key=?`, spec.SubmittingAuthority, spec.SubmissionIdempotencyKey))
+			if lerr != nil {
+				return foreman.ParentRecord{}, false, fmt.Errorf("insert parent run: %w", err)
+			}
+			spec.ParentRunID = alt.ParentRunID
+			replay = true
+		}
+	default:
 		return foreman.ParentRecord{}, false, err
 	}
-	rec, err := s.GetParentRun(ctx, spec.ParentRunID)
+	// Second stage: every parent/canonical-brief/policy field, same
+	// transaction. The guarded UPDATE fills a half-written row exactly once
+	// and is a no-op on replay.
+	if _, err := tx.conn.ExecContext(ctx, `UPDATE execution_runs SET parent_brief_json=?,max_active_attempts=?,parent_deadline_at=?,parent_budget_json=?,cancellation_policy=?,parent_state='queued',parent_state_updated_at=? WHERE run_id=? AND parent_brief_json=''`,
+		spec.ParentBriefJSON, maxActive, brief.DeadlineAt, string(budgetJSON), brief.CancellationPolicy, now, spec.ParentRunID); err != nil {
+		return foreman.ParentRecord{}, false, fmt.Errorf("fill parent plane: %w", err)
+	}
+	rec, err := scanParentRun(tx.conn.QueryRowContext(ctx, `SELECT `+parentRunColumns+` FROM execution_runs WHERE run_id=?`, spec.ParentRunID))
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
 	}
-	if replay && (rec.MaxActiveAttempts != maxActive || rec.DeadlineAt != brief.DeadlineAt || rec.CancellationPolicy != brief.CancellationPolicy) {
-		return foreman.ParentRecord{}, false, fmt.Errorf("%w: submission %s/%s has different parent policy", foreman.ErrParentConflict, spec.SubmittingAuthority, spec.SubmissionIdempotencyKey)
+	if replay {
+		if rec.BriefDigest != brief.BriefDigest {
+			return foreman.ParentRecord{}, false, fmt.Errorf("%w: submission %s/%s has a different brief digest", foreman.ErrParentConflict, spec.SubmittingAuthority, spec.SubmissionIdempotencyKey)
+		}
+		if rec.MaxActiveAttempts != maxActive || rec.DeadlineAt != brief.DeadlineAt || rec.CancellationPolicy != brief.CancellationPolicy {
+			return foreman.ParentRecord{}, false, fmt.Errorf("%w: submission %s/%s has different parent policy", foreman.ErrParentConflict, spec.SubmittingAuthority, spec.SubmissionIdempotencyKey)
+		}
+	}
+	if err := tx.commit(); err != nil {
+		return foreman.ParentRecord{}, false, err
 	}
 	return rec, replay, nil
 }
@@ -124,9 +165,65 @@ func scanParentRun(row *sql.Row) (foreman.ParentRecord, error) {
 	return r, nil
 }
 
-// InvokeForeman records the foreman invocation and the queued →
-// foreman_planning edge.
-func (s *ParentRunStore) InvokeForeman(ctx context.Context, parentRunID string, receipt execution.ForemanReceipt) (foreman.ParentRecord, bool, error) {
+// BeginForemanInvocation persists the stable invocation identity BEFORE the
+// external boundary is crossed. Only the caller that gets crossing=true may
+// invoke the foreman; an already confirmed invocation replays its receipt and
+// an unconfirmed intent is an uncertain crossing that must be reconciled
+// before any resend.
+func (s *ParentRunStore) BeginForemanInvocation(ctx context.Context, parentRunID string) (foreman.InvocationIntent, bool, error) {
+	tx, err := beginExecutionTx(ctx, s.DB)
+	if err != nil {
+		return foreman.InvocationIntent{}, false, err
+	}
+	defer tx.rollback()
+	rec, err := scanParentRun(tx.conn.QueryRowContext(ctx, `SELECT `+parentRunColumns+` FROM execution_runs WHERE run_id=?`, parentRunID))
+	if err != nil {
+		return foreman.InvocationIntent{}, false, err
+	}
+	intent := foreman.InvocationIntent{InvocationID: rec.ForemanInvocationID, ParentRunID: parentRunID}
+	switch {
+	case rec.ForemanInvocationID != "" && rec.ForemanInvokedAt != "":
+		intent.Receipt = execution.ForemanReceipt{
+			InvocationID: rec.ForemanInvocationID,
+			ParentRunID:  parentRunID,
+			AcceptedAt:   rec.ForemanInvokedAt,
+		}
+		return intent, false, tx.commit()
+	case rec.ForemanInvocationID != "":
+		// The identity is durable but the crossing is unconfirmed.
+		intent.Uncertain = true
+		return intent, false, tx.commit()
+	}
+	if rec.ParentState != execution.ParentQueued {
+		return foreman.InvocationIntent{}, false, fmt.Errorf("%w: cannot invoke foreman in state %q", execution.ErrParentTransitionIllegal, rec.ParentState)
+	}
+	brief, err := execution.ValidateParentBriefDigest(rec.BriefJSON)
+	if err != nil {
+		return foreman.InvocationIntent{}, false, err
+	}
+	invocationID := execution.DeriveForemanInvocationID(parentRunID, brief.BriefDigest)
+	res, err := tx.conn.ExecContext(ctx, `UPDATE execution_runs SET foreman_invocation_id=? WHERE run_id=? AND foreman_invocation_id='' AND parent_state='queued'`,
+		invocationID, parentRunID)
+	if err != nil {
+		return foreman.InvocationIntent{}, false, err
+	}
+	if err := casResult(res, err); err != nil {
+		return foreman.InvocationIntent{}, false, fmt.Errorf("%w: %v", foreman.ErrParentConflict, err)
+	}
+	if err := tx.commit(); err != nil {
+		return foreman.InvocationIntent{}, false, err
+	}
+	intent.InvocationID = invocationID
+	return intent, true, nil
+}
+
+// ConfirmForemanInvocation records the receiver-accepted receipt under the
+// SAME stable identity and applies the queued → foreman_planning edge. A
+// repeat of the identical confirmed invocation replays.
+func (s *ParentRunStore) ConfirmForemanInvocation(ctx context.Context, parentRunID string, receipt execution.ForemanReceipt) (foreman.ParentRecord, bool, error) {
+	if receipt.InvocationID == "" || receipt.ParentRunID != parentRunID {
+		return foreman.ParentRecord{}, false, fmt.Errorf("%w: receipt identity incomplete", execution.ErrInvocationIdentity)
+	}
 	tx, err := beginExecutionTx(ctx, s.DB)
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
@@ -136,11 +233,17 @@ func (s *ParentRunStore) InvokeForeman(ctx context.Context, parentRunID string, 
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
 	}
-	if rec.ForemanInvocationID != "" {
-		if rec.ForemanInvocationID == receipt.InvocationID {
+	if rec.ForemanInvocationID == "" {
+		return foreman.ParentRecord{}, false, fmt.Errorf("%w: no invocation intent persisted for %s", execution.ErrInvocationIdentity, parentRunID)
+	}
+	if rec.ForemanInvocationID != receipt.InvocationID {
+		return foreman.ParentRecord{}, false, fmt.Errorf("%w: intent %s, receipt %s", execution.ErrInvocationIdentity, rec.ForemanInvocationID, receipt.InvocationID)
+	}
+	if rec.ForemanInvokedAt != "" {
+		if rec.ForemanInvokedAt == receipt.AcceptedAt || receipt.AcceptedAt == "" {
 			return rec, true, tx.commit()
 		}
-		return foreman.ParentRecord{}, false, fmt.Errorf("%w: parent already invoked as %q", foreman.ErrParentConflict, rec.ForemanInvocationID)
+		return foreman.ParentRecord{}, false, fmt.Errorf("%w: parent already invoked at %s", foreman.ErrParentConflict, rec.ForemanInvokedAt)
 	}
 	if err := execution.CanTransitionParent(rec.ParentState, execution.ParentForemanPlanning); err != nil {
 		return foreman.ParentRecord{}, false, err
@@ -149,8 +252,8 @@ func (s *ParentRunStore) InvokeForeman(ctx context.Context, parentRunID string, 
 	if acceptedAt == "" {
 		acceptedAt = executionNow(ctx)
 	}
-	res, err := tx.conn.ExecContext(ctx, `UPDATE execution_runs SET foreman_invocation_id=?,foreman_invoked_at=?,parent_state='foreman_planning',parent_state_updated_at=? WHERE run_id=? AND parent_state='queued' AND foreman_invocation_id=''`,
-		receipt.InvocationID, acceptedAt, executionNow(ctx), parentRunID)
+	res, err := tx.conn.ExecContext(ctx, `UPDATE execution_runs SET foreman_invoked_at=?,parent_state='foreman_planning',parent_state_updated_at=? WHERE run_id=? AND parent_state='queued' AND foreman_invocation_id=? AND foreman_invoked_at IS NULL`,
+		acceptedAt, executionNow(ctx), parentRunID, receipt.InvocationID)
 	if err != nil {
 		return foreman.ParentRecord{}, false, err
 	}
@@ -165,11 +268,13 @@ func (s *ParentRunStore) InvokeForeman(ctx context.Context, parentRunID string, 
 }
 
 // PrepareStepAttempt persists exactly one attempt at dispatch preparation.
-// The complete fail-closed gate — parent executability, step generation
-// freshness, route receipt digest and expiry, candidate order, connector
-// compatibility and lease authority — runs inside this transaction before any
-// row exists, and the attempt idempotency key is re-derived here rather than
-// trusted from the caller.
+// The complete fail-closed gate — parent executability, dependency readiness,
+// step generation freshness, route receipt digest and expiry, candidate
+// order, connector compatibility and lease ownership/authority — runs inside
+// this transaction before any row exists, and the attempt idempotency key is
+// re-derived here rather than trusted from the caller. A replay of the same
+// (parent, step, generation) with ANY changed replay-contract field is an
+// idempotency conflict, never a second attempt.
 func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.AttemptPreparation) (foreman.AttemptRecord, bool, error) {
 	intent := prep.Intent
 	if prep.AttemptID == "" || intent.ParentRunID == "" {
@@ -184,22 +289,24 @@ func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.At
 	if err != nil {
 		return foreman.AttemptRecord{}, false, err
 	}
-	// Replay is answered from the derived key BEFORE the gate: an identical
-	// preparation is idempotent even after the parent moved on.
 	key := execution.DeriveAttemptIdempotencyKey(rec.ParentRunID, intent.StepID, intent.StepGeneration, intent.Route.ReceiptDigest, intent.Lease.LeaseEpoch)
-	if _, ok, e := findAttemptByKey(ctx, tx.conn, key); e != nil {
+	// Replay is answered from the durable (parent, step, generation) identity
+	// BEFORE the gate: an identical preparation is idempotent even after the
+	// parent moved on, and a changed replay contract is a conflict.
+	if stored, ok, e := findStepAttempt(ctx, tx.conn, rec.ParentRunID, intent.StepID, intent.StepGeneration); e != nil {
 		return foreman.AttemptRecord{}, false, e
 	} else if ok {
-		stored, e := scanAttemptRow(tx.conn.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempts WHERE attempt_idempotency_key=?`, key))
-		if e != nil {
-			return foreman.AttemptRecord{}, false, e
-		}
 		if !sameStepAttempt(stored, prep, key) {
 			return foreman.AttemptRecord{}, false, ErrExecutionConflict
 		}
 		return stored, true, tx.commit()
 	}
-	facts, err := admissionFacts(ctx, tx.conn, rec, intent)
+	if _, ok, e := findAttemptByKey(ctx, tx.conn, key); e != nil {
+		return foreman.AttemptRecord{}, false, e
+	} else if ok {
+		return foreman.AttemptRecord{}, false, ErrExecutionConflict
+	}
+	facts, err := admissionFacts(ctx, tx.conn, rec, intent, prep.AttemptID)
 	if err != nil {
 		return foreman.AttemptRecord{}, false, err
 	}
@@ -216,14 +323,14 @@ func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.At
 	}
 	head := intent.Route.Candidates[0]
 	chosen := intent.Route.Candidates[intent.Choice.CandidateRank-1]
-	_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_attempts(attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,step_id,step_generation,enforcement_receipt_ref,start_deadline_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = tx.conn.ExecContext(ctx, `INSERT INTO execution_attempts(attempt_id,run_id,generation,attempt_idempotency_key,state,selected_candidate_rank,requested_model,requested_provider,selected_model,selected_provider,selected_base_url,route_digest,route_receipt_json,connector_id,connector_version,bunker_profile_id,native_session_id,workspace_lease_id,lease_epoch,submitted_at,step_id,step_generation,enforcement_receipt_ref,brief_digest,start_deadline_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		prep.AttemptID, rec.ParentRunID, generation, key, execution.AttemptStateSubmitted,
 		intent.Choice.CandidateRank, head.Model, head.Provider,
 		chosen.Model, chosen.Provider, chosen.BaseURL,
 		intent.Route.ReceiptDigest, string(routeJSON),
 		intent.Choice.ConnectorID, intent.Choice.ConnectorVersion, intent.Lease.ProfileID,
 		"", intent.Lease.LeaseID, intent.Lease.LeaseEpoch, nowStr,
-		intent.StepID, intent.StepGeneration, intent.Lease.EnforcementReceiptRef, startDeadline)
+		intent.StepID, intent.StepGeneration, intent.Lease.EnforcementReceiptRef, intent.BriefDigest, startDeadline)
 	if err != nil {
 		return foreman.AttemptRecord{}, false, fmt.Errorf("insert step attempt: %w", err)
 	}
@@ -257,8 +364,25 @@ func (s *ParentRunStore) PrepareStepAttempt(ctx context.Context, prep foreman.At
 	return attempt, false, err
 }
 
-func admissionFacts(ctx context.Context, conn *sql.Conn, rec foreman.ParentRecord, intent execution.ReadyStepIntent) (execution.AdmissionFacts, error) {
+func findStepAttempt(ctx context.Context, conn *sql.Conn, runID, stepID string, stepGeneration int) (foreman.AttemptRecord, bool, error) {
+	var attemptID string
+	err := conn.QueryRowContext(ctx, `SELECT attempt_id FROM execution_attempts WHERE run_id=? AND step_id=? AND step_generation=?`, runID, stepID, stepGeneration).Scan(&attemptID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return foreman.AttemptRecord{}, false, nil
+	}
+	if err != nil {
+		return foreman.AttemptRecord{}, false, err
+	}
+	stored, err := scanAttemptRow(conn.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempts WHERE attempt_id=?`, attemptID))
+	if err != nil {
+		return foreman.AttemptRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
+func admissionFacts(ctx context.Context, conn *sql.Conn, rec foreman.ParentRecord, intent execution.ReadyStepIntent, attemptID string) (execution.AdmissionFacts, error) {
 	facts := execution.AdmissionFacts{
+		AttemptID:         attemptID,
 		ParentState:       rec.ParentState,
 		MaxActiveAttempts: rec.MaxActiveAttempts,
 	}
@@ -284,17 +408,56 @@ func admissionFacts(ctx context.Context, conn *sql.Conn, rec foreman.ParentRecor
 	if err := rows.Close(); err != nil {
 		return facts, err
 	}
+	for _, dep := range intent.Dependencies {
+		fact, err := dependencyFact(ctx, conn, rec.ParentRunID, dep.StepID)
+		if err != nil {
+			return facts, err
+		}
+		facts.Dependencies = append(facts.Dependencies, fact)
+	}
 	var epoch int
-	var state, expires string
-	err = conn.QueryRowContext(ctx, `SELECT lease_epoch,state,expires_at FROM workspace_leases WHERE lease_id=?`, intent.Lease.LeaseID).Scan(&epoch, &state, &expires)
+	var state, expires, ownerRun, ownerAttempt string
+	var id execution.WorkspaceIdentityFact
+	err = conn.QueryRowContext(ctx, `SELECT lease_epoch,state,expires_at,owner_run_id,owner_attempt_id,repository_uri,base_revision,branch,host_id,workspace_path FROM workspace_leases WHERE lease_id=?`, intent.Lease.LeaseID).Scan(&epoch, &state, &expires, &ownerRun, &ownerAttempt, &id.RepositoryURI, &id.BaseRevision, &id.Branch, &id.HostID, &id.WorkspacePath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return facts, nil
 	}
 	if err != nil {
 		return facts, err
 	}
-	facts.Lease = execution.LeaseFact{Present: true, State: state, Epoch: epoch, ExpiresAt: expires}
+	facts.Lease = execution.LeaseFact{
+		Present: true, State: state, Epoch: epoch, ExpiresAt: expires,
+		OwnerRunID: ownerRun, OwnerAttemptID: ownerAttempt, Identity: id,
+	}
 	return facts, nil
+}
+
+// dependencyFact loads the durable readiness fact of one prerequisite step:
+// its latest generation must have stopped quiescently, and passing independent
+// verification is read from the durable verification receipts — never from a
+// caller's claim.
+func dependencyFact(ctx context.Context, conn *sql.Conn, runID, stepID string) (execution.DependencyFact, error) {
+	fact := execution.DependencyFact{StepID: stepID}
+	var state, settlementRef, verificationRef string
+	var noStart int
+	err := conn.QueryRowContext(ctx, `SELECT state,connector_settlement_ref,independent_verification_ref,reconciled_no_start FROM execution_attempts WHERE run_id=? AND step_id=? ORDER BY step_generation DESC LIMIT 1`, runID, stepID).Scan(&state, &settlementRef, &verificationRef, &noStart)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fact, nil
+	}
+	if err != nil {
+		return fact, err
+	}
+	fact.State = state
+	fact.Present = execution.IsTerminalAttemptState(state) && (settlementRef != "" || noStart == 1)
+	if verificationRef != "" {
+		var receiptState string
+		if err := conn.QueryRowContext(ctx, `SELECT state FROM verification_receipts WHERE receipt_id=? AND run_id=?`, verificationRef, runID).Scan(&receiptState); err == nil {
+			fact.VerifiedPass = execution.VerifyIndependentVerdict(receiptState, execution.VerifierPass)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fact, err
+		}
+	}
+	return fact, nil
 }
 
 func dispatchPayload(parentRunID, attemptID string, generation int, key string, intent execution.ReadyStepIntent) ([]byte, error) {
@@ -316,17 +479,31 @@ func dispatchPayload(parentRunID, attemptID string, generation int, key string, 
 	return json.Marshal(body)
 }
 
+// sameStepAttempt is the exact replay contract: every route/tool/connector/
+// profile/lease/brief field must match the stored attempt, or the preparation
+// conflicts instead of silently producing a second attempt.
 func sameStepAttempt(existing foreman.AttemptRecord, prep foreman.AttemptPreparation, key string) bool {
 	intent := prep.Intent
+	chosen := execution.RouteCandidate{}
+	if rank := intent.Choice.CandidateRank; rank >= 1 && rank <= len(intent.Route.Candidates) {
+		chosen = intent.Route.Candidates[rank-1]
+	}
 	return existing.AttemptID == prep.AttemptID &&
 		existing.AttemptIdempotencyKey == key &&
 		existing.ParentRunID == intent.ParentRunID &&
 		existing.StepID == intent.StepID &&
 		existing.StepGeneration == intent.StepGeneration &&
+		existing.BriefDigest == intent.BriefDigest &&
 		existing.RouteDigest == intent.Route.ReceiptDigest &&
+		existing.CandidateRank == intent.Choice.CandidateRank &&
 		existing.ConnectorID == intent.Choice.ConnectorID &&
+		existing.ConnectorVersion == intent.Choice.ConnectorVersion &&
+		existing.SelectedModel == chosen.Model &&
+		existing.SelectedProvider == chosen.Provider &&
 		existing.LeaseID == intent.Lease.LeaseID &&
-		existing.LeaseEpoch == intent.Lease.LeaseEpoch
+		existing.LeaseEpoch == intent.Lease.LeaseEpoch &&
+		existing.ProfileID == intent.Lease.ProfileID &&
+		existing.EnforcementReceiptRef == intent.Lease.EnforcementReceiptRef
 }
 
 func scanAttemptRow(row *sql.Row) (foreman.AttemptRecord, error) {
@@ -341,29 +518,42 @@ func scanAttempt(row interface{ Scan(...any) error }) (foreman.AttemptRecord, er
 	var a foreman.AttemptRecord
 	var rank, noStart, leaseEpoch, stepGeneration, generation int
 	var requestedModel, requestedProvider, selectedModel, selectedProvider, selectedBaseURL string
-	var routeJSON, connectorVersion, profileID, enforcementRef, startDeadline string
-	var startedAt, settledAt sql.NullString
+	var routeJSON, connectorVersion, profileID, enforcementRef, briefDigest, startDeadline string
+	var quiescenceRef, cgroup string
+	var startedAt, settledAt, processStartedAt sql.NullString
+	var pid, pgid sql.NullInt64
 	err := row.Scan(&a.AttemptID, &a.ParentRunID, &generation, &a.AttemptIdempotencyKey, &a.State,
 		&rank, &requestedModel, &requestedProvider, &selectedModel, &selectedProvider, &selectedBaseURL,
 		&a.RouteDigest, &routeJSON, &a.ConnectorID, &connectorVersion, &profileID, &a.NativeSessionID,
 		&a.LeaseID, &leaseEpoch, &a.SubmittedAt, &startedAt, &settledAt,
-		&a.StepID, &stepGeneration, &enforcementRef, &startDeadline,
-		&a.TerminalOutcomeRef, &a.ConnectorSettlementRef, &a.IndependentVerificationRef, &noStart)
+		&a.StepID, &stepGeneration, &enforcementRef, &briefDigest, &startDeadline,
+		&a.TerminalOutcomeRef, &a.ConnectorSettlementRef, &a.IndependentVerificationRef, &quiescenceRef, &noStart,
+		&pid, &pgid, &cgroup, &processStartedAt)
 	if err != nil {
 		return a, err
 	}
 	a.Generation = generation
+	a.CandidateRank = rank
+	a.ConnectorVersion = connectorVersion
+	a.SelectedModel = selectedModel
+	a.SelectedProvider = selectedProvider
 	a.LeaseEpoch = leaseEpoch
 	a.StepGeneration = stepGeneration
+	a.ProfileID = profileID
 	a.EnforcementReceiptRef = enforcementRef
+	a.BriefDigest = briefDigest
 	a.StartDeadlineAt = startDeadline
+	a.StartedAt = startedAt.String
 	a.SettledAt = settledAt.String
+	a.QuiescenceReceiptRef = quiescenceRef
 	a.ReconciledNoStart = noStart == 1
+	a.ProcessBacked = pid.Valid || pgid.Valid || cgroup != "" || processStartedAt.Valid || startedAt.Valid
 	return a, nil
 }
 
 // AppendEvidence appends immutable attempt evidence, idempotent by
-// (attempt, kind, payload digest) and append-only by sequence.
+// (attempt, kind, payload digest) and append-only by sequence against the
+// durable stream. Replay preserves the original accepted/rejected verdict.
 func (s *ParentRunStore) AppendEvidence(ctx context.Context, ev foreman.EvidenceRecord) (foreman.EvidenceRecord, bool, error) {
 	tx, err := beginExecutionTx(ctx, s.DB)
 	if err != nil {
@@ -392,29 +582,34 @@ func appendEvidenceTx(ctx context.Context, conn *sql.Conn, ev foreman.EvidenceRe
 	if attemptRun != ev.ParentRunID || attemptStepGen != ev.Generation {
 		return ev, false, fmt.Errorf("%w: evidence generation %d does not match attempt %s", foreman.ErrAttemptConflict, ev.Generation, ev.AttemptID)
 	}
-	// Idempotent enqueue: identical evidence already appended replays.
+	// Idempotent enqueue: identical evidence already appended replays with
+	// its ORIGINAL accepted/rejected verdict — rejected stale evidence never
+	// replays as accepted.
 	var existing foreman.EvidenceRecord
-	err := conn.QueryRowContext(ctx, `SELECT event_id,sequence,created_at FROM execution_events WHERE attempt_id=? AND kind=? AND payload_digest=?`, ev.AttemptID, ev.Kind, ev.PayloadDigest).Scan(&existing.EventID, &existing.Sequence, &existing.CreatedAt)
+	var accepted int
+	err := conn.QueryRowContext(ctx, `SELECT event_id,run_id,sequence,proposed_state,accepted,rejection_reason,created_at FROM execution_events WHERE attempt_id=? AND kind=? AND payload_digest=?`, ev.AttemptID, ev.Kind, ev.PayloadDigest).Scan(
+		&existing.EventID, &existing.ParentRunID, &existing.Sequence, &existing.ProposedState, &accepted, &existing.RejectionReason, &existing.CreatedAt)
 	if err == nil {
-		existing.ParentRunID, existing.AttemptID = ev.ParentRunID, ev.AttemptID
-		existing.Generation, existing.Kind, existing.PayloadDigest = ev.Generation, ev.Kind, ev.PayloadDigest
-		existing.Accepted = true
+		existing.AttemptID, existing.Generation = ev.AttemptID, ev.Generation
+		existing.Kind, existing.PayloadDigest = ev.Kind, ev.PayloadDigest
+		existing.Accepted = accepted == 1
+		// Compare every authoritative field before treating this as a replay.
+		if existing.ParentRunID != ev.ParentRunID || existing.ProposedState != ev.ProposedState {
+			return ev, false, ErrExecutionConflict
+		}
+		if ev.Sequence > 0 && ev.Sequence != existing.Sequence {
+			return ev, false, fmt.Errorf("%w: evidence replay with sequence %d, stored %d", execution.ErrEvidenceSequence, ev.Sequence, existing.Sequence)
+		}
 		return existing, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ev, false, err
 	}
-	sequence := ev.Sequence
-	if sequence < 1 {
-		if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM execution_events WHERE attempt_id=?`, ev.AttemptID).Scan(&sequence); err != nil {
-			return ev, false, err
-		}
-	}
 	appended, replay, err := appendExecutionEventTx(ctx, conn, ExecutionEvent{
 		RunID:         ev.ParentRunID,
 		AttemptID:     ev.AttemptID,
 		Generation:    attemptGen,
-		Sequence:      sequence,
+		Sequence:      ev.Sequence,
 		Kind:          ev.Kind,
 		ProposedState: ev.ProposedState,
 		PayloadDigest: ev.PayloadDigest,
@@ -431,8 +626,61 @@ func appendEvidenceTx(ctx context.Context, conn *sql.Conn, ev foreman.EvidenceRe
 	return out, replay, nil
 }
 
-// MarkStartUncertain applies executing → uncertain. A repeat while already
-// uncertain is idempotent.
+// resolveEvidenceRef requires the named reference to resolve to an accepted
+// durable execution_events record of the given kind, bound to this
+// parent/attempt. Nonempty invented strings are never evidence.
+func resolveEvidenceRef(ctx context.Context, conn *sql.Conn, runID, attemptID, kind, ref string) error {
+	if ref == "" {
+		return fmt.Errorf("%w: empty %s reference", execution.ErrEvidenceNotDurable, kind)
+	}
+	q := `SELECT COUNT(*) FROM execution_events WHERE run_id=? AND kind=? AND payload_digest=? AND accepted=1`
+	args := []any{runID, kind, ref}
+	if attemptID != "" {
+		q += ` AND attempt_id=?`
+		args = append(args, attemptID)
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s %q does not resolve to a durable record of parent %s", execution.ErrEvidenceNotDurable, kind, ref, runID)
+	}
+	return nil
+}
+
+// resolveVerificationRef requires the independent verification reference to
+// resolve to a durable verification_receipts row bound to this run (and
+// attempt, when one is named), with the verifier identity and result matching
+// the claimed verdict.
+func resolveVerificationRef(ctx context.Context, conn *sql.Conn, runID, attemptID, ref, verdict, verifierID string) error {
+	if ref == "" {
+		return fmt.Errorf("%w: empty verification reference", execution.ErrEvidenceNotDurable)
+	}
+	var state, receiptRun, receiptAttempt, receiptVerifier string
+	err := conn.QueryRowContext(ctx, `SELECT state,run_id,attempt_id,verifier_id FROM verification_receipts WHERE receipt_id=?`, ref).Scan(&state, &receiptRun, &receiptAttempt, &receiptVerifier)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: verification %q does not resolve to a durable receipt", execution.ErrEvidenceNotDurable, ref)
+	}
+	if err != nil {
+		return err
+	}
+	if receiptRun != runID || (attemptID != "" && receiptAttempt != attemptID) {
+		return fmt.Errorf("%w: verification %q is bound to run %s/attempt %s", execution.ErrEvidenceNotDurable, ref, receiptRun, receiptAttempt)
+	}
+	if verifierID != "" && receiptVerifier != verifierID {
+		return fmt.Errorf("%w: verification %q verifier %s", execution.ErrVerificationAuthority, ref, receiptVerifier)
+	}
+	if !execution.VerifyIndependentVerdict(state, verdict) {
+		return fmt.Errorf("%w: verification %q state %s contradicts verdict %s", execution.ErrVerificationAuthority, ref, state, verdict)
+	}
+	return nil
+}
+
+// MarkStartUncertain applies executing → uncertain only on the current active
+// attempt with an elapsed persisted start deadline and accepted durable
+// evidence. Stale, completed, foreign-generation, premature or rejected
+// evidence cannot move the parent to uncertain.
 func (s *ParentRunStore) MarkStartUncertain(ctx context.Context, req foreman.UncertainRequest) (foreman.ParentRecord, error) {
 	tx, err := beginExecutionTx(ctx, s.DB)
 	if err != nil {
@@ -449,14 +697,48 @@ func (s *ParentRunStore) MarkStartUncertain(ctx context.Context, req foreman.Unc
 	if err := execution.CanTransitionParent(rec.ParentState, execution.ParentUncertain); err != nil {
 		return rec, err
 	}
-	if _, _, err := appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
+	attempt, err := scanAttemptRow(tx.conn.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempts WHERE attempt_id=?`, req.AttemptID))
+	if err != nil {
+		return rec, err
+	}
+	if attempt.ParentRunID != req.ParentRunID {
+		return rec, fmt.Errorf("%w: attempt %s is not under parent %s", foreman.ErrAttemptConflict, req.AttemptID, req.ParentRunID)
+	}
+	if attempt.StepGeneration != req.Generation {
+		return rec, fmt.Errorf("%w: evidence generation %d does not match attempt %s", foreman.ErrAttemptConflict, req.Generation, req.AttemptID)
+	}
+	if !execution.IsActiveAttemptState(attempt.State) {
+		return rec, fmt.Errorf("%w: attempt %s is %s", foreman.ErrAttemptConflict, req.AttemptID, attempt.State)
+	}
+	if attempt.Generation != rec.CurrentAttemptGeneration {
+		return rec, fmt.Errorf("%w: attempt %s generation %d is not current", foreman.ErrAttemptConflict, req.AttemptID, attempt.Generation)
+	}
+	if !execution.IsPreStartAttemptState(attempt.State) || attempt.StartedAt != "" {
+		return rec, fmt.Errorf("%w: attempt %s already started", execution.ErrAttemptNotStartPending, req.AttemptID)
+	}
+	if attempt.StartDeadlineAt == "" {
+		return rec, fmt.Errorf("%w: attempt %s has no persisted start deadline", foreman.ErrAttemptConflict, req.AttemptID)
+	}
+	now := clock.FromContext(ctx).Now().UTC()
+	deadline, derr := time.Parse(time.RFC3339Nano, attempt.StartDeadlineAt)
+	if derr != nil {
+		return rec, fmt.Errorf("%w: start deadline %q", foreman.ErrAttemptConflict, attempt.StartDeadlineAt)
+	}
+	if now.Before(deadline) {
+		return rec, fmt.Errorf("%w: deadline %s", execution.ErrStartDeadlineNotElapsed, attempt.StartDeadlineAt)
+	}
+	ev, _, err := appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
 		ParentRunID:   req.ParentRunID,
 		AttemptID:     req.AttemptID,
 		Generation:    req.Generation,
-		Kind:          "start_uncertain",
-		PayloadDigest: execution.EvidenceDigest("start_uncertain", req.ParentRunID, req.AttemptID, fmt.Sprintf("%d", req.Generation), req.Reason),
-	}); err != nil {
+		Kind:          execution.EvidenceKindStartUncertain,
+		PayloadDigest: execution.EvidenceDigest(execution.EvidenceKindStartUncertain, req.ParentRunID, req.AttemptID, fmt.Sprintf("%d", req.Generation), req.Reason),
+	})
+	if err != nil {
 		return rec, err
+	}
+	if !ev.Accepted {
+		return rec, fmt.Errorf("%w: %s", execution.ErrEvidenceNotAccepted, ev.RejectionReason)
 	}
 	res, err := tx.conn.ExecContext(ctx, `UPDATE execution_runs SET parent_state='uncertain',parent_state_updated_at=? WHERE run_id=? AND parent_state=?`,
 		executionNow(ctx), req.ParentRunID, rec.ParentState)
@@ -485,12 +767,19 @@ func (s *ParentRunStore) BeginReconciliation(ctx context.Context, req foreman.Re
 	if err != nil {
 		return rec, false, err
 	}
+	attempt, err := scanAttemptRow(tx.conn.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempts WHERE attempt_id=?`, req.AttemptID))
+	if err != nil {
+		return rec, false, err
+	}
+	if attempt.ParentRunID != req.ParentRunID || attempt.StepGeneration != req.Generation {
+		return rec, false, fmt.Errorf("%w: attempt %s is not generation %d of parent %s", foreman.ErrAttemptConflict, req.AttemptID, req.Generation, req.ParentRunID)
+	}
 	_, replay, err := appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
 		ParentRunID:   req.ParentRunID,
 		AttemptID:     req.AttemptID,
 		Generation:    req.Generation,
-		Kind:          "reconcile_enqueued",
-		PayloadDigest: execution.EvidenceDigest("reconcile_enqueued", req.ParentRunID, req.AttemptID, fmt.Sprintf("%d", req.Generation), req.Reason),
+		Kind:          execution.EvidenceKindReconcileEnqueued,
+		PayloadDigest: execution.EvidenceDigest(execution.EvidenceKindReconcileEnqueued, req.ParentRunID, req.AttemptID, fmt.Sprintf("%d", req.Generation), req.Reason),
 	})
 	if err != nil {
 		return rec, false, err
@@ -517,8 +806,14 @@ func (s *ParentRunStore) BeginReconciliation(ctx context.Context, req foreman.Re
 }
 
 // CompleteReconciliation records the proven result append-only and applies
-// reconciling → executing|settled. A repeat of an identical outcome replays.
+// reconciling → executing. It can never manufacture `settled`: settlement
+// follows the normal transition/settlement path with full evidence. A no-start
+// resolution requires durable no-start proof and the absence of process
+// authority; a retry then needs a new generation and route.
 func (s *ParentRunStore) CompleteReconciliation(ctx context.Context, req foreman.ReconcileOutcome) (foreman.ParentRecord, error) {
+	if req.Next == execution.ParentSettled {
+		return foreman.ParentRecord{}, execution.ErrReconciliationSettled
+	}
 	tx, err := beginExecutionTx(ctx, s.DB)
 	if err != nil {
 		return foreman.ParentRecord{}, err
@@ -526,6 +821,20 @@ func (s *ParentRunStore) CompleteReconciliation(ctx context.Context, req foreman
 	defer tx.rollback()
 	rec, err := scanParentRun(tx.conn.QueryRowContext(ctx, `SELECT `+parentRunColumns+` FROM execution_runs WHERE run_id=?`, req.ParentRunID))
 	if err != nil {
+		return rec, err
+	}
+	attempt, err := scanAttemptRow(tx.conn.QueryRowContext(ctx, `SELECT `+attemptColumns+` FROM execution_attempts WHERE attempt_id=?`, req.AttemptID))
+	if err != nil {
+		return rec, err
+	}
+	if attempt.ParentRunID != req.ParentRunID || attempt.StepGeneration != req.Generation {
+		return rec, fmt.Errorf("%w: attempt %s is not generation %d of parent %s", foreman.ErrAttemptConflict, req.AttemptID, req.Generation, req.ParentRunID)
+	}
+	proofKind := execution.EvidenceKindNoStartProof
+	if req.Result.Kind == foreman.ReconcileNativeIdentified {
+		proofKind = execution.EvidenceKindNativeIdentification
+	}
+	if err := resolveEvidenceRef(ctx, tx.conn, req.ParentRunID, req.AttemptID, proofKind, req.Result.EvidenceRef); err != nil {
 		return rec, err
 	}
 	_, replay, err := appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
@@ -543,9 +852,16 @@ func (s *ParentRunStore) CompleteReconciliation(ctx context.Context, req foreman
 	}
 	switch req.Result.Kind {
 	case foreman.ReconcileNoStart:
-		if _, err := tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET state=?,settled_at=?,reconciled_no_start=1 WHERE attempt_id=? AND state IN `+attemptActiveStatesSQL,
-			execution.AttemptStateExpired, executionNow(ctx), req.AttemptID); err != nil {
+		if attempt.ProcessBacked {
+			return rec, fmt.Errorf("%w: attempt %s records process authority", execution.ErrNoStartContradiction, req.AttemptID)
+		}
+		res, err := tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET state=?,settled_at=?,reconciled_no_start=1 WHERE attempt_id=? AND state IN `+attemptActiveStatesSQL,
+			execution.AttemptStateExpired, executionNow(ctx), req.AttemptID)
+		if err != nil {
 			return rec, err
+		}
+		if err := casResult(res, err); err != nil {
+			return rec, fmt.Errorf("%w: %v", foreman.ErrAttemptConflict, err)
 		}
 	case foreman.ReconcileNativeIdentified:
 		res, err := tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET native_session_id=?,state=? WHERE attempt_id=? AND state IN ('submitted','workspace_ready','dispatched')`,
@@ -574,7 +890,10 @@ func (s *ParentRunStore) CompleteReconciliation(ctx context.Context, req foreman
 	return s.GetParentRun(ctx, req.ParentRunID)
 }
 
-// SettleAttempt settles one attempt only on complete settlement evidence.
+// SettleAttempt settles one attempt only on complete settlement evidence that
+// resolves to durable records bound to this parent/attempt/generation.
+// Cancellation is monotonic: after a cancellation request a success result
+// cannot settle.
 func (s *ParentRunStore) SettleAttempt(ctx context.Context, req foreman.AttemptSettlementRequest) (foreman.AttemptRecord, error) {
 	settlement := req.Settlement
 	if err := execution.ValidateAttemptSettlement(settlement); err != nil {
@@ -592,6 +911,13 @@ func (s *ParentRunStore) SettleAttempt(ctx context.Context, req foreman.AttemptS
 	if attempt.ParentRunID != settlement.ParentRunID {
 		return attempt, fmt.Errorf("%w: attempt %s is not under parent %s", foreman.ErrAttemptConflict, settlement.AttemptID, settlement.ParentRunID)
 	}
+	rec, err := scanParentRun(tx.conn.QueryRowContext(ctx, `SELECT `+parentRunColumns+` FROM execution_runs WHERE run_id=?`, settlement.ParentRunID))
+	if err != nil {
+		return attempt, err
+	}
+	if (rec.CancelRequestedAt != "" || rec.ParentState == execution.ParentCancelling) && settlement.Outcome.State == execution.AttemptStateCompleted {
+		return attempt, fmt.Errorf("%w: cancelled parent cannot settle attempt %s completed", execution.ErrCancellationMonotonic, settlement.AttemptID)
+	}
 	if execution.IsTerminalAttemptState(attempt.State) {
 		// A connector terminal event may land before its settlement receipt.
 		// Completing the evidence is allowed; contradicting it is not.
@@ -602,6 +928,7 @@ func (s *ParentRunStore) SettleAttempt(ctx context.Context, req foreman.AttemptS
 			attempt.TerminalOutcomeRef:         settlement.Outcome.OutcomeRef,
 			attempt.ConnectorSettlementRef:     settlement.Connector.SettlementReceiptRef,
 			attempt.IndependentVerificationRef: settlement.Independent.VerificationRef,
+			attempt.QuiescenceReceiptRef:       settlement.Connector.QuiescenceReceiptRef,
 		} {
 			if got != "" && got != want {
 				return attempt, fmt.Errorf("%w: attempt %s already settled", foreman.ErrAttemptConflict, settlement.AttemptID)
@@ -610,21 +937,44 @@ func (s *ParentRunStore) SettleAttempt(ctx context.Context, req foreman.AttemptS
 		if attempt.TerminalOutcomeRef != "" && attempt.ConnectorSettlementRef != "" && attempt.IndependentVerificationRef != "" {
 			return attempt, tx.commit() // exact replay
 		}
-	} else {
-		_, _, err = appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
-			ParentRunID:   settlement.ParentRunID,
-			AttemptID:     settlement.AttemptID,
-			Generation:    attempt.StepGeneration,
-			Kind:          "attempt_settlement",
-			PayloadDigest: execution.EvidenceDigest("attempt_settlement", settlement.ParentRunID, settlement.AttemptID, settlement.Outcome.OutcomeRef, settlement.Connector.SettlementReceiptRef, settlement.Independent.VerificationRef),
-		})
-		if err != nil {
+	}
+	// Every reference must resolve to durable evidence bound to this
+	// parent/attempt/generation.
+	if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, settlement.AttemptID, execution.EvidenceKindTerminalOutcome, settlement.Outcome.OutcomeRef); err != nil {
+		return attempt, err
+	}
+	if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, settlement.AttemptID, execution.EvidenceKindConnectorSettlement, settlement.Connector.SettlementReceiptRef); err != nil {
+		return attempt, err
+	}
+	if settlement.Connector.QuiescenceReceiptRef != "" {
+		if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, settlement.AttemptID, execution.EvidenceKindConnectorQuiescence, settlement.Connector.QuiescenceReceiptRef); err != nil {
 			return attempt, err
 		}
 	}
-	if _, err := tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET terminal_outcome_ref=?,connector_settlement_ref=?,independent_verification_ref=?,state=?,settled_at=? WHERE attempt_id=?`,
+	if attempt.ProcessBacked && settlement.Connector.QuiescenceReceiptRef == "" {
+		return attempt, fmt.Errorf("%w: attempt %s ran a process", execution.ErrQuiescenceEvidenceRequired, settlement.AttemptID)
+	}
+	if err := resolveVerificationRef(ctx, tx.conn, settlement.ParentRunID, settlement.AttemptID,
+		settlement.Independent.VerificationRef, settlement.Independent.Verdict, settlement.Independent.VerifierID); err != nil {
+		return attempt, err
+	}
+	if !execution.IsTerminalAttemptState(attempt.State) {
+		if err := execution.CanTransitionAttempt(attempt.State, settlement.Outcome.State); err != nil {
+			return attempt, err
+		}
+		if _, _, err := appendEvidenceTx(ctx, tx.conn, foreman.EvidenceRecord{
+			ParentRunID:   settlement.ParentRunID,
+			AttemptID:     settlement.AttemptID,
+			Generation:    attempt.StepGeneration,
+			Kind:          execution.EvidenceKindAttemptSettlement,
+			PayloadDigest: execution.EvidenceDigest(execution.EvidenceKindAttemptSettlement, settlement.ParentRunID, settlement.AttemptID, settlement.Outcome.OutcomeRef, settlement.Connector.SettlementReceiptRef, settlement.Independent.VerificationRef),
+		}); err != nil {
+			return attempt, err
+		}
+	}
+	if _, err := tx.conn.ExecContext(ctx, `UPDATE execution_attempts SET terminal_outcome_ref=?,connector_settlement_ref=?,independent_verification_ref=?,quiescence_receipt_ref=?,state=?,settled_at=? WHERE attempt_id=?`,
 		settlement.Outcome.OutcomeRef, settlement.Connector.SettlementReceiptRef, settlement.Independent.VerificationRef,
-		settlement.Outcome.State, executionNow(ctx), settlement.AttemptID); err != nil {
+		settlement.Connector.QuiescenceReceiptRef, settlement.Outcome.State, executionNow(ctx), settlement.AttemptID); err != nil {
 		return attempt, err
 	}
 	if err := tx.commit(); err != nil {
@@ -634,7 +984,9 @@ func (s *ParentRunStore) SettleAttempt(ctx context.Context, req foreman.AttemptS
 }
 
 // RecordForemanReport applies executing → verifying on the foreman's verified
-// parent result.
+// parent result. It can never overwrite connector or independent-verifier
+// authority already durably established, and its references must resolve to
+// durable records bound to this parent.
 func (s *ParentRunStore) RecordForemanReport(ctx context.Context, report execution.ForemanReport) (foreman.ParentRecord, error) {
 	if err := execution.ValidateForemanReport(report); err != nil {
 		return foreman.ParentRecord{}, err
@@ -650,6 +1002,33 @@ func (s *ParentRunStore) RecordForemanReport(ctx context.Context, report executi
 	}
 	if rec.ForemanInvocationID == "" || rec.ForemanInvocationID != report.InvocationID {
 		return rec, fmt.Errorf("%w: report is not from the invoked foreman", foreman.ErrParentConflict)
+	}
+	for got, want := range map[string]string{
+		rec.TerminalOutcomeRef:         report.Outcome.OutcomeRef,
+		rec.ConnectorSettlementRef:     report.Connector.SettlementReceiptRef,
+		rec.IndependentVerificationRef: report.Independent.VerificationRef,
+	} {
+		if got != "" && got != want {
+			return rec, fmt.Errorf("%w: durable authority %q cannot be overwritten by %q", foreman.ErrParentConflict, got, want)
+		}
+	}
+	if rec.CancelRequestedAt != "" && report.Outcome.State == execution.AttemptStateCompleted {
+		return rec, fmt.Errorf("%w: cancelled parent cannot report completed", execution.ErrCancellationMonotonic)
+	}
+	if err := resolveEvidenceRef(ctx, tx.conn, report.ParentRunID, "", execution.EvidenceKindTerminalOutcome, report.Outcome.OutcomeRef); err != nil {
+		return rec, err
+	}
+	if err := resolveEvidenceRef(ctx, tx.conn, report.ParentRunID, "", execution.EvidenceKindConnectorSettlement, report.Connector.SettlementReceiptRef); err != nil {
+		return rec, err
+	}
+	if report.Connector.QuiescenceReceiptRef != "" {
+		if err := resolveEvidenceRef(ctx, tx.conn, report.ParentRunID, "", execution.EvidenceKindConnectorQuiescence, report.Connector.QuiescenceReceiptRef); err != nil {
+			return rec, err
+		}
+	}
+	if err := resolveVerificationRef(ctx, tx.conn, report.ParentRunID, "",
+		report.Independent.VerificationRef, report.Independent.Verdict, report.Independent.VerifierID); err != nil {
+		return rec, err
 	}
 	if rec.ParentState == execution.ParentVerifying {
 		if rec.TerminalOutcomeRef == report.Outcome.OutcomeRef && rec.ConnectorSettlementRef == report.Connector.SettlementReceiptRef {
@@ -735,9 +1114,11 @@ func scanAttemptRows(rows *sql.Rows) ([]foreman.AttemptRecord, error) {
 	return out, rows.Err()
 }
 
-// SettleParent settles the parent only on complete settlement evidence and
-// full descendant quiescence, then queues the DuckBrain projection as an
-// outbox reference (no network side effect).
+// SettleParent settles the parent only on complete settlement evidence that
+// resolves to durable records bound to this parent, and full descendant
+// quiescence, then queues the DuckBrain projection as an outbox reference (no
+// network side effect). Parent connector state, timestamps, attempt state and
+// settlement/projection state commit in the same transaction.
 func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSettlementRequest) (foreman.ParentRecord, error) {
 	settlement := req.Settlement
 	tx, err := beginExecutionTx(ctx, s.DB)
@@ -752,7 +1133,8 @@ func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSet
 	if rec.ParentState == execution.ParentSettled {
 		if rec.TerminalOutcomeRef == settlement.Outcome.OutcomeRef &&
 			rec.ConnectorSettlementRef == settlement.Connector.SettlementReceiptRef &&
-			rec.IndependentVerificationRef == settlement.Independent.VerificationRef {
+			rec.IndependentVerificationRef == settlement.Independent.VerificationRef &&
+			rec.QuiescenceReceiptRef == settlement.QuiescenceReceiptRef {
 			return rec, tx.commit()
 		}
 		return rec, fmt.Errorf("%w: parent already settled", foreman.ErrParentConflict)
@@ -765,6 +1147,7 @@ func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSet
 		return rec, err
 	}
 	settlement.FromParentState = rec.ParentState
+	settlement.CancelRequested = rec.CancelRequestedAt != ""
 	settlement.Descendants = settlement.Descendants[:0]
 	for _, a := range attempts {
 		settlement.Descendants = append(settlement.Descendants, execution.AttemptQuiescence{
@@ -772,13 +1155,39 @@ func (s *ParentRunStore) SettleParent(ctx context.Context, req foreman.ParentSet
 			Terminal:          execution.IsTerminalAttemptState(a.State),
 			ConnectorSettled:  a.ConnectorSettlementRef != "",
 			ReconciledNoStart: a.ReconciledNoStart,
+			ProcessBacked:     a.ProcessBacked,
+			QuiescenceRef:     a.QuiescenceReceiptRef,
 		})
 	}
 	if err := execution.ValidateParentSettlement(settlement); err != nil {
 		return rec, err
 	}
-	if rec.TerminalOutcomeRef != "" && rec.TerminalOutcomeRef != settlement.Outcome.OutcomeRef {
-		return rec, fmt.Errorf("%w: reported outcome %q differs from settlement", foreman.ErrParentConflict, rec.TerminalOutcomeRef)
+	// Every settlement reference must resolve to durable authority bound to
+	// this parent.
+	if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, "", execution.EvidenceKindTerminalOutcome, settlement.Outcome.OutcomeRef); err != nil {
+		return rec, err
+	}
+	if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, "", execution.EvidenceKindConnectorSettlement, settlement.Connector.SettlementReceiptRef); err != nil {
+		return rec, err
+	}
+	if settlement.QuiescenceReceiptRef != "" {
+		if err := resolveEvidenceRef(ctx, tx.conn, settlement.ParentRunID, "", execution.EvidenceKindConnectorQuiescence, settlement.QuiescenceReceiptRef); err != nil {
+			return rec, err
+		}
+	}
+	if err := resolveVerificationRef(ctx, tx.conn, settlement.ParentRunID, "",
+		settlement.Independent.VerificationRef, settlement.Independent.Verdict, settlement.Independent.VerifierID); err != nil {
+		return rec, err
+	}
+	for got, want := range map[string]string{
+		rec.TerminalOutcomeRef:         settlement.Outcome.OutcomeRef,
+		rec.ConnectorSettlementRef:     settlement.Connector.SettlementReceiptRef,
+		rec.IndependentVerificationRef: settlement.Independent.VerificationRef,
+		rec.QuiescenceReceiptRef:       settlement.QuiescenceReceiptRef,
+	} {
+		if got != "" && got != want {
+			return rec, fmt.Errorf("%w: durable authority %q cannot be overwritten by %q", foreman.ErrParentConflict, got, want)
+		}
 	}
 	now := executionNow(ctx)
 	verificationState := "failed"

@@ -23,16 +23,16 @@ type fakeInvoker struct {
 	err   error
 }
 
-func (f *fakeInvoker) InvokeForeman(_ context.Context, brief execution.ParentBrief) (execution.ForemanReceipt, error) {
+func (f *fakeInvoker) InvokeForeman(_ context.Context, inv execution.ForemanInvocation) (execution.ForemanReceipt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, brief)
+	f.calls = append(f.calls, inv.Brief)
 	if f.err != nil {
 		return execution.ForemanReceipt{}, f.err
 	}
 	return execution.ForemanReceipt{
-		InvocationID: "invocation-1",
-		ParentRunID:  brief.ParentRunID,
+		InvocationID: inv.InvocationID,
+		ParentRunID:  inv.ParentRunID,
 		AcceptedAt:   seamNow.Format(time.RFC3339Nano),
 	}, nil
 }
@@ -58,6 +58,7 @@ func (f *fakeProjector) Project(context.Context, execution.DuckBrainProjection) 
 type harness struct {
 	t               *testing.T
 	ctx             context.Context
+	sim             *clock.SimClock
 	dbPath          string
 	db              *sql.DB
 	store           *foreman.Seam
@@ -74,7 +75,9 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "scheduler.db")
 	h := &harness{t: t, parentID: "parent-1"}
-	h.ctx = clock.WithClock(context.Background(), clock.NewFixed(seamNow))
+	h.sim = clock.NewManualSimClock(seamNow)
+	t.Cleanup(h.sim.Close)
+	h.ctx = clock.WithClock(context.Background(), h.sim)
 	h.dbPath = dbPath
 	h.open()
 	t.Cleanup(func() {
@@ -113,6 +116,16 @@ func (h *harness) restart() {
 	h.open()
 }
 
+// advance moves virtual time forward on the harness clock.
+func (h *harness) advance(d time.Duration) {
+	h.t.Helper()
+	h.sim.Advance(d)
+}
+
+func (h *harness) now() string {
+	return h.sim.Now().UTC().Format(time.RFC3339Nano)
+}
+
 func (h *harness) admit(maxActive int) foreman.ParentRecord {
 	h.t.Helper()
 	rec, replay, err := h.store.AdmitParent(h.ctx, foreman.ParentRunSpec{
@@ -137,15 +150,31 @@ func (h *harness) invoke() execution.ForemanReceipt {
 	return receipt
 }
 
+func (h *harness) leaseIdentity(leaseID string) database.WorkspaceIdentity {
+	return database.WorkspaceIdentity{
+		RepositoryURI: "https://example.invalid/repo.git",
+		BaseRevision:  "base",
+		Branch:        "work",
+		HostID:        "bunker-1",
+		WorkspacePath: "/workspace/" + leaseID,
+	}
+}
+
 func (h *harness) acquireLease(leaseID string, epoch int, expected int) {
+	h.t.Helper()
+	h.acquireLeaseOwned(leaseID, epoch, expected, h.parentID, "")
+}
+
+func (h *harness) acquireLeaseOwned(leaseID string, epoch, expected int, ownerRun, ownerAttempt string) {
 	h.t.Helper()
 	err := database.AcquireWorkspaceLease(h.ctx, h.db, database.LeaseAcquire{
 		WorkspaceLease: database.WorkspaceLease{
-			LeaseID:    leaseID,
-			LeaseEpoch: epoch,
-			Identity:   database.WorkspaceIdentity{RepositoryURI: "https://example.invalid/repo.git", BaseRevision: "base", Branch: "work", HostID: "bunker-1", WorkspacePath: "/workspace/" + leaseID},
-			OwnerRunID: h.parentID,
-			ExpiresAt:  seamNow.Add(time.Hour).Format(time.RFC3339Nano),
+			LeaseID:        leaseID,
+			LeaseEpoch:     epoch,
+			Identity:       h.leaseIdentity(leaseID),
+			OwnerRunID:     ownerRun,
+			OwnerAttemptID: ownerAttempt,
+			ExpiresAt:      h.sim.Now().Add(time.Hour).Format(time.RFC3339Nano),
 		},
 		ExpectedEpoch: expected,
 	})
@@ -161,8 +190,8 @@ func (h *harness) route(mutators ...func(*execution.RouteReceipt)) execution.Rou
 			{Rank: 1, Model: "mimo-v2.6-pro", Provider: "opencode-go", BaseURL: "https://router.invalid"},
 			{Rank: 2, Model: "longcat-2.0", Provider: "opencode-go", BaseURL: "https://router.invalid"},
 		},
-		ResolvedAt: seamNow.Add(-time.Minute).Format(time.RFC3339Nano),
-		ValidUntil: seamNow.Add(5 * time.Minute).Format(time.RFC3339Nano),
+		ResolvedAt: h.sim.Now().Add(-time.Minute).Format(time.RFC3339Nano),
+		ValidUntil: h.sim.Now().Add(5 * time.Minute).Format(time.RFC3339Nano),
 	}
 	for _, m := range mutators {
 		m(&r)
@@ -177,6 +206,7 @@ func (h *harness) route(mutators ...func(*execution.RouteReceipt)) execution.Rou
 
 func (h *harness) intent(stepID string, generation int, leaseID string, leaseEpoch int, route execution.RouteReceipt) execution.ReadyStepIntent {
 	h.t.Helper()
+	id := h.leaseIdentity(leaseID)
 	return execution.ReadyStepIntent{
 		ParentRunID:          h.parentID,
 		StepID:               stepID,
@@ -198,8 +228,13 @@ func (h *harness) intent(stepID string, generation int, leaseID string, leaseEpo
 			LeaseEpoch:            leaseEpoch,
 			ProfileID:             "bunker-profile-1",
 			EnforcementReceiptRef: "enforcement-receipt-1",
-			VerifiedAt:            seamNow.Add(-time.Minute).Format(time.RFC3339Nano),
-			ValidUntil:            seamNow.Add(time.Hour).Format(time.RFC3339Nano),
+			VerifiedAt:            h.sim.Now().Add(-time.Minute).Format(time.RFC3339Nano),
+			ValidUntil:            h.sim.Now().Add(time.Hour).Format(time.RFC3339Nano),
+			RepositoryURI:         id.RepositoryURI,
+			BaseRevision:          id.BaseRevision,
+			Branch:                id.Branch,
+			HostID:                id.HostID,
+			WorkspacePath:         id.WorkspacePath,
 		},
 		Policy: execution.AttemptPolicy{
 			StartTimeoutS:      60,
@@ -228,6 +263,15 @@ func (h *harness) attemptCount() int {
 	return n
 }
 
+func (h *harness) outboxCount() int {
+	h.t.Helper()
+	var n int
+	if err := h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM execution_outbox`).Scan(&n); err != nil {
+		h.t.Fatal(err)
+	}
+	return n
+}
+
 func (h *harness) eventCount() int {
 	h.t.Helper()
 	var n int
@@ -241,6 +285,50 @@ func (h *harness) settleTriple() (execution.TerminalOutcome, execution.Connector
 	return execution.TerminalOutcome{OutcomeRef: "outcome-1", State: execution.AttemptStateCompleted, CorrelationID: "corr-1"},
 		execution.ConnectorSettlement{SettlementReceiptRef: "connector-settlement-1", QuiescenceReceiptRef: "quiescence-1"},
 		execution.IndependentVerification{VerificationRef: "verification-1", VerifierID: "verifier-1", Verdict: execution.VerifierPass}
+}
+
+// recordEvidence appends one durable evidence record whose payload digest IS
+// the reference later settlement/reconciliation resolves.
+func (h *harness) recordEvidence(attemptID string, generation int, kind, ref string) {
+	h.t.Helper()
+	if _, _, err := h.durable.AppendEvidence(h.ctx, foreman.EvidenceRecord{
+		ParentRunID:   h.parentID,
+		AttemptID:     attemptID,
+		Generation:    generation,
+		Kind:          kind,
+		PayloadDigest: ref,
+	}); err != nil {
+		h.t.Fatalf("record %s evidence: %v", kind, err)
+	}
+}
+
+// recordVerification stores the authoritative independent-verifier receipt a
+// settlement's verification reference must resolve to.
+func (h *harness) recordVerification(attemptID string, independent execution.IndependentVerification) {
+	h.t.Helper()
+	state := "passed"
+	if independent.Verdict != execution.VerifierPass {
+		state = "failed"
+	}
+	if _, err := database.RecordVerificationReceipt(h.ctx, h.db, database.VerificationReceipt{
+		ReceiptID: independent.VerificationRef, RunID: h.parentID, AttemptID: attemptID,
+		CriterionID: "ac1", CommitSHA: "commit-1", State: state,
+		TrustedEnvironment: "bunker", ArgvJSON: `["go","test"]`, VerifierID: independent.VerifierID,
+	}); err != nil {
+		h.t.Fatalf("record verification receipt: %v", err)
+	}
+}
+
+// recordSettlementEvidence durably records every reference one settlement
+// triple carries — invented strings are never evidence.
+func (h *harness) recordSettlementEvidence(attemptID string, generation int, outcome execution.TerminalOutcome, connector execution.ConnectorSettlement, independent execution.IndependentVerification) {
+	h.t.Helper()
+	h.recordEvidence(attemptID, generation, execution.EvidenceKindTerminalOutcome, outcome.OutcomeRef)
+	h.recordEvidence(attemptID, generation, execution.EvidenceKindConnectorSettlement, connector.SettlementReceiptRef)
+	if connector.QuiescenceReceiptRef != "" {
+		h.recordEvidence(attemptID, generation, execution.EvidenceKindConnectorQuiescence, connector.QuiescenceReceiptRef)
+	}
+	h.recordVerification(attemptID, independent)
 }
 
 // mustStepBriefDigest returns a canonical execution-brief digest computed by

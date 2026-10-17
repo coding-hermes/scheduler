@@ -260,6 +260,7 @@ func TestRefuseRetryWhileStartUncertain(t *testing.T) {
 	h.invoke()
 	attempt := h.prepare("attempt-1", h.intent("step-1", 1, "lease-1", 1, h.route()))
 
+	h.advance(61 * time.Second) // past the persisted start deadline
 	if _, err := h.store.MarkStartUncertain(h.ctx, foreman.UncertainRequest{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1, Reason: "start deadline passed",
 	}); err != nil {
@@ -291,6 +292,7 @@ func TestUncertainReconciliationIdentifiesNativeAttempt(t *testing.T) {
 	h.invoke()
 	attempt := h.prepare("attempt-1", h.intent("step-1", 1, "lease-1", 1, h.route()))
 
+	h.advance(61 * time.Second) // past the persisted start deadline
 	if _, err := h.store.MarkStartUncertain(h.ctx, foreman.UncertainRequest{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1, Reason: "start deadline passed",
 	}); err != nil {
@@ -301,6 +303,8 @@ func TestUncertainReconciliationIdentifiesNativeAttempt(t *testing.T) {
 	}); err != nil || replay {
 		t.Fatalf("begin reconciliation: replay=%v err=%v", replay, err)
 	}
+	// The native identification proof must itself be durable evidence.
+	h.recordEvidence(attempt.AttemptID, 1, execution.EvidenceKindNativeIdentification, "native-proof-1")
 	eventsBefore := h.eventCount()
 	rec, err := h.store.CompleteReconciliation(h.ctx, foreman.ReconcileOutcome{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1,
@@ -339,6 +343,7 @@ func TestBoundedRetryAfterProvenNoStart(t *testing.T) {
 	h.invoke()
 	attempt := h.prepare("attempt-1", h.intent("step-1", 1, "lease-1", 1, h.route()))
 
+	h.advance(61 * time.Second) // past the persisted start deadline
 	if _, err := h.store.MarkStartUncertain(h.ctx, foreman.UncertainRequest{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1, Reason: "start deadline passed",
 	}); err != nil {
@@ -349,6 +354,8 @@ func TestBoundedRetryAfterProvenNoStart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A no-start resolution requires durable no-start proof.
+	h.recordEvidence(attempt.AttemptID, 1, execution.EvidenceKindNoStartProof, "no-start-proof-1")
 	rec, err := h.store.CompleteReconciliation(h.ctx, foreman.ReconcileOutcome{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1,
 		Next:   execution.ParentExecuting,
@@ -502,7 +509,7 @@ func TestRefuseCancellationSettlementWithDescendants(t *testing.T) {
 	// A connector-reported terminal outcome without a settlement receipt is
 	// still an unsettled connector.
 	if _, _, err := database.AppendExecutionEvent(h.ctx, h.db, database.ExecutionEvent{
-		RunID: h.parentID, AttemptID: attempt.AttemptID, Generation: attempt.Generation, Sequence: 99,
+		RunID: h.parentID, AttemptID: attempt.AttemptID, Generation: attempt.Generation, Sequence: 1,
 		Kind: "connector_terminal", ProposedState: execution.AttemptStateFailed, PayloadDigest: execution.EvidenceDigest("connector_terminal", attempt.AttemptID),
 	}); err != nil {
 		t.Fatal(err)
@@ -511,12 +518,16 @@ func TestRefuseCancellationSettlementWithDescendants(t *testing.T) {
 		t.Fatalf("settlement over unsettled connector error=%v", err)
 	}
 
-	// Cancellation settlement also demands quiescence evidence.
+	// Cancellation settlement also demands quiescence evidence. Every
+	// reference must resolve to durable records first.
 	quiescenceless := quiescent
 	quiescenceless.QuiescenceReceiptRef = ""
+	attemptOutcome := execution.TerminalOutcome{OutcomeRef: "outcome-1", State: execution.AttemptStateFailed, CorrelationID: "corr-1"}
+	h.recordSettlementEvidence(attempt.AttemptID, 1, attemptOutcome, connector, independent)
+	h.recordEvidence(attempt.AttemptID, 1, execution.EvidenceKindConnectorQuiescence, "quiescence-receipt-1")
 	settledAttempt, err := h.store.SettleAttempt(h.ctx, foreman.AttemptSettlementRequest{Settlement: execution.AttemptSettlement{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID,
-		Outcome:   execution.TerminalOutcome{OutcomeRef: "outcome-1", State: execution.AttemptStateFailed, CorrelationID: "corr-1"},
+		Outcome:   attemptOutcome,
 		Connector: connector, Independent: independent,
 	}})
 	if err != nil {
@@ -544,6 +555,7 @@ func TestVerifiedParentSettlement(t *testing.T) {
 	receipt := h.invoke()
 	attempt := h.prepare("attempt-1", h.intent("step-1", 1, "lease-1", 1, h.route()))
 	outcome, connector, independent := h.settleTriple()
+	h.recordSettlementEvidence(attempt.AttemptID, 1, outcome, connector, independent)
 
 	settled, err := h.store.SettleAttempt(h.ctx, foreman.AttemptSettlementRequest{Settlement: execution.AttemptSettlement{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Outcome: outcome, Connector: connector, Independent: independent,
@@ -609,9 +621,10 @@ func TestRestartReplayIdempotency(t *testing.T) {
 	h := newHarness(t)
 	h.admit(0)
 	h.acquireLease("lease-1", 1, 0)
-	h.invoke()
+	receipt := h.invoke()
 	intent := h.intent("step-1", 1, "lease-1", 1, h.route())
 	attempt := h.prepare("attempt-1", intent)
+	h.advance(61 * time.Second) // past the persisted start deadline
 	if _, err := h.store.MarkStartUncertain(h.ctx, foreman.UncertainRequest{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1, Reason: "start deadline passed",
 	}); err != nil {
@@ -666,7 +679,8 @@ func TestRestartReplayIdempotency(t *testing.T) {
 	}
 
 	// The replayed reconciliation still resolves to the identified native
-	// attempt and then settles with complete evidence.
+	// attempt and then settles with complete, durably recorded evidence.
+	h.recordEvidence(attempt.AttemptID, 1, execution.EvidenceKindNativeIdentification, "native-proof-1")
 	rec, err = h.store.CompleteReconciliation(h.ctx, foreman.ReconcileOutcome{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Generation: 1,
 		Next:   execution.ParentExecuting,
@@ -676,13 +690,14 @@ func TestRestartReplayIdempotency(t *testing.T) {
 		t.Fatalf("parent=%+v err=%v", rec, err)
 	}
 	outcome, connector, independent := h.settleTriple()
+	h.recordSettlementEvidence(attempt.AttemptID, 1, outcome, connector, independent)
 	if _, err := h.store.SettleAttempt(h.ctx, foreman.AttemptSettlementRequest{Settlement: execution.AttemptSettlement{
 		ParentRunID: h.parentID, AttemptID: attempt.AttemptID, Outcome: outcome, Connector: connector, Independent: independent,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.store.RecordForemanReport(h.ctx, execution.ForemanReport{
-		ParentRunID: h.parentID, InvocationID: "invocation-1",
+		ParentRunID: h.parentID, InvocationID: receipt.InvocationID,
 		Outcome: outcome, Connector: connector, Independent: independent,
 	}); err != nil {
 		t.Fatal(err)

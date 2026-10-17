@@ -92,12 +92,35 @@ func TestValidateParentSettlementDescendantAndQuiescenceRules(t *testing.T) {
 
 	cancelling := base
 	cancelling.FromParentState = ParentCancelling
+	cancelling.Outcome.State = AttemptStateCanceled
 	if err := ValidateParentSettlement(cancelling); !errors.Is(err, ErrQuiescenceEvidenceRequired) {
 		t.Fatalf("cancellation without quiescence receipt error=%v", err)
 	}
 	cancelling.QuiescenceReceiptRef = "quiescence-receipt-1"
 	if err := ValidateParentSettlement(cancelling); err != nil {
 		t.Fatalf("cancellation with quiescence receipt refused: %v", err)
+	}
+
+	// Cancellation is monotonic: success cannot follow a cancellation request.
+	completedCancel := cancelling
+	completedCancel.Outcome.State = AttemptStateCompleted
+	if err := ValidateParentSettlement(completedCancel); !errors.Is(err, ErrCancellationMonotonic) {
+		t.Fatalf("cancelled parent settled completed: error=%v", err)
+	}
+
+	// Process-backed descendants additionally need zero-descendant quiescence.
+	processBacked := base
+	processBacked.Descendants = []AttemptQuiescence{{AttemptID: "attempt-1", Terminal: true, ConnectorSettled: true, ProcessBacked: true}}
+	if err := ValidateParentSettlement(processBacked); !errors.Is(err, ErrQuiescenceEvidenceRequired) {
+		t.Fatalf("process-backed descendant without quiescence error=%v", err)
+	}
+	processBacked.Descendants[0].QuiescenceRef = "quiescence-1"
+	if err := ValidateParentSettlement(processBacked); !errors.Is(err, ErrQuiescenceEvidenceRequired) {
+		t.Fatalf("process-backed parent without zero-descendant authority error=%v", err)
+	}
+	processBacked.QuiescenceReceiptRef = "quiescence-receipt-1"
+	if err := ValidateParentSettlement(processBacked); err != nil {
+		t.Fatalf("process-backed quiescence refused: %v", err)
 	}
 
 	ackOnly := base

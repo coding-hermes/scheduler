@@ -30,11 +30,22 @@ type ReadyStepIntent struct {
 	StepGeneration       int                     `json:"step_generation"`
 	BriefDigest          string                  `json:"brief_digest"`
 	ContextRefs          []ContextRef            `json:"context_refs"`
+	Dependencies         []StepDependency        `json:"dependencies"`
 	RequiredCapabilities []string                `json:"required_capabilities"`
 	Route                RouteReceipt            `json:"route"`
 	Choice               ToolChoice              `json:"choice"`
 	Lease                WorkspaceLeaseAuthority `json:"lease"`
 	Policy               AttemptPolicy           `json:"policy"`
+}
+
+// StepDependency names one prerequisite step and the outcome policy it must
+// have reached before this step is ready. The default policy
+// (DependencyOutcomeCompletedVerified) requires a successful terminal result
+// plus a passing independent verification; only an explicit policy admits
+// anything else.
+type StepDependency struct {
+	StepID          string `json:"step_id"`
+	RequiredOutcome string `json:"required_outcome"`
 }
 
 // RouteReceipt is the just-in-time Task Router decision: ordered model/
@@ -71,7 +82,8 @@ type ToolChoice struct {
 
 // WorkspaceLeaseAuthority is the verified Bunker workspace lease/profile
 // authority the attempt must execute under. Presence and currency are checked
-// fail-closed before any attempt row exists.
+// fail-closed before any attempt row exists, and the claimed workspace
+// identity must match the durable lease exactly.
 type WorkspaceLeaseAuthority struct {
 	LeaseID               string `json:"lease_id"`
 	LeaseEpoch            int    `json:"lease_epoch"`
@@ -79,6 +91,11 @@ type WorkspaceLeaseAuthority struct {
 	EnforcementReceiptRef string `json:"enforcement_receipt_ref"`
 	VerifiedAt            string `json:"verified_at"`
 	ValidUntil            string `json:"valid_until"`
+	RepositoryURI         string `json:"repository_uri"`
+	BaseRevision          string `json:"base_revision"`
+	Branch                string `json:"branch"`
+	HostID                string `json:"host_id"`
+	WorkspacePath         string `json:"workspace_path"`
 }
 
 // AttemptPolicy is the timeout/budget/cancellation policy carried with the
@@ -111,8 +128,22 @@ func ValidateReadyStepIntent(in ReadyStepIntent) error {
 	if in.Policy.StartTimeoutS < 1 || in.Policy.WallTimeoutS < 1 || in.Policy.BudgetUnits < 0 || in.Policy.CancellationPolicy == "" {
 		return fmt.Errorf("%w: timeout/budget/cancellation policy incomplete", ErrReadyStepIntent)
 	}
+	for _, dep := range in.Dependencies {
+		if dep.StepID == "" {
+			return fmt.Errorf("%w: dependency without a step id", ErrReadyStepIntent)
+		}
+		if dep.StepID == in.StepID {
+			return fmt.Errorf("%w: step %s depends on itself", ErrReadyStepIntent, in.StepID)
+		}
+		if !ValidateDependencyOutcome(dep.RequiredOutcome) {
+			return fmt.Errorf("%w: dependency %s policy %q", ErrReadyStepIntent, dep.StepID, dep.RequiredOutcome)
+		}
+	}
 	if in.Lease.LeaseID == "" || in.Lease.LeaseEpoch < 1 || in.Lease.ProfileID == "" || in.Lease.EnforcementReceiptRef == "" {
 		return ErrLeaseAuthorityMissing
+	}
+	if in.Lease.RepositoryURI == "" || in.Lease.BaseRevision == "" || in.Lease.Branch == "" || in.Lease.HostID == "" || in.Lease.WorkspacePath == "" {
+		return fmt.Errorf("%w: lease workspace identity incomplete", ErrLeaseAuthorityMissing)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, in.Lease.VerifiedAt); err != nil {
 		return fmt.Errorf("%w: lease verified_at: %v", ErrLeaseAuthorityMissing, err)
@@ -220,4 +251,19 @@ func DeriveAttemptIdempotencyKey(parentRunID, stepID string, generation int, rou
 		h.Write([]byte(f))
 	}
 	return "aik-1:" + hex.EncodeToString(h.Sum(nil))
+}
+
+// DeriveForemanInvocationID derives the stable receiver-facing identity of
+// one foreman invocation from the parent run and its canonical brief digest.
+// It is persisted BEFORE the external boundary is crossed and never changes on
+// replay, so a resend after an uncertain crossing presents the same identity
+// and the receiver can deduplicate.
+func DeriveForemanInvocationID(parentRunID, briefDigest string) string {
+	h := sha256.New()
+	h.Write([]byte("foreman-invocation-v1"))
+	h.Write([]byte{0})
+	h.Write([]byte(parentRunID))
+	h.Write([]byte{0})
+	h.Write([]byte(briefDigest))
+	return "fi-1:" + hex.EncodeToString(h.Sum(nil))
 }

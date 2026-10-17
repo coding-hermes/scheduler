@@ -96,17 +96,26 @@ type AttemptRecord struct {
 	Generation                 int
 	AttemptIdempotencyKey      string
 	State                      string
+	BriefDigest                string
 	RouteDigest                string
+	CandidateRank              int
 	ConnectorID                string
+	ConnectorVersion           string
+	SelectedModel              string
+	SelectedProvider           string
 	LeaseID                    string
 	LeaseEpoch                 int
+	ProfileID                  string
 	EnforcementReceiptRef      string
 	StartDeadlineAt            string
+	StartedAt                  string
 	NativeSessionID            string
 	TerminalOutcomeRef         string
 	ConnectorSettlementRef     string
 	IndependentVerificationRef string
+	QuiescenceReceiptRef       string
 	ReconciledNoStart          bool
+	ProcessBacked              bool
 	SubmittedAt                string
 	SettledAt                  string
 }
@@ -173,8 +182,9 @@ type ReconcileResult struct {
 	NativeSessionID string
 }
 
-// ReconcileOutcome resolves an uncertain start. Next must be executing or
-// settled, per the closed parent lifecycle.
+// ReconcileOutcome resolves an uncertain start. Next must be executing: a
+// reconciliation result is a durable resolution receipt, never a settlement —
+// settling follows the normal settlement path with full evidence.
 type ReconcileOutcome struct {
 	ParentRunID string
 	AttemptID   string
@@ -214,6 +224,23 @@ type CancelFanout struct {
 	CancelRequestedAt string
 }
 
+// InvocationIntent is the durable foreman-invocation identity. It is
+// persisted BEFORE the external boundary is crossed; the receiver-facing
+// identity never changes on replay.
+type InvocationIntent struct {
+	InvocationID string
+	ParentRunID  string
+	// Uncertain is true when an earlier crossing persisted the identity but
+	// no confirmation landed: the crossing must be reconciled before any
+	// resend.
+	Uncertain bool
+	// Receipt carries the confirmed receipt once the invocation completed.
+	Receipt execution.ForemanReceipt
+}
+
+// Confirmed reports whether the invocation already completed durably.
+func (i InvocationIntent) Confirmed() bool { return i.Receipt.InvocationID != "" }
+
 // Store is the durable seam onto the landed execution schema. Implementations
 // must be fail-closed and replay-safe: every mutation is idempotent by its
 // derived identity and every refusal names a sentinel error from
@@ -224,9 +251,15 @@ type Store interface {
 	AdmitParentRun(ctx context.Context, spec ParentRunSpec) (ParentRecord, bool, error)
 	// GetParentRun reads one parent run.
 	GetParentRun(ctx context.Context, parentRunID string) (ParentRecord, error)
-	// InvokeForeman records the foreman invocation receipt and the
-	// queued → foreman_planning edge. replay is true on an identical repeat.
-	InvokeForeman(ctx context.Context, parentRunID string, receipt execution.ForemanReceipt) (ParentRecord, bool, error)
+	// BeginForemanInvocation persists the stable invocation identity before
+	// the external boundary is crossed. crossing is true only for the caller
+	// that may invoke the foreman; an unconfirmed intent is an uncertain
+	// crossing that must be reconciled before any resend.
+	BeginForemanInvocation(ctx context.Context, parentRunID string) (InvocationIntent, bool, error)
+	// ConfirmForemanInvocation records the receiver-accepted receipt under
+	// the SAME stable identity and applies the queued → foreman_planning
+	// edge. replay is true on an identical repeat.
+	ConfirmForemanInvocation(ctx context.Context, parentRunID string, receipt execution.ForemanReceipt) (ParentRecord, bool, error)
 	// PrepareStepAttempt persists exactly one attempt at dispatch
 	// preparation after every fail-closed check. replay is true on an
 	// identical repeat of the same derived idempotency key.
@@ -239,7 +272,7 @@ type Store interface {
 	// uncertain → reconciling edge. replay is true on an identical repeat.
 	BeginReconciliation(ctx context.Context, req ReconcileRequest) (ParentRecord, bool, error)
 	// CompleteReconciliation records the proven result and applies the
-	// reconciling → executing|settled edge.
+	// reconciling → executing edge. It can never manufacture settled.
 	CompleteReconciliation(ctx context.Context, req ReconcileOutcome) (ParentRecord, error)
 	// SettleAttempt settles one attempt on complete settlement evidence.
 	SettleAttempt(ctx context.Context, req AttemptSettlementRequest) (AttemptRecord, error)
