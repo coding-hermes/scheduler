@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/coding-hermes/scheduler/internal/bus"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // mcpFedDefaultBudgetMS is the MCP transport's caller-side default budget
@@ -97,12 +98,12 @@ func federationTools() []ToolDefinition {
 	toolDefs := make([]ToolDefinition, 0, 1+len(federationOpToolIDs))
 	toolDefs = append(toolDefs, ToolDefinition{
 		Name:        "fed_query",
-		Description: "Federation query (REMOTE-010): ask THIS scheduler a read-catalogue question with the full §2.1 envelope. op is one of: peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list. corr_id is REQUIRED — caller-assigned, unique per (caller, minute), the idempotency key (a retried query returns the first answer). Returns the §2.2 response envelope verbatim: status (ok/partial/error/stale), peer, as_of/age_ms (the data's freshness), data, gaps, error, contract.",
+		Description: "Federation query (REMOTE-010): ask THIS scheduler a read-catalogue question with the full §2.1 envelope. op is one of: peer.status, fleet.status, projects.list, queue.get, ticks.list, events.list. corr_id is REQUIRED — caller-assigned, unique per (caller, minute), the idempotency key (a retried query returns the first answer). Returns the §2.2 response envelope verbatim: status (ok/partial/error/stale), peer, as_of/age_ms (the data's freshness), data, gaps, error, contract. The read is about THIS scheduler — the answer's peer member names it; an optional args.peer asserts that identity, and asking about a DIFFERENT peer over MCP is refused (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read).",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"op":        map[string]interface{}{"type": "string", "description": "Catalogue op id (e.g. queue.get, projects.list)"},
-				"args":      map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional (e.g. {\"filter\": \"name\"} for projects.list; {\"since\": RFC3339, \"limit\": int} for ticks.list/events.list)"},
+				"args":      map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional (e.g. {\"filter\": \"name\"} for projects.list; {\"since\": RFC3339, \"limit\": int} for ticks.list/events.list); an optional \"peer\" asserts the target scheduler and must equal this scheduler's id (a different peer is refused)"},
 				"corr_id":   map[string]interface{}{"type": "string", "description": "REQUIRED correlation/idempotency id, echoed in the reply"},
 				"budget_ms": map[string]interface{}{"type": "integer", "description": "Read budget in ms (default 10000); the peer clamps to its own cap"},
 				"want":      map[string]interface{}{"type": "string", "description": "\"answer\" (default, all-or-error) or \"partial\" (best-effort with named gaps)"},
@@ -122,11 +123,11 @@ func federationTools() []ToolDefinition {
 	for _, op := range ops {
 		toolDefs = append(toolDefs, ToolDefinition{
 			Name:        federationOpToolName(op),
-			Description: "Federation read op " + op + " — " + federationOpToolIDs[op] + ". Same one contract as fed_query: returns the §2.2 response envelope verbatim (status ok/partial/error/stale, peer, as_of/age_ms, data, gaps, contract). federation_corr_id is required.",
+			Description: "Federation read op " + op + " — " + federationOpToolIDs[op] + ". Answers about THIS scheduler (the envelope's peer member names it): an optional args.peer asserts that identity and must equal this scheduler's id — a DIFFERENT peer is refused, never answered locally (use scheduler-query <peer> <op> or the bus/HTTP surface for a remote read). Same one contract as fed_query: returns the §2.2 response envelope verbatim (status ok/partial/error/stale, peer, as_of/age_ms, data, gaps, contract). federation_corr_id is required.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"args":               map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional"},
+					"args":               map[string]interface{}{"type": "object", "description": "Op-specific arguments, all optional; an optional \"peer\" asserts the target scheduler and must equal this scheduler's id (a different peer is refused)"},
 					"federation_corr_id": map[string]interface{}{"type": "string", "description": "REQUIRED correlation/idempotency id, echoed in the reply"},
 					"budget_ms":          map[string]interface{}{"type": "integer", "description": "Read budget in ms (default 10000); the peer clamps to its own cap"},
 				},
@@ -168,6 +169,9 @@ func (s *Server) toolFedQuery(_ context.Context, args map[string]interface{}) (s
 	if err != nil {
 		return "", err
 	}
+	if err := fedPeerArgError(q.Args, fedAnsweringPeerID()); err != nil {
+		return "", err
+	}
 	return s.federationExecForMCP(q)
 }
 
@@ -187,7 +191,67 @@ func (s *Server) toolFedOpQuery(_ context.Context, tool string, args map[string]
 	if err != nil {
 		return "", err
 	}
+	if err := fedPeerArgError(q.Args, fedAnsweringPeerID()); err != nil {
+		return "", err
+	}
 	return s.federationExecForMCP(q)
+}
+
+// fedAnsweringPeerID is the scheduler identity this MCP server's answers are
+// ABOUT (the §2.2 envelope's `peer` member) — the same value every op's read
+// stamps: the installed daemon identity (cmd/schedulerd/main.go installs it at
+// boot), else the host-derived default that boot would have installed.
+func fedAnsweringPeerID() string {
+	if id := database.SchedulerID(); id != "" {
+		return id
+	}
+	return database.ResolveDefaultSchedulerID()
+}
+
+// fedPeerArgError validates the OPTIONAL `peer` member of a tool's op-args
+// object (SCHED-GAP-1741). The MCP transport answers about THIS scheduler
+// (spec §3 MCP row — the tool set is how an agent asks the scheduler it is
+// talking to), so `peer` is an ASSERTION of that identity, not a selector:
+//
+//   - absent → the named default (this scheduler); the §2.2 answer's `peer`
+//     member names it, and the tool schema states it;
+//   - present and equal to this scheduler's id → accepted (the caller's
+//     assertion is satisfied);
+//   - present and naming a DIFFERENT scheduler → a named refusal. Before this
+//     check the key was copied into the envelope, ignored by every §2.3 op and
+//     answered from the LOCAL read: a wrong answer the caller could not see.
+//     Remote reads have surfaces of their own (CLI positional, bus topic,
+//     HTTP on the target peer) and are named in the refusal.
+//   - present but not a non-empty string → a named refusal (a malformed
+//     assertion must never degrade into "as if absent").
+//
+// answering is the resolved identity (fedAnsweringPeerID); an empty answering
+// identity cannot verify the assertion, so an explicit peer fails closed
+// rather than being answered locally.
+func fedPeerArgError(args map[string]interface{}, answering string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	raw, ok := args["peer"]
+	if !ok {
+		return nil
+	}
+	label := answering
+	if label == "" {
+		label = "identity not installed in this process"
+	}
+	peer, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("args.peer must be a string naming the scheduler being asked (omit it to accept the default: THIS scheduler, %s)", label)
+	}
+	peer = strings.TrimSpace(peer)
+	if peer == "" {
+		return fmt.Errorf("args.peer must be a non-empty string naming the scheduler being asked (omit it to accept the default: THIS scheduler, %s)", label)
+	}
+	if answering != "" && peer == answering {
+		return nil
+	}
+	return fmt.Errorf("args.peer %q is not this scheduler (%s) — the MCP federation tools answer about THIS scheduler; use scheduler-query <peer> <op> (CLI), the crier bus topic fed.query.<peer>, or POST /api/v1/federation/query on the target peer for a remote read", peer, label)
 }
 
 // federationEnvelopeFromArgs builds the §2.1 Query envelope from the tool

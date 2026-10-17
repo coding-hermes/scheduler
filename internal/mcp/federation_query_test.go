@@ -348,6 +348,206 @@ func TestREMOTE010_TooFewArgsRefused(t *testing.T) {
 	}
 }
 
+// ── SCHED-GAP-1741: the `peer` argument ─────────────────────────────────
+//
+// The MCP federation tools answer about THIS scheduler (docs/federation-query-
+// spec.md §3 MCP row); `peer` is an addressing concept of the CLI/bus/HTTP
+// transports, never a §2.3 op argument. Before this row an args.peer naming a
+// DIFFERENT scheduler was copied into the envelope, ignored by the op, and
+// answered from the local read — a wrong answer the caller could not see.
+// The fix names the default (the answer's `peer` member, plus the tool schema)
+// and refuses an explicit peer that is not this scheduler.
+
+// fedLocalPeer is the identity this test process resolves as "this scheduler"
+// (the installed id, else the host-derived default the daemon installs at
+// boot) — the value an args.peer must equal to be accepted.
+func fedLocalPeer() string {
+	if id := database.SchedulerID(); id != "" {
+		return id
+	}
+	return database.ResolveDefaultSchedulerID()
+}
+
+// TestSCHEDGAP1741_NoPeerDefaultsToThisScheduler is acceptance cell 2 for the
+// ABSENT arm: omitting peer is NOT a misroute — the tool answers about itself
+// and the §2.2 envelope's `peer` member names the scheduler that answered
+// (the named default the row asked for, replacing the silent fall-through).
+func TestSCHEDGAP1741_NoPeerDefaultsToThisScheduler(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+
+	// Two shapes of "no peer": no args member at all, and an op-args object
+	// carrying an unrelated key.
+	for i, args := range []map[string]interface{}{
+		{"federation_corr_id": "gap1741-nopeer-1"},
+		{"federation_corr_id": "gap1741-nopeer-2", "args": map[string]interface{}{"limit": 1}},
+	} {
+		text := fedMCPCall(t, m, i+1, "fed_peer_status", args)
+		var env struct {
+			Peer   string         `json:"peer"`
+			Op     string         `json:"op"`
+			Status string         `json:"status"`
+			Data   map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(text), &env); err != nil {
+			t.Fatalf("answer not a §2.2 envelope: %v (%s)", err, text)
+		}
+		if env.Status != "ok" {
+			t.Fatalf("status = %s, want ok (%s)", env.Status, text)
+		}
+		if env.Op != "peer.status" {
+			t.Errorf("op = %q, want peer.status", env.Op)
+		}
+		// The default is NAMED: the envelope says which scheduler answered...
+		if env.Peer != database.SchedulerID() {
+			t.Errorf("peer = %q, want the answering scheduler id %q", env.Peer, database.SchedulerID())
+		}
+		// ...and the read is the LOCAL one (no fan-out, no aggregate rows):
+		// peer.status data is this scheduler's identity.
+		if _, ok := env.Data["scheduler_id"]; !ok {
+			t.Errorf("peer.status data lost scheduler_id: %v", env.Data)
+		}
+		if _, ok := env.Data["peers"]; ok {
+			t.Errorf("peer.status answered with a peer aggregate — an MCP read must not fan out: %v", env.Data)
+		}
+	}
+}
+
+// TestSCHEDGAP1741_ExplicitLocalPeerAccepted is the YOUR-arm of the brief's
+// criterion 2: an args.peer that DOES name this scheduler is processed
+// normally (the assertion is satisfied, not refused).
+func TestSCHEDGAP1741_ExplicitLocalPeerAccepted(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+	text := fedMCPCall(t, m, 1, "fed_peer_status", map[string]interface{}{
+		"federation_corr_id": "gap1741-local-1",
+		"args":               map[string]interface{}{"peer": fedLocalPeer()},
+	})
+	var env struct {
+		Peer   string `json:"peer"`
+		Status string `json:"status"`
+		Error  *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(text), &env); err != nil {
+		t.Fatalf("answer not a §2.2 envelope: %v (%s)", err, text)
+	}
+	if env.Status != "ok" {
+		t.Fatalf("peer==this scheduler must be processed normally, got status=%s (%s)", env.Status, text)
+	}
+	if env.Peer != database.SchedulerID() {
+		t.Errorf("peer = %q, want the answering scheduler id %q", env.Peer, database.SchedulerID())
+	}
+}
+
+// TestSCHEDGAP1741_ForeignPeerRefused is the defect cell: asking about a
+// DIFFERENT scheduler over the MCP transport is refused with a named error
+// that names both the requested peer and this scheduler, and points at the
+// surfaces that CAN reach a remote peer — never a silently local answer.
+func TestSCHEDGAP1741_ForeignPeerRefused(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+	const foreign = "fleet-peer-that-is-not-this-scheduler"
+
+	for i, tool := range []string{"fed_peer_status", "fed_queue_get", "fed_query"} {
+		args := map[string]interface{}{
+			"federation_corr_id": "gap1741-foreign-" + tool,
+			"args":               map[string]interface{}{"peer": foreign},
+		}
+		if tool == "fed_query" {
+			delete(args, "federation_corr_id")
+			args["op"] = "peer.status"
+			args["corr_id"] = "gap1741-foreign-" + tool
+		}
+		text, err := callTool(t, m, i+1, tool, args)
+		if err == nil {
+			t.Fatalf("%s answered about peer %q locally instead of refusing: %s", tool, foreign, text)
+		}
+		if err.Code != -32000 {
+			// The surface's JSON-RPC vocabulary (internal/mcp/server.go): a
+			// TOOL-level refusal — the same class as a missing
+			// federation_corr_id — is -32000; -32602 is reserved for an
+			// undecodable params envelope and -32600 for a bad method.
+			t.Errorf("%s refusal code = %d, want -32000 (tool error, the same class as the other argument refusals)", tool, err.Code)
+		}
+		for _, want := range []string{foreign, "not this scheduler", "scheduler-query"} {
+			if !strings.Contains(err.Message, want) {
+				t.Errorf("%s refusal %q lost %q", tool, err.Message, want)
+			}
+		}
+	}
+
+	// A refusal is not an answer: nothing was audited as an answered read and
+	// no replay slot was consumed under that corr_id.
+	var answered int
+	if err := m.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE component='api.federation' AND message LIKE '%gap1741-foreign-%'`).Scan(&answered); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if answered != 0 {
+		t.Errorf("%d api.federation audit rows for refused calls — an argument refusal must not reach the shared entry point", answered)
+	}
+}
+
+// TestSCHEDGAP1741_MalformedPeerRefused refuses a peer that cannot be a
+// scheduler id at all (non-string / empty) rather than treating it as absent.
+func TestSCHEDGAP1741_MalformedPeerRefused(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+	for i, peer := range []interface{}{42, "", "   "} {
+		_, err := callTool(t, m, i+1, "fed_peer_status", map[string]interface{}{
+			"federation_corr_id": "gap1741-bad-" + string(rune('a'+i)),
+			"args":               map[string]interface{}{"peer": peer},
+		})
+		if err == nil {
+			t.Fatalf("args.peer=%v accepted — a malformed peer must be a named refusal", peer)
+		}
+		if !strings.Contains(err.Message, "args.peer") {
+			t.Errorf("refusal %q does not name args.peer", err.Message)
+		}
+	}
+}
+
+// TestSCHEDGAP1741_ToolSchemaNamesThePeerDefault pins the affordance half of
+// the row ("... and say so"): the tool surface an agent actually reads must
+// state that the read is about THIS scheduler and that a foreign peer is
+// refused — a caller cannot learn the address model from a 401 line.
+func TestSCHEDGAP1741_ToolSchemaNamesThePeerDefault(t *testing.T) {
+	m, _ := newFedMCPStack(t)
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("tools/list result not an object: %T", resp.Result)
+	}
+	tools, ok := result["tools"].([]interface{})
+	if !ok {
+		t.Fatalf("tools/list tools not an array: %T", result["tools"])
+	}
+	want := map[string]bool{"fed_query": false, "fed_peer_status": false}
+	for _, raw := range tools {
+		td, _ := raw.(map[string]interface{})
+		name, _ := td["name"].(string)
+		if _, tracked := want[name]; !tracked {
+			continue
+		}
+		desc, _ := td["description"].(string)
+		if !strings.Contains(desc, "THIS scheduler") {
+			t.Errorf("%s description does not state that the read is about THIS scheduler: %q", name, desc)
+		}
+		if !strings.Contains(desc, "peer") {
+			t.Errorf("%s description does not name the peer argument: %q", name, desc)
+		}
+		want[name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("%s missing from tools/list", name)
+		}
+	}
+}
+
 // TestREMOTE010_BudgetClampShared pins the budget path: a huge budget_ms
 // through the MCP tool is clamped by the SHARED cap
 // (federationBudgetClampMS inside the entry point) and the answer still
