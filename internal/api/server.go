@@ -276,6 +276,13 @@ func (s *Server) Handler() http.Handler {
 	// deprecated in docs/api.md §5 in favour of the tree.
 	mux.HandleFunc("/api/v1/lanes/tree", s.handleLanesTree)
 	mux.HandleFunc("/api/v1/lanes", s.handleLanes)
+	// SCHED-GAP-1700: the lane relationship map — many-to-many parent/child
+	// references between lanes, within or across namespaces. REFERENCE ONLY:
+	// nothing in internal/scheduler reads lane_links, so no scheduling field
+	// can move when a link is written. The trailing-slash subtree carries the
+	// five traversal reads (parents/children/ancestors/descendants/ancestor).
+	mux.HandleFunc("/api/v1/links", s.handleLinks)
+	mux.HandleFunc("/api/v1/links/", s.handleLinkSub)
 	mux.HandleFunc("/api/v1/cadence", s.cadence)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/v1/namespaces/", s.handleNamespaceByID)

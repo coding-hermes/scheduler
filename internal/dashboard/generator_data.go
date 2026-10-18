@@ -474,6 +474,13 @@ type ProjectDetailData struct {
 	// outcome yet), never a zero that could read as "no waste ever".
 	OutcomeSplit database.OutcomeSplit
 	OutcomeKnown bool
+	// SCHED-GAP-1700: the lane relationship map — this lane's direct parents
+	// and direct children from lane_links (many-to-many, within or across
+	// namespaces). REFERENCE ONLY: these rows never influence scheduling, and
+	// a read failure renders the "none recorded" line rather than failing the
+	// page (the map is lookup data, not a render dependency).
+	Parents  []database.LaneLink
+	Children []database.LaneLink
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.

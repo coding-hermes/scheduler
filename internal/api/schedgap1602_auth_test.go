@@ -455,9 +455,10 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 		}
 	}
 	// REMOTE-008 added one mutating-shape operation (POST federation/query)
-	// on top of REMOTE-003's two peers POSTs.
-	if mutating != 25 {
-		t.Errorf("mutating operations in spec = %d, want 25 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query)", mutating)
+	// on top of REMOTE-003's two peers POSTs; SCHED-GAP-1700 added the two
+	// lane-link writes (POST + DELETE /api/v1/links).
+	if mutating != 27 {
+		t.Errorf("mutating operations in spec = %d, want 27 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query + POST/DELETE /api/v1/links)", mutating)
 	}
 	if len(missing) > 0 {
 		t.Errorf("mutating operations without security: %v", missing)

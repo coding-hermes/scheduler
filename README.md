@@ -256,7 +256,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (63 tools)            │
+│  /mcp      → MCP server (68 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -297,7 +297,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 63 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 68 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (older
 deployed builds report fewer tools):
@@ -372,6 +372,11 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `fed_queue_get` | Federation read op `queue.get` — the ordered scheduling queue |
 | `fed_ticks_list` | Federation read op `ticks.list` — tick rows, newest first |
 | `fed_events_list` | Federation read op `events.list` — event rows, newest first |
+| `lane_links_list` | Lane relationship map (SCHED-GAP-1700): every recorded parent→child lane link — many-to-many, within or across namespaces — with each endpoint's namespace and a derived `cross_namespace`. Filters: `lane` (either endpoint), `parent`, `child`. Reference only — never changes scheduling |
+| `lane_link_add` | Record one parent→child lane link (operator credential required; named refusals for self-link, cycle, duplicate edge). Reference only — never changes scheduling |
+| `lane_link_remove` | Remove one parent→child lane link (operator credential required; a missing edge is a not-found error, never a silent success) |
+| `lane_relations` | Who is X related to: `direction=parents\|children\|ancestors\|descendants` — the direct relations or the transitive closure nearest hop first (depth + via edge per node), in one call |
+| `lane_is_ancestor` | Is Y an ancestor of X — the reachability answer plus its witness path and hop count, in one call |
 
 Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it. `fed_peer_status` (op `peer.status`) **requires** `args.peer` — the identity the read is about — and the other reads default to this scheduler while accepting `args.peer` only as an assertion of that same id. A peer naming a *different* scheduler is refused (SCHED-GAP-1741) instead of silently being answered from the local read; to read a remote peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
 
@@ -1055,7 +1060,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 63 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 68 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, the `lane_*` lane-relationship map tools (SCHED-GAP-1700), and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP

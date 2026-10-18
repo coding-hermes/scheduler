@@ -53,10 +53,20 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 // in server.go; a renamed tool fails the coverage_map_tools_exist subtest
 // instead of silently un-covering its route.
 var apiToolCoverage = map[string][]string{
-	"GET /api/v1/status":                  {"fleet_status"},
-	"GET /api/v1/projects":                {"fleet_projects"},
-	"GET /api/v1/lanes":                   {"fleet_projects"},
-	"GET /api/v1/lanes/tree":              {"fleet_lane_tree"},
+	"GET /api/v1/status":     {"fleet_status"},
+	"GET /api/v1/projects":   {"fleet_projects"},
+	"GET /api/v1/lanes":      {"fleet_projects"},
+	"GET /api/v1/lanes/tree": {"fleet_lane_tree"},
+	// SCHED-GAP-1700: the lane relationship map. The four traversal reads
+	// share one tool (direction discriminates), the CRUD pair map one-to-one.
+	"GET /api/v1/links":                   {"lane_links_list"},
+	"POST /api/v1/links":                  {"lane_link_add"},
+	"DELETE /api/v1/links":                {"lane_link_remove"},
+	"GET /api/v1/links/parents":           {"lane_relations"},
+	"GET /api/v1/links/children":          {"lane_relations"},
+	"GET /api/v1/links/ancestors":         {"lane_relations"},
+	"GET /api/v1/links/descendants":       {"lane_relations"},
+	"GET /api/v1/links/ancestor":          {"lane_is_ancestor"},
 	"POST /api/v1/projects":               {"fleet_add"},
 	"GET /api/v1/projects/{name}":         {"fleet_project_detail"},
 	"PUT /api/v1/projects/{name}":         {"fleet_set_weight", "fleet_set_priority", "fleet_set_cooldown", "fleet_set_decay"},

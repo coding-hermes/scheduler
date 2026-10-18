@@ -1366,6 +1366,11 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 		// parity guard surfaced without MCP coverage.
 		"peers_events",
 		"cadence",
+		// SCHED-GAP-1700: the lane relationship map — the list, the CRUD pair
+		// and the two traversal tools (four REST traversal reads share
+		// lane_relations; lane_is_ancestor answers the reachability question).
+		"lane_links_list", "lane_link_add", "lane_link_remove",
+		"lane_relations", "lane_is_ancestor",
 	}
 	for _, w := range want {
 		if !names[w] {
@@ -1378,8 +1383,9 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 	// tools (fed_query + 6 catalogue ops). SCHED-GAP-1580 added
 	// peers_events (REMOTE-006) + cadence (SOL-CADENCE) — the two served
 	// routes the served-spec parity guard surfaced without MCP coverage.
-	if len(toolsList) != 63 {
-		t.Errorf("tool count = %d, want 63 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_*)", len(toolsList))
+	// SCHED-GAP-1700 added the 5 lane relationship tools.
+	if len(toolsList) != 68 {
+		t.Errorf("tool count = %d, want 68 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_* + 5 lane relationship tools)", len(toolsList))
 	}
 }
 

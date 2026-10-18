@@ -124,6 +124,12 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
 | GET | `/api/v1/lanes/tree` | [§5](#5-projects) |
 | GET | `/api/v1/lanes` (deprecated) | [§5](#5-projects) |
+| GET, POST, DELETE | `/api/v1/links` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/parents` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/children` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/ancestors` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/descendants` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/ancestor` | [§18](#18-lane-relationship-map-sched-gap-1700) |
 | GET, PUT, DELETE | `/api/v1/projects/{name}` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/resume` | [§5](#5-projects) |
@@ -1771,3 +1777,197 @@ AI agents read the same report through the MCP tool `gateway_errors` (`POST
 /mcp`) — both surfaces are built by one aggregation
 (`scheduler.BuildGatewayErrorsReport`), so the REST wire and the tool output
 cannot disagree.
+
+## 18. Lane relationship map (SCHED-GAP-1700)
+
+A lane may be related to other lanes in ways the single `projects.parent`
+column cannot express: it can carry **several parents and several children at
+once**, and either endpoint may live in the **same namespace or a different
+one**. This section documents that map.
+
+**Reference/lookup only.** A link never changes a lane's admission mode,
+cadence, cooldown, weight, priority, enabled flag or pick order. `lane_links`
+(migration v70) is not read by the scheduling loop at all — writing an edge
+cannot move work. The tests measure this directly: a lane's full row is
+byte-identical before and after a link write, and no tick row appears.
+
+This is also a DIFFERENT relation from `projects.parent` / `/api/v1/lanes/tree`:
+that column is the one-parent nesting shape the tree resolves, this table is
+the free-form association map. Neither is derived from the other.
+
+### Link object
+
+```json
+{
+  "parent_lane": "lore",
+  "child_lane": "pulse",
+  "parent_namespace": "lore",
+  "child_namespace": "pulse",
+  "cross_namespace": true,
+  "note": "shared release train",
+  "created_at": "2026-10-17T21:04:11Z",
+  "created_by": "operator:token"
+}
+```
+
+`parent_namespace` / `child_namespace` are read **live** from the lane rows, so
+a lane moved between namespaces is reported honestly. The values recorded at
+link time are used only when the lane row is gone (a purged lane leaves a
+dangling link that still reads back). `cross_namespace` is derived, never
+stored.
+
+### GET /api/v1/links
+
+List every edge, `parent_lane` then `child_lane` ascending. Optional filters,
+ANDed:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `lane=X` | edges where `X` is EITHER endpoint |
+| `parent=X` | edges whose parent is `X` (i.e. X's children) |
+| `child=X` | edges whose child is `X` (i.e. X's parents) |
+| `parent=X&child=Y` | the one exact edge |
+
+```json
+{"links": [<link>, ...], "count": 2, "lane": "lore"}
+```
+
+`links` is `[]`, never `null`.
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/links?lane=lore" | jq '.count'
+```
+
+### POST /api/v1/links
+
+Operator credential required (SCHED-GAP-1602; 401 unauthenticated, 503 when no
+credential is configured).
+
+```json
+{"parent_lane": "lore", "child_lane": "pulse", "note": "shared release train"}
+```
+
+Namespaces are DERIVED from the lane rows — the daemon never accepts a
+caller-supplied namespace, so a stored edge cannot claim a namespace the lane
+never had.
+
+- `201` → `{"link": {...}}`
+- `400` `invalid_json` / `self_link` — malformed body, or the same lane named
+  as both endpoints
+- `404` `unknown_lane` — an endpoint does not name an existing lane (the
+  message names it)
+- `409` `cycle` — the edge would make a lane its own ancestor (the message
+  names the lane that is already an ancestor)
+- `409` `link_exists` — that exact edge is already recorded
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/links \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"parent_lane":"lore","child_lane":"pulse","note":"shared release train"}'
+```
+
+### DELETE /api/v1/links
+
+`DELETE /api/v1/links?parent=X&child=Y`, operator credential required.
+
+- `200` → `{"status": "deleted", "parent_lane": "X", "child_lane": "Y"}`
+- `400` `invalid_request` — `parent` or `child` missing
+- `404` `link_not_found` — no such edge (a delete that changed nothing never
+  reports success)
+
+```bash
+curl -s -X DELETE "http://127.0.0.1:9090/api/v1/links?parent=lore&child=pulse" \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+```
+
+### The three lookup questions, one call each
+
+| Question | Request |
+|----------|---------|
+| Who are X's parents? | `GET /api/v1/links/parents?lane=X` |
+| Who are X's children? | `GET /api/v1/links/children?lane=X` |
+| Is Y an ancestor of X? | `GET /api/v1/links/ancestor?lane=X&ancestor=Y` |
+
+None of them uses a name-suffix heuristic (`-qa`, `-pm`, `-sync`, `-dogfood`
+inference plays no part here): the answer comes from recorded edges only.
+
+**`GET /api/v1/links/parents?lane=X`**
+
+```json
+{"lane": "pulse", "parents": [<link>, ...], "count": 2}
+```
+
+**`GET /api/v1/links/children?lane=X`**
+
+```json
+{"lane": "lore", "children": [<link>, ...], "count": 2}
+```
+
+Both answer `400 invalid_request` without `lane`, and `404 unknown_lane` when
+the lane row does not exist — a typo never silently returns "nothing found".
+
+**`GET /api/v1/links/ancestors?lane=X`** and **`GET /api/v1/links/descendants?lane=X`**
+
+The transitive closure, nearest hop first, each lane appearing once at its
+shortest depth (name-ASC within a depth):
+
+```json
+{
+  "lane": "pulse",
+  "ancestors": [
+    {"lane": "lore", "namespace": "lore", "depth": 1, "via_parent": "lore", "via_child": "pulse"},
+    {"lane": "h3",   "namespace": "h3",   "depth": 2, "via_parent": "h3",   "via_child": "lore"}
+  ],
+  "count": 2
+}
+```
+
+`descendants` has the identical node shape under its own key. The walk is
+cycle-safe even on out-of-band data (a direct SQL cycle terminates with each
+lane reported once), and bounded at 4096 hops.
+
+**`GET /api/v1/links/ancestor?lane=X&ancestor=Y`**
+
+```json
+{"lane": "pulse", "ancestor": "h3", "is_ancestor": true, "path": ["h3", "lore", "pulse"], "hops": 2}
+```
+
+`path` is the witness chain (`[]` when `is_ancestor` is `false`, so a "no"
+answer is as legible as a "yes"). A lane is never its own ancestor. `ancestor`
+is required (`400 invalid_request`); the subject `lane` must exist
+(`404 unknown_lane`).
+
+```bash
+curl -s "http://127.0.0.1:9090/api/v1/links/ancestor?lane=pulse&ancestor=h3" | jq '.is_ancestor'
+```
+
+### Dashboard
+
+`GET /projects/{name}` renders a **Lane Relationships** section listing the
+lane's direct parents and direct children, each endpoint linked to its own
+lane page, the namespace of every endpoint shown, a `cross-ns` marker on
+cross-namespace edges and the link's note. The section states that the links
+never alter scheduling, and an unlinked lane renders an explicit
+"No parent or child references recorded for this lane." line.
+
+### MCP tools
+
+Five tools mirror this surface through the SAME `internal/database/links.go`
+functions, so the two answers cannot disagree:
+
+| Tool | Mirrors |
+|------|---------|
+| `lane_links_list` | `GET /api/v1/links` |
+| `lane_link_add` | `POST /api/v1/links` (operator credential required) |
+| `lane_link_remove` | `DELETE /api/v1/links` (operator credential required) |
+| `lane_relations` | the four traversal reads (`direction=parents\|children\|ancestors\|descendants`) |
+| `lane_is_ancestor` | `GET /api/v1/links/ancestor` |
+
+The two writes are classified mutating in `internal/mcp/auth.go`, so the MCP
+gate refuses them exactly as the REST gate does; the three reads are open like
+every other introspection tool. An edge recorded over MCP is attributed to
+`mcp` in `created_by` (the tool context carries no operator identity).
+
+Every write — REST or MCP — goes through the operator gate, and an edge is
+additive: the map never mutates a lane row.

@@ -8,6 +8,46 @@
 </div>
 <div class="meta">{{.Project.RepoURL}}</div>
 
+{{/* SCHED-GAP-1700: the lane relationship map — this lane's DIRECT parents and
+     DIRECT children from lane_links (many-to-many, within or across
+     namespaces). Reference/lookup only: no row here changes admission,
+     cooldown, weight, priority or pick order. Each endpoint is a link to its
+     own lane page; a cross-namespace edge is marked so the association is
+     legible without opening the other lane. */}}
+<h2>Lane Relationships</h2>
+{{if or .Parents .Children}}
+<div class="table-wrap">
+<table>
+<thead><tr><th>Direction</th><th>Lane</th><th>Namespace</th><th>Cross-ns</th><th>Note</th><th>Added</th></tr></thead>
+<tbody>
+{{range .Parents}}
+<tr>
+  <td><span class="pill warn">parent</span></td>
+  <td><a href="/projects/{{.ParentLane}}" class="mono">{{.ParentLane}}</a></td>
+  <td class="mono">{{if .ParentNamespace}}{{.ParentNamespace}}{{else}}<span class="meta">unscheduled</span>{{end}}</td>
+  <td>{{if .CrossNamespace}}<span class="pill warn">cross-ns</span>{{else}}<span class="meta">—</span>{{end}}</td>
+  <td>{{if .Note}}{{.Note}}{{else}}<span class="meta">—</span>{{end}}</td>
+  <td class="meta">{{.CreatedAt}}</td>
+</tr>
+{{end}}
+{{range .Children}}
+<tr>
+  <td><span class="pill ok">child</span></td>
+  <td><a href="/projects/{{.ChildLane}}" class="mono">{{.ChildLane}}</a></td>
+  <td class="mono">{{if .ChildNamespace}}{{.ChildNamespace}}{{else}}<span class="meta">unscheduled</span>{{end}}</td>
+  <td>{{if .CrossNamespace}}<span class="pill warn">cross-ns</span>{{else}}<span class="meta">—</span>{{end}}</td>
+  <td>{{if .Note}}{{.Note}}{{else}}<span class="meta">—</span>{{end}}</td>
+  <td class="meta">{{.CreatedAt}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<p class="meta">Reference map only — {{len .Parents}} parent(s), {{len .Children}} child(ren); these links never alter this lane's scheduling.</p>
+{{else}}
+<p class="meta">No parent or child references recorded for this lane.</p>
+{{end}}
+
 {{/* SCHED-GAP-1601: the lane console — pause/resume (cascade noted), spawn
      (async), bump (asks reason/ticks/cooldown), unbump, edit, delete
      (confirm-gated). Results print the API's real status + message. */}}

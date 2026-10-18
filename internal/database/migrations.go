@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 69
+const latestMigration = 70
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1479,6 +1479,55 @@ CREATE TABLE IF NOT EXISTS execution_outbox (
     ack_id TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS execution_outbox_pending_idx ON execution_outbox(state, available_at, created_at);
+`,
+	},
+	{
+		// SCHED-GAP-1700: the lane relationship map — MANY-TO-MANY parent/child
+		// edges between lanes, within one namespace or across namespaces.
+		//
+		// Reference/lookup ONLY: a row here never changes a lane's admission
+		// mode, cadence, cooldown, weight, priority or pick order. The
+		// scheduler does not read this table; it exists so an operator (or an
+		// agent) can answer "who are X's parents", "who are X's children" and
+		// "is Y an ancestor of X" without name-suffix heuristics.
+		//
+		// Deliberately a DIFFERENT relation from projects.parent (SCHED-GAP-
+		// 1586), which is the single-parent hierarchy the tree views resolve:
+		// that column is the scheduling/nesting shape (one parent, cycle-
+		// checked, surfaced in /api/v1/lanes/tree); this table is the free-form
+		// association map (many parents AND many children per lane). Neither is
+		// derived from the other.
+		//
+		// Endpoints are NOT foreign keys, matching projects.parent: lane names
+		// are soft-deleted (enabled=0) and purgeable, and a purged endpoint must
+		// not cascade-delete history or block a write. Writes validate both
+		// endpoints against the projects table; a later purge leaves a dangling
+		// link that reads back verbatim (namespace falls back to the value
+		// recorded at link time).
+		//
+		// namespace_parent / namespace_child record the endpoint namespaces
+		// observed at LINK TIME. Reads prefer the lane's LIVE namespace and fall
+		// back to these columns only when the lane row is gone, so a lane moved
+		// between namespaces is reported honestly instead of pinning a stale
+		// value — and a dangling link keeps the last known namespace instead of
+		// an empty string.
+		version: 70,
+		desc:    "SCHED-GAP-1700: lane_links — many-to-many parent/child lane references within or across namespaces (reference/lookup only, no scheduling effect)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS lane_links (
+    parent_lane      TEXT NOT NULL,
+    child_lane       TEXT NOT NULL,
+    namespace_parent TEXT NOT NULL DEFAULT '',
+    namespace_child  TEXT NOT NULL DEFAULT '',
+    note             TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    created_by       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (parent_lane, child_lane),
+    CHECK (parent_lane <> child_lane)
+);
+CREATE INDEX IF NOT EXISTS idx_lane_links_parent ON lane_links(parent_lane);
+CREATE INDEX IF NOT EXISTS idx_lane_links_child ON lane_links(child_lane);
+CREATE INDEX IF NOT EXISTS idx_lane_links_child_ns ON lane_links(child_lane, namespace_child);
 `,
 	},
 }

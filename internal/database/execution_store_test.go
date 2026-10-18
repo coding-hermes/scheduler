@@ -54,9 +54,12 @@ func admission(runID, attemptID, key, leaseID string, epoch, expected int) Attem
 
 func TestExecutionMigrationFreshDatabase(t *testing.T) {
 	db, ctx := executionTestDB(t)
+	// The LADDER lands every migration, so the recorded version is the
+	// build's latest — compared through the const so a new migration never
+	// re-breaks this execution-schema test.
 	v, err := MigrationVersion(ctx, db)
-	if err != nil || v != 69 {
-		t.Fatalf("migration version=%d err=%v", v, err)
+	if err != nil || v != latestMigration {
+		t.Fatalf("migration version=%d (want %d) err=%v", v, latestMigration, err)
 	}
 	for _, table := range []string{"execution_runs", "execution_attempts", "execution_events", "workspace_leases", "verification_receipts", "execution_projections", "execution_outbox"} {
 		var got string

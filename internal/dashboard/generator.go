@@ -455,6 +455,18 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		data.OutcomeKnown = os.Total+os.Unset > 0
 	}
 
+	// SCHED-GAP-1700: the lane relationship map — the lane's DIRECT parents
+	// and DIRECT children from lane_links (many-to-many; either endpoint may
+	// live in another namespace). Reference/lookup only: this read touches no
+	// scheduling state and an error leaves the section's honest "none
+	// recorded" line standing instead of failing the whole page.
+	if parents, lerr := database.LaneParents(ctx, g.db, name); lerr == nil {
+		data.Parents = parents
+	}
+	if children, lerr := database.LaneChildren(ctx, g.db, name); lerr == nil {
+		data.Children = children
+	}
+
 	// SCHED-GAP-1601: the lane's control strip + paused badge.
 	data.Control = ControlData{Actions: laneControls(name)}
 	data.FleetPaused, data.FleetPausedKnown = g.globalPaused()

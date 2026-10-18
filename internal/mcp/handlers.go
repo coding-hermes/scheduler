@@ -2185,3 +2185,156 @@ func (s *Server) toolGatewayErrors() (string, error) {
 	}
 	return string(b), nil
 }
+
+// ─── SCHED-GAP-1700 — the lane relationship map ────────────────────────────
+//
+// Five tools, one per lookup question plus the CRUD pair. Each mirrors its
+// REST route through the SAME database functions (internal/database/links.go),
+// so the MCP answer and the REST answer can never disagree about who is
+// related to whom.
+//
+// REFERENCE/LOOKUP ONLY: lane_link_add / lane_link_remove touch lane_links and
+// nothing else. No tool here writes a scheduling field, so an agent adding a
+// reference edge cannot change admission, cadence, cooldown, weight or pick
+// order — the same invariant the REST surface carries.
+
+// toolLaneLinksList serves lane_links_list (GET /api/v1/links): every recorded
+// parent→child edge, optionally filtered by lane (either endpoint), parent or
+// child.
+func (s *Server) toolLaneLinksList(ctx context.Context, args map[string]interface{}) (string, error) {
+	lane := getStringArg(args, "lane")
+	parent := getStringArg(args, "parent")
+	child := getStringArg(args, "child")
+
+	var (
+		links []database.LaneLink
+		err   error
+	)
+	switch {
+	case lane != "":
+		links, err = database.ListLaneLinksTouching(ctx, s.db, lane)
+	case parent != "":
+		links, err = database.LaneChildren(ctx, s.db, parent)
+	case child != "":
+		links, err = database.LaneParents(ctx, s.db, child)
+	default:
+		links, err = database.ListLaneLinks(ctx, s.db)
+	}
+	if err != nil {
+		return "", err
+	}
+	if links == nil {
+		links = []database.LaneLink{}
+	}
+	return jsonString(map[string]interface{}{
+		"links": links, "count": len(links),
+		"lane": lane, "parent": parent, "child": child,
+	}), nil
+}
+
+// toolLaneLinkAdd serves lane_link_add (POST /api/v1/links). The operator gate
+// already ran (lane_link_add is classified mutating in auth.go); the identity
+// is not carried into the tool context, so the edge is attributed to "mcp".
+func (s *Server) toolLaneLinkAdd(ctx context.Context, args map[string]interface{}) (string, error) {
+	parent := getStringArg(args, "parent_lane")
+	child := getStringArg(args, "child_lane")
+	if parent == "" || child == "" {
+		return "", fmt.Errorf("parent_lane and child_lane are required")
+	}
+	link, err := database.CreateLaneLink(ctx, s.db, parent, child, getStringArg(args, "note"), "mcp")
+	if err != nil {
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"link": link}), nil
+}
+
+// toolLaneLinkRemove serves lane_link_remove (DELETE /api/v1/links).
+func (s *Server) toolLaneLinkRemove(ctx context.Context, args map[string]interface{}) (string, error) {
+	parent := getStringArg(args, "parent_lane")
+	child := getStringArg(args, "child_lane")
+	if parent == "" || child == "" {
+		return "", fmt.Errorf("parent_lane and child_lane are required")
+	}
+	if err := database.DeleteLaneLink(ctx, s.db, parent, child); err != nil {
+		return "", err
+	}
+	return jsonString(map[string]interface{}{
+		"status": "deleted", "parent_lane": parent, "child_lane": child,
+	}), nil
+}
+
+// toolLaneRelations serves lane_relations — the four traversal reads behind
+// one tool: direction=parents|children (direct) and
+// direction=ancestors|descendants (transitive closure, nearest hop first).
+func (s *Server) toolLaneRelations(ctx context.Context, args map[string]interface{}) (string, error) {
+	lane := getStringArg(args, "lane")
+	if lane == "" {
+		return "", fmt.Errorf("lane is required")
+	}
+	direction := getStringArg(args, "direction")
+	if direction == "" {
+		direction = "parents"
+	}
+	if _, err := database.GetProject(ctx, s.db, lane); err != nil {
+		return "", err // unknown lane: the same not-found class the REST read answers
+	}
+	switch direction {
+	case "parents":
+		links, err := database.LaneParents(ctx, s.db, lane)
+		if err != nil {
+			return "", err
+		}
+		if links == nil {
+			links = []database.LaneLink{}
+		}
+		return jsonString(map[string]interface{}{"lane": lane, "direction": direction, "parents": links, "count": len(links)}), nil
+	case "children":
+		links, err := database.LaneChildren(ctx, s.db, lane)
+		if err != nil {
+			return "", err
+		}
+		if links == nil {
+			links = []database.LaneLink{}
+		}
+		return jsonString(map[string]interface{}{"lane": lane, "direction": direction, "children": links, "count": len(links)}), nil
+	case "ancestors":
+		nodes, err := database.LaneAncestorNodes(ctx, s.db, lane)
+		if err != nil {
+			return "", err
+		}
+		return jsonString(map[string]interface{}{"lane": lane, "direction": direction, "ancestors": nodes, "count": len(nodes)}), nil
+	case "descendants":
+		nodes, err := database.LaneDescendantNodes(ctx, s.db, lane)
+		if err != nil {
+			return "", err
+		}
+		return jsonString(map[string]interface{}{"lane": lane, "direction": direction, "descendants": nodes, "count": len(nodes)}), nil
+	default:
+		return "", fmt.Errorf("direction %q is not valid (want parents, children, ancestors or descendants)", direction)
+	}
+}
+
+// toolLaneIsAncestor serves lane_is_ancestor (GET /api/v1/links/ancestor): the
+// reachability answer plus its witness path, in one call.
+func (s *Server) toolLaneIsAncestor(ctx context.Context, args map[string]interface{}) (string, error) {
+	lane := getStringArg(args, "lane")
+	ancestor := getStringArg(args, "ancestor")
+	if lane == "" || ancestor == "" {
+		return "", fmt.Errorf("lane and ancestor are required")
+	}
+	isAncestor, path, err := database.IsLaneAncestor(ctx, s.db, ancestor, lane)
+	if err != nil {
+		return "", err
+	}
+	if path == nil {
+		path = []string{}
+	}
+	hops := 0
+	if len(path) > 0 {
+		hops = len(path) - 1
+	}
+	return jsonString(map[string]interface{}{
+		"lane": lane, "ancestor": ancestor,
+		"is_ancestor": isAncestor, "path": path, "hops": hops,
+	}), nil
+}

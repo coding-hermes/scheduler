@@ -82,6 +82,11 @@ var mutatingTools = map[string]bool{
 	"project_unbump":         true,
 	"peers_register":         true,
 	"peers_heartbeat":        true,
+	// SCHED-GAP-1700: the lane relationship map's writes. Reference edges are
+	// still operator-gated — the map is fleet data, and an unauthenticated
+	// caller must not be able to rewrite who is related to whom.
+	"lane_link_add":    true,
+	"lane_link_remove": true,
 }
 
 // readOnlyTools is the complement: everything not listed here but in the
@@ -132,6 +137,13 @@ var readOnlyTools = map[string]bool{
 	"fed_queue_get":     true,
 	"fed_ticks_list":    true,
 	"fed_events_list":   true,
+	// SCHED-GAP-1700: the relationship map's reads — parents/children/
+	// ancestors/descendants and the ancestor check answer from recorded
+	// edges only (no scheduling state), so they are open like every other
+	// introspection read above.
+	"lane_links_list":  true,
+	"lane_relations":   true,
+	"lane_is_ancestor": true,
 }
 
 // MutatingToolNames returns the mutating tool set sorted — the classification

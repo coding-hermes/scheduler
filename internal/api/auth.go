@@ -16,8 +16,9 @@ import (
 // THREAT MODEL (decided, in writing): the surface is bound to 127.0.0.1 and
 // tailnet-forwarded (sched-ui-tailnet socat). The fleet has ONE human
 // operator. The defended threat is UNAUTHENTICATED CONTROL — any process on
-// any machine that can reach the port (22 mutating routes: fleet-wide pause,
-// project/namespace/group/template delete) must be refused. It is explicitly
+// any machine that can reach the port (every mutating route: fleet-wide pause,
+// project/namespace/group/template delete, federation peer writes, lane-link
+// writes) must be refused. It is explicitly
 // NOT a hostile multi-tenant user model: no accounts, no sessions, no
 // per-identity authorization. One shared operator credential asserts "a
 // device the operator armed", which is exactly the guarantee the exposure

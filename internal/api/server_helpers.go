@@ -1150,6 +1150,126 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/links": {
+      "get": {
+        "operationId": "getApiV1Links",
+        "summary": "Lane relationship map (SCHED-GAP-1700) — list MANY-TO-MANY parent→child lane links",
+        "description": "Reference/lookup only: a link never changes a lane's admission mode, cadence, cooldown, weight, priority or pick order. Both endpoints may live in the same namespace or different namespaces (cross_namespace is derived per row). Optional filters: ?lane=X (either endpoint), ?parent=X, ?child=X (?parent+?child together select one exact edge).",
+        "parameters": [
+          {"name": "lane", "in": "query", "required": false, "schema": {"type": "string"}},
+          {"name": "parent", "in": "query", "required": false, "schema": {"type": "string"}},
+          {"name": "child", "in": "query", "required": false, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "{\"links\": [{\"parent_lane\", \"child_lane\", \"parent_namespace\", \"child_namespace\", \"cross_namespace\", \"note\", \"created_at\", \"created_by\"}, ...], \"count\": N} — parent then child ASC; namespaces are read LIVE from the lane rows (recorded value only when the lane row is gone, i.e. a dangling link)"},
+          "405": {"description": "Non-GET/POST/DELETE method"}
+        }
+      },
+      "post": {
+        "operationId": "postApiV1Links",
+        "security": [{"operatorToken": []}],
+        "summary": "Record one parent→child lane link (SCHED-GAP-1700)",
+        "description": "Validates that BOTH endpoints name real lanes (unknown_lane), that they differ (self_link) and that the edge closes no cycle (cycle). Duplicate edges answer link_exists. Namespaces are derived from the lane rows, never caller-supplied.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LaneLinkCreate"}}}
+        },
+        "responses": {
+          "201": {"description": "{\"link\": {...}} — the recorded edge"},
+          "400": {"description": "invalid_json / self_link — malformed body or the same lane named twice"},
+          "404": {"description": "unknown_lane — an endpoint does not name an existing lane"},
+          "409": {"description": "cycle / link_exists — the edge would make a lane its own ancestor, or it is already recorded"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteApiV1Links",
+        "security": [{"operatorToken": []}],
+        "summary": "Remove one parent→child lane link (SCHED-GAP-1700)",
+        "description": "DELETE /api/v1/links?parent=X&child=Y. A delete that changed nothing answers link_not_found — never a false success.",
+        "parameters": [
+          {"name": "parent", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "child", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "{\"status\": \"deleted\", \"parent_lane\", \"child_lane\"}"},
+          "400": {"description": "invalid_request — parent or child missing"},
+          "404": {"description": "link_not_found — no such edge"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/links/parents": {
+      "get": {
+        "operationId": "getApiV1LinksParents",
+        "summary": "Who are X's parents (SCHED-GAP-1700) — the lane's DIRECT parents in one call",
+        "parameters": [{"name": "lane", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{\"lane\", \"parents\": [<lane link>], \"count\"} — an empty list when the lane has none, never null"},
+          "400": {"description": "invalid_request — lane missing"},
+          "404": {"description": "unknown_lane — the named lane does not exist"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/links/children": {
+      "get": {
+        "operationId": "getApiV1LinksChildren",
+        "summary": "Who are X's children (SCHED-GAP-1700) — the lane's DIRECT children in one call",
+        "parameters": [{"name": "lane", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{\"lane\", \"children\": [<lane link>], \"count\"} — an empty list when the lane has none, never null"},
+          "400": {"description": "invalid_request — lane missing"},
+          "404": {"description": "unknown_lane — the named lane does not exist"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/links/ancestors": {
+      "get": {
+        "operationId": "getApiV1LinksAncestors",
+        "summary": "Transitive parents of X (SCHED-GAP-1700) — nearest hop first, deduplicated",
+        "parameters": [{"name": "lane", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{\"lane\", \"ancestors\": [{\"lane\", \"namespace\", \"depth\", \"via_parent\", \"via_child\"}], \"count\"} — depth 1 is a direct parent; each lane appears once at its shortest depth"},
+          "400": {"description": "invalid_request — lane missing"},
+          "404": {"description": "unknown_lane — the named lane does not exist"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/links/descendants": {
+      "get": {
+        "operationId": "getApiV1LinksDescendants",
+        "summary": "Transitive children of X (SCHED-GAP-1700) — nearest hop first, deduplicated",
+        "parameters": [{"name": "lane", "in": "query", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{\"lane\", \"descendants\": [{\"lane\", \"namespace\", \"depth\", \"via_parent\", \"via_child\"}], \"count\"}"},
+          "400": {"description": "invalid_request — lane missing"},
+          "404": {"description": "unknown_lane — the named lane does not exist"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
+    "/api/v1/links/ancestor": {
+      "get": {
+        "operationId": "getApiV1LinksAncestor",
+        "summary": "Is Y an ancestor of X (SCHED-GAP-1700) — one call, witness path included",
+        "description": "Answers the reachability question directly (no client-side walk, no name-suffix heuristics). A lane is never its own ancestor.",
+        "parameters": [
+          {"name": "lane", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "ancestor", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "{\"lane\", \"ancestor\", \"is_ancestor\", \"path\": [ancestor … lane], \"hops\"} — path is [] when is_ancestor is false"},
+          "400": {"description": "invalid_request — lane or ancestor missing"},
+          "404": {"description": "unknown_lane — the lane does not exist"},
+          "405": {"description": "Non-GET method"}
+        }
+      }
+    },
     "/api/v1/namespaces": {
       "get": {
         "operationId": "getApiV1Namespaces",
@@ -1876,6 +1996,31 @@ var openapiSpec = []byte(`{
           "capabilities": {"type": "string", "description": "Free-form capability string (e.g. \"control,query\")."}
         },
         "description": "POST /api/v1/peers body (REMOTE-003 §2). Upsert keyed by id; a re-registration refreshes identity but never fabricates liveness — only a heartbeat stamps last_contact."
+      },
+      "LaneLink": {
+        "type": "object",
+        "required": ["parent_lane", "child_lane"],
+        "properties": {
+          "parent_lane": {"type": "string", "description": "Parent endpoint lane name."},
+          "child_lane": {"type": "string", "description": "Child endpoint lane name."},
+          "parent_namespace": {"type": "string", "description": "Namespace of the parent, read LIVE from the lane row (recorded at link time only when the lane row is gone). Empty = the lane is unscheduled."},
+          "child_namespace": {"type": "string", "description": "Namespace of the child, same live-read rule."},
+          "cross_namespace": {"type": "boolean", "description": "Derived: the two endpoints sit in different namespaces."},
+          "note": {"type": "string", "description": "Free-text annotation stored verbatim."},
+          "created_at": {"type": "string", "description": "RFC3339 UTC instant the link was recorded."},
+          "created_by": {"type": "string", "description": "Audit identity of the operator credential that recorded the link (\\\"\\\" when unattributed)."}
+        },
+        "description": "One lane_links row (SCHED-GAP-1700). REFERENCE/LOOKUP ONLY — it never changes a lane's admission mode, cadence, cooldown, weight, priority or pick order."
+      },
+      "LaneLinkCreate": {
+        "type": "object",
+        "required": ["parent_lane", "child_lane"],
+        "properties": {
+          "parent_lane": {"type": "string"},
+          "child_lane": {"type": "string"},
+          "note": {"type": "string", "description": "Optional free-text annotation."}
+        },
+        "description": "POST /api/v1/links body (SCHED-GAP-1700). Both endpoints must name real lanes; namespaces are derived by the daemon, never supplied by the caller. The same lane named as both endpoints, a cycle, or a duplicate edge is refused with a named error."
       },
       "PeerView": {
         "type": "object",

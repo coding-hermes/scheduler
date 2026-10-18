@@ -559,6 +559,67 @@ var tools = []ToolDefinition{
 		Description: "Configured-vs-achieved run rates per lane (mirrors GET /api/v1/cadence, SOL-CADENCE): target_runs_per_day, achieved_runs_per_day and target_deficit_per_day over a 7-day window",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
+	{
+		Name:        "lane_links_list",
+		Description: "Lane relationship map (SCHED-GAP-1700): every recorded parent→child lane link — MANY-TO-MANY, within or across namespaces — with each endpoint's namespace and a derived cross_namespace flag (mirrors GET /api/v1/links). REFERENCE/LOOKUP ONLY: these links never change admission, cadence, cooldown, weight or pick order. Optional filters: lane (either endpoint), parent, child.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"lane":   map[string]interface{}{"type": "string", "description": "Match edges where this lane is EITHER endpoint"},
+				"parent": map[string]interface{}{"type": "string", "description": "Match edges whose parent is this lane (i.e. its children)"},
+				"child":  map[string]interface{}{"type": "string", "description": "Match edges whose child is this lane (i.e. its parents)"},
+			},
+		},
+	},
+	{
+		Name:        "lane_link_add",
+		Description: "Record one parent→child lane link (mirrors POST /api/v1/links, operator credential required). Both endpoints must name real lanes; the edge is refused with a named error when it names the same lane twice, would close a cycle, or already exists. Reference/lookup only — it never changes scheduling.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"parent_lane": map[string]interface{}{"type": "string", "description": "Parent endpoint lane name"},
+				"child_lane":  map[string]interface{}{"type": "string", "description": "Child endpoint lane name"},
+				"note":        map[string]interface{}{"type": "string", "description": "Optional free-text annotation"},
+			},
+			"required": []string{"parent_lane", "child_lane"},
+		},
+	},
+	{
+		Name:        "lane_link_remove",
+		Description: "Remove one parent→child lane link (mirrors DELETE /api/v1/links, operator credential required). A link that does not exist is a not-found error, never a silent success.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"parent_lane": map[string]interface{}{"type": "string", "description": "Parent endpoint lane name"},
+				"child_lane":  map[string]interface{}{"type": "string", "description": "Child endpoint lane name"},
+			},
+			"required": []string{"parent_lane", "child_lane"},
+		},
+	},
+	{
+		Name:        "lane_relations",
+		Description: "Who is X related to (SCHED-GAP-1700): direction=parents|children returns the DIRECT parents/children, direction=ancestors|descendants the transitive closure nearest hop first (depth + via edge per node). One call answers the question — no client-side walk, no name-suffix heuristic. Mirrors GET /api/v1/links/{parents,children,ancestors,descendants}.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"lane":      map[string]interface{}{"type": "string", "description": "The lane to look up"},
+				"direction": map[string]interface{}{"type": "string", "enum": []string{"parents", "children", "ancestors", "descendants"}, "description": "Direction of the walk (default parents)"},
+			},
+			"required": []string{"lane"},
+		},
+	},
+	{
+		Name:        "lane_is_ancestor",
+		Description: "Is Y an ancestor of X (SCHED-GAP-1700): the reachability answer plus the witness path and hop count, in one call (mirrors GET /api/v1/links/ancestor). A lane is never its own ancestor.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"lane":     map[string]interface{}{"type": "string", "description": "The descendant lane (X)"},
+				"ancestor": map[string]interface{}{"type": "string", "description": "The lane tested as ancestor (Y)"},
+			},
+			"required": []string{"lane", "ancestor"},
+		},
+	},
 	// ── CTL-003: parity with the remaining /api/v1 control + read routes ──
 	// One tool per uncovered openapi operation (namespaces CRUD/projects/move,
 	// project delete/spawn/bump/unbump, tick detail, config, queue, metrics).
@@ -923,6 +984,18 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolPeersEvents(ctx, args)
 	case "cadence":
 		return s.toolCadence(ctx)
+	// SCHED-GAP-1700 — the lane relationship map (CTL-003 parity with
+	// /api/v1/links + its five traversal reads).
+	case "lane_links_list":
+		return s.toolLaneLinksList(ctx, args)
+	case "lane_link_add":
+		return s.toolLaneLinkAdd(ctx, args)
+	case "lane_link_remove":
+		return s.toolLaneLinkRemove(ctx, args)
+	case "lane_relations":
+		return s.toolLaneRelations(ctx, args)
+	case "lane_is_ancestor":
+		return s.toolLaneIsAncestor(ctx, args)
 	case "namespaces_list":
 		return s.toolNamespacesList(ctx)
 	case "namespaces_get":
