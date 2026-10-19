@@ -1081,7 +1081,7 @@ Configure the operator credential via one of:
 
 ### Federation tools — deny-all by default
 
-The 13 `fed_<op>` tools (`fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`, `fed_query`) and the `peers_*` tools (`peers_list`, `peers_register`, `peers_heartbeat`, `peers_events`) are gated by a **deny-all** policy — they answer `op_not_allowed` until you explicitly allow the operations you need.
+The 7 `fed_<op>` tools (`fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`, `fed_query`) and the `peers_*` tools (`peers_list`, `peers_register`, `peers_heartbeat`, `peers_events`) are gated by a **deny-all** policy — they answer `op_not_allowed` until you explicitly allow the operations you need.
 
 Configure allowed operations in the `[federation]` section of your scheduler config (`fleet.toml` or the file passed via `--config`):
 
