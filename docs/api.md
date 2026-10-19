@@ -151,6 +151,8 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
 | GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
 | POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
+| GET | `/api/v1/peers/events` | [§14](#14-federation-peer-registry-remote-003) |
+| GET | `/api/v1/peers/{id}/events` | [§14](#14-federation-peer-registry-remote-003) |
 | GET, POST | `/api/v1/agents` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
 | DELETE | `/api/v1/agents/{name}` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
 
@@ -1541,6 +1543,12 @@ SCHED-GAP-1602 gate as every mutating route; the GET is gated too — the peer
 list is fleet topology, not public read material). With no credential
 configured the surface fails CLOSED: 503.
 
+The section also carries the REMOTE-006 **durable event slices** —
+`GET /api/v1/peers/events` (fleet-wide) and `GET /api/v1/peers/{id}/events`
+(one scheduler) — the last-seen event, replay high-water mark and counted
+dedupe drops this instance actually received. They are read-only federation
+state behind the same operator credential (see "Event slices" below).
+
 **Rendering law:** a peer with no heartbeat within the freshness window
 (`--peer-freshness-window`, default 180s; env
 `SCHEDULER_PEER_FRESHNESS_WINDOW`) is **STALE with its `last_contact`
@@ -1589,6 +1597,130 @@ credential · 503 no credential.
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/peers/kara/heartbeat \
   -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+```
+
+### Event slices — durable per-scheduler state (REMOTE-006)
+
+The registry above answers *who* is in the federation; these two routes answer
+*what this scheduler has actually received from them* — the last-seen event, the
+replay high-water mark and the counted duplicate frames. The state is durable
+(the `remote_events` / `remote_events_stats` tables), so the answer survives a
+daemon restart and is the same slice a replay would resume from
+(docs/federation-query-spec.md §2 envelope, §8 idempotent ingest).
+
+**Both routes are operator-token gated**, including the GETs: this is remote
+fleet payload, not public read material, so it follows the anti-enumeration
+posture of `GET /api/v1/peers` rather than the read-open rule in §0. With no
+credential configured the surface fails CLOSED (503); a missing or wrong
+credential is 401 (`operator credential required for mutations` /
+`invalid operator credential`). Non-GET methods on the subtree are 405
+`GET only`.
+
+Two routes, one payload shape:
+
+| Route | Scope | `scheduler_id` in the body |
+|-------|-------|----------------------------|
+| `GET /api/v1/peers/events` | every scheduler this instance has ingested from | literal `"*"` |
+| `GET /api/v1/peers/{id}/events` | one registered scheduler | the `{id}` from the path |
+
+**Payload shape (both routes, always these four keys):**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `scheduler_id` | string | whose slice this is — the peer id, or `"*"` for the fleet-wide route |
+| `last_event` | object \| null | the most recently **ingested** event from that scheduler (`ORDER BY ingested_at DESC, event_id DESC LIMIT 1`), projecting the full envelope: `{scheduler_id, event_id, kind, project, tick_id, status, ts, topic, pattern, ingested_at, source}` with `source` ∈ `live` / `replay` / `replayed-live` |
+| `last_event_id` | string | the peer's replay high-water mark. Monotone: it only moves **forward**, so a late or out-of-order frame can never pull it backward and a reconnect cannot re-deliver a covered interval |
+| `dedupe_drops` | integer | durable count of duplicate frames the store refused (idempotency key = `scheduler_id` + `event_id`), cumulative per scheduler |
+
+**Empty-state rule — `last_event: null` when empty, NEVER omitted.** A
+scheduler that has never delivered an event renders `"last_event": null`: the
+key is always present with an explicit `null`, never dropped from the object,
+never an empty `{}` and never a placeholder event with blank fields. Consumers
+may therefore branch on `last_event === null` without a key-presence check. The
+companion empties are typed, not null: `last_event_id` is the empty **string**
+`""` when no replayable event has been seen, and `dedupe_drops` is `0`, never
+`null`.
+
+The slice never fabricates liveness and never mutates a peer: reading it does
+not touch `last_contact`, the registry row, or freshness (`stale` stays the
+registry's verdict — see the rendering law above).
+
+### GET /api/v1/peers/events
+
+**Purpose:** the fleet-wide slice — union state across every scheduler whose
+events this instance stores.
+
+**Response 200:** `{"scheduler_id": "*", "last_event": {...} | null,
+"last_event_id": "...", "dedupe_drops": N}` — `scheduler_id` is always the
+literal `"*"` on this route.
+
+**Errors:** 401 missing/invalid credential · 503 no credential configured ·
+405 non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/peers/events \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
+```
+
+**Live status (2026-10-19) — known defect, this route answers 404.** Probed
+against a build of HEAD, `GET /api/v1/peers/events` returns
+`{"error":"unknown peer: events"}` with **404**, not the slice. Cause: the
+subtree dispatcher in `internal/api/server_peers.go` derives the peer id as
+`strings.TrimSuffix(rest, "/events")`, which does not strip the aggregate path
+(`rest == "events"`, no leading slash), so `"events"` is looked up as a peer id.
+The per-scheduler route below is unaffected, and the MCP tool `peers_events`
+(called with no `id`) answers the aggregate slice correctly. Documented here so
+an integrator does not build against a 404; the fix is confined to that
+dispatch branch.
+
+### GET /api/v1/peers/{id}/events
+
+**Purpose:** the durable event slice for ONE registered scheduler.
+
+**Response 200** (populated — real daemon response, peer `kara` having sent
+`evt-0007` and dropped 3 duplicates):
+
+```json
+{
+  "scheduler_id": "kara",
+  "last_event": {
+    "scheduler_id": "kara",
+    "event_id": "evt-0007",
+    "kind": "tick.completed",
+    "project": "helios",
+    "tick_id": "1841",
+    "status": "ok",
+    "ts": "2026-10-19T19:40:00Z",
+    "topic": "board.events",
+    "pattern": "board.>",
+    "ingested_at": "2026-10-19T19:40:03Z",
+    "source": "live"
+  },
+  "last_event_id": "evt-0007",
+  "dedupe_drops": 3
+}
+```
+
+**Response 200** (empty — registered peer that has never sent an event; note the
+`null` is present, not omitted):
+
+```json
+{
+  "scheduler_id": "kara",
+  "last_event": null,
+  "last_event_id": "",
+  "dedupe_drops": 0
+}
+```
+
+**Errors:** **404** unknown id — `{"error":"unknown peer: <id>"}`; the slice does
+NOT auto-register, exactly like the heartbeat route (register the peer with
+`POST /api/v1/peers` first) · 401 missing/invalid credential · 503 no credential
+configured · 405 non-GET.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/peers/kara/events \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
 ```
 
 ## 15. Federation query (REMOTE-008)
