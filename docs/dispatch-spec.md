@@ -152,6 +152,18 @@ each lives:
   tick. A remote lane with no reply identity REFUSES to dispatch at all, because
   a hand-out whose answer can never be correlated is the silent-failure shape
   this verb exists to remove.
+- **Agent registry + targeted dispatch (SCHED-GAP-1665).** The lane property
+  above answers "which agent runs lane X". The registry
+  (`internal/database/agents.go`, migration v71, `GET/POST /api/v1/agents` +
+  `DELETE /api/v1/agents/{name}`) answers the INVENTORY question: which agents
+  exist, what each declares it can do, and where it is reachable. It is
+  ADVISORY — the relay's `404` remains the authority on whether an agent
+  exists, so an unregistered agent is still a valid target. A per-tick override
+  (`POST /api/v1/projects/{name}/spawn {"agent": "…"}`) routes ONE tick to a
+  chosen agent; a registered agent's `endpoint` is then used as that dispatch's
+  relay (`bus.Client.DispatchTo`), while every non-targeted dispatch keeps
+  riding the configured relay byte-identically. The payload law, the no-fallback
+  law and the correlation law above are unchanged for the targeted path.
 
 Hermetic proof: `internal/scheduler/dispatch_leg_test.go` (ready → hand-out →
 agent answers → tick completes with no request ever reaching the gateway;

@@ -323,6 +323,12 @@ func (s *Server) Handler() http.Handler {
 	// rendering law: stale + last_contact, never "down").
 	mux.HandleFunc("/api/v1/peers", s.handlePeers)
 	mux.HandleFunc("/api/v1/peers/", s.handlePeerByID)
+	// SCHED-GAP-1665: the AGENT registry — the inventory of execution
+	// targets work can be handed to (name, capabilities, endpoint), backing
+	// targeted tick dispatch. Operator-gated on every route, reads included
+	// (fleet topology: agent names, capabilities, relay endpoints).
+	mux.HandleFunc("/api/v1/agents", s.handleAgents)
+	mux.HandleFunc("/api/v1/agents/", s.handleAgentByName)
 	// REMOTE-008 (federation-query-spec §2 + §3 HTTP row): the read half of
 	// federation — one envelope, one internal entry point, every transport
 	// an adapter. Operator-gated (spec §4: fail-closed, no credential

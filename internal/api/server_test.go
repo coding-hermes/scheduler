@@ -1177,6 +1177,8 @@ var documentedPaths = []string{
 	"/api/v1/peers/{id}/heartbeat",
 	"/api/v1/peers/events",
 	"/api/v1/peers/{id}/events",
+	"/api/v1/agents",
+	"/api/v1/agents/{name}",
 	"/api/v1/federation/query",
 	"/api/v1/federation/catalogue",
 	"/api/v1/openapi.json",

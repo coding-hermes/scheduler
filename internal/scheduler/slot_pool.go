@@ -516,13 +516,22 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				enqueued = true
 			}
 			var targetErr error
-			target, remoteLane, targetErr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			target, remoteLane, targetErr = resolveSpawnTarget(proj)
 			if targetErr != nil {
-				p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr, target)
-				if !usagePolicy.ObserveOnly {
-					return
+				if !proj.hasDispatchAgentOverride() {
+					p.emitUsagePoolRefusal(proj, tickID, "usage_pool_invalid", targetErr, target)
+					if !usagePolicy.ObserveOnly {
+						return
+					}
+					target, remoteLane = DispatchTarget{}, false
+				} else {
+					// SCHED-GAP-1665: the operator named an agent for THIS
+					// tick, so a broken target FILE must not cancel the
+					// override — the references fall back to the lane's
+					// workdir and the parse error is surfaced loudly.
+					log.Printf("DISPATCH: %s tick=%s targeted agent %s — dispatch targets unreadable (%v), references fall back to the lane workdir",
+						proj.Name, tickID, target.Agent, targetErr)
 				}
-				target, remoteLane = DispatchTarget{}, false
 			}
 			var reserveErr error
 			usageLease, reserveErr := p.reserveUsagePools(context.Background(), db, proj.Name, tickID, target, remoteLane)
@@ -703,10 +712,16 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// being fixed. The log line names the lane and the problem.
 		if usagePolicy == nil || !usagePolicy.Enabled {
 			var terr error
-			target, remoteLane, terr = LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+			target, remoteLane, terr = resolveSpawnTarget(proj)
 			if terr != nil {
 				log.Printf("DISPATCH: %s tick=%s dispatch targets unreadable (%v) — running locally as before", proj.Name, tickID, terr)
-				remoteLane = false
+				// SCHED-GAP-1665: a per-tick agent override is an explicit
+				// dispatch decision, so a broken target file must not demote
+				// it to a local spawn — it stays remote, with fallback
+				// references, exactly as in the usage-pool branch above.
+				if !proj.hasDispatchAgentOverride() {
+					remoteLane = false
+				}
 			}
 		}
 		var st *SpawnedTick

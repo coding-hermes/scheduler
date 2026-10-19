@@ -73,11 +73,16 @@ var apiToolCoverage = map[string][]string{
 	"POST /api/v1/projects/{name}/pause":  {"fleet_pause"},
 	"POST /api/v1/projects/{name}/resume": {"fleet_resume"},
 	"GET /api/v1/ticks":                   {"fleet_ticks"},
-	"POST /api/v1/evaluate":               {"fleet_evaluate"},
-	"POST /api/v1/pause":                  {"fleet_pause_scheduler"},
-	"POST /api/v1/resume":                 {"fleet_resume_scheduler"},
-	"GET /api/v1/events":                  {"events_list"},
-	"GET /api/v1/observatory":             {"observatory_snapshot"},
+	// SCHED-GAP-1665: the agent registry. The list read and the two writes
+	// map one-to-one (no aggregation needed).
+	"GET /api/v1/agents":           {"agents_list"},
+	"POST /api/v1/agents":          {"agents_register"},
+	"DELETE /api/v1/agents/{name}": {"agents_unregister"},
+	"POST /api/v1/evaluate":        {"fleet_evaluate"},
+	"POST /api/v1/pause":           {"fleet_pause_scheduler"},
+	"POST /api/v1/resume":          {"fleet_resume_scheduler"},
+	"GET /api/v1/events":           {"events_list"},
+	"GET /api/v1/observatory":      {"observatory_snapshot"},
 	// SCHED-GAP-1654: the gateway_errors MCP tool serves the same
 	// scheduler.BuildGatewayErrorsReport the REST route answers.
 	"GET /api/v1/gateway-errors":        {"gateway_errors"},

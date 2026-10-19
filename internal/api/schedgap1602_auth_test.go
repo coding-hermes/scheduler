@@ -423,6 +423,10 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 		// to the served spec by SCHED-GAP-1580).
 		"/api/v1/peers/events":      true,
 		"/api/v1/peers/{id}/events": true,
+		// SCHED-GAP-1665: the agent registry read exposes fleet topology
+		// (agent names, capabilities and relay endpoints), the same class
+		// the peer registry gates for anti-enumeration.
+		"/api/v1/agents": true,
 	}
 	mutating, missing := 0, []string{}
 	readWithSec := 0
@@ -456,9 +460,11 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 	}
 	// REMOTE-008 added one mutating-shape operation (POST federation/query)
 	// on top of REMOTE-003's two peers POSTs; SCHED-GAP-1700 added the two
-	// lane-link writes (POST + DELETE /api/v1/links).
-	if mutating != 27 {
-		t.Errorf("mutating operations in spec = %d, want 27 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query + POST/DELETE /api/v1/links)", mutating)
+	// lane-link writes (POST + DELETE /api/v1/links); SCHED-GAP-1665 added
+	// the two agent-registry writes (POST /api/v1/agents — an upsert — and
+	// DELETE /api/v1/agents/{name}).
+	if mutating != 29 {
+		t.Errorf("mutating operations in spec = %d, want 29 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query + POST/DELETE /api/v1/links + POST/DELETE /api/v1/agents)", mutating)
 	}
 	if len(missing) > 0 {
 		t.Errorf("mutating operations without security: %v", missing)
@@ -466,10 +472,11 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 	// GET /api/v1/peers (REMOTE-003) + GET /api/v1/federation/catalogue
 	// (REMOTE-008 §4) + the two REMOTE-006 event slices (the peer-event
 	// surface is gated like every peers read — SCHED-GAP-1580 added them
-	// to the served spec). The query is a POST: counted in the mutating
-	// total, not here.
-	if readWithSec != 4 {
-		t.Errorf("%d read operations carry security, want exactly 4 (GET /api/v1/peers — REMOTE-003; GET /api/v1/federation/catalogue — REMOTE-008 §4; GET /api/v1/peers/events and /api/v1/peers/{id}/events — REMOTE-006)", readWithSec)
+	// to the served spec) + GET /api/v1/agents (SCHED-GAP-1665: the agent
+	// inventory is fleet topology). The query is a POST: counted in the
+	// mutating total, not here.
+	if readWithSec != 5 {
+		t.Errorf("%d read operations carry security, want exactly 5 (GET /api/v1/peers — REMOTE-003; GET /api/v1/federation/catalogue — REMOTE-008 §4; GET /api/v1/peers/events and /api/v1/peers/{id}/events — REMOTE-006; GET /api/v1/agents — SCHED-GAP-1665)", readWithSec)
 	}
 }
 

@@ -1758,6 +1758,55 @@ var openapiSpec = []byte(`{
           "503": {"description": "No operator credential configured (fail-closed)"}
         }
       }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "getApiV1Agents",
+        "security": [{"operatorToken": []}],
+        "summary": "List registered agents with their capabilities and endpoints (SCHED-GAP-1665)",
+        "description": "The scheduler's agent inventory: {name, capabilities, endpoint, registered_at, updated_at} per row. Fleet topology (agent names, capabilities, relay endpoints), so the read is operator-gated like the peer registry (SCHED-GAP-1602). Optional ?capability=<token> keeps only agents declaring that capability (token-wise, case-insensitive). An empty registry answers {\"agents\": [], \"count\": 0} — never null.",
+        "parameters": [{"name": "capability", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Keep only agents declaring this capability token (e.g. dispatch)"}],
+        "responses": {
+          "200": {"description": "{agents: [{name, capabilities, endpoint, registered_at, updated_at}], count}"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      },
+      "post": {
+        "operationId": "postApiV1Agents",
+        "security": [{"operatorToken": []}],
+        "summary": "Register or refresh an agent (upsert, SCHED-GAP-1665)",
+        "description": "name is required and is the registry key (letters, digits, '.', '_', '-'); capabilities is a free-form comma list, normalized on write; endpoint is an optional absolute http(s) relay base URL ('' inherits the scheduler's [crier] url). 201 when the row is new, 200 when an existing registration was refreshed (registered_at is preserved; updated_at moves).",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentRegister"}}}
+        },
+        "responses": {
+          "201": {"description": "Agent registered — {status: \"registered\", agent}"},
+          "200": {"description": "Existing registration refreshed — {status: \"updated\", agent}"},
+          "400": {"description": "Invalid body, agent name or endpoint"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "405": {"description": "Non-POST method"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
+    },
+    "/api/v1/agents/{name}": {
+      "delete": {
+        "operationId": "deleteApiV1AgentsName",
+        "security": [{"operatorToken": []}],
+        "summary": "Unregister an agent (SCHED-GAP-1665)",
+        "description": "Removes the registry row. An unknown name is a 404 — an unregister that removed nothing never reads as a success. Routing is unaffected either way: the dispatch-targets file, not the registry, decides which agent runs a lane.",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "{status: \"unregistered\", name}"},
+          "401": {"description": "Missing or wrong operator credential"},
+          "404": {"description": "Unknown agent"},
+          "405": {"description": "Non-DELETE method"},
+          "503": {"description": "No operator credential configured (fail-closed)"}
+        }
+      }
     }
   },
   "components": {
@@ -1996,6 +2045,16 @@ var openapiSpec = []byte(`{
           "capabilities": {"type": "string", "description": "Free-form capability string (e.g. \"control,query\")."}
         },
         "description": "POST /api/v1/peers body (REMOTE-003 §2). Upsert keyed by id; a re-registration refreshes identity but never fabricates liveness — only a heartbeat stamps last_contact."
+      },
+      "AgentRegister": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "description": "The agent's bus identity — the registry key. Allowed: letters, digits, '.', '_', '-' (max 128 bytes)."},
+          "capabilities": {"type": "string", "description": "Free-form comma list, normalized on write (trimmed, de-duplicated, joined with ', '). Matched token-wise by ?capability=."},
+          "endpoint": {"type": "string", "description": "Optional absolute http(s) relay base URL this agent is reachable through. Empty = inherit the scheduler's configured [crier] url."}
+        },
+        "description": "POST /api/v1/agents body (SCHED-GAP-1665). Upsert keyed by name: a re-registration refreshes capabilities and endpoint, preserves registered_at and moves updated_at. The registry is ADVISORY for routing — an unregistered agent remains a valid dispatch target, because the relay's own 404 is the authority."
       },
       "LaneLink": {
         "type": "object",

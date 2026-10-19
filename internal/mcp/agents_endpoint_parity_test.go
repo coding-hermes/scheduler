@@ -600,6 +600,10 @@ var openapiGatedReads = map[string]bool{
 	"get /api/v1/peers/events":         true,
 	"get /api/v1/peers/{id}/events":    true,
 	"get /api/v1/federation/catalogue": true,
+	// SCHED-GAP-1665: the agent registry read exposes fleet topology — agent
+	// names, capabilities and relay endpoints — the same class of material
+	// the peer registry gates, so it carries the marker deliberately.
+	"get /api/v1/agents": true,
 }
 
 // openapiOperation is one operation reduced to the properties the guard checks.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1058,6 +1059,24 @@ var ErrProjectRunning = errors.New("project already has a tick in flight")
 // SpawnNow synchronously enqueues a tick for the project and fires the spawn
 // session into the slot pool, returning the REAL stored tick id (DOGFOOD-015).
 //
+// It is the historical operator entry point and is byte-identical to the
+// pre-SCHED-GAP-1665 behaviour: no execution-target override, so the lane's
+// declared dispatch target decides where the work runs.
+func (l *Loop) SpawnNow(project database.Project) (string, error) {
+	return l.SpawnNowTargeted(project, "")
+}
+
+// SpawnNowTargeted is SpawnNow with an OPTIONAL per-tick execution-target
+// override (SCHED-GAP-1665): a non-empty agent hands this one tick's work to
+// that named agent even when the lane has no dispatch target row. Empty agent
+// delegates to exactly the historical path.
+//
+// The override is deliberately narrow — it names the AGENT, not the board, the
+// workdir or the task. The lane still supplies its references (or falls back to
+// its configured workdir), and the dispatch laws are untouched: an unreachable
+// agent fails this tick loudly with the attempt recorded, and the tick row
+// still carries the agent the relay ACCEPTED.
+//
 // The id is generated with database.NextTickID — the canonical UTC generator
 // shared with SlotPool.Spawn — so the returned id always resolves via
 // GET /ticks/{id}. The row is enqueued BEFORE the async spawn session runs,
@@ -1068,7 +1087,7 @@ var ErrProjectRunning = errors.New("project already has a tick in flight")
 // slot, or has a running/queued tick row, is refused with ErrProjectRunning —
 // the same dedup the evaluation loop applies, so the manual spawn endpoint
 // can never double-spawn a project that is mid-tick.
-func (l *Loop) SpawnNow(project database.Project) (string, error) {
+func (l *Loop) SpawnNowTargeted(project database.Project, agent string) (string, error) {
 	l.mu.RLock()
 	simulate := l.simulate
 	noDeliver := l.noDeliver
@@ -1116,6 +1135,9 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 		// SCHED-GAP-111: thread the namespace id for effectiveTickTimeout
 		// in the spawn path (manual spawns resolve the wave deadline too).
 		NamespaceID: nsIDOf(project),
+		// SCHED-GAP-1665: the operator's explicit execution target for THIS
+		// tick (empty on every non-targeted spawn — the packer's routing).
+		DispatchAgent: strings.TrimSpace(agent),
 	}
 
 	// Simulation mode: the sim spawner inserts the row itself (status

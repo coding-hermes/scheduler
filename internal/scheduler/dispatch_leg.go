@@ -129,6 +129,36 @@ func (p *SlotPool) busClientForDispatch() *bus.Client {
 	return loop.Bus().Client()
 }
 
+// dispatchToTarget performs the hand-out itself, honouring a REGISTERED agent's
+// declared relay endpoint for an EXPLICITLY targeted dispatch (SCHED-GAP-1665).
+//
+// Two rules keep this additive:
+//
+//   - only an explicit per-tick override consults the registry. A lane whose
+//     target file names the agent keeps riding the scheduler's configured
+//     relay, byte-identically to the pre-registry behaviour.
+//   - an unregistered agent, a registered agent with an empty endpoint, or any
+//     registry read failure all leave baseURL empty → the configured relay. The
+//     registry can never make a dispatch that works today fail.
+//
+// A non-empty endpoint is logged, because it moves the request to a relay the
+// operator must have prepared (and whose answer must reach this scheduler's
+// inbox — see bus.Client.DispatchTo).
+func dispatchToTarget(ctx context.Context, client *bus.Client, proj PackedProject, target DispatchTarget, item bus.WorkItem, db *sql.DB) (bus.DispatchReceipt, error) {
+	baseURL := ""
+	if strings.TrimSpace(proj.DispatchAgent) != "" && db != nil {
+		if ag, err := database.GetAgent(ctx, db, target.Agent); err == nil && strings.TrimSpace(ag.Endpoint) != "" {
+			baseURL = ag.Endpoint
+			log.Printf("DISPATCH: %s tick target agent %s uses its REGISTERED relay endpoint %s (targeted dispatch)",
+				proj.Name, target.Agent, baseURL)
+		}
+	}
+	if baseURL == "" {
+		return client.Dispatch(ctx, target.Agent, item)
+	}
+	return client.DispatchTo(ctx, baseURL, target.Agent, item)
+}
+
 // dispatchRemote performs the whole remote leg for one tick: hand out, record,
 // wait for the correlated answer, record. It returns a SpawnedTick whose
 // Wait() yields the tick's outcome (so slot_pool's completion, delivery and
@@ -171,7 +201,7 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 		ReplyTo: client.InboxAgentID(),
 	}
 
-	receipt, err := client.Dispatch(dctx, target.Agent, item)
+	receipt, err := dispatchToTarget(dctx, client, proj, target, item, db)
 	if err != nil {
 		// LOUD, and never a fallback: the work was NOT handed out.
 		attempt := database.TickDispatch{

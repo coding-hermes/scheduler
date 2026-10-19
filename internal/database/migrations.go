@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 70
+const latestMigration = 71
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1528,6 +1528,45 @@ CREATE TABLE IF NOT EXISTS lane_links (
 CREATE INDEX IF NOT EXISTS idx_lane_links_parent ON lane_links(parent_lane);
 CREATE INDEX IF NOT EXISTS idx_lane_links_child ON lane_links(child_lane);
 CREATE INDEX IF NOT EXISTS idx_lane_links_child_ns ON lane_links(child_lane, namespace_child);
+`,
+	},
+	{
+		// SCHED-GAP-1665 (the agent half): the scheduler's AGENT REGISTRY —
+		// the durable record of the agents work can be handed to, what each
+		// one can do, and where it is reachable.
+		//
+		// Why a table and not the dispatch-targets.jsonl file: a target file
+		// answers "which agent runs lane X" (a LANE property, read on the
+		// spawn path). It cannot answer "which agents exist, what can they
+		// do, and where are they" — and it cannot be written by an operator
+		// at runtime without editing a file on the control box. The registry
+		// is the inventory; the file stays the lane's routing property.
+		//
+		// No foreign keys and no lane column: an agent is not owned by a
+		// lane (several lanes may share one agent, and one lane may be
+		// retargeted), and an unregistered agent must never be able to make
+		// a tick unroutable. The registry is ADVISORY for routing — the
+		// relay's own 404 is the authority on whether an agent exists —
+		// and AUTHORITATIVE for what an explicit targeted dispatch is
+		// recorded against (see internal/api/agents.go and
+		// internal/scheduler/dispatch_targets.go).
+		//
+		// capabilities is a free-form comma list, matched token-wise by the
+		// list surface (`?capability=dispatch` matches "control, dispatch").
+		// endpoint is the agent's declared bus relay base URL; '' inherits
+		// the scheduler's configured [crier] url. Fresh table, no backfill:
+		// there are no agents until one registers, and an empty registry
+		// changes no routing decision.
+		version: 71,
+		desc:    "SCHED-GAP-1665: agents — the durable agent registry (name, capabilities, endpoint) backing GET/POST /api/v1/agents + DELETE /api/v1/agents/{name} and targeted tick dispatch",
+		stmt: `
+CREATE TABLE IF NOT EXISTS agents (
+    name          TEXT PRIMARY KEY,
+    capabilities  TEXT NOT NULL DEFAULT '',
+    endpoint      TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 `,
 	},
 }

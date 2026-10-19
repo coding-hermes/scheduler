@@ -151,6 +151,8 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
 | GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
 | POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
+| GET, POST | `/api/v1/agents` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
+| DELETE | `/api/v1/agents/{name}` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
 
 ## 1a. Deploy templates (JSONL deploy routes)
 
@@ -775,6 +777,23 @@ budget, namespace); a DISABLED project is refused with 409
 queued/running tick is refused with 409 (duplicate-spawn protection,
 SCHED-GAP-030).
 
+**Body (optional, SCHED-GAP-1665):** `{"agent": "<name>"}` routes THIS tick to
+that specific agent instead of the lane's own execution target. With no body
+(or an empty `agent`) the historical project-based routing applies unchanged.
+The name must be a bus identity (letters, digits, `.`, `_`, `-`), else 400.
+
+Targeted dispatch is additive and advisory:
+
+- the lane still supplies the board/workdir references (or its configured
+  workdir when it has no dispatch-target row);
+- an agent the registry has no row for is still dispatched — the relay's own
+  404 is the authority on whether an agent exists — but the response says
+  `agent_registered: false`;
+- a REGISTERED agent with a non-empty `endpoint` is handed the work through
+  THAT relay (see §19);
+- an unreachable or refusing agent fails this tick loudly with the attempt
+  recorded (`tick_dispatch`), never falling back to the shared gateway.
+
 **Response 202:**
 
 ```json
@@ -782,13 +801,22 @@ SCHED-GAP-030).
  "tick_id":"my-project-2026-08-18-06-55-00"}
 ```
 
-**Errors:** 404 `{"error":"project not found"}`; 409 `{"error":"project is disabled — resume it before spawning"}`; 409 `{"error":"project already has a tick in flight"}`; 405 on non-POST.
+A targeted spawn adds `"agent":"helix-agent","agent_registered":true`.
+
+**Errors:** 404 `{"error":"project not found"}`; 409 `{"error":"project is disabled — resume it before spawning"}`; 409 `{"error":"project already has a tick in flight"}`; 400 `{"error":"invalid JSON body: …"}` or a refused agent name; 405 on non-POST.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/spawn
 # 202 {"status":"spawned","project":"my-project","tick_id":"my-project-..."}
 curl -s http://127.0.0.1:9090/api/v1/ticks/my-project-2026-08-18-06-55-00
 # 200 — the returned tick_id always resolves
+
+# Targeted: hand this ONE tick to a named agent
+curl -s -X POST http://127.0.0.1:9090/api/v1/projects/my-project/spawn \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"agent":"helix-agent"}'
+# 202 {"status":"spawned","project":"my-project","tick_id":"…","agent":"helix-agent","agent_registered":true}
 ```
 
 ### POST /api/v1/projects/{name}/bump
@@ -1971,3 +1999,135 @@ every other introspection tool. An edge recorded over MCP is attributed to
 
 Every write — REST or MCP — goes through the operator gate, and an edge is
 additive: the map never mutates a lane row.
+
+## 19. Agent registry + targeted tick dispatch (SCHED-GAP-1665)
+
+The scheduler already knows how to hand a lane's tick to a NAMED agent over the
+Crier bus (`docs/dispatch-spec.md`): the lane declares its execution target in
+`dispatch-targets.jsonl`, and the dispatch leg fails a tick loudly when that
+agent is unreachable. What was missing is the INVENTORY — which agents exist,
+what each one can do, and where it is reachable — and a way to target ONE tick
+at a chosen agent without editing the lane's routing.
+
+Both are additive. An empty registry changes no routing decision, and a spawn
+with no `agent` body behaves exactly as it did before this section existed.
+
+### GET /api/v1/agents
+
+Operator credential required (the list exposes fleet topology: agent names,
+capabilities and relay endpoints — the same class the peer registry gates).
+
+| Query | Meaning |
+|-------|---------|
+| `capability` (optional) | Keep only agents declaring this capability token (case-insensitive, token-wise — `dispatch` never matches `dispatcher`) |
+
+**Response 200:**
+
+```json
+{"agents":[
+  {"name":"helix-agent",
+   "capabilities":"control, dispatch",
+   "endpoint":"https://relay.example.net:8767",
+   "registered_at":"2026-10-18T21:04:11Z",
+   "updated_at":"2026-10-18T21:04:11Z"}
+ ],
+ "count":1}
+```
+
+An empty registry answers `{"agents":[],"count":0}` — never `null`.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/agents \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+curl -s 'http://127.0.0.1:9090/api/v1/agents?capability=dispatch' \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+```
+
+### POST /api/v1/agents
+
+Register or refresh an agent. Operator credential required.
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `name` | yes | The bus identity and the registry key. Letters, digits, `.`, `_`, `-` (max 128 bytes). Interpolated into `/agents/{id}/inbox`, hence the narrow charset. |
+| `capabilities` | no | Free-form comma list. Normalized on write: trimmed, de-duplicated (case-insensitively, first spelling wins), joined with `", "`. |
+| `endpoint` | no | Absolute `http(s)` relay base URL for this agent. Empty = inherit the scheduler's configured `[crier]` url. A bare `host:port` or a relative path is refused (400) — an endpoint that cannot be addressed must not look like routing information. |
+
+**Responses:** `201 {"status":"registered","agent":{…}}` when the row is new;
+`200 {"status":"updated","agent":{…}}` when an existing registration was
+refreshed. A refresh updates `capabilities`/`endpoint`/`updated_at` and
+PRESERVES `registered_at`: re-registering an agent does not rewrite its history.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/agents \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"helix-agent","capabilities":"control, dispatch","endpoint":"https://relay.example.net:8767"}'
+# 201 {"status":"registered","agent":{"name":"helix-agent", …}}
+```
+
+**Errors:** 400 for invalid JSON, a missing/invalid name, or an invalid
+endpoint; 401 without a credential; 503 when no operator credential is
+configured (fail-closed).
+
+### DELETE /api/v1/agents/{name}
+
+Unregister an agent. Operator credential required. `200
+{"status":"unregistered","name":"…"}`; an unknown name is `404` — an unregister
+that removed nothing never reads as a success.
+
+Routing is unaffected: the dispatch-targets file, not the registry, decides
+which agent runs a lane. Removing a registry row un-inventories an agent, it does
+not retarget one.
+
+```bash
+curl -s -X DELETE http://127.0.0.1:9090/api/v1/agents/helix-agent \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
+```
+
+### Targeted tick dispatch
+
+`POST /api/v1/projects/{name}/spawn {"agent":"<name>"}` routes ONE tick to that
+agent (see §5). Three laws keep it honest:
+
+1. **The registry is advisory, never a gate.** An agent with no registry row is
+   still dispatched: the relay's `404` is the authority on whether an agent
+   exists, and a scheduler-side gate would refuse work the relay would accept.
+   The spawn response reports `agent_registered: false` so the operator sees the
+   divergence BEFORE the tick fails.
+2. **The endpoint is load-bearing only for targeted dispatch.** A registered
+   agent with a non-empty `endpoint` is handed the work through THAT relay
+   (`bus.Client.DispatchTo`). Every other dispatch — every lane whose target file
+   names its agent — keeps riding the scheduler's configured relay,
+   byte-identically to the pre-registry behaviour.
+3. **No fallback, ever.** An unreachable, unknown or refusing agent fails the
+   tick with the named dispatch error and the attempt recorded in `tick_dispatch`
+   (the agent ADDRESSED, the correlation id, the relay message id, the state).
+   Nothing is re-pointed at the shared gateway.
+
+The reply leg is unchanged: answers arrive in the scheduler's own inbox
+(`payload.reply_to`) and must correlate to a hand-out this scheduler made. An
+agent reached through a FOREIGN relay therefore needs its answer federated back;
+a missing reply surfaces as the tick's `dispatch_deadline`, never as a silent
+pass.
+
+**Usage-pool interaction (fail-closed, by design).** When usage-pool enforcement
+is ON, a remote tick must carry a stable `host_id` for cross-namespace capacity
+accounting. A per-tick override inherits the lane's `host_id` when the lane has a
+dispatch-target row; a lane with NO row (or a parked one) has none, so the
+admission refuses it with the named `usage_pool_missing` deferral rather than
+dispatch unaccounted work. That is deliberate: the registry adds an address, not
+a capacity promise. Give the lane a dispatch-target row (or run with pools in
+observe-only mode) when you need targeted dispatch under enforcement.
+
+### MCP tools
+
+| Tool | Mirrors | Gate |
+|------|---------|------|
+| `agents_list` | `GET /api/v1/agents` | open (like every introspection read on the MCP surface) |
+| `agents_register` | `POST /api/v1/agents` | operator credential required |
+| `agents_unregister` | `DELETE /api/v1/agents/{name}` | operator credential required |
+
+All three call the SAME `internal/database/agents.go` functions as REST, so the
+two surfaces cannot disagree about normalization, not-found semantics or the
+`created` vs `updated` distinction.

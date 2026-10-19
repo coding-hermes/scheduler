@@ -49,6 +49,19 @@ type PackedProject struct {
 	// lane > namespace > the global (env) default.
 	IdleIntervention          int
 	NamespaceIdleIntervention int
+	// DispatchAgent (SCHED-GAP-1665) is a PER-TICK execution-target
+	// override: when set, this tick's work is handed to that NAMED agent
+	// even if the lane has no dispatch target row (or names a different
+	// one). It is the operator's explicit choice — set only by
+	// Loop.SpawnNowTargeted (POST /api/v1/projects/{name}/spawn {"agent":…})
+	// — and it is empty on every other spawn path, so the packer's routing
+	// is byte-identical for the fleet's own ticks.
+	//
+	// An override does NOT bypass the dispatch laws: the hand-out still
+	// carries lane + reference + correlation id, an unreachable agent still
+	// fails the tick loudly, and the tick row records the agent the relay
+	// ACCEPTED (dispatch-spec.md §2/§3).
+	DispatchAgent string
 	// WaveSerial (SCHED-GAP-113, S12 §6.2 admission layer): set by the
 	// packer when the project's namespace has wave_workers_cap > 0 AND a
 	// live wave (running tick with worker_count > 0) was in flight at pack

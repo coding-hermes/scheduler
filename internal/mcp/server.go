@@ -560,6 +560,40 @@ var tools = []ToolDefinition{
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
 	{
+		Name:        "agents_list",
+		Description: "List the scheduler's registered agents — the execution targets work can be handed to (mirrors GET /api/v1/agents, SCHED-GAP-1665): name, capabilities, endpoint, registered_at, updated_at. ADVISORY inventory: the relay, not this registry, decides whether an agent exists. Optional capability filter keeps only agents declaring that token.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"capability": map[string]interface{}{"type": "string", "description": "Keep only agents declaring this capability token (e.g. dispatch)"},
+			},
+		},
+	},
+	{
+		Name:        "agents_register",
+		Description: "Register or refresh an agent in the scheduler's registry (mirrors POST /api/v1/agents, SCHED-GAP-1665; operator credential required). name is the registry key and the bus identity; capabilities is a free-form comma list (normalized on write); endpoint is an optional absolute http(s) relay base URL (empty = inherit the scheduler's [crier] url). Re-registering refreshes capabilities/endpoint and preserves registered_at.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":         map[string]interface{}{"type": "string", "description": "Agent bus identity (letters, digits, '.', '_', '-')"},
+				"capabilities": map[string]interface{}{"type": "string", "description": "Free-form comma list (e.g. control, dispatch)"},
+				"endpoint":     map[string]interface{}{"type": "string", "description": "Optional absolute http(s) relay base URL for this agent"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		Name:        "agents_unregister",
+		Description: "Remove an agent from the scheduler's registry (mirrors DELETE /api/v1/agents/{name}, SCHED-GAP-1665; operator credential required). An unknown name is a not-found error, never a silent success. Routing is unaffected: the dispatch-targets file, not the registry, decides which agent runs a lane.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{"type": "string", "description": "Registered agent name"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
 		Name:        "lane_links_list",
 		Description: "Lane relationship map (SCHED-GAP-1700): every recorded parent→child lane link — MANY-TO-MANY, within or across namespaces — with each endpoint's namespace and a derived cross_namespace flag (mirrors GET /api/v1/links). REFERENCE/LOOKUP ONLY: these links never change admission, cadence, cooldown, weight or pick order. Optional filters: lane (either endpoint), parent, child.",
 		InputSchema: map[string]interface{}{
@@ -984,6 +1018,14 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolPeersEvents(ctx, args)
 	case "cadence":
 		return s.toolCadence(ctx)
+	// SCHED-GAP-1665 — the agent registry (CTL-003 parity with
+	// /api/v1/agents + /api/v1/agents/{name}).
+	case "agents_list":
+		return s.toolAgentsList(ctx, args)
+	case "agents_register":
+		return s.toolAgentsRegister(ctx, args)
+	case "agents_unregister":
+		return s.toolAgentsUnregister(ctx, args)
 	// SCHED-GAP-1700 — the lane relationship map (CTL-003 parity with
 	// /api/v1/links + its five traversal reads).
 	case "lane_links_list":

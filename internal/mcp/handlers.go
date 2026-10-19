@@ -2107,6 +2107,60 @@ func (s *Server) toolPeersList(ctx context.Context) (string, error) {
 	return jsonString(map[string]interface{}{"peers": out, "count": len(out)}), nil
 }
 
+// toolAgentsList mirrors GET /api/v1/agents (SCHED-GAP-1665): the agent
+// registry inventory, optionally filtered to agents declaring one capability.
+func (s *Server) toolAgentsList(ctx context.Context, args map[string]interface{}) (string, error) {
+	agents, err := database.ListAgents(ctx, s.db, getStringArg(args, "capability"))
+	if err != nil {
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"agents": agents, "count": len(agents)}), nil
+}
+
+// toolAgentsRegister mirrors POST /api/v1/agents: register or refresh an agent.
+// The store's NormalizeAgent is the shared write gate (name charset, endpoint
+// shape, capability canonicalization), so this surface cannot disagree with
+// REST about what a stored row means.
+func (s *Server) toolAgentsRegister(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	agent := &database.Agent{
+		Name:         name,
+		Capabilities: getStringArg(args, "capabilities"),
+		Endpoint:     getStringArg(args, "endpoint"),
+	}
+	if err := database.NormalizeAgent(agent); err != nil {
+		return "", err
+	}
+	created, err := database.UpsertAgent(ctx, s.db, agent)
+	if err != nil {
+		return "", err
+	}
+	status := "updated"
+	if created {
+		status = "registered"
+	}
+	return jsonString(map[string]interface{}{"status": status, "agent": agent}), nil
+}
+
+// toolAgentsUnregister mirrors DELETE /api/v1/agents/{name}: remove the
+// registry row. An unknown name is a not-found error, never a silent success.
+func (s *Server) toolAgentsUnregister(ctx context.Context, args map[string]interface{}) (string, error) {
+	name := getStringArg(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if err := database.DeleteAgent(ctx, s.db, name); err != nil {
+		if errors.Is(err, database.ErrAgentNotFound) {
+			return "", fmt.Errorf("agent %q not found", name)
+		}
+		return "", err
+	}
+	return jsonString(map[string]interface{}{"status": "unregistered", "name": name}), nil
+}
+
 // toolPeersRegister mirrors POST /api/v1/peers: register or refresh peer
 // identity. Registration is NOT liveness — last_contact is untouched.
 func (s *Server) toolPeersRegister(ctx context.Context, args map[string]interface{}) (string, error) {

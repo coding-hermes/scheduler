@@ -82,6 +82,11 @@ var mutatingTools = map[string]bool{
 	"project_unbump":         true,
 	"peers_register":         true,
 	"peers_heartbeat":        true,
+	// SCHED-GAP-1665: the agent registry's writes. The registry is fleet
+	// topology (who can be handed work, and where), so registering or
+	// removing an agent is operator-gated exactly like the peer registry.
+	"agents_register":   true,
+	"agents_unregister": true,
 	// SCHED-GAP-1700: the lane relationship map's writes. Reference edges are
 	// still operator-gated — the map is fleet data, and an unauthenticated
 	// caller must not be able to rewrite who is related to whom.
@@ -120,6 +125,11 @@ var readOnlyTools = map[string]bool{
 	"features_prune_candidates": true,
 	"cooldown_residue":          true,
 	"peers_list":                true,
+	// SCHED-GAP-1665: the agent registry read — a mirror of its REST GET,
+	// open like every other introspection read on this surface (the REST
+	// read carries the operator marker for anti-enumeration; see
+	// internal/api/agents.go).
+	"agents_list": true,
 	// SCHED-GAP-1580 (CTL-003 coverage): the REMOTE-006 durable event slice
 	// and the SOL-CADENCE rate read — both read-only mirrors of their REST
 	// GET routes (peers_events is gated on the REST side like every peers

@@ -1384,8 +1384,10 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 	// peers_events (REMOTE-006) + cadence (SOL-CADENCE) — the two served
 	// routes the served-spec parity guard surfaced without MCP coverage.
 	// SCHED-GAP-1700 added the 5 lane relationship tools.
-	if len(toolsList) != 68 {
-		t.Errorf("tool count = %d, want 68 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_* + 5 lane relationship tools)", len(toolsList))
+	// SCHED-GAP-1665 added the 3 agent registry tools (agents_list,
+	// agents_register, agents_unregister).
+	if len(toolsList) != 71 {
+		t.Errorf("tool count = %d, want 71 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_* + 5 lane relationship tools + 3 agent registry tools)", len(toolsList))
 	}
 }
 

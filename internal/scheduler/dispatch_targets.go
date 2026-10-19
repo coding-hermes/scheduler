@@ -226,6 +226,47 @@ func resetDispatchTargetsCache() {
 	dispatchTargetsCache = map[string]dispatchTargetsEntry{}
 }
 
+// resolveSpawnTarget resolves ONE tick's execution target: the lane's declared
+// target (dispatch-targets.jsonl) with an explicit per-tick agent override
+// applied on top (SCHED-GAP-1665).
+//
+// THE OVERRIDE IS LAST. A lane row still supplies the board/workdir references
+// and the host identity, so an operator retargeting a single tick does not have
+// to restate the lane's reference plumbing — only the agent that will do the
+// work. When the lane has no row at all, the override ALONE makes the tick
+// remote and the references fall back to the lane's configured workdir
+// (resolveDispatchReferences).
+//
+// A parse error in the file is RETURNED, not swallowed, and it does NOT cancel
+// an override: the operator asked for a specific agent, so the tick goes there
+// with fallback references while the caller logs the broken config loudly. For
+// a tick with no override the caller keeps the historical behaviour (log the
+// error, run locally).
+func resolveSpawnTarget(proj PackedProject) (DispatchTarget, bool, error) {
+	override := strings.TrimSpace(proj.DispatchAgent)
+	target, remoteLane, err := LookupDispatchTarget(DefaultDispatchTargetsPath(), proj.Name)
+	if override == "" {
+		return target, remoteLane, err
+	}
+	target.Agent = override
+	// Case: the file has no row for this lane (or has one that is parked with
+	// enabled=false, which LookupDispatchTarget reports as not-remote). The
+	// lane's declared references are then unknown, which is legitimate — an
+	// override does not require a lane row.
+	if !remoteLane {
+		target.Lane = proj.Name
+		target.HostID = ""
+	}
+	return target, true, err
+}
+
+// hasDispatchAgentOverride reports whether this tick carries an explicit agent
+// override — i.e. whether a target-file parse error must NOT demote it to a
+// local spawn.
+func (p PackedProject) hasDispatchAgentOverride() bool {
+	return strings.TrimSpace(p.DispatchAgent) != ""
+}
+
 // resolveDispatchReferences fills the board/workdir references a dispatched
 // unit carries. The references are what the AGENT resolves on its own side, so
 // an explicit target value always wins; absent values fall back to the lane's

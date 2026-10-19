@@ -254,11 +254,31 @@ func BuildDispatch(baseURL, schedulerID, agentID string, item WorkItem, now time
 // status) is in the returned error. The idempotency key makes an
 // operator-level retry of the SAME correlation id safe.
 func (c *Client) Dispatch(ctx context.Context, agentID string, item WorkItem) (DispatchReceipt, error) {
+	return c.DispatchTo(ctx, c.baseURL, agentID, item)
+}
+
+// DispatchTo is Dispatch through an EXPLICIT relay base URL (SCHED-GAP-1665):
+// the targeted-dispatch path hands work to a REGISTERED agent whose endpoint is
+// a different relay than the scheduler's own. The wire contract, the accept
+// shapes and the failure vocabulary are identical — only the host changes.
+//
+// An empty baseURL means the client's configured relay, so a caller that has no
+// per-agent endpoint never needs this method.
+//
+// The REPLY is a separate matter: answers arrive in the SCHEDULER's inbox
+// (payload.reply_to) on the scheduler's own relay. An agent reached through a
+// foreign relay must have its answer federated back to that inbox, which is the
+// operator's declared topology, not something this client can invent — a
+// missing reply surfaces as the leg's dispatch_deadline, never as a silent pass.
+func (c *Client) DispatchTo(ctx context.Context, baseURL, agentID string, item WorkItem) (DispatchReceipt, error) {
 	target := strings.TrimSpace(agentID)
 	if !c.Enabled() {
 		return DispatchReceipt{}, fmt.Errorf("bus: dispatch to %q not attempted: %w", target, ErrDisabled)
 	}
-	endpoint, body, corr, err := BuildDispatch(c.baseURL, c.schedID, target, item, c.now())
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = c.baseURL
+	}
+	endpoint, body, corr, err := BuildDispatch(baseURL, c.schedID, target, item, c.now())
 	if err != nil {
 		return DispatchReceipt{}, err
 	}
