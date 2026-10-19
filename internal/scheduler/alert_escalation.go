@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,14 +40,32 @@ type AlertEscalator struct {
 	// than double-warning. nil/empty = no hold knowledge; behaviour is
 	// byte-identical to pre-1614.
 	budgetHolds map[string]BudgetHoldView
+	// infraThrottle (SCHED-GAP-128) is the in-process memory of the last
+	// emission per (project, finding-class) tuple — the fast path of the
+	// shared-infra alert throttle. The durable half of that memory is the
+	// events table itself (lastInfraAlertEvent), because this escalator is
+	// constructed fresh on every evaluation pass. nil is legal: the durable
+	// lookup still applies.
+	infraThrottle *infraAlertThrottle
+	// infraWindow (SCHED-GAP-128) is the resolved throttle window for
+	// shared-infra alerts. 0 = DefaultInfraAlertThrottleWindow.
+	infraWindow time.Duration
 }
 
 // NewAlertEscalator creates an escalator backed by db and events. The
 // autoDisable policy enables per-project failure-rate auto-disable when
 // autoDisable.failureRate > 0 (SCHED-GAP-018); a zero-value policy leaves
-// the feature off.
+// the feature off. The shared-infra alert throttle (SCHED-GAP-128) starts
+// with the env-resolved window (SCHEDULER_INFRA_ALERT_THROTTLE, default
+// DefaultInfraAlertThrottleWindow).
 func NewAlertEscalator(db *sql.DB, events *EventLogger, autoDisable autoDisablePolicy) *AlertEscalator {
-	return &AlertEscalator{db: db, events: events, autoDisable: autoDisable}
+	return &AlertEscalator{
+		db:            db,
+		events:        events,
+		autoDisable:   autoDisable,
+		infraThrottle: newInfraAlertThrottle(),
+		infraWindow:   infraAlertWindowFromEnv(),
+	}
 }
 
 // SetSchedulerBus installs the lane-state publisher (REMOTE-004). nil or a
@@ -385,6 +404,11 @@ func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 // committed into HEADING's repo). The create-path guard (database/projects.go)
 // prevents new duplicates; this check flags any that already exist so the
 // fleet audit surfaces them instead of letting them run silently.
+//
+// SCHED-GAP-128: the finding rides EmitInfraFinding, so an unchanged
+// duplicate group re-emits at most once per infraAlertWindowOrDefault instead
+// of HIGH on every health pass. The tuple is keyed on the group's canonical
+// first member (the roster is also in the payload).
 func (ae *AlertEscalator) CheckDuplicateWorkdirs(ctx context.Context) error {
 	prows, err := ae.db.QueryContext(ctx,
 		`SELECT name, workdir FROM projects WHERE enabled = 1 AND workdir != '' ORDER BY workdir, name`)
@@ -411,7 +435,9 @@ func (ae *AlertEscalator) CheckDuplicateWorkdirs(ctx context.Context) error {
 		if len(names) < 2 {
 			continue
 		}
-		ae.events.Emit(ctx, SeverityHigh, "escalation",
+		keyed := append([]string(nil), names...)
+		sort.Strings(keyed)
+		ae.EmitInfraFinding(ctx, SeverityHigh, "escalation", keyed[0], InfraAlertDuplicateWorkdir,
 			fmt.Sprintf("duplicate workdir: %d enabled projects share %s", len(names), wd),
 			map[string]any{
 				"workdir":  wd,
