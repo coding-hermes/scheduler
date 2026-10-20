@@ -13,9 +13,50 @@ import (
 )
 
 // evaluate runs one evaluation cycle.
-// Phase 1 (locked): state update, cleanup, pick projects.
-// Phase 2 (lock-free): fire into slot pool, alert escalation.
+//
+// LOCK DISCIPLINE (PERF-001-R3 — this comment is the contract for anything
+// added below):
+//
+//	evalMu serializes PASSES (one decision phase at a time) and is released
+//	       at the Phase-1/Phase-2 boundary.
+//	mu     is held ONLY for the O(1) loop-state updates — entry (lastEval +
+//	       its mirrors, board-stasis arming, the snapshots the rest of the
+//	       pass needs) and the Phase-1 tail (budget-hold view, the GAP-043
+//	       zero-select counters). It is NEVER held across the pack.
+//
+// The write lock used to be held for the whole pass, and the pack runs the
+// per-board board-freshness battery (git subprocesses; 41.9% of all daemon
+// CPU, PERF-002-R2). That coupling starved every mu reader — measured live as
+// /api/v1/status blocking 13.9-21.8s and answering 504 (goroutine dump at the
+// stall: the handler parked in sync.RWMutex.RLock inside
+// Loop.ZeroSelectStats while a pass held the write lock). The armed 5s read
+// budget cannot bound a mutex wait, so the fix is not to tune the budget but
+// to stop making an operator read wait at all.
+//
+// Phase 1a (mu held, O(1)): state update + the pass's input snapshots.
+// Phase 1b (NO lock)      : cleanup, budget/cadence queries, the pack.
+// Phase 1c (mu held, O(1)): publish the pass's loop-level results.
+// Phase 2  (NO lock)      : fire into the slot pool, alert escalation.
 func (l *Loop) evaluate() {
+	// Whole-pass serialization. Two concurrent DECISION phases would race on
+	// the shared packers' per-pass state (budget gate, cadence rates,
+	// wave-shed DB, board-stasis gate, hold state). The write lock used to
+	// provide that exclusion as a side effect of being held for the entire
+	// pass; evalMu provides it without coupling the pass to any reader.
+	l.evalMu.Lock()
+	serialized := true
+	defer func() {
+		// Covers the early returns inside Phase 1 (paused loop, packer
+		// error, zero select): a pass that bails out still hands the
+		// serialization token on. The token is released EXPLICITLY at the
+		// Phase-1/Phase-2 boundary (see the end of Phase 1c), which is
+		// exactly where the write lock used to be released, so a pass's
+		// spawns may overlap the next pass's decisions as they always could.
+		if serialized {
+			l.evalMu.Unlock()
+		}
+	}()
+
 	l.mu.Lock()
 
 	// GAP-101 (2026-09-09): single choke-point gate. ForceEvaluate fires
@@ -47,11 +88,13 @@ func (l *Loop) evaluate() {
 	// explicit evaluate always spawns); every other pass arms it with the
 	// loop-level switch. The baseline recording happens later, at the
 	// spawn sites (evaluate's spawn loop / SpawnNow).
-	// NOTE: the loop fields are read INLINE, never under a second lock —
-	// evaluate() already holds l.mu (acquired at entry) through the whole
-	// Phase-1 section below, and Go's RWMutex is not reentrant, so any
-	// Lock()/Unlock() pair here self-deadlocks or releases the entry lock
-	// early. boardStasisForce is an atomic for that reason.
+	// NOTE: the loop fields are read INLINE, never under a second lock — the
+	// entry lock is held here and Go's RWMutex is not reentrant, so any
+	// Lock()/Unlock() pair in this block self-deadlocks or releases the
+	// entry lock early. boardStasisForce is an atomic for that reason.
+	// PERF-001-R3: this block is now the LAST thing the entry lock covers —
+	// it ends with the snapshots the lock-free remainder of the pass needs,
+	// then releases mu before any expensive work.
 	gate := l.boardStasisGate
 	forced := l.boardStasisForce.Swap(false)
 	enabled := l.boardStasisOn && !forced
@@ -68,6 +111,30 @@ func (l *Loop) evaluate() {
 			l.packer.SetBoardStasisGate(gate)
 		}
 	}
+
+	// PERF-001-R3 snapshots. Everything Phase 1b needs from loop state is
+	// read HERE, under the entry lock, so the rest of the pass can run
+	// lock-free:
+	//
+	//   nsMode      namespaces the pass is scheduling in (SetNamespaceMode).
+	//   noDeliver   snapshot handed to the slot pool at spawn time; the old
+	//               code read it under the lock in Phase 1c for the same
+	//               reason (SetNoDeliver is a startup setter).
+	//   tickBase    the spawner's configured tick deadline — the base
+	//               backstopMaxAge() derives the reaper cutoff from. Read
+	//               here so the cutoff can be computed WITHOUT re-entering
+	//               mu (backstopMaxAgeFor), and hasSpawner carries the
+	//               nil-spawner case (NewLoop always installs one) so the
+	//               old floored fallback is preserved rather than queried.
+	nsMode := l.namespaceMode
+	noDeliver := l.noDeliver
+	hasSpawner := l.spawner != nil
+	tickBase := time.Duration(0)
+	if hasSpawner {
+		tickBase = l.spawner.timeout
+	}
+	l.mu.Unlock()
+	// ---- Phase 1b: expensive work, NO loop lock held ----
 
 	// ADV-R13: persist exactly ONE host load/memory sample per evaluation
 	// pass, immediately at entry — after the paused-loop gate (a paused
@@ -104,7 +171,18 @@ func (l *Loop) evaluate() {
 	// prior hardcoded 90m killed legitimate 3h-wave ticks at 1.5h
 	// (phantom "stale - timeout at 1h30m0s" rows that fed the failure-rate
 	// counters). See wave_timeout.go:backstopMaxAge for the full derivation.
-	if staleProjects, cleaned, _ := l.lifecycle.CleanupStaleProjects(l.backstopMaxAge()); cleaned > 0 {
+	//
+	// PERF-001-R3: the cutoff is computed from the Phase-1a tickBase
+	// snapshot via backstopMaxAgeFor, NOT backstopMaxAge() — the latter
+	// re-takes mu and runs its own DB queries, i.e. exactly the
+	// lock-under-the-pass coupling this restructure removes. hasSpawner
+	// preserves the old nil-spawner floored fallback (NewLoop always
+	// installs a spawner; the branch exists for the test-only shape).
+	backstop := backstopFloor
+	if hasSpawner {
+		backstop = l.backstopMaxAgeFor(tickBase)
+	}
+	if staleProjects, cleaned, _ := l.lifecycle.CleanupStaleProjects(backstop); cleaned > 0 {
 		log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
 		if l.slotPool != nil {
 			l.slotPool.releaseReaped(staleProjects)
@@ -150,7 +228,9 @@ func (l *Loop) evaluate() {
 			}
 		}
 	}
-	if l.namespaceMode && l.multiPoolPacker != nil {
+	// PERF-001-R3: nsMode is the Phase-1a snapshot of l.namespaceMode (mu is
+	// no longer held here).
+	if nsMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
 		// namespaces itself; seeing them lets it distinguish "project points
@@ -206,7 +286,8 @@ func (l *Loop) evaluate() {
 		packed, err = l.packer.Pick(now, runningSet)
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
-			l.mu.Unlock()
+			// PERF-001-R3: mu is not held here any more; the deferred
+			// serialization release covers this early return.
 			return
 		}
 	}
@@ -247,7 +328,13 @@ func (l *Loop) evaluate() {
 		}
 	}
 	if l.multiPoolPacker != nil {
-		l.budgetHoldViews = l.multiPoolPacker.heldByProject()
+		// PERF-001-R3: budgetHoldViews is loop state the Phase-2 escalator
+		// reads under RLock — published under mu, briefly. The packer read
+		// itself (heldByProject) is O(held) and needs no lock.
+		holds := l.multiPoolPacker.heldByProject()
+		l.mu.Lock()
+		l.budgetHoldViews = holds
+		l.mu.Unlock()
 	}
 
 	if len(packed) == 0 {
@@ -260,20 +347,31 @@ func (l *Loop) evaluate() {
 		for _, name := range running {
 			runningSet[name] = true
 		}
+		// PERF-001-R3: noteZeroSelect mutates loop state the API reads (the
+		// GAP-043 trio plus its atomic mirrors) — take mu for the update
+		// only. It is one indexed eligibility query plus a log line, and it
+		// only runs on a zero-select pass.
+		l.mu.Lock()
 		l.noteZeroSelect(now, runningSet)
 		l.mu.Unlock()
 		return
 	}
 
+	l.mu.Lock()
 	l.resetZeroSelect()
+	l.mu.Unlock()
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)
 
-	// Snapshot before releasing lock.
-	noDeliver := l.noDeliver
-
-	l.mu.Unlock()
+	// ---- Phase 1c end / Phase 2 start ----
+	// Release the pass serialization at the same boundary the write lock used
+	// to be released at: the spawns below (and the escalator) may overlap the
+	// NEXT pass's decision phase exactly as they always could, while two
+	// decision phases still cannot overlap. noDeliver is the Phase-1a
+	// snapshot (the old code read l.noDeliver under the lock here).
+	serialized = false
+	l.evalMu.Unlock()
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
 	// SCHED-GAP-170: gateway health is a PER-PROJECT admission decision now,

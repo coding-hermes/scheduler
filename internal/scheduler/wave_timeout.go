@@ -259,14 +259,38 @@ const (
 // O(running) + O(distinct namespaces) round-trips per evaluation, each
 // evaluation is a single OS-thread tick at ~30s cadence — well under 1ms
 // aggregate on a healthy DB. No new indexes are required.
+//
+// LOCKING (PERF-001-R3). backstopMaxAge() resolves the base tick deadline
+// under the loop mutex, because the field it reads (the spawner's configured
+// timeout) is written by SetTickTimeout under that mutex. evaluate() must NOT
+// take the loop mutex for this — its whole contract is that the pass holds mu
+// only for O(1) state updates — so the pass snapshots the base under its
+// entry lock and calls backstopMaxAgeFor(base) instead. Both entry points run
+// the identical computation; only where the base comes from differs.
 func (l *Loop) backstopMaxAge() time.Duration {
 	if l == nil || l.spawner == nil {
 		// Defensive: a Loop without a Spawner (test-only shape) gets the
 		// floored conservative value. Never the zero duration.
 		return backstopFloor
 	}
+	l.mu.Lock()
 	base := l.spawner.timeout
+	l.mu.Unlock()
+	return l.backstopMaxAgeFor(base)
+}
+
+// backstopMaxAgeFor is backstopMaxAge's computation with the base
+// --tick-timeout supplied by the caller (PERF-001-R3, see the LOCKING note
+// above). A nil Loop gets the floored value; an absent DB cannot run the
+// running-tick join, so it floors the cutoff rather than panicking.
+func (l *Loop) backstopMaxAgeFor(base time.Duration) time.Duration {
+	if l == nil {
+		return backstopFloor
+	}
 	graceBase := base + backstopGrace
+	if l.db == nil {
+		return maxDuration(graceBase, backstopFloor)
+	}
 
 	rows, err := l.db.Query(`
 		SELECT DISTINCT p.namespace_id
