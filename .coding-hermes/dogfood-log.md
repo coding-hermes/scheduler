@@ -257,3 +257,49 @@ Friction count: 3 (docs gap on the allow ladder; identity-invisible config; mult
 Bunker leg: SKIPPED-install-bunker — running-daemon premise (DOGFOOD-025), build+boot proven 09-25 (63s).
 Perf: overview warm 12-13ms n=5, cold-after-60s 1.36s; MCP fed 4ms, HTTP fed 19-96ms — all comfortably fast, no row.
 Artifacts: docs/dogfood/2026-10-17-federation-surface.md; rows SCHED-GAP-1738..1742 + DOGFOOD-029; commit 84d7ef10.
+
+## 2026-10-20 (06:54-07:45Z) | coding-hermes-scheduler | 🟡 PROMISING-BUT-ROUGH (cadence read surface) + P1 control-plane CPU recurrence
+Angle chosen (uncovered by prior runs): the cadence read surface — docs/api.md §10 / GET /api/v1/cadence, documented
+hours before this tick (DOC-19, commit 6602ba64) and never driven by a dogfood run — used as an operator would
+("which lanes are behind, and why"), cross-checked against the live DB, plus the freshly landed DOC wave read as a
+claim list. Prior runs covered the control surface (09-25), the dashboard at scale (09-25), the simulator (09-25) and
+the federation read surface (10-17).
+Reality: the arithmetic is honest — 608 served rows = 608 DB rows, 0 target/target_source mismatches against the
+documented resolution table, achieved exact on 606/608 (2 boundary ticks), empty responses are [] never null, and the
+whole read costs 10.1/10.8/11.7ms for 107,580 B. But the TARGET is built from each lane's cooldown pin with no
+admission_mode term, and 37 enabled lanes are tasks-admission (board-governed, packer_select.go:376
+tasksAdmissionDue): 22 lanes run ABOVE their served target (consensus-foreman 9.71/day vs 2.00 = 4.9x;
+monitoring-foreman 13.29 vs 4.00 = 3.3x, with 82 of 92 tick gaps under its own 21600s cooldown), and because the
+deficit field is clamped at 0 they can never appear in the endpoint's own documented recipe
+(select(.target_deficit_per_day > 0)) — nor in the cooldown-residue detector, which sees pin == cooldown. The
+fleet-level reading (610.5 declared vs 258.7 achieved starts/day = 42.4%, enabled lanes) is therefore not a delivery
+number, and the same recipe hands back 463 name-ordered lanes led by 7 disabled fixture lanes claiming 48-96
+starts/day. Separately, the control plane spends 55% of its CPU in ReadBoardFreshness, 41.9% of it on ONE loop line
+(board_freshness.go:542, 400,160 `\b<id>\b` matches = 5.13s against this repo's 656-row board) — a recurrence of the
+closed PERF-002 with a new hot path (its git subprocesses are now ~11%).
+Top findings: PERF-002-R2 (P1 — quadratic freshness mis-attribution scan; profile line-level evidence + independent
+repro), SCHED-GAP-1745 (P2 — cadence target ignores admission_mode; over-achievement clamped away), SCHED-GAP-1746
+(P3 — cadence + residue absent from all 9 dashboard routes; §10 recipe not actionable), DOGFOOD-030 (P4 — campaign).
+Time-to-first-success: ~2 min to a served cadence table (single curl, no auth needed for the read); ~20 min to a
+defensible verdict (the DB cross-check is what separates "the numbers are consistent" from "the numbers mean
+something"). Perf measurement added ~25 min.
+Friction count: 3 (the documented deficit recipe is unusable as shipped; the metric is invisible on the operator's
+dashboard; the missing admission_mode context means the operator cannot tell which lanes the target even binds).
+Bunker leg: SKIPPED-install-bunker — tailscale: bunker-las-01 offline 15d, -02 offline 7d, -03 offline 15d, -04
+offline 18d (the coding-hermes-remote-bunker-* hosts are online but are agent boxes, not bunkerd targets), so
+bunker-qa.sh has no host; the standing premise is the pending row DOGFOOD-025, so no duplicate skip row was filed.
+Install-equivalent leg RUN instead: fresh local clone of HEAD e209c70b (0 dirty files) -> make build 4.10s wall
+(9.84u+1.45s; warm build cache here, 63s cold on the 09-25 fresh box) -> boot with NO config on port 19091 + scratch DB
+-> ready <1s, health 0.49ms, GET / 2.08ms, cadence/residue/projects all [] not null, and the boot banner honestly
+declares FAIL-CLOSED operator auth; friction: the zero-config daemon still syncs to DuckBrain at localhost:3000 and
+logs 5x "key rejected (HTTP 401)" + a queued HIGH event, with no documented off switch.
+Perf (Step 2b): GET / 1.50s cold after 60s idle / 1.53s after 90s / 3.09s after 15s / 12.03s under load 23-32 vs
+4.3-19ms warm (n=33); 10.97s of CPU in a 60s profile window, 55% ReadBoardFreshness / 41.9% one line; repro
+400,160 MatchString calls = 5.13s. cadence 10ms, residue 1.6ms, health 0.42ms, /api/v1/status 413ms, /api/v1/projects
+42ms — fast enough that no row is warranted.
+Artifacts: docs/dogfood/2026-10-20-cadence-cost-and-install.md; rows PERF-002-R2 + SCHED-GAP-1745 + SCHED-GAP-1746 +
+DOGFOOD-030 (tasks.jsonl 656->660, one audit event 1792220000000000148); scratch /tmp/df-cad-2026-10-20/ (xcheck.py,
+xcheck2.py, gaps.py, repro/main.go, cpu60.pb.gz, cold_probe.sh, drive.sh, install_leg.sh+log, dash_timing.tsv,
+openapi.json, mcp_tools.txt) with kept copies under ~/.hermes/stand-in/dogfood/coding-hermes-scheduler/scratch/.
+Read-only lane: no source, no scheduler state, no fleet config and no repo visibility was touched; the scratch daemon
+was killed and its port (19091) verified free.
