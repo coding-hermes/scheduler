@@ -44,8 +44,22 @@ func (l *Loop) evaluate() {
 	// provide that exclusion as a side effect of being held for the entire
 	// pass; evalMu provides it without coupling the pass to any reader.
 	l.evalMu.Lock()
+
+	// PERF-001-R2 (b): arm the block-profile rate so the profile records
+	// whatever evaluate() waits on. Armed once per process via a sync.Once
+	// in blockprofile.go, so the first evaluate() that runs in this
+	// process is the one that triggers it.
+	ArmBlockProfile()
+
+	// PERF-001-R2 (c): observe the evaluate() lock hold. Start measuring
+	// the duration before any work begins; the deferred call below will
+	// record the elapsed time when this pass is done.
+	evalStart := time.Now()
 	serialized := true
 	defer func() {
+		// PERF-001-R2 (c): record the hold duration at unlock.
+		l.evalHold.observe(time.Since(evalStart))
+
 		// Covers the early returns inside Phase 1 (paused loop, packer
 		// error, zero select): a pass that bails out still hands the
 		// serialization token on. The token is released EXPLICITLY at the
