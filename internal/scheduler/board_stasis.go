@@ -1,7 +1,10 @@
 package scheduler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -24,7 +27,8 @@ import (
 // the lane and no full LLM tick is fired.
 //
 // THE SIGNAL (PERF-002 budget): a fingerprint of the board file —
-// mtime + size, one os.Stat per lane per pass. It deliberately does NOT run
+// mtime + size + a content digest of the bytes, i.e. one os.Stat plus one
+// sequential streamed read per lane per pass. It deliberately does NOT run
 // the git battery (board_freshness.go) and does not even consult the
 // FreshnessVerdictCache's HEAD probe: the measured correlation is between
 // BOARD WRITES and no-op ticks, and a board write moves mtime. A landed
@@ -32,6 +36,18 @@ import (
 // productive — the 69% figure already includes those. Zero subprocesses;
 // strictly cheaper than the one-exec cache-hit path the PERF-002 verdict
 // cache guarantees.
+//
+// The CONTENT term is what makes the signal content-bearing (QA-CHS-183):
+// an mtime+size pair cannot see a board rewritten in place at the same byte
+// length, and on a host whose filesystem timestamp tick is coarser than the
+// gap between two board writes the pair is identical for two DIFFERENT
+// boards (measured 1464/2000 back-to-back same-size writes sharing one
+// mtime on a fresh bunker agent) — the gate then skipped a lane whose board
+// carried real new work. Hashing the bytes makes a same-size content change
+// a change on every host, independent of clock granularity. mtime is
+// RETAINED on top of the digest: a touch that changes no byte still
+// unblocks the lane, exactly as before, so the change is strictly additive
+// and removes no existing sensitivity.
 //
 // THE BASELINE is recorded at SPAWN time (Loop.evaluate's spawn loop and
 // Loop.SpawnNow), keyed by lane, carrying the fingerprint observed at the
@@ -100,10 +116,20 @@ import (
 const AdmissionReasonBoardUnchanged = "board_unchanged"
 
 // boardFingerprint returns a change-sensitive fingerprint of the lane's
-// board file: mtime + size, the observable surface a board write always
-// moves. ok is false when the lane has no board file or it cannot be
-// stat'ed — the fail-open signal (no evidence of stasis, never a reason to
-// skip). One os.Stat; no subprocess (PERF-002: never the git battery).
+// board file: mtime + size + a digest of the file's bytes. The observable
+// surface a board write moves is the bytes themselves — the content term is
+// what carries a same-size in-place rewrite, which neither mtime (coarse
+// host clock) nor size (equal length) can report on its own (QA-CHS-183).
+//
+// COST (PERF-002 budget): at most ONE os.Stat plus ONE sequential read of
+// the board file, streamed through io.Copy into the hasher in fixed-size
+// chunks — a fleet-sized board is never slurped into a string or []byte.
+// No subprocess, no git call: strictly cheaper than the one-exec cache-hit
+// path the PERF-002 verdict cache guarantees.
+//
+// ok is false when the lane has no board file, it cannot be stat'ed, or it
+// cannot be read — the fail-open signal (no evidence of stasis, never a
+// reason to skip).
 func boardFingerprint(workdir string) (fp string, ok bool) {
 	if workdir == "" {
 		return "", false
@@ -116,7 +142,21 @@ func boardFingerprint(workdir string) (fp string, ok bool) {
 	if err != nil {
 		return "", false
 	}
-	return fmt.Sprintf("%d:%d", fi.ModTime().UnixNano(), fi.Size()), true
+	f, err := os.Open(boardPath)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close() // read-only handle: a close error cannot change the fingerprint
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", false
+	}
+	// 16 hex chars (64 bits) of the digest, the repo's short-fingerprint
+	// convention (ClosureViolationFingerprint). Equality is the only
+	// question asked of it; a collision can only ever SKIP a tick, and the
+	// next board write re-decides.
+	digest := hex.EncodeToString(h.Sum(nil))[:16]
+	return fmt.Sprintf("%d:%d:%s", fi.ModTime().UnixNano(), fi.Size(), digest), true
 }
 
 // boardBaseline is one lane's recorded spawn-time board state: the

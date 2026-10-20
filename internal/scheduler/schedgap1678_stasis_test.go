@@ -5,10 +5,12 @@ package scheduler_test
 // The measured problem (2026-09-29): a tick fired on a board that has NOT
 // changed since the lane's previous tick no-ops 69% of the time (164/235)
 // versus 25% (66/260) when the board moved, and the no-ops are the EXPENSIVE
-// ticks. The gate fingerprints the lane's board file (mtime + size) at SPAWN
-// time and excludes a cooldown-mode BUILDER lane from selection while that
-// fingerprint is unchanged — before any LLM call and before any tick row
-// exists.
+// ticks. The gate fingerprints the lane's board file (mtime + size + a digest
+// of the bytes) at SPAWN time and excludes a cooldown-mode BUILDER lane from
+// selection while that fingerprint is unchanged — before any LLM call and
+// before any tick row exists. The digest is what makes the signal
+// content-bearing: a same-size in-place rewrite with a pinned mtime must
+// still release the lane (QA-CHS-183).
 //
 // These tests drive the gate through the REAL selection path (the multi-pool
 // packer, namespace mode — the fleet's live path), plus the gate's own
@@ -188,10 +190,36 @@ func TestBoardStasisGate_Primitives(t *testing.T) {
 		t.Fatalf("T-STASIS-5 FAIL: unchanged board must block and name the previous tick (got blocked=%v prev=%q)", blocked, prev)
 	}
 
-	// The board moves -> not blocked.
-	writeModeBoard(t, wd, `{"id":"REAL-2","status":"pending"}`)
+	// The board's CONTENT changes at the SAME byte length, with the mtime
+	// pinned back to its pre-write value: the fingerprint must still see the
+	// change. This is the host-clock-independent form of the leg — a lane
+	// whose board carries new work must never be skipped on a filesystem
+	// whose timestamp tick is coarser than the gap between two writes
+	// (QA-CHS-183: 1464/2000 back-to-back same-size writes shared one mtime
+	// on a fresh bunker agent, and the gate reported blocked=true for a
+	// board whose content had changed).
+	boardPath := filepath.Join(wd, ".coding-hermes", "board", "tasks.jsonl")
+	pre, err := os.Stat(boardPath)
+	if err != nil {
+		t.Fatalf("T-STASIS-5 FAIL: stat before the same-size rewrite: %v", err)
+	}
+	writeModeBoard(t, wd, `{"id":"REAL-2","status":"pending"}`) // same length as REAL-1
+	if err := os.Chtimes(boardPath, pre.ModTime(), pre.ModTime()); err != nil {
+		t.Fatalf("T-STASIS-5 FAIL: pin mtime back: %v", err)
+	}
+	// Prove the leg exercises the CONTENT term only: if size or mtime moved,
+	// the assertion below could pass for the wrong reason (and the RED-proof
+	// mutation that drops the content term would stay green).
+	post, err := os.Stat(boardPath)
+	if err != nil {
+		t.Fatalf("T-STASIS-5 FAIL: stat after the same-size rewrite: %v", err)
+	}
+	if post.Size() != pre.Size() || !post.ModTime().Equal(pre.ModTime()) {
+		t.Fatalf("T-STASIS-5 setup FAIL: the rewritten board is not size+mtime identical (size %d->%d, mtime %s->%s) — the content leg would not be exercised",
+			pre.Size(), post.Size(), pre.ModTime(), post.ModTime())
+	}
 	if blocked, _ := gate.AdmissionBlocked("lane-x", wd); blocked {
-		t.Fatalf("T-STASIS-5 FAIL: a changed board must not block")
+		t.Fatalf("T-STASIS-5 FAIL: a changed board must not block, even with size and mtime unchanged (a same-size content change IS a change)")
 	}
 
 	// ClearBaseline -> not blocked (the next pass re-decides).
@@ -212,9 +240,9 @@ func TestBoardStasisGate_Primitives(t *testing.T) {
 	}
 }
 
-// T-STASIS-6: the fingerprint is mtime+size over the board file the lane
-// actually reads (findBoardFile's .coding-hermes/board walk) — content that
-// changes only in SIZE is detected even when the mtime granularity is coarse.
+// T-STASIS-6: the fingerprint is over the board file the lane actually reads
+// (findBoardFile's .coding-hermes/board walk) — content that changes in SIZE
+// is detected even when the mtime granularity is coarse.
 func TestBoardStasisGate_FingerprintTracksBoardFile(t *testing.T) {
 	wd := t.TempDir()
 	boardDir := filepath.Join(wd, ".coding-hermes", "board")

@@ -136,10 +136,11 @@ func noopVerdict(preCommit, preBranch, postCommit, postBranch string, boardUncha
 }
 
 // boardFingerprintOrEmpty is the guard's read of the SCHED-GAP-1678
-// fingerprint: the mtime+size pair of the lane's board file, "" when the
-// board is missing or unreadable. Reusing boardFingerprint keeps ONE
-// fingerprint implementation — the guard and the spawn gate can never
-// measure the board differently.
+// fingerprint: the mtime+size+content-digest triple of the lane's board
+// file, "" when the board is missing or unreadable. Reusing boardFingerprint
+// keeps ONE fingerprint implementation — the guard and the spawn gate can
+// never measure the board differently (and the guard's board leg inherits the
+// content term, so a same-size rewrite at a pinned mtime reads as a change).
 func boardFingerprintOrEmpty(workdir string) string {
 	fp, _ := boardFingerprint(workdir)
 	return fp
