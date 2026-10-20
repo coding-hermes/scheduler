@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -53,12 +54,17 @@ func (l *Loop) evaluate() {
 
 	// PERF-001-R2 (c): observe the evaluate() lock hold. Start measuring
 	// the duration before any work begins; the deferred call below will
-	// record the elapsed time when this pass is done.
-	evalStart := time.Now()
+	// record the elapsed time when this pass is done. Uses clock.Real()
+	// because measurement must survive simulator clocks (ADV-R04).
+	evalStart := clock.Real().Now()
+	// PERF-001-R2 (d): flag that an evaluate() pass is in-flight.
+	// EvalInFlight() returns true for the window between this Store
+	// and the Store(false) in unlockEval().
+	l.evalInFlight.Store(true)
 	serialized := true
 	defer func() {
 		// PERF-001-R2 (c): record the hold duration at unlock.
-		l.evalHold.observe(time.Since(evalStart))
+		l.evalHold.observe(clock.Real().Since(evalStart))
 
 		// Covers the early returns inside Phase 1 (paused loop, packer
 		// error, zero select): a pass that bails out still hands the
@@ -72,6 +78,10 @@ func (l *Loop) evaluate() {
 	}()
 
 	l.mu.Lock()
+
+	// PERF-001-R2: observe the Phase-1a stage (state update + snapshots).
+	// Uses clock.Real() because measurement must survive simulator clocks.
+	l.observeEvalStage("phase1a", clock.Real().Now())
 
 	// GAP-101 (2026-09-09): single choke-point gate. ForceEvaluate fires
 	// evaluate() in a raw goroutine — with the old channel-only protocol
