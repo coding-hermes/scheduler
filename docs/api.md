@@ -146,6 +146,7 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | GET | `/api/v1/events/stream` | [§8](#8-events) |
 | GET | `/api/v1/queue` | [§9](#9-queue) |
 | GET | `/api/v1/metrics` | [§10](#10-fleet-metrics) |
+| GET | `/api/v1/cadence` | [§10](#10-fleet-metrics) |
 | POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/pause` | [§11](#11-fleet-wide-control) |
 | POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
@@ -1376,6 +1377,78 @@ because a dead source is a metric to report, not a request error.
 curl -s http://127.0.0.1:9090/api/v1/metrics | jq '{active: .ticks.active, queued: .ticks.queued, caps: .ticks.by_namespace}'
 curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.deferrals.by_reason | to_entries | map(select(.value > 0))'
 curl -s http://127.0.0.1:9090/api/v1/metrics | jq '.sources'   # what backs each number
+```
+
+### GET /api/v1/cadence
+
+**Purpose:** configured vs achieved starts/day per lane over the trailing
+seven-day window (SOL-CADENCE / SCHED-GAP-1668). A lane's *configured* rate is
+resolved from its explicit `target_runs_per_day` override, else derived from its
+durable cooldown pin (`86400 / cooldown_pin_s`); *achieved* is the count of
+ticks that actually spawned inside the window, divided by the window length.
+Deliberately a separate read from `/api/v1/projects`: this costs one project
+list plus one aggregate, and nothing about a lane's cadence belongs on the
+latency-sensitive pick path.
+
+**Target resolution order** (first match wins — `database.EffectiveCadenceTarget`):
+
+| Stored `target_runs_per_day` | Stored `cooldown_pin_s` | `target_source` | Served `target_runs_per_day` |
+|---|---|---|---|
+| explicit `> 0` | any | `override` | that value |
+| explicit `0` | any | `disabled` | `null` |
+| `NULL` | `> 0` | `cooldown_pin` | `86400 / cooldown_pin_s` |
+| `NULL` | absent / `0` | `none` | `null` |
+
+**`target_source` vocabulary** (the wire tokens, with the prose name that reads them):
+
+| Token | Name | Meaning |
+|-------|------|---------|
+| `override` | explicit override | The operator set `target_runs_per_day` on the lane; that number IS the target |
+| `cooldown_pin` | durable cooldown pin | No override; the target is derived from the lane's own stored `cooldown_pin_s` (`86400 / pin`) |
+| `disabled` | disabled | A declared opt-out: `target_runs_per_day` is explicitly `0`. This is a cadence OPINION, not `projects.enabled = 0` — a disabled lane still appears in this list |
+| `none` | none | No override and no pin: the lane has no cadence opinion at all |
+
+`target_runs_per_day` is JSON `null` exactly when `target_source` is `disabled`
+or `none`. The NULL carries its reason in the sibling token, and no interval is
+fabricated for a lane that never declared one.
+
+**Response 200** — `{"cadence": [ ... ]}`, one row per project row (enabled and
+disabled alike, ordered by `name`):
+
+```json
+{
+  "cadence": [
+    {
+      "name": "9router-foreman",
+      "target_runs_per_day": 4,
+      "target_source": "cooldown_pin",
+      "achieved_runs_per_day": 3.142857142857143,
+      "window_days": 7,
+      "target_deficit_per_day": 0.8571428571428572
+    }
+  ]
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `cadence` | array | One row per stored project row — enabled AND disabled lanes. Empty `[]` (never `null`) only when the fleet has no projects |
+| `cadence[].name` | string | Lane name — the join key against `/api/v1/projects` |
+| `cadence[].target_runs_per_day` | number \| null | Configured starts/day; `null` when `target_source` is `disabled` or `none` |
+| `cadence[].target_source` | string | `override`, `cooldown_pin`, `disabled` or `none` — see the vocabulary table above |
+| `cadence[].achieved_runs_per_day` | number | Ticks whose `spawned_at` is set and falls inside the trailing window, divided by `window_days`. A spawned tick counts whether it later completed, failed or timed out |
+| `cadence[].window_days` | int | Always `7` — the window length, repeated on every row so a row is self-describing |
+| `cadence[].target_deficit_per_day` | number | `max(0, target − achieved)`; always `0` when `target_runs_per_day` is `null`, so an over-achieving lane never reports a negative deficit |
+
+**Errors:** 405 `{"error":"method not allowed"}` with `Allow: GET` on any
+non-GET; 504 `{"error":"deadline exceeded","helper":"cadence","detail":…}` when
+the per-request read budget trips (`--api-read-timeout`, SCHED-GAP-1575-B);
+500 with the store's error text if the project list or the spawn aggregate
+fails.
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/cadence | jq '.cadence | map(select(.target_deficit_per_day > 0))'
+curl -s http://127.0.0.1:9090/api/v1/cadence | jq '[.cadence[].target_source] | group_by(.) | map({source: .[0], lanes: length})'
 ```
 
 ## 11. Feature usage (SCHED-GAP-131)
