@@ -53,7 +53,26 @@ type Loop struct {
 	// "starved". Written under mu in evaluate; read under RLock.
 	budgetHoldViews map[string]BudgetHoldView
 
-	mu     sync.RWMutex
+	// mu guards the Loop's mutable state. PERF-001-R3: it is a SHORT-HOLD
+	// lock — evaluate() takes it only for the O(1) state updates at the
+	// head and tail of a pass (lastEval, the board-stasis arming, the
+	// budget-hold snapshot, the zero-select counters). It is deliberately
+	// NOT held across the pack: the pack runs the per-board board-freshness
+	// battery (git subprocesses; 41.9% of all daemon CPU, PERF-002-R2), and
+	// holding the write lock across it starved every reader that touched mu
+	// — measured live as /api/v1/status blocking 13.9-21.8s and answering
+	// 504 (goroutine dump at the stall: the /status handler parked in
+	// sync.RWMutex.RLock inside Loop.ZeroSelectStats). See evalMu for the
+	// pass serialization that the write lock used to provide implicitly.
+	mu sync.RWMutex
+	// evalMu serializes evaluation PASSES (PERF-001-R3). Before this, one
+	// pass at a time was a side effect of mu being write-held for the whole
+	// pass; that coupling is exactly what starved the API. evalMu preserves
+	// the serialization (two concurrent passes would race on the shared
+	// packers' per-pass state — gates, cadence rates, hold state) while
+	// letting mu be released before the expensive work. Never held by any
+	// reader, so it can never starve an operator surface.
+	evalMu sync.Mutex
 	stopCh chan struct{}
 	// SCHED-GAP-1575-A: atomic mirror of the spawner gateway-response
 	// timeout so /api/v1/status can read it WITHOUT taking Loop.mu.
@@ -168,8 +187,22 @@ type Loop struct {
 	zeroSelectCount     int
 	zeroSelectEligible  int
 	lastZeroSelectEvent time.Time
-	simulate            bool
-	simSuccess          float64
+	// PERF-001-R3: atomic write-through mirrors of the zero-select trio
+	// above, the same pattern lastEvalNs established (SCHED-GAP-1621).
+	// ZeroSelectStats() is on the /api/v1/status read path; while it took
+	// mu.RLock() it queued behind an evaluate() pass holding the write lock
+	// across the board-freshness battery — the measured /status 504
+	// (13.9-21.8s). The getter now reads these and never touches mu; the
+	// plain fields stay the in-loop source of truth (noteZeroSelect /
+	// resetZeroSelect / tests keep reading them) and every mutation
+	// publishes the trio through publishZeroSelect.
+	zeroSelectCountNs    atomic.Int64
+	zeroSelectEligibleNs atomic.Int64
+	// lastZeroSelectNs is the mirror of lastZeroSelectEvent as UnixNano;
+	// 0 means "no zero-select event has ever fired" (the zero time).
+	lastZeroSelectNs atomic.Int64
+	simulate         bool
+	simSuccess       float64
 	// simSeq guarantees unique simulated tick IDs even when multiple
 	// simulated ticks are generated within the same second (DOGFOOD-007:
 	// RunBulkSim crashed with "UNIQUE constraint failed: ticks.id" because
@@ -1538,6 +1571,12 @@ func (l *Loop) GatewayErrorCount() int64 {
 // without event spam. A zero select with NO eligible projects (normal
 // fleet-idle) resets the counter.
 func (l *Loop) noteZeroSelect(now time.Time, runningSet map[string]bool) {
+	// PERF-001-R3: every exit path of this function mutates the zero-select
+	// trio the API reads. Publish the mirrors on the way out (one defer,
+	// rather than a store at each of the five return sites) so
+	// ZeroSelectStats() can never serve a stale snapshot — the counter and
+	// the eligible count move together, exactly as the locked fields do.
+	defer l.publishZeroSelect()
 	// GAP-050: a zero select while every slot is busy is expected — the
 	// packer's global maxConcurrent cap breaks out of selection before
 	// picking anything, so eligible projects exist but NOTHING is wrong.
@@ -1584,6 +1623,25 @@ func (l *Loop) noteZeroSelect(now time.Time, runningSet map[string]bool) {
 func (l *Loop) resetZeroSelect() {
 	l.zeroSelectCount = 0
 	l.zeroSelectEligible = 0
+	l.publishZeroSelect()
+}
+
+// publishZeroSelect writes the zero-select field trio through to the atomics
+// ZeroSelectStats() reads (PERF-001-R3). The plain fields remain the in-loop
+// source of truth; the mirrors are what the lock-free operator getter sees.
+// Lock-free by construction (atomics only) so it is safe from every caller —
+// noteZeroSelect/resetZeroSelect run under mu in evaluate(), and the
+// zero-select tests call them directly without it.
+func (l *Loop) publishZeroSelect() {
+	l.zeroSelectCountNs.Store(int64(l.zeroSelectCount))
+	l.zeroSelectEligibleNs.Store(int64(l.zeroSelectEligible))
+	if l.lastZeroSelectEvent.IsZero() {
+		// The zero time has no UnixNano — 0 is the documented "never"
+		// sentinel the getter renders as "".
+		l.lastZeroSelectNs.Store(0)
+		return
+	}
+	l.lastZeroSelectNs.Store(l.lastZeroSelectEvent.UnixNano())
 }
 
 // countEligibleProjects counts enabled projects that are not currently
@@ -1742,13 +1800,23 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 // ZeroSelectStats exposes GAP-043 diagnostics for /api/v1/status: the
 // consecutive zero-select count, the eligible-project count at the last
 // zero select, and the last zero-select event time ("" = never).
+//
+// PERF-001-R3: reads the atomic mirrors, NOT mu — the same fix
+// LastEvalTime() got in SCHED-GAP-1621, and what the /status 504 required.
+// This getter was the measured stall: a live goroutine dump taken mid-504
+// showed the handler parked in sync.RWMutex.RLock here (loop.go:1746 →
+// server.go:656) while the evaluate() pass held the write lock across the
+// board-freshness battery, so the 5s read budget could not bound the wait —
+// the request was answered 13.9-21.8s later. The mirrors are written by
+// publishZeroSelect() at every mutation of the trio, so the getter's answer
+// equals what the locked read returned.
 func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if !l.lastZeroSelectEvent.IsZero() {
-		lastEvent = l.lastZeroSelectEvent.UTC().Format(time.RFC3339)
+	consecutive = int(l.zeroSelectCountNs.Load())
+	eligible = int(l.zeroSelectEligibleNs.Load())
+	if ns := l.lastZeroSelectNs.Load(); ns != 0 {
+		lastEvent = time.Unix(0, ns).UTC().Format(time.RFC3339)
 	}
-	return l.zeroSelectCount, l.zeroSelectEligible, lastEvent
+	return consecutive, eligible, lastEvent
 }
 
 // ─────────────────────────────────────────────────────────────────────────
