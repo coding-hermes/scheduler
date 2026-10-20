@@ -30,6 +30,16 @@ The commands are of three kinds and nothing else: `curl` against the loopback AP
 read-only SQL, and `grep` over the daemon log or a board file. If you can run `curl`, `sqlite3`
 and `grep`, you can diagnose every entry below.
 
+> **Important: every `curl` on this page must use `-f` (fail) or capture the HTTP code.**
+> Without `-f`, `curl` exits 0 even on 4xx/5xx responses, and `jq` renders missing keys as
+> `{null}`, so a failed read is indistinguishable from a healthy zero-count. Use `curl -sf`
+> (or `curl -w '%{http_code}'`) so the command fails loudly when the API does not answer with
+> a status document.
+
+> **Important: the daemon log rotates.** See the log-rotation notes below. Any `grep` over
+> `scheduler.log` only sees the current 50 MB slice; older events live in `scheduler.log.1`
+> and `scheduler.log.*.gz`.
+
 **Do not write to the live database to diagnose anything.** Every query on this page is either a
 plain `SELECT` or uses `sqlite3 -readonly` / `sqlite3 "file:…?mode=ro"`. The runbook states the
 same rule; the only writes in this system belong to the daemon and to the sanctioned ops scripts.
@@ -57,6 +67,12 @@ Three facts about the surfaces that cost time if you learn them the hard way:
   boot during authoring — 3,294 lines, starting 08:23:53, while the daemon itself had started
   21 hours earlier). A `grep -c` over the file counts history; a `grep -c` over the journal
   counts this boot. Say which one you mean.
+- **The log rotates.** Logrotate is configured with `size 50M, rotate 3, copytruncate`, so
+  `scheduler.log` holds the most recent 50 MB; older generations live in `scheduler.log.1`
+  and `scheduler.log.*.gz`. A `grep` against `scheduler.log` alone can return empty when
+  the relevant events were truncated into a rotated file — this is the single most common
+  reason for false-zero readings on this page. To search across all generations:
+  `for f in scheduler.log scheduler.log.1 scheduler.log.*.gz; do case "$f" in *.gz) zgrep "$p" "$f" ;; *) grep "$p" "$f" ;; esac; done`
 - **The `ADMIT ` marker is prefix-free and the other markers are not.** `ADMIT` lines are
   written straight to the log writer with no timestamp prefix, so `grep -E '^ADMIT '` matches
   them. Every other marker (`EVAL:`, `RESUME:`, …) is prefixed with
@@ -68,7 +84,7 @@ Three facts about the surfaces that cost time if you learn them the hard way:
 Boot-time sanity, useful before any of the entries below:
 
 ```sh
-curl -s --max-time 20 http://127.0.0.1:9090/api/v1/health
+curl -sf --max-time 20 http://127.0.0.1:9090/api/v1/health
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -201,8 +217,8 @@ rather than resurrected again (anti-zombie-resurrection).
 
 ```sh
 LOG="$HOME/.hermes/coding-hermes/scheduler.log"
-grep -c 'RESUME: deferring orphaned tick.*at cap' "$LOG"
-grep -m1 'RESUME: deferring orphaned tick.*at cap' "$LOG"
+# Rotation-aware: search scheduler.log, scheduler.log.1, and scheduler.log.*.gz
+for f in "$LOG" "$LOG.1"; do grep 'RESUME: deferring orphaned tick.*at cap' "$f"; done; zgrep 'RESUME: deferring orphaned tick.*at cap' "$LOG.2.gz" "$LOG.3.gz" 2>/dev/null | head -100
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -481,7 +497,7 @@ ADMIT pass_id=2089 eligible=146 admitted=0 deferred=146 ns=duckbrain-sync cap=1 
 The gate's own threshold, live, and the per-gate counters:
 
 ```sh
-curl -s --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -c '{load_gate_threshold, max_concurrent}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -c '{load_gate_threshold, max_concurrent}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -508,7 +524,7 @@ That event is self-explaining: which project, which namespace, the measured load
 threshold it crossed. The same deferral is visible on the read API:
 
 ```sh
-curl -s --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -c '.events[0].message'
+curl -sf --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -c '.events[0].message'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -708,7 +724,7 @@ from at all. `--against <rev>` measures against a specific commit (default `HEAD
 The same verdict from the API, without the repo:
 
 ```sh
-curl -s --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -c '{build_sha, build_time}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -c '{build_sha, build_time}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -765,7 +781,7 @@ non-recovery stay `HIGH`. Both severities share a 30-minute re-emit throttle.
 **Confirm** *(read-only)*
 
 ```sh
-curl -s --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20, healthy)*
@@ -825,7 +841,7 @@ expected saturation and also resets it.
 **Confirm** *(read-only)*
 
 ```sh
-curl -s --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT severity, COUNT(*) AS n, MIN(SUBSTR(created_at,1,16)) AS first_seen
  FROM events WHERE message LIKE '%selected 0 projects%' GROUP BY 1;"
@@ -944,7 +960,7 @@ inside ~35 minutes, every one of them on failures that were 91–99% gateway tex
 **Confirm** *(read-only)*
 
 ```sh
-curl -s --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | {armed: length, names: [.[].key]}'
+curl -sf --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | {armed: length, names: [.[].key]}'
 sqlite3 -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT COUNT(*) AS armed_lanes_that_are_actually_enabled FROM projects WHERE enabled=1 AND name IN ('sim-beta','sim-delta');"
 ```
@@ -1032,7 +1048,7 @@ healthy projects were parked for a gateway outage. The classifier is what preven
 from being reached again, and the same lanes read clean once it was deployed:
 
 ```sh
-curl -s --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
+curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -1049,7 +1065,7 @@ EXPECTED OUTPUT *(real, 2026-09-20)*
 Zero to 11% failure rates, none armed. The live policy, for completeness:
 
 ```sh
-curl -s --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '{failure_window, auto_disable}'
+curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '{failure_window, auto_disable}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
