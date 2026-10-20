@@ -16,7 +16,21 @@ import (
 // Phase 1 (locked): state update, cleanup, pick projects.
 // Phase 2 (lock-free): fire into slot pool, alert escalation.
 func (l *Loop) evaluate() {
+	// PERF-001-R2 (row step 1): arm the runtime block profile BEFORE the
+	// write lock is taken, so GET /debug/pprof/block can attribute whatever
+	// the /api/v1/status read path waits on while this pass runs. The arm is
+	// idempotent — after the first pass it costs one atomic load — and the
+	// rate is SCHEDULER_BLOCK_PROFILE_RATE (default 1 = every blocking
+	// event; 0 disables). See blockprofile.go for the cost/rate contract.
+	ArmBlockProfile()
+	// PERF-001-R2: the hold clock and the in-flight flag that make the
+	// status-side lock wait measurable live (see lockwait.go). Measurement
+	// only — neither gates, delays nor alters a decision — and both use the
+	// REAL wall clock: the loop's clock seam is the decision instant
+	// (ADV-R04/G6), and a simulator clock would report every hold as 0.
+	lockStart := time.Now()
 	l.mu.Lock()
+	l.evalInFlight.Store(true)
 
 	// GAP-101 (2026-09-09): single choke-point gate. ForceEvaluate fires
 	// evaluate() in a raw goroutine — with the old channel-only protocol
@@ -24,7 +38,7 @@ func (l *Loop) evaluate() {
 	// caught by the GAP-101 regression test). The atomic flag makes the
 	// paused state authoritative regardless of entry path.
 	if l.paused.Load() {
-		l.mu.Unlock()
+		l.unlockEval(lockStart)
 		log.Println("EVAL: skipped — loop paused")
 		return
 	}
@@ -34,6 +48,9 @@ func (l *Loop) evaluate() {
 	// path. The single `now` value flows to every consumer below (budget
 	// gate, packers, zero-select note, sim tick IDs, slot-pool spawns,
 	// escalator); no second read of the seam happens inside evaluate().
+	// PERF-001-R2 stage attribution: `stage` marks the start of the next
+	// timed stage of this locked Phase 1 (vocabulary in lockwait.go).
+	stage := time.Now()
 	now := l.nowLocked()
 	l.lastEval = now
 	// SCHED-GAP-1621: keep the lock-free mirror in sync (write-through under
@@ -68,6 +85,8 @@ func (l *Loop) evaluate() {
 			l.packer.SetBoardStasisGate(gate)
 		}
 	}
+	l.observeEvalStage(EvalStageGate, stage)
+	stage = time.Now()
 
 	// ADV-R13: persist exactly ONE host load/memory sample per evaluation
 	// pass, immediately at entry — after the paused-loop gate (a paused
@@ -81,6 +100,8 @@ func (l *Loop) evaluate() {
 	// once per PASS, not per project or per spawned tick — off every hot
 	// path.
 	l.recordHostSample(now)
+	l.observeEvalStage(EvalStageHostSample, stage)
+	stage = time.Now()
 
 	if goroCount := runtime.NumGoroutine(); goroCount > 100 {
 		log.Printf("WARN: goroutine count = %d (threshold: 100)", goroCount)
@@ -90,6 +111,8 @@ func (l *Loop) evaluate() {
 		"active_ticks": l.lifecycle.RunningCount(),
 		"budget":       l.weightBudget,
 	})
+	l.observeEvalStage(EvalStageEventsEmit, stage)
+	stage = time.Now()
 
 	// Cleanup stale ticks. SCHED-GAP-186: CleanupStaleProjects reports WHICH
 	// projects it flipped terminal so the SlotPool claims can be reconciled —
@@ -110,6 +133,8 @@ func (l *Loop) evaluate() {
 			l.slotPool.releaseReaped(staleProjects)
 		}
 	}
+	l.observeEvalStage(EvalStageCleanup, stage)
+	stage = time.Now()
 
 	// Pick projects.
 	var packed []PackedProject
@@ -135,6 +160,8 @@ func (l *Loop) evaluate() {
 	if l.multiPoolPacker != nil {
 		l.multiPoolPacker.SetWaveShedDB(l.db)
 	}
+	l.observeEvalStage(EvalStageBudgetGate, stage)
+	stage = time.Now()
 	if l.multiPoolPacker != nil || l.packer != nil {
 		cadenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		rates, err := database.LoadCadenceRates(cadenceCtx, l.db, now, CadenceWindow)
@@ -150,6 +177,8 @@ func (l *Loop) evaluate() {
 			}
 		}
 	}
+	l.observeEvalStage(EvalStageCadence, stage)
+	stage = time.Now()
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
 		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
@@ -206,10 +235,12 @@ func (l *Loop) evaluate() {
 		packed, err = l.packer.Pick(now, runningSet)
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
-			l.mu.Unlock()
+			l.unlockEval(lockStart)
 			return
 		}
 	}
+	l.observeEvalStage(EvalStagePick, stage)
+	stage = time.Now()
 
 	// SCHED-GAP-155: emit one grep-stable ADMIT line per candidate project
 	// for THIS pass — the selection is now final (both packer paths have
@@ -249,6 +280,8 @@ func (l *Loop) evaluate() {
 	if l.multiPoolPacker != nil {
 		l.budgetHoldViews = l.multiPoolPacker.heldByProject()
 	}
+	l.observeEvalStage(EvalStageAdmitEmit, stage)
+	stage = time.Now()
 
 	if len(packed) == 0 {
 		// GAP-043: a zero-select eval with eligible projects present is an
@@ -261,7 +294,8 @@ func (l *Loop) evaluate() {
 			runningSet[name] = true
 		}
 		l.noteZeroSelect(now, runningSet)
-		l.mu.Unlock()
+		l.observeEvalStage(EvalStageZeroSelect, stage)
+		l.unlockEval(lockStart)
 		return
 	}
 
@@ -273,7 +307,7 @@ func (l *Loop) evaluate() {
 	// Snapshot before releasing lock.
 	noDeliver := l.noDeliver
 
-	l.mu.Unlock()
+	l.unlockEval(lockStart)
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----
 
 	// SCHED-GAP-170: gateway health is a PER-PROJECT admission decision now,
