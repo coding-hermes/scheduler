@@ -1,22 +1,22 @@
 # Coding Hermes Fleet — Live Status
 
-**Generated 2026-10-14 08:11 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
+**Generated 2026-10-20 01:11 UTC from the live schedulerd API** (`GET http://127.0.0.1:9090/api/v1/status` + `/api/v1/projects`). Do not edit by hand — run `python3 docs/regenerate_fleet.py` to refresh.
 
 ## Settings (live)
 
 | Setting | Value |
 |---------|-------|
-| Active projects (enabled) | 400 |
-| Total projects (incl. disabled) | 605 |
+| Active projects (enabled) | 411 |
+| Total projects (incl. disabled) | 608 |
 | Active ticks | 10 |
 | Budget | 100 |
-| Last evaluation | 2026-10-14T08:05:08Z |
-| Recent outcomes | completed=41573, failed=42400, timeout=4278 |
+| Last evaluation | 2026-10-20T01:10:50Z |
+| Recent outcomes | completed=42757, failed=42541, timeout=4318 |
 | DuckBrain sync | reachable=True, spooled_pending=0 |
 
-## Fleet (605 projects, 400 enabled)
+## Fleet (608 projects, 411 enabled)
 
-### Enabled (400)
+### Enabled (411)
 
 | Project | Priority | Weight | Cooldown | Namespace |
 |---------|----------|--------|----------|-----------|
@@ -40,6 +40,7 @@
 | terminal-jail-foreman | 10 | 15 | 21600s | coding-hermes |
 | trouble-foreman | 10 | 10 | 21600s | coding-hermes |
 | warpfs-foreman | 10 | 15 | 21600s | coding-hermes |
+| wojons-mythos-foreman | 10 | 15 | 21600s | coding-hermes |
 | h3-pm | 9 | 3 | 21600s | pm |
 | tatara-dogfood | 9 | 3 | 21600s | dogfood |
 | tatara-foreman | 9 | 15 | 21600s | coding-hermes |
@@ -145,7 +146,9 @@
 | heading-readme | 5 | 3 | 604800s | docs |
 | heading-sync | 5 | 1 | 21600s | duckbrain-sync |
 | helios-docs | 5 | 3 | 604800s | docs |
+| helios-dogfood | 5 | 3 | 259200s | dogfood |
 | helios-readme | 5 | 3 | 604800s | docs |
+| helios-sync | 5 | 1 | 21600s | duckbrain-sync |
 | helix-docs | 5 | 3 | 604800s | docs |
 | helix-readme | 5 | 3 | 604800s | docs |
 | hermes-agent-sync | 5 | 1 | 43200s | duckbrain-sync |
@@ -246,6 +249,7 @@
 | warpfs-readme | 5 | 3 | 604800s | docs |
 | warpfs-sync | 5 | 1 | 21600s | duckbrain-sync |
 | wojons-mythos-docs | 5 | 3 | 604800s | docs |
+| wojons-mythos-dogfood | 5 | 3 | 259200s | dogfood |
 | wojons-mythos-readme | 5 | 3 | 604800s | docs |
 | 9router-qa | 4 | 4 | 21600s | qa |
 | 9router-review | 4 | 3 | 604800s | review |
@@ -307,6 +311,8 @@
 | h3-sync | 4 | 4 | 21600s | duckbrain-sync |
 | heading-qa | 4 | 4 | 21600s | qa |
 | heading-review | 4 | 3 | 21600s | review |
+| helios-qa | 4 | 4 | 21600s | qa |
+| helios-releng | 4 | 4 | 21600s | releases |
 | hermes-canopy-qa | 4 | 4 | 21600s | qa |
 | hermes-canopy-review | 4 | 3 | 21600s | review |
 | hermes-dagger-qa | 4 | 4 | 21600s | qa |
@@ -371,6 +377,8 @@
 | trouble-review | 4 | 3 | 21600s | review |
 | warpfs-qa | 4 | 4 | 21600s | qa |
 | warpfs-review | 4 | 3 | 21600s | review |
+| wojons-mythos-qa | 4 | 4 | 21600s | qa |
+| wojons-mythos-sync | 4 | 4 | 21600s | duckbrain-sync |
 | 9router-pm | 3 | 3 | 21600s | pm |
 | 9router-releng | 3 | 2 | 21600s | releases |
 | ai-plays-poke-pm | 3 | 3 | 86400s | pm |
@@ -397,6 +405,7 @@
 | h3-releng | 3 | 2 | 21600s | releases |
 | heading-pm | 3 | 3 | 21600s | pm |
 | heading-releng | 3 | 2 | 21600s | releases |
+| helios-pm | 3 | 3 | 86400s | pm |
 | hermes-canopy-pm | 3 | 3 | 21600s | pm |
 | hermes-canopy-releng | 3 | 2 | 86400s | releases |
 | hermes-dagger-pm | 3 | 3 | 21600s | pm |
@@ -420,8 +429,10 @@
 | terminal-jail-releng | 3 | 2 | 21600s | releases |
 | warpfs-pm | 3 | 3 | 21600s | pm |
 | warpfs-releng | 3 | 2 | 21600s | releases |
+| wojons-mythos-pm | 3 | 3 | 86400s | pm |
+| wojons-mythos-releng | 3 | 2 | 86400s | releases |
 
-### Disabled (205)
+### Disabled (197)
 
 | Project | Priority | Weight | Cooldown | Namespace |
 |---------|----------|--------|----------|-----------|
@@ -473,11 +484,7 @@
 | global-slow | 1 | 10 | 43200s | coding-hermes |
 | HEADING-foreman | 10 | 25 | 43200s | coding-hermes |
 | heading-perf | 5 | 3 | 604800s | perf |
-| helios-dogfood | 5 | 3 | 259200s | dogfood |
 | helios-perf | 5 | 3 | 604800s | perf |
-| helios-pm | 3 | 3 | 86400s | pm |
-| helios-qa | 4 | 4 | 21600s | qa |
-| helios-sync | 5 | 1 | 21600s | duckbrain-sync |
 | helix-dogfood | 5 | 3 | 259200s | dogfood |
 | helix-foreman | 10 | 10 | 21600s | coding-hermes |
 | helix-perf | 5 | 3 | 604800s | perf |
@@ -623,11 +630,7 @@
 | uhlp-pm | 3 | 3 | 86400s | pm |
 | uhlp-qa | 4 | 4 | 21600s | qa |
 | uhlp-sync | 5 | 1 | 21600s | duckbrain-sync |
-| wojons-mythos-dogfood | 5 | 3 | 259200s | dogfood |
-| wojons-mythos-foreman | 10 | 15 | 21600s | coding-hermes |
 | wojons-mythos-perf | 5 | 3 | 604800s | perf |
-| wojons-mythos-pm | 3 | 3 | 86400s | pm |
-| wojons-mythos-qa | 4 | 4 | 21600s | qa |
 | zz-gap12-probe | 5 | 10 | 900s | coding-hermes |
 | zz-schedgap-011-probe | 5 | 10 | 900s | coding-hermes |
 
