@@ -5331,3 +5331,92 @@ tasks:
   status: complete
   created_at: '2026-10-20T16:02:13.516786+00:00'
   completed_at: '2026-10-20T16:43:47.713342+00:00'
+- id: RELEASE-016
+  title: Reconcile v1.6.1 orphan tag with forge release list
+  criteria:
+  - gh release view v1.6.1 --json tagName exits 0 (release object published) or git
+    ls-remote --tags origin shows no v1.6.1 tag (orphan deleted); verified by live
+    forge read-back
+  status: complete
+  created_at: '2026-10-20T21:48:18.839360+00:00'
+  completed_at: '2026-10-20T21:58:01.077375+00:00'
+- id: DOC-23
+  title: CHANGELOG omits sections for tagged versions v1.6.1 v1.7.0 v1.7.1
+  criteria:
+  - CHANGELOG.md carries headings for 1.6.1, 1.7.0 and 1.7.1 in descending order between
+    the 1.8.0 and 1.6.2 sections, each with tag and commit range per the file contract;
+    grep -cE the three headings prints 3; go test -short -p 1 ./... green
+  status: complete
+  created_at: '2026-10-20T21:48:19.952904+00:00'
+  completed_at: '2026-10-20T22:38:27.480123+00:00'
+- id: RELEASE-014
+  title: Reconcile stale v1.4.1 readiness record
+  criteria:
+  - 'Probe: git ls-remote --tags origin carries no v1.4.1 and gh release list shows
+    the shipped train v1.5.0 through v1.12.0, so the 2026-09-24 NO-GO record is superseded
+    with no cut performed'
+  status: complete
+  created_at: '2026-10-20T21:55:09.355363+00:00'
+  completed_at: '2026-10-20T21:55:10.632567+00:00'
+- id: RELEASE-015
+  title: Reconcile stale v1.5.1 readiness record
+  criteria:
+  - 'Probe: no v1.5.1 tag exists on the remote and the row itself states no development
+    was requested in this lane, so the 2026-09-27 candidate record is superseded with
+    no cut performed'
+  status: complete
+  created_at: '2026-10-20T21:56:44.841932+00:00'
+  completed_at: '2026-10-20T21:56:46.185034+00:00'
+- id: RELEASE-017
+  title: Reconcile stale v1.6.3 readiness record
+  criteria:
+  - 'Probe: no v1.6.3 tag exists on the remote, the named v1.6.1 orphan blocker is
+    reconciled under RELEASE-016, and the range content shipped in later releases,
+    so the candidate record is superseded'
+  status: complete
+  created_at: '2026-10-20T21:56:47.151046+00:00'
+  completed_at: '2026-10-20T21:56:48.478719+00:00'
+- id: RELEASE-018
+  title: Reconcile stale v1.6.3 readiness record second sweep
+  criteria:
+  - 'Probe: no v1.6.3 tag exists on the remote and the v1.6.1 orphan release object
+    named as blocker is reconciled this tick, so the second NO-GO sweep record is
+    superseded'
+  status: complete
+  created_at: '2026-10-20T21:56:49.475423+00:00'
+  completed_at: '2026-10-20T21:56:50.753594+00:00'
+- id: RELEASE-019
+  title: Reconcile v1.7.0 unauthorized-cut incident record
+  criteria:
+  - 'Probe: gh release view v1.7.0 shows a release object published 2026-09-27T21:39:56Z
+    with 9 assets and the CHANGELOG naming residue is transferred to DOC-23, so the
+    incident record end state is reconciled'
+  status: complete
+  created_at: '2026-10-20T21:56:51.755665+00:00'
+  completed_at: '2026-10-20T21:56:53.149334+00:00'
+- id: RELEASE-020
+  title: Reconcile stale v1.7.1 readiness record
+  criteria:
+  - 'Probe: v1.7.1 was never cut via release-prep, its orphan tag is reconciled under
+    RELEASE-032, and v1.8.0 shipped the range content, so the candidate record is
+    superseded'
+  status: complete
+  created_at: '2026-10-20T21:56:54.122663+00:00'
+  completed_at: '2026-10-20T21:56:55.444520+00:00'
+- id: RELEASE-022
+  title: Reconcile stale v1.11.0 candidate record
+  criteria:
+  - 'Probe: gh release view v1.11.0 shows the release object published 2026-09-29T13:40:41Z,
+    so the proposed candidate was realized by RELEASE-023'
+  status: complete
+  created_at: '2026-10-20T21:56:56.516907+00:00'
+  completed_at: '2026-10-20T21:56:57.851715+00:00'
+- id: RELEASE-032
+  title: Reconcile v1.7.1 orphan tag with forge release list
+  criteria:
+  - gh release view v1.7.1 --json tagName exits 0 (release object published) or git
+    ls-remote --tags origin shows no v1.7.1 tag; verified by live forge read-back
+    and a zero-orphan tag/release census
+  status: complete
+  created_at: '2026-10-20T21:57:59.824073+00:00'
+  completed_at: '2026-10-20T21:58:30.402084+00:00'
