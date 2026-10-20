@@ -59,6 +59,22 @@ So `--api-read-timeout=5s` (live: `{"api_read_timeout":"5s"}`) does not bound th
 | stall catcher | 1/47 = 504 after 21.820 s |
 | operator-visible rate | 3 of 6 back-to-back operator runs saw `/status` exceed 10 s; one exceeded 60 s |
 
+**FIXED — `PERF-001-R3`.** Both halves of the mechanism this section records are gone from the read path, and the WARN line above can no longer be produced by a pass:
+
+1. **The operator read takes no lock.** `ZeroSelectStats()` now reads atomic write-through mirrors of the GAP-043 trio (`zeroSelectCountNs` / `zeroSelectEligibleNs` / `lastZeroSelectNs`, published from every mutation) — the pattern `LastEvalTime()` got in `SCHED-GAP-1621`. No `/api/v1/status` or `/api/v1/health` getter touches `Loop.mu` any more; the remaining `mu` users are startup setters, the loop's own reaper/health goroutines and brief internal snapshots.
+2. **`evaluate()` no longer holds the write lock across the pack.** The pass keeps one-pass-at-a-time serialization in a new `evalMu` (taken by no reader, released at the same Phase-1/Phase-2 boundary the write lock used to be released at) and holds `mu` only for the O(1) state updates — so the holder in the dump above (`ReadBoardFreshness` → `classifyCompleteRow` → `gitCommitInfo`, 41.9% of daemon CPU per `PERF-002-R2`) now runs lock-free. `backstopMaxAgeFor(base)` carries the same change into the stale-tick cutoff.
+
+A/B on a scratch daemon against a hot `.backup` copy of the live DB, `--simulate`, with an evaluation pass **mid-pack for the entire measured window** (pack executed throughout: 31 `PENDING-BOOST` lines, 0 passes completed), 100 consecutive calls on the quiet pass and 67 on the loaded one:
+
+| leg (same harness, fresh DB copy each) | result |
+|---|---|
+| pre-fix build — loaded pair | 2 warm-up calls **HTTP 000 after 90.0 s** (no response), 2 samples **000 after 60.0 s**, 2 × **504** (7.91 s / 5.00 s), 6 × `WARN: slow request handler=status` — up to `elapsed=5m9.121s slowest_step=runningWaveCostTotal slowest_step_elapsed=5m7.508s budget=5s` |
+| pre-fix build — quiet pair | 2 warm-up calls **000 after 90.0 s**, 1 sample **000 after 60.0 s**, 1 × **504 after 47.077 s**, 4 × the same WARN — up to `elapsed=4m47.147s` / `slowest_step_elapsed=4m45.452s` |
+| post-fix build — quiet pair | 100 samples: min 0.328 s / p50 0.462 s / p90 0.857 s / max 2.170 s, **0 non-200, 0 samples > 5 s, 0 WARN lines** |
+| post-fix build — loaded pair | 67 samples: min 0.414 s / p50 0.817 s / p90 1.115 s / max 1.428 s, **0 non-200, 0 > 5 s, 0 WARN** |
+
+Both pre-fix legs reproduce this section's step names and mis-attribution exactly (`step=configDriftBlock`, `slowest_step=runningWaveCostTotal`, budget 5 s). The pre-fix leg's own *unstalled* samples are 0.42–2.44 s — the same distribution as the post-fix leg, which is the point: this fix removes the unbounded mutex wait (the 47–90 s / 504 tail), and leaves the ~0.3–2 s handler cost that `PERF-001-R2` measures (p50 326 ms), i.e. the single-connection SQLite serialization, untouched.
+
 ### 3.2 `SCHED-GAP-1747` (P2) — the runbook's "ops gate" reports a healthy daemon as DOWN
 
 `ops/check-daemon-freshness.sh` (runbook §1.6, whose exit 2 the runbook calls "a failure for deploy purposes") returned, on first invocation:
