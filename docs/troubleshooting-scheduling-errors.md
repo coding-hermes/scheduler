@@ -92,7 +92,7 @@ Three facts about the surfaces that cost time if you learn them the hard way:
 Boot-time sanity, useful before any of the entries below:
 
 ```sh
-curl -sf --max-time 20 http://127.0.0.1:9090/api/v1/health | jq -e -c '{active_ticks, build_sha, status}'
+set -o pipefail; curl -sf --max-time 20 http://127.0.0.1:9090/api/v1/health | jq -e 'select(has("active_ticks") and has("build_sha") and has("status")) | {active_ticks, build_sha, status}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -508,7 +508,7 @@ ADMIT pass_id=2089 eligible=146 admitted=0 deferred=146 ns=duckbrain-sync cap=1 
 The gate's own threshold, live, and the per-gate counters:
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -e -c '{load_gate_threshold, max_concurrent}'
+set -o pipefail; curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -e 'select(has("load_gate_threshold") and has("max_concurrent")) | {load_gate_threshold, max_concurrent}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -535,7 +535,7 @@ That event is self-explaining: which project, which namespace, the measured load
 threshold it crossed. The same deferral is visible on the read API:
 
 ```sh
-curl -sf --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -e -c '.events[0].message'
+set -o pipefail; curl -sf --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -e 'select(has("events") and (.events | length > 0)) | .events[0].message'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -740,7 +740,7 @@ from at all. `--against <rev>` measures against a specific commit (default `HEAD
 The same verdict from the API, without the repo:
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -e -c '{build_sha, build_time}'
+set -o pipefail; curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -e 'select(has("build_sha") and has("build_time")) | {build_sha, build_time}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -797,7 +797,7 @@ non-recovery stay `HIGH`. Both severities share a 30-minute re-emit throttle.
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+set -o pipefail; curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e 'select(has("zero_select_consecutive") and has("zero_select_eligible") and has("zero_select_last_at")) | {zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20, healthy)*
@@ -864,7 +864,7 @@ expected saturation and also resets it.
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+set -o pipefail; curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e 'select(has("zero_select_consecutive") and has("zero_select_eligible") and has("zero_select_last_at")) | {zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT severity, COUNT(*) AS n, MIN(SUBSTR(created_at,1,16)) AS first_seen
  FROM events WHERE message LIKE '%selected 0 projects%' GROUP BY 1;"
@@ -988,7 +988,7 @@ inside ~35 minutes, every one of them on failures that were 91–99% gateway tex
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -e -c '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | {armed: length, names: [.[].key]}'
+set -o pipefail; curl -sf --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -e '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | select(length > 0) | {armed: length, names: [.[].key]}'
 sqlite3 -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT COUNT(*) AS armed_lanes_that_are_actually_enabled FROM projects WHERE enabled=1 AND name IN ('sim-beta','sim-delta');"
 ```
@@ -1076,7 +1076,7 @@ healthy projects were parked for a gateway outage. The classifier is what preven
 from being reached again, and the same lanes read clean once it was deployed:
 
 ```sh
-curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e -c '.projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
+set -o pipefail; curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e 'select(.projects_failure_rates | has("crier") and has("bunker") and has("chimera-v2") and has("heading")) | .projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -1093,7 +1093,7 @@ EXPECTED OUTPUT *(real, 2026-09-20)*
 Zero to 11% failure rates, none armed. The live policy, for completeness:
 
 ```sh
-curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e -c '{failure_window, auto_disable}'
+set -o pipefail; curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e 'select(has("failure_window") and has("auto_disable")) | {failure_window, auto_disable}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
