@@ -49,13 +49,9 @@ func perf001r2BlockOnMarker() {
 	perf001r2MarkerMu.Lock()
 	// Intentional: this is the deliberate block that ArmBlockProfile
 	// records when it is armed. The Lock above is the observable event.
-	// We need a real body to satisfy staticcheck SA2001 (no empty critical section).
-	// Calling TryLock() on the same mutex we already hold always returns false,
-	// but the call is not a no-op and satisfies the linter.
-	if _, _ = perf001r2MarkerMu.TryLock(), false; false {
-		// Unreachable: TryLock fails because we already hold the mutex.
-		// The compiler must still generate the call.
-	}
+	// TryLock() returns false because we already hold the mutex, but the
+	// call satisfies staticcheck SA2001 (non-empty critical section).
+	_ = perf001r2MarkerMu.TryLock()
 }
 
 // perf001r2ObserveBlock drives one deliberate, completed block on the marker
