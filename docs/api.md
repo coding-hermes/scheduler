@@ -112,8 +112,9 @@ default (`--listen 127.0.0.1:9090`).
 | HTML dashboard | `/`, `/dashboard/partial`, `/projects/{name}`, `/queue`, `/ticks?page=N`, `/namespaces/{id}`, `/health` (not part of the JSON API) |
 | MCP (JSON-RPC) | `POST /mcp` (not part of the REST API) |
 
-Route index (every `/api/v1/*` route documented below; the JSONL deploy
-groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-templates)):
+Route index (every `/api/v1/*` path the daemon serves — 53 paths, cross-checked
+against `GET /api/v1/openapi.json`; the JSONL deploy templates/groups family is
+documented in [§1a Deploy templates](#1a-deploy-templates-jsonl-deploy-routes)):
 
 | Method | Path | Section |
 |--------|------|---------|
@@ -124,12 +125,6 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | GET, POST | `/api/v1/projects` | [§5](#5-projects) |
 | GET | `/api/v1/lanes/tree` | [§5](#5-projects) |
 | GET | `/api/v1/lanes` (deprecated) | [§5](#5-projects) |
-| GET, POST, DELETE | `/api/v1/links` | [§18](#18-lane-relationship-map-sched-gap-1700) |
-| GET | `/api/v1/links/parents` | [§18](#18-lane-relationship-map-sched-gap-1700) |
-| GET | `/api/v1/links/children` | [§18](#18-lane-relationship-map-sched-gap-1700) |
-| GET | `/api/v1/links/ancestors` | [§18](#18-lane-relationship-map-sched-gap-1700) |
-| GET | `/api/v1/links/descendants` | [§18](#18-lane-relationship-map-sched-gap-1700) |
-| GET | `/api/v1/links/ancestor` | [§18](#18-lane-relationship-map-sched-gap-1700) |
 | GET, PUT, DELETE | `/api/v1/projects/{name}` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/pause` | [§5](#5-projects) |
 | POST | `/api/v1/projects/{name}/resume` | [§5](#5-projects) |
@@ -147,15 +142,35 @@ groups/templates routes are documented in [§1a Deploy templates](#1a-deploy-tem
 | GET | `/api/v1/queue` | [§9](#9-queue) |
 | GET | `/api/v1/metrics` | [§10](#10-fleet-metrics) |
 | GET | `/api/v1/cadence` | [§10](#10-fleet-metrics) |
-| POST | `/api/v1/evaluate` | [§11](#11-fleet-wide-control) |
-| POST | `/api/v1/pause` | [§11](#11-fleet-wide-control) |
-| POST | `/api/v1/resume` | [§11](#11-fleet-wide-control) |
+| GET | `/api/v1/features` | [§11](#11-feature-usage-sched-gap-131) |
+| GET | `/api/v1/features/prune-candidates` | [§11](#11-feature-usage-sched-gap-131) |
+| GET | `/api/v1/cooldown/residue` | [§11](#11-feature-usage-sched-gap-131) |
+| POST | `/api/v1/evaluate` | [§12](#12-fleet-wide-control) |
+| POST | `/api/v1/pause` | [§12](#12-fleet-wide-control) |
+| POST | `/api/v1/resume` | [§12](#12-fleet-wide-control) |
+| GET | `/api/v1/openapi.json` | [§13](#13-openapi-spec) |
 | GET, POST | `/api/v1/peers` | [§14](#14-federation-peer-registry-remote-003) |
 | POST | `/api/v1/peers/{id}/heartbeat` | [§14](#14-federation-peer-registry-remote-003) |
 | GET | `/api/v1/peers/events` | [§14](#14-federation-peer-registry-remote-003) |
 | GET | `/api/v1/peers/{id}/events` | [§14](#14-federation-peer-registry-remote-003) |
+| POST | `/api/v1/federation/query` | [§15](#15-federation-query-remote-008) |
+| GET | `/api/v1/federation/catalogue` | [§15](#15-federation-query-remote-008) |
+| GET | `/api/v1/observatory` | [§16](#16-observatory-sched-gap-1592) |
+| GET | `/api/v1/observatory/stream` | [§16](#16-observatory-sched-gap-1592) |
+| GET | `/api/v1/gateway-errors` | [§17](#17-gateway-availability-losses-sched-gap-1654) |
+| GET, POST, DELETE | `/api/v1/links` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/parents` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/children` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/ancestors` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/descendants` | [§18](#18-lane-relationship-map-sched-gap-1700) |
+| GET | `/api/v1/links/ancestor` | [§18](#18-lane-relationship-map-sched-gap-1700) |
 | GET, POST | `/api/v1/agents` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
 | DELETE | `/api/v1/agents/{name}` | [§19](#19-agent-registry--targeted-tick-dispatch-sched-gap-1665) |
+| GET, POST | `/api/v1/templates` | [§1a](#1a-deploy-templates-jsonl-deploy-routes) |
+| GET, PUT, DELETE | `/api/v1/templates/{name}` | [§1a](#1a-deploy-templates-jsonl-deploy-routes) |
+| GET, POST | `/api/v1/groups` | [§1a](#1a-deploy-templates-jsonl-deploy-routes) |
+| GET, PUT, DELETE | `/api/v1/groups/{name}` | [§1a](#1a-deploy-templates-jsonl-deploy-routes) |
+| POST | `/api/v1/groups/{name}/deploy` | [§1a](#1a-deploy-templates-jsonl-deploy-routes) |
 
 ## 1a. Deploy templates (JSONL deploy routes)
 
@@ -173,9 +188,32 @@ name; the `name` field in the body is ignored there.
 | PUT | `/api/v1/templates/{name}` | Replace description/tasks (name immutable) |
 | DELETE | `/api/v1/templates/{name}` | Delete a template |
 
-Trailing `/api/v1/groups` routes (list/create/update groups of member
-projects) follow the same patterns; the full machine-readable schema for both
-families stays at `GET /api/v1/openapi.json`.
+Group routes (same JSONL store, same validation: a name is required and must
+carry no whitespace):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/groups` | List groups (`{"groups": [...]}`, sorted by name) |
+| POST | `/api/v1/groups` | Create a group (201; 409 when it already exists) |
+| GET | `/api/v1/groups/{name}` | Read one group |
+| PUT | `/api/v1/groups/{name}` | Partial-update `projects`/`description` (name immutable — comes from the path) |
+| DELETE | `/api/v1/groups/{name}` | Delete a group (JSONL row removed) |
+| POST | `/api/v1/groups/{name}/deploy` | Deploy a template to every member project |
+
+**Group shape.** `{"name": "<required, no whitespace>", "projects":
+["<scheduler project name>", ...], "description": "<optional>"}`. `projects`
+defaults to `[]` when omitted. PUT applies only the keys supplied (pointer
+semantics), so an absent key is left untouched rather than cleared.
+
+**Deploy body.** `{"template": "<required template name>", "dry_run": false}`.
+`dry_run: true` returns the plan without writing to any board. 400 for a body
+without `template`, or for an empty group; 404 when the group or template is
+unknown. The 200 body is `{group, template, dry_run, deployed_at, projects:
+[{project, workdir, status, task_ids, reason}], summary: {projects, appended,
+skipped, errors, task_rows}}`, where `status` is `appended` / `skipped` /
+`error` (`would_append` / `would_skip` on a dry run) — a per-project error is
+reported in the batch, never a batch abort. The full machine-readable schema
+for both families stays at `GET /api/v1/openapi.json`.
 
 **Task shape.** Each element of `tasks` is a TemplateTask — `{"title":
 "required", "detail": "optional long-form spec written to the board row
@@ -590,7 +628,7 @@ curl -s http://127.0.0.1:9090/api/v1/lanes/tree | jq '.roots[] | {name, kids: [.
 ### GET /api/v1/lanes
 
 **Purpose:** List lanes, flat — **DEPRECATED (SCHED-GAP-1587)** in favour of
-[`/api/v1/lanes/tree`](#get-apiv1lane-tree). Kept for backward compatibility:
+[`/api/v1/lanes/tree`](#get-apiv1lanestree). Kept for backward compatibility:
 consumers that walk parents client-side (or read the full project row shape)
 keep working unchanged, but new consumers should use the tree, which resolves
 the hierarchy server-side.
