@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -39,33 +38,35 @@ import (
 // Phase 1c (mu held, O(1)): publish the pass's loop-level results.
 // Phase 2  (NO lock)      : fire into the slot pool, alert escalation.
 func (l *Loop) evaluate() {
+	// PERF-001-R2 (row step 1): arm the runtime block profile BEFORE the pass
+	// does any work, so GET /debug/pprof/block can attribute whatever a
+	// blocked request waits on. The endpoint is already registered
+	// (cmd/schedulerd/main.go) — only the rate was missing. Idempotent: one
+	// atomic load per pass after the first. Rate from
+	// SCHEDULER_BLOCK_PROFILE_RATE (default 1 = every blocking event; 0
+	// disables). See blockprofile.go for the cost contract.
+	ArmBlockProfile()
+	// PERF-001-R2 pass window: `passStart` + evalInFlight + the deferred
+	// close bracket the DECISION phase (Phase 1a-1c, evalMu-serialized) — the
+	// window an operator read used to queue behind before PERF-001-R3
+	// released it, and the arm-split flag a sampler tests
+	// (ops/status-lock-ab.sh). Measurement only: nothing here gates, delays
+	// or alters a decision, and the instants come from the loop's CLOCK SEAM
+	// (real wall clock by default) — never a second stdlib clock read, which
+	// internal/clock's stdlib guard forbids outside internal/clock.
+	passStart := l.clock().Now()
+	l.evalInFlight.Store(true)
+	defer l.endEvalPassObs(passStart)
+	stage := passStart
+
 	// Whole-pass serialization. Two concurrent DECISION phases would race on
 	// the shared packers' per-pass state (budget gate, cadence rates,
 	// wave-shed DB, board-stasis gate, hold state). The write lock used to
 	// provide that exclusion as a side effect of being held for the entire
 	// pass; evalMu provides it without coupling the pass to any reader.
 	l.evalMu.Lock()
-
-	// PERF-001-R2 (b): arm the block-profile rate so the profile records
-	// whatever evaluate() waits on. Armed once per process via a sync.Once
-	// in blockprofile.go, so the first evaluate() that runs in this
-	// process is the one that triggers it.
-	ArmBlockProfile()
-
-	// PERF-001-R2 (c): observe the evaluate() lock hold. Start measuring
-	// the duration before any work begins; the deferred call below will
-	// record the elapsed time when this pass is done. Uses clock.Real()
-	// because measurement must survive simulator clocks (ADV-R04).
-	evalStart := clock.Real().Now()
-	// PERF-001-R2 (d): flag that an evaluate() pass is in-flight.
-	// EvalInFlight() returns true for the window between this Store
-	// and the Store(false) in unlockEval().
-	l.evalInFlight.Store(true)
 	serialized := true
 	defer func() {
-		// PERF-001-R2 (c): record the hold duration at unlock.
-		l.evalHold.observe(clock.Real().Since(evalStart))
-
 		// Covers the early returns inside Phase 1 (paused loop, packer
 		// error, zero select): a pass that bails out still hands the
 		// serialization token on. The token is released EXPLICITLY at the
@@ -78,10 +79,6 @@ func (l *Loop) evaluate() {
 	}()
 
 	l.mu.Lock()
-
-	// PERF-001-R2: observe the Phase-1a stage (state update + snapshots).
-	// Uses clock.Real() because measurement must survive simulator clocks.
-	l.observeEvalStage("phase1a", clock.Real().Now())
 
 	// GAP-101 (2026-09-09): single choke-point gate. ForceEvaluate fires
 	// evaluate() in a raw goroutine — with the old channel-only protocol
@@ -157,6 +154,8 @@ func (l *Loop) evaluate() {
 	if hasSpawner {
 		tickBase = l.spawner.timeout
 	}
+	l.observeEvalStage(EvalStagePhase1A, stage)
+	stage = l.clock().Now()
 	l.mu.Unlock()
 	// ---- Phase 1b: expensive work, NO loop lock held ----
 
@@ -181,6 +180,8 @@ func (l *Loop) evaluate() {
 		"active_ticks": l.lifecycle.RunningCount(),
 		"budget":       l.weightBudget,
 	})
+	l.observeEvalStage(EvalStageHostSample, stage)
+	stage = l.clock().Now()
 
 	// Cleanup stale ticks. SCHED-GAP-186: CleanupStaleProjects reports WHICH
 	// projects it flipped terminal so the SlotPool claims can be reconciled —
@@ -212,6 +213,8 @@ func (l *Loop) evaluate() {
 			l.slotPool.releaseReaped(staleProjects)
 		}
 	}
+	l.observeEvalStage(EvalStageCleanup, stage)
+	stage = l.clock().Now()
 
 	// Pick projects.
 	var packed []PackedProject
@@ -237,6 +240,8 @@ func (l *Loop) evaluate() {
 	if l.multiPoolPacker != nil {
 		l.multiPoolPacker.SetWaveShedDB(l.db)
 	}
+	l.observeEvalStage(EvalStageBudgetGate, stage)
+	stage = l.clock().Now()
 	if l.multiPoolPacker != nil || l.packer != nil {
 		cadenceCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		rates, err := database.LoadCadenceRates(cadenceCtx, l.db, now, CadenceWindow)
@@ -252,6 +257,8 @@ func (l *Loop) evaluate() {
 			}
 		}
 	}
+	l.observeEvalStage(EvalStageCadence, stage)
+	stage = l.clock().Now()
 	// PERF-001-R3: nsMode is the Phase-1a snapshot of l.namespaceMode (mu is
 	// no longer held here).
 	if nsMode && l.multiPoolPacker != nil {
@@ -315,6 +322,8 @@ func (l *Loop) evaluate() {
 			return
 		}
 	}
+	l.observeEvalStage(EvalStagePick, stage)
+	stage = l.clock().Now()
 
 	// SCHED-GAP-155: emit one grep-stable ADMIT line per candidate project
 	// for THIS pass — the selection is now final (both packer paths have
@@ -360,6 +369,8 @@ func (l *Loop) evaluate() {
 		l.budgetHoldViews = holds
 		l.mu.Unlock()
 	}
+	l.observeEvalStage(EvalStageAdmitEmit, stage)
+	stage = l.clock().Now()
 
 	if len(packed) == 0 {
 		// GAP-043: a zero-select eval with eligible projects present is an
@@ -378,6 +389,8 @@ func (l *Loop) evaluate() {
 		l.mu.Lock()
 		l.noteZeroSelect(now, runningSet)
 		l.mu.Unlock()
+		l.observeEvalStage(EvalStageZeroSelect, stage)
+		l.endEvalPassObs(passStart)
 		return
 	}
 
@@ -387,6 +400,7 @@ func (l *Loop) evaluate() {
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)
+	l.observeEvalStage(EvalStagePhase1C, stage)
 
 	// ---- Phase 1c end / Phase 2 start ----
 	// Release the pass serialization at the same boundary the write lock used
@@ -394,6 +408,7 @@ func (l *Loop) evaluate() {
 	// NEXT pass's decision phase exactly as they always could, while two
 	// decision phases still cannot overlap. noDeliver is the Phase-1a
 	// snapshot (the old code read l.noDeliver under the lock here).
+	l.endEvalPassObs(passStart)
 	serialized = false
 	l.evalMu.Unlock()
 	// ---- Phase 2: spawn projects (lock-free, concurrent) ----

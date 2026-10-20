@@ -1,29 +1,27 @@
 package scheduler
 
-// PERF-001-R2 (b): the eval-lock A/B.
+// PERF-001-R2 (b): the eval A/B, in the form PERF-001-R3 left it.
 //
-// The row: /api/v1/status answers p50 326ms / p99 ~350ms against PERF-001's
-// recorded PASS bar (p99 < 100ms). The handler profile is CPU:wall =
-// 47ms:326ms — the request spends ~86% of its life NOT computing — and the
-// goroutine dump taken at the stall proved Loop.evaluate() was the write-lock
-// holder. The question the row asks is the A/B: does the READ path actually
-// wait on that lock (idle vs immediately after an evaluate pass), and by how
-// much — or is the wait somewhere else entirely?
+// The row's A/B was written to attribute a lock convoy: sample the status read
+// path while evaluate() is idle vs while it holds Loop.mu. PERF-001-R3 then
+// removed the coupling itself — passes serialize on evalMu, Loop.mu is held
+// only for O(1) state updates, and ZeroSelectStats / LastEvalTime / IsPaused
+// read atomics — so the A/B's answer is the row's own sanctioned alternative,
+// "no lock wait detected", and these tests are what keeps it that way:
 //
-// The read path's only Loop.mu site is ZeroSelectStats() (the GAP-043 block
-// the status handler renders). These tests measure exactly that acquire in
-// two states, with the REAL evaluate() pass as the contended state:
+//	TestPERF001R3StatusReadPathIsLockFree — the guarantee, deterministically.
+//	With Loop.mu write-held, the exact loop reads /api/v1/status makes must
+//	still return promptly, and a TryRLock proves the premise (the write lock
+//	really is held, so an RLock reader really would have blocked). Re-couple
+//	the read path to mu and this fails.
 //
-//	TestPERF001R2ReadPathWaitsBehindWriteHold — controlled hold: a 120ms
-//	write hold must produce a ~120ms read wait. This isolates the lock's cost
-//	from the pass's composition, and fails loudly if the read path ever stops
-//	taking Loop.mu (the "no lock wait detected" arm of the row).
-//
-//	TestPERF001R2EvalLockAB — the real thing: sample the read path while the
-//	loop is idle (arm A) and while a production-shaped evaluate() pass holds
-//	the write lock (arm B), report p50/p99/max for both, and require the
-//	contended arm to track the pass's measured hold. Skipped under -short
-//	because it seeds a production-shaped project list.
+//	TestPERF001R2EvalPassAB — the row's two-state measurement. Arm A samples
+//	the read path while no pass is running; arm B samples it while a real
+//	evaluate() pass is inside its decision window (driven through the
+//	production ForceEvaluate entry point). Neither arm may approach the
+//	window's own duration; the window and its stage split are reported from
+//	the pass observer. Skipped under -short (it seeds a production-shaped
+//	project list).
 
 import (
 	"database/sql"
@@ -38,34 +36,21 @@ import (
 )
 
 // perf001r2QuietLogs silences the package's stdout logging for the duration of
-// the A/B and returns a restore func. evaluate() emits one grep-stable ADMIT
-// line per eligible lane WHILE HOLDING the write lock, so at fixture scale the
-// pass spends most of its hold writing log lines to stderr (measured: 5.5s and
-// 9.2s at 8000 lanes with the logs on). That is real work the pass does under
-// the lock, but it is not what this A/B measures — the question here is
-// whether the READ path queues behind the lock — and it would otherwise make
-// the test's runtime a function of log I/O. The report committed with this
-// change carries both numbers.
+// the A/B and returns a restore func. A pass emits one grep-stable ADMIT line
+// per eligible lane, so at fixture scale the pass spends most of its window
+// writing log lines to stderr — real work, but not what this A/B measures, and
+// it would otherwise make the test's runtime a function of log I/O.
 func perf001r2QuietLogs() func() {
 	prev := log.Writer()
 	log.SetOutput(io.Discard)
 	return func() { log.SetOutput(prev) }
 }
 
-// perf001r2ABProjects sizes the fixture the A/B drives. The pass cost (and so
-// the write-lock hold the read path queues behind) is linear in this number.
-// It is deliberately modest: the hold only has to be long enough for a
-// sampler to be caught behind it (tens of milliseconds), and a bigger fixture
-// turns the test into a load test of the pass itself. The invariant below
-// fails loudly if a future change to the pick path makes this fixture too
-// small to hold the lock measurably.
+// perf001r2ABProjects sizes the fixture the A/B drives: 400 enabled,
+// cooldown-fresh lanes make the decision window long enough (tens of ms at
+// least) for the contended arm to be sampled inside it. The invariant below
+// fails loudly if a future change shrinks the window below measurability.
 const perf001r2ABProjects = 400
-
-// perf001r2Samplers is how many goroutines hammer the read path. One is not
-// enough: a single sampler that enters the RLock just before a pass starts is
-// consumed for the WHOLE pass (that is the phenomenon under test), and then
-// every later iteration it runs lands after the pass ended.
-const perf001r2Samplers = 4
 
 // seedPerf001r2Projects inserts n enabled, cooldown-fresh projects so a pass
 // scores every one of them but selects none:
@@ -76,9 +61,7 @@ const perf001r2Samplers = 4
 //     inside its cooldown, so GAP-011's overdue force-select cannot rescue
 //     one either.
 //
-// The work the pass does is therefore the measurement-relevant part only:
-// scan + score + sort every project under the write lock, then take the
-// zero-select early return.
+// The work the pass does is therefore the measurement-relevant part only.
 func seedPerf001r2Projects(t *testing.T, db *sql.DB, n int) {
 	t.Helper()
 	tx, err := db.Begin()
@@ -133,63 +116,58 @@ func perf001r2Max(ds []time.Duration) time.Duration {
 	return m
 }
 
-// TestPERF001R2ReadPathWaitsBehindWriteHold is the controlled-hold half of the
-// A/B: hold Loop.mu for a known 120ms exactly the way evaluate() does, and
-// require the status read path's acquire to pay for it. Deterministic, no
-// fixture, and it is the arm that fails if a later change removes the read
-// path's Loop.mu dependency (then the answer to the row becomes "no lock wait
-// detected here", which must be a deliberate, visible change).
-func TestPERF001R2ReadPathWaitsBehindWriteHold(t *testing.T) {
+// perf001r2ReadPath is the exact composite of loop reads /api/v1/status makes
+// (ZeroSelectStats for the GAP-043 block, LastEvalTime for last_evaluation,
+// IsPaused for paused). It is the read path PERF-001-R2 measured convoys and
+// PERF-001-R3 made lock-free.
+func perf001r2ReadPath(loop *Loop) {
+	loop.ZeroSelectStats()
+	_ = loop.LastEvalTime()
+	_ = loop.IsPaused()
+}
+
+// TestPERF001R3StatusReadPathIsLockFree is the deterministic half: hold the
+// write lock, prove the premise with TryRLock, and require the read path's
+// three reads to return promptly regardless.
+func TestPERF001R3StatusReadPathIsLockFree(t *testing.T) {
 	db := newTestDB(t)
 	defer func() { _ = db.Close() }()
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 1, 5)
 
-	// Hold Loop.mu for the full `hold` window — the same write lock
-	// evaluate() takes and holds across its Phase 1.
-	const hold = 120 * time.Millisecond
 	loop.mu.Lock()
-	holdStart := time.Now()
-	started := make(chan struct{})
-	waited := make(chan time.Duration, 1)
-	go func() {
-		close(started)
-		acquire := time.Now()
-		// ZeroSelectStats is the ONLY Loop.mu site on /api/v1/status.
-		loop.ZeroSelectStats()
-		waited <- time.Since(acquire)
-	}()
-	<-started
-	for time.Since(holdStart) < hold {
-		time.Sleep(time.Millisecond)
+	// Premise, deterministically: with the write lock held, an RLock reader
+	// would block — so if the read path takes mu, this test fails.
+	if loop.mu.TryRLock() {
+		loop.mu.RUnlock()
+		loop.mu.Unlock()
+		t.Fatal("TryRLock succeeded while the write lock was held — the premise of this test is broken")
 	}
+	elapsed := make(chan time.Duration, 1)
+	go func() {
+		started := time.Now()
+		perf001r2ReadPath(loop)
+		elapsed <- time.Since(started)
+	}()
+	time.Sleep(50 * time.Millisecond) // let the goroutine run while the lock is held
 	loop.mu.Unlock()
 
-	w := <-waited
-	if w < hold/2 {
-		t.Fatalf("status read path waited %s behind a %s write hold — the read path no longer convoys behind evaluate()'s lock (PERF-001-R2 attribution is now 'no lock wait')", w, hold)
+	got := <-elapsed
+	if got > 50*time.Millisecond {
+		t.Fatalf("status read path took %s while Loop.mu was write-held (an RLock would have blocked) — the read path is coupled to the pass again (PERF-001-R3 regression)", got)
 	}
-
 	attr := loop.LockAttribution()
-	if attr.StatusReadLock.Samples < 1 {
-		t.Fatalf("read-lock observer recorded no samples: %+v", attr.StatusReadLock)
+	if attr.ReadPathLockSite == "" {
+		t.Fatal("lock_attribution.read_path_lock_site is empty — a consumer cannot tell 'lock-free' from 'not measured'")
 	}
-	if attr.StatusReadLock.Blocked < 1 {
-		t.Fatalf("read-lock observer recorded no BLOCKED sample for a %s write hold: %+v", hold, attr.StatusReadLock)
-	}
-	if got := time.Duration(attr.StatusReadLock.MaxNs); got < hold/2 {
-		t.Fatalf("read-lock observer max = %s, want >= %s (the measured wait must match the hold it waited for)", got, hold/2)
-	}
-	t.Logf("PERF-001-R2 controlled hold=%s read-wait=%s observed_max=%s blocked=%d",
-		hold, w, time.Duration(attr.StatusReadLock.MaxNs), attr.StatusReadLock.Blocked)
+	t.Logf("PERF-001-R3 read-path lock-freedom: read path=%s while the write lock was held; site=%q", got, attr.ReadPathLockSite)
 }
 
-// TestPERF001R2EvalLockAB measures the endpoint-side lock component in its two
-// states — the pass idle, and a real evaluate() pass holding the write lock —
-// using the same acquire the status handler makes. Arm A's samples are taken
-// before the pass starts, arm B's while it holds the lock; the write hold is
-// measured independently by the eval-hold observer, so the assertion is
-// "arm B tracked the pass's own measured hold", not a hardcoded constant.
-func TestPERF001R2EvalLockAB(t *testing.T) {
+// TestPERF001R2EvalPassAB measures the endpoint-side read path in its two
+// states — no pass running (arm A) vs a real evaluate() pass inside its
+// decision window (arm B) — and requires both to stay far below the window's
+// own duration. The window and its stage split are reported from the pass
+// observer, so "no convoy" and "what the pass costs" come from one run.
+func TestPERF001R2EvalPassAB(t *testing.T) {
 	if testing.Short() {
 		t.Skip("PERF-001-R2 A/B seeds a production-shaped project list; run without -short")
 	}
@@ -200,8 +178,8 @@ func TestPERF001R2EvalLockAB(t *testing.T) {
 	defer perf001r2QuietLogs()()
 
 	type sample struct {
-		at   time.Time
-		wait time.Duration
+		wait     time.Duration
+		inFlight bool
 	}
 	var (
 		mu      sync.Mutex
@@ -209,99 +187,100 @@ func TestPERF001R2EvalLockAB(t *testing.T) {
 	)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < perf001r2Samplers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				at := time.Now()
-				loop.ZeroSelectStats() // the status read path's only Loop.mu site
-				w := time.Since(at)
-				mu.Lock()
-				samples = append(samples, sample{at: at, wait: w})
-				mu.Unlock()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
 			}
-		}()
-	}
+			inFlight := loop.EvalInFlight()
+			started := time.Now()
+			perf001r2ReadPath(loop)
+			w := time.Since(started)
+			mu.Lock()
+			samples = append(samples, sample{wait: w, inFlight: inFlight})
+			mu.Unlock()
+		}
+	}()
 
 	time.Sleep(20 * time.Millisecond) // arm A: idle samples
-	passStart := time.Now()
-	loop.evaluate()
-	passEnd := time.Now()
+	beforeSamples := loop.LockAttribution().EvalPass.Samples
+	loop.ForceEvaluate()
+	// Wait for the forced pass to open its window, then for it to close.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && !loop.EvalInFlight() {
+		time.Sleep(50 * time.Microsecond)
+	}
+	sawWindow := loop.EvalInFlight()
+	for time.Now().Before(deadline) && loop.EvalInFlight() {
+		time.Sleep(50 * time.Microsecond)
+	}
+	for i := 0; i < 20000 && loop.LockAttribution().EvalPass.Samples == beforeSamples; i++ {
+		time.Sleep(50 * time.Microsecond)
+	}
 	close(stop)
 	wg.Wait()
 
-	// Classify by OVERLAP, not by start time: a sample that began just before
-	// the pass took the lock and then waited for the pass is arm B (it is the
-	// clearest evidence of the convoy there is), while a sample that finished
-	// before the pass began is arm A.
 	mu.Lock()
 	armA := make([]time.Duration, 0, len(samples))
 	armB := make([]time.Duration, 0, len(samples))
 	for _, s := range samples {
-		switch {
-		case !s.at.Add(s.wait).After(passStart):
-			armA = append(armA, s.wait)
-		case s.at.Before(passEnd):
+		if s.inFlight {
 			armB = append(armB, s.wait)
+		} else {
+			armA = append(armA, s.wait)
 		}
 	}
 	mu.Unlock()
 
-	attr := loop.LockAttribution()
-	hold := passEnd.Sub(passStart)
-	observedHold := time.Duration(attr.EvalHold.MaxNs)
+	after := loop.LockAttribution()
+	window := time.Duration(after.EvalPass.MaxNs)
 
 	// Report before asserting: a failed invariant must never hide the numbers.
-	t.Logf("PERF-001-R2 eval-lock A/B: pass hold=%s (observed %s) | idle n=%d p50=%s p99=%s max=%s | contended n=%d p50=%s p99=%s max=%s | read-lock blocked=%d max=%s | stages=%s",
-		hold, observedHold,
-		len(armA), perf001r2Pct(armA, 0.50), perf001r2Pct(armA, 0.99), perf001r2Max(armA),
+	t.Logf("PERF-001-R2 eval-pass A/B: pass window=%s | idle n=%d p50=%s p99=%s max=%s | in-window n=%d p50=%s p99=%s max=%s | stages=%s",
+		window, len(armA), perf001r2Pct(armA, 0.50), perf001r2Pct(armA, 0.99), perf001r2Max(armA),
 		len(armB), perf001r2Pct(armB, 0.50), perf001r2Pct(armB, 0.99), perf001r2Max(armB),
-		attr.StatusReadLock.Blocked, time.Duration(attr.StatusReadLock.MaxNs),
-		perf001r2StageSummary(attr.Stages))
+		perf001r2StageSummary(after.Stages))
 
+	if !sawWindow {
+		t.Fatal("ForceEvaluate never opened an evaluate() window (eval_in_flight stayed false) — the A/B has no contended arm")
+	}
 	if len(armA) < 10 {
-		t.Fatalf("arm A collected %d idle samples, want >= 10 (samplers did not run)", len(armA))
+		t.Fatalf("arm A collected %d idle samples, want >= 10 (sampler did not run)", len(armA))
 	}
 	if len(armB) == 0 {
-		t.Fatalf("arm B collected no sample overlapping the %s evaluate() pass", hold)
+		t.Fatal("arm B collected no sample inside the pass window")
 	}
-	if hold < 20*time.Millisecond {
-		t.Fatalf("the evaluate() pass held the write lock for only %s — the %d-project fixture no longer holds it long enough for the A/B; raise perf001r2ABProjects", hold, perf001r2ABProjects)
+	if after.EvalPass.Samples-beforeSamples != 1 {
+		t.Fatalf("pass observer recorded %d window(s), want exactly 1", after.EvalPass.Samples-beforeSamples)
 	}
-	if attr.EvalHold.Samples != 1 {
-		t.Fatalf("eval-hold observer recorded %d holds for one pass, want 1", attr.EvalHold.Samples)
+	if after.EvalInFlight {
+		t.Fatal("eval_in_flight still true after the pass closed its window")
 	}
-	if attr.EvalInFlight {
-		t.Fatalf("eval_in_flight still true after evaluate() returned")
+	if window < 20*time.Millisecond {
+		t.Fatalf("the pass window was only %s — the %d-lane fixture is too small for the A/B; raise perf001r2ABProjects", window, perf001r2ABProjects)
 	}
-	if len(attr.Stages) == 0 {
-		t.Fatalf("stage attribution recorded nothing for a pass that ran: %+v", attr)
+	if len(after.Stages) == 0 {
+		t.Fatalf("stage attribution recorded nothing for a pass that ran: %+v", after)
 	}
-	// The lock half of the attribution: a read sample overlapping the pass
-	// must have waited for most of the pass's own hold.
-	if blockedMax := perf001r2Max(armB); blockedMax < hold/2 {
-		t.Fatalf("contended arm max wait = %s, want >= half the pass hold (%s): the read path did not convoy behind evaluate()", blockedMax, hold/2)
+	// THE assertion: PERF-001-R3's guarantee, measured. A read that lands
+	// inside the pass window must not track the window — if the read path is
+	// ever re-coupled to the pass, arm B jumps to the window's order of
+	// magnitude and this fails.
+	if got := perf001r2Max(armB); got >= window/2 {
+		t.Fatalf("read path max inside the pass window = %s, want far below half the window (%s): the read path convoys behind evaluate() again", got, window/2)
 	}
-	if idleMax := perf001r2Max(armA); idleMax >= hold/2 {
-		t.Fatalf("idle arm max wait = %s is not distinguishable from the contended arm (%s hold) — the A/B has no signal", idleMax, hold)
-	}
-	if attr.StatusReadLock.Blocked < 1 {
-		t.Fatalf("read-lock observer never recorded a blocked sample during the pass: %+v", attr.StatusReadLock)
-	}
-	if observedHold < hold/2 {
-		t.Fatalf("eval-hold observer max = %s, want >= half the wall hold %s", observedHold, hold/2)
+	if got := perf001r2Max(armA); got >= window/2 {
+		t.Fatalf("idle arm max = %s is not below half the window (%s) — the read path is slow for another reason", got, window/2)
 	}
 }
 
 // perf001r2StageSummary renders the stage attribution as
 // "stage=total/max" pairs, longest total first: the row's "which sub-call
-// holds the lock longest" in one line.
+// spends the window" in one line.
 func perf001r2StageSummary(stages []EvalStageStats) string {
 	cp := append([]EvalStageStats(nil), stages...)
 	sort.Slice(cp, func(i, j int) bool { return cp[i].TotalNs > cp[j].TotalNs })

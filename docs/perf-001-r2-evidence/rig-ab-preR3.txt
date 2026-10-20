@@ -1,0 +1,9 @@
+== PERF-001-R2 eval-lock A/B — http://127.0.0.1:19099 (samples/arm=10, contended budget=300s)
+-- attribution BEFORE
+
+-- arm A: idle (no pass in flight)
+..........
+arm A    n=10  p50=   1192.2 ms  p99=   3079.7 ms  max= 141348.1 ms  [http codes:       9 200       1 504 ]
+
+-- arm B: contended (a pass holds Loop.mu)
+{"status":"evaluation triggered"}

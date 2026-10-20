@@ -1,0 +1,5 @@
+=== RUN   TestPERF001R2StatusPassAB
+    status_lock_ab_test.go:190: PERF-001-R2 /api/v1/status pass A/B: window=419.347249ms | idle n=20 p50=36.689641ms p99=51.075347ms max=128.035962ms | in-window n=6 p50=65.431138ms p99=88.374216ms max=91.498183ms | stages=admit_emit=375ms/375ms,pick=17ms/17ms,zero_select=14ms/14ms,cleanup_stale=12ms/12ms,cadence=0s/0s,host_sample=0s/0s,budget_gate=0s/0s,phase1a=0s/0s
+--- PASS: TestPERF001R2StatusPassAB (1.47s)
+PASS
+ok  	github.com/coding-hermes/scheduler/internal/api	1.473s

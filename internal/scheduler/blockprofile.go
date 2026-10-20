@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"flag"
 	"os"
 	"runtime"
 	"strconv"
@@ -70,15 +71,29 @@ var (
 // SCHEDULER_BLOCK_PROFILE_RATE, defaulting to DefaultBlockProfileRate.
 func ArmBlockProfile() bool {
 	if !blockProfileArmed.Load() {
-		blockProfileOnce.Do(func() { armBlockProfile(os.Getenv(BlockProfileRateEnv)) })
+		blockProfileOnce.Do(func() { armBlockProfile(os.Getenv(BlockProfileRateEnv), inTestBinary()) })
 	}
 	return blockProfileRate.Load() > 0
 }
 
+// inTestBinary reports whether this process is a `go test` binary (the flag
+// package registers test.v in every test binary and nowhere else). Used only
+// to keep a process-global profiler off the suite: rate 1 records EVERY
+// blocking event, and the scheduler package is the commit guard's gate.
+func inTestBinary() bool { return flag.Lookup("test.v") != nil }
+
 // armBlockProfile resolves the rate and installs it. Rate is stored BEFORE
 // the armed flag so a concurrent reader can never observe "armed" with an
-// unset rate.
-func armBlockProfile(raw string) {
+// unset rate. A test binary with no explicit rate resolves to 0 (disabled)
+// while still recording the arm attempt, so the decision is stable for the
+// process lifetime — a test that wants the real thing sets the env, which is
+// what internal/scheduler/blockprofile_test.go's children do.
+func armBlockProfile(raw string, testBinary bool) {
+	if testBinary && strings.TrimSpace(raw) == "" {
+		blockProfileRate.Store(0)
+		blockProfileArmed.Store(true)
+		return
+	}
 	rate := resolveBlockProfileRate(raw)
 	if rate > 0 {
 		runtime.SetBlockProfileRate(rate)

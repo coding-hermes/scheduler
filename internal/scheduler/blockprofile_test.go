@@ -52,6 +52,7 @@ func perf001r2BlockOnMarker() {
 	// TryLock() returns false because we already hold the mutex, but the
 	// call satisfies staticcheck SA2001 (non-empty critical section).
 	_ = perf001r2MarkerMu.TryLock()
+	perf001r2MarkerMu.Unlock()
 }
 
 // perf001r2ObserveBlock drives one deliberate, completed block on the marker
@@ -162,31 +163,36 @@ func TestPERF001R2ResolveBlockProfileRate(t *testing.T) {
 
 // TestPERF001R2BlockProfileRateRespected is the positive/negative control for
 // the arming itself: rate > 0 must record the marker block, rate 0 must record
-// nothing at all.
+// nothing at all, and the test-binary exemption must resolve to "disabled"
+// unless the operator set the rate explicitly.
 func TestPERF001R2BlockProfileRateRespected(t *testing.T) {
 	if os.Getenv("PERF001R2_BLOCK_CHILD_SET") != "" {
 		t.Skip("child mode")
 	}
 	for _, tc := range []struct {
-		raw       string
-		wantRate  int
-		wantArmed bool
-		wantCount bool
+		name       string
+		raw        string
+		testBinary bool
+		wantRate   int
+		wantArmed  bool
+		wantMarker bool
 	}{
-		{raw: "1", wantRate: 1, wantArmed: true, wantCount: true},
-		{raw: "0", wantRate: 0, wantArmed: false, wantCount: false},
-		{raw: "", wantRate: DefaultBlockProfileRate, wantArmed: true, wantCount: true},
-		{raw: "nonsense", wantRate: DefaultBlockProfileRate, wantArmed: true, wantCount: true},
+		{name: "rate=1", raw: "1", wantRate: 1, wantArmed: true, wantMarker: true},
+		{name: "rate=0", raw: "0", wantRate: 0, wantArmed: false, wantMarker: false},
+		{name: "unset", raw: "", wantRate: DefaultBlockProfileRate, wantArmed: true, wantMarker: true},
+		{name: "nonsense", raw: "nonsense", wantRate: DefaultBlockProfileRate, wantArmed: true, wantMarker: true},
+		{name: "test-binary-unset", raw: "", testBinary: true, wantRate: 0, wantArmed: false, wantMarker: false},
+		{name: "test-binary-explicit", raw: "1", testBinary: true, wantRate: 1, wantArmed: true, wantMarker: true},
 	} {
-		name := tc.raw
-		if name == "" {
-			name = "unset"
-		}
-		t.Run("rate="+name, func(t *testing.T) {
-			out := perf001r2RunChild(t, "TestPERF001R2BlockProfileChild", map[string]string{
+		t.Run(tc.name, func(t *testing.T) {
+			extra := map[string]string{
 				"PERF001R2_BLOCK_CHILD_SET": "1",
 				"PERF001R2_BLOCK_CHILD":     tc.raw,
-			})
+			}
+			if tc.testBinary {
+				extra["PERF001R2_BLOCK_CHILD_TESTBIN"] = "1"
+			}
+			out := perf001r2RunChild(t, "TestPERF001R2BlockProfileChild", extra)
 			fields := perf001r2ParseChild(t, out)
 			if got := fields["rate"]; got != fmt.Sprint(tc.wantRate) {
 				t.Errorf("child resolved rate = %s, want %d", got, tc.wantRate)
@@ -194,10 +200,10 @@ func TestPERF001R2BlockProfileRateRespected(t *testing.T) {
 			if got := fields["armed"]; got != fmt.Sprint(tc.wantArmed) {
 				t.Errorf("child armed = %s, want %t", got, tc.wantArmed)
 			}
-			if got := fields["marker"]; got != fmt.Sprint(tc.wantCount) {
-				t.Errorf("child profile names perf001r2BlockOnMarker = %s, want %t (count=%s)", got, tc.wantCount, fields["count"])
+			if got := fields["marker"]; got != fmt.Sprint(tc.wantMarker) {
+				t.Errorf("child profile names perf001r2BlockOnMarker = %s, want %t (count=%s)", got, tc.wantMarker, fields["count"])
 			}
-			if !tc.wantCount && fields["count"] != "0" {
+			if !tc.wantMarker && fields["count"] != "0" {
 				t.Errorf("child recorded %s block samples with the profile disabled, want 0", fields["count"])
 			}
 		})
@@ -205,13 +211,14 @@ func TestPERF001R2BlockProfileRateRespected(t *testing.T) {
 }
 
 // TestPERF001R2BlockProfileChild is the child half of
-// TestPERF001R2BlockProfileRateRespected: arm with the raw rate the parent
-// passed, perform one deliberate block, and report what the profile holds.
+// TestPERF001R2BlockProfileRateRespected: arm with the raw rate (and the
+// test-binary flag) the parent passed, perform one deliberate block, and
+// report what the profile holds.
 func TestPERF001R2BlockProfileChild(t *testing.T) {
 	if os.Getenv("PERF001R2_BLOCK_CHILD_SET") != "1" {
 		t.Skip("parent-driven child (PERF001R2_BLOCK_CHILD_SET)")
 	}
-	armBlockProfile(os.Getenv("PERF001R2_BLOCK_CHILD"))
+	armBlockProfile(os.Getenv("PERF001R2_BLOCK_CHILD"), os.Getenv("PERF001R2_BLOCK_CHILD_TESTBIN") == "1")
 	perf001r2ObserveBlock()
 	_, hasMarker := perf001r2BlockProfileText(t)
 	fmt.Printf("%s rate=%d armed=%t count=%d marker=%t\n",
@@ -219,30 +226,52 @@ func TestPERF001R2BlockProfileChild(t *testing.T) {
 		pprof.Lookup("block").Count(), hasMarker)
 }
 
-// TestPERF001R2EvaluateArmsBlockProfile is the row's step-1 wiring proof: with
-// NO rate env set, a production evaluate() pass must leave the block profile
-// armed at the default rate (so the daemon's already-exposed
-// /debug/pprof/block names the wait) and must leave its write-lock hold
-// recorded.
+// TestPERF001R2EvaluateArmsBlockProfile is the row's step-1 wiring proof: the
+// production evaluate() call site must arm the profile. Two arms:
+//
+//   - SCHEDULER_BLOCK_PROFILE_RATE=1 ⇒ the pass leaves the profile armed and
+//     recording, so the daemon's already-exposed /debug/pprof/block names the
+//     wait instead of answering "0 nodes accounting for 0, 0% of 0 total";
+//   - no rate env in a TEST binary ⇒ the pass leaves it disabled (the
+//     exemption that keeps a process-global profiler off the test suite),
+//     while still recording the pass window.
 func TestPERF001R2EvaluateArmsBlockProfile(t *testing.T) {
 	if os.Getenv("PERF001R2_EVAL_CHILD") != "" {
 		t.Skip("child mode")
 	}
-	out := perf001r2RunChild(t, "TestPERF001R2EvaluateArmsBlockProfileChild", map[string]string{
-		"PERF001R2_EVAL_CHILD": "1",
-	})
-	fields := perf001r2ParseChild(t, out)
-	if fields["armed"] != "true" || fields["rate"] != fmt.Sprint(DefaultBlockProfileRate) {
-		t.Errorf("after evaluate(): armed=%s rate=%s, want armed=true rate=%d", fields["armed"], fields["rate"], DefaultBlockProfileRate)
-	}
-	if fields["marker"] != "true" {
-		t.Errorf("block profile after evaluate() does not name the marker frame (count=%s) — the profile is armed but records nothing", fields["count"])
-	}
-	if fields["holds"] != "1" {
-		t.Errorf("eval-hold observer recorded %s holds for one evaluate() pass, want 1", fields["holds"])
-	}
-	if fields["inflight"] != "false" {
-		t.Errorf("eval_in_flight = %s after evaluate() returned, want false", fields["inflight"])
+	for _, tc := range []struct {
+		name       string
+		rate       string
+		wantArmed  bool
+		wantRate   int
+		wantMarker bool
+	}{
+		{name: "explicit-rate-1", rate: "1", wantArmed: true, wantRate: 1, wantMarker: true},
+		{name: "test-binary-default-off", rate: "", wantArmed: false, wantRate: 0, wantMarker: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := map[string]string{"PERF001R2_EVAL_CHILD": "1"}
+			if tc.rate != "" {
+				extra[BlockProfileRateEnv] = tc.rate
+			}
+			out := perf001r2RunChild(t, "TestPERF001R2EvaluateArmsBlockProfileChild", extra)
+			fields := perf001r2ParseChild(t, out)
+			if fields["armed"] != fmt.Sprint(tc.wantArmed) || fields["rate"] != fmt.Sprint(tc.wantRate) {
+				t.Errorf("after evaluate(): armed=%s rate=%s, want armed=%t rate=%d", fields["armed"], fields["rate"], tc.wantArmed, tc.wantRate)
+			}
+			if fields["marker"] != fmt.Sprint(tc.wantMarker) {
+				t.Errorf("block profile after evaluate(): names the marker frame = %s, want %t (count=%s)", fields["marker"], tc.wantMarker, fields["count"])
+			}
+			if fields["passes"] != "1" {
+				t.Errorf("pass observer recorded %s window(s) for one evaluate() pass, want 1", fields["passes"])
+			}
+			if fields["inflight"] != "false" {
+				t.Errorf("eval_in_flight = %s after evaluate() returned, want false", fields["inflight"])
+			}
+			if fields["stages"] == "0" {
+				t.Errorf("stage attribution recorded nothing for a pass that ran")
+			}
+		})
 	}
 }
 
@@ -255,7 +284,7 @@ func TestPERF001R2EvaluateArmsBlockProfileChild(t *testing.T) {
 	db := newTestDB(t)
 	defer func() { _ = db.Close() }()
 	// budget below every project weight ⇒ an empty pick, so the pass cannot
-	// enqueue a spawn; the pass still runs its locked Phase 1 end to end.
+	// enqueue a spawn; the pass still runs its whole decision phase.
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 1, 5)
 	loop.evaluate()
 	// evaluate() is the ONLY arm site in this process, so a blocked sample
@@ -266,7 +295,7 @@ func TestPERF001R2EvaluateArmsBlockProfileChild(t *testing.T) {
 	perf001r2ObserveBlock()
 	attr := loop.LockAttribution()
 	_, hasMarker := perf001r2BlockProfileText(t)
-	fmt.Printf("%s rate=%d armed=%t count=%d marker=%t holds=%d inflight=%t\n",
+	fmt.Printf("%s rate=%d armed=%t count=%d marker=%t passes=%d inflight=%t stages=%d\n",
 		perf001r2ChildPrefix, loop.BlockProfileRate(), loop.BlockProfileArmed(),
-		pprof.Lookup("block").Count(), hasMarker, attr.EvalHold.Samples, attr.EvalInFlight)
+		pprof.Lookup("block").Count(), hasMarker, attr.EvalPass.Samples, attr.EvalInFlight, len(attr.Stages))
 }
