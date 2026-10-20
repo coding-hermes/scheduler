@@ -1081,26 +1081,39 @@ Configure the operator credential via one of:
 
 ### Federation tools — deny-all by default
 
-The 7 `fed_<op>` tools (`fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`, `fed_query`) and the `peers_*` tools (`peers_list`, `peers_register`, `peers_heartbeat`, `peers_events`) are gated by a **deny-all** policy — they answer `op_not_allowed` until you explicitly allow the operations you need.
+The 7 `fed_<op>` tools (`fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`, `fed_query`) are gated by a **deny-all** read policy — they answer `op_not_allowed` until you explicitly allow the operations you need. (The `peers_*` tools are not read-policy ops: `peers_list` / `peers_events` are the local peer registry and event slice — operator-gated on REST, open on MCP like the other introspection reads — and `peers_register` / `peers_heartbeat` are mutations that require the operator credential.)
 
-Configure allowed operations in the `[federation]` section of your scheduler config (`fleet.toml` or the file passed via `--config`):
+Configure allowed operations in the `[federation]` section of your scheduler config (`fleet.toml` or the file passed via `--config`). The schema is a **per-caller table**, not a scalar list: the key is the caller identity that appears in the federation audit rows (`"*"` is the fleet-wide default every caller inherits), and `ops` lists the `docs/federation-query-spec.md` §2.3 **op ids** — not tool names:
 
 ```toml
 [federation]
-# Allow all read ops (or list specific ones: ["peer.status", "fleet.status", "projects.list"])
-allow = ["*"]
+# Fleet-wide default: every caller that has no table of its own inherits these ops.
+[federation.allow."*"]
+ops = ["peer.status", "fleet.status", "projects.list", "queue.get", "ticks.list", "events.list"]
 
-# Or allow specific operations per tool:
-# [federation.allow.fed_fleet_status]
-# ops = ["fleet.status"]
+# A caller's own table OVERRIDES "*" in both directions — it grants only what it
+# lists, so name the identities your transports actually present (see below).
+[federation.allow."operator:token"]
+ops = ["fleet.status", "queue.get"]
 ```
+
+There is **no scalar list form** (`allow = […]` with no caller key is not a wire-schema field — `"*"` is a caller key, never an op wildcard, and a bare list is therefore ignored), and `fed_fleet_status` is a *tool* name, not a table key — keying a table to it produces a grant for a caller named `fed_fleet_status` that no transport ever presents (a silent deny-all in practice). The identities a live caller presents are:
+
+| Caller identity | Presented by |
+|---|---|
+| `operator:token` | HTTP `POST /api/v1/federation/query`, authenticated with the operator token (`X-Operator-Token` / `Authorization: Bearer`) |
+| `operator:basic` | the same route, authenticated with `Authorization: Basic` (`[api] operator_user` / `operator_password`) |
+| `bus:transport` | crier bus queries on the `fed.query.<peer>` topic (`CRIER_AUTH_TOKEN` is the transport credential) |
+| `mcp:auth-token`, `mcp:auth-basic`, `mcp:auth-off` | MCP `fed_query` / `fed_<op>` tools, suffixed with the daemon's resolved operator-auth mode |
+
+Check the arming result on the boot line: `FEDERATION: read policy armed (N caller grant(s))` — one per `[federation.allow.<key>]` table you declared (`0` means the recipe granted nobody).
 
 The environment variables that feed the federation subsystem are:
 
 - `SCHEDULER_OPERATOR_TOKEN` — operator credential for auth (see above)
 - `CRIER_AUTH_TOKEN` — bus/relay authentication token for the federation bus (set in the daemon unit's `EnvironmentFile`, e.g. `~/.hermes/secrets/scheduler-crier.env`)
 
-Without a `[federation.allow]` block, all federation tools are denied and will return an `op_not_allowed` error.
+Without any `[federation.allow.<caller>]` table, all federation tools are denied and will return an `op_not_allowed` error.
 
 ## Dashboard
 

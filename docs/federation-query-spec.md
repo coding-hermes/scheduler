@@ -117,8 +117,10 @@ peer's), and remote reads keep their own addressing: the CLI positional, the bus
 
 ## 4. Access model (REMOTE-013)
 
-- **Read is scoped, not open.** A peer answers only ops its operator has published (`[federation]
-  allow = ["fleet.status","queue.get", ...]`); anything else is `status="error" code="op_not_allowed"`
+- **Read is scoped, not open.** A peer answers only ops its operator has published for that CALLER
+  (`[federation.allow."<caller>"]` + `ops = ["fleet.status","queue.get", ...]` — a per-caller table
+  keyed by the caller identity from the audit rows, `"*"` being the fleet-wide default key; see
+  `config.example.toml`); anything else is `status="error" code="op_not_allowed"`
   — a named refusal, never an empty answer (an empty answer lies).
 - **Per-peer scoping.** The primary may ask peer A more than peer B; the allow-list is per peer, keyed
   by the peer's identity from the registry (REMOTE-003).
