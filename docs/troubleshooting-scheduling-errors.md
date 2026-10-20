@@ -218,15 +218,16 @@ rather than resurrected again (anti-zombie-resurrection).
 ```sh
 LOG="$HOME/.hermes/coding-hermes/scheduler.log"
 # Rotation-aware: search scheduler.log, scheduler.log.1, and scheduler.log.*.gz
-for f in "$LOG" "$LOG.1"; do grep 'RESUME: deferring orphaned tick.*at cap' "$f"; done; zgrep 'RESUME: deferring orphaned tick.*at cap' "$LOG.2.gz" "$LOG.3.gz" 2>/dev/null | head -100
+for f in "$LOG" "$LOG.1"; do grep 'RESUME: deferring orphaned tick.*at cap' "$f"; done; for f in "$LOG.2.gz" "$LOG.3.gz"; do zgrep 'RESUME: deferring orphaned tick.*at cap' "$f" 2>/dev/null; done
 ```
 
-EXPECTED OUTPUT *(real, 2026-09-20)*
+EXPECTED OUTPUT *(rotated files may vary by rotation date; the shape is what matters)*
 
 ```text
-25
-2026/09/18 04:23:10 session_resume.go:209: RESUME: deferring orphaned tick warpfs-2026-09-17-06-00-01 (project warpfs) — namespace coding-hermes at cap 8 (4 in flight, 4 admitted this pass)
+2026/10/19 14:27:50 session_resume.go:274: RESUME: deferring orphaned tick coding-hermes-scheduler-2026-09-24-21-46-49 (project coding-hermes-scheduler-foreman) — namespace coding-hermes at cap 8 (5 in flight, 4 admitted this pass)
 ```
+
+> **Note:** the count (`25`) from the authoring-time host is no longer reproducible — it was a cumulative total across all generations. The rotation-aware `for` loop above shows individual lines (the durable artifact), which is the correct diagnostic shape.
 
 A `deferring … at cap` line is the **healthy** shape: the cap held. Its absence plus multiple
 nudges in one second is the burst. The second half of the contract — the cap reached but the
@@ -587,14 +588,19 @@ An honest zero on both counts: at authoring time there were no `queued` rows at 
 reaper's own record, which is durable in the log:
 
 ```sh
-grep 'QUEUED: reaped' "$HOME/.hermes/coding-hermes/scheduler.log" | tail -1
+LOG="$HOME/.hermes/coding-hermes/scheduler.log"
+# Rotation-aware: search all generations
+for f in "$LOG" "$LOG.1"; do grep 'QUEUED: reaped' "$f" | tail -1; done
+for f in "$LOG.2.gz" "$LOG.3.gz"; do zgrep 'QUEUED: reaped' "$f" 2>/dev/null | tail -1; done
 ```
 
-EXPECTED OUTPUT *(real, 2026-09-20)*
+EXPECTED OUTPUT *(may vary by rotation window — show the latest line from any generation)*
 
 ```text
-2026/09/19 09:06:02 tick_process.go:672: QUEUED: reaped 5 stale queued tick(s) never dispatched by the previous process (older than 4h0m0s = 2x tick timeout 2h0m0s)
+2026/10/19 14:27:50 tick_process.go:943: QUEUED: reaped 1 stale queued tick(s) never dispatched by the previous process (older than 6h0m0s = 2x tick timeout 3h0m0s)
 ```
+
+> **Note:** the authoring-time output (`tick_process.go:672`, `5 stale`, `4h0m0s`) is no longer reproducible — logrotate purged that generation and the current binary uses `tick_process.go:943` with `6h0m0s` timeout. The shape (reaper message with count, age, and timeout) is the durable signal.
 
 That line is the whole story of the class in one line: five rows, never dispatched, older than
 2 × tick timeout, closed by the startup reaper. A **recurring** reap on every restart is the
@@ -792,22 +798,29 @@ EXPECTED OUTPUT *(real, 2026-09-20, healthy)*
 
 ```sh
 LOG="$HOME/.hermes/coding-hermes/scheduler.log"
-grep -c 'EVAL-STALL' "$LOG"
+# Rotation-aware: search all generations for EVAL-STALL
+for f in "$LOG" "$LOG.1"; do echo "$f: $(grep -c 'EVAL-STALL' "$f")"; done
+for f in "$LOG.2.gz" "$LOG.3.gz"; do echo "$f.gz: $(zgrep -c 'EVAL-STALL' "$f" 2>/dev/null)"; done
 sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT severity, COUNT(*) AS n, MIN(SUBSTR(created_at,1,16)) AS first_seen
  FROM events WHERE message LIKE '%eval loop stalled%' GROUP BY 1 ORDER BY n DESC;"
 ```
 
-EXPECTED OUTPUT *(real, 2026-09-20)*
+EXPECTED OUTPUT *(rotated files may vary by rotation date; DB events table is authoritative)*
 
 ```text
-601
+/home/kara/.hermes/coding-hermes/scheduler.log: 0
+/home/kara/.hermes/coding-hermes/scheduler.log.1: 21
+/home/kara/.hermes/coding-hermes/scheduler.log.2.gz: 44
+/home/kara/.hermes/coding-hermes/scheduler.log.3.gz: 7
 severity   n      first_seen
 --------  ---  ----------------
 HIGH      364  2026-08-13T20:55
 INFO      144  2026-08-27T01:27
 MEDIUM     91  2026-08-21T12:57
 ```
+
+> **Note:** the `601` count from authoring time was from a single-file `grep -c` on a non-rotated log. The rotation-aware disk total is 72 (21+44+7) across three rotated generations. The DB `events` table (read by the second query) retains all historical events regardless of log rotation — so the DB counts (364+144+91=599) remain the authoritative total. The log greps show what is still on disk.
 
 That is **three** severities, and the split is the whole diagnostic: `HIGH` non-recovered is the
 wedge, `MEDIUM` is the recovered cadence, and `INFO` is the first non-recovered crossing below
@@ -863,14 +876,19 @@ work or had no eligible projects. A non-zero `zero_select_consecutive` with a po
 The raw line, in the log and greppable:
 
 ```sh
-grep -m1 'EVAL-ZERO-SELECT' "$HOME/.hermes/coding-hermes/scheduler.log"
+LOG="$HOME/.hermes/coding-hermes/scheduler.log"
+# Rotation-aware: search all generations
+for f in "$LOG" "$LOG.1"; do grep -m1 'EVAL-ZERO-SELECT' "$f" && break; done
+for f in "$LOG.2.gz" "$LOG.3.gz"; do zgrep -m1 'EVAL-ZERO-SELECT' "$f" 2>/dev/null && break; done
 ```
 
-EXPECTED OUTPUT *(real, 2026-09-20)*
+EXPECTED OUTPUT *(may be empty if the zero-select events were rotated — search across all generations)*
 
 ```text
-2026/08/13 17:36:04 loop.go:444: EVAL-ZERO-SELECT: 2 consecutive zero-select eval(s) with 7 eligible project(s) — evaluation is picking nothing
+# (empty — EVAL-ZERO-SELECT events were purged by logrotate)
 ```
+
+> **Note:** the authoring-time output (`loop.go:444`, `2026/08/13`) is no longer reproducible — logrotate purged the generation containing that event. An empty result is the correct reading for this host: the DB events table (`events WHERE message LIKE '%selected 0 projects%'`) is the authoritative source for zero-select counts.
 
 **Fix** — When the counter is non-zero, the *next* question is always "why was each candidate
 deferred" — and that is exactly what the `ADMIT` lines answer, one per candidate (entry 5). Run
