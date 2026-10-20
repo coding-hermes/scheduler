@@ -980,7 +980,7 @@ inside ~35 minutes, every one of them on failures that were 91–99% gateway tex
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | {armed: length, names: [.[].key]}'
+curl -sf --max-time 60 http://127.0.0.1:9090/api/v1/status | jq -e -c '.projects_failure_rates | to_entries | map(select(.value.auto_disable_armed==true)) | {armed: length, names: [.[].key]}'
 sqlite3 -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT COUNT(*) AS armed_lanes_that_are_actually_enabled FROM projects WHERE enabled=1 AND name IN ('sim-beta','sim-delta');"
 ```
@@ -1068,7 +1068,7 @@ healthy projects were parked for a gateway outage. The classifier is what preven
 from being reached again, and the same lanes read clean once it was deployed:
 
 ```sh
-curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '.projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
+curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e -c '.projects_failure_rates | to_entries | map(select(.key|IN("crier","bunker","chimera-v2","heading","hermes-canopy","hermes-dagger"))) | .[]'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -1085,7 +1085,7 @@ EXPECTED OUTPUT *(real, 2026-09-20)*
 Zero to 11% failure rates, none armed. The live policy, for completeness:
 
 ```sh
-curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -c '{failure_window, auto_disable}'
+curl -sf --max-time 90 http://127.0.0.1:9090/api/v1/status | jq -e -c '{failure_window, auto_disable}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
