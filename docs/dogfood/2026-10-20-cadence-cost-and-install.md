@@ -5,8 +5,8 @@
 608 projects / 411 enabled, host load ~23 (16 cores).
 **Lane contract:** read-only — no source, scheduler state, fleet config or repo visibility was modified.
 Every write in this tick is this report, the run-history entry in `.coding-hermes/dogfood-log.md`,
-and four board rows.
-**Rows filed:** `PERF-002-R2`, `SCHED-GAP-1745`, `SCHED-GAP-1746`, `DOGFOOD-030`.
+and five board rows.
+**Rows filed:** `PERF-002-R2`, `PERF-001-R2`, `SCHED-GAP-1745`, `SCHED-GAP-1746`, `DOGFOOD-030`.
 
 ## 1. The promise being tested
 
@@ -150,6 +150,29 @@ line 542 quadratic scan: rows=610 x ids=656 = 400160 MatchString calls in 5.1304
 one full read of *one* 656-row board ≈ **5 s CPU**, matching the 4.60 s in the profile. `PERF-002`
 (closed, 332 lanes) found this function family with **git subprocesses** as the hot path; that half is
 now ~11%, and the class has recurred with this new dominant mechanism → filed as `PERF-002-R2`.
+
+### 3.4b A second closed criterion is breached: `/api/v1/status`
+
+Re-checking my own perf notes turned up a breach I had not gone looking for — the other perf row this
+project closed:
+
+| | PERF-001 closure bar | measured 2026-10-20 (n=10, warm) |
+|---|---|---|
+| `/api/v1/status` | "p99 < 100 ms at production row count (57k+)" | min 317 / **p50 326** / p90 339 / max 350 ms |
+| scale | 57k+ ticks, 44 projects | 89,933 ticks, 608 projects |
+| payload | 5.2 KB | 59,975 B |
+
+Profile of the handler while driving 30 sequential requests
+(`go tool pprof -top cpu_status.pb.gz`): `(*Server).status` 1420 ms of the window's 1520 ms CPU,
+`computeProjectFailureRates` **880 ms (57.9%)** — the very function PERF-001 named, still the top CPU
+component — `spendByCostSource` 380 ms, sqlite `_sqlite3VdbeExec` 1120 ms cum (73.7%, so the handler is
+DB-bound). But **47 ms of CPU per 326 ms of wall time**: the request spends ~86% of its life *not*
+computing, so a query rewrite alone cannot close the gap. The two surfaces that would name the wait are
+dark — `/debug/pprof/block` and `/debug/pprof/mutex` both return 0 samples (neither
+`SetBlockProfileRate` nor `SetMutexProfileFraction` is set) — so the row asks for the eval-lock A/B
+first (PERF-002 recorded the evaluate pass holding `l.mu` across the whole pass, which the freshness
+scan in §3.4 makes expensive) plus enabling those profiles. Filed as `PERF-001-R2`, scoped to the
+measurement and the attribution gap, not to a guessed fix.
 
 ### 3.5 Install leg
 

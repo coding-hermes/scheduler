@@ -303,3 +303,14 @@ xcheck2.py, gaps.py, repro/main.go, cpu60.pb.gz, cold_probe.sh, drive.sh, instal
 openapi.json, mcp_tools.txt) with kept copies under ~/.hermes/stand-in/dogfood/coding-hermes-scheduler/scratch/.
 Read-only lane: no source, no scheduler state, no fleet config and no repo visibility was touched; the scratch daemon
 was killed and its port (19091) verified free.
+
+### 2026-10-20 (08:0xZ) | coding-hermes-scheduler | addendum to the run above (same tick, second angle)
+While re-checking the perf numbers I had already recorded I re-measured the OTHER closed perf criterion on the same
+daemon and found it breached again: /api/v1/status p50 326ms / p99 ~350ms (n=10, warm, 59,975 B) against the PASS bar
+PERF-001 recorded at closure (p99 < 100ms at 57k+ ticks), now at 89,933 ticks / 608 projects — filed as PERF-001-R2.
+Profile of the handler under a 30-request driver: (*Server).status 1420ms of the window's 1520ms CPU,
+computeProjectFailureRates 880ms (the function PERF-001 named; still the top CPU component), spendByCostSource 380ms,
+sqlite 1120ms cum — but 47ms of CPU per 326ms of wall means the request mostly WAITS, and the daemon's block and
+mutex profiles are both dark (0 samples), so the wait cannot be attributed from the process; the row asks for the
+eval-lock A/B first (PERF-002 recorded the evaluate pass holding l.mu). Same discipline as the freshness scan:
+criterion + command + numbers + line, no code touched.
