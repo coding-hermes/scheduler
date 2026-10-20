@@ -5267,3 +5267,50 @@ tasks:
     until configured'
   status: in_progress
   created_at: '2026-10-17T09:12:19.166046+00:00'
+- id: SCHED-GAP-128
+  title: 'Fleet-wide infra alert spam: bunker port-pool / dropped-config / stale-binary
+    findings flood event log'
+  criteria:
+  - 'Fix: deduplicate/rate-limit infra alert events per finding-class per project
+    so the same finding does not re-emit every tick. PASS: consecutive identical infra
+    alerts for the same project/finding-class are spaced >= 1h apart in /api/v1/events.'
+  status: complete
+  created_at: '2026-10-19T07:55:54.907660+00:00'
+  completed_at: '2026-10-19T08:23:51.720288+00:00'
+- id: DOC-14
+  title: README [federation] recipe documents a TOML shape the daemon does not implement
+  criteria:
+  - README.md [federation] block matches config.example.toml per-caller table and
+    names the caller identities (operator:token, bus:transport, mcp:auth-token); a
+    reader following it produces a grant a live caller can match (boot line 'read
+    policy armed (N caller grant(s))' N>=1 plus one answered op).
+  status: complete
+  created_at: '2026-10-20T02:31:00.245004+00:00'
+  completed_at: '2026-10-20T02:42:01.769664+00:00'
+- id: DOC-17
+  title: Document SCHEDULER_IDLE_INTERVENTION (read by daemon, named in no doc)
+  criteria:
+  - grep -c SCHEDULER_IDLE_INTERVENTION docs/reference/env-vars.md >= 1 with its truthy
+    vocabulary (1/true/yes/on), default false, and lane>namespace>global precedence
+    stated; no code change.
+  status: complete
+  created_at: '2026-10-20T02:31:00.863917+00:00'
+  completed_at: '2026-10-20T02:46:29.920637+00:00'
+- id: DOC-19
+  title: Document GET /api/v1/cadence (SOL-CADENCE) in docs/api.md
+  criteria:
+  - docs/api.md documents GET /api/v1/cadence with response fields and target_source
+    vocabulary (explicit override | durable cooldown pin | disabled | none); grep
+    -c 'api/v1/cadence' docs/api.md >= 2 (index row + section).
+  status: complete
+  created_at: '2026-10-20T02:31:01.452185+00:00'
+  completed_at: '2026-10-20T02:46:56.458114+00:00'
+- id: DOC-20
+  title: 'docs/api.md route index rot: omits served routes while claiming completeness'
+  criteria:
+  - Every served /api/v1/* path has an index row pointing at its section (or the completeness
+    sentence is removed); the index row set reproduces 'comm -23 <served-openapi-paths>
+    <doc-index-paths>' with an empty output for paths that have a section.
+  status: complete
+  created_at: '2026-10-20T02:37:53.155038+00:00'
+  completed_at: '2026-10-20T02:48:32.224621+00:00'
