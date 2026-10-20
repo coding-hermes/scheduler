@@ -84,14 +84,16 @@ Three facts about the surfaces that cost time if you learn them the hard way:
 Boot-time sanity, useful before any of the entries below:
 
 ```sh
-curl -sf --max-time 20 http://127.0.0.1:9090/api/v1/health
+curl -sf --max-time 20 http://127.0.0.1:9090/api/v1/health | jq -e -c '{active_ticks, build_sha, status}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
 
 ```json
-{"active_ticks":9,"build_sha":"1f8e95e","build_time":"2026-09-19T15:46:11Z","db":"connected","evaluation_age_seconds":53.493707954,"gateway_errors":25,"last_evaluation":"2026-09-20T13:28:14Z","spawns_exec":0,"spawns_http":295,"status":"ok","uptime":"21h42m54.182324747s","version":"v1.3.0-161-g1f8e95e-dirty"}
+{"active_ticks":9,"build_sha":"1f8e95e","status":"ok"}
 ```
+
+> **Note:** this page's original health confirm printed the full health body. The simplified shape `{active_ticks, build_sha, status}` is what matters for boot-time sanity — if any key is missing or the API returns 504, `jq -e` exits 1 so the command fails LOUDLY (non-zero exit) rather than silently printing `{null,null,null}`.
 
 `build_sha` is the field that matters (entry 8). If `curl` hangs rather than failing, raise
 `--max-time`: a heavily loaded daemon was observed taking 8.3 s on the first `/api/v1/status`
@@ -498,7 +500,7 @@ ADMIT pass_id=2089 eligible=146 admitted=0 deferred=146 ns=duckbrain-sync cap=1 
 The gate's own threshold, live, and the per-gate counters:
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -c '{load_gate_threshold, max_concurrent}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/config | jq -e -c '{load_gate_threshold, max_concurrent}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -525,7 +527,7 @@ That event is self-explaining: which project, which namespace, the measured load
 threshold it crossed. The same deferral is visible on the read API:
 
 ```sh
-curl -sf --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -c '.events[0].message'
+curl -sf --max-time 25 "http://127.0.0.1:9090/api/v1/events?component=load_gate&limit=1" | jq -e -c '.events[0].message'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -730,7 +732,7 @@ from at all. `--against <rev>` measures against a specific commit (default `HEAD
 The same verdict from the API, without the repo:
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -c '{build_sha, build_time}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/health | jq -e -c '{build_sha, build_time}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20)*
@@ -787,7 +789,7 @@ non-recovery stay `HIGH`. Both severities share a 30-minute re-emit throttle.
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 ```
 
 EXPECTED OUTPUT *(real, 2026-09-20, healthy)*
@@ -854,7 +856,7 @@ expected saturation and also resets it.
 **Confirm** *(read-only)*
 
 ```sh
-curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
+curl -sf --max-time 25 http://127.0.0.1:9090/api/v1/status | jq -e -c '{zero_select_consecutive, zero_select_eligible, zero_select_last_at}'
 sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" \
 "SELECT severity, COUNT(*) AS n, MIN(SUBSTR(created_at,1,16)) AS first_seen
  FROM events WHERE message LIKE '%selected 0 projects%' GROUP BY 1;"
