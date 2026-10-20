@@ -266,6 +266,25 @@ type Loop struct {
 	// the current running-tick candidate set, so entries for finished ticks
 	// never leak. Touched only from the reaper goroutine — no lock.
 	pollLoopHist pollLoopTracker
+
+	// PERF-001-R2 lock-contention attribution (see lockwait.go). All four
+	// fields are lock-free atomics read by /api/v1/status while evaluate()
+	// holds l.mu — an observer that takes a lock to measure a lock would
+	// measure itself.
+	//
+	// statusReadLock records how long the status read path's RLock had to
+	// wait (ZeroSelectStats is the only Loop.mu site on that handler);
+	// evalHold records how long each evaluate() pass held the write lock;
+	// evalInFlight is true for exactly the window between evaluate()'s
+	// Lock() and its matching unlock.
+	statusReadLock durationObs
+	evalHold       durationObs
+	evalInFlight   atomic.Bool
+	// evalStages decomposes the hold above into evaluate()'s Phase-1 stages
+	// (PERF-001-R2 step 3: WHICH sub-call holds the lock longest). Built once
+	// in NewLoop; the map is never mutated afterwards, so a reader needs no
+	// lock.
+	evalStages *evalStageObs
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -378,6 +397,11 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	// /api/v1/status reports the armed count before the daemon applies the
 	// flag (the spawner resolved env/default at construction).
 	l.gatewayTransientRetries.Store(int64(l.spawner.GatewayTransientRetries()))
+
+	// PERF-001-R2: initialize the lock-contention attribution subsystem.
+	// evalStages is built once; lock-free reads for the status handler.
+	l.evalStages = newEvalStageObs()
+
 	// ADV-R08/G3: slot-wait drops in SlotPool.spawn emit MEDIUM events
 	// through the same logger.
 	l.slotPool.SetEventLogger(l.events)

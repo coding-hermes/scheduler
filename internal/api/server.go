@@ -686,6 +686,19 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		// (SCHED-GAP-1694, default); true = web-primary updates, the
 		// fleet-strand-push cron is the only remaining pusher.
 		status["tick_push_disabled"] = s.loop.TickPushDisabled()
+		// PERF-001-R2: the lock-contention attribution behind this
+		// endpoint's own p50/p99. status_read_lock is the measured wait the
+		// READ path paid for Loop.mu (the ZeroSelectStats RLock — the only
+		// Loop.mu site on this handler), eval_hold is how long each
+		// evaluate() pass held the write lock, and eval_in_flight is true
+		// only while a pass holds it — the state a sampler tests to split
+		// its idle arm from its contended arm. Zero samples = "never
+		// observed", never a derived zero.
+		status["lock_attribution"] = s.loop.LockAttribution()
+		// PERF-001-R2: the armed block profile, so an operator can tell
+		// "the profile is off" from "the profile is armed and found
+		// nothing" before trusting GET /debug/pprof/block.
+		status["block_profile"] = s.loop.BlockProfileState()
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
