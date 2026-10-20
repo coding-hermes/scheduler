@@ -186,6 +186,63 @@ range cited under its heading. The rollover itself is done by
 
 - Tick dispatch accountability (SCHED-GAP-1653) — `b764c5dd`.
 
+## [1.7.1] — 2026-09-28
+
+> Tag `v1.7.1` → commit `c27afe8a86ee6fac39362efb18e8a2d1e50114e5` (annotated).
+> Range `v1.7.0..v1.7.1` — **24 commits**: 15 board rows, 5 fix, 2 merge,
+> 1 test, 1 qa.
+> **Note:** hand-cut without `make release-prep` and superseded by v1.8.0 about
+> 35 minutes later, so it never had binaries; a retro release object with zero
+> assets was published 2026-10-20 (RELEASE-032).
+
+### Fixed
+
+- outcome: derive the tick outcome from observed artifacts, not from status — a failed git-delta measurement is not a measured zero, the `-1` sentinel replaces the stub, `ExportSession` removed (SCHED-GAP-1652, parts 1+2) — `4beeb7b5`, `2f928912`, merged via `675c9be6`.
+- schedulerd: emit the instance-identity line into the log file (rework; SCHED-GAP-1647) — `51ab6155`, merged via `27ecda59`, with the subprocess test made deterministic (`6c8f5c0e`).
+- schedulerd: tolerance window for the first-cycle check (INT-CI-167 CI flake) — `98162732`.
+- tests: drop the hardcoded `latestMigration=47` pin in the SCHED-GAP-177 fixture vs ladder 48 (QA-CHS-177B) — `ee84631c`.
+
+## [1.7.0] — 2026-09-27
+
+> Tag `v1.7.0` → commit `9b494e03a69fbc63463e3adb6fcf766f47e11980` (annotated).
+> Range `v1.6.2..v1.7.0` — **36 commits**: 10 board rows, 8 chore, 6 fix,
+> 5 docs, 4 merge, 1 feat.
+> **Note:** hand-cut without `make release-prep`; its Release workflow run
+> failed version authority with `REASON=CHANGELOG_DOES_NOT_NAME_VERSION`
+> (RELEASE-019), but a release object with 9 binary assets was published
+> 2026-09-27.
+
+### New Features
+
+- ops: lane-instructions invariant check — no enabled lane may lack instructions (SCHED-GAP-1650) — `0a254435`, merged via `20d41b85`.
+
+### Fixed
+
+- scheduler: fairness rotation, hold-event dedupe, budget-hold escalation (SCHED-GAP-1614) — `fbee0678`.
+- schedulerd: instance identity stamp + log path derived from `--db` — scratch instances were writing the production log path, so 9 shutdown lines looked like 9 restarts when only 2 were real (SCHED-GAP-1647) — `d4fd81cd`, merged via `f1b92f45`.
+- board: real-newline atomic ledger write + glued-tail validator detector (SCHED-GAP-1645) — `395f14e5`.
+- database: deterministic namespace tick ordering (INT-CI-165 CI flake) — `83629b9c`.
+- config: tune the auto-disable tripwire — window 100→30, min_ticks 50→20, failure_window 100→30 (SCHED-GAP-130) — `975e8099`.
+
+### Documentation
+
+- reference: env-var layer reference, linked from the README run section (DOC-5) — `fe78d1de`, `5fa519f1`.
+- readme: document the operator credential for mutating API examples (README-3) — `608525b6`.
+- ci: second workflow badge + the canonical CI workflow split named (README-4) — `4a49c167`, `25907c44`.
+- flags: pin the flag reference to `main.go`, add 10 missing rows (DOC-4) — `02f04a0b`, merged via `5e049bf6`.
+
+## [1.6.1] — 2026-09-27
+
+> Tag `v1.6.1` → commit `0edb3c8360018f1732af24f9344a10f0aaff44de` (annotated).
+> Range `v1.6.0..v1.6.1` — **3 commits**, bookkeeping-only.
+> **Note:** hand-cut without `make release-prep` and superseded by v1.6.2 about
+> 13 minutes later, so it never had binaries; a retro release object with zero
+> assets was published 2026-10-20 (RELEASE-016).
+
+### Other Changes
+
+- Recorded the completed SCHED-GAP-1623 gitreins judge lifecycle (PASS verdict `87afa742`) and closed the row after live dashboard re-verification — `/dashboard/partial` measured 1.21–1.42s against the <3s criterion (`3e0cb4f7`, `3773b16c`); the release commit itself is `0edb3c83`.
+
 ## [1.6.2] — 2026-09-27
 
 ### Other Changes
