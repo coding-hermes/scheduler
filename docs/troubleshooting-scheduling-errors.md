@@ -19,6 +19,12 @@ is a real anchor in that file.
 
 ## 0. How to read this page
 
+> **Shell safety: run all confirms under `set -o pipefail`.** Every confirm on this page pipes `curl` into `jq`. Without `pipefail`, the pipeline's exit code is jq's (always 0), so a failed curl (non-200, curl -f suppressed the body) is masked. With `set -o pipefail`, the pipeline returns curl's non-zero exit, making a 504 fail loudly (exit 22 or 28). Add this as the first line of any shell session that runs confirms:
+>
+> ```sh
+> set -o pipefail
+> ```
+
 Every command is tagged:
 
 | Tag | Meaning |
@@ -30,11 +36,13 @@ The commands are of three kinds and nothing else: `curl` against the loopback AP
 read-only SQL, and `grep` over the daemon log or a board file. If you can run `curl`, `sqlite3`
 and `grep`, you can diagnose every entry below.
 
-> **Important: every `curl` on this page must use `-f` (fail) or capture the HTTP code.**
+> **Important: every `curl` on this page must use `-f` (fail) and run under `pipefail`.**
 > Without `-f`, `curl` exits 0 even on 4xx/5xx responses, and `jq` renders missing keys as
-> `{null}`, so a failed read is indistinguishable from a healthy zero-count. Use `curl -sf`
-> (or `curl -w '%{http_code}'`) so the command fails loudly when the API does not answer with
-> a status document.
+> `{null}`, so a failed read is indistinguishable from a healthy zero-count. The page's
+> commands use `curl -sf` (which makes curl exit non-zero on failure) and `set -o pipefail`
+> (which makes the pipeline return curl's exit code, not jq's) — this combination guarantees
+> a non-zero exit when the API does not return 200. Without pipefail, `jq` wins the pipeline
+> and its exit 0 masks curl's failure.
 
 > **Important: the daemon log rotates.** See the log-rotation notes below. Any `grep` over
 > `scheduler.log` only sees the current 50 MB slice; older events live in `scheduler.log.1`
