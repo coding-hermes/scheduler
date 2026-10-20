@@ -5314,3 +5314,20 @@ tasks:
   status: complete
   created_at: '2026-10-20T02:37:53.155038+00:00'
   completed_at: '2026-10-20T02:48:32.224621+00:00'
+- id: QA-CHS-183
+  title: Board-stasis fingerprint must be content-bearing (same-size board change
+    detected)
+  criteria:
+  - 'internal/scheduler/board_stasis.go boardFingerprint detects a SAME-BYTE-SIZE
+    board content change without relying on mtime movement: test TestBoardStasisGate_Primitives
+    in internal/scheduler/schedgap1678_stasis_test.go pins the board mtime back with
+    os.Chtimes after writing a differently-valued same-length line and asserts the
+    gate does NOT block (it currently DOES block, the false-stasis defect). No subprocess
+    and no git call are added to the gate path (one stat plus one sequential read
+    at most), the fail-open contract is unchanged (no board file -> not blocked),
+    the BOARD-UNCHANGED skip log and RecordSpawn/AdmissionBlocked/ClearBaseline semantics
+    are unchanged, and boardFingerprintOrEmpty users (internal/scheduler/noop_guard.go)
+    keep passing.'
+  status: complete
+  created_at: '2026-10-20T16:02:13.516786+00:00'
+  completed_at: '2026-10-20T16:43:47.713342+00:00'
