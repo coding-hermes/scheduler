@@ -1264,3 +1264,6 @@
 {"id":1792220000000000150,"timestamp":"2026-10-20T07:24:01Z","event_type":"task_created","task_id":"SCHED-GAP-1747","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1747\",\"status\":\"pending\"}","tick_number":null}
 {"id":1792220000000000151,"timestamp":"2026-10-20T07:24:01Z","event_type":"task_created","task_id":"SCHED-GAP-1748","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1748\",\"status\":\"pending\"}","tick_number":null}
 {"id":1792220000000000152,"timestamp":"2026-10-20T07:24:01Z","event_type":"task_created","task_id":"DOC-22","actor":"foreman","detail":"{\"id\":\"DOC-22\",\"status\":\"pending\"}","tick_number":null}
+{"id":1792220000000000153,"timestamp":"2026-10-20T07:42:55Z","event_type":"task_created","task_id":"SCHED-GAP-1749","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1749\",\"status\":\"pending\"}","tick_number":null}
+{"id":1792220000000000154,"timestamp":"2026-10-20T07:42:55Z","event_type":"task_created","task_id":"SCHED-GAP-1750","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1750\",\"status\":\"pending\"}","tick_number":null}
+{"id":1792220000000000155,"timestamp":"2026-10-20T07:42:55Z","event_type":"task_created","task_id":"SCHED-GAP-1751","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-1751\",\"status\":\"pending\"}","tick_number":null}
