@@ -316,6 +316,190 @@ type freshnessEntry struct {
 	fixture bool
 }
 
+// newIDMatcher returns the read's shared id matcher: one word-bounded exact
+// id regex per distinct id, compiled lazily and cached for the life of the
+// read. Word-bounded exact id: ADV-R061 and ADV-R06X never match, while
+// dash/hash-suffixed aliases (ADV-R06-OLD, ADV-R06#3) and trailing
+// punctuation ("Addresses ADV-R06.") do — the suffix sits behind a word
+// boundary, so the base id is still named. Case-sensitive: ids are
+// identifiers. matcher("") is nil: an anonymous row names nothing.
+//
+// PERF-002 already amortized the COMPILATION here; PERF-002-R2 removed the
+// per-row CALL PRODUCT (see rowIDIndex).
+func newIDMatcher() func(string) *regexp.Regexp {
+	matchers := make(map[string]*regexp.Regexp)
+	return func(id string) *regexp.Regexp {
+		if id == "" {
+			return nil
+		}
+		re, ok := matchers[id]
+		if !ok {
+			re = regexp.MustCompile(`\b` + regexp.QuoteMeta(id) + `\b`)
+			matchers[id] = re
+		}
+		return re
+	}
+}
+
+// asciiWord reports whether c is an ASCII word character — the exact class
+// Go's regexp \b treats as a word character ([0-9A-Za-z_], ASCII only).
+func asciiWord(c byte) bool {
+	switch {
+	case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
+		return true
+	}
+	return false
+}
+
+// rowIDIndex is the per-read id index behind the mis-attribution scan
+// (PERF-002-R2). The pre-fix scan asked EVERY board id, one compiled
+// `\bid\b` regex at a time, whether it named the commit message:
+//
+//	for _, other := range ids { matcher(other).MatchString(msg) }
+//
+// That is a rows x ids product of regex calls — at fleet size (656 rows x
+// 656 ids = 400k MatchString calls) it burned 4.60s of a 10.97s CPU sample
+// window, 41.9% of all daemon CPU. The pattern COMPILATION was already
+// amortized; the cost was purely the CALL COUNT.
+//
+// The index asks the same question with the same answer, but only probes
+// ids that can actually occur in the message:
+//
+//   - set holds every id whose first and last characters are word chars
+//     (the fleet's shape: "PERF-002-R2", "ADV-R06"). For those, a `\bid\b`
+//     match must begin at a word-run start and end where a word char meets
+//     a non-word char, so the candidate substrings of a message are
+//     enumerable in ONE walk and each is an O(1) map probe instead of a
+//     regex over the whole id list. Every candidate is then confirmed with
+//     the real `\bid\b` matcher, so the answer stays the regex's — the
+//     index only narrows the search, it never decides attribution.
+//   - edge holds the ids a walk cannot locate that way (an id with a
+//     non-word first or last character, e.g. "-x" or "DOC-"); they keep
+//     the exhaustive loop. That loop is over this (normally empty) list,
+//     never over the whole board.
+type rowIDIndex struct {
+	// set is the membership index for word-edged ids.
+	set map[string]struct{}
+	// edge holds non-word-edged ids, probed exhaustively (rare).
+	edge []string
+	// maxLen is the longest word-edged id: the candidate walk's bound.
+	maxLen int
+	// matcher is the shared `\bid\b` matcher (lazily compiled, cached)
+	// every candidate must be confirmed with.
+	matcher func(string) *regexp.Regexp
+	// prefix2 marks the two-byte prefixes of the word-edged ids: the
+	// filter that rejects a word-run start (1<<16 table, ~2ns) before any
+	// candidate probe. Real commit bodies are ~6KB of prose; without it
+	// every word-run start would walk its ~27-byte end window. Keyed
+	// by int(msg[s])<<8 | int(msg[s+1]) over a 1<<16 bitmap.
+	prefix2 []bool
+}
+
+// newRowIDIndex indexes ids once per board read. matcher is the read's
+// shared id matcher — the same one the pre-fix loop used, so a candidate
+// confirmation is byte-identical to the request the loop would have made.
+func newRowIDIndex(ids []string, matcher func(string) *regexp.Regexp) *rowIDIndex {
+	ix := &rowIDIndex{
+		set:     make(map[string]struct{}, len(ids)),
+		prefix2: make([]bool, 1<<16),
+		matcher: matcher,
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue // anonymous rows: matcher("") is nil, nothing to probe
+		}
+		// Two classes cannot be located by a word-boundary walk and are
+		// probed exhaustively instead — rare, non-fleet shapes: an id
+		// with a non-word first or last character ("-x", "DOC-"), and an
+		// id too short for the two-byte prefix filter ("Q").
+		if !asciiWord(id[0]) || !asciiWord(id[len(id)-1]) || len(id) < 2 {
+			ix.edge = append(ix.edge, id)
+			continue
+		}
+		ix.set[id] = struct{}{}
+		if len(id) > ix.maxLen {
+			ix.maxLen = len(id)
+		}
+		ix.prefix2[int(id[0])<<8|int(id[1])] = true
+	}
+	return ix
+}
+
+// candidates returns the word-edged ids of the index that msg names under
+// the `\b<id>\b` semantics — the exact set the pre-fix loop would have
+// found for those ids, derived without running a single id regex.
+//
+// The walk is over word boundaries only: a `\b<id>\b` match for a
+// word-edged id must START at a word-run start (its first character is a
+// word char preceded by a non-word char or the message start) and END where
+// a word char meets a non-word char (or the message end). Those two
+// conditions plus the two-byte id-prefix filter reduce the scan to one
+// linear pass: ordinary prose bytes are classified once and rejected, and
+// only a word-run start that actually begins like some id gets its ≤maxLen
+// end window walked. Board size never enters the cost.
+func (ix *rowIDIndex) candidates(msg string) []string {
+	n := len(msg)
+	var out []string
+	for s := 0; s < n; s++ {
+		if !asciiWord(msg[s]) || (s > 0 && asciiWord(msg[s-1])) {
+			continue // not a word-run start
+		}
+		if s+1 >= n || !ix.prefix2[int(msg[s])<<8|int(msg[s+1])] {
+			continue // no id starts with these two bytes
+		}
+		limit := s + ix.maxLen
+		if limit > n {
+			limit = n
+		}
+		for e := s + 1; e <= limit; e++ {
+			if !asciiWord(msg[e-1]) || (e < n && asciiWord(msg[e])) {
+				continue // a word-edged id ends on a word char, then \b
+			}
+			if _, ok := ix.set[msg[s:e]]; ok {
+				out = append(out, msg[s:e])
+			}
+		}
+	}
+	return out
+}
+
+// namesOtherID reports whether msg names a board row id OTHER than self —
+// the mis-attribution question: a commit that resolves in reachable history
+// but names a different row is the off-by-one pointer class.
+//
+// It answers exactly what the pre-fix loop answered
+//
+//	for _, other := range ids {
+//		if other == self { continue }
+//		if matcher(other).MatchString(msg) { return true }
+//	}
+//
+// but the whole id list is replaced by the candidate walk: each word-edged
+// candidate is one O(1) set hit, sparsely enumerated from the message, and
+// then confirmed with the same `\bid\b` matcher the loop used — the regex
+// stays the authority on attribution; the index only narrows the search.
+// Non-word-edged ids take the exhaustive loop. Board size no longer
+// multiplies the work: the cost is the message, not the board.
+func (ix *rowIDIndex) namesOtherID(msg, self string) bool {
+	for _, tok := range ix.candidates(msg) {
+		if tok == self {
+			continue
+		}
+		if m := ix.matcher(tok); m != nil && m.MatchString(msg) {
+			return true
+		}
+	}
+	for _, other := range ix.edge {
+		if other == self {
+			continue
+		}
+		if m := ix.matcher(other); m != nil && m.MatchString(msg) {
+			return true
+		}
+	}
+	return false
+}
+
 // ReadBoardFreshness reads the board at boardPath and verifies every row's
 // claimed work against the commit graph of the git repo at repoDir.
 //
@@ -400,23 +584,14 @@ func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) Freshn
 		recent = gitRecentCommits(repoDir, now.Add(-window), 200)
 	}
 
-	matchers := make(map[string]*regexp.Regexp)
-	matcher := func(id string) *regexp.Regexp {
-		if id == "" {
-			return nil
-		}
-		re, ok := matchers[id]
-		if !ok {
-			// Word-bounded exact id: ADV-R061 and ADV-R06X never match,
-			// while dash/hash-suffixed aliases (ADV-R06-OLD, ADV-R06#3)
-			// and trailing punctuation ("Addresses ADV-R06.") do — the
-			// suffix sits behind a word boundary, so the base id is
-			// still named. Case-sensitive: ids are identifiers.
-			re = regexp.MustCompile(`\b` + regexp.QuoteMeta(id) + `\b`)
-			matchers[id] = re
-		}
-		return re
-	}
+	matcher := newIDMatcher()
+
+	// PERF-002-R2: index the ids ONCE per read. The mis-attribution scan
+	// (classifyCompleteRow) used to run every id's regex over every
+	// message — a rows x ids product (656 x 656 at fleet size). The index
+	// lets it probe only the ids a message could actually name; the
+	// matcher above stays the authority on attribution.
+	idIndex := newRowIDIndex(ids, matcher)
 
 	for _, e := range entries {
 		var v RowVerdict
@@ -435,7 +610,7 @@ func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) Freshn
 			v.RawStatus = status
 			switch {
 			case completeStatuses[status]:
-				v = classifyCompleteRow(e, repoDir, repoOK, now, ids, matcher, v)
+				v = classifyCompleteRow(e, repoDir, repoOK, now, idIndex, v)
 			case status == blockedStatusLiteral:
 				v.Status = RowBlocked
 			case openStatuses[status]:
@@ -481,7 +656,7 @@ func ReadBoardFreshness(repoDir, boardPath string, opts FreshnessOptions) Freshn
 // git-first — a row whose worker_status lags but whose commit verifiably
 // landed and is attributed is CLOSED here, because the work demonstrably
 // exists. The two definitions answer different questions.
-func classifyCompleteRow(e freshnessEntry, repoDir string, repoOK bool, now time.Time, ids []string, matcher func(string) *regexp.Regexp, v RowVerdict) RowVerdict {
+func classifyCompleteRow(e freshnessEntry, repoDir string, repoOK bool, now time.Time, idIndex *rowIDIndex, v RowVerdict) RowVerdict {
 	v.Status = RowUnverified
 	if !repoOK {
 		v.Reason = ReasonRepoUnreadable
@@ -527,7 +702,7 @@ func classifyCompleteRow(e freshnessEntry, repoDir string, repoOK bool, now time
 		return v
 	}
 	v.Freshness = when
-	if m := matcher(e.id); m != nil && m.MatchString(msg) {
+	if m := idIndex.matcher(e.id); m != nil && m.MatchString(msg) {
 		v.Status = RowClosed
 		v.Reason = ""
 		return v
@@ -535,14 +710,14 @@ func classifyCompleteRow(e freshnessEntry, repoDir string, repoOK bool, now time
 	// The commit does not name this row. If it names a different board
 	// row, that is the off-by-one pointer class; naming no row at all is
 	// unattributed. Both park as unverified — never work-to-spawn.
-	for _, other := range ids {
-		if other == e.id {
-			continue
-		}
-		if m := matcher(other); m != nil && m.MatchString(msg) {
-			v.Reason = ReasonMisAttributed
-			return v
-		}
+	//
+	// PERF-002-R2: the id question is answered against the read's id
+	// index (O(1) probe per candidate id) instead of by running every
+	// board id's regex over the message — same verdict, board-size work
+	// removed from the scan.
+	if idIndex.namesOtherID(msg, e.id) {
+		v.Reason = ReasonMisAttributed
+		return v
 	}
 	v.Reason = ReasonUnattributed
 	return v

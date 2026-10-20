@@ -71,6 +71,22 @@ jobs:
       - name: Test (full)
         run: go test -count=1 ./...
 
+      - name: Freshness scan benchmark (PERF-002-R2)
+        # The budget that FAILS a regression is a test, not a benchmark:
+        # internal/scheduler/board_freshness_bench_test.go's
+        # TestBoardFreshnessMisattributionScanBudget sweeps the repo's own
+        # 600+ row board and fails if the mis-attribution scan exceeds
+        # 100ms (it also pins the operation count, which host load cannot
+        # mask). It runs in the Test steps above.
+        #
+        # This step runs the paired benchmarks so the per-sweep numbers land
+        # in the CI log: ...ScanFleetBoard (the indexed scan) against
+        # ...ScanExhaustiveReference (the pre-fix per-id loop it replaced —
+        # ~5s per fleet sweep). -benchtime=1x keeps every benchmark at a
+        # single iteration: the reference is deliberately quadratic, so
+        # scaling it for a full second would cost minutes.
+        run: go test -run=^$ -bench=. -benchtime=1x ./internal/scheduler/...
+
   multiarch:
     # SCHED-GAP-159: org standard multi-arch build (coding-hermes/.github#1),
     # adopted from the boardctl pilot (boardctl/.github/workflows/multiarch.yml).
