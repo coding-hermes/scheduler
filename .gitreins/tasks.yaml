@@ -5420,3 +5420,23 @@ tasks:
   status: complete
   created_at: '2026-10-20T21:57:59.824073+00:00'
   completed_at: '2026-10-20T21:58:30.402084+00:00'
+- id: SCHED-GAP-1748
+  title: Collapse invariant-checker event-id flood
+  criteria:
+  - 'Acceptance: ops/check-fleet-invariants.py --json reports no more than 20 total
+    violations on the current board, aggregates the off-scale event-id condition as
+    one file-level finding, preserves genuine duplicate findings, and python3 ops/check-fleet-invariants.py
+    --json exits 0 on this repository''s board. Include committed traceability marker
+    for SCHED-GAP-1748.'
+  status: in_progress
+  created_at: '2026-10-21T18:50:23.578312+00:00'
+- id: SCHED-GAP-1752
+  title: Align wave manifest writer and ingest contract
+  criteria:
+  - 'Acceptance: go test ./internal/scheduler -run ''WaveManifest'' -count=1 -v passes
+    with a rows/created_at/closed_at manifest preserving worker attribution, and go
+    test ./internal/scheduler -count=1 passes; the implementation must preserve the
+    recovery trigger for unfinished manifests and include committed traceability marker
+    for SCHED-GAP-1752.'
+  status: in_progress
+  created_at: '2026-10-21T18:50:24.651051+00:00'
