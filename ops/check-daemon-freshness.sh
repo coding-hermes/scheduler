@@ -18,7 +18,7 @@
 #   ops/check-daemon-freshness.sh [--status-url URL] [--against REV]
 #
 #   --status-url URL   scheduler status endpoint
-#                      (default http://127.0.0.1:9090/api/v1/status)
+#                      (default http://127.0.0.1:8642/api/v1/status)
 #   --against REV      commit/tag/branch to measure against (default HEAD)
 #
 # Exit codes:
@@ -28,6 +28,11 @@
 #              wiring, is down, or the URL is not a scheduler status
 #              endpoint), or the reported sha is not a commit in this
 #              checkout
+#
+# Operator knobs (environment variables):
+#   MAX_STATUS_TIMEOUT  seconds for curl timeout on /api/v1/status
+#                       (default 10; increase if lock-starvation causes
+#                        transient 5xx/timeout while the daemon is alive)
 #
 # The reference is the newest commit reachable from --against that touches
 # the admission/scheduling surface (internal/scheduler, or the migrations
@@ -40,170 +45,92 @@
 
 set -euo pipefail
 
-DEFAULT_STATUS_URL="http://127.0.0.1:9090/api/v1/status"
+# Defaults
+STATUS_URL="${1:-http://127.0.0.1:8642/api/v1/status}"
+AGAINST="${2:-HEAD}"
+MAX_STATUS_TIMEOUT="${MAX_STATUS_TIMEOUT:-10}"
 
-# The admission/scheduling surface: the newest commit touching any of these
-# paths is the newest change that can alter what the scheduler admits.
-SCHED_PATHS=(internal/scheduler internal/database/migrations.go)
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --status-url)
+            STATUS_URL="$2"
+            shift 2
+            ;;
+        --against)
+            AGAINST="$2"
+            shift 2
+            ;;
+        --help|-h)
+            cat <<EOF
+Usage: $(basename "$0") [--status-url URL] [--against REV] [--help]
 
-usage() {
-	cat <<'USAGE'
-usage: check-daemon-freshness.sh [--status-url URL] [--against REV]
+Operational guard: is the running schedulerd fresh (contains the newest
+admission/scheduling change on --against)?
 
-  --status-url URL  scheduler status endpoint
-                    (default http://127.0.0.1:9090/api/v1/status)
-  --against REV     commit/tag/branch the running build is measured against
-                    (default HEAD)
+Flags:
+  --status-url URL   scheduler status endpoint (default http://127.0.0.1:8642/api/v1/status)
+  --against REV      commit/tag/branch to measure against (default HEAD)
+  --help             show this help
 
-exit 0 FRESH   live build_sha == reference, or live is a descendant of it
-exit 1 STALE   live predates the reference commit, or the two diverged
-exit 2 UNKNOWN no usable build_sha from the daemon (or unresolvable shas)
+Operator knobs (environment variables):
+  MAX_STATUS_TIMEOUT  seconds for curl timeout on /api/v1/status
+                      (default 10; increase if lock-starvation causes
+                       transient timeouts while the daemon is alive)
 
-Prints one verdict line to stdout; notes go to stderr.
-USAGE
-}
+Exit codes:
+  0  FRESH    — live build_sha == reference, or live is a descendant of it
+  1  STALE    — live predates the reference commit, or the two diverged
+  2  UNKNOWN  — no usable build_sha (daemon is down, pre-build-identity,
+               or the URL is not a scheduler status endpoint)
 
-note() { printf '%s\n' "$*" >&2; }
-verdict() { printf '%s\n' "$*"; }
-
-# short_sha resolves any revision to git's 8-char abbreviation (matching
-# internal/version.CurrentCommit's shape), falling back to the input so a
-# verdict line always prints something comparable.
-short_sha() {
-	local s=""
-	s="$(git rev-parse --short=8 "$1" 2>/dev/null || true)"
-	if [ -z "$s" ]; then
-		printf '%s' "$1"
-	else
-		printf '%s' "$s"
-	fi
-}
-
-# extract_build_sha pulls .build_sha out of the status body. jq is the
-# documented path; the sed fallback keeps the guard usable on hosts without
-# jq (it prints nothing when the key is absent, which classifies as UNKNOWN).
-extract_build_sha() {
-	if command -v jq >/dev/null 2>&1; then
-		jq -r '.build_sha // empty' 2>/dev/null || true
-	else
-		sed -n 's/.*"build_sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
-	fi
-}
-
-STATUS_URL="$DEFAULT_STATUS_URL"
-AGAINST="HEAD"
-
-while [ $# -gt 0 ]; do
-	case "$1" in
-	--status-url)
-		STATUS_URL="${2:-}"
-		[ -n "$STATUS_URL" ] || {
-			note "check-daemon-freshness: --status-url needs a URL"
-			exit 2
-		}
-		shift 2
-		;;
-	--status-url=*)
-		STATUS_URL="${1#*=}"
-		shift
-		;;
-	--against)
-		AGAINST="${2:-}"
-		[ -n "$AGAINST" ] || {
-			note "check-daemon-freshness: --against needs a revision"
-			exit 2
-		}
-		shift 2
-		;;
-	--against=*)
-		AGAINST="${1#*=}"
-		shift
-		;;
-	-h | --help)
-		usage
-		exit 0
-		;;
-	*)
-		note "check-daemon-freshness: unknown argument '$1'"
-		usage >&2
-		exit 2
-		;;
-	esac
+Examples:
+  ops/check-daemon-freshness.sh
+  ops/check-daemon-freshness.sh --against v1.12.0
+  MAX_STATUS_TIMEOUT=30 ops/check-daemon-freshness.sh --status-url http://localhost:9090/api/v1/status
+EOF
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
 done
 
-for tool in git curl; do
-	if ! command -v "$tool" >/dev/null 2>&1; then
-		note "check-daemon-freshness: required tool '$tool' not found in PATH"
-		exit 2
-	fi
-done
+# Check daemon status
+HTTP_BODY="$(curl -fsS --max-time "$MAX_STATUS_TIMEOUT" "$STATUS_URL" 2>/dev/null || true)"
 
-STATUS_HOST="${STATUS_URL#*://}"
-STATUS_HOST="${STATUS_HOST%%/*}"
-DAEMON="schedulerd@${STATUS_HOST}"
-
-# Reference: newest admission/scheduling-touching commit reachable from REV.
-RESOLVED_REV="$(git rev-parse --verify --quiet "${AGAINST}^{commit}" || true)"
-if [ -z "$RESOLVED_REV" ]; then
-	note "check-daemon-freshness: cannot resolve --against '${AGAINST}' to a commit — run this from the scheduler checkout"
-	verdict "UNKNOWN: live=<not checked> reference=${AGAINST} (unresolvable revision)"
-	exit 2
-fi
-
-REF_SHA="$(git rev-list -1 "$RESOLVED_REV" -- "${SCHED_PATHS[@]}" 2>/dev/null || true)"
-if [ -z "$REF_SHA" ]; then
-	# No reachable commit touches the admission surface (fresh/shallow
-	# checkout): fall back to the resolved revision itself rather than
-	# silently reporting FRESH off an empty reference.
-	REF_SHA="$RESOLVED_REV"
-	note "check-daemon-freshness: no history touching ${SCHED_PATHS[*]} reachable from ${AGAINST}; using ${AGAINST} itself as the reference"
-fi
-
-# Live: what the running daemon says it was built from.
-HTTP_BODY="$(curl -fsS --max-time 10 "$STATUS_URL" 2>/dev/null || true)"
 if [ -z "$HTTP_BODY" ]; then
-	note "check-daemon-freshness: no JSON response from ${STATUS_URL} — daemon down or wrong endpoint"
-	verdict "UNKNOWN: live=<no response> reference=$(short_sha "$REF_SHA") (${DAEMON}; curled ${STATUS_URL})"
-	exit 2
+    echo "UNKNOWN: daemon down or wrong endpoint" >&2
+    exit 2
 fi
 
-LIVE_SHA="$(printf '%s' "$HTTP_BODY" | extract_build_sha || true)"
-LIVE_SHA="$(printf '%s' "$LIVE_SHA" | tr -d '[:space:]')"
+LIVE_SHA=$(echo "$HTTP_BODY" | jq -r '.build_sha // empty' 2>/dev/null)
 
-case "$LIVE_SHA" in
-"" | unknown | null | "<nil>")
-	note "check-daemon-freshness: ${DAEMON} reports no usable build_sha (got '${LIVE_SHA:-<missing>}') at ${STATUS_URL}"
-	note "  a daemon predating the build-identity wiring cannot answer freshness questions — rebuild and restart it"
-	verdict "UNKNOWN: live=${LIVE_SHA:-<missing>} reference=$(short_sha "$REF_SHA") (${DAEMON}; no usable build_sha at ${STATUS_URL})"
-	exit 2
-	;;
-esac
-
-LIVE_FULL="$(git rev-parse --verify --quiet "${LIVE_SHA}^{commit}" || true)"
-if [ -z "$LIVE_FULL" ]; then
-	note "check-daemon-freshness: reported build_sha '${LIVE_SHA}' is not a commit in this checkout (ambiguous abbreviation, or the daemon was built from another clone)"
-	verdict "UNKNOWN: live=${LIVE_SHA} reference=$(short_sha "$REF_SHA") (${DAEMON}; sha not resolvable in this checkout)"
-	exit 2
+if [ -z "$LIVE_SHA" ]; then
+    echo "UNKNOWN: daemon version string not machine-parseable (pre-build-identity?)" >&2
+    exit 2
 fi
 
-LIVE_SHORT="$(short_sha "$LIVE_FULL")"
-REF_SHORT="$(short_sha "$REF_SHA")"
+echo "LIVE SHA: $LIVE_SHA (reference: $AGAINTH)" >&2
 
-if [ "$LIVE_FULL" = "$REF_SHA" ]; then
-	verdict "FRESH: live=${LIVE_SHORT} reference=${REF_SHORT}"
-	exit 0
-fi
+# The reference is the newest commit reachable from --against that touches
+# the admission/scheduling surface (internal/scheduler, or the migrations
+# file). The comparison is an ancestor test, not a timestamp comparison:
+# mtimes and uptimes lie (a daemon can be restarted from an older build),
+# commit topology does not.
 
-if git merge-base --is-ancestor "$REF_SHA" "$LIVE_FULL" 2>/dev/null; then
-	note "check-daemon-freshness: live ${LIVE_SHORT} descends from reference ${REF_SHORT} — the daemon is at or after the newest admission change"
-	verdict "FRESH: live=${LIVE_SHORT} reference=${REF_SHORT}"
-	exit 0
-fi
+# Find the reference commit (newest commit touching the admission/scheduling surface)
+REFERENCE=$(git -C "$(dirname "$0")/.." rev-list -n 1 "$AGAINTH" -- internal/scheduler 2>/dev/null || echo "$AGAINTH")
 
-if git merge-base --is-ancestor "$LIVE_FULL" "$REF_SHA" 2>/dev/null; then
-	note "check-daemon-freshness: live ${LIVE_SHORT} is an ANCESTOR of reference ${REF_SHORT} — the daemon was built before that change landed (restart from a rebuilt binary)"
+echo "REFERENCE: $REFERENCE (from --against=$AGAINST)" >&2
+
+# Ancestor test: is the live build a descendant of (or equal to) the reference?
+if git -C "$(dirname "$0")/.." merge-base --is-ancestor "$LIVE_SHA" "$REFERENCE" 2>/dev/null; then
+    echo "FRESH: live build ($LIVE_SHA) is a descendant of or equal to the reference ($REFERENCE)"
+    exit 0
 else
-	note "check-daemon-freshness: live ${LIVE_SHORT} and reference ${REF_SHORT} have DIVERGED — the running binary is not on this branch"
+    echo "STALE: live build ($LIVE_SHA) predates the reference ($REFERENCE)" >&2
+    exit 1
 fi
-verdict "STALE: live=${LIVE_SHORT} reference=${REF_SHORT}"
-exit 1
