@@ -156,7 +156,7 @@ def test_log_with_no_19_digit_id_is_entirely_off_scale(tmp_path):
     count, not one violation per id (the consensus-board shape produced 643
     violations for a single file-level fact).
 
-    ch:trace row=SCHED-GAP-1748-A spec=docs/troubleshooting-scheduling-errors.md#7 wave=.coding-hermes/waves/coding-hermes-scheduler-foreman-2026-10-21-20-20-55.json#SCHED-GAP-1748-A test=tests/test_check_fleet_invariants_event_ids.py::test_log_with_no_19_digit_id_is_entirely_off_scale doc=none:scope-fenced-by-row prompt=/tmp/SCHED-GAP-1748-A-brief-2026-10-21-20-20-55.txt evidence=none:foreman-mints-after-commit witness=none:worker-local marker verdict=none:foreman-judge commit=none:pending-implementation memory=none:not-written
+    ch:trace row=SCHED-GAP-1748-A spec=docs/troubleshooting-scheduling-errors.md#7 wave=none:serial-worker test=tests/test_check_fleet_invariants_event_ids.py::test_log_with_no_19_digit_id_is_entirely_off_scale doc=none:scope-fenced-by-row prompt=none:foreman-dispatch-brief evidence=commit:38e428e2664f229eeef0564d6d4b8fbf85fd69d3 witness=none:worker-local marker verdict=none:foreman-judge commit=38e428e2664f229eeef0564d6d4b8fbf85fd69d3 memory=none:not-written
     """
     rc, out = _run_gate(tmp_path, _event(
         f'{{"id": {MICRO}}}',
