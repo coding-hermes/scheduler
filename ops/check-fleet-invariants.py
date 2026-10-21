@@ -130,7 +130,8 @@ Checks
                      >= 10^18 id: this board carries 979 of them on lines 1-999)
                      is tolerated because an append-only log cannot be
                      renumbered; a file with NO 19-digit id at all is entirely
-                     off-scale and every int id in it is reported. Rides the
+                     off-scale and reported as ONE file-level violation naming
+                     the int-id count (SCHED-GAP-1748-A). Rides the
                      board pass: SKIPS SILENTLY when the events file is missing
                      (test rigs, a checkout without a board dir), and lines that
                      fail to parse or carry no int id are skipped, exactly as
@@ -663,10 +664,26 @@ def event_id_below_floor_detail(eid: int) -> str:
 def event_id_no_scale_detail(eid: int) -> str:
     """Finding text: an id in a file with NO id at the 19-digit scale at all.
 
-    Shared verbatim with Go's ``eventIDNoScaleDetail``.
+    Shared verbatim with Go's ``eventIDNoScaleDetail``. Kept for the wording
+    contract; the Python checker reports this class as ONE file-level aggregate
+    (``event_id_no_scale_aggregate_detail``, SCHED-GAP-1748-A), not per id.
     """
     return (f"id={eid} is below the 19-digit floor {EVENT_ID_SCALE} and the file "
             f"carries no id at that scale (every int id in it is off-scale)")
+
+
+def event_id_no_scale_aggregate_detail(count: int) -> str:
+    """Finding text for a file with NO id at the 19-digit scale, as ONE
+    file-level violation (SCHED-GAP-1748-A).
+
+    The per-id shape (``event_id_no_scale_detail`` once per integer id) turned
+    a single file-level fact into hundreds of violations — the consensus-board
+    file produced 643. The aggregate names the count of off-scale int ids and
+    rides on the events-file path as its subject, so the finding is one line.
+    """
+    return (f"{count} int id(s) below the 19-digit floor {EVENT_ID_SCALE} and "
+            f"the file carries no id at that scale (every int id in it is "
+            f"off-scale)")
 
 
 def event_id_descent_detail(eid: int, previous: int) -> str:
@@ -692,8 +709,9 @@ def scan_event_ids(events: str) -> tuple[list[tuple[int, str]], dict]:
       * a line that fails to parse as JSON, or whose ``id`` is not an int, is
         SKIPPED (legacy shapes are tolerated, exactly as checks 8/9 tolerate
         them);
-      * a file with NO id >= 10^18 establishes no scale at all: every int id in
-        it is reported as off-scale (the shape a wrong-basis writer produces);
+      * a file with NO id >= 10^18 establishes no scale at all: it is reported
+        as ONE file-level aggregate violation naming the int-id count
+        (SCHED-GAP-1748-A; the shape a wrong-basis writer produces);
       * the PRE-SCALE PREFIX — int ids before the file's first >= 10^18 id — is
         tolerated: the log is append-only and 979 such lines exist on this
         board's own log (1,2,3…, then an epoch-seconds and an epoch-millis era);
@@ -725,14 +743,17 @@ def scan_event_ids(events: str) -> tuple[list[tuple[int, str]], dict]:
             ids.append((lineno, eid))
     stats["int_ids"] = len(ids)
     has_scale = any(eid >= EVENT_ID_SCALE for _, eid in ids)
+    if ids and not has_scale:
+        # SCHED-GAP-1748-A: one file-level aggregate, not one violation per id.
+        # lineno sentinel -1 tells the caller to ride the finding on the events
+        # file path as its subject.
+        violations.append((-1, event_id_no_scale_aggregate_detail(len(ids))))
+        return violations, stats
 
     seen: set[int] = set()
     max_id: int | None = None
     scaled = False
     for lineno, eid in ids:
-        if not has_scale:
-            violations.append((lineno, event_id_no_scale_detail(eid)))
-            continue
         if not scaled and eid < EVENT_ID_SCALE:
             stats["legacy_prefix"] += 1
             continue  # pre-scale history — append-only, cannot be renumbered
@@ -1369,8 +1390,10 @@ def main(argv: list[str] | None = None) -> int:
     # first >= 10^18 id — this board carries 979 of them on lines 1-999) is
     # tolerated because an append-only log cannot be renumbered; duplicate ids
     # are tolerated (boardctl warns, not errors, on re-used ids). A file with NO
-    # id at the 19-digit scale establishes no scale at all, so every int id in
-    # it is reported. A missing events file SKIPS SILENTLY, the same documented
+    # id at the 19-digit scale establishes no scale at all, so it is reported as
+    # ONE file-level aggregate violation naming the int-id count and riding on
+    # the events file path (SCHED-GAP-1748-A). A missing events file SKIPS
+    # SILENTLY, the same documented
     # behaviour checks 8/9 have for a missing board, so the checker stays
     # runnable in test rigs and old-style workdirs.
     events = resolve_events_path(args.events, args.board,
@@ -1378,7 +1401,10 @@ def main(argv: list[str] | None = None) -> int:
     if events:
         ev_violations, ev_stats = scan_event_ids(events)
         for lineno, detail in ev_violations:
-            bad(EVENT_ID_CLASS, str(lineno), detail)
+            # lineno -1 = file-level aggregate (SCHED-GAP-1748-A): the subject
+            # is the events file path itself, not a line number.
+            subject = events if lineno < 0 else str(lineno)
+            bad(EVENT_ID_CLASS, subject, detail)
         anchor = ev_stats["anchor_line"] if ev_stats["anchor_line"] is not None else "none"
         peak = ev_stats["max_id"] if ev_stats["max_id"] is not None else "none"
         info.append({"class": EVENT_ID_CLASS, "subject": events,

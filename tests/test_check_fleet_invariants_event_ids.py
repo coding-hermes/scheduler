@@ -11,8 +11,10 @@ sorts below the file's existing ids — fails a test here instead of
   * the reported defect's own shape (a sub-10^18 id appended after 19-digit
     ids) exits 1 with the LINE NUMBER and the BAD ID named;
   * a 19-digit id that descends below the file's max exits 1;
-  * a log with NO 19-digit id at all is entirely off-scale (every int id
-    reported);
+  * a log with NO 19-digit id at all is entirely off-scale — reported as ONE
+    file-level violation naming the events path and the int-id count
+    (SCHED-GAP-1748-A; the per-id shape produced 643 violations on the
+    consensus-board file);
   * the live log's pre-scale prefix and its duplicate ids are TOLERATED — this
     board carries 979 pre-scale ids and 2 duplicates, and the append-only log
     cannot be renumbered, so gating them would paint CI red for history;
@@ -149,7 +151,13 @@ def test_descending_19_digit_id_fires(tmp_path):
 
 def test_log_with_no_19_digit_id_is_entirely_off_scale(tmp_path):
     """A log whose ids are ALL sub-10^18 establishes no scale at all — the shape
-    a wrong-basis writer produces into a new log. Every int id is reported."""
+    a wrong-basis writer produces into a new log. SCHED-GAP-1748-A: the finding
+    is ONE file-level violation naming the events file path and the int-id
+    count, not one violation per id (the consensus-board shape produced 643
+    violations for a single file-level fact).
+
+    ch:trace row=SCHED-GAP-1748-A spec=docs/troubleshooting-scheduling-errors.md#7 wave=.coding-hermes/waves/coding-hermes-scheduler-foreman-2026-10-21-20-20-55.json#SCHED-GAP-1748-A test=tests/test_check_fleet_invariants_event_ids.py::test_log_with_no_19_digit_id_is_entirely_off_scale doc=none:scope-fenced-by-row prompt=/tmp/SCHED-GAP-1748-A-brief-2026-10-21-20-20-55.txt evidence=none:foreman-mints-after-commit witness=none:worker-local marker verdict=none:foreman-judge commit=none:pending-implementation memory=none:not-written
+    """
     rc, out = _run_gate(tmp_path, _event(
         f'{{"id": {MICRO}}}',
         '{"id": 1790080400000000}',
@@ -157,8 +165,12 @@ def test_log_with_no_19_digit_id_is_entirely_off_scale(tmp_path):
 
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     lines = _violations(out)
-    assert len(lines) == 2, out
+    assert len(lines) == 1, out
+    events_path = str(tmp_path / "events.jsonl")
+    assert events_path in lines[0], lines[0]
+    assert "2 int id(s)" in lines[0], lines[0]
     assert "the file carries no id at that scale" in lines[0], lines[0]
+    assert "VIOLATION event-id-ascending " + events_path + ":" in lines[0], lines[0]
 
 
 # ── tolerances that keep the gate usable on the live board ────────────────
@@ -231,7 +243,8 @@ def test_empty_events_file_exits_zero(tmp_path):
 
 def test_explicit_events_flag_wins(tmp_path):
     """A caller can point the class at any log; the off-scale file behind the
-    flag is the one reported, wherever the board lives."""
+    flag is the one reported, wherever the board lives. SCHED-GAP-1748-A: the
+    no-scale finding is ONE aggregate whose subject is the flagged file path."""
     other = tmp_path / "elsewhere-events.jsonl"
     other.write_text('{"id": 5}\n', encoding="utf-8")
     rc, out = _run_gate(tmp_path, [f'{{"id": {BIG}}}'],
@@ -240,9 +253,9 @@ def test_explicit_events_flag_wins(tmp_path):
     assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
     assert str(other) in out, out
     assert _violations(out) == [
-        f"VIOLATION {gate.EVENT_ID_CLASS} 1: id=5 is below the 19-digit floor "
-        f"{gate.EVENT_ID_SCALE} and the file carries no id at that scale "
-        f"(every int id in it is off-scale)"], out
+        f"VIOLATION {gate.EVENT_ID_CLASS} {other}: 1 int id(s) below the "
+        f"19-digit floor {gate.EVENT_ID_SCALE} and the file carries no id at "
+        f"that scale (every int id in it is off-scale)"], out
 
 
 def test_board_sibling_resolution_does_not_fall_back_to_this_checkout(tmp_path):
