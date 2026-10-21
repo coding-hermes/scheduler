@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -723,5 +724,199 @@ func TestWaveManifestUnfinished(t *testing.T) {
 	// tick_id disagreeing with its own filename: untrusted, non-candidate.
 	if p := write("", "some-other-tick"); waveManifestUnfinished(p) {
 		t.Error("self-inconsistent manifest (tick_id ≠ filename): want false")
+	}
+}
+
+// ── SCHED-GAP-1752: writer/consumer wave-manifest shape drift ─────────────
+//
+// The measured defect: this repo's foreman wrote wave manifests in a
+// rows/created_at/closed_at/result shape while the daemon ingest contract
+// (S12 §9.3, waveManifest) is tick_id/project/started_at/finished_at/
+// workers[]. Tolerant ingest silently dropped the unknown keys, so every
+// wave tick landed worker_count=0 and a COMPLETE wave re-flagged as a
+// recovery candidate on every spawn (empty finished_at). Fix direction
+// pinned here: the WRITER moves to the contract shape; the consumer NEVER
+// learns the second shape — it emits exactly one loud WARN when a manifest
+// parses with zero workers while carrying a non-empty "rows" array, and the
+// recovery predicate keeps reading finished_at only (closed_at is never
+// silently accepted as a close).
+//
+// ch:trace row=SCHED-GAP-1752 spec=specs/S12-concurrent-wave-scheduling.md#93-wave-manifest-contract wave=.coding-hermes/waves/coding-hermes-scheduler-foreman-2026-10-21-18-18-09.json#SCHED-GAP-1752 test=internal/scheduler/wave_manifest_test.go::TestIngestWaveManifestRowsShapeWarns doc=specs/S12-concurrent-wave-scheduling.md#93-wave-manifest-contract prompt=none:worker-brief evidence=internal/scheduler/wave_manifest_test.go witness=none:local-repro-only verdict=none:foreman-judge commit=none:pending-foreman-trace memory=none:pending-foreman-record
+// STATUS: complete
+// TIER: T3 — observed: `go test ./internal/scheduler -run 'WaveManifest' -count=1 -v` (15 tests PASS incl. the 3 new SCHED-GAP-1752 tests; red proof on the pre-change parser for the rows-shape arm); `go test ./internal/scheduler -count=1`; `go build ./...`
+// EVIDENCE: internal/scheduler/wave_manifest_test.go (committed test artifact; red-proof output in the worker report to the foreman)
+
+// writeRowsShapeManifest marshals a manifest in the drifted foreman shape
+// (rows / created_at / closed_at / result — SCHED-GAP-1752) and writes it at
+// the canonical path. Built from a raw map, NOT the WaveManifest struct,
+// because the struct can only emit the contract shape. tick_id and project
+// carry the same keys and meanings in both shapes; closed_at is the
+// writer-side name for finished_at and is omitted entirely when empty.
+func writeRowsShapeManifest(t *testing.T, workdir, tickID string, rows []map[string]any, closedAt string) string {
+	t.Helper()
+	m := map[string]any{
+		"tick_id":    tickID,
+		"project":    "wave-proj",
+		"created_at": "2026-10-21T18:18:09Z", // writer-side name for started_at
+		"result":     fmt.Sprintf("%d/%d workers landed", len(rows), len(rows)),
+		"rows":       rows,
+	}
+	if closedAt != "" {
+		m["closed_at"] = closedAt
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal rows-shape manifest: %v", err)
+	}
+	return writeWaveManifest(t, workdir, tickID, string(raw))
+}
+
+// rowsShapeWorkers returns 3 worker rows as the drifted writer emitted them
+// (same per-worker field names as the contract — the drift is the container).
+func rowsShapeWorkers() []map[string]any {
+	return []map[string]any{
+		{"task_id": "T-1", "branch": "wt/T-1", "worktree": "/wt/T-1", "commit_sha": "abc1234",
+			"judge": "pass", "merge": "merged", "cost_usd": 0.11, "tokens_in": 1000, "tokens_out": 200},
+		{"task_id": "T-2", "branch": "wt/T-2", "worktree": "/wt/T-2", "commit_sha": "def5678",
+			"judge": "pass", "merge": "merged", "cost_usd": 0.22, "tokens_in": 2000, "tokens_out": 400},
+		{"task_id": "T-3", "branch": "wt/T-3", "worktree": "/wt/T-3", "commit_sha": "90ab12",
+			"judge": "fail", "merge": "conflict", "cost_usd": 0.33, "tokens_in": 3000, "tokens_out": 600},
+	}
+}
+
+// TestIngestWaveManifestRowsShapeWarns is the SCHED-GAP-1752 loud-detection
+// pin (row pass criterion b): a manifest that parses with zero workers while
+// carrying a non-empty "rows" array ingests NOTHING (no attribution from a
+// shape the writer must not use), never fails the tick, and emits EXACTLY
+// ONE WARN event naming the drift. The parser is not taught the second
+// shape — silence here is how the drift survived in the first place.
+func TestIngestWaveManifestRowsShapeWarns(t *testing.T) {
+	workdir := t.TempDir()
+	tickID := "wave-proj-2026-10-21-18-18-09"
+	path := writeRowsShapeManifest(t, workdir, tickID, rowsShapeWorkers(), "2026-10-21T19:40:00Z")
+
+	db := newTestDB(t)
+	waveSeedTick(t, db, tickID, workdir)
+
+	n, err := ingestWaveManifest(context.Background(), db, workdir, "wave-proj", tickID)
+	if err != nil {
+		t.Fatalf("ingestWaveManifest returned error %v — shape drift must never fail the tick", err)
+	}
+	if n != 0 {
+		t.Errorf("ingested = %d, want 0 (the rows shape is not attributed; the writer must emit workers[])", n)
+	}
+	wc, _ := waveTickState(t, db, tickID)
+	if wc != 0 {
+		t.Errorf("ticks.worker_count = %d, want 0 for a rows-shape manifest", wc)
+	}
+	if rows, _ := database.ListTickWorkersByTick(context.Background(), db, tickID); len(rows) != 0 {
+		t.Errorf("tick_workers rows = %d, want 0 (no worker rows from the drifted shape)", len(rows))
+	}
+	if got := waveEventCount(t, db); got != 1 {
+		t.Fatalf("wave events = %d, want exactly 1 WARN for the shape drift", got)
+	}
+	var msg string
+	if err := db.QueryRow(`SELECT message FROM events WHERE component = 'wave'`).Scan(&msg); err != nil {
+		t.Fatalf("read wave event: %v", err)
+	}
+	if !strings.Contains(msg, "shape drift") {
+		t.Errorf("WARN message %q must name the drift (\"shape drift\")", msg)
+	}
+	if !strings.Contains(msg, `"rows"`) {
+		t.Errorf("WARN message %q must name the offending writer key (\"rows\")", msg)
+	}
+	if !strings.Contains(msg, tickID) || !strings.Contains(msg, path) {
+		t.Errorf("WARN message %q must name tick id %q and path %q", msg, tickID, path)
+	}
+}
+
+// TestIngestWaveManifestCanonicalShapeNoDriftWarn is the contrast arm of the
+// SCHED-GAP-1752 detector: a manifest already in the contract shape
+// (workers[] present, no "rows" key) stays fully attributed and the shape
+// detector stays silent — zero events. This pins that the new WARN cannot
+// false-positive on the canonical writers the fleet already runs.
+func TestIngestWaveManifestCanonicalShapeNoDriftWarn(t *testing.T) {
+	workdir := t.TempDir()
+	tickID := "wave-proj-2026-10-21-21-00-00"
+	mIn := WaveManifest{
+		TickID:     tickID,
+		Project:    "wave-proj",
+		StartedAt:  "2026-10-21T21:00:00Z",
+		FinishedAt: "2026-10-21T22:10:00Z",
+		Workers: []WaveWorker{
+			{TaskID: "T-1", Branch: "wt/T-1", Worktree: "/wt/T-1", CommitSHA: "abc1234",
+				Judge: "pass", Merge: "merged", CostUSD: 0.11, TokensIn: 1000, TokensOut: 200},
+			{TaskID: "T-2", Branch: "wt/T-2", Worktree: "/wt/T-2", CommitSHA: "def5678",
+				Judge: "pass", Merge: "merged", CostUSD: 0.22, TokensIn: 2000, TokensOut: 400},
+		},
+	}
+	raw, err := json.Marshal(mIn)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	writeWaveManifest(t, workdir, tickID, string(raw))
+
+	db := newTestDB(t)
+	waveSeedTick(t, db, tickID, workdir)
+
+	n, err := ingestWaveManifest(context.Background(), db, workdir, "wave-proj", tickID)
+	if err != nil {
+		t.Fatalf("ingestWaveManifest: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("ingested = %d, want 2 (canonical workers shape stays attributed)", n)
+	}
+	wc, _ := waveTickState(t, db, tickID)
+	if wc != 2 {
+		t.Errorf("ticks.worker_count = %d, want 2", wc)
+	}
+	rows, err := database.ListTickWorkersByTick(context.Background(), db, tickID)
+	if err != nil {
+		t.Fatalf("ListTickWorkersByTick: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("tick_workers rows = %d, want 2", len(rows))
+	}
+	if got := waveEventCount(t, db); got != 0 {
+		t.Errorf("wave events = %d, want 0 (canonical shape must not raise the drift WARN)", got)
+	}
+}
+
+// TestWaveManifestUnfinishedRowsShapeRecovery pins the SCHED-GAP-1752
+// recovery half: the unfinished predicate keeps reading finished_at ONLY.
+// (a) a rows-shape manifest with no close fields at all is unfinished (the
+// crashed-writer case); (b) a rows-shape manifest carrying the writer-side
+// closed_at with finished_at empty is STILL unfinished — silently treating
+// closed_at as a close would accept the second shape, exactly the drift this
+// row forbids; (c) the same writer emitting the contract shape with a
+// non-empty finished_at closes cleanly.
+func TestWaveManifestUnfinishedRowsShapeRecovery(t *testing.T) {
+	workdir := t.TempDir()
+	tickID := "wave-proj-2026-10-21-20-00-00"
+
+	// (a) rows shape, crashed before any close field: unfinished.
+	p := writeRowsShapeManifest(t, workdir, tickID, rowsShapeWorkers(), "")
+	if !waveManifestUnfinished(p) {
+		t.Error("rows-shape manifest with no close field: want unfinished=true")
+	}
+
+	// (b) rows shape with closed_at written but finished_at empty: the
+	// measured live defect (COMPLETE wave re-flagged every spawn). The
+	// predicate must still report unfinished — closed_at is writer-side
+	// vocabulary, never silently accepted as the contract close.
+	p = writeRowsShapeManifest(t, workdir, tickID, rowsShapeWorkers(), "2026-10-21T19:40:00Z")
+	if !waveManifestUnfinished(p) {
+		t.Error("rows-shape manifest with closed_at but empty finished_at: want unfinished=true (closed_at is not the contract close)")
+	}
+
+	// (c) contract shape, non-empty finished_at: closed, not a candidate.
+	raw, _ := json.Marshal(WaveManifest{
+		TickID: tickID, Project: "wave-proj", StartedAt: "2026-10-21T20:00:00Z",
+		FinishedAt: "2026-10-21T21:30:00Z",
+		Workers:    []WaveWorker{{TaskID: "T-1", Branch: "wt/T-1", Judge: "pass", Merge: "merged"}},
+	})
+	p = writeWaveManifest(t, workdir, tickID, string(raw))
+	if waveManifestUnfinished(p) {
+		t.Error("contract-shape manifest with finished_at set: want unfinished=false")
 	}
 }
