@@ -1341,3 +1341,4 @@
 {"id": 1792662709000000008, "timestamp": "2026-10-22T14:44:00Z", "event_type": "task_completed", "task_id": "INT-CI-189", "actor": "foreman", "detail": "{\"note\": \"TestFreshnessScript_ExitCodes 9/9 PASS at HEAD\"}", "tick_number": 20261022143500}
 {"id": 1792662709000000009, "timestamp": "2026-10-22T14:44:00Z", "event_type": "task_completed", "task_id": "SCHED-GAP-1748", "actor": "foreman", "detail": "{\"note\": \"stale row: zero criteria\"}", "tick_number": 20261022143500}
 {"id": 1792662709000000010, "timestamp": "2026-10-22T14:46:00Z", "event_type": "board_cleanup", "actor": "foreman", "detail": "{\"stale_rows_closed\": 43, \"reason\": \"zero criteria\"}", "tick_number": 20261022143500}
+{"id": 1792662709000000011, "timestamp": "2026-10-22T21:13:33Z", "event_type": "task_created", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-1757\",\"status\":\"pending\"}", "tick_number": null, "task_id": "SCHED-GAP-1757"}
