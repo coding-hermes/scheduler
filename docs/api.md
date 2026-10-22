@@ -91,6 +91,14 @@ Refusals come back as JSON-RPC errors with HTTP status 200 — the envelope is
 | Credential configured, none presented | -32001 | `operator credential required for mutations` |
 | Wrong value presented | -32001 | `invalid operator credential` |
 
+A `tools/call` naming a tool absent from the registry is classified before
+the gate (SCHED-GAP-1749) and answers a plain application error — it is not a
+gate arm and needs no credential:
+
+| Case | Code | Message |
+|------|------|---------|
+| Unknown tool name (`ErrUnknownTool`, checked before the gate) | -32000 | `unknown tool: <name>` |
+
 Allowed calls write an `mcp.auth` audit row (identity `operator:token` /
 `operator:basic`, method/path `MCP tools/call` / `/mcp`) — same sentence shape
 as `api.auth`, so one grep pattern covers both surfaces via

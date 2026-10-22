@@ -18,6 +18,7 @@ package mcp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,6 +27,17 @@ import (
 	"github.com/coding-hermes/scheduler/internal/api"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
+
+// ErrUnknownTool is the sentinel for a tools/call naming a tool absent from
+// the registry. handleToolsCall classifies the name against the registry
+// BEFORE the operator gate (SCHED-GAP-1749): an unknown tool is a client
+// contract error ("-32000 unknown tool: <name>"), never a credential
+// refusal — the old path let the fail-closed isMutatingTool default present
+// a typo'd name as a mutation and answer -32001 without the registry ever
+// speaking. TestMCPAuth_MutationClassificationCoversRegistry keeps every
+// registry tool in one of the two sets, so this arm can only fire for
+// genuinely unknown names.
+var ErrUnknownTool = errors.New("unknown tool")
 
 // OperatorAuth is the resolved operator-credential contract the MCP gate
 // reuses from the API package. api.authConfig implements it (SCHED-GAP-1619
@@ -177,10 +189,22 @@ func ReadOnlyToolNames() []string {
 	return out
 }
 
+// knownTool reports whether name is in the MCP tool registry. This is the
+// ONE authoritative lookup (SCHED-GAP-1749): a new tool can enter the
+// registry only via the tools var or federationTools, and the classification
+// coverage test forces each of those names into mutatingTools or
+// readOnlyTools, so no second hand-maintained list is needed for unknown-tool
+// classification to stay correct as tools are added.
+func knownTool(name string) bool {
+	return mutatingTools[name] || readOnlyTools[name]
+}
+
 // isMutatingTool reports whether name mutates state. Classification is
 // fail-closed: a tool missing from BOTH sets is treated as mutating (it must
 // present a credential to run) — the coverage test then forces the author to
-// classify it properly.
+// classify it properly. handleToolsCall classifies unknown names via
+// knownTool BEFORE calling the gate, so this default can only be reached for
+// registry-classified tools.
 func isMutatingTool(name string) bool {
 	if mutatingTools[name] {
 		return true
