@@ -407,6 +407,11 @@ type FleetData struct {
 	// FleetPausedKnown renders as the "unknown" state (API read failed) —
 	// never a fabricated paused/resumed badge.
 	FleetPausedKnown bool
+	// One-shot activity (SCHED-GAP-1642): count of ticks carrying the
+	// SCHED-GAP-1641 failure_reason marker in the recent dashboard window.
+	// Zero is meaningful: it renders the quiet state, while legacy rows with
+	// an empty failure_reason remain outside the count.
+	InstantTurnCount int
 	// TableState carries the operator's per-table server-side controls
 	// (SCHED-GAP-1598): search / sort / page / size for each of the four
 	// stacked tables. The full page renders from these; the htmx autorefresh
@@ -788,6 +793,15 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 
 	// Active ticks count.
 	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
+
+	// SCHED-GAP-1642: expose recent one-shot burst activity from the same
+	// failure_reason marker written by SCHED-GAP-1641. The best-effort read
+	// leaves the card at zero for an empty or legacy dataset.
+	instantSince := g.clock().Now().UTC().Add(-instantTurnDashboardWindow).Format(time.RFC3339)
+	_ = g.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM ticks
+		WHERE failure_reason = ? AND spawned_at >= ?
+	`, instantTurnFailureReason, instantSince).Scan(&data.InstantTurnCount)
 
 	// Recent ticks.
 	tickRows, _ := g.db.QueryContext(ctx, `SELECT id, project_name, status, COALESCE(outcome,''), COALESCE(session_id,''), spawned_at, COALESCE(completed_at,''), commits, files_changed FROM ticks ORDER BY spawned_at DESC LIMIT 20`)
