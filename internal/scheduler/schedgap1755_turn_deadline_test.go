@@ -210,6 +210,13 @@ func TestSgap1755_NamespaceDeadlineOverride(t *testing.T) {
 	if !strings.Contains(outcome.Error, "no progress for 250ms") {
 		t.Errorf("Wait() error = %q, want the namespace's own 250ms deadline named in the contract text", outcome.Error)
 	}
+	// THE WIRE, not just the text: the abort must have happened at the
+	// NAMESPACE's deadline. If sendTurn still read the global 5s knob this
+	// turn would have burned ~5s before failing, and the row text would
+	// have named a value the gate never enforced.
+	if outcome.Duration > 3*time.Second {
+		t.Errorf("turn aborted after %v, want ~250ms — the namespace override must be the deadline actually ENFORCED, not just printed", outcome.Duration)
+	}
 }
 
 // TestSgap1755_TurnDeadlineResolver pins the resolver's vocabulary directly

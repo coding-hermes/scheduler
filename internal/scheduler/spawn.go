@@ -250,12 +250,21 @@ type Spawner struct {
 // aborts at the same deadline as GAP-117. When supervise is false the
 // legacy non-streaming POST runs under turnCtx — byte-for-byte pre-119.
 //
+// turnDeadline is THIS tick's resolved per-turn deadline (SCHED-GAP-1755):
+// the namespace's turn_deadline override when one is armed, the global knob
+// otherwise. It must be passed in rather than re-read from the Spawner — the
+// per-namespace tier means the knob is a PER-TICK fact, and reading the
+// global field here would apply the fleet-wide 30m to a namespace that
+// overrode it (the text would name one value while the wire enforced
+// another). Zero means "no per-turn deadline for this tick" (the exempt
+// family): the supervised branch is not taken at all.
+//
 // Every attempt (primary + GAP-080 retry + chain hops) merges its
 // GatewayPOSTTrace into *tickTrace; logPOSTTrace persists + logs it (AC 1).
-func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
+func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, turnDeadline, effectiveTimeout time.Duration,
 	prompt, model, provider, key, tickID, project string, tickTrace **GatewayPOSTTrace, stall *bool) (*Response, error) {
 	if supervise {
-		deadline := s.gatewayResponseTimeout
+		deadline := turnDeadline
 		if deadline > effectiveTimeout {
 			deadline = effectiveTimeout
 		}
@@ -1882,7 +1891,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// POST when the knob is armed, else the legacy non-streaming
 				// POST under turnCtx — one seam for every attempt below.
 				send := func(m, p string) (*Response, error) {
-					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
+					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTurnDeadline, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
 				}
 				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
