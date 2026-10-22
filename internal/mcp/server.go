@@ -684,7 +684,7 @@ var tools = []ToolDefinition{
 			"properties": map[string]interface{}{
 				"id":             map[string]interface{}{"type": "string", "description": "Namespace id (unique slug, e.g. \"coding-hermes\")"},
 				"weight":         map[string]interface{}{"type": "integer", "description": "Relative weight for proportional allocation (1..100, required)"},
-				"reserved":       map[string]interface{}{"type": "integer", "description": "Guaranteed floor budget units (>= 0)"},
+				"reserved":       map[string]interface{}{"type": "number", "description": "Guaranteed fractional floor budget units (>= 0)"},
 				"hard_cap":       map[string]interface{}{"type": "integer", "description": "Maximum budget; 0 = no cap"},
 				"max_concurrent": map[string]interface{}{"type": "integer", "description": "Max ticks running at once in this namespace; 0 = unlimited (global cap still applies)"},
 				"enabled":        map[string]interface{}{"type": "boolean", "description": "Disabled namespaces get zero allocation"},
@@ -706,7 +706,7 @@ var tools = []ToolDefinition{
 			"properties": map[string]interface{}{
 				"id":             map[string]interface{}{"type": "string", "description": "Namespace id"},
 				"weight":         map[string]interface{}{"type": "integer", "description": "New weight"},
-				"reserved":       map[string]interface{}{"type": "integer", "description": "New reserved floor"},
+				"reserved":       map[string]interface{}{"type": "number", "description": "New fractional reserved floor (>= 0)"},
 				"hard_cap":       map[string]interface{}{"type": "integer", "description": "New hard cap (0 = no cap)"},
 				"max_concurrent": map[string]interface{}{"type": "integer", "description": "New max concurrent ticks (0 = unlimited)"},
 				"enabled":        map[string]interface{}{"type": "boolean", "description": "Enable/disable the namespace"},

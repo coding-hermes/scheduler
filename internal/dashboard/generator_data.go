@@ -148,7 +148,7 @@ type TickRow struct {
 type NamespaceRow struct {
 	ID           string
 	Weight       int
-	Reserved     int
+	Reserved     float64
 	HardCap      int
 	Allocated    int
 	Used         int

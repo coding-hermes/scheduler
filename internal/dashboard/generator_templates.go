@@ -179,8 +179,8 @@ func loadTemplates(seam *clock.Seam) *template.Template {
 				return ""
 			}
 		},
-		"utilClass": func(reserved, hardCap, used int) string {
-			if used < reserved {
+		"utilClass": func(reserved float64, hardCap, used int) string {
+			if float64(used) < reserved {
 				return "util-green"
 			}
 			if hardCap > 0 && used >= hardCap {

@@ -469,7 +469,7 @@ func TestNamespace_WaveConfigRoundTrip(t *testing.T) {
 		t.Errorf("wave_enabled clobbered by wave-only patch")
 	}
 	if got.Weight != ns.Weight || got.Reserved != ns.Reserved || got.HardCap != ns.HardCap || got.MaxConcurrent != ns.MaxConcurrent {
-		t.Errorf("non-wave fields clobbered: weight=%d reserved=%d hard_cap=%d max_concurrent=%d",
+		t.Errorf("non-wave fields clobbered: weight=%d reserved=%g hard_cap=%d max_concurrent=%d",
 			got.Weight, got.Reserved, got.HardCap, got.MaxConcurrent)
 	}
 

@@ -207,12 +207,12 @@ func benchNamespaceAllocatorFixtures(n int) []database.Namespace {
 		}
 		switch mod {
 		case 0:
-			ns.Reserved = ((i * 3) % 10) + 1 // 1..10
+			ns.Reserved = float64(((i * 3) % 10) + 1) // 1..10
 			ns.HardCap = ((i * 11) % 50) + 20
 		case 1:
 			// weight only, no reserved, no hardcap
 		case 2:
-			ns.Reserved = ((i * 5) % 7) + 1
+			ns.Reserved = float64(((i * 5) % 7) + 1)
 			// hardcap = 0 means no cap
 		}
 		out[i] = ns

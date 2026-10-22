@@ -424,7 +424,7 @@ func TestSyncNamespaceSummary(t *testing.T) {
 		t.Errorf("TotalWeight = %d, want 30", received.TotalWeight)
 	}
 	if received.TotalReserved != 7 {
-		t.Errorf("TotalReserved = %d, want 7", received.TotalReserved)
+		t.Errorf("TotalReserved = %g, want 7", received.TotalReserved)
 	}
 }
 
@@ -460,7 +460,7 @@ func TestSyncNamespaceStatuses(t *testing.T) {
 		t.Errorf("Weight = %d, want 10", lastStatus.Weight)
 	}
 	if lastStatus.Reserved != 2 {
-		t.Errorf("Reserved = %d, want 2", lastStatus.Reserved)
+		t.Errorf("Reserved = %g, want 2", lastStatus.Reserved)
 	}
 	if lastStatus.HardCap != 100 {
 		t.Errorf("HardCap = %d, want 100", lastStatus.HardCap)
@@ -992,7 +992,7 @@ func TestSyncNamespaceSummary_EmptyDB(t *testing.T) {
 		t.Errorf("TotalWeight = %d, want 0", received.TotalWeight)
 	}
 	if received.TotalReserved != 0 {
-		t.Errorf("TotalReserved = %d, want 0", received.TotalReserved)
+		t.Errorf("TotalReserved = %g, want 0", received.TotalReserved)
 	}
 }
 

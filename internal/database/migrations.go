@@ -9,8 +9,8 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-// SCHED-GAP-1755 landed v74 (namespaces.turn_deadline, census index, duckbrain-sync exempt + qa 2h).
-const latestMigration = 74
+// SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
+const latestMigration = 75
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -126,7 +126,7 @@ ALTER TABLE projects ADD COLUMN command TEXT DEFAULT '';
 CREATE TABLE IF NOT EXISTS namespaces (
     id          TEXT PRIMARY KEY NOT NULL,
     weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
-    reserved    INTEGER NOT NULL DEFAULT 1 CHECK(reserved >= 0),
+    reserved    REAL NOT NULL DEFAULT 1 CHECK(reserved >= 0),
     hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
     max_concurrent INTEGER NOT NULL DEFAULT 0 CHECK(max_concurrent >= 0),
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
@@ -1627,6 +1627,62 @@ UPDATE namespaces SET turn_deadline = '0s', updated_at = strftime('%Y-%m-%dT%H:%
 		desc:    "SCHED-GAP-1755: qa namespace turn_deadline='2h' — long QA batteries emit no gateway progress events mid-run; 2h keeps a per-turn backstop while stopping the 30m class from eating the family",
 		stmt: `
 UPDATE namespaces SET turn_deadline = '2h', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'qa' AND turn_deadline = '';
+`,
+	},
+	{
+		// SCHED-GAP-16922: SQLite cannot alter a column's declared type in
+		// place. Rebuild namespaces so reserved is REAL while copying every
+		// existing column and value forward. This is an ownTx migration because
+		// the table participates in project foreign keys.
+		version: 75,
+		desc:    "SCHED-GAP-16922: change namespaces.reserved from INTEGER to REAL for fractional reserved floors",
+		ownTx:   true,
+		stmt: `
+PRAGMA foreign_keys=OFF;
+BEGIN;
+DROP TABLE IF EXISTS namespaces_new;
+CREATE TABLE namespaces_new (
+    id          TEXT PRIMARY KEY NOT NULL,
+    weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
+    reserved    REAL NOT NULL DEFAULT 1 CHECK(reserved >= 0),
+    hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
+    max_concurrent INTEGER NOT NULL DEFAULT 0 CHECK(max_concurrent >= 0),
+    enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    description TEXT,
+    default_prompt TEXT NOT NULL DEFAULT '',
+    model_chain TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    wave_enabled INTEGER NOT NULL DEFAULT 0 CHECK(wave_enabled IN (0, 1)),
+    wave_tick_timeout TEXT NOT NULL DEFAULT '',
+    wave_workers_cap INTEGER NOT NULL DEFAULT 0 CHECK(wave_workers_cap >= 0),
+    admission_mode TEXT NOT NULL DEFAULT 'cooldown' CHECK(admission_mode IN ('cooldown','tasks')),
+    load_gate TEXT NOT NULL DEFAULT '' CHECK(load_gate IN ('','off')),
+    idle_intervention INTEGER NOT NULL DEFAULT -1,
+    gateway_url TEXT NOT NULL DEFAULT '',
+    gateway_key TEXT NOT NULL DEFAULT '',
+    reporter_class TEXT NOT NULL DEFAULT '',
+    no_artifact_window TEXT NOT NULL DEFAULT '',
+    no_artifact_recon_floor TEXT NOT NULL DEFAULT '',
+    turn_deadline TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO namespaces_new (
+    id, weight, reserved, hard_cap, max_concurrent, enabled, description,
+    default_prompt, model_chain, created_at, updated_at, wave_enabled,
+    wave_tick_timeout, wave_workers_cap, admission_mode, load_gate,
+    idle_intervention, gateway_url, gateway_key, reporter_class,
+    no_artifact_window, no_artifact_recon_floor, turn_deadline
+)
+SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, description,
+    default_prompt, model_chain, created_at, updated_at, wave_enabled,
+    wave_tick_timeout, wave_workers_cap, admission_mode, load_gate,
+    idle_intervention, gateway_url, gateway_key, reporter_class,
+    no_artifact_window, no_artifact_recon_floor, turn_deadline
+FROM namespaces;
+DROP TABLE namespaces;
+ALTER TABLE namespaces_new RENAME TO namespaces;
+COMMIT;
+PRAGMA foreign_keys=ON;
 `,
 	},
 }

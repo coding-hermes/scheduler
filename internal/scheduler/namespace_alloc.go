@@ -35,43 +35,45 @@ func (a *NamespaceAllocator) SetBudget(b int) {
 	a.budget = b
 }
 
-// allocOrderKey carries the deterministic leftover tie-break fields for one
-// namespace (SCHED-GAP-1697): larger reserved wins, then larger weight, then
-// lexicographically smaller ID. The order keys are index-aligned with the
-// enabled-namespace slice the allocator works on.
+// reservedScale is the fixed-point precision used for reserved floors. Three
+// decimal places preserve integer JSON/TOML compatibility plus common fractional
+// floors such as 0.5, while keeping admission accumulation deterministic: all
+// reservation arithmetic after decoding is integer arithmetic in milli-slots.
+const reservedScale int64 = 1000
+
 type allocOrderKey struct {
 	id       string
-	reserved int
+	reserved int64
 	weight   int
 }
 
-// apportionSeats distributes seats slots across the items described by shares
-// (each treated as >= 0) using largest-remainder (Hamilton) apportionment:
-//
-//  1. give item i floor(shares[i] * seats / sum(shares)) slots, then
-//  2. hand the leftover slots out one each, in descending fractional-remainder
-//     order, breaking ties with the order keys (larger reserved, then larger
-//     weight, then lexicographically smaller ID).
-//
-// The returned slice has len(shares) entries and sums to seats whenever
-// seats > 0 and at least one share is positive. Parallel to shares, order
-// supplies the tie-break keys by item index.
-func apportionSeats(shares []float64, seats int, order []allocOrderKey) []int {
-	out := make([]int, len(shares))
+// reservedToUnits converts the public float64 representation at one boundary.
+// The allocator never compares or accumulates float64 values; math.Round makes
+// the fixed-point conversion deterministic for values such as 0.5.
+func reservedToUnits(reserved float64) int64 {
+	if reserved <= 0 || math.IsNaN(reserved) || math.IsInf(reserved, 0) {
+		return 0
+	}
+	return int64(math.Round(reserved * float64(reservedScale)))
+}
+
+// apportionIntegerShares distributes integer seats with Hamilton's
+// largest-remainder method. Using integer quotients and remainders avoids
+// floating-point equality in the admission path.
+func apportionIntegerShares(shares []int64, seats int64, order []allocOrderKey) []int64 {
+	out := make([]int64, len(shares))
 	if seats <= 0 || len(shares) == 0 {
 		return out
 	}
 
-	total := 0.0
-	for _, s := range shares {
-		if s > 0 {
-			total += s
+	var total int64
+	for _, share := range shares {
+		if share > 0 {
+			total += share
 		}
 	}
 	if total <= 0 {
-		// Nothing to apportion by. Hand the slots to the first items in the
-		// caller's order rather than dropping them.
-		for i := 0; i < seats && i < len(out); i++ {
+		for i := int64(0); i < seats && i < int64(len(out)); i++ {
 			out[i] = 1
 		}
 		return out
@@ -79,26 +81,24 @@ func apportionSeats(shares []float64, seats int, order []allocOrderKey) []int {
 
 	type remainder struct {
 		idx  int
-		frac float64
+		frac int64
 	}
 	rems := make([]remainder, len(shares))
-	assigned := 0
-	for i, s := range shares {
-		if s < 0 {
-			s = 0
+	var assigned int64
+	for i, share := range shares {
+		if share < 0 {
+			share = 0
 		}
-		exact := s * float64(seats) / total
-		fl := math.Floor(exact)
-		out[i] = int(fl)
+		numerator := share * seats
+		out[i] = numerator / total
 		assigned += out[i]
-		rems[i] = remainder{idx: i, frac: exact - fl}
+		rems[i] = remainder{idx: i, frac: numerator % total}
 	}
 
 	leftover := seats - assigned
 	if leftover <= 0 {
 		return out
 	}
-
 	sort.SliceStable(rems, func(x, y int) bool {
 		if rems[x].frac != rems[y].frac {
 			return rems[x].frac > rems[y].frac
@@ -112,7 +112,7 @@ func apportionSeats(shares []float64, seats int, order []allocOrderKey) []int {
 		}
 		return kx.id < ky.id
 	})
-	for i := 0; i < leftover && i < len(rems); i++ {
+	for i := int64(0); i < leftover && i < int64(len(rems)); i++ {
 		out[rems[i].idx]++
 	}
 	return out
@@ -150,38 +150,47 @@ func (a *NamespaceAllocator) Allocate(namespaces []database.Namespace) map[strin
 	// Deterministic leftover tie-break keys, index-aligned with `enabled`.
 	order := make([]allocOrderKey, len(enabled))
 	for i, ns := range enabled {
-		order[i] = allocOrderKey{id: ns.ID, reserved: ns.Reserved, weight: ns.Weight}
+		order[i] = allocOrderKey{id: ns.ID, reserved: reservedToUnits(ns.Reserved), weight: ns.Weight}
 	}
 
 	// --- Phase 1: reserved floors ---
-	// Sum reserved across all enabled namespaces.
-	rTotal := 0
-	for _, ns := range enabled {
-		rTotal += ns.Reserved
+	// Convert reservations to fixed-point units once at the public type
+	// boundary. This lets fractional floors accumulate without float equality.
+	reservedUnits := make([]int64, len(enabled))
+	var rTotal int64
+	for i, ns := range enabled {
+		reservedUnits[i] = reservedToUnits(ns.Reserved)
+		rTotal += reservedUnits[i]
 	}
 
-	// If R_total exceeds budget, scale each reserved value down with
-	// largest-remainder apportionment (floors alone leave slots unused).
+	// Sum reserved across all enabled namespaces.
 	reserved := make([]int, len(enabled))
-	if rTotal > budget {
-		log.Printf("WARN NamespaceAllocator: total reserved %d exceeds budget %d; scaling reserved proportionally (largest-remainder)",
-			rTotal, budget)
-		shares := make([]float64, len(enabled))
-		for i, ns := range enabled {
-			r := ns.Reserved
-			if r < 0 {
-				r = 0
-			}
-			shares[i] = float64(r)
+	budgetUnits := int64(budget) * reservedScale
+	if rTotal <= budgetUnits {
+		// Whole floors are preserved per namespace. Fractional credits are
+		// pooled and the resulting integer slots go to the largest credits.
+		var fractionalCredits int64
+		fractional := make([]int64, len(enabled))
+		for i, units := range reservedUnits {
+			reserved[i] = int(units / reservedScale)
+			fractional[i] = units % reservedScale
+			fractionalCredits += fractional[i]
 		}
-		reserved = apportionSeats(shares, budget, order)
-	} else {
-		for i, ns := range enabled {
-			r := ns.Reserved
-			if r < 0 {
-				r = 0
+		fractionalCredits /= reservedScale
+		if fractionalCredits > 0 {
+			credits := apportionIntegerShares(fractional, fractionalCredits, order)
+			for i, credit := range credits {
+				reserved[i] += int(credit)
 			}
-			reserved[i] = r
+		}
+	} else {
+		// If R_total exceeds budget, scale each reserved value down with
+		// largest-remainder apportionment (floors alone leave slots unused).
+		log.Printf("WARN NamespaceAllocator: total reserved %d exceeds budget %d; scaling reserved proportionally (largest-remainder)",
+			rTotal, budgetUnits)
+		reserved64 := apportionIntegerShares(reservedUnits, int64(budget), order)
+		for i, value := range reserved64 {
+			reserved[i] = int(value)
 		}
 	}
 
@@ -222,11 +231,14 @@ func (a *NamespaceAllocator) Allocate(namespaces []database.Namespace) map[strin
 		// same largest-remainder method as Phase 1, so shares that fall
 		// below 1 no longer floor to an unrunnable 0 while nobody's share
 		// is shifted by a pre-seed.
-		shares := make([]float64, len(enabled))
+		shares := make([]int64, len(enabled))
 		for i := range shares {
-			shares[i] = float64(weights[i])
+			shares[i] = int64(weights[i])
 		}
-		extra = apportionSeats(shares, remainder, order)
+		extra64 := apportionIntegerShares(shares, int64(remainder), order)
+		for i, value := range extra64 {
+			extra[i] = int(value)
+		}
 	}
 
 	// SCHED-GAP-1697 minimum-one guarantee (owner ruling R3.4: "anytime

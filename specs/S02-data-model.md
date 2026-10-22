@@ -36,7 +36,7 @@ SQLite is the source of truth. DuckBrain is a compact snapshot for foremen and B
 CREATE TABLE IF NOT EXISTS namespaces (
     id          TEXT PRIMARY KEY NOT NULL,
     weight      INTEGER NOT NULL DEFAULT 10 CHECK(weight >= 1 AND weight <= 100),
-    reserved    INTEGER NOT NULL DEFAULT 1 CHECK(reserved >= 0),
+    reserved    REAL NOT NULL DEFAULT 1 CHECK(reserved >= 0),
     hard_cap    INTEGER NOT NULL DEFAULT 100 CHECK(hard_cap >= 0),
     enabled     INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
     description TEXT,

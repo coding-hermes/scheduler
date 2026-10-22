@@ -719,15 +719,16 @@ func (d *DuckBrainSync) syncLaneFamilyOutput(ctx context.Context) error {
 
 // namespaceSummary is the payload sent for /fleet/namespaces.
 type namespaceSummary struct {
-	Count         int    `json:"count"`
-	TotalWeight   int    `json:"total_weight"`
-	TotalReserved int    `json:"total_reserved"`
-	SyncedAt      string `json:"synced_at"`
+	Count         int     `json:"count"`
+	TotalWeight   int     `json:"total_weight"`
+	TotalReserved float64 `json:"total_reserved"`
+	SyncedAt      string  `json:"synced_at"`
 }
 
 // syncNamespaceSummary queries aggregate namespace stats and pushes to DuckBrain.
 func (d *DuckBrainSync) syncNamespaceSummary(ctx context.Context) error {
-	var count, totalWeight, totalReserved int
+	var count, totalWeight int
+	var totalReserved float64
 	if err := d.db.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(weight), 0), COALESCE(SUM(reserved), 0) FROM namespaces`).
 		Scan(&count, &totalWeight, &totalReserved); err != nil {
@@ -746,13 +747,13 @@ func (d *DuckBrainSync) syncNamespaceSummary(ctx context.Context) error {
 
 // namespaceStatus is the per-namespace payload sent to DuckBrain.
 type namespaceStatus struct {
-	ID          string `json:"id"`
-	Weight      int    `json:"weight"`
-	Reserved    int    `json:"reserved"`
-	HardCap     int    `json:"hard_cap"`
-	Enabled     bool   `json:"enabled"`
-	Description string `json:"description"`
-	SyncedAt    string `json:"synced_at"`
+	ID          string  `json:"id"`
+	Weight      int     `json:"weight"`
+	Reserved    float64 `json:"reserved"`
+	HardCap     int     `json:"hard_cap"`
+	Enabled     bool    `json:"enabled"`
+	Description string  `json:"description"`
+	SyncedAt    string  `json:"synced_at"`
 }
 
 // syncNamespaceStatuses queries all namespaces and pushes one memory each to DuckBrain.
@@ -767,7 +768,8 @@ func (d *DuckBrainSync) syncNamespaceStatuses(ctx context.Context) error {
 	syncedAt := d.clock().Now().Format(time.RFC3339)
 	for rows.Next() {
 		var id, desc string
-		var weight, reserved, hardCap int
+		var weight, hardCap int
+		var reserved float64
 		var enabledInt int
 		if err := rows.Scan(&id, &weight, &reserved, &hardCap, &enabledInt, &desc); err != nil {
 			log.Printf("SYNC: scan namespace row: %v", err)

@@ -625,7 +625,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
       properties:
         id: { type: string }
         weight: { type: integer, minimum: 1, maximum: 100 }
-        reserved: { type: integer, minimum: 0 }
+        reserved: { type: number, minimum: 0 }
         hard_cap: { type: integer, minimum: 0, description: "0 = unlimited" }
         enabled: { type: boolean }
         description: { type: string }
@@ -637,7 +637,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
       properties:
         id: { type: string }
         weight: { type: integer, minimum: 1, maximum: 100, default: 10 }
-        reserved: { type: integer, minimum: 0, default: 1 }
+        reserved: { type: number, minimum: 0, default: 1 }
         hard_cap: { type: integer, minimum: 0, default: 100 }
         enabled: { type: boolean, default: true }
         description: { type: string }
@@ -645,7 +645,7 @@ When `NamespaceMode=true`, the following additional endpoints are available. Whe
       type: object
       properties:
         weight: { type: integer }
-        reserved: { type: integer }
+        reserved: { type: number, minimum: 0 }
         hard_cap: { type: integer }
         enabled: { type: boolean }
         description: { type: string }

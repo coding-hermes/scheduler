@@ -80,7 +80,7 @@ enabled = true
 		t.Errorf("namespace weight: expected 70, got %d", ns.Weight)
 	}
 	if ns.Reserved != 10 {
-		t.Errorf("namespace reserved: expected 10, got %d", ns.Reserved)
+		t.Errorf("namespace reserved: expected 10, got %g", ns.Reserved)
 	}
 	if ns.Description != "Main coding-hermes fleet" {
 		t.Errorf("namespace description mismatch: %q", ns.Description)
@@ -175,7 +175,7 @@ func TestApplyFleetConfig(t *testing.T) {
 		t.Errorf("namespace weight: expected 70, got %d", ns.Weight)
 	}
 	if ns.Reserved != 10 {
-		t.Errorf("namespace reserved: expected 10, got %d", ns.Reserved)
+		t.Errorf("namespace reserved: expected 10, got %g", ns.Reserved)
 	}
 
 	// Verify project was created.

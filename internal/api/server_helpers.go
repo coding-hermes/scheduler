@@ -2012,7 +2012,7 @@ var openapiSpec = []byte(`{
         "properties": {
           "id": {"type": "string"},
           "weight": {"type": "integer", "minimum": 1, "maximum": 100},
-          "reserved": {"type": "integer", "minimum": 0},
+          "reserved": {"type": "number", "minimum": 0},
           "hard_cap": {"type": "integer", "minimum": 0, "description": "0 = no cap (interpret as B)"},
           "enabled": {"type": "boolean"},
           "description": {"type": "string"},
@@ -2025,7 +2025,7 @@ var openapiSpec = []byte(`{
         "description": "Partial namespace update — only supplied fields are applied.",
         "properties": {
           "weight": {"type": "integer", "minimum": 1, "maximum": 100},
-          "reserved": {"type": "integer", "minimum": 0},
+          "reserved": {"type": "number", "minimum": 0},
           "hard_cap": {"type": "integer", "minimum": 0},
           "enabled": {"type": "boolean"},
           "description": {"type": "string"},

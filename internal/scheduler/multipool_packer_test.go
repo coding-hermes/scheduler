@@ -16,7 +16,7 @@ import (
 // Test helpers (namespace-specific)
 // ---------------------------------------------------------------------------
 
-func makeNamespace(id string, weight, reserved, hardCap int, enabled bool) *database.Namespace {
+func makeNamespace(id string, weight int, reserved float64, hardCap int, enabled bool) *database.Namespace {
 	return &database.Namespace{
 		ID:       id,
 		Weight:   weight,
