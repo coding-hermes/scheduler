@@ -540,6 +540,16 @@ Written by the **foreman** (it owns `.coding-hermes/`; workers never write board
 state). Read by the scheduler at tick completion and at pack time for the recovery
 flag.
 
+**Writer-side shape rule (SCHED-GAP-1752):** the foreman writes THIS shape —
+`tick_id` / `project` / `started_at` / `finished_at` / `workers[]` — never a
+`rows` / `created_at` / `closed_at` / `result` variant. The drifted writer shape
+caused two live failures: zero worker attribution for every wave tick, and a
+complete wave re-flagged as a recovery candidate on every spawn (the recovery
+predicate reads `finished_at` only; a writer-side `closed_at` never clears it).
+The daemon does not accept the second shape: a manifest that parses with zero
+`workers` while carrying a non-empty `rows` array costs exactly one `WARN` event
+(see the ingestion table) and attributes nothing.
+
 ```json
 {
   "tick_id": "h3-sdk-go-2026-09-13-02-50-55",
@@ -569,9 +579,10 @@ Ingestion rules (all deliberately fail-safe):
 | File missing | `worker_count = 0`, no `tick_workers` rows, **no event** (serial tick is normal) |
 | Malformed JSON | `worker_count = 0`, `WARN` event naming tick + path |
 | `workers` > 8 entries | first 8 ingested, `WARN` event (bounded write) |
+| Zero `workers` + non-empty `rows` (shape drift, SCHED-GAP-1752) | nothing ingested, one `WARN` event naming the drift — the writer must emit `workers[]`; the parser never learns the second shape |
 | File > 64 KiB | not parsed, `WARN` event |
 | Unknown keys | ignored |
-| `finished_at` non-empty at crash-scan time | not a recovery candidate (the foreman closed it) |
+| `finished_at` non-empty at crash-scan time | not a recovery candidate (the foreman closed it) — `finished_at` is the ONLY close field; a writer-side `closed_at` is not consulted (SCHED-GAP-1752) |
 | `tick_id` mismatches the tick being completed | rejected, `WARN` event |
 
 ### 9.4 `/api/v1/status` additions

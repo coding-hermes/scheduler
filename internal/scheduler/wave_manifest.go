@@ -61,6 +61,15 @@ type WaveManifest struct {
 	// TruncatedWorkers counts worker entries dropped by the
 	// waveManifestMaxWorkers cap. json:"-" keeps it out of the wire format.
 	TruncatedWorkers int `json:"-"`
+
+	// ShapeDriftRows (SCHED-GAP-1752) counts entries found under a
+	// non-contract "rows" array in a manifest whose "workers" is
+	// empty/absent. json:"-" keeps it out of the wire format, exactly like
+	// TruncatedWorkers: it is parse-time EVIDENCE for the single loud WARN,
+	// never ingestion input — the parser is deliberately NOT taught the
+	// second shape (the row's explicit fix direction), and nothing from
+	// "rows" is ever attributed.
+	ShapeDriftRows int `json:"-"`
 }
 
 // WaveWorker is one dispatched worker as reported by the foreman. Judge and
@@ -315,6 +324,9 @@ func hasAnyNonEmptyToken(s string) bool {
 //   - malformed JSON          → (nil, error) — caller emits one WARN
 //   - tick_id mismatch        → (nil, error) — caller emits one WARN, nothing ingested
 //   - workers > 8             → first 8 kept, m.TruncatedWorkers set — caller emits one WARN
+//   - zero "workers" + non-empty "rows" (SCHED-GAP-1752 shape drift)
+//     → m.ShapeDriftRows set — caller emits one WARN; the
+//     parser is NOT taught the second shape
 //
 // Unknown JSON keys are ignored (json.Unmarshal default). The returned
 // manifest always carries normalized judge/merge values; the
@@ -352,6 +364,25 @@ func parseWaveManifest(path, tickID string) (*WaveManifest, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, fmt.Errorf("wave manifest parse %s: %w", path, err)
 	}
+
+	// SCHED-GAP-1752: the contract shape (§9.3) carries workers under
+	// "workers". A drifted writer that put them under "rows" parses as
+	// zero workers and would previously die silently — worker_count 0, no
+	// attribution, and (empty finished_at) a permanent recovery flag.
+	// Detect that exact signature here and carry the row count on the
+	// manifest so ingestWaveManifest can emit exactly one loud WARN, but
+	// do NOT read "rows" as workers: two accepted shapes is how the drift
+	// survives. The count-only probe uses a shadow struct so "rows" stays
+	// outside the contract type's vocabulary on the wire.
+	if len(m.Workers) == 0 {
+		var probe struct {
+			Rows []json.RawMessage `json:"rows"`
+		}
+		if json.Unmarshal(raw, &probe) == nil && len(probe.Rows) > 0 {
+			m.ShapeDriftRows = len(probe.Rows)
+		}
+	}
+
 	if m.TickID != tickID {
 		return nil, fmt.Errorf("wave manifest %s tick_id mismatch: manifest %q, completing tick %q", path, m.TickID, tickID)
 	}
@@ -411,6 +442,10 @@ func waveWarnEvent(ctx context.Context, db *sql.DB, tickID, path, message string
 //   - any other parse problem  → (0, nil) + exactly one WARN event naming
 //     the tick id and path; nothing ingested
 //   - workers > 8              → first 8 ingested + one WARN event
+//   - zero "workers" + non-empty "rows" (SCHED-GAP-1752 shape drift)
+//     → nothing ingested + exactly one WARN naming
+//     the drift; the writer must emit workers[] — the parser never learns
+//     the second shape
 //   - success                  → worker rows inserted, worker_count set,
 //     (ingested count, nil)
 //
@@ -447,6 +482,20 @@ func ingestWaveManifest(ctx context.Context, db *sql.DB, workdir, project, tickI
 			fmt.Sprintf("vocab drift: %d worker(s) — judge_drift=%v sample=%q merge_drift=%v sample=%q (ids: %s%s)",
 				len(driftIDs), judgeDrift, sampleJudge, mergeDrift, sampleMerge,
 				strings.Join(driftIDs[:min(5, len(driftIDs))], ", "), extra))
+	}
+
+	// SCHED-GAP-1752: shape drift is loud. A manifest that parsed with zero
+	// workers while carrying a non-empty "rows" array is the writer
+	// emitting a shape the contract (S12 §9.3) never defined; nothing is
+	// attributed and the tick must know why. Exactly one WARN naming the
+	// offending key and the row count — emitted BEFORE BeginTx (same
+	// reasoning as the vocab-drift event above: waveWarnEvent needs its own
+	// pooled connection and SetMaxOpenConns(1) would deadlock inside the
+	// transaction).
+	if m.ShapeDriftRows > 0 {
+		waveWarnEvent(ctx, db, tickID, path,
+			fmt.Sprintf("wave manifest shape drift: writer put %d row(s) under \"rows\" with \"workers\" empty/absent — not the S12 §9.3 contract shape (tick_id/project/started_at/finished_at/workers[]); nothing attributed, the writer must emit workers[]",
+				m.ShapeDriftRows))
 	}
 
 	// SCHED-GAP-1707 deliverable 3: wave-convergence visibility. Count the
