@@ -54,12 +54,18 @@ type TurnDeadlineError struct {
 	// Events is the number of real SSE events observed before the abort
 	// (0 = the POST never became observable — the classic idle-POST hang).
 	Events int
+	// Heartbeats is the number of LIVENESS HEARTBEAT-CHANNEL resets the watch
+	// consumed before the abort (SCHED-GAP-1755). 0 = the channel was empty at
+	// every fire, i.e. the tick's gateway session never showed new tool calls
+	// or tokens: the honest corner for the "stalled" classification.
+	Heartbeats int
 }
 
 // Error implements error. The GAP-117 "stalled" contract text itself is
 // built in spawn.go; this text only names the mechanism for logs.
 func (e *TurnDeadlineError) Error() string {
-	return fmt.Sprintf("gateway turn deadline exceeded: no activity for %v (%d events observed)", e.After, e.Events)
+	return fmt.Sprintf("gateway turn deadline exceeded: no activity for %v (%d events observed, %d heartbeat resets)",
+		e.After, e.Events, e.Heartbeats)
 }
 
 // GatewayPOSTTrace is the per-POST record required by SCHED-GAP-119 AC 1:
@@ -98,6 +104,11 @@ type GatewayPOSTTrace struct {
 	// Events counts real SSE events observed across attempts (deltas, tool
 	// items, terminal events). Keepalive comments are excluded.
 	Events int `json:"events"`
+	// Heartbeats counts LIVENESS HEARTBEAT-CHANNEL resets across attempts
+	// (SCHED-GAP-1755). A reset means the tick's gateway session showed NEW
+	// tool calls or tokens between two deadline fires — the POST was alive
+	// with zero SSE events on the wire. 0 on the empty channel.
+	Heartbeats int `json:"heartbeats,omitempty"`
 	// SessionID is the gateway session id from the X-Hermes-Session-Id
 	// response header when present (available at stream open — earlier and
 	// more precise than the per-request resp_* envelope id), else the
@@ -233,6 +244,7 @@ func mergePostTrace(dst **GatewayPOSTTrace, next *GatewayPOSTTrace) {
 	d.Classification = next.Classification
 	d.IdleFired = next.IdleFired
 	d.Events += next.Events
+	d.Heartbeats += next.Heartbeats
 	if next.SessionID != "" {
 		d.SessionID = next.SessionID
 	}
@@ -242,10 +254,25 @@ func mergePostTrace(dst **GatewayPOSTTrace, next *GatewayPOSTTrace) {
 // watcher goroutine owns a child context; when the deadline fires (no
 // activity for `deadline`) it marks fired and cancels the context, which
 // aborts the in-flight POST. Every real SSE event resets the timer.
+//
+// SCHED-GAP-1755 adds a SECOND resetter: the liveness heartbeat channel
+// (beat, optional). At each timer fire the watch reads the channel's
+// monotonic activity signature; a signature that MOVED since the previous
+// fire means the tick's gateway session did new work (tool calls / tokens)
+// between fires, so the timer resets instead of aborting. An empty channel
+// (nil beat, or a signature that is 0/unmoved) leaves the deadline
+// fail-closed exactly as GAP-117/119 shipped it.
 type turnWatch struct {
 	deadline time.Duration
 	fired    atomic.Bool
 	events   atomic.Int64
+	// heartbeats counts heartbeat-channel resets (SCHED-GAP-1755).
+	heartbeats atomic.Int64
+	// lastBeatSig is the channel signature consumed by the previous fire
+	// (0 = nothing consumed yet / empty channel).
+	lastBeatSig atomic.Int64
+	// beat is the heartbeat channel probe (nil = channel absent).
+	beat     func() int64
 	activity chan struct{}
 	stopped  chan struct{}
 	cancel   context.CancelFunc
@@ -254,9 +281,14 @@ type turnWatch struct {
 // startTurnWatch arms the idle deadline for one POST. The returned context
 // is the request context: canceled by the watcher when the deadline fires,
 // or by Stop when the POST resolves. deadline must be > 0.
-func startTurnWatch(parent context.Context, deadline time.Duration) (*turnWatch, context.Context) {
+//
+// beat is the optional SCHED-GAP-1755 liveness heartbeat channel: at every
+// fire the watch consults it, and a moved signature resets the timer instead
+// of aborting the POST (nil = no channel, i.e. the GAP-119 behavior).
+func startTurnWatch(parent context.Context, deadline time.Duration, beat func() int64) (*turnWatch, context.Context) {
 	w := &turnWatch{
 		deadline: deadline,
+		beat:     beat,
 		activity: make(chan struct{}, 1),
 		stopped:  make(chan struct{}),
 	}
@@ -269,13 +301,24 @@ func startTurnWatch(parent context.Context, deadline time.Duration) (*turnWatch,
 		for {
 			select {
 			case <-t.C:
+				// SCHED-GAP-1755: a live heartbeat channel is progress.
+				// Only a fire with an EMPTY (or unmoved) channel is a
+				// stall — AC 4's "only if the heartbeat channel is empty".
+				if w.beat != nil {
+					if sig := w.beat(); sig > 0 && sig != w.lastBeatSig.Load() {
+						w.lastBeatSig.Store(sig)
+						w.heartbeats.Add(1)
+						t.Reset(deadline)
+						continue
+					}
+				}
 				w.fired.Store(true)
 				cancel()
 				return
 			case <-w.activity:
-				// Sole resetter: the only exits from this select are the
-				// timer firing or ctx cancellation, so Reset is race-free
-				// per the time package docs.
+				// Sole SSE resetter: the only exits from this select are
+				// the timer firing or ctx cancellation, so Reset is
+				// race-free per the time package docs.
 				t.Reset(deadline)
 			case <-ctx.Done():
 				return
@@ -309,7 +352,11 @@ func (w *turnWatch) stop() {
 // legacy transport error, unchanged.
 func (w *turnWatch) abortErr(err error) error {
 	if w.fired.Load() {
-		return &TurnDeadlineError{After: w.deadline, Events: int(w.events.Load())}
+		return &TurnDeadlineError{
+			After:      w.deadline,
+			Events:     int(w.events.Load()),
+			Heartbeats: int(w.heartbeats.Load()),
+		}
 	}
 	return err
 }
@@ -330,6 +377,16 @@ func (w *turnWatch) abortErr(err error) error {
 // the same error-envelope handling as the legacy path. The trace carries
 // the AC 1 record; its Classification is finalized on every return path.
 func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, provider, key, sessionKey string, turnDeadline time.Duration) (*Response, *GatewayPOSTTrace, error) {
+	return g.SendResponseStreamWithHeartbeat(ctx, prompt, model, provider, key, sessionKey, turnDeadline, nil)
+}
+
+// SendResponseStreamWithHeartbeat is SendResponseStream plus the SCHED-GAP-1755
+// liveness heartbeat channel: beat reports a monotonic activity signature for
+// the tick's gateway session (0 = empty channel), read at every deadline fire.
+// A moved signature resets the deadline instead of aborting the POST, so a turn
+// whose writes emit no SSE events is not failed as stalled while it is
+// demonstrably working. nil beat = the GAP-119 behavior byte-for-byte.
+func (g *GatewayClient) SendResponseStreamWithHeartbeat(ctx context.Context, prompt, model, provider, key, sessionKey string, turnDeadline time.Duration, beat func() int64) (*Response, *GatewayPOSTTrace, error) {
 	trace := &GatewayPOSTTrace{
 		Start:          g.clock().Now(),
 		Deadline:       turnDeadline,
@@ -365,7 +422,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 	var watch *turnWatch
 	reqCtx := ctx
 	if turnDeadline > 0 {
-		watch, reqCtx = startTurnWatch(ctx, turnDeadline)
+		watch, reqCtx = startTurnWatch(ctx, turnDeadline, beat)
 		defer watch.stop()
 	}
 
@@ -417,6 +474,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 		r, err := readSSEResponse(resp.Body, watch)
 		if watch != nil {
 			trace.Events = int(watch.events.Load())
+			trace.Heartbeats = int(watch.heartbeats.Load())
 			if err != nil {
 				if werr := watch.abortErr(err); werr != err {
 					// The watch fired — this is the idle abort.
@@ -462,6 +520,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 	}
 	if watch != nil {
 		trace.Events = int(watch.events.Load())
+		trace.Heartbeats = int(watch.heartbeats.Load())
 	}
 	if trace.SessionID == "" && result.ID != "" {
 		trace.SessionID = result.ID

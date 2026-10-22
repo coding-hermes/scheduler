@@ -286,7 +286,12 @@ canonical "is the scheduler alive" probe.
 ```json
 {"active_ticks":1,"clock":{"mode":"real","scale":1},"db":"connected","evaluation_age_seconds":185.1,
  "last_evaluation":"2026-08-18T06:52:15Z","spawns_exec":0,"spawns_http":3,
- "status":"ok","uptime":"18m35.148135137s"}
+ "status":"ok","uptime":"18m35.148135137s",
+ "stalls_24h":{"window_hours":24,"total":70,"by_family":[
+   {"family":"primary","ticks":335,"stalled_24h":20,"stall_rate":0.0597,
+    "deadline":"30m0s","deadline_ms":1800000,"exempt":false,"heartbeat":true},
+   {"family":"sync","ticks":128,"stalled_24h":29,"stall_rate":0.2266,
+    "deadline":"exempt","deadline_ms":0,"exempt":true,"heartbeat":true}]}}
 ```
 
 | Field | Type | Meaning |
@@ -299,6 +304,7 @@ canonical "is the scheduler alive" probe.
 | `last_evaluation` | string | RFC3339 of the last evaluation cycle; `""` if never evaluated |
 | `evaluation_age_seconds` | float | Seconds since last evaluation (0 when never evaluated — compare against this, not the empty `last_evaluation`) |
 | `spawns_http` / `spawns_exec` | int | Cumulative tick spawns via gateway HTTP vs `exec.Command` fallback. Fleet norm is HTTP rising, exec 0 |
+| `stalls_24h` | object | SCHED-GAP-1755 per-family stall census (AC 2). `window_hours` = the rolling window (24), `total` = every `stalled: no progress` tick in it, `by_family` = one row per lane family: `family` (`primary` for role-less lanes, else the role suffix — `sync`, `qa`, `pm`, `dogfood`, `perf`, `docs`, `readme`, `releng`, `review`), `ticks` (ticks the family ran in the window), `stalled_24h` (how many carried the stall class), `stall_rate` (ratio), `deadline`/`deadline_ms` (the per-turn deadline IN FORCE for that family — `"exempt"`/0 for the role-suffix families, which is the SCHED-GAP-1755 fix), `exempt` (same as a boolean), `heartbeat` (true when the liveness heartbeat channel backs the deadline). Families with no ticks still appear — the deadline column is the load-bearing half. An unreadable DB adds `error` and leaves the policy rows intact |
 
 **Errors:** 405 `{"error":"GET only"}` on non-GET.
 

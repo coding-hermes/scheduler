@@ -375,6 +375,21 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if !obs.check(w, ctx) {
 		return
 	}
+	// SCHED-GAP-1755 (AC 2): the per-family stall census — stalls_24h by
+	// family alongside the per-turn deadline actually in force for each
+	// family. One aggregated round trip under the same request deadline.
+	// A nil loop (unit-test servers) resolves the knob at the library default
+	// the spawner itself would boot with, and a nil/closed DB degrades to the
+	// policy half of the census — this surface must never take /health down.
+	stallKnob := scheduler.DefaultGatewayResponseTimeout
+	if s.loop != nil {
+		stallKnob = s.loop.GatewayResponseTimeout()
+	}
+	obs.enter("computeStallCensus")
+	stallCensus := computeStallCensus(ctx, s.db, s.clock().Now(), stallKnob)
+	if !obs.check(w, ctx) {
+		return
+	}
 	lastEval := s.loop.LastEvalTime()
 	// last_evaluation is RFC3339. Zero time serializes as "0001-01-01T00:00:00Z"
 	// when the loop has never evaluated yet — callers can compare against
@@ -419,6 +434,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// SCHED-GAP-080: transient gateway spawn failures since restart
 		// (auth rejections never counted), alongside the spawn counters.
 		"gateway_errors": s.loop.GatewayErrorCount(),
+		// SCHED-GAP-1755: stalls_24h by lane family + the per-turn deadline
+		// resolved for each family ("exempt" for the role-suffix families
+		// whose POSTs emit no gateway progress events).
+		"stalls_24h": stallCensus,
 	})
 }
 

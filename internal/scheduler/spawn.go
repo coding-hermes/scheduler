@@ -252,14 +252,24 @@ type Spawner struct {
 //
 // Every attempt (primary + GAP-080 retry + chain hops) merges its
 // GatewayPOSTTrace into *tickTrace; logPOSTTrace persists + logs it (AC 1).
-func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout time.Duration,
+//
+// SCHED-GAP-1755: turnDeadline is the FAMILY-RESOLVED per-turn deadline
+// (StallDeadlineForLane) — 0 means this lane's family is exempt, in which case
+// the streaming POST is still used (SSE observability is worth keeping) but no
+// deadline is armed: the tick wall alone bounds it. When a deadline IS armed,
+// the watch also reads the liveness heartbeat channel for this tick.
+func (s *Spawner) sendTurn(gw *GatewayClient, sessionCtx, turnCtx context.Context, supervise bool, effectiveTimeout, turnDeadline time.Duration,
 	prompt, model, provider, key, tickID, project string, tickTrace **GatewayPOSTTrace, stall *bool) (*Response, error) {
 	if supervise {
-		deadline := s.gatewayResponseTimeout
+		deadline := turnDeadline
 		if deadline > effectiveTimeout {
 			deadline = effectiveTimeout
 		}
-		r, trace, err := gw.SendResponseStream(sessionCtx, prompt, model, provider, key, tickID, deadline)
+		var beat func() int64
+		if deadline > 0 {
+			beat = newStallHeartbeat(tickID).signature
+		}
+		r, trace, err := gw.SendResponseStreamWithHeartbeat(sessionCtx, prompt, model, provider, key, tickID, deadline, beat)
 		trace.Model, trace.Provider = model, provider
 		trace.TickID, trace.Project = tickID, project
 		mergePostTrace(tickTrace, trace)
@@ -333,10 +343,10 @@ func (s *Spawner) logPOSTTrace(tickID string, trace *GatewayPOSTTrace) {
 	trace.Elapsed = trace.Finish.Sub(trace.Start)
 	trace.ElapsedMS = trace.Elapsed.Milliseconds()
 	trace.DeadlineMS = trace.Deadline.Milliseconds()
-	log.Printf("GATEWAY-POST-TRACE: tick=%s project=%s model=%s provider=%s classification=%s mode=%s deadline=%v elapsed=%v events=%d attempts=%d session=%s idle_fired=%t",
+	log.Printf("GATEWAY-POST-TRACE: tick=%s project=%s model=%s provider=%s classification=%s mode=%s deadline=%v elapsed=%v events=%d heartbeats=%d attempts=%d session=%s idle_fired=%t",
 		trace.TickID, trace.Project, trace.Model, trace.Provider,
 		trace.Classification, trace.DeadlineMode, trace.Deadline, trace.Elapsed,
-		trace.Events, trace.Attempts, trace.SessionID, trace.IdleFired)
+		trace.Events, trace.Heartbeats, trace.Attempts, trace.SessionID, trace.IdleFired)
 	if s.db == nil {
 		return
 	}
@@ -1724,7 +1734,27 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// zero-accounted failure. turnCtx below therefore bounds only
 			// the LEGACY non-streaming POST (knob off, or collapsed onto
 			// the tick deadline) — byte-for-byte the pre-119 behavior.
-			superviseTurn := s.gatewayResponseTimeout > 0 && s.gatewayResponseTimeout < effectiveTimeout
+			// SCHED-GAP-1755: the per-turn deadline is FAMILY-SCOPED. A
+			// role-suffix (satellite) lane — sync/qa/pm/dogfood/perf/docs/
+			// readme/releng/review — resolves to 0, i.e. EXEMPT: the measured
+			// 24h census put 50/70 "stalled" failures on exactly those lanes
+			// with deadline_mode=wall and events=0 (no headers at all for the
+			// whole 30m: the gateway's queue/fallback latency, not agent
+			// silence), so the deadline was failing work it never observed.
+			// Primary (foreman) lanes keep the knob unchanged; their 20 stalls
+			// all had events>0 (the GAP-119 shape). The streaming POST is still
+			// used for an exempt lane (SSE observability + traces), only the
+			// deadline is disarmed. An explicit pin can re-arm any family
+			// (SetStallFamilyDeadline).
+			stallFamily := StallFamilyOf(project.Name)
+			turnDeadline := StallDeadlineForLane(project.Name, s.gatewayResponseTimeout)
+			// SCHED-GAP-1755: the streaming (trace-bearing) POST is used while
+			// the knob is armed at all. An EXEMPT family (turnDeadline == 0)
+			// still streams — the trace is how the exemption stays auditable —
+			// it simply arms no watch, so the tick wall is its only bound. A
+			// primary lane whose resolved deadline would sit at/above the tick
+			// wall keeps the legacy non-streaming path byte-for-byte.
+			superviseTurn := s.gatewayResponseTimeout > 0 && (turnDeadline <= 0 || turnDeadline < effectiveTimeout)
 			turnCtx, turnCancel := context.WithCancel(ctx)
 			defer turnCancel()
 
@@ -1869,7 +1899,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// POST when the knob is armed, else the legacy non-streaming
 				// POST under turnCtx — one seam for every attempt below.
 				send := func(m, p string) (*Response, error) {
-					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
+					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTimeout, turnDeadline, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
 				}
 				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
@@ -2407,10 +2437,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// comment below for the double-run rationale), so the wording
 				// names the real outcome (stalled failure) and carries the
 				// gateway error text the old FAIL line used to relay.
-				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure: %v",
-					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout, gwErr)
-				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
-					s.gatewayResponseTimeout, effectiveTimeout)
+				log.Printf("GATEWAY STALLED: %s tick=%s family=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure: %v",
+					project.Name, tickID, stallFamily, turnDeadline, effectiveTimeout, gwErr)
+				// SCHED-GAP-1755: the classification names the mechanism that
+				// decided it — the family, the deadline that family carries,
+				// and the heartbeat-channel resets observed (a stall is only
+				// recorded when the channel was empty at every fire).
+				stallHeartbeats := 0
+				if postTrace != nil {
+					stallHeartbeats = postTrace.Heartbeats
+				}
+				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; family %q; heartbeat resets %d; tick timeout %v)",
+					turnDeadline, stallFamily, stallHeartbeats, effectiveTimeout)
 				// SCHED-GAP-119: preserve the REAL gateway session id on the
 				// stalled row (the SSE X-Hermes-Session-Id header, else the
 				// tick-id placeholder) and count the work the turn actually
@@ -2428,7 +2466,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						"gateway turn stalled — tick failed before tick-timeout", map[string]any{
 							"project":         project.Name,
 							"tick_id":         tickID,
-							"turn_deadline_s": int(s.gatewayResponseTimeout.Seconds()),
+							"stall_family":    stallFamily,
+							"turn_deadline_s": int(turnDeadline.Seconds()),
+							"heartbeats":      stallHeartbeats,
 							"tick_timeout_s":  int(effectiveTimeout.Seconds()),
 							"error":           stallErr,
 						})
