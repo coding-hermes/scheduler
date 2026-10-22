@@ -1562,6 +1562,29 @@ func main() {
 		}
 	})
 
+	// SCHED-GAP-1746: the Cadence & Residue page (/cadence) — configured
+	// vs achieved starts/day plus the cooldown-pin residue detector. htmx
+	// polls return the residue-rows fragment only (HX-Request) — the same
+	// fragment contract as /remote and /health.
+	mux.HandleFunc("GET /cadence", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var err error
+		if r.Header.Get("HX-Request") != "" {
+			err = dashGen.GenerateCadenceResidueRows(w)
+		} else {
+			err = dashGen.GenerateCadence(w)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	mux.HandleFunc("GET /cadence/partial", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := dashGen.GenerateCadenceResidueRows(w); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
 	// SCHED-GAP-1601: the deploy blocks console page (/blocks) — groups +
 	// templates listed read-only; every write goes through /dashboard/control.
 	mux.HandleFunc("GET /blocks", func(w http.ResponseWriter, r *http.Request) {
