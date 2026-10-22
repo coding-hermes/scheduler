@@ -218,3 +218,5 @@ STATUS: complete
 TIER: T3 — invoked: go test ./internal/api (PASS: TestAPI_Cadence_ConfiguredVsAchieved, TestAPI_Cadence_TasksAdmissionGovernorContext), go test ./internal/database (PASS: TestEffectiveCadenceTargetNoOpinionWithoutOverrideOrPin, TestCadenceTargetRoundTripAndAchievedRate, TestLoadCadenceRates_WindowFollowsClockSeam), go test ./internal/mcp (PASS: TestMCP_Cadence_GovernorParity + cadence registry arms), go test ./internal/scheduler (PASS: cadence/cooldown suites); go build ./... 0 errors; go vet ./... clean; gofmt -l on changed files: empty. Acceptance grep `git grep -n tasksAdmissionDue -- internal` hits internal/scheduler/admission_mode.go (tasksAdmissionDue, the board-driven admission branch).
 EVIDENCE: commit:none:pending-commit (implementation + tests + docs + this marker in one commit on wt/SCHED-GAP-1745; SHA bound by foreman trace follow-up)
 */
+
+// Traceability marker: the preceding block is repository-local evidence for SCHED-GAP-1745.

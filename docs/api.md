@@ -1475,10 +1475,13 @@ disabled alike, ordered by `name`):
 | `cadence` | array | One row per stored project row — enabled AND disabled lanes. Empty `[]` (never `null`) only when the fleet has no projects |
 | `cadence[].name` | string | Lane name — the join key against `/api/v1/projects` |
 | `cadence[].target_runs_per_day` | number \| null | Configured starts/day; `null` when `target_source` is `disabled` or `none` |
-| `cadence[].target_source` | string | `override`, `cooldown_pin`, `disabled` or `none` — see the vocabulary table above |
+| `cadence[].target_source` | string | `override`, `cooldown_pin`, `tasks_board`, `disabled` or `none` — see the vocabulary table above |
+| `cadence[].admission_governor` | string | `cooldown_pin` when wall-clock cooldown paces admission; `tasks_board` when board-driven admission governs the lane |
 | `cadence[].achieved_runs_per_day` | number | Ticks whose `spawned_at` is set and falls inside the trailing window, divided by `window_days`. A spawned tick counts whether it later completed, failed or timed out |
 | `cadence[].window_days` | int | Always `7` — the window length, repeated on every row so a row is self-describing |
-| `cadence[].target_deficit_per_day` | number | `max(0, target − achieved)`; always `0` when `target_runs_per_day` is `null`, so an over-achieving lane never reports a negative deficit |
+| `cadence[].target_deficit_per_day` | number | `max(0, target − achieved)` for `cooldown_pin` rows; `0` with `target_runs_per_day: null` and `target_source: tasks_board` because board-driven admission has no cooldown-derived delivery target |
+
+A `tasks_board` row is governed by `admission_mode=tasks` and an owned board (`tasksAdmissionDue`), not by its stored cooldown pin while dispatchable board work exists. Do not interpret its zero deficit as measured delivery or use it in a cooldown-based "lanes behind" ranking. Shared-board task lanes remain `cooldown_pin` because their board-ownership waiver does not apply.
 
 **Errors:** 405 `{"error":"method not allowed"}` with `Allow: GET` on any
 non-GET; 504 `{"error":"deadline exceeded","helper":"cadence","detail":…}` when
