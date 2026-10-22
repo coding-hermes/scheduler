@@ -23,8 +23,24 @@ const peersEventsToolTimeout = 5 * time.Second
 // fabricated: an unknown id is a not-found error and a scheduler that has
 // never sent events reads last_event: null / last_event_id: "" — the same
 // rendering the REST route answers with (peerEvents in internal/api).
+//
+// SCHED-GAP-1750: the advertised all-schedulers default WORKS. `id` is
+// optional; omitting it (or passing "*") answers the AGGREGATE slice — the
+// union across every scheduler this instance ingested from, rendered exactly
+// as the fleet-wide REST route in internal/api: the newest stored event, the
+// greatest replay high-water mark, and the summed dedupe drops, with
+// scheduler_id "*". `scheduler_id` is accepted as an alias of `id` — the
+// error message a pre-fix daemon emitted named it, and a client retrying
+// with the named parameter now gets the right answer instead of a silent
+// unknown-arg ignore.
 func (s *Server) toolPeersEvents(ctx context.Context, args map[string]interface{}) (string, error) {
 	peerID := strings.TrimSpace(getStringArg(args, "id"))
+	if peerID == "" {
+		peerID = strings.TrimSpace(getStringArg(args, "scheduler_id"))
+	}
+	if peerID == "*" {
+		peerID = "" // the advertised all-schedulers wildcard
+	}
 	if peerID != "" {
 		if _, err := database.GetPeer(ctx, s.db, peerID); err != nil {
 			if errors.Is(err, database.ErrPeerNotFound) {

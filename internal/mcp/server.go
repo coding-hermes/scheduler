@@ -550,7 +550,8 @@ var tools = []ToolDefinition{
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"id": map[string]interface{}{"type": "string", "description": "Peer id (optional; omit for all schedulers)"},
+				"id":           map[string]interface{}{"type": "string", "description": "Peer id (optional; omit or '*' for all schedulers)"},
+				"scheduler_id": map[string]interface{}{"type": "string", "description": "Alias of id — accepted so a retry naming this field resolves instead of being silently ignored"},
 			},
 		},
 	},

@@ -145,22 +145,23 @@ ON CONFLICT(scheduler_id) DO UPDATE SET dedupe_drops = dedupe_drops + excluded.d
 	return nil
 }
 
-// RemoteLastEventID returns the per-scheduler LAST-SEEN EVENT high-water
+// RemoteLastEventID returns the scheduler's LAST-SEEN EVENT high-water
 // mark (the greatest event_id observed, by counter order). Returns "" when
 // the scheduler has never been seen — the replay-from-scratch condition.
+// schedulerID "" is the AGGREGATE (the REST fleet-wide route and the MCP
+// no-id form): the greatest mark across every scheduler this instance saw,
+// lexicographic over counter-form ids (event ids embed their scheduler
+// prefix, so the fleet-wide maximum is well-defined).
 func RemoteLastEventID(ctx context.Context, db *sql.DB, schedulerID string) (string, error) {
-	if strings.TrimSpace(schedulerID) == "" {
-		return "", errors.New("remote last event id: scheduler_id required")
+	q := `SELECT COALESCE(MAX(last_event_id), '') FROM remote_events_stats`
+	args := []any{}
+	if strings.TrimSpace(schedulerID) != "" {
+		q += ` WHERE scheduler_id = ?`
+		args = append(args, schedulerID)
 	}
 	var last string
-	err := db.QueryRowContext(ctx,
-		`SELECT COALESCE(last_event_id, '') FROM remote_events_stats WHERE scheduler_id = ?`,
-		schedulerID).Scan(&last)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("remote last event id %q: %w", schedulerID, err)
+	if err := db.QueryRowContext(ctx, q, args...).Scan(&last); err != nil {
+		return "", fmt.Errorf("remote last event id %s: %w", schedulerID, err)
 	}
 	return last, nil
 }
@@ -199,7 +200,10 @@ ON CONFLICT(scheduler_id) DO UPDATE SET last_event_id = excluded.last_event_id`
 // they never move an existing counter-form mark, but they MAY establish a
 // first mark so a scheduler that only ever emits non-counter ids still
 // records a floor. With both non-counter, the later write wins (arrival
-// order — the only order such ids have).
+// order — the only order such ids have). The current mark is never empty
+// here: RemoteLastEventID's aggregate read resolves "" as the empty-store
+// case on SetRemoteLastEventID's caller side, and the ""→true arm below is
+// the empty-store arm of the comparison itself.
 func remoteCounterLess(cur, next string) bool {
 	if cur == "" {
 		return true
@@ -307,11 +311,21 @@ func RemoteEventCount(ctx context.Context, db *sql.DB, schedulerID string) (int,
 
 // RemoteLastEvent returns the scheduler's most recently INGESTED event (by
 // receive time, then event id) — the dashboard's "last-seen event" cell.
-// sql.ErrNoRows means this scheduler has no stored events yet; the caller
-// decides how to render that.
+// schedulerID "" is the AGGREGATE (the REST fleet-wide route and the MCP
+// no-id form): the newest ingested event across every scheduler this
+// instance saw, ordered exactly as the per-scheduler read.
+// sql.ErrNoRows means no stored events yet; the caller decides how to
+// render that.
 func RemoteLastEvent(ctx context.Context, db *sql.DB, schedulerID string) (*RemoteEvent, error) {
-	row := db.QueryRowContext(ctx, `SELECT scheduler_id, event_id, kind, project, tick_id, status, ts, topic, pattern, ingested_at, source
-FROM remote_events WHERE scheduler_id = ? ORDER BY ingested_at DESC, event_id DESC LIMIT 1`, schedulerID)
+	q := `SELECT scheduler_id, event_id, kind, project, tick_id, status, ts, topic, pattern, ingested_at, source
+FROM remote_events`
+	args := []any{}
+	if strings.TrimSpace(schedulerID) != "" {
+		q += ` WHERE scheduler_id = ?`
+		args = append(args, schedulerID)
+	}
+	q += ` ORDER BY ingested_at DESC, event_id DESC LIMIT 1`
+	row := db.QueryRowContext(ctx, q, args...)
 	e := &RemoteEvent{}
 	err := row.Scan(&e.SchedulerID, &e.EventID, &e.Kind, &e.Project, &e.TickID,
 		&e.Status, &e.TS, &e.Topic, &e.Pattern, &e.IngestedAt, &e.Source)

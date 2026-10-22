@@ -1786,16 +1786,16 @@ curl -s http://127.0.0.1:9090/api/v1/peers/events \
   -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN" | jq
 ```
 
-**Live status (2026-10-19) — known defect, this route answers 404.** Probed
-against a build of HEAD, `GET /api/v1/peers/events` returns
-`{"error":"unknown peer: events"}` with **404**, not the slice. Cause: the
-subtree dispatcher in `internal/api/server_peers.go` derives the peer id as
-`strings.TrimSuffix(rest, "/events")`, which does not strip the aggregate path
-(`rest == "events"`, no leading slash), so `"events"` is looked up as a peer id.
-The per-scheduler route below is unaffected, and the MCP tool `peers_events`
-(called with no `id`) answers the aggregate slice correctly. Documented here so
-an integrator does not build against a 404; the fix is confined to that
-dispatch branch.
+**Fixed 2026-10-22 (SCHED-GAP-1750): the aggregate route answers the slice.**
+Two defects stacked here before: the subtree dispatcher derived the peer id
+`"events"` from the aggregate path (TrimSuffix has nothing to strip when
+`rest == "events"`) and answered 404 `unknown peer: events`, and a masked
+500 lay behind that from `RemoteLastEventID("")`. Both are fixed: the
+aggregate path dispatches explicitly to the all-schedulers read
+(`scheduler_id: "*"`, global `last_event`, MAX over the marks, summed
+`dedupe_drops`) and `RemoteLastEventID` / `RemoteLastEvent` treat `""` as
+the aggregate — exactly the payload shape tabulated above. The per-scheduler
+route below is unaffected.
 
 ### GET /api/v1/peers/{id}/events
 

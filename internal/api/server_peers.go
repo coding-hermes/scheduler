@@ -158,8 +158,25 @@ func (s *Server) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// REMOTE-006: the durable per-peer event slice — the last-seen event,
-	// the replay high-water mark, and the counted dedupe drops.
-	if rest == "events" || strings.HasSuffix(rest, "/events") {
+	// the replay high-water mark, and the counted dedupe drops. The
+	// aggregate path is rest == "events" with NO trailing "/events" to
+	// TrimSuffix — the suffix form would here derive the peer id "events"
+	// and answer a wrong not-found (SCHED-GAP-1750: the 2026-10-19 live
+	// defect in docs/api.md §14).
+	if rest == "events" {
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "GET only")
+			return
+		}
+		if !s.requireOperator(w, r, "-") {
+			return
+		}
+		// The aggregate route is operator-gated too (SCHED-GAP-1602's
+		// auth map already pins it); pass "" — the all-schedulers slice.
+		s.peerEvents(w, r, "")
+		return
+	}
+	if strings.HasSuffix(rest, "/events") {
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "GET only")
 			return

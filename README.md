@@ -363,7 +363,7 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `peers_list` | Federation peers with freshness — `stale` computed against the peer freshness window (REMOTE-003) |
 | `peers_register` | Register or refresh a federation peer (identity only — liveness is heartbeat-only) |
 | `peers_heartbeat` | Stamp a registered peer's `last_contact` to now (no auto-register) |
-| `peers_events` | REMOTE-006 durable per-peer event slice — last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops`; `id` optional (omit = every scheduler) |
+| `peers_events` | REMOTE-006 durable per-peer event slice — last-seen event, replay high-water mark (`last_event_id`), counted `dedupe_drops`; `id` optional (omit or `*` = every scheduler; `scheduler_id` accepted as alias) |
 | `cadence` | Configured-vs-achieved run rates per lane (SOL-CADENCE) — `target_runs_per_day`, `achieved_runs_per_day`, `target_deficit_per_day` over a 7-day window |
 | `fed_query` | Federation query envelope (REMOTE-010): op + args + required `corr_id`; returns the §2.2 response envelope verbatim |
 | `fed_peer_status` | Federation read op `peer.status` — identity, version, clock, load, uptime |
