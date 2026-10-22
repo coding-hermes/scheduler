@@ -61,13 +61,54 @@ func TestMigrationV72_TurnDeadline(t *testing.T) {
 		t.Errorf("duckbrain-sync turn_deadline = %q, want \"0s\" (per-turn exempt, SCHED-GAP-1755)", raw)
 	}
 
-	// MigrationVersion must be >= 72 on a migrated DB.
+	// The QA half (v74): a builder family gets a LONG deadline, not an
+	// exemption — measured on the live fleet, qa dies to the same 30m class
+	// mid-battery but a full exemption would leave a genuine hang on the 3h
+	// slot. Same replay shape as the duckbrain-sync arm.
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO namespaces (id) VALUES ('qa')`); err != nil {
+		t.Fatalf("insert qa: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE namespaces SET turn_deadline = '' WHERE id = 'qa'`); err != nil {
+		t.Fatalf("reset qa turn_deadline: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM migrations WHERE version = 74`); err != nil {
+		t.Fatalf("unapply v74: %v", err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("re-run migration ladder for v74: %v", err)
+	}
+	var qaDL string
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(turn_deadline, '') FROM namespaces WHERE id = 'qa'`).Scan(&qaDL); err != nil {
+		t.Fatalf("read qa turn_deadline: %v", err)
+	}
+	if qaDL != "2h" {
+		t.Errorf("qa turn_deadline = %q, want \"2h\" (long-battery override, SCHED-GAP-1755)", qaDL)
+	}
+	// The v74 predicate is idempotent: an operator-set value must survive a
+	// replay (only a row still at the '' default is written).
+	if _, err := db.ExecContext(ctx, `UPDATE namespaces SET turn_deadline = '90m' WHERE id = 'qa'`); err != nil {
+		t.Fatalf("operator override: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM migrations WHERE version = 74`); err != nil {
+		t.Fatalf("unapply v74 (second time): %v", err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("re-run migration ladder (second time): %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(turn_deadline, '') FROM namespaces WHERE id = 'qa'`).Scan(&qaDL); err != nil {
+		t.Fatalf("read qa turn_deadline after replay: %v", err)
+	}
+	if qaDL != "90m" {
+		t.Errorf("qa turn_deadline after replay = %q, want the operator's \"90m\" preserved (the backfill never overrides a set value)", qaDL)
+	}
+
+	// MigrationVersion must be at the head of the ladder on a migrated DB.
 	v, err := MigrationVersion(ctx, db)
 	if err != nil {
 		t.Fatalf("MigrationVersion: %v", err)
 	}
-	if v < 73 {
-		t.Errorf("MigrationVersion = %d, want >= 73", v)
+	if v < 74 {
+		t.Errorf("MigrationVersion = %d, want >= 74", v)
 	}
 }
 

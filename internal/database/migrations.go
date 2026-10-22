@@ -9,8 +9,8 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-// SCHED-GAP-1755 landed v73 (namespaces.turn_deadline + census index).
-const latestMigration = 73
+// SCHED-GAP-1755 landed v74 (namespaces.turn_deadline, census index, duckbrain-sync exempt + qa 2h).
+const latestMigration = 74
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1613,6 +1613,20 @@ CREATE INDEX IF NOT EXISTS idx_ticks_status_running_project ON ticks(project_nam
 		desc:    "SCHED-GAP-1755: exempt the duckbrain-sync namespace from the per-turn /v1/responses deadline (turn_deadline='0s') — its DuckBrain HTTP writes emit no gateway progress events, so the 30m idle deadline killed 50% of the family's ticks",
 		stmt: `
 UPDATE namespaces SET turn_deadline = '0s', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'duckbrain-sync' AND turn_deadline = '';
+`,
+	},
+	{
+		// SCHED-GAP-1755 (the QA half). Measured on the live fleet: qa lanes
+		// die to the SAME class — several at exactly 30m, the rest at 43-86m
+		// after a 30m silent stretch inside a longer QA-battery run (a
+		// terminal tool call emits no SSE event while the battery executes).
+		// qa is a BUILDER family, so a full exemption would leave a genuine
+		// hang burning the whole 3h slot: 2h tolerates a battery and keeps a
+		// fail-closed per-turn backstop well under the tick wall.
+		version: 74,
+		desc:    "SCHED-GAP-1755: qa namespace turn_deadline='2h' — long QA batteries emit no gateway progress events mid-run; 2h keeps a per-turn backstop while stopping the 30m class from eating the family",
+		stmt: `
+UPDATE namespaces SET turn_deadline = '2h', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'qa' AND turn_deadline = '';
 `,
 	},
 }
