@@ -42,17 +42,17 @@ func CreateNamespace(ctx context.Context, db *sql.DB, ns *Namespace) error {
 		return fmt.Errorf("invalid load_gate %q for namespace %q (want \"off\" or empty)", ns.LoadGate, ns.ID)
 	}
 	const q = `INSERT INTO namespaces
-(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, gateway_url, gateway_key, wave_enabled, wave_tick_timeout, wave_workers_cap, admission_mode, load_gate, reporter_class, no_artifact_window, no_artifact_recon_floor, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-	_, err := db.ExecContext(ctx, q,
+(id, weight, reserved, hard_cap, max_concurrent, enabled, description, default_prompt, model_chain, gateway_url, gateway_key, wave_enabled, wave_tick_timeout, wave_workers_cap, admission_mode, load_gate, reporter_class, no_artifact_window, no_artifact_recon_floor, turn_deadline, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	if _, err := db.ExecContext(ctx, q,
 		ns.ID, ns.Weight, ns.Reserved, ns.HardCap, ns.MaxConcurrent, boolToInt(ns.Enabled),
 		nullableString(ns.Description), ns.DefaultPrompt, ns.ModelChain,
 		ns.GatewayURL, ns.GatewayKey,
 		boolToInt(ns.WaveEnabled), ns.WaveTickTimeout, ns.WaveWorkersCap,
 		ns.AdmissionMode, ns.LoadGate,
 		ns.ReporterClass, ns.NoArtifactWindow, ns.NoArtifactReconFloor,
-		ns.CreatedAt, ns.UpdatedAt)
-	if err != nil {
+		ns.TurnDeadline,
+		ns.CreatedAt, ns.UpdatedAt); err != nil {
 		return fmt.Errorf("create namespace %q: %w", ns.ID, err)
 	}
 	return nil
@@ -61,7 +61,9 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetNamespace loads a single namespace by id. Returns ErrNamespaceNotFound
 // if no row matches.
 func GetNamespace(ctx context.Context, db *sql.DB, id string) (*Namespace, error) {
-	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(gateway_url,''), COALESCE(gateway_key,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), COALESCE(load_gate,''), COALESCE(reporter_class,''), COALESCE(no_artifact_window,''), COALESCE(no_artifact_recon_floor,''), created_at, updated_at
+	// SCHED-GAP-1755: the namespace's per-turn /v1/responses deadline
+	// (turn_deadline) joins the SAME two surfaces: the read columns below.
+	const q = `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(gateway_url,''), COALESCE(gateway_key,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), COALESCE(load_gate,''), COALESCE(reporter_class,''), COALESCE(no_artifact_window,''), COALESCE(no_artifact_recon_floor,''), COALESCE(turn_deadline,''), created_at, updated_at
 FROM namespaces WHERE id = ?`
 	var ns Namespace
 	var enabled, waveEnabled int
@@ -70,7 +72,7 @@ FROM namespaces WHERE id = ?`
 		&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
 		&ns.GatewayURL, &ns.GatewayKey,
 		&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.AdmissionMode, &ns.LoadGate,
-		&ns.ReporterClass, &ns.NoArtifactWindow, &ns.NoArtifactReconFloor, &ns.CreatedAt, &ns.UpdatedAt)
+		&ns.ReporterClass, &ns.NoArtifactWindow, &ns.NoArtifactReconFloor, &ns.TurnDeadline, &ns.CreatedAt, &ns.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrNamespaceNotFound, id)
 	}
@@ -85,7 +87,7 @@ FROM namespaces WHERE id = ?`
 // ListNamespaces returns all namespaces, ordered by id. If enabledOnly is
 // true, only enabled=1 rows are returned.
 func ListNamespaces(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Namespace, error) {
-	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(gateway_url,''), COALESCE(gateway_key,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), COALESCE(load_gate,''), COALESCE(reporter_class,''), COALESCE(no_artifact_window,''), COALESCE(no_artifact_recon_floor,''), created_at, updated_at
+	q := `SELECT id, weight, reserved, hard_cap, max_concurrent, enabled, COALESCE(description,''), COALESCE(default_prompt,''), COALESCE(model_chain,''), COALESCE(gateway_url,''), COALESCE(gateway_key,''), COALESCE(wave_enabled,0), COALESCE(wave_tick_timeout,''), COALESCE(wave_workers_cap,0), COALESCE(admission_mode,'cooldown'), COALESCE(load_gate,''), COALESCE(reporter_class,''), COALESCE(no_artifact_window,''), COALESCE(no_artifact_recon_floor,''), COALESCE(turn_deadline,''), created_at, updated_at
 FROM namespaces`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -107,7 +109,7 @@ FROM namespaces`
 			&ns.Description, &ns.DefaultPrompt, &ns.ModelChain,
 			&ns.GatewayURL, &ns.GatewayKey,
 			&waveEnabled, &ns.WaveTickTimeout, &ns.WaveWorkersCap, &ns.AdmissionMode, &ns.LoadGate,
-			&ns.ReporterClass, &ns.NoArtifactWindow, &ns.NoArtifactReconFloor, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
+			&ns.ReporterClass, &ns.NoArtifactWindow, &ns.NoArtifactReconFloor, &ns.TurnDeadline, &ns.CreatedAt, &ns.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan namespace row: %w", err)
 		}
 		ns.Enabled = enabled != 0
@@ -238,6 +240,23 @@ func UpdateNamespace(ctx context.Context, db *sql.DB, id string, patch Namespace
 			}
 		}
 		setClauses = append(setClauses, "no_artifact_recon_floor = ?")
+		args = append(args, m)
+	}
+	// SCHED-GAP-1755: the namespace's per-turn /v1/responses deadline.
+	// Accepted vocabulary: '' (inherit the global 30m knob), '0' (or '0s' —
+	// the explicit per-turn EXEMPT), or any parseable positive duration that
+	// OVERRIDES the global value. A garbage or negative duration is REJECTED
+	// here rather than silently warn-and-defaulted: unlike the hand-edited
+	// row path below, the API caller gets a 400 and can fix the typo.
+	if patch.TurnDeadline != nil {
+		m := *patch.TurnDeadline
+		if m != "" {
+			d, err := time.ParseDuration(m)
+			if err != nil || d < 0 {
+				return fmt.Errorf("invalid turn_deadline %q for namespace %q (want a non-negative duration or \"\")", m, id)
+			}
+		}
+		setClauses = append(setClauses, "turn_deadline = ?")
 		args = append(args, m)
 	}
 

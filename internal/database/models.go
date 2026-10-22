@@ -602,8 +602,18 @@ type Namespace struct {
 	ReporterClass        string `json:"reporter_class"`          // "" | "reporter"
 	NoArtifactWindow     string `json:"no_artifact_window"`      // duration string; "" = 20m
 	NoArtifactReconFloor string `json:"no_artifact_recon_floor"` // string int; "" = 25
-	CreatedAt            string `json:"created_at"`              // RFC3339
-	UpdatedAt            string `json:"updated_at"`              // RFC3339
+	// SCHED-GAP-1755: the namespace's /v1/responses PER-TURN deadline as a
+	// duration string. '' = inherit the global 30m knob
+	// (--gateway-response-timeout); '0s' = the namespace is EXEMPT from the
+	// per-turn deadline — its POST runs on the tick deadline alone (the
+	// pre-117 behavior). duckbrain-sync is migrated to '0s': its lanes make
+	// long DuckBrain HTTP writes that emit no gateway progress events, so a
+	// global wall/idle deadline reads productive turns as hung and killed
+	// 50% of the family's ticks. Any other parseable positive duration
+	// overrides the global value for that namespace's lanes only.
+	TurnDeadline string `json:"turn_deadline"` // duration string; "" = inherit global
+	CreatedAt    string `json:"created_at"`    // RFC3339
+	UpdatedAt    string `json:"updated_at"`    // RFC3339
 }
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
@@ -634,10 +644,15 @@ type NamespacePatch struct {
 	// (validated by UpdateNamespace). Nil/empty = gate applies.
 	LoadGate *string `json:"load_gate,omitempty"`
 	// SCHED-GAP-1674: builder no-artifact guard config, applied only when
-	// non-nil like every field above.
+	// non-nil like every other field above.
 	ReporterClass        *string `json:"reporter_class,omitempty"`          // "" | "reporter"
-	NoArtifactWindow     *string `json:"no_artifact_window,omitempty"`      // duration string; "" = default
-	NoArtifactReconFloor *string `json:"no_artifact_recon_floor,omitempty"` // string int; "" = default
+	NoArtifactWindow     *string `json:"no_artifact_window,omitempty"`      // "" = 20m default
+	NoArtifactReconFloor *string `json:"no_artifact_recon_floor,omitempty"` // "" = default
+	// SCHED-GAP-1755: the namespace's per-turn /v1/responses deadline,
+	// duration string ("" = inherit the global 30m knob; "0s" = exempt from
+	// the per-turn deadline). Applied only when non-nil; validated by
+	// UpdateNamespace (a garbage duration is rejected, never normalized).
+	TurnDeadline *string `json:"turn_deadline,omitempty"`
 }
 
 // TickWorker is one dispatched worker inside a wave tick (S12 §9.2,

@@ -299,6 +299,7 @@ canonical "is the scheduler alive" probe.
 | `last_evaluation` | string | RFC3339 of the last evaluation cycle; `""` if never evaluated |
 | `evaluation_age_seconds` | float | Seconds since last evaluation (0 when never evaluated — compare against this, not the empty `last_evaluation`) |
 | `spawns_http` / `spawns_exec` | int | Cumulative tick spawns via gateway HTTP vs `exec.Command` fallback. Fleet norm is HTTP rising, exec 0 |
+| `stall_census` | object | SCHED-GAP-1755: per-FAMILY stall census over the last 24h, keyed by namespace id — `{stalls_24h, terminal_ticks_24h, stall_rate_24h, turn_deadline, exempt_from_turn_deadline}`. `stalls_24h` counts terminal ticks whose `error` carries the `stalled: no progress` contract text; `terminal_ticks_24h` is the family's denominator (every tick with a `completed_at`); `turn_deadline` is the per-turn deadline VALUE armed for the family (`""` = inherits the global `--gateway-response-timeout` 30m, `0s` = EXEMPT from the per-turn deadline). `duckbrain-sync` is migrated to `0s`; the row's post-deploy criterion is read directly off this block (duckbrain-sync <10%, qa <20%). Empty object on a fleet with no terminal ticks in the window |
 
 **Errors:** 405 `{"error":"GET only"}` on non-GET.
 
@@ -1035,7 +1036,11 @@ curl -s -X POST http://127.0.0.1:9090/api/v1/namespaces \
 **Purpose:** Partial namespace update — only supplied fields are applied.
 
 **Request body** (all optional): `weight` (int), `reserved` (int),
-`hard_cap` (int), `enabled` (bool), `description` (string).
+`hard_cap` (int), `enabled` (bool), `description` (string),
+`turn_deadline` (SCHED-GAP-1755: duration string — `""` = inherit the global
+30m per-turn deadline, `"0s"` = EXEMPT this namespace's lanes from the
+per-turn deadline, a positive duration = override it for this namespace;
+garbage and negative values are 400-class errors).
 
 **Response 200:** the updated namespace (flat). **Errors:** 400 invalid JSON;
 404 `{"error":"namespace not found"}`; 405 `{"error":"GET or PUT only"}`.

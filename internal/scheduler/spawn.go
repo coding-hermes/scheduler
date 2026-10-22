@@ -1724,7 +1724,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// zero-accounted failure. turnCtx below therefore bounds only
 			// the LEGACY non-streaming POST (knob off, or collapsed onto
 			// the tick deadline) — byte-for-byte the pre-119 behavior.
-			superviseTurn := s.gatewayResponseTimeout > 0 && s.gatewayResponseTimeout < effectiveTimeout
+			// SCHED-GAP-1755: the per-turn deadline is now PER-NAMESPACE.
+			// The namespace's turn_deadline column ('0s' = exempt, a
+			// positive duration = override, ''/missing = inherit the global
+			// knob) resolves ONCE here, at the same site the supervision
+			// decision is made; an exempt namespace leaves superviseTurn
+			// FALSE and the POST runs under the plain tick deadline
+			// (pre-117 behavior, byte-for-byte). The legacy expression
+			// below is the ok=false arm unchanged.
+			nsTurnDeadline, nsTurnOK := turnDeadlineOf(ctx, s.db, project.Name)
+			effectiveTurnDeadline := s.gatewayResponseTimeout
+			if nsTurnOK {
+				effectiveTurnDeadline = nsTurnDeadline
+			}
+			superviseTurn := effectiveTurnDeadline > 0 && effectiveTurnDeadline < effectiveTimeout
 			turnCtx, turnCancel := context.WithCancel(ctx)
 			defer turnCancel()
 
@@ -2408,9 +2421,13 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// names the real outcome (stalled failure) and carries the
 				// gateway error text the old FAIL line used to relay.
 				log.Printf("GATEWAY STALLED: %s tick=%s turn deadline %v exceeded (tick deadline %v still alive) — recording stalled failure: %v",
-					project.Name, tickID, s.gatewayResponseTimeout, effectiveTimeout, gwErr)
+					project.Name, tickID, effectiveTurnDeadline, effectiveTimeout, gwErr)
+				// SCHED-GAP-1755: the contract text now carries the EFFECTIVE
+				// per-turn deadline — the namespace override when one is armed,
+				// the global knob otherwise — so the census's class text and the
+				// row's own telemetry agree on the value that fired.
 				stallErr := fmt.Sprintf("stalled: no progress for %v (gateway /v1/responses per-turn deadline; tick timeout %v)",
-					s.gatewayResponseTimeout, effectiveTimeout)
+					effectiveTurnDeadline, effectiveTimeout)
 				// SCHED-GAP-119: preserve the REAL gateway session id on the
 				// stalled row (the SSE X-Hermes-Session-Id header, else the
 				// tick-id placeholder) and count the work the turn actually
@@ -2428,7 +2445,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						"gateway turn stalled — tick failed before tick-timeout", map[string]any{
 							"project":         project.Name,
 							"tick_id":         tickID,
-							"turn_deadline_s": int(s.gatewayResponseTimeout.Seconds()),
+							"turn_deadline_s": int(effectiveTurnDeadline.Seconds()),
 							"tick_timeout_s":  int(effectiveTimeout.Seconds()),
 							"error":           stallErr,
 						})

@@ -305,6 +305,98 @@ func countActiveTicks(ctx context.Context, db *sql.DB) int {
 	return n
 }
 
+// StallCensusEntry (SCHED-GAP-1755 AC 2) is one FAMILY's row in the
+// /api/v1/health stall census: how many terminal ticks failed with the
+// "stalled: no progress" contract text in the last 24h, how many terminal
+// ticks the family ran in that window (the denominator), the per-turn
+// deadline value armed for the family ('0s' = exempt), and whether the
+// census text's value disagrees with the armed one (a stale row from before
+// a knob change is still counted — the census reports history verbatim).
+//
+// Family = namespace: the census is keyed by namespace id so the row's
+// acceptance criteria can be verified directly (duckbrain-sync <10%, qa
+// <20% stall rate over the 24h window).
+type StallCensusEntry struct {
+	Family          string  `json:"family"`
+	Stalls24h       int     `json:"stalls_24h"`
+	Terminal24h     int     `json:"terminal_ticks_24h"`
+	StallRate24h    float64 `json:"stall_rate_24h"`
+	TurnDeadline    string  `json:"turn_deadline"` // armed value; "" = inherits global
+	ExemptFromStall bool    `json:"exempt_from_turn_deadline"`
+}
+
+// stallCensus answers SCHED-GAP-1755 AC 2: a per-family stall census on
+// /api/v1/health — one row per namespace that owns a terminal tick in the
+// 24h window, ordered by stall count desc. The query joins the terminal
+// ticks (completed_at NOT NULL) to their project's namespace; the stall
+// predicate matches the exact contract text spawn.go builds
+// ("stalled: no progress"). The turn_deadline column is read per namespace
+// (the armed knob, "" = global inherit, "0s" = exempt) so the census names
+// the deadline VALUE that governs the family.
+//
+// Bounded by the same 24h window the outcome counters use; the
+// idx_ticks_status_completed partial index covers the terminal-tick count
+// and the group join scales with the window, not tick history. Best-effort:
+// a query error returns a nil map (the health payload just omits the census)
+// and never a 504 — the handler's deadline protects it anyway.
+func stallCensus(ctx context.Context, db *sql.DB) map[string]*StallCensusEntry {
+	out := map[string]*StallCensusEntry{}
+	rows, err := db.QueryContext(ctx, `
+SELECT p.namespace_id,
+       COUNT(*) AS terminal,
+       SUM(CASE WHEN t.error LIKE 'stalled: no progress%' THEN 1 ELSE 0 END) AS stalls
+FROM ticks t JOIN projects p ON t.project_name = p.name
+WHERE t.completed_at IS NOT NULL
+  AND t.completed_at <> ''
+  AND julianday(t.completed_at) >= julianday('now', '-1 day')
+GROUP BY p.namespace_id`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	// One pass: terminal/stall totals per namespace...
+	total := map[string]int{}
+	stalls := map[string]int{}
+	for rows.Next() {
+		var nsID string
+		var term, st sql.NullInt64
+		if err := rows.Scan(&nsID, &term, &st); err != nil {
+			continue
+		}
+		total[nsID] = int(term.Int64)
+		stalls[nsID] = int(st.Int64)
+	}
+	if rows.Err() != nil {
+		return out
+	}
+	// ...then the armed knobs, in ONE indexed read.
+	nsDeadline := map[string]string{}
+	if dlRows, derr := db.QueryContext(ctx, `SELECT id, COALESCE(turn_deadline, '') FROM namespaces`); derr == nil {
+		defer dlRows.Close()
+		for dlRows.Next() {
+			var id, raw string
+			if dlRows.Scan(&id, &raw) == nil {
+				nsDeadline[id] = raw
+			}
+		}
+	}
+	for nsID, term := range total {
+		st := stalls[nsID]
+		entry := &StallCensusEntry{
+			Family:          nsID,
+			Stalls24h:       st,
+			Terminal24h:     term,
+			TurnDeadline:    nsDeadline[nsID],
+			ExemptFromStall: nsDeadline[nsID] == "0s",
+		}
+		if term > 0 {
+			entry.StallRate24h = float64(st) / float64(term)
+		}
+		out[nsID] = entry
+	}
+	return out
+}
+
 func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 	out := map[string]int{"completed": 0, "failed": 0, "timeout": 0}
 	rows, err := db.QueryContext(ctx, `SELECT status, COUNT(*) FROM ticks WHERE completed_at IS NOT NULL GROUP BY status ORDER BY status`)

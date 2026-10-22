@@ -519,4 +519,13 @@ type NamespaceDef struct {
 	// NoArtifactReconFloor overrides N (the minimum interaction floor) for
 	// this namespace. Integer as string; "" = 25 default.
 	NoArtifactReconFloor string `toml:"no_artifact_recon_floor"`
+	// SCHED-GAP-1755: the namespace's /v1/responses PER-TURN deadline as a
+	// duration string. "" (key absent) leaves the live DB value untouched —
+	// the GatewayKey-conditional pattern, so an API/situation-room change
+	// survives a restart with a keyless entry. A non-empty value pins the
+	// row: "0s" exempts the namespace's lanes from the per-turn deadline
+	// (duckbrain-sync's long DuckBrain writes emit no gateway progress
+	// events); any positive duration overrides the global 30m knob for the
+	// namespace. Replacement for the old fleet-wide 30m wall on this family.
+	TurnDeadline string `toml:"turn_deadline"`
 }

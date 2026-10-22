@@ -746,6 +746,26 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				}
 				log.Printf("Config: pinned namespace %q no_artifact_recon_floor=%s", nd.ID, v)
 			}
+			// SCHED-GAP-1755: the namespace's per-turn /v1/responses
+			// deadline pins GatewayKey-conditionally — only an explicitly
+			// set fleet.toml key rewrites the row, so an operator's
+			// API/SQL change (e.g. exempting another family) survives a
+			// restart with a keyless entry. "0s" is the exemption; a
+			// positive duration overrides the global 30m knob; a garbage
+			// value warns and skips rather than crashing boot.
+			if nd.TurnDeadline != "" {
+				if d, derr := time.ParseDuration(nd.TurnDeadline); derr == nil && d >= 0 {
+					v := nd.TurnDeadline
+					if err := database.UpdateNamespace(ctx, db, nd.ID, database.NamespacePatch{
+						TurnDeadline: &v,
+					}); err != nil {
+						return fmt.Errorf("update namespace %q turn_deadline: %w", nd.ID, err)
+					}
+					log.Printf("Config: pinned namespace %q turn_deadline=%s", nd.ID, v)
+				} else {
+					log.Printf("Config: namespace %q has invalid turn_deadline %q — skipped (want a non-negative duration)", nd.ID, nd.TurnDeadline)
+				}
+			}
 			// SCHED-GAP-1712: the namespace gateway endpoint + credential
 			// pin the GatewayKey-conditional way — only an explicitly set
 			// key rewrites the row, so an API-assigned namespace endpoint
@@ -1128,6 +1148,10 @@ func namespaceFromDef(nd NamespaceDef) *database.Namespace {
 		ReporterClass:        nd.ReporterClass,
 		NoArtifactWindow:     nd.NoArtifactWindow,
 		NoArtifactReconFloor: nd.NoArtifactReconFloor,
+		// SCHED-GAP-1755: the per-turn deadline flows through on CREATE so a
+		// fresh database (no v72 backfill row to update) still boots with the
+		// family's exemption armed from fleet.toml.
+		TurnDeadline: nd.TurnDeadline,
 	}
 }
 

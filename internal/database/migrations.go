@@ -9,7 +9,8 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 71
+// SCHED-GAP-1755 landed v73 (namespaces.turn_deadline + census index).
+const latestMigration = 73
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1567,6 +1568,51 @@ CREATE TABLE IF NOT EXISTS agents (
     registered_at TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
+`,
+	},
+	{
+		// SCHED-GAP-1755 — the 30m per-turn "stalled" deadline ate 50% of
+		// duckbrain-sync ticks (55 failures/24h): sync lanes run long DuckBrain
+		// HTTP writes that emit NO gateway progress events, so the SSE idle
+		// deadline (SCHED-GAP-119) treats a PRODUCTIVE turn as a hung one and
+		// kills it at exactly 30m. Mechanism (approach (a) of the row's
+		// acceptance criteria): the per-turn deadline becomes PER-NAMESPACE —
+		// namespaces.turn_deadline is a duration string, '' = inherit the
+		// global 30m knob, '0s' = the namespace is EXEMPT from the per-turn
+		// deadline (its /v1/responses POST runs on the tick deadline alone,
+		// pre-117 behavior). The migration sets duckbrain-sync to '0s' (its
+		// 3h tick timeout is the backstop; a genuinely hung POST there is
+		// the tick-timeout class, not the stalled class). Every other
+		// namespace keeps '' = global 30m, byte-identical behavior.
+		//
+		// No project-level tier: the stall census (AC 2) counts by FAMILY,
+		// and a family IS a namespace — a single knob per namespace keeps the
+		// resolution one query the spawn path already pays for
+		// (resolveTickEndpoint joins namespaces).
+		version: 72,
+		desc:    "SCHED-GAP-1755: namespaces.turn_deadline — per-namespace /v1/responses per-turn deadline ('' = global 30m knob; '0s' = exempt), plus the running-tick project index the stall census reads",
+		stmt: `
+ALTER TABLE namespaces ADD COLUMN turn_deadline TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_ticks_status_running_project ON ticks(project_name) WHERE status = 'running';
+`,
+	},
+	{
+		// SCHED-GAP-1755 (the data half, deliberately its own migration):
+		// the duckbrain-sync exemption. A SEPARATE entry, not a trailing
+		// statement of v72, because the migration runner Execs each entry as
+		// one batch and tolerates only the "duplicate column name" error —
+		// on a re-run the ALTER trips that tolerance and the UPDATE would
+		// never execute. Splitting keeps the backfill replayable (the
+		// regression test deletes the version row and re-migrates to prove
+		// the arm the LIVE upgrade takes).
+		//
+		// Idempotent by predicate: only a row still at the '' default is
+		// written, so an operator who has already set a per-family value
+		// (including re-inheriting the global knob) is never overridden.
+		version: 73,
+		desc:    "SCHED-GAP-1755: exempt the duckbrain-sync namespace from the per-turn /v1/responses deadline (turn_deadline='0s') — its DuckBrain HTTP writes emit no gateway progress events, so the 30m idle deadline killed 50% of the family's ticks",
+		stmt: `
+UPDATE namespaces SET turn_deadline = '0s', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 'duckbrain-sync' AND turn_deadline = '';
 `,
 	},
 }

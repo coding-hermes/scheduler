@@ -4,15 +4,70 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 )
+
+// turnDeadlineOf resolves ONE tick's /v1/responses per-turn deadline from its
+// namespace's turn_deadline column (SCHED-GAP-1755).
+//
+// The lookup joins the LANE's own row to its namespace, so the value is
+// resolved from the same source the rest of the spawn path reads (a
+// PackedProject field can be dropped by a caller; the projects row cannot).
+//
+// Vocabulary: a missing project/namespace row, a lookup error, or an EMPTY
+// column value all yield ok=false — the caller inherits the global 30m knob
+// (Spawner.GatewayResponseTimeout, the SCHED-GAP-117 default), byte-identical
+// to the pre-1755 behavior. A parseable '0s' (or '0') yields (0, true): the
+// namespace is EXEMPT — the POST runs on the tick deadline alone (the
+// pre-117 behavior, GAP-117 wall/idle semantics disabled). Any other
+// parseable non-negative duration overrides the global value for that
+// namespace's lanes. A HAND-EDITED garbage value warns and inherits
+// (fail-open to the global knob — never insta-fail a lane over a typo).
+//
+// The exemption is the SCHED-GAP-1755 mechanism for the sync families: their
+// DuckBrain HTTP writes emit no gateway progress events, so a global 30m
+// wall/idle deadline read productive turns as hung and killed 50% of the
+// duckbrain-sync family's ticks (55/24h). Exempting the FAMILY (not
+// individual lanes) keeps the knob aligned with the stall census, which
+// counts by namespace. The tick deadline (--tick-timeout, 3h live) remains
+// the backstop: a genuinely hung sync POST still frees its slot, it is just
+// classified as a tick timeout instead of a stall.
+func turnDeadlineOf(ctx context.Context, db *sql.DB, project string) (time.Duration, bool) {
+	if db == nil || project == "" {
+		return 0, false
+	}
+	var raw string
+	err := db.QueryRowContext(ctx, `
+SELECT COALESCE(ns.turn_deadline, '')
+FROM projects p LEFT JOIN namespaces ns ON ns.id = p.namespace_id
+WHERE p.name = ?`, project).Scan(&raw)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			// A lookup error must never fail the tick — inherit the global
+			// knob and say why.
+			log.Printf("WARN: turn_deadline lookup for %s failed (%v) — inheriting the global per-turn deadline", project, err)
+		}
+		return 0, false
+	}
+	if raw == "" {
+		return 0, false // inherit global
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		log.Printf("WARN: project %q turn_deadline=%q unparseable — inheriting the global per-turn deadline", project, raw)
+		return 0, false
+	}
+	return d, true // 0 = explicit per-turn exempt
+}
 
 // SCHED-GAP-119: activity-aware supervision of the gateway /v1/responses POST.
 //

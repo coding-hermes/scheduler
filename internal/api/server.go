@@ -419,6 +419,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// SCHED-GAP-080: transient gateway spawn failures since restart
 		// (auth rejections never counted), alongside the spawn counters.
 		"gateway_errors": s.loop.GatewayErrorCount(),
+		// SCHED-GAP-1755 AC 2: per-family stall census — stalls_24h and the
+		// stall rate by namespace, with the per-turn deadline value armed per
+		// family ('0s' = exempt). Present whenever the census query answers;
+		// a fresh/dry fleet carries the empty map.
+		"stall_census": stallCensus(ctx, s.db),
 	})
 }
 
