@@ -17,10 +17,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -505,6 +507,125 @@ func TestREMOTE011_FanoutOKExitZero(t *testing.T) {
 		}
 	}
 }
+
+// TestREMOTE011_LegacyAllDeadlineEnforced is the hard-deadline regression
+// cell for the legacy local fan-out (SCHED-GAP-1704): the armed whole-run
+// ceiling must be DETERMINISTICALLY enforced even when a transport leg's
+// teardown outlives the context — wall time may not exceed the ceiling
+// because a per-leg handshake or close hung past it.
+//
+// ch:trace row=SCHED-GAP-1704 spec=none:row-cites-remote-011-load-reproduction wave=.coding-hermes/waves/coding-hermes-scheduler-foreman-2026-10-22-21-23-23.json#SCHED-GAP-1704 test=cmd/scheduler-query/*_test.go::LegacyAll doc=none:implementation-docs-if-needed prompt=/tmp/sched-20261022212323-SCHED-GAP-1704-brief.txt evidence=commit witness=none:foreman-verifies-full-suite verdict=none:pending-foreman-trace commit=none:pending-foreman memory=none:not-written
+// STATUS: complete
+// TIER: T0
+// EVIDENCE: TestREMOTE011_LegacyAllDeadlineEnforced red before the fix (runFanout's wg.Wait() outlived the ceiling), green after.
+func TestREMOTE011_LegacyAllDeadlineEnforced(t *testing.T) {
+	dbPath := setupFanoutRegistry(t)
+	// hungTransport answers nothing and — THE REGRESSION — is immune to
+	// ctx cancellation and to a bounded wall wait: its Query call is a
+	// plain blocking handshake whose teardown (and every return) hangs
+	// forever, exactly a socket read against a wedged peer or a close
+	// frame written into a dead TCP connection. No wall-clock threshold
+	// in the test: the deadline IS the ceiling runFanout arms.
+	//
+	// runFanout MUST cancel the leg on ceiling expiry and degrade the
+	// cancelled leg exactly as any other failed leg (degradedEnvelope,
+	// the output vocabulary unchanged) instead of waiting on wg for a
+	// leg that ignores the context. Under the pre-fix code this cell
+	// cannot even reach the assertions: wg.Wait() blocks forever and
+	// the observer ceiling below goes red.
+	tr := &hungTransport{}
+	t.Cleanup(tr.releaseAll)
+	var stdout, stderr bytes.Buffer
+	cfg := queryConfig{
+		legacyAll: true,
+		op:        "peer.status",
+		corrID:    "cli-all-hang-1",
+		budgetMS:  2000,
+		jsonOut:   true,
+		dbPath:    dbPath,
+		stdout:    &stdout,
+		stderr:    &stderr,
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		code := runQuery(context.Background(), cfg, tr)
+		if code != exitDegraded {
+			t.Errorf("exit = %d, want %d", code, exitDegraded)
+		}
+	}()
+	// The no-hang property, expressed exactly the way the INT-CI-176 helpers
+	// express it: the OBSERVER ceiling sits budget+slack+10x-slack above the
+	// armed ceiling (budget 2000ms + fanoutSlackMS 5000ms + 10 quanta), so
+	// only a leg escaping its own deadlines can trip it, while a REAL hang
+	// (the pre-fix wg.Wait() on a transport that ignores ctx) still goes
+	// red — the framework deadline behind it.
+	awaitCompletion(t, "legacy fan-out deadline", done,
+		time.Duration(2000+fanoutSlackMS+10*100)*time.Millisecond)
+
+	// Every leg degraded on the ceiling, rendered in the SAME vocabulary
+	// (status=error, the cancelled leg is not an omitted row), exit 1.
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdout lines = %d, want 2 (one envelope per peer): %q", len(lines), stdout.String())
+	}
+	for _, l := range lines {
+		var env bus.ResponseEnvelope
+		if err := json.Unmarshal([]byte(l), &env); err != nil {
+			t.Fatalf("line not a JSON envelope: %v (%s)", err, l)
+		}
+		if env.Status != "error" || env.Error == nil || env.Error.Code != "timeout" {
+			t.Errorf("deadline-degraded leg drifted: %s", l)
+		}
+		if env.CorrID == "" {
+			t.Errorf("degraded fan-out envelope carries no corr_id echo: %s", l)
+		}
+	}
+	if strings.Contains(stderr.String(), "REMOTE-012") == false {
+		// The stderr vocabulary is unchanged by the fix.
+		t.Errorf("stderr does not name the authoritative aggregate: %q", stderr.String())
+	}
+}
+
+// hungTransport is the SCHED-GAP-1704 seam: a queryTransport whose legs
+// NEVER return on their own — no ctx observation, no deadline — simulating
+// a teardown/handshake that outlives every context cancel.
+type hungTransport struct {
+	mu    sync.Mutex
+	conns map[string]chan struct{}
+}
+
+func (h *hungTransport) Query(ctx context.Context, peerID string, q bus.QueryEnvelope) (bus.ResponseEnvelope, error) {
+	h.mu.Lock()
+	if h.conns == nil {
+		h.conns = make(map[string]chan struct{})
+	}
+	release, ok := h.conns[peerID]
+	if !ok {
+		release = make(chan struct{})
+		h.conns[peerID] = release
+	}
+	h.mu.Unlock()
+	// Block until the transport seam force-releases this leg. Contexts
+	// are deliberately NEVER observed: that is the defect the cell
+	// reproduces (the leg's own wait/teardown outlives the caller's
+	// cancellation).
+	<-release
+	return bus.ResponseEnvelope{}, errors.New("bus: query peer.status corr x: transport hung")
+}
+
+// queryDeadlineForces lets the TEST unblock a leg (the way a
+// transport-level force teardown would): after runFanout's ceiling
+// enforcement the cell releases all legs once they exited the wait.
+func (h *hungTransport) releaseAll() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.conns {
+		close(c) // panics if already closed; tests release once
+	}
+}
+
+func (h *hungTransport) NextCorrID() string { return "corr-hung-1" }
 
 // setupFanoutRegistry creates a scratch scheduler DB with two registered
 // peers (ordered zeta < alpha? no — ListPeers orders by id ASC, so the

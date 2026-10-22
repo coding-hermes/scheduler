@@ -44,7 +44,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/bus"
@@ -205,25 +204,72 @@ func runFanout(ctx context.Context, cfg queryConfig, tr queryTransport) int {
 		peer string
 		resp bus.ResponseEnvelope
 	}
+	type fanoutResult struct {
+		index int
+		q     bus.QueryEnvelope
+		resp  bus.ResponseEnvelope
+		err   error
+	}
 	answers := make([]answer, len(peers))
 	sem := make(chan struct{}, fanoutConcurrency)
-	var wg sync.WaitGroup
+	results := make(chan fanoutResult, len(peers))
 	for i, peer := range peers {
-		wg.Add(1)
 		go func(i int, peer string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 			q := buildEnvelope(cfg)
 			q.CorrID = tr.NextCorrID() // per-leg id: unique per (caller, minute), §2.1
-			resp, err := tr.Query(ctx, peer, q)
-			if err != nil {
-				resp = degradedEnvelope(q, peer, err)
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results <- fanoutResult{index: i, q: q, err: ctx.Err()}
+				return
 			}
-			answers[i] = answer{peer: peer, resp: resp}
+			defer func() { <-sem }()
+			if err := ctx.Err(); err != nil {
+				results <- fanoutResult{index: i, q: q, err: err}
+				return
+			}
+			resp, err := tr.Query(ctx, peer, q)
+			results <- fanoutResult{index: i, q: q, resp: resp, err: err}
 		}(i, peer)
 	}
-	wg.Wait()
+	completed := make([]bool, len(peers))
+	remaining := len(peers)
+	for remaining > 0 {
+		select {
+		case result := <-results:
+			if completed[result.index] {
+				continue
+			}
+			completed[result.index] = true
+			if result.err != nil {
+				answers[result.index] = answer{
+					peer: peers[result.index],
+					resp: degradedEnvelope(result.q, peers[result.index], result.err),
+				}
+			} else {
+				answers[result.index] = answer{peer: peers[result.index], resp: result.resp}
+			}
+			remaining--
+		case <-ctx.Done():
+			// Do not wait for a transport's teardown after the aggregate
+			// ceiling. A transport must honor ctx, but the local fan-out
+			// deadline is also a hard bound on this CLI even when a broken
+			// transport ignores cancellation while closing a leg.
+			deadlineErr := fmt.Errorf("legacy fan-out deadline: %w", bus.ErrQueryTimeout)
+			for i, done := range completed {
+				if done {
+					continue
+				}
+				q := buildEnvelope(cfg)
+				q.CorrID = cfg.corrID
+				answers[i] = answer{
+					peer: peers[i],
+					resp: degradedEnvelope(q, peers[i], deadlineErr),
+				}
+			}
+			remaining = 0
+		}
+	}
 
 	degraded := false
 	for _, a := range answers {
