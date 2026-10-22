@@ -52,6 +52,17 @@ func newMCPTestServer(t *testing.T) *mcpTestServer {
 
 // call sends a JSON-RPC request and returns the parsed response and HTTP status.
 func (m *mcpTestServer) call(t *testing.T, req map[string]interface{}) (int, mcpserver.MCPResponse) {
+	return m.post(t, req, true)
+}
+
+// callWithoutAuth is call() with no credential headers at all. SCHED-GAP-1749
+// probes rely on it: the unknown-tool classification must fire before the
+// operator gate, so the probe must present nothing for a refusal to prove.
+func (m *mcpTestServer) callWithoutAuth(t *testing.T, req map[string]interface{}) (int, mcpserver.MCPResponse) {
+	return m.post(t, req, false)
+}
+
+func (m *mcpTestServer) post(t *testing.T, req map[string]interface{}, withAuth bool) (int, mcpserver.MCPResponse) {
 	t.Helper()
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -62,7 +73,9 @@ func (m *mcpTestServer) call(t *testing.T, req map[string]interface{}) (int, mcp
 		t.Fatalf("NewRequest: %v", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Operator-Token", mcpOperatorToken)
+	if withAuth {
+		httpReq.Header.Set("X-Operator-Token", mcpOperatorToken)
+	}
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -1191,6 +1204,89 @@ func TestMCP_UnknownTool(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error.Message, "unknown tool") {
 		t.Errorf("error = %q, want 'unknown tool'", resp.Error.Message)
+	}
+}
+
+// TestMCP_UnknownToolBeforeAuthGate is the SCHED-GAP-1749 regression: a
+// tools/call naming a tool absent from the registry must be classified as an
+// unknown tool BEFORE the operator credential is evaluated. isMutatingTool is
+// fail-closed, so an unknown name used to look like a mutation and get the
+// credential refusal (-32001) before invokeTool could say "unknown tool" —
+// wrong taxonomy for a typo'd tool name, and it leaked a gate decision (and
+// its mcp.auth audit row) on a call that never named a real tool. The probe
+// presents no credential at all: any -32001 here means the gate ran first.
+func TestMCP_UnknownToolBeforeAuthGate(t *testing.T) {
+	m := newMCPBareServer(t) // no SetOperatorAuth — the fail-closed arm
+	_, resp := m.callWithoutAuth(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_bogus_tool",
+			"arguments": map[string]interface{}{},
+		},
+	})
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if resp.Error.Code == -32001 {
+		t.Fatalf("unknown tool hit the credential gate: code=%d message=%q", resp.Error.Code, resp.Error.Message)
+	}
+	if resp.Error.Code == -32602 {
+		t.Fatalf("unknown tool misclassified as invalid params: code=%d message=%q", resp.Error.Code, resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "unknown tool") {
+		t.Errorf("error = %q, want 'unknown tool'", resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "fleet_bogus_tool") {
+		t.Errorf("error = %q, want it to name the tool fleet_bogus_tool", resp.Error.Message)
+	}
+
+	// The known-mutator arm is unchanged: the same bare stack still refuses
+	// a REAL mutating tool with the credential error (-32001), so the
+	// reorder is classification-only, not a gate bypass.
+	_, resp = m.callWithoutAuth(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_set_weight",
+			"arguments": map[string]interface{}{},
+		},
+	})
+	if resp.Error == nil {
+		t.Fatal("expected credential refusal for known mutating tool without auth")
+	}
+	if resp.Error.Code != -32001 {
+		t.Errorf("known mutator code = %d, want -32001 (message=%q)", resp.Error.Code, resp.Error.Message)
+	}
+}
+
+// TestMCP_UnknownToolErrorCode pins the wire shape of the unknown-tool
+// refusal introduced by SCHED-GAP-1749: the handler classifies the name
+// against the registry and answers -32000 "unknown tool: <name>" via
+// ErrUnknownTool — an application error, not -32602 (params parse fine) and
+// not -32001 (no credential was needed to learn the name is unknown).
+func TestMCP_UnknownToolErrorCode(t *testing.T) {
+	m := newMCPBareServer(t)
+	_, resp := m.callWithoutAuth(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_nonexistent",
+			"arguments": map[string]interface{}{},
+		},
+	})
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if resp.Error.Code != -32000 {
+		t.Errorf("code = %d, want -32000 (message=%q)", resp.Error.Code, resp.Error.Message)
+	}
+	want := "unknown tool: fleet_nonexistent"
+	if resp.Error.Message != want {
+		t.Errorf("message = %q, want %q", resp.Error.Message, want)
 	}
 }
 

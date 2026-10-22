@@ -916,6 +916,18 @@ func (s *Server) handleToolsCall(w http.ResponseWriter, r *http.Request, req MCP
 		return
 	}
 
+	// SCHED-GAP-1749: classify the tool name against the registry BEFORE the
+	// gate. An unknown tool is a client contract error, not a credential
+	// refusal — the fail-closed isMutatingTool default otherwise presents a
+	// typo'd name as a mutation and answers -32001 without the registry ever
+	// speaking (and writes an mcp.auth row for a tool that does not exist).
+	// Known tools keep the SCHED-GAP-1619 ordering: the mutation gate runs
+	// BEFORE invokeTool, so a refused mutating call never reaches tool code.
+	if !knownTool(params.Name) {
+		writeMCPError(w, req.ID, -32000, fmt.Sprintf("%s: %s", ErrUnknownTool, params.Name))
+		return
+	}
+
 	// SCHED-GAP-1619: the mutation gate runs BEFORE invokeTool — a refused
 	// mutating call never reaches tool code, so no state changes and the
 	// refusal (with its mcp.auth audit row) is the whole response. Reads
