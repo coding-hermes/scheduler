@@ -1877,6 +1877,24 @@ never invents an aggregation the peer could not answer about itself:
 | `ticks.list` | `since`, `limit` | `GET /api/v1/ticks` (listTicks) |
 | `events.list` | `since`, `limit`, `severity` | `GET /api/v1/events` (listEvents) |
 
+**Two-plane caller identity (SCHED-GAP-1740).** Each federation transport
+carries its OWN caller identity, so the same peer id resolves differently per
+plane:
+
+| Plane | Transport | Caller identity |
+|---|---|---|
+| CLI | crier bus topic `fed.query.<peer>` (`scheduler-query <peer> <op>`) | the local peer-registry name (bus:transport) |
+| HTTP | `POST /api/v1/federation/query` on the peer | `X-Operator-Token` header (operator:token) |
+| MCP | `fed_peer_status` / `fed_query` … tools | `mcp:auth-token` |
+
+CLI (bus:transport) vs HTTP (operator:token) vs MCP (mcp:auth-token) — the
+same peer id works only on the plane its caller identity is published for:
+a peer named in the local peer registry answers `scheduler-query` over the
+bus, while the same id posted to `/api/v1/federation/query` is read policy
+refused unless the `X-Operator-Token` caller is allowed (spec §4 auth
+posture; the per-caller allow-list in `[federation]` judges one identity
+per plane, never all three at once).
+
 ### POST /api/v1/federation/query
 
 **Request body (§2.1):** `{"op": "...", "args": {...}, "corr_id": "...",

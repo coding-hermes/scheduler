@@ -383,6 +383,8 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 
 Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it. `fed_peer_status` (op `peer.status`) **requires** `args.peer` — the identity the read is about — and the other reads default to this scheduler while accepting `args.peer` only as an assertion of that same id. A peer naming a *different* scheduler is refused (SCHED-GAP-1741) instead of silently being answered from the local read; to read a remote peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
 
+Each federation transport carries its own caller identity. The scheduler-query CLI reaches a peer over the crier bus (`bus:transport`), the HTTP `POST /api/v1/federation/query` endpoint is its own transport and requires the caller's identity as `X-Operator-Token` (`operator:token`), and MCP tools (`fed_peer_status`, `fed_query`, …) identify their caller as `mcp:auth-token`. Because the caller identity differs per transport, the same peer id may answer on one transport and fail (`op_not_allowed`/401) on another — a peer id that works via `scheduler-query` is a registry name resolvable on the bus plane, and only there.
+
 [^1]: `fed_*` and `peers_*` tools are deny-all by default — see [Federation tools — deny-all by default](#federation-tools-deny-all-by-default) for configuration.
 
 ---
