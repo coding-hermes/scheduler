@@ -2256,6 +2256,12 @@ answer is as legible as a "yes"). A lane is never its own ancestor. `ancestor`
 is required (`400 invalid_request`); the subject `lane` must exist
 (`404 unknown_lane`).
 
+The MCP read mirrors refuse an unknown subject lane instead of returning an
+empty traversal or `is_ancestor: false`: `tools/call` answers JSON-RPC `-32000`
+with a message prefixed `unknown_lane: unknown lane: <lane>`. The MCP message
+carries the same named refusal class as REST; an unknown `ancestor` argument on
+an existing subject remains a legitimate false reachability answer.
+
 ```bash
 curl -s "http://127.0.0.1:9090/api/v1/links/ancestor?lane=pulse&ancestor=h3" | jq '.is_ancestor'
 ```

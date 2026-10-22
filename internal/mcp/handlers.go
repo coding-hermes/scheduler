@@ -246,6 +246,21 @@ func (s *Server) ensureProjectExists(ctx context.Context, name string) error {
 	return nil
 }
 
+// ensureLaneExists returns the named refusal shared by the MCP link reads.
+// REST exposes this class as HTTP 404 with code `unknown_lane`; MCP keeps its
+// JSON-RPC error code (-32000) and carries the same machine-readable class in
+// the message so clients do not confuse a typo with a legitimate empty/false
+// reachability result.
+func (s *Server) ensureLaneExists(ctx context.Context, lane string) error {
+	if _, err := database.GetProject(ctx, s.db, lane); err != nil {
+		if errors.Is(err, database.ErrProjectNotFound) || strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("unknown_lane: unknown lane: %s", lane)
+		}
+		return err
+	}
+	return nil
+}
+
 // mcpDisableProvenance is the disabled_by value stamped on every project
 // disabled through the MCP write surface, so an operator reading the row can
 // tell which entry point paused it (REST PUT stamps "api", the REST pause
@@ -2329,8 +2344,8 @@ func (s *Server) toolLaneRelations(ctx context.Context, args map[string]interfac
 	if direction == "" {
 		direction = "parents"
 	}
-	if _, err := database.GetProject(ctx, s.db, lane); err != nil {
-		return "", err // unknown lane: the same not-found class the REST read answers
+	if err := s.ensureLaneExists(ctx, lane); err != nil {
+		return "", err
 	}
 	switch direction {
 	case "parents":
@@ -2375,6 +2390,9 @@ func (s *Server) toolLaneIsAncestor(ctx context.Context, args map[string]interfa
 	ancestor := getStringArg(args, "ancestor")
 	if lane == "" || ancestor == "" {
 		return "", fmt.Errorf("lane and ancestor are required")
+	}
+	if err := s.ensureLaneExists(ctx, lane); err != nil {
+		return "", err
 	}
 	isAncestor, path, err := database.IsLaneAncestor(ctx, s.db, ancestor, lane)
 	if err != nil {
