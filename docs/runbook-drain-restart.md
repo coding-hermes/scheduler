@@ -36,8 +36,13 @@ accounting. The default path (§2–§7) stays conservative.
 **Repo (build + ops scripts):** `/home/kara/coding-hermes-scheduler/coding-herms-scheduler/`
 (the outer `/home/kara/coding-hermes-scheduler/` directory is **not** the repo).
 **Database (read-only queries):** `/home/kara/.hermes/coding-hermes/scheduler.db`.
-**Service endpoints:** `http://127.0.0.1:9090` — loopback, **unauthenticated**; no credential belongs
-in any command on this page.
+**Service endpoints:** `http://127.0.0.1:9090` — loopback, but **GETs are open while mutations are
+NOT**. `POST /api/v1/pause`, `POST /api/v1/resume`, every `PUT`/`DELETE` and the peer routes pass
+through the daemon's operator gate (SCHED-GAP-1602) and accept only the credential the DAEMON loaded
+from its own `EnvironmentFile` (`~/.hermes/scheduler-auth.env`, `SCHEDULER_OPERATOR_TOKEN=`). Missing
+header → 401 `operator credential required for mutations`; wrong value → 401 `invalid operator
+credential`; no credential configured daemon-side → 503. `API_SERVER_KEY` from `~/.hermes/.env` is the
+**gateway** key and this gate refuses it — that mix-up is SCHED-GAP-1756 (§8 Trap E).
 
 Sanity-check the repo path before you start:
 
@@ -261,20 +266,27 @@ EXPECTED OUTPUT *(real, 2026-09-18)*
 
 *(mutating — not run while authoring this page)*
 
+The pause is authenticated: send the daemon's own operator token, out of `argv` (`ps` is readable).
+
 ```sh
-curl -s -X POST http://127.0.0.1:9090/api/v1/pause
+TOKEN=$(sed -n 's/^SCHEDULER_OPERATOR_TOKEN=//p' "$HOME/.hermes/scheduler-auth.env")
+curl -s -o /tmp/pause.json -w '%{http_code}\n' -X POST \
+  -K <(printf 'header = "X-Operator-Token: %s"\n' "$TOKEN") \
+  http://127.0.0.1:9090/api/v1/pause
 # NOT executed in authoring — expected output shown
 ```
 
-EXPECTED OUTPUT **shape** — HTTP 200 with a one-key JSON body. The handler sets
-`{"status": "paused"}` unconditionally (`internal/api/server.go`), and a real invocation on
-2026-09-17 recorded exactly that in `/tmp/scheduler-cap24-restart.log`:
+EXPECTED OUTPUT
 
 ```text
-{"status":"paused"}
+200
 ```
 
-`POST` is required; a `GET` returns `405 {"error":"POST only"}`. No credential is needed on loopback.
+`POST` is required; a `GET` returns `405 {"error":"POST only"}`. Read the CODE, never assume: a `401`
+here means the credential, not the endpoint — `{"error":"invalid operator credential"}` is the wrong
+token, `{"error":"operator credential required for mutations"}` is a missing header, `503 mutations
+disabled` means the daemon has no operator credential configured at all. A rejected pause leaves the
+fleet RUNNING while you believe it is parked, which is the failure SCHED-GAP-1756 records.
 
 Verify the pause took effect:
 
@@ -545,12 +557,22 @@ a restart that fails outright, because nothing alerts on it.
 Only run this **after** §5 passes. If §5 failed, see §8 Trap B before resuming.
 
 ```sh
-curl -s -X POST http://127.0.0.1:9090/api/v1/resume
+curl -s -o /tmp/resume.json -w '%{http_code}\n' -X POST \
+  -K <(printf 'header = "X-Operator-Token: %s"\n' "$TOKEN") \
+  http://127.0.0.1:9090/api/v1/resume
 # NOT executed in authoring — expected output shown
 ```
 
-EXPECTED OUTPUT **shape** — HTTP 200, `{"status":"resumed"}` (same handler shape as pause, mirrored;
-`GET` → `405 {"error":"POST only"}`).
+EXPECTED OUTPUT
+
+```text
+200
+```
+
+**A non-200 resume is a FAILURE, not a retry-able detail.** A `401 {"error":"invalid operator
+credential"}` means the fleet is still parked and the credential you are holding is not the one the
+daemon wants — fix the credential (§8 Trap E) and resume again. Never record "resumed" from a call
+whose status code you did not read.
 
 Verify:
 
@@ -891,29 +913,79 @@ no `failed`/`timeout` rows in it is a paused window. Real illustration from the 
 start of every drain-restart (§1.5) and again at the end (§6, §7).** Do not assume a daemon that
 answers is a daemon that schedules.
 
+### Trap E — the helper holds a credential the daemon does not accept
+
+**What it looks like:** the drain helper logs `pause -> HTTP 401 {"error":"invalid operator
+credential"}`, keeps "draining" against a fleet that is still admitting work — or, worse, against a
+pause that a DIFFERENT caller set — and its abort path's `resume` is refused with the same credential,
+leaving the fleet parked with no owner.
+
+**Precedent (2026-10-22, SCHED-GAP-1756):** `deploy-scheduler-drain-restart.sh` sent `API_SERVER_KEY`
+(the gateway key from `~/.hermes/.env`) as `Authorization: Bearer` on every call. The operator gate
+refuses that value, so the pause never landed; another caller paused at 07:02; the drain ran 45 min
+against that foreign pause and timed out; the resume 401'd at 07:45 and the status code was discarded.
+74 minutes of zero admission (07:00–08:14) until a manual restart — which is also what landed the build
+the aborted deploy never deployed.
+
+**Detection — status codes and digests, never a credential value:**
+
+```sh
+grep -n 'NO WORKING CREDENTIAL\|pause attempt\|RESUME FAILED' /tmp/scheduler-deploy-restart.log | tail
+curl -s --max-time 5 http://127.0.0.1:9090/api/v1/status | jq .paused
+```
+
+Read the ladder: `pause attempt 1/2 ... -> HTTP 200` means the operator token was accepted; two
+`-> HTTP 401` lines mean the daemon recognises NEITHER source. What the daemon actually holds is in its
+own environment — compare digests:
+
+```sh
+pid=$(pgrep -f 'bin/schedulerd' | head -1)
+sed -n 's/^SCHEDULER_OPERATOR_TOKEN=//p' ~/.hermes/scheduler-auth.env | tr -d '\n' | sha256sum
+tr '\0' '\n' < /proc/$pid/environ | sed -n 's/^SCHEDULER_OPERATOR_TOKEN=//p' | tr -d '\n' | sha256sum
+```
+
+Equal digests = the file is right and the helper's parsing is the problem. Different digests = the
+daemon is running a token the file no longer carries (it reads its `EnvironmentFile` at start): fix the
+file, then restart to load it.
+
+**Action** — never hand-drive a deploy from a helper you have not proven: pause and resume once by hand
+(§2, §6) and read both codes. Then run the helper's own tests
+(`~/.hermes/scripts/tests/test-drain-restart-credentials.sh`) before trusting it in a deploy window.
+
 ---
 
-## Appendix A — the sanctioned helper
+## Appendix A — the two drain-restart helpers
 
-`~/.hermes/scripts/scheduler-deploy-drain-restart.sh` implements this runbook end to end:
-pause → poll `active_ticks` to 0 (60-min cap) → `systemctl --user restart` → wait for `health=200` →
-verify → resume. Its log is `/tmp/scheduler-deploy-restart.log`.
+Both implement this runbook and both share ONE credential resolver
+(`~/.hermes/scripts/lib/scheduler-cred.sh`, SCHED-GAP-1756):
 
-It is safe to use, and it encodes two rules this page also states:
+| Script | Shape | Log |
+|---|---|---|
+| `~/.hermes/scripts/deploy-scheduler-drain-restart.sh` | pause → drain (`DRAIN_MAX`, default 2700 s) → restart → health → resume → symbol + freshness verify | stdout; name it with `DEPLOY_LOG` |
+| `~/.hermes/scripts/scheduler-deploy-drain-restart.sh` | same phases plus a namespace/migration dump, the policy-script deploy-hash gate and a board-derived fix-symbol check; drain cap `SCHEDULER_MAX_DRAIN`, default 5 h | `/tmp/scheduler-deploy-restart.log` |
 
-- **It refuses to restart with ticks in flight** — a 60-min drain timeout resumes and exits `2`
-  without restarting.
-- **It resumes on death.** It traps `EXIT` *and* `TERM`/`INT`, because trapping `EXIT` alone did not
-  survive a kill (Trap A). Proven working on 2026-09-18T01:15:25.
+What both guarantee:
 
-Two limits you must cover yourself, and they are why this page exists:
+- **One credential, resolved before scheduling state is touched.** Pause itself is the probe — rung 1
+  `X-Operator-Token`, rung 2 `Authorization: Bearer` (`API_SERVER_KEY`). A 401 changes nothing
+  server-side, so a refused rung is a safe probe; if neither is accepted the script prints
+  `NO WORKING CREDENTIAL` with both codes and exits `1` having paused nothing. Credentials reach curl
+  through a 0600 config file (`-K`), never `argv`.
+- **A resume is only "done" at HTTP 200.** 401/403/000 is reported as `RESUME FAILED` (exit `5`) and
+  the `paused` flag is read back and must be `false`.
+- **It refuses to restart with ticks in flight** — a drain timeout resumes and exits `3` (or `2`).
+- **It resumes on death.** `EXIT` *and* `TERM`/`INT` are trapped, because trapping `EXIT` alone did not
+  survive a kill (Trap A). A killed run exits `143` and logs the trap's resume.
 
-1. **`SIGKILL` / OOM / reboot defeat the traps.** Check `paused` afterwards by hand (§8 Trap D).
-2. **Its verification step is fix-specific.** It greps the running binary for the symbol names of two
-   *particular* historical fixes and exits `3` when they are missing; those names mean nothing for a
-   different change set, and its cap probe (`ps -eo args= -C schedulerd | ... | head -1`) is unreliable
-   because `-e` overrides `-C` and matches unrelated processes (verified: 1668 lines instead of 1).
-   Always finish with §5 — the freshness gate plus your own fix's signature string.
+Two limits you still cover yourself, and they are why this page exists:
+
+1. **`SIGKILL` / OOM / reboot defeat the traps.** Check `paused` by hand (§8 Trap D).
+2. **Verification is fix-specific.** The symbol list means nothing for a different change set. Finish
+   with §5 — the freshness gate plus your own fix's signature string.
+
+`~/.hermes/scripts/tests/test-drain-restart-credentials.sh` exercises the ladder against a fake daemon
+(rung 1, rung 2 fallback, both refused, daemon unreachable, resume-401) and touches no live state. Run
+it after editing either helper.
 
 Both helper scripts on this host write their log to `/tmp`; `/tmp` is not durable across a reboot, so
 a reboot during a drain leaves *no* record of the abandoned run. That is another reason to check

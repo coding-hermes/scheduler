@@ -1629,20 +1629,31 @@ slot-freed debounce, and the 5-min eval-stall watchdog, GAP-042).
 
 **Purpose:** Pause the scheduler loop — stops NEW spawns fleet-wide.
 
-**Response 200:** `{"status":"paused"}`. **Errors:** 405 on non-POST.
+**Auth:** operator credential (mutating route, SCHED-GAP-1602). The daemon accepts only the token it
+loaded from its own `EnvironmentFile` (`SCHEDULER_OPERATOR_TOKEN`).
+
+**Response 200:** `{"status":"paused"}`. **Errors:** 401 `operator credential required for mutations`
+(no header) · 401 `invalid operator credential` (wrong value — `API_SERVER_KEY` from `~/.hermes/.env`
+is the GATEWAY key and is refused here, SCHED-GAP-1756) · 503 no operator credential configured
+daemon-side · 405 on non-POST.
 
 ### POST /api/v1/resume
 
 **Purpose:** Resume the scheduler loop.
 
-**Response 200:** `{"status":"resumed"}`. **Errors:** 405 on non-POST.
+**Auth:** operator credential, same gate as pause.
+
+**Response 200:** `{"status":"resumed"}`. **Errors:** same as pause — and a 401 here means the fleet is
+STILL PAUSED, so the status code must be checked rather than the call's exit status.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/evaluate
 # {"status":"evaluation triggered"}
-curl -s -X POST http://127.0.0.1:9090/api/v1/pause
+curl -s -X POST http://127.0.0.1:9090/api/v1/pause \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
 # {"status":"paused"}
-curl -s -X POST http://127.0.0.1:9090/api/v1/resume
+curl -s -X POST http://127.0.0.1:9090/api/v1/resume \
+  -H "X-Operator-Token: $SCHEDULER_OPERATOR_TOKEN"
 # {"status":"resumed"}
 ```
 
