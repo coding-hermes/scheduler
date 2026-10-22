@@ -805,6 +805,12 @@ func (l *Loop) Run() {
 			// next pause/resume pair (DOGFOOD-020).
 		case <-reaper.C:
 			l.reapZombies()
+			// SCHED-GAP-1754: reap stale 'queued' rows on the 60s reaper
+			// pass so ticks left stranded by a restart or load-gate deferral
+			// are cleaned up continuously instead of waiting for the next
+			// daemon restart (the startup reap at Run() remains as the
+			// catch-all on boot).
+			l.reapStaleQueuedRows()
 			// SCHED-GAP-1674: the builder no-artifact guard rides the same
 			// 60s reaper pass, after the zombie reap. Best-effort by
 			// contract: every failure inside the pass is logged there and

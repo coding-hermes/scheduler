@@ -5440,3 +5440,15 @@ tasks:
     for SCHED-GAP-1752.'
   status: in_progress
   created_at: '2026-10-21T18:50:24.651051+00:00'
+- id: SCHED-GAP-1754
+  title: Move reapStaleQueuedRows from startup-only to 60s reaper pass so stale queued
+    ticks are reaped continuously, not just at restart
+  criteria:
+  - "SCHED-GAP-1754: Add l.reapStaleQueuedRows() call to the 60s reaper pass in Loop.Run()\
+    \ (after l.reapZombies() at loop.go:807). Verify: (1) go test ./... -short passes,\
+    \ (2) the reaper case in loop.go gorilla-select now calls reapStaleQueuedRows()\
+    \ alongside reapZombies and builderGuardPass, (3) no other startup-only calls\
+    \ are removed (keep startup reap too \u2014 dual-path is correct: startup for\
+    \ catch-all, reaper for ongoing leaks)"
+  status: in_progress
+  created_at: '2026-10-22T07:38:20.975718+00:00'
