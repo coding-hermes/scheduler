@@ -42,6 +42,13 @@ var htmxJS = mustReadStatic("static/htmx.min.js")
 // two together, so the page can never point at a path nothing serves.
 const EventsToastAssetPath = "/static/js/events-toast.js"
 
+// SCHED-GAP-1642: the dashboard's one-shot burst activity card reads the
+// machine-auditable SCHED-GAP-1641 accounting marker, never a second signal.
+const (
+	instantTurnFailureReason   = scheduler.FailureReasonInstantTurn
+	instantTurnDashboardWindow = 24 * time.Hour
+)
+
 // eventsToastJS is the bundled toast client (SCHED-GAP-1599). It is a real
 // file rather than an inline <script> so the policy it implements (dedupe,
 // rate cap, notification opt-in) is reviewable and testable on its own.
@@ -1078,6 +1085,7 @@ const pageTemplate = `{{template "head" .}}
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
 <div class="card"><div class="label">Active Ticks</div><div class="value">{{.ActiveTicks}}</div></div>
+<div class="card"><div class="label">One-shot activity (24h)</div><div class="value">{{.InstantTurnCount}}</div></div>
 <div class="card"><div class="label">Fleet Weight</div><div class="value">{{.BudgetUsed}}</div></div>
 {{if .CostTodayTotal}}<div class="card"><div class="label">Cost Today</div><div class="value">${{printf "%.2f" .CostTodayTotal}}</div></div>{{end}}
 {{if .CostWeekTotal}}<div class="card"><div class="label">Cost 7d</div><div class="value">${{printf "%.2f" .CostWeekTotal}}</div></div>{{end}}
