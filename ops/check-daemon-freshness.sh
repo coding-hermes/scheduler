@@ -102,18 +102,28 @@ done
 HTTP_BODY="$(curl -fsS --max-time "$MAX_STATUS_TIMEOUT" "$STATUS_URL" 2>/dev/null || true)"
 
 if [ -z "$HTTP_BODY" ]; then
-    echo "UNKNOWN: daemon down or wrong endpoint" >&2
+    echo "UNKNOWN: daemon down or wrong endpoint"
     exit 2
 fi
 
-LIVE_SHA=$(echo "$HTTP_BODY" | jq -r '.build_sha // empty' 2>/dev/null)
+LIVE_SHA=$(printf '%s' "$HTTP_BODY" | jq -r '.build_sha // empty' 2>/dev/null || true)
 
 if [ -z "$LIVE_SHA" ]; then
-    echo "UNKNOWN: daemon version string not machine-parseable (pre-build-identity?)" >&2
+    echo "UNKNOWN: daemon version string not machine-parseable (pre-build-identity?)"
     exit 2
 fi
 
-echo "LIVE SHA: $LIVE_SHA (reference: $AGAINTH)" >&2
+# A build_sha is only usable when it names a commit this checkout can resolve.
+# A shape-only string ("unknown", "deadbeef") is not build identity: it can
+# never be an ancestor of anything, so treating it as STALE would report a
+# fresh daemon as garbage instead of admitting we do not know.
+if ! LIVE_FULL=$(git rev-parse --verify --quiet "${LIVE_SHA}^{commit}" 2>/dev/null); then
+    echo "UNKNOWN: reported build_sha ($LIVE_SHA) is not a commit in this checkout"
+    exit 2
+fi
+LIVE_SHORT=$(git rev-parse --short=8 "$LIVE_FULL" 2>/dev/null || echo "$LIVE_SHA")
+
+echo "LIVE SHA: $LIVE_SHA (reference: $AGAINST)" >&2
 
 # The reference is the newest commit reachable from --against that touches
 # the admission/scheduling surface (internal/scheduler, or the migrations
@@ -122,15 +132,24 @@ echo "LIVE SHA: $LIVE_SHA (reference: $AGAINTH)" >&2
 # commit topology does not.
 
 # Find the reference commit (newest commit touching the admission/scheduling surface)
-REFERENCE=$(git -C "$(dirname "$0")/.." rev-list -n 1 "$AGAINTH" -- internal/scheduler 2>/dev/null || echo "$AGAINTH")
+REFERENCE=$(git rev-list -n 1 "$AGAINST" -- internal/scheduler 2>/dev/null || true)
+if [ -z "${REFERENCE:-}" ]; then
+    REFERENCE=$(git rev-parse --verify --quiet "$AGAINST" 2>/dev/null || true)
+fi
+if [ -z "${REFERENCE:-}" ]; then
+    echo "UNKNOWN: --against ($AGAINST) does not resolve in this checkout"
+    exit 2
+fi
+REF_SHORT=$(git rev-parse --short=8 "$REFERENCE" 2>/dev/null || echo "$REFERENCE")
 
 echo "REFERENCE: $REFERENCE (from --against=$AGAINST)" >&2
 
 # Ancestor test: is the live build a descendant of (or equal to) the reference?
-if git -C "$(dirname "$0")/.." merge-base --is-ancestor "$LIVE_SHA" "$REFERENCE" 2>/dev/null; then
-    echo "FRESH: live build ($LIVE_SHA) is a descendant of or equal to the reference ($REFERENCE)"
+# i.e. is the reference already contained in the running build?
+if git merge-base --is-ancestor "$REFERENCE" "$LIVE_FULL" 2>/dev/null; then
+    echo "FRESH: live=$LIVE_SHORT reference=$REF_SHORT"
     exit 0
 else
-    echo "STALE: live build ($LIVE_SHA) predates the reference ($REFERENCE)" >&2
+    echo "STALE: live=$LIVE_SHORT reference=$REF_SHORT"
     exit 1
 fi
