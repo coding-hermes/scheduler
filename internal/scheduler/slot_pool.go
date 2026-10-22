@@ -758,6 +758,19 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			// therefore always written via the outcome path below, the same
 			// one a completed tick uses.
 			log.Printf("SPAWN: %s failed: %v", proj.Name, err)
+			// INT-CI-188: release the usage-pool lease BEFORE the tick row
+			// is made terminal. The lease release used to live only in this
+			// goroutine's defer, which runs after lifecycle.Complete has
+			// written status=failed — so any reader that observes the
+			// terminal row could still see the lease 'active' for a
+			// microsecond-long window (the flaky
+			// TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal race).
+			// Releasing ahead of the terminal write makes the invariant
+			// "a terminal tick row never retains its usage-pool lease"
+			// hold by construction; the deferred release below becomes a
+			// no-op (cleared ID) and stays as the panic/exit-path backstop.
+			releaseUsagePoolLeaseAfterSpawn(db, usageLeaseID, proj.Name)
+			usageLeaseID = ""
 			// Finished MUST be set: lifecycle.Complete persists it as
 			// completed_at, and the packer's cooldown/backoff/starvation logic
 			// keys off that timestamp. Leaving it zero ("0001-01-01") froze the
@@ -794,6 +807,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// This flag is the tick-level "yes" that makes dispatch fields
 		// readable on every tick that actually ran a foreman.
 		outcome.DispatchDispatched = true
+		// INT-CI-188: same ordering as the refusal path above — drop the
+		// usage-pool lease BEFORE lifecycle.Complete writes the terminal
+		// status, so completion-observation readers never catch the lease
+		// 'active' behind a terminal row. The deferred release below stays
+		// as the backstop for exits that never reach this point.
+		releaseUsagePoolLeaseAfterSpawn(db, usageLeaseID, proj.Name)
+		usageLeaseID = ""
 		if err := p.lifecycle.Complete(outcome); err != nil {
 			log.Printf("SPAWN: complete %s: %v", tickID, err)
 		}
