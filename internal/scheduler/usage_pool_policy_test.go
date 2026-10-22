@@ -172,6 +172,19 @@ func TestRemoteMissingHostPoolFailsClosedNoFallback(t *testing.T) {
 	}
 }
 
+// ch:trace row=INT-CI-188 spec=none:row-cites-live-ci-failure wave=.coding-hermes/waves/coding-hermes-scheduler-foreman-2026-10-22-21-23-23.json#INT-CI-188 test=internal/scheduler/usage_pool_policy_test.go::TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal doc=none:code-fix prompt=/tmp/sched-20261022212323-INT-CI-188-brief.txt evidence=commit witness=none:foreman-verifies-race-battery verdict=none:pending-foreman-trace commit=none:pending-foreman memory=none:not-written
+//
+// TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal (INT-CI-188) pins the
+// lease-retention invariant on a refused remote dispatch: once the tick row is
+// OBSERVABLY terminal (status left queued/running), no usage pool may retain an
+// active lease and no local slot may stay consumed. The invariant must hold by
+// construction — the implementation releases the lease BEFORE the terminal
+// status write (slot_pool.go, INT-CI-188) — so the assertion right after
+// waitForTickTerminal is deterministic: no fixed sleep, and no release-vs-read
+// race. The lease row itself is additionally verified to exist with
+// state='released', which keeps the test from passing vacuously if a later
+// change stops taking or releasing remote-dsp lane leases entirely.
+// CI failure provenance: Race Detector step red on run 39401386941.
 func TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal(t *testing.T) {
 	db := newTestDB(t)
 	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('remote-refused','url','/tmp','now','now')`); err != nil {
@@ -188,6 +201,33 @@ func TestUsagePoolLeaseReleasedAfterRemoteDispatchRefusal(t *testing.T) {
 	tickID := pool.Spawn(PackedProject{Name: "remote-refused", Workdir: "/tmp"}, time.Now(), true, db)
 	if status, ok := waitForTickTerminal(t, db, tickID, 15*time.Second); !ok || status != "failed" {
 		t.Fatalf("remote dispatch refusal status=%q terminal=%t, want failed", status, ok)
+	}
+	// INT-CI-188: the lease the refusal consumed must be visible in the
+	// lease table AND proven released — an empty pool list would let a
+	// missing reserve or a missing release both pass vacuously.
+	stats, err := database.UsagePoolStats(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawLeasePool := false
+	for _, stat := range stats {
+		if stat.PoolID != "host:bunker" {
+			continue
+		}
+		sawLeasePool = true
+		if stat.Active != 0 {
+			t.Fatalf("pool host:bunker retained %d active lease(s) behind an already-terminal tick row", stat.Active)
+		}
+	}
+	if !sawLeasePool {
+		t.Fatal("host:bunker pool produced no lease row — reserve was skipped or released by lease_id, not by pool stats")
+	}
+	var leaseState int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases WHERE tick_id=? AND state='released'`, tickID).Scan(&leaseState); err != nil {
+		t.Fatal(err)
+	}
+	if leaseState != 1 {
+		t.Fatalf("tick=%s lease rows at state='released'=%d, want exactly one", tickID, leaseState)
 	}
 	assertNoActiveUsagePoolLeases(t, db)
 	if pool.Running() != 0 {
