@@ -1,0 +1,64 @@
+{{define "cadence"}}{{template "head" .}}
+{{template "sidebar" "cadence"}}
+<div class="main" id="main">
+<div class="page-head">
+<h1>Cadence &amp; Residue</h1>
+<div class="actions"><span class="signal"><span class="dot"></span> live</span></div>
+</div>
+<div class="meta">Generated {{.GeneratedAt}} · configured vs achieved starts/day over a {{.WindowDays}}-day window · cooldown-pin residue detector (read-only)<br>
+REST surfaces: <a href="/api/v1/cadence"><span class="mono">/api/v1/cadence</span></a> (this table as JSON) · <a href="{{.ResidueRoute}}"><span class="mono">/api/v1/cooldown/residue</span></a> (the detector below as JSON)</div>
+
+{{if .DataError}}
+<div class="table-wrap"><table><tbody><tr><td class="meta status-fail">Cadence &amp; Residue unavailable: {{.DataError}}</td></tr></tbody></table></div>
+{{else}}
+
+<h2>Cadence (configured vs achieved, {{.WindowDays}}d window)</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lane</th><th>Target/day</th><th>Source</th><th>Achieved/day</th><th>Deficit/day</th><th>State</th></tr></thead>
+<tbody>
+{{range .Cadence}}
+<tr{{if not .Enabled}} class="disabled"{{end}}>
+<td><span class="mono">{{.Name}}</span></td>
+<td>{{if .Target}}{{printf "%.2f" .Target}}{{else}}<span class="meta">—</span>{{end}}</td>
+<td><span class="badge">{{.Source}}</span>{{if .PinnedByUser}} <span class="meta">pin</span>{{end}}</td>
+<td class="num">{{printf "%.2f" .Achieved}}</td>
+<td class="num">{{if .Target}}{{printf "%.2f" .Deficit}}{{else}}<span class="meta">—</span>{{end}}</td>
+<td>{{if .InResidue}}<span class="pill warn">residue</span>{{else if .Enabled}}<span class="pill ok">clean</span>{{else}}<span class="meta">off</span>{{end}}</td>
+</tr>
+{{else}}
+<tr><td colspan="6" class="meta">No lanes configured. Lanes appear here once created via POST /api/v1/projects (docs/api.md §5).</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+
+<h2>Cooldown Residue (live cooldown below the lane's own pin)</h2>
+<div class="meta">A residue lane runs hotter than the cadence the operator pinned (SCHED-GAP-1670). Read-only: reconciliation happens on the pin write paths, never here. <span class="mono"><a href="{{.ResidueRoute}}">/api/v1/cooldown/residue</a></span></div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lane</th><th>Live cooldown_s</th><th>Pinned cooldown_s</th><th>Pinned by</th></tr></thead>
+<tbody id="cadence-residue"
+hx-get="/cadence/partial"
+hx-trigger="autorefresh from:body"
+hx-swap="innerHTML">
+{{template "cadence_residue_rows" .}}
+</tbody>
+</table>
+</div>
+{{end}}
+</div>
+{{template "ready_js"}}
+</body>
+</html>{{end}}
+
+{{define "cadence_residue_rows"}}{{range .Residue}}
+<tr>
+<td><span class="mono">{{.Name}}</span></td>
+<td class="num status-warn">{{.Cooldown}}</td>
+<td class="num">{{.Pin}}</td>
+<td><span class="badge">{{.PinBy}}</span></td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="meta">No residue: every enabled pinned lane's live cooldown_s is at or above its own pin.</td></tr>
+{{end}}{{end}}

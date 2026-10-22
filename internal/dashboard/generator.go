@@ -76,6 +76,7 @@ type Generator struct {
 	blocksTmpl        *template.Template // full page: /blocks (SCHED-GAP-1601)
 	remoteTmpl        *template.Template // full page: /remote (REMOTE-006)
 	observatoryTmpl   *template.Template // full page: /observatory (SCHED-GAP-1592)
+	cadenceTmpl       *template.Template // full page: /cadence (SCHED-GAP-1746)
 	gatewayURL        string
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
@@ -187,6 +188,9 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 	g.remoteTmpl = g.tmpl.Lookup("remote")
 	// SCHED-GAP-1592: the Observatory — live graphs over the tick history.
 	g.observatoryTmpl = g.tmpl.Lookup("observatory")
+	// SCHED-GAP-1746: the Cadence & Residue page — configured vs achieved
+	// run rates plus the cooldown-pin residue detector.
+	g.cadenceTmpl = g.tmpl.Lookup("cadence")
 	for name, parsed := range map[string]*template.Template{
 		"fleet_table":    g.fleetTmpl,
 		"project_detail": g.projectTmpl,
@@ -199,6 +203,7 @@ func NewGenerator(db *sql.DB, urgencyCalc *scheduler.UrgencyCalculator, gatewayU
 		"blocks_console": g.blocksTmpl,
 		"remote":         g.remoteTmpl,
 		"observatory":    g.observatoryTmpl,
+		"cadence":        g.cadenceTmpl,
 	} {
 		if parsed == nil {
 			panic("dashboard: " + name + " template not registered")
