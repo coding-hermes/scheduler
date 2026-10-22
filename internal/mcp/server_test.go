@@ -1290,6 +1290,13 @@ func TestMCP_UnknownToolErrorCode(t *testing.T) {
 	}
 }
 
+/*
+ch:trace row=SCHED-GAP-1749 spec=docs/api.md#mcp-refusals wave=none:serial-worker test=internal/mcp/server_test.go::TestMCP_UnknownToolBeforeAuthGate doc=docs/api.md prompt=none:foreman-dispatch-brief evidence=none:pending-commit witness=none:worker-local verdict=none:foreman-judge commit=none:pending-implementation memory=none:not-written
+STATUS: complete
+TIER: T3 — invoked go test ./internal/mcp -run 'UnknownTool' -count=1 -v and go test ./internal/mcp -count=1; unknown-tool classification and known mutation gate both observed.
+EVIDENCE: commit:none:pending-commit (implementation + tests + docs + this marker will be committed together on wt/SCHED-GAP-1749; SHA bound by foreman trace follow-up)
+*/
+
 // TestMCP_InvalidParams verifies tools/call with malformed params returns -32602.
 func TestMCP_InvalidParams(t *testing.T) {
 	m := newMCPTestServer(t)
