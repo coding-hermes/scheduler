@@ -321,12 +321,12 @@ type controlRequest struct {
 	Deliver        *string  `json:"deliver,omitempty"`
 
 	// ── namespace_update (PUT) / namespace_create (POST) fields ──
-	NSWeight        *int    `json:"ns_weight,omitempty"`
-	NSReserved      *int    `json:"ns_reserved,omitempty"`
-	NSHardCap       *int    `json:"ns_hard_cap,omitempty"`
-	NSMaxConcurrent *int    `json:"ns_max_concurrent,omitempty"`
-	NSDescription   *string `json:"ns_description,omitempty"`
-	NSProject       *string `json:"ns_project,omitempty"` // namespace_move: lane to assign
+	NSWeight        *int     `json:"ns_weight,omitempty"`
+	NSReserved      *float64 `json:"ns_reserved,omitempty"`
+	NSHardCap       *int     `json:"ns_hard_cap,omitempty"`
+	NSMaxConcurrent *int     `json:"ns_max_concurrent,omitempty"`
+	NSDescription   *string  `json:"ns_description,omitempty"`
+	NSProject       *string  `json:"ns_project,omitempty"` // namespace_move: lane to assign
 
 	// ── group/template fields ──
 	GName        string   `json:"g_name,omitempty"`     // create: name
@@ -431,7 +431,13 @@ func parseControlRequest(r *http.Request) (controlRequest, error) {
 		req.Prompt = strPtr("prompt")
 		req.Deliver = strPtr("deliver")
 		req.NSWeight = intPtr("ns_weight")
-		req.NSReserved = intPtr("ns_reserved")
+		if v := get("ns_reserved"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil || n < 0 {
+				return req, errors.New("ns_reserved must be a non-negative number")
+			}
+			req.NSReserved = &n
+		}
 		req.NSHardCap = intPtr("ns_hard_cap")
 		req.NSMaxConcurrent = intPtr("ns_max_concurrent")
 		req.NSDescription = strPtr("ns_description")

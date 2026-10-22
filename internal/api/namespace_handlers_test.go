@@ -172,6 +172,27 @@ func TestUpdateNamespace(t *testing.T) {
 	}
 }
 
+func TestUpdateNamespaceReservedFractional(t *testing.T) {
+	a := newAPITestServer(t)
+	createTestNamespace(t, a.db, "fractional")
+
+	status, _ := a.do(t, "PUT", "/api/v1/namespaces/fractional", map[string]interface{}{
+		"reserved": 0.5,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+
+	var storageType string
+	var reserved float64
+	if err := a.db.QueryRow(`SELECT typeof(reserved), reserved FROM namespaces WHERE id = 'fractional'`).Scan(&storageType, &reserved); err != nil {
+		t.Fatalf("read reserved: %v", err)
+	}
+	if storageType != "real" || reserved != 0.5 {
+		t.Fatalf("stored reserved = %s|%g, want real|0.5", storageType, reserved)
+	}
+}
+
 func TestUpdateNamespaceNotFound(t *testing.T) {
 	a := newAPITestServer(t)
 	status, _ := a.do(t, "PUT", "/api/v1/namespaces/nonexistent", map[string]interface{}{

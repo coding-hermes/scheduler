@@ -1213,7 +1213,7 @@ func TestCreateNamespace(t *testing.T) {
 		t.Fatalf("GetNamespace after create: %v", err)
 	}
 	if got.Weight != 30 || got.Reserved != 5 || got.HardCap != 50 {
-		t.Fatalf("expected weight=30 reserved=5 hard_cap=50, got weight=%d reserved=%d hard_cap=%d",
+		t.Fatalf("expected weight=30 reserved=5 hard_cap=50, got weight=%d reserved=%g hard_cap=%d",
 			got.Weight, got.Reserved, got.HardCap)
 	}
 	if !got.Enabled {
@@ -1338,7 +1338,7 @@ func TestUpdateNamespace_AllFields(t *testing.T) {
 	}
 
 	w := 25
-	r := 8
+	r := 8.0
 	c := 60
 	e := false
 	d := "updated desc"
@@ -1358,7 +1358,7 @@ func TestUpdateNamespace_AllFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Weight != 25 || got.Reserved != 8 || got.HardCap != 60 {
-		t.Fatalf("got weight=%d reserved=%d hard_cap=%d", got.Weight, got.Reserved, got.HardCap)
+		t.Fatalf("got weight=%d reserved=%g hard_cap=%d", got.Weight, got.Reserved, got.HardCap)
 	}
 	if got.Enabled {
 		t.Fatal("expected enabled=false after update")

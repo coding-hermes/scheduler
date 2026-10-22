@@ -109,7 +109,7 @@ func printSchema() {
         "properties": {
           "id": { "type": "string" },
           "weight": { "type": "integer", "default": 10 },
-          "reserved": { "type": "integer", "default": 1 },
+          "reserved": { "type": "number", "minimum": 0, "default": 1, "description": "Fractional reserved floor in budget units; integers remain valid" },
           "hard_cap": { "type": "integer", "default": 100 },
           "enabled": { "type": "boolean", "default": true },
           "description": { "type": "string" },

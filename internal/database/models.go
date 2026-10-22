@@ -562,15 +562,17 @@ type Event struct {
 // Each namespace gets a share of the global budget (B=100) via a two-phase
 // allocation algorithm: reserved floor + proportional remainder, capped by hard_cap.
 type Namespace struct {
-	ID            string `json:"id"`             // PRIMARY KEY — unique slug (e.g. "coding-hermes")
-	Weight        int    `json:"weight"`         // 1..100 — relative weight for proportional allocation
-	Reserved      int    `json:"reserved"`       // >= 0 — guaranteed floor budget units
-	HardCap       int    `json:"hard_cap"`       // >= 0 — maximum budget; 0 means no cap (interpret as B)
-	MaxConcurrent int    `json:"max_concurrent"` // >= 0 — max ticks running at once in this namespace; 0 = unlimited (global cap still applies)
-	Enabled       bool   `json:"enabled"`        // disabled namespaces get zero allocation
-	Description   string `json:"description"`    // human-readable label
-	DefaultPrompt string `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
-	ModelChain    string `json:"model_chain"`    // ordered "model@provider" hops (JSON array); namespace tier between project and router (Bane 2026-08-27)
+	ID     string `json:"id"`     // PRIMARY KEY — unique slug (e.g. "coding-hermes")
+	Weight int    `json:"weight"` // 1..100 — relative weight for proportional allocation
+	// Reserved is a fractional floor in budget units. JSON integers remain
+	// compatible because encoding/json represents them exactly as float64.
+	Reserved      float64 `json:"reserved"`       // >= 0 — guaranteed floor budget units
+	HardCap       int     `json:"hard_cap"`       // >= 0 — maximum budget; 0 means no cap (interpret as B)
+	MaxConcurrent int     `json:"max_concurrent"` // >= 0 — max ticks running at once in this namespace; 0 = unlimited (global cap still applies)
+	Enabled       bool    `json:"enabled"`        // disabled namespaces get zero allocation
+	Description   string  `json:"description"`    // human-readable label
+	DefaultPrompt string  `json:"default_prompt"` // foreman prompt default for every project in this namespace; empty = built-in (Bane 2026-08-27)
+	ModelChain    string  `json:"model_chain"`    // ordered "model@provider" hops (JSON array); namespace tier between project and router (Bane 2026-08-27)
 	// SCHED-GAP-1712: the namespace tier of the gateway endpoint resolution
 	// (lane > namespace > global). GatewayURL is inherited by every member
 	// lane that has no gateway_url of its own; GatewayKey is inherited the
@@ -618,14 +620,14 @@ type Namespace struct {
 
 // NamespacePatch is used for partial updates. Only non-nil fields are applied.
 type NamespacePatch struct {
-	Weight        *int    `json:"weight,omitempty"`
-	Reserved      *int    `json:"reserved,omitempty"`
-	HardCap       *int    `json:"hard_cap,omitempty"`
-	MaxConcurrent *int    `json:"max_concurrent,omitempty"`
-	Enabled       *bool   `json:"enabled,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	DefaultPrompt *string `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
-	ModelChain    *string `json:"model_chain,omitempty"`    // namespace model chain (JSON array string)
+	Weight        *int     `json:"weight,omitempty"`
+	Reserved      *float64 `json:"reserved,omitempty"`
+	HardCap       *int     `json:"hard_cap,omitempty"`
+	MaxConcurrent *int     `json:"max_concurrent,omitempty"`
+	Enabled       *bool    `json:"enabled,omitempty"`
+	Description   *string  `json:"description,omitempty"`
+	DefaultPrompt *string  `json:"default_prompt,omitempty"` // Bane 2026-08-27: namespace foreman prompt default
+	ModelChain    *string  `json:"model_chain,omitempty"`    // namespace model chain (JSON array string)
 	// SCHED-GAP-1712: the namespace tier of the gateway endpoint
 	// resolution — inherited by member lanes with no endpoint of their
 	// own, over the daemon's global URL / shared --gateway-key.
