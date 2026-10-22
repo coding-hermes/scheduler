@@ -9,6 +9,7 @@ import (
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // peersEventsToolTimeout bounds the peer event slice read (SCHED-GAP-1580
@@ -77,6 +78,11 @@ const cadenceToolTimeout = 5 * time.Second
 // EffectiveCadenceTarget, null when none is configured), achieved, and the
 // never-negative deficit. Same database functions the REST handler runs
 // (api.Server.cadence), so the tool cannot disagree with the route.
+// SCHED-GAP-1745: every row also names its admission governor
+// (admission_governor, "tasks_board" | "cooldown_pin"), and a tasks-admission
+// lane never carries a pin-derived target/deficit — the REST route resolves
+// admission_mode through database.AdmissionModePaced and this tool runs the
+// same functions, so the two surfaces cannot disagree.
 func (s *Server) toolCadence(ctx context.Context) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, cadenceToolTimeout)
 	defer cancel()
@@ -84,6 +90,14 @@ func (s *Server) toolCadence(ctx context.Context) (string, error) {
 	projects, err := database.ListProjects(cctx, s.db, false)
 	if err != nil {
 		return "", err
+	}
+	namespaces, err := database.ListNamespaces(cctx, s.db, false)
+	if err != nil {
+		return "", err
+	}
+	nsModes := make(map[string]string, len(namespaces))
+	for _, ns := range namespaces {
+		nsModes[ns.ID] = ns.AdmissionMode
 	}
 	rates, err := database.LoadCadenceRates(cctx, s.db, clock.Real().Now(), 7*24*time.Hour)
 	if err != nil {
@@ -93,19 +107,23 @@ func (s *Server) toolCadence(ctx context.Context) (string, error) {
 	for i := range projects {
 		p := projects[i]
 		target, source, configured := database.EffectiveCadenceTarget(p)
+		governor := scheduler.CadenceGovernorFor(p, nsModes)
 		item := map[string]interface{}{
 			"name":                  p.Name,
 			"target_source":         source,
+			"admission_governor":    governor,
 			"achieved_runs_per_day": rates[p.Name],
 			"window_days":           7,
 		}
-		if configured {
+		if governor == database.CadenceGovernorCooldown && configured {
 			deficit := target - rates[p.Name]
 			if deficit < 0 {
 				deficit = 0
 			}
 			item["target_runs_per_day"] = target
 			item["target_deficit_per_day"] = deficit
+		} else if governor == database.CadenceGovernorTasksBoard && source == "cooldown_pin" {
+			item["target_source"] = database.CadenceGovernorTasksBoard
 		}
 		items = append(items, item)
 	}

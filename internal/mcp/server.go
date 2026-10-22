@@ -556,7 +556,7 @@ var tools = []ToolDefinition{
 	},
 	{
 		Name:        "cadence",
-		Description: "Configured-vs-achieved run rates per lane (mirrors GET /api/v1/cadence, SOL-CADENCE): target_runs_per_day, achieved_runs_per_day and target_deficit_per_day over a 7-day window",
+		Description: "Configured-vs-achieved run rates per lane (mirrors GET /api/v1/cadence, SOL-CADENCE): target_runs_per_day, achieved_runs_per_day and target_deficit_per_day over a 7-day window, plus admission_governor (SCHED-GAP-1745) — tasks_board rows are board-driven and carry no pin-derived target/deficit",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	},
 	{

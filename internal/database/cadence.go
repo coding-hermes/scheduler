@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+// CadenceGovernor is the wire vocabulary for the governor behind a cadence
+// row (SCHED-GAP-1745): "tasks_board" = admission is board-driven (the
+// cooldown pin is waived while dispatchable board work exists), so a
+// pin-derived target is NOT the lane's delivery pace; "cooldown_pin" =
+// admission is paced by the wall-clock cooldown, so the derived target and
+// its deficit describe real expected delivery. Resolution lives with the
+// admission predicates in internal/scheduler (cadence_governor.go) — the
+// same package that applies the chain on the pick paths — so the cadence
+// surface can never drift from what actually admitted a tick.
+const (
+	CadenceGovernorTasksBoard = "tasks_board"
+	CadenceGovernorCooldown   = "cooldown_pin"
+)
+
 // EffectiveCadenceTarget resolves derived-first cadence intent. An explicit
 // override wins; zero explicitly opts out. Without an override, a durable
 // cooldown pin is operator configuration and derives 86400/pin runs/day.
