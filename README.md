@@ -505,6 +505,8 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
 | `-listen` | `127.0.0.1:9090` | HTTP listen address |
 | `-public-url` | _(empty)_ | Public base URL of the dashboard (e.g. `https://sched.example.com`) used to build tick-report permalinks for `deliver_mode=link`; empty = link mode falls back to full (SCHED-GAP-1607). Env: `SCHEDULER_PUBLIC_URL` |
+| `-tls-cert` | _(empty)_ | PEM certificate chain; with `-tls-key`, serves the dashboard/API/MCP over HTTPS so the origin is a browser **secure context** — required for `Notification` and service workers, which the plain-HTTP tailnet origin denies outright (SCHED-GAP-1600). Empty = plain HTTP, the unchanged default. See [docs/reference/https-origin.md](docs/reference/https-origin.md). Env: `SCHEDULER_TLS_CERT` |
+| `-tls-key` | _(empty)_ | PEM private key matching `-tls-cert`. All-or-nothing: a half-configured pair refuses to boot rather than silently serving cleartext. Env: `SCHEDULER_TLS_KEY` |
 | `-min-interval` | `30s` | Fastest tick interval |
 | `-max-interval` | `24h` | Slowest tick interval |
 | `-num-levels` | `10` | Number of priority levels |

@@ -30,9 +30,14 @@ import (
 // used (either would be CSRF-able or stealable, strictly worse than no auth);
 // the credential travels ONLY in a request header. The browser gets it via
 // HTTP basic (one credential, browser-cached for the session); API callers
-// may send Basic, a Bearer token, or the raw X-Operator-Token header. The
-// HTTPS-origin gap is SCHED-GAP-1600's row, not this one — nothing here
-// changes when that lands.
+// may send Basic, a Bearer token, or the raw X-Operator-Token header.
+//
+// The origin itself is now switchable (SCHED-GAP-1600): `--tls-cert/--tls-key`
+// serve this exact handler tree over HTTPS so the origin becomes a browser
+// secure context (required for Notifications and service workers), or
+// tailscaled terminates TLS in front of it. Neither changes anything here —
+// TLS is a transport swap, and the exposure boundary stays "whoever is on the
+// tailnet", so the same credential model applies unchanged on the https origin.
 //
 // ROUTE SPLIT (decided, in writing): every MUTATING route requires the
 // operator credential. Reads (status, health, live, metrics, queue, ticks,

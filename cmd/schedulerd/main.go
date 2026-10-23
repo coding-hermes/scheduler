@@ -51,9 +51,47 @@ func BulkSimWindow(count int) time.Duration {
 	return time.Duration(beats)*BulkSimBeat + bulkHeadroom
 }
 
+// tlsPairValid enforces the all-or-nothing TLS flag pair (SCHED-GAP-1600).
+//
+// A half-configured pair must refuse to boot instead of falling back to
+// cleartext. An operator who set only --tls-cert believes the dashboard is on
+// an HTTPS origin; a silent cleartext fallback would leave the browser on an
+// insecure origin, permanently denying Notification and serviceWorker — the
+// exact defect the flags exist to remove — while every boot line looked fine.
+func tlsPairValid(certFile, keyFile string) error {
+	if (certFile == "") == (keyFile == "") {
+		return nil
+	}
+	return fmt.Errorf("TLS requires BOTH --tls-cert and --tls-key (cert=%q key=%q); refusing to boot half-configured rather than silently serving cleartext", certFile, keyFile)
+}
+
+// serveDashboard starts the dashboard/API/MCP server and blocks (SCHED-GAP-1600).
+//
+// With a cert/key pair it serves the SAME handler tree over TLS, so the origin
+// becomes a browser secure context and the auth surface is byte-identical to
+// the cleartext listener — this function changes the transport, never the
+// authorization. With an empty pair it serves the historical plain HTTP
+// listener, so existing deployments are untouched.
+func serveDashboard(srv *http.Server, certFile, keyFile string) error {
+	if certFile == "" && keyFile == "" {
+		return srv.ListenAndServe()
+	}
+	if err := tlsPairValid(certFile, keyFile); err != nil {
+		return err
+	}
+	return srv.ListenAndServeTLS(certFile, keyFile)
+}
+
 func main() {
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
+	// SCHED-GAP-1600: optional TLS front. Browser Notifications and service
+	// workers are refused outright on the plain-HTTP tailnet forward — the
+	// origin is not a secure context, so it is not a permission the operator
+	// can grant. Serving this daemon's own handler tree over TLS gives remote
+	// devices a secure origin without a second proxy in the path.
+	tlsCert := flag.String("tls-cert", "", "Path to a PEM certificate chain; set together with --tls-key to serve the dashboard/API/MCP over HTTPS (a browser SECURE CONTEXT, required for Notifications and service workers — SCHED-GAP-1600); empty = plain HTTP. Env: SCHEDULER_TLS_CERT")
+	tlsKey := flag.String("tls-key", "", "Path to the PEM private key matching --tls-cert; the pair is all-or-nothing (a half-configured pair refuses to boot rather than silently serving cleartext). Env: SCHEDULER_TLS_KEY")
 	// SCHED-GAP-1607: public dashboard origin for link-mode tick-report
 	// delivery (deliver_mode=link). Empty = not configured → link mode
 	// degrades to full. Also SCHEDULER_PUBLIC_URL env override below.
@@ -364,6 +402,19 @@ func main() {
 	// knobs); empty stays empty (link mode degrades to full at delivery).
 	if v := os.Getenv("SCHEDULER_PUBLIC_URL"); v != "" {
 		*publicURL = v
+	}
+	// SCHED-GAP-1600: TLS front, env overrides the pair wholesale (env wins,
+	// matching the other SCHEDULER_* knobs). Validated HERE, before any long
+	// boot work: a half-configured pair must never reach the listener arm,
+	// where the failure would surface as a dead dashboard in a goroutine.
+	if v := os.Getenv("SCHEDULER_TLS_CERT"); v != "" {
+		*tlsCert = v
+	}
+	if v := os.Getenv("SCHEDULER_TLS_KEY"); v != "" {
+		*tlsKey = v
+	}
+	if err := tlsPairValid(*tlsCert, *tlsKey); err != nil {
+		log.Fatalf("FATAL: %v", err)
 	}
 	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1639,16 +1690,36 @@ func main() {
 	if *publicURL != "" {
 		log.Printf("DELIVER: public URL %s — deliver_mode=link builds tick permalinks against it", *publicURL)
 	}
+	if *tlsCert != "" && *tlsKey != "" && strings.HasPrefix(*publicURL, "http://") {
+		// A cleartext permalink base while TLS is on hands operators
+		// http://-scheme tick links: those pages load on an INSECURE origin,
+		// so their notification affordances stay dead. WARN rather than
+		// rewrite — the operator may front the daemon with a TLS proxy whose
+		// public URL this flag is pinning.
+		log.Printf("WARN: --public-url is http:// while TLS is enabled — permalinks would point at the cleartext origin")
+	}
 
+	// SCHED-GAP-1600: one scheme for every boot line, so "is the dashboard on a
+	// secure origin?" is answerable from the log rather than guessed.
+	scheme := "http"
+	if *tlsCert != "" && *tlsKey != "" {
+		scheme = "https"
+	}
 	server := &http.Server{
 		Addr:    *listen,
 		Handler: pprofMux,
 	}
 	go func() {
-		log.Printf("HTTP: listening on %s", *listen)
-		log.Printf("  Dashboard: http://%s/", *listen)
-		log.Printf("  API:       http://%s/api/v1/health", *listen)
-		log.Printf("  MCP:       http://%s/mcp", *listen)
+		log.Printf("%s: listening on %s", strings.ToUpper(scheme), *listen)
+		log.Printf("  Dashboard: %s://%s/", scheme, *listen)
+		log.Printf("  API:       %s://%s/api/v1/health", scheme, *listen)
+		log.Printf("  MCP:       %s://%s/mcp", scheme, *listen)
+		if scheme == "https" {
+			// The whole point of the flag pair: browsers require a secure
+			// context for Notification and serviceWorker, and an https origin
+			// is one. Name it so the property is not assumed.
+			log.Printf("  Origin:    SECURE CONTEXT (TLS) — cert %s", *tlsCert)
+		}
 		// SCHED-GAP-1602: one boot line that answers "are mutations gated?" —
 		// NEVER prints the credential itself.
 		switch {
@@ -1659,8 +1730,8 @@ func main() {
 		default:
 			log.Printf("  Auth:      FAIL-CLOSED — no operator credential configured; every mutating route answers 503 until SCHEDULER_OPERATOR_TOKEN/[api] operator_token is set")
 		}
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP: %v", err)
+		if err := serveDashboard(server, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("%s: %v", strings.ToUpper(scheme), err)
 		}
 	}()
 
