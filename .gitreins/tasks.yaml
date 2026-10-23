@@ -5455,3 +5455,53 @@ tasks:
     exit codes match test expectations'
   status: in_progress
   created_at: '2026-10-22T08:40:43.873503+00:00'
+- id: SCHED-GAP-1600-R2
+  title: Opt-in HTTPS listener for a browser secure origin (recovery merge)
+  criteria:
+  - cmd/schedulerd/main.go calls ListenAndServeTLS for the dashboard/API origin when
+    --tls-cert plus --tls-key are set and refuses a half-configured pair; docs/reference/flags.md
+    documents both flags; go build ./... exits 0 and go test -short ./cmd/schedulerd
+    ./internal/api passes.
+  status: complete
+  created_at: '2026-10-23T08:25:03.249762+00:00'
+  completed_at: '2026-10-23T08:25:09.277338+00:00'
+- id: SCHED-GAP-128-R2
+  title: Fleet-infra finding classification + collapse of per-project copies (recovery
+    merge)
+  criteria:
+  - ops/fleet-infra-findings.py classifies a finding as fleet-infra vs project-local
+    with a required substrate co-signal, files ONE FLEET-INFRA row per pattern with
+    cross_ref provenance and a throttle; ops/collapse-fleet-infra-findings.py collapses
+    existing per-project copies with --dry-run default, byte backup and archive; python3
+    -m pytest tests/test_fleet_infra_findings.py tests/test_collapse_fleet_infra_findings.py
+    tests/test_check_fleet_invariants_fleet_infra_dup.py passes.
+  status: complete
+  created_at: '2026-10-23T08:25:04.482002+00:00'
+  completed_at: '2026-10-23T08:25:14.768003+00:00'
+- id: SCHED-GAP-1595
+  title: 'Nested parent pages: a foreman''s page aggregates its satellites'
+  criteria:
+  - grep -n 'Satellites' internal/dashboard/generator.go internal/dashboard/generator_data.go
+    prints at least one match in each file, and go test ./internal/dashboard -run
+    'TestGenerate_WithProjects' -count=1 exits 0.
+  status: complete
+  created_at: '2026-10-23T08:29:46.556025+00:00'
+  completed_at: '2026-10-23T08:41:35.014206+00:00'
+- id: SCHED-GAP-1585
+  title: 'Budget exemptions: namespaces and lanes the weight budget does not apply
+    to'
+  criteria:
+  - grep -n 'budget_exempt' internal/config/config.go prints at least one match, grep
+    -rln 'budget_exempt' internal/scheduler/ prints at least one file, and go test
+    ./internal/scheduler -run 'TestPick_RespectsBudget' -count=1 exits 0.
+  status: complete
+  created_at: '2026-10-23T08:29:47.850278+00:00'
+  completed_at: '2026-10-23T08:50:22.785491+00:00'
+- id: SCHED-GAP-1628-V
+  title: 'Verification: documented install story stays installable at 800e85cb'
+  criteria:
+  - grep -c 'Go 1.26+' README.md prints 1 and grep -c 'make build' README.md prints
+    6 (>=3); make build on this tree exits 0 and produces bin/schedulerd and bin/migrate.
+  status: complete
+  created_at: '2026-10-23T08:31:00.717721+00:00'
+  completed_at: '2026-10-23T08:31:05.383367+00:00'
