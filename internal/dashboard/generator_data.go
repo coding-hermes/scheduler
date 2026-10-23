@@ -486,6 +486,16 @@ type ProjectDetailData struct {
 	// page (the map is lookup data, not a render dependency).
 	Parents  []database.LaneLink
 	Children []database.LaneLink
+	// Satellites are direct child projects, with their own recent tick graph
+	// and execution history, shown on this parent lane's family page.
+	Satellites []SatelliteDetailData
+}
+
+// SatelliteDetailData is the parent-page summary for one direct satellite.
+type SatelliteDetailData struct {
+	Project     database.Project
+	SpeedCost   []SpeedCostPoint
+	RecentTicks []database.Tick
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.

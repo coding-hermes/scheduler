@@ -167,6 +167,38 @@ func TestGenerateProjectDetail_WithTicks(t *testing.T) {
 	}
 }
 
+// TestGenerateProjectDetail_ShowsSatellites verifies a parent's family page
+// includes each direct satellite's graph section and execution-filter link.
+func TestGenerateProjectDetail_ShowsSatellites(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	for _, p := range []*database.Project{
+		{Name: "family-foreman", Weight: 10, Priority: 5, CooldownS: 900, DecayRate: 1, Enabled: true},
+		{Name: "family-foreman-qa", Parent: "family-foreman", Weight: 5, Priority: 3, CooldownS: 900, DecayRate: 1, Enabled: true},
+	} {
+		if err := database.CreateProject(ctx, db, p); err != nil {
+			t.Fatalf("CreateProject %s: %v", p.Name, err)
+		}
+	}
+	if err := database.CreateTick(ctx, db, &database.Tick{
+		ID: "satellite-tick-1", ProjectName: "family-foreman-qa", Status: database.StatusCompleted,
+		Outcome: database.OutcomeCommitted, SpawnedAt: "2026-07-19T10:00:00Z",
+		CompletedAt: "2026-07-19T10:05:00Z", CostUSD: 0.25, Commits: 2,
+	}); err != nil {
+		t.Fatalf("CreateTick: %v", err)
+	}
+	var buf strings.Builder
+	if err := dashboard.NewGenerator(db, nil).GenerateProjectDetail(&buf, "family-foreman"); err != nil {
+		t.Fatalf("GenerateProjectDetail: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Satellites", "/projects/family-foreman-qa", "satellite-tick-1", "/ticks?project=family-foreman-qa", "Speed", "Cost"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("parent satellite view missing %q", want)
+		}
+	}
+}
+
 // TestGenerateProjectDetail_NotFound verifies that querying a project that
 // doesn't exist returns an error wrapping ErrProjectNotFound.
 func TestGenerateProjectDetail_NotFound(t *testing.T) {

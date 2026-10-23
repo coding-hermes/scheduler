@@ -478,6 +478,20 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	if children, lerr := database.LaneChildren(ctx, g.db, name); lerr == nil {
 		data.Children = children
 	}
+	// Satellites: collect direct children from the authoritative projects.parent
+	// column and give each lane its own graph and execution drill-in.
+	if lanes, laneErr := database.ListProjects(ctx, g.db, false); laneErr == nil {
+		for _, satellite := range lanes {
+			if satellite.Parent != name {
+				continue
+			}
+			detail := SatelliteDetailData{Project: satellite, SpeedCost: g.speedCostSeries(ctx, satellite.Name, 20)}
+			if ticks, tickErr := database.ListTicks(ctx, g.db, satellite.Name, 20); tickErr == nil {
+				detail.RecentTicks = ticks
+			}
+			data.Satellites = append(data.Satellites, detail)
+		}
+	}
 
 	// SCHED-GAP-1601: the lane's control strip + paused badge.
 	data.Control = ControlData{Actions: laneControls(name)}

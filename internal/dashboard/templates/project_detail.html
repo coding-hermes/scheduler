@@ -159,6 +159,30 @@
 </style>
 {{end}}
 
+{{/* Satellites: direct child lanes are rendered as a family dashboard, with
+     independent charts and project-filtered execution history. */}}
+<h2>Satellites</h2>
+{{if .Satellites}}
+{{range .Satellites}}
+<section class="satellite-panel">
+<h3><a href="/projects/{{.Project.Name}}">{{.Project.Name}}</a></h3>
+<p class="meta">{{if .Project.Enabled}}Enabled{{else}}Disabled{{end}} · <a href="/ticks?project={{urlquery .Project.Name}}">View this satellite's executions</a></p>
+{{if .SpeedCost}}
+<div class="charts">
+<div class="chart-col"><div class="chart-card"><div class="chart-title">Speed</div>{{linechart .SpeedCost "speed"}}</div><div class="chart-card"><div class="chart-title">Cost</div>{{linechart .SpeedCost "cost"}}</div></div>
+<div class="chart-col"><div class="chart-card"><div class="chart-title">Commits</div>{{linechart .SpeedCost "commits"}}</div><div class="chart-card"><div class="chart-title">Files changed</div>{{linechart .SpeedCost "files"}}</div></div>
+</div>
+{{else}}<p class="meta">No completed tick graph data recorded.</p>{{end}}
+{{if .RecentTicks}}
+<ul class="meta">{{range .RecentTicks}}<li><a class="mono" href="/ticks?project={{urlquery $.Project.Name}}">{{.ID}}</a> · {{.Status}}{{if .Outcome}} · {{.Outcome}}{{end}}</li>{{end}}</ul>
+{{else}}<p class="meta">No executions recorded.</p>{{end}}
+</section>
+{{end}}
+<style>.satellite-panel{border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0}.satellite-panel h3{margin:0 0 4px}</style>
+{{else}}
+<p class="meta">No direct satellites recorded.</p>
+{{end}}
+
 <h2>Latest Tick</h2>
 {{if .LatestTick}}
 <div class="table-wrap">
