@@ -372,7 +372,12 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			i, s.name, s.urgency, s.priority, lt)
 	}
 
-	// Greedy pack: pick projects that fit in budget.
+	// Greedy pack: pick projects that fit in budget. The policy is declared
+	// by config.SchedulerConfig.OversubscriptionPolicy
+	// (oversubscription_policy); fleets may oversubscribe under the standing
+	// "proportional" behavior. NamespaceAllocator proportionally scales reserved floors when they
+	// exceed the global weight budget. This does not remove either the
+	// --max-concurrent ceiling or the load gate.
 	// Use the in-memory running set as the SOLE source of truth.
 	// DB queries race against goroutines writing to SQLite — the
 	// memory-backed SlotPool semaphore is always correct.

@@ -283,7 +283,18 @@ sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT count(*) FROM pro
 
 E1 → `28: DefaultAdaptiveCooldownThreshold = 10`, `39: AdaptiveCeilingFloorMultiplier = 8`. E2 → `0`. E3 → `0|26`, `172800|18`, `345600|64`, `691200|24`, `2073600|24`. E4 → `{"cooldown_s": 900, "cooldown_floor_s": 21600, "cooldown_ceiling_s": 172800, "adaptive_cooldown": false, "no_progress_threshold": 10}`. E5 → `79: const adaptiveCooldownFactor = 2`. E6 → `156` — so E2's `0` is 0 of 156, not 0 of a handful.
 
-### 4.4 The other things that change *when* a lane runs
+### 4.4 Over-subscription policy — `proportional`
+
+Over-subscription is a supported fleet mode, not a configuration error: fleets may oversubscribe legitimately. The standing `proportional` policy is unchanged: when reserved namespace floors exceed the global weight budget, the namespace allocator scales them proportionally. The policy is named by `[scheduler] oversubscription_policy` in `fleet.toml`; omit the key to use the default, `proportional`.
+
+Raising the weight budget only redistributes budget between namespaces; it does not raise the real concurrency ceiling or admit work past the load gate. `--max-concurrent` remains the global tick ceiling, and the configured load gate remains an independent ceiling.
+
+```toml
+[scheduler]
+oversubscription_policy = "proportional"
+```
+
+### 4.5 The other things that change *when* a lane runs
 
 These do not touch `cooldown_s`, but an operator asking "how often does it run" is asking about them too. Each is deferral or ordering only.
 

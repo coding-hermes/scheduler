@@ -25,6 +25,13 @@ import (
 const (
 	DefaultModel    = "deepseek-v4-flash"
 	DefaultProvider = "deepseek-foreman"
+
+	// OversubscriptionPolicyProportional names the standing namespace
+	// allocation policy. A fleet may oversubscribe legitimately; the
+	// allocator proportionally scales reserved floors when their sum exceeds
+	// the weight budget (see scheduler/namespace_alloc.go). Future
+	// alternatives must be named configuration values here.
+	OversubscriptionPolicyProportional = "proportional"
 )
 
 // FleetConfig is the top-level TOML structure decoded from a fleet.toml.
@@ -54,15 +61,22 @@ type DaemonConfig struct {
 type SchedulerConfig struct {
 	// ForemanRoutingMode pins canonical foreman lanes to their explicit project
 	// pair in fixed mode; empty/router preserves existing task-router behavior.
-	ForemanRoutingMode string           `toml:"foreman_routing_mode"`
-	MinInterval        string           `toml:"min_interval"`
-	MaxInterval        string           `toml:"max_interval"`
-	NumLevels          int              `toml:"num_levels"`
-	WeightBudget       int              `toml:"weight_budget"`
-	MaxConcurrent      int              `toml:"max_concurrent"`
-	TickTimeout        string           `toml:"tick_timeout"`
-	NamespaceMode      bool             `toml:"namespace_mode"`
-	BlackoutWindows    []BlackoutWindow `toml:"blackout_windows"`
+	ForemanRoutingMode string `toml:"foreman_routing_mode"`
+	MinInterval        string `toml:"min_interval"`
+	MaxInterval        string `toml:"max_interval"`
+	NumLevels          int    `toml:"num_levels"`
+	WeightBudget       int    `toml:"weight_budget"`
+	// OversubscriptionPolicy names how namespace allocations behave when
+	// reserved floors exceed the global weight budget. Over-subscription is
+	// a legitimate supported mode; the standing "proportional" algorithm
+	// scales floors proportionally in scheduler/namespace_alloc.go. This
+	// defaults to OversubscriptionPolicyProportional; future behavior
+	// alternatives must be named here rather than silently changing policy.
+	OversubscriptionPolicy string           `toml:"oversubscription_policy"`
+	MaxConcurrent          int              `toml:"max_concurrent"`
+	TickTimeout            string           `toml:"tick_timeout"`
+	NamespaceMode          bool             `toml:"namespace_mode"`
+	BlackoutWindows        []BlackoutWindow `toml:"blackout_windows"`
 
 	// GatewayResponseTimeout (SCHED-GAP-117) is the per-turn deadline for a
 	// single gateway /v1/responses POST, stored as a duration string

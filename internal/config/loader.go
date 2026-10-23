@@ -72,14 +72,15 @@ func defaultRootConfig() *RootConfig {
 			Listen: defaultListen,
 		},
 		Scheduler: SchedulerConfig{
-			ForemanRoutingMode: "router",
-			MinInterval:        defaultMinInterval,
-			MaxInterval:        defaultMaxInterval,
-			NumLevels:          defaultNumLevels,
-			WeightBudget:       defaultWeightBudget,
-			MaxConcurrent:      defaultMaxConcurrent,
-			TickTimeout:        defaultTickTimeout,
-			NamespaceMode:      false,
+			ForemanRoutingMode:     "router",
+			MinInterval:            defaultMinInterval,
+			MaxInterval:            defaultMaxInterval,
+			NumLevels:              defaultNumLevels,
+			WeightBudget:           defaultWeightBudget,
+			OversubscriptionPolicy: OversubscriptionPolicyProportional,
+			MaxConcurrent:          defaultMaxConcurrent,
+			TickTimeout:            defaultTickTimeout,
+			NamespaceMode:          false,
 		},
 		Gateway: GatewayConfig{
 			URL:         defaultGatewayURL,
@@ -600,6 +601,9 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 	var cfg RootConfig
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
+	}
+	if cfg.Scheduler.OversubscriptionPolicy == "" {
+		cfg.Scheduler.OversubscriptionPolicy = OversubscriptionPolicyProportional
 	}
 	applyEnvOverrides(&cfg)
 	return &cfg, nil

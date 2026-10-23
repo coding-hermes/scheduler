@@ -98,6 +98,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Scheduler.WeightBudget != defaultWeightBudget {
 		t.Errorf("scheduler.weight_budget default: got %d, want %d", cfg.Scheduler.WeightBudget, defaultWeightBudget)
 	}
+	if cfg.Scheduler.OversubscriptionPolicy != OversubscriptionPolicyProportional {
+		t.Errorf("scheduler.oversubscription_policy default: got %q, want %q", cfg.Scheduler.OversubscriptionPolicy, OversubscriptionPolicyProportional)
+	}
 	if cfg.Scheduler.MaxConcurrent != defaultMaxConcurrent {
 		t.Errorf("scheduler.max_concurrent default: got %d, want %d", cfg.Scheduler.MaxConcurrent, defaultMaxConcurrent)
 	}
@@ -118,6 +121,51 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.DuckBrain.URL != defaultDuckBrainURL {
 		t.Errorf("duckbrain.url default: got %q, want %q", cfg.DuckBrain.URL, defaultDuckBrainURL)
+	}
+}
+
+// ch:trace row=SCHED-GAP-1584 spec=docs/fleet-config-model.md#over-subscription wave=coding-hermes-scheduler-foreman-2026-10-22-23-29-00#SCHED-GAP-1584 test=internal/config/loader_test.go::TestOversubscriptionPolicyDefault doc=docs/fleet-config-model.md prompt=/tmp/20261022232900-wave-brief-SCHED-GAP-1584.txt evidence=internal/config/loader_test.go::TestOversubscriptionPolicyDefault witness=none:worker-local verdict=none:pending-foreman-judge commit=none:pending-foreman-trace memory=none:pending-foreman
+// STATUS: complete
+// TIER: T0
+// EVIDENCE: internal/config/loader_test.go::TestOversubscriptionPolicyDefault
+func TestOversubscriptionPolicyDefault(t *testing.T) {
+	clearSchedulerEnv(t)
+
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Fatalf("LoadConfig without fleet.toml: %v", err)
+	}
+	if got := cfg.Scheduler.OversubscriptionPolicy; got != OversubscriptionPolicyProportional {
+		t.Fatalf("scheduler.oversubscription_policy = %q, want %q", got, OversubscriptionPolicyProportional)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schedulerd.toml")
+	if err := os.WriteFile(path, []byte(`[scheduler]
+oversubscription_policy = "proportional"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	configured, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig with explicit policy: %v", err)
+	}
+	if got := configured.Scheduler.OversubscriptionPolicy; got != "proportional" {
+		t.Fatalf("explicit scheduler.oversubscription_policy = %q, want proportional", got)
+	}
+
+	rootPath := filepath.Join(dir, "root.toml")
+	if err := os.WriteFile(rootPath, []byte(`[scheduler]
+weight_budget = 100
+`), 0o644); err != nil {
+		t.Fatalf("write root config: %v", err)
+	}
+	rootCfg, err := LoadRootConfig(rootPath)
+	if err != nil {
+		t.Fatalf("LoadRootConfig without explicit policy: %v", err)
+	}
+	if got := rootCfg.Scheduler.OversubscriptionPolicy; got != OversubscriptionPolicyProportional {
+		t.Fatalf("root scheduler.oversubscription_policy default = %q, want %q", got, OversubscriptionPolicyProportional)
 	}
 }
 
