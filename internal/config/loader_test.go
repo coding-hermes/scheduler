@@ -124,7 +124,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 }
 
-// ch:trace row=SCHED-GAP-1584 spec=docs/fleet-config-model.md#over-subscription wave=coding-hermes-scheduler-foreman-2026-10-22-23-29-00#SCHED-GAP-1584 test=internal/config/loader_test.go::TestOversubscriptionPolicyDefault doc=docs/fleet-config-model.md prompt=/tmp/20261022232900-wave-brief-SCHED-GAP-1584.txt evidence=internal/config/loader_test.go::TestOversubscriptionPolicyDefault witness=none:worker-local verdict=none:pending-foreman-judge commit=none:pending-foreman-trace memory=none:pending-foreman
+// ch:trace row=SCHED-GAP-1584 spec=docs/fleet-config-model.md#over-subscription wave=coding-hermes-scheduler-foreman-2026-10-22-23-29-00#SCHED-GAP-1584 test=internal/config/loader_test.go::TestOversubscriptionPolicyDefault doc=docs/fleet-config-model.md prompt=/tmp/20261022232900-wave-brief-SCHED-GAP-1584.txt evidence=internal/config/loader_test.go::TestOversubscriptionPolicyDefault witness=none:worker-local verdict=none:pending-foreman-trace-rebind commit=b75b614fe4f22b5f2d09a0d3e34fca2d6be0d7c4 memory=none:pending-foreman
 // STATUS: complete
 // TIER: T0
 // EVIDENCE: internal/config/loader_test.go::TestOversubscriptionPolicyDefault
