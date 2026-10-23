@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/agentlog"
@@ -425,6 +426,24 @@ type FleetData struct {
 	// CacheAge (SCHED-GAP-1730): age label of the cached snapshot
 	// served by cachedOverview; empty on a fresh collect.
 	CacheAge string
+	// RefreshPending / RefreshNote (PERF-001-R3-R2): the render budget
+	// tripped and this page is the PREVIOUS snapshot while the refresh runs
+	// in the background. Rendered as an explicit notice above the cards so a
+	// slow collect never looks like a frozen page.
+	RefreshPending bool
+	RefreshNote    string
+	// Partial / PartialNote (PERF-001-R3-R2): no snapshot existed yet and
+	// the first collect did not finish inside the budget, so the page renders
+	// the shell with an explicit "still collecting" notice instead of
+	// blocking for an unbounded time.
+	Partial     bool
+	PartialNote string
+	// EnrichSkipped (PERF-001-R3-R2) counts lanes whose per-lane git work
+	// (tick-work classification, GitReins history walk) was skipped because
+	// the collect work budget was spent. It is rendered as a quiet meta line —
+	// the rows are still valid (DB-derived), just less annotated — and the
+	// next pass covers a different slice (rotating start).
+	EnrichSkipped int
 }
 
 // FleetTables is the per-table parameter set for the overview page.
@@ -717,6 +736,11 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	dayAgo := g.clock().Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
 	weekAgo := g.clock().Now().UTC().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 
+	// PERF-001-R3-R2: per-stage marks for the slow-request log. The cold
+	// render is a pipeline and "79s" without a stage name re-opens the same
+	// investigation, so each stage records its own span on the render trace
+	// (nil trace = no-op, so the cost on a traced-free path is two nil checks).
+	endProjects := stageTimer(ctx, "db-projects")
 	rows, err := g.db.QueryContext(ctx, projectQuery, dayAgo, weekAgo)
 	if err == nil {
 		defer func() { _ = rows.Close() }()
@@ -769,26 +793,39 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// lane list (including disabled lanes — they keep their tree position) is
 	// fetched in ONE extra query; the fleet table has no parity constraint
 	// with an API ordering, so this is purely additive markup.
+	endProjects()
+	endLanes := stageTimer(ctx, "db-lanes")
 	if lanes, laneErr := database.ListProjects(ctx, g.db, false); laneErr == nil {
 		annotateFleetNesting(data.Projects, lanes)
 	}
+	endLanes()
 
 	// Second pass for cost sparklines + recent failure flags + observability.
 	// Done AFTER the project rows cursor is fully closed — the modernc.org/sqlite
 	// driver deadlocks if we open nested queries on the same connection while a
 	// rows cursor is still open (the collect() N+1 warning).
 	// The fleet-wide learned prior is built ONCE and shared across all projects.
+	endLearned := stageTimer(ctx, "fleet-learned")
 	fleet := g.fleetLearned(ctx)
+	endLearned()
 	// CI conclusions (DASH-PERF-001): warm the TTL cache once, with bounded
 	// concurrency, before the per-project loop — the ciConclusion reads below
 	// then hit the cache and no render ever serializes N gh subprocesses again.
+	//
+	// PERF-001-R3-R2: the warm pass is BOUNDED (time + count when a deadline
+	// is available) and the per-project read below is cache-only. Unbounded,
+	// this fan-out over 809 distinct workdirs × up to 2s per `gh run list`
+	// was the 79.7s zero-CPU first paint this row is about; a workdir left
+	// cold now renders the CI pill as unknown and is picked up next pass.
 	workdirs := make([]string, 0, len(data.Projects))
 	for i := range data.Projects {
 		if wd := data.Projects[i].Workdir; wd != "" {
 			workdirs = append(workdirs, wd)
 		}
 	}
-	g.warmCIConclusions(workdirs)
+	endCI := stageTimer(ctx, "ci-warm")
+	g.warmCIConclusionsWithin(ctx, workdirs)
+	endCI()
 	// DASH-PERF-003: the per-project stats below previously cost ~4-5 serial
 	// DB round-trips per project (~176 total on the single shared connection —
 	// the warm-render bottleneck). Two window-function queries now fetch every
@@ -797,11 +834,25 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// (projMaxConcurrent). Parallel DB queries would serialize on the
 	// SetMaxOpenConns(1) pool anyway; batching is the only lever that cuts
 	// serial DB time.
+	endSamples := stageTimer(ctx, "db-samples")
 	samplesByProject := g.batchCompletedSamples(ctx)
 	healthByProject := g.batchTickHealth(ctx)
-	g.enrichProjects(data.Projects, samplesByProject, healthByProject, fleet)
+	endSamples()
+	endEnrich := stageTimer(ctx, "enrich")
+	// PERF-001-R3-R2: the per-lane enrichment is bounded by a WORK deadline.
+	// It is the O(lanes) subprocess/walk stage (tick-work git classification,
+	// GitReins history walk) — unbounded, it is the other half of a cold first
+	// paint. Lanes past the deadline keep their DB-derived fields; the loop's
+	// rotating start makes the next pass cover them.
+	enrichDeadline := time.Time{}
+	if b := g.overviewBudget(); b > 0 {
+		enrichDeadline = g.clock().Now().Add(b)
+	}
+	data.EnrichSkipped = g.enrichProjectsWithin(data.Projects, samplesByProject, healthByProject, fleet, enrichDeadline)
+	endEnrich()
 
 	// Active ticks count.
+	endTail := stageTimer(ctx, "db-tail")
 	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
 
 	// SCHED-GAP-1642: expose recent one-shot burst activity from the same
@@ -919,6 +970,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			data.NamespaceTicks = append(data.NamespaceTicks, nt)
 		}
 	}
+	endTail()
 
 	return data
 }
@@ -1119,10 +1171,37 @@ func tickSamplesFromCompleted(clk clock.Clock, workdir string, samples []complet
 // the rest is file reads + git log subprocesses + cache lookups, so projects
 // run with bounded concurrency (projMaxConcurrent). The fleet prior is
 // read-only here, and each project row is touched by exactly one goroutine.
+//
+// It is the unbounded-budget form: collect() calls enrichProjectsWithin with a
+// work deadline (PERF-001-R3-R2). Kept as the test/standalone entry point so
+// the enrichment contract is unchanged for callers that want every lane fully
+// classified.
 func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[string][]completedSample, healthByProject map[string]tickHealth, fleet *fleetModel) {
+	g.enrichProjectsWithin(projects, samplesByProject, healthByProject, fleet, time.Time{})
+}
+
+// enrichProjectsWithin is enrichProjects with a WORK deadline. Lanes reached
+// after the deadline keep their batched-DB fields (cost series, health,
+// observability) and skip the per-lane git/subprocess work (tick-work
+// classification, the GitReins history walk), which is the part whose cold
+// cost scales with the fleet — measured on the live 845-lane DB this single
+// stage is tens of seconds cold, and it was the second half of the 79.7s
+// first paint after the CI fan-out was bounded.
+//
+// STARVATION GUARD: the lane loop starts at a rotating offset (one lane per
+// pass), so a fleet larger than one pass's budget converges instead of
+// starving the tail — the same property the CI warm pass gets from its
+// staleness ordering.
+//
+// Returns the number of lanes that skipped the expensive work.
+func (g *Generator) enrichProjectsWithin(projects []FleetRow, samplesByProject map[string][]completedSample, healthByProject map[string]tickHealth, fleet *fleetModel, deadline time.Time) int {
+	n := len(projects)
+	start := g.enrichWindowStart(n)
+	var skipped atomic.Int64
 	sem := make(chan struct{}, projMaxConcurrent)
 	var wg sync.WaitGroup
-	for i := range projects {
+	for k := 0; k < n; k++ {
+		i := (start + k) % n
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int) {
@@ -1135,6 +1214,14 @@ func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[str
 				r.RecentTicks, r.RecentFailures = h.total, h.failed
 			}
 			r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = observabilityFromSamples(g.clock(), samples, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+			// Work budget: everything below is per-lane git / filesystem work
+			// whose cold cost is O(lanes). Past the deadline the lane renders
+			// its DB-derived state and the next pass (rotated start) fills it.
+			if !deadline.IsZero() && g.clock().Now().After(deadline) {
+				r.GitReinsPass = -1
+				skipped.Add(1)
+				return
+			}
 			// Learning ETA: predict remaining time + cost from per-task-type
 			// estimates learned from tick history + the fleet-wide prior.
 			if r.Workdir != "" {
@@ -1153,11 +1240,53 @@ func (g *Generator) enrichProjects(projects []FleetRow, samplesByProject map[str
 				if gr := cachedReadGitReins(r.Workdir, 0); gr.Total > 0 {
 					r.GitReinsPass = gr.RatePct
 				}
-				r.CIConclusion = g.ciConclusion(r.Workdir)
+				// PERF-001-R3-R2: CACHE-ONLY read. The warm pass above is
+				// bounded, so a workdir it did not reach renders the CI pill as
+				// unknown instead of launching a gh subprocess from inside the
+				// enrichment pool (that fallback is what let a cold 845-lane
+				// fleet spend ~80s here with zero request CPU). The next pass
+				// picks the entry up; ciConclusion (with its on-miss fetch)
+				// stays for non-collect callers.
+				r.CIConclusion = g.ciConclusionCached(r.Workdir)
 			}
 		}(i)
 	}
 	wg.Wait()
+	skip := int(skipped.Load())
+	// Advance the window by the number of lanes this pass actually COVERED
+	// (n - skipped), not by one: a pass that classified the first K lanes must
+	// hand the next pass the window starting at K, otherwise the covered
+	// window slides one lane per pass and the tail is effectively starved.
+	g.advanceEnrichRotation(start, n, n-skip)
+	return skip
+}
+
+// enrichWindowStart returns this pass's starting lane offset (0 when there is
+// one lane or fewer, or no rotation recorded).
+func (g *Generator) enrichWindowStart(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	off := int(g.enrichRotate.Load() % int64(n))
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
+// advanceEnrichRotation records where the NEXT pass should start, given the
+// offset and covered count of this one.
+func (g *Generator) advanceEnrichRotation(start, n, covered int) {
+	if n <= 1 {
+		return
+	}
+	if covered <= 0 {
+		covered = 1 // always make progress, however slow
+	}
+	if covered > n {
+		covered = n
+	}
+	g.enrichRotate.Store(int64((start + covered) % n))
 }
 
 // latestTickForProject returns the most recently spawned tick for the project,
@@ -1659,6 +1788,25 @@ type ciCacheEntry struct {
 	fetchedAt  time.Time
 }
 
+// ciConclusionCached reads a workdir's CI conclusion from the TTL cache only —
+// it NEVER runs a subprocess. Empty string = unknown (the pill is hidden).
+//
+// PERF-001-R3-R2: this is the read enrichProjects uses inside collect(). The
+// overview's CI vocabulary is filled by the bounded warm pass; a miss renders
+// "unknown" and is retried on a later pass. The fetch-on-miss shape stays in
+// ciConclusion for callers that are not inside a bounded render.
+func (g *Generator) ciConclusionCached(workdir string) string {
+	if workdir == "" {
+		return ""
+	}
+	g.ciMu.Lock()
+	defer g.ciMu.Unlock()
+	if e, ok := g.ciCache[workdir]; ok && g.clock().Since(e.fetchedAt) < g.ciTTLValue() {
+		return e.conclusion
+	}
+	return ""
+}
+
 // ciConclusion returns the latest GitHub Actions run conclusion for the repo
 // at workdir, consulting the TTL cache first. Empty string = unknown (CI pill
 // hidden); "success"/"failure" drive the ci✓/ci✗ pills and the GitReins-vs-CI
@@ -1686,7 +1834,46 @@ func (g *Generator) ciConclusion(workdir string) string {
 // fresh in the TTL cache, with at most ciMaxConcurrent gh subprocesses in
 // flight. collect() calls this once before its per-project loop so the loop
 // reads are cache hits.
+//
+// Deprecated for callers inside a render: collect() uses
+// warmCIConclusionsWithin, which BOUNDS the pass. This wrapper keeps the
+// unbounded shape for callers with no render budget (tests, and any future
+// non-render consumer that genuinely wants every lane warmed before returning).
 func (g *Generator) warmCIConclusions(workdirs []string) {
+	g.warmCIConclusionsWithin(context.Background(), workdirs)
+}
+
+// ciWarmDispatchBudget bounds the CI warm pass's DISPATCH phase: no new `gh`
+// subprocess starts after this much time inside one collect. Already-running
+// fetches finish (each is independently capped by ciFetchTimeout), so a pass
+// can overrun by at most one ciFetchTimeout — bounded, which is the point.
+//
+// Sizing: a healthy gh run list is ~0.1-0.9s per workdir and the live fleet
+// has 809 distinct workdirs. Fully warming that at 8-wide costs 10-90s, i.e.
+// exactly the observed 79.7s first paint. 1.5s warms the ~15-60 workdirs that
+// fit, and successive passes (the 10s autorefresh) walk the rest — the pass
+// orders by staleness so coverage converges instead of re-fetching the same
+// head of the list.
+const ciWarmDispatchBudget = 1000 * time.Millisecond
+
+// ciWarmMaxPerPass caps the number of subprocesses one pass may start. It is
+// a count backstop for the time budget: a fast-failing runner (a workdir that
+// is not a git repo fails in ~0.1s) would otherwise let one pass start the
+// whole fleet's worth of subprocesses inside the time budget.
+const ciWarmMaxPerPass = 256
+
+// warmCIConclusionsWithin runs the bounded warm pass. A caller-supplied ctx
+// deadline shrinks the dispatch window (the render budget propagates here);
+// otherwise ciWarmDispatchBudget applies. Returns the number of fetches
+// started so a caller/test can assert the bound held.
+func (g *Generator) warmCIConclusionsWithin(ctx context.Context, workdirs []string) int {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := g.clock().Now().Add(ciWarmDispatchBudget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
 	need := make([]string, 0, len(workdirs))
 	g.ciMu.Lock()
 	for _, wd := range workdirs {
@@ -1697,16 +1884,41 @@ func (g *Generator) warmCIConclusions(workdirs []string) {
 			need = append(need, wd)
 		}
 	}
+	// Oldest-first so a fleet larger than one pass's budget converges: the
+	// stalest entries are refreshed first and the pass never starves the tail.
+	sort.SliceStable(need, func(i, j int) bool {
+		ei, iok := g.ciCache[need[i]]
+		ej, jok := g.ciCache[need[j]]
+		if !iok || !jok {
+			// Never-fetched entries sort ahead of stale ones (they render
+			// "unknown", the least informative state).
+			return !iok && jok
+		}
+		return ei.fetchedAt.Before(ej.fetchedAt)
+	})
 	g.ciMu.Unlock()
 	if len(need) == 0 {
-		return
+		return 0
 	}
 	runner := g.ciRunnerFunc()
 	sem := make(chan struct{}, ciMaxConcurrent)
 	var wg sync.WaitGroup
+	started := 0
 	for _, wd := range need {
+		// Bound the pass: stop DISPATCHING once the window is spent or the
+		// count backstop trips. Fetches already in flight still complete (and
+		// land in the cache), so nothing is wasted.
+		if started >= ciWarmMaxPerPass || !g.clock().Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			goto drain
+		default:
+		}
 		wg.Add(1)
 		sem <- struct{}{}
+		started++
 		go func(wd string) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -1716,7 +1928,9 @@ func (g *Generator) warmCIConclusions(workdirs []string) {
 			g.ciMu.Unlock()
 		}(wd)
 	}
+drain:
 	wg.Wait()
+	return started
 }
 
 // ciTTLValue returns the effective cache TTL, defaulting when unset so a

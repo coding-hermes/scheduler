@@ -1424,7 +1424,9 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		q := r.URL.Query()
 		params := dashboard.ParseFleetTableQuery(q)
-		if err := dashGen.GenerateParams(w, params); err != nil {
+		// PERF-001-R3-R2: the request context carries the render trace (so a
+		// slow render logs its stage breakdown) and the client's cancellation.
+		if err := dashGen.GenerateParamsFrom(r.Context(), w, params); err != nil {
 			http.Error(w, err.Error(), 500)
 		}
 	})
@@ -1436,7 +1438,7 @@ func main() {
 	// (SCHED-GAP-1598).
 	mux.HandleFunc("GET /dashboard/partial", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := dashGen.GenerateFleetTableParams(w, r.URL.Query()); err != nil {
+		if err := dashGen.GenerateFleetTableParamsFrom(r.Context(), w, r.URL.Query()); err != nil {
 			http.Error(w, err.Error(), 500)
 		}
 	})
@@ -1709,8 +1711,13 @@ func main() {
 		scheme = "https"
 	}
 	server := &http.Server{
-		Addr:    *listen,
-		Handler: pprofMux,
+		Addr: *listen,
+		// PERF-001-R3-R2: the slow-request observer wraps the whole mux. It
+		// installs the per-request render trace the dashboard marks its stages
+		// on, and prints one SLOW-REQ line (path, duration, bytes, wait
+		// reason) for any request over SCHEDULER_SLOW_REQUEST_MS. Before this,
+		// the 79.7s cold GET / left NO record in the log at all.
+		Handler: slowRequests(pprofMux),
 	}
 	go func() {
 		log.Printf("%s: listening on %s", strings.ToUpper(scheme), *listen)

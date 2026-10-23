@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/agentlog"
@@ -126,9 +127,18 @@ type Generator struct {
 	// GenerateFleetTableParams serve a 60s-TTL deep-copied snapshot instead
 	// (mechanism + invalidation in overview_cache.go). snapTTL shrinks the
 	// window per generator (tests); zero reads the package default.
-	snap     ovSnapshot
-	snapTTL  time.Duration
-	ciRunner func(workdir string) string // injectable for tests; nil → runCIConclusion
+	snap    ovSnapshot
+	snapTTL time.Duration
+	// renderBudget (PERF-001-R3-R2) is how long a render may WAIT for a cold
+	// collect before degrading to the snapshot/partial page. Atomic because
+	// the render path reads it unlocked and tests set it after construction.
+	// 0 = process resolution (overviewBudgetDefault); negative = unbounded.
+	renderBudget atomic.Int64
+	// enrichRotate (PERF-001-R3-R2) rotates the per-lane enrichment start
+	// offset once per collect, so a work-budget-truncated pass does not starve
+	// the same tail lanes forever.
+	enrichRotate atomic.Int64
+	ciRunner     func(workdir string) string // injectable for tests; nil → runCIConclusion
 	// fleetPausedFn (SCHED-GAP-1601) reads the loop's authoritative paused
 	// flag for the console badge. Nil = unknown state, never fabricated.
 	fleetPausedFn func() bool
@@ -301,7 +311,29 @@ func (g *Generator) Generate(w io.Writer) error {
 // (TotalProjects / EnabledProjects / BudgetUsed / cost totals) describe the
 // WHOLE fleet — they are computed in collect() before the tables are sliced.
 func (g *Generator) GenerateParams(w io.Writer, params *FleetTables) error {
-	ctx := context.Background()
+	return g.GenerateParamsFrom(context.Background(), w, params)
+}
+
+// GenerateParamsFrom is GenerateParams with the REQUEST's context: it carries
+// the render trace (PERF-001-R3-R2, so a slow GET / logs its stage breakdown
+// instead of nothing) and the client's cancellation, and it bounds the
+// post-collect queries with the same budget the snapshot wait uses.
+//
+// HTTP handlers MUST use this entry point. The context-free GenerateParams is
+// kept for tests and non-request callers (it renders with no trace and no
+// client cancel, exactly as before).
+func (g *Generator) GenerateParamsFrom(ctx context.Context, w io.Writer, params *FleetTables) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Bound the post-collect reads with the remaining budget: they run on the
+	// SAME single sqlite connection as a busy daemon's writes, so an unbounded
+	// query here would re-open the wait the snapshot bound just closed.
+	if budget := g.overviewBudget(); budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
 	data := g.cachedOverview(ctx)
 	if params != nil {
 		data.TableState = *params
@@ -357,7 +389,22 @@ func (g *Generator) GenerateFleetTable(w io.Writer) error {
 // values. The partial owns the projects table's tbody only, so only that
 // table's state applies here.
 func (g *Generator) GenerateFleetTableParams(w io.Writer, q url.Values) error {
-	ctx := context.Background()
+	return g.GenerateFleetTableParamsFrom(context.Background(), w, q)
+}
+
+// GenerateFleetTableParamsFrom is GenerateFleetTableParams with the request's
+// context (render trace + client cancel + the same bounded post-collect reads
+// as GenerateParamsFrom). The htmx partial is the surface the 10s autorefresh
+// hits, so it is also the one that must never stack behind a cold collect.
+func (g *Generator) GenerateFleetTableParamsFrom(ctx context.Context, w io.Writer, q url.Values) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if budget := g.overviewBudget(); budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
 	data := g.cachedOverview(ctx)
 	var projectOptions []string
 	if projs, err := database.DistinctTickProjects(ctx, g.db); err == nil {
@@ -1089,6 +1136,14 @@ const pageTemplate = `{{template "head" .}}
 </div>
 </div>
 <div class="meta">Generated {{.GeneratedAt}}</div>{{if .CacheAge}}<div class="meta" id="cacheAge">snapshot cached {{.CacheAge}}</div>{{end}}
+{{/* PERF-001-R3-R2: a cold render is bounded. When the refresh did not
+     finish inside the render budget the page says so - serving the previous
+     snapshot (refreshPending) or, on a first render after boot, the shell
+     with an explicit "still collecting" notice. A slow first paint must never
+     look like a frozen page, and it must say WHY it is incomplete. */}}
+{{if .RefreshPending}}<div class="notice" id="refreshPending" style="margin:8px 0;padding:8px 12px;border-left:3px solid #d9a441;background:#2a2418;color:#e8dcc0">{{.RefreshNote}}</div>{{end}}
+{{if .Partial}}<div class="notice" id="partialRender" style="margin:8px 0;padding:8px 12px;border-left:3px solid #d9a441;background:#2a2418;color:#e8dcc0">{{.PartialNote}}</div>{{end}}
+{{if .EnrichSkipped}}<div class="meta" id="enrichSkipped">{{.EnrichSkipped}} lane(s) rendered without git tick classification — the collect work budget was spent; successive passes fill them in.</div>{{end}}
 
 {{/* SCHED-GAP-1601: the global console — pause-all (confirm-gated), resume-all,
      force evaluate. Every button's result line prints the API's own status and
