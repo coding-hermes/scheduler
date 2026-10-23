@@ -440,11 +440,17 @@ func (r *RootConfig) Validate() error {
 		if p.Name == "" {
 			errs = append(errs, fmt.Errorf("projects[%d]: name is required", i))
 		}
+		if err := validateAdmissionMode(p.Name, p.AdmissionMode, true); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	for i, n := range r.Namespaces {
 		if n.ID == "" {
 			errs = append(errs, fmt.Errorf("namespaces[%d]: id is required", i))
 			continue
+		}
+		if err := validateAdmissionMode(n.ID, n.AdmissionMode, true); err != nil {
+			errs = append(errs, err)
 		}
 		// S12 §4.3 (SCHED-GAP-111): same wave_tick_timeout contract as
 		// LoadFleetConfig — a root TOML carrying fleet declarations gets
@@ -459,6 +465,22 @@ func (r *RootConfig) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateAdmissionMode rejects typos at config-load time instead of allowing
+// the loader to silently skip a lane's admission pin. Project overrides may be
+// empty (inherit); namespace defaults must be explicit only when supplied.
+func validateAdmissionMode(id, mode string, allowEmpty bool) error {
+	if mode == "" && allowEmpty {
+		return nil
+	}
+	switch mode {
+	case database.AdmissionModeCooldown, database.AdmissionModeTasks:
+		return nil
+	default:
+		return fmt.Errorf("%s admission_mode %q is invalid (want %q or %q)", id, mode,
+			database.AdmissionModeCooldown, database.AdmissionModeTasks)
+	}
 }
 
 // parseDurationErr wraps time.ParseDuration with a field-name for error
@@ -558,11 +580,17 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 		if p.Name == "" {
 			errs = append(errs, fmt.Errorf("projects[%d]: name is required", i))
 		}
+		if err := validateAdmissionMode(p.Name, p.AdmissionMode, true); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	for i, n := range cfg.Namespaces {
 		if n.ID == "" {
 			errs = append(errs, fmt.Errorf("namespaces[%d]: id is required", i))
 			continue
+		}
+		if err := validateAdmissionMode(n.ID, n.AdmissionMode, true); err != nil {
+			errs = append(errs, err)
 		}
 		// S12 §4.3 (SCHED-GAP-111): wave_tick_timeout must parse and stay
 		// <= 4h — field-named rejection, never a silent clamp.
