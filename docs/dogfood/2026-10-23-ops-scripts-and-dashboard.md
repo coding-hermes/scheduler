@@ -110,18 +110,33 @@ daemon was only ever `GET`-ed.
 - cell `repo-head` OK: tested HEAD `65159dd7ec1aa7a52d73c1bcb9f19a69808b0c4c` (clone dirty — pull
   skipped, recorded sha)
 - cell `launch` OK: battery started detached (`qa-run.sh`), 135,569 script bytes
-- `collect` at 16:45Z, 16:52Z, 16:56Z and 16:58Z → `RUNNING … agent left intact`; the evidence file
-  has not grown since launch (2 cells)
-- **STALLED-OR-SLOW, recorded rather than rounded off:** the battery's own log
-  (`/home/bunker-c4a3a2eb/qa-run.log`) read `QA-HEAD=… / HARNESS-COMPOSE=ok / HARNESS_NODE=ok` at
-  both 16:52:30Z and 16:58Z — identical tail across ~6 minutes, 20 minutes after launch. `bunker-qa
-  status` reported `act=no` at launch, so the harness bootstrap is the stage under suspicion. Not
-  filed as a row: one frozen window is a lead, not a finding, and the state did not let me separate a
-  slow `act` download from a hung step.
-- Agent left ALIVE with its 4h TTL (destroying it would lose the cells). Owed to the next tick:
-  `~/.hermes/scripts/bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261023T163802Z-1846595.jsonl`
-  → harvest the cells, attribute the harness-stage stall if it reproduced, then destroy `c4a3a2eb`.
-  This leg is **PARTIAL, not SKIPPED** — the battery ran; it has not finished.
+- `collect` at 16:45Z, 16:52Z, 16:56Z and 16:58Z → `RUNNING … agent left intact`; the battery's log sat
+  on `HARNESS-COMPOSE=ok / HARNESS_NODE=ok` for ~20 min, then completed. Final `collect` at 17:09:53Z:
+  **22 evidence rows**, agent destroyed and verified gone (`bunker info c4a3a2eb` → `not_found`,
+  `bunker list` census 0). Logs pulled to `/tmp/df-ops-1023/bunker-logs/` **before** the destroy.
+
+Cell grades (verbatim from the evidence file):
+
+| cell | state | what it says |
+|---|---|---|
+| `repo-head` | OK | tested HEAD `65159dd7` (snapshot, no pull) |
+| `launch` | OK | detached `qa-run.sh`, 135,569 bytes |
+| `toolchain-bootstrap` | OK ×7 | go 1.27.3, gcc/g++, make, compose plugin, buildx, node v22.15.0 |
+| `fresh-install` | OK | detail is a `go: downloading` tail — a log tail, not a build result; installability proof rests on `upgrade` + `ui-probe` |
+| `upgrade` | OK | previous release v1.11.7 (tree via `git archive`) → HEAD reinstall clean |
+| `ui-probe` | OK | `/`, `/dashboard`, `/health` all 200 `text/html` |
+| `ci-pass` | **FAIL** | native rc=1 — `internal/api` `TestFreshnessScript_ExitCodes` 5/5 + `TestADMIT148_FreshnessGuard` 5/5 (`exit = 2 … UNKNOWN: daemon version string not machine-parseable`), `internal/bus` `TestREMOTE009_ResponderFullRoundTrip` (query reply timeout) → `INT-CI-189-R2`, `SCHED-GAP-16927` |
+| `chaos-resource` | FAIL | same freshness test under the 3 GB cap (10 identical `exit = 2, want` lines) — identity-specific, not memory-specific |
+| `chaos-disconnect` | UNVERIFIED | correctly refused to grade while the native suite was red |
+| `chaos-shutdown` / `chaos-errorpath`-adjacent | N/A | no compose file / no db-state files in the repo |
+| `chaos-errorpath` | INFO | "application started but exited cleanly on missing config (rc=0)" — recorded, not filed: one INFO line cannot separate a deliberate zero-config default from a missing-config gap |
+
+Both failures are **fresh-box only**: GitHub Actions at the same SHA is green (runs `39961880936` and
+`39961879326`, conclusion success). The measured difference is the tree: the tested snapshot has
+`git tag | wc -l` = 0 and `git describe --tags --always` = `b3fae23`, so the git-describe-shaped build
+identity degenerates — which is also exactly what a release-tarball install produces.
+
+This leg is **PARTIAL (cells graded, evidence harvested, agent destroyed)** — not SKIPPED and not a pass.
 
 ## Verdict
 
