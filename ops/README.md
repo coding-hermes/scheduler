@@ -57,6 +57,7 @@ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl -
 | `sync-orientation` | every enabled `*-sync` lane's workdir carries a non-empty `README.md` naming its target DuckBrain namespace (a `namespace` line carrying the lane's base as a whole hyphen-delimited word, or a >=2-token hyphen run of it) AND a findable consumption contract (the companion `<base>-sync-data` skill under the skills root, or an in-README pointer: `/sync/` marker, `/api/` route, skill name). One violation per lane with every unmet fact in the detail; a workdir ABSENT is check 5's fact (no double-report); disabled lanes exempt; the skill axis SKIPS SILENTLY when the skills root is absent (`--skills-root`, the CI shape) while the README facts still assert | `tests/test_check_fleet_invariants_sync_orientation.py` | covered (seeded / conforming / exempt / skip arms + per-fact independence) |
 | `event-id-ascending` | every INTEGER id in `events.jsonl` (resolved from `--events`, else the sibling of `--board`, else the walk-up from the script) sits on the board's 19-digit epoch-nanosecond scale (`>= 10^18`) and does not descend below the highest id already in the file — the defect that planted two epoch-microsecond lines in this project's log and FAILed the live `boardctl validate` (SCHED-GAP-206). One violation per line, naming the LINE NUMBER and the BAD ID. Lines that fail to parse or carry no int id are skipped; the file's PRE-SCALE prefix (ids before its first `>= 10^18` id — this board has 979 on lines 1-999) and duplicate ids are tolerated, exactly as `boardctl validateEvents` tolerates them; a file with no 19-digit id at all is entirely off-scale and every int id in it fires. A missing events file SKIPS SILENTLY, same as checks 8/9 | `tests/test_check_fleet_invariants_event_ids.py` + Go `internal/scheduler/board_event_id_test.go` (`ValidateEventIDs`, floor pinned equal by `TestValidateEventIDs_ScaleMatchesPythonGate`) | covered (seeded / conforming / tolerant-prefix / duplicate / legacy-shape / skip arms) |
 | `lane-instructions` | every ENABLED lane carries instructions: the CONJUNCTION of own `prompt` AND its namespace `default_prompt` fallback both under `PROMPT_SHORT_CHARS` (400 — above the 296-char auger-releng incident state, below the thinnest healthy own prompt 1060 and fallback 777; justified at the constant) fires one line naming the lane; a `prompt_mode=replace` lane is judged on its own prompt ALONE (it replaces the base); disabled lanes exempt; skips with a documented INFO line when the schema predates the prompt columns; rides the live-DB pass so `--board-only` (CI) never runs it | `tests/test_check_fleet_invariants_lane_instructions.py` | covered (seeded / conforming / replace / boundary / disabled / schema-skip / board-only arms) |
+| `fleet-infra-dup` | a PROJECT board carries an OPEN row whose pattern the shared-infra board already carries open as a `FLEET-INFRA-N` carrier (`classification: fleet-infra:<pattern>` / `origin: fleet-infra-classifier|fleet-infra-collapse`) — the SCHED-GAP-128 defect where one host condition became N project rows. Rows that merely MENTION the vocabulary (a repo's own stale binary, a docs row quoting a config drop) are project-local to the same classifier the router uses, so the class never demands their deletion; closed copies exempt; the infra board's own native rows exempt. Resolves the carrier side itself in live mode; in `--board-only` (CI) it SKIPS with a documented INFO unless `--infra-board` + `--fleet-boards` fixtures are passed | `tests/test_check_fleet_invariants_fleet_infra_dup.py` | covered (seeded / clean / no-carrier / skip / table-registered arms) |
 
 The row's PASSING-FLEET requirement lives in
 `test_passing_fleet_full_checker_exits_zero` (a full conforming fleet exits 0
@@ -94,6 +95,12 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
   workdir is absent is check 5's finding — the class stays silent so one fact
   never produces two lines.
 
+* **`fleet-infra-dup` in `--board-only`** — the class must compare two sets of
+  BOARDS (project boards vs the shared-infra board), and CI carries neither.
+  With `--infra-board` + `--fleet-boards` it runs anywhere (the fixture battery
+  drives it that way); without them it emits a documented skip INFO. Live
+  `python3 ops/check-fleet-invariants.py` resolves both sides from the DB.
+
 ### Adding an invariant
 
 **Adding an invariant without a fixture is itself a defect.** The checklist:
@@ -113,3 +120,97 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
 5. If the check genuinely cannot run without the live fleet DB/TOML, say so
    IN THE TABLE with the reason and the skip shape — do not ship a fixture
    that passes because the check never ran.
+
+## Shared-infra findings: classify, file once, collapse the copies (SCHED-GAP-128)
+
+The qa/dogfood/PM lanes report on the SHARED substrate — the bunker agent
+hosts, the port pool, config delivery, the gateway key. Those conditions are
+fleet-wide, but each lane filed them on the board of whatever project it was
+poking, so one fix became N open rows (measured 2026-10-22: 42 fleet-infra rows
+across 15 project boards for TWO fixes).
+
+Two scripts and one gate class own the whole story:
+
+| piece | role |
+|---|---|
+| `ops/fleet-infra-patterns.json` | the classification table: name, `pattern` (must match the row TITLE), optional `requires` substrate co-signal (may come from the detail), and an `exclude` list for the tracking row that NAMES the class to fix it |
+| `ops/fleet-infra-findings.py` | `classify` (label a finding), `file` (route it: fleet-infra → ONE `FLEET-INFRA-N` row on the shared board with a `cross_ref`, project-local → passthrough), `stats` (fleet census), `throttle` (inspect/clear the filing ledger) |
+| `ops/collapse-fleet-infra-findings.py` | the migration + the per-tick convergence sweep: collapse existing copies into ONE row per pattern, archive every removed row, back up every rewritten board |
+| `ops/fleet-infra-sweep.sh` | tick-safe wrapper: `--sweep` mode, one output line, ALWAYS exit 0 |
+| check 13 `fleet-infra-dup` | the regression gate: an OPEN project-board copy of a pattern the shared board already carries fires |
+
+### The discriminator that matters
+
+`stale-binary` is also a PROJECT class (a repo whose own deployed binary
+predates HEAD — `GAP-056`, `DF-HERMES-CANOPY-32`). The `requires` half is what
+separates "the host the fleet stands on is stale" from "this project ships a
+stale binary", and it is matched against the TITLE + DETAIL only — never the
+chatty `reasoning`/`foreman_note` prose where a lane narrates the whole fleet.
+A classifier without that split sweeps real project work into the fleet bucket,
+which is worse than the noise it removes.
+
+### Filing (prevention at the source)
+
+```bash
+python3 ops/fleet-infra-findings.py classify "run_battery FAIL — bunkerd port-pool exhaustion on bunker-las-03"
+# {"label": "fleet-infra:port_pool", "pattern": "port_pool", "route": "infra", ...}
+
+python3 ops/fleet-infra-findings.py file --board <project>/tasks.jsonl \
+    --project consensus --title "<finding title>" --detail "<evidence>" --apply
+# action=filed|observed|throttled|passthrough|unroutable
+```
+
+`observed` means an OPEN `FLEET-INFRA` row of that pattern already existed and
+this project was appended to its `cross_ref.observations` — that is how "17
+projects saw it" stays one row and still counts 17. The observing board gets a
+`fleet_infra_diverted` EVENTS row and no task row.
+
+The **30-minute filing throttle** (`(project, pattern)`, NUL-separated,
+`$FLEET_INFRA_THROTTLE_S` to override, ledger at
+`~/.hermes/coding-hermes/fleet-infra-throttle.json`) mirrors the scheduler's
+lane-health throttles (`starvationThrottleWindow`,
+`consecutiveFailureThrottleWindow` — both 30 min, per project, read back so the
+memory survives a fresh process). Two lanes filing the same host condition
+inside the window produce one row.
+
+### Migration (already applied once, 2026-10-22)
+
+```bash
+python3 ops/collapse-fleet-infra-findings.py                # dry run (default)
+python3 ops/collapse-fleet-infra-findings.py --apply        # migrate
+python3 ops/collapse-fleet-infra-findings.py --apply --include-closed
+```
+
+* Removes ONLY rows the classifier calls fleet-infra; project-local rows that
+  merely mention the vocabulary stay.
+* One `FLEET-INFRA-N` row per pattern, `cross_ref.observations` naming every
+  collapsed `(project, row id, status, priority)`; priority is the strongest
+  the copies carried.
+* Removed rows are archived verbatim to
+  `~/.hermes/coding-hermes/fleet-infra-collapse/collapse-<UTC>.jsonl` with a
+  `_collapsed` provenance block.
+* Each rewritten board is backed up to
+  `~/.hermes/coding-hermes/fleet-infra-backups/<project>/tasks.jsonl.bak-<UTC>`
+  BEFORE the rewrite; the rewrite itself is temp-file + rename, re-emitting
+  untouched lines byte-identically.
+* Lost-update guard: the rewrite is refused when a board's
+  `(size, mtime_ns)` moved since the classification read — a lane that appended
+  mid-run is never silently dropped, and the run reports
+  `SKIPPED (concurrent write)`.
+* Idempotent: a second `--apply` reports `collapsed=0`.
+
+Rollback one board:
+`cp ~/.hermes/coding-hermes/fleet-infra-backups/<project>/tasks.jsonl.bak-<stamp> <repo>/.coding-hermes/board/tasks.jsonl`.
+
+### Per-tick convergence
+
+Rewiring every lane's filing path is the prevention; the sweep is the
+convergence, and it is what makes the row's acceptance criterion hold after the
+NEXT qa tick. The qa driver
+(`~/.hermes/scripts/qa-scheduler-tick.sh`) calls the sweep after the pipeline
+runs, resolved from `$FLEET_INFRA_SWEEP` or this checkout's
+`ops/fleet-infra-sweep.sh`. Other tick drivers opt in the same way:
+
+```bash
+/path/to/coding-hermes-scheduler/ops/fleet-infra-sweep.sh || true
+```

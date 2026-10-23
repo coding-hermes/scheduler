@@ -506,7 +506,8 @@ CHECK_CLASSES = ("caps", "admission", NAMESPACE_MEMBERSHIP_CLASS, "cooldown", "e
                  "coverage", "family-floor", "targets", "parity",
                  "board-vocab", "board-legacy-status", "board-content-dup",
                  "board-id-slot", "sync-orientation", "event-id-ascending",
-                 "lane-instructions", COOLDOWN_PIN_PACING_CLASS)
+                 "lane-instructions", COOLDOWN_PIN_PACING_CLASS,
+                 "fleet-infra-dup")
 
 
 def find_board_path(start: str) -> str | None:
@@ -881,6 +882,90 @@ def toml_value(block: str, field: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+# 13. fleet-infra duplication (SCHED-GAP-128) --------------------------------
+# The qa/dogfood/PM lanes report on the SHARED substrate (bunker port pool,
+# host config delivery, a host binary older than its commit). Filed per
+# project, one FIX becomes N open rows and every board burndown is inflated by
+# conditions no project can fix alone. Measured 2026-10-22: 150 rows across 60
+# board files carried the vocabulary, 144 of consensus's 236 pending rows were
+# one such class. The filing side (ops/fleet-infra-findings.py) routes these to
+# ONE row on the shared-infra board; this class is the regression gate — it
+# fires when a project board carries an OPEN copy of a pattern the shared board
+# already carries. Rows that merely MENTION the vocabulary (a project's own
+# stale binary, a docs row quoting a config drop) are project-local by the same
+# classifier the router uses, so the gate cannot demand their deletion.
+FLEET_INFRA_DUP_CLASS = "fleet-infra-dup"
+
+
+def fleet_infra_lib_path() -> str:
+    """The classifier module beside this script."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "fleet-infra-findings.py")
+
+
+def load_fleet_infra_lib(path: str | None = None):
+    """Import ``fleet-infra-findings.py`` by path, or ``None`` when unavailable.
+
+    The hyphenated filename is not a module name, so it is loaded by spec — the
+    same way the tests load both scripts. A missing library degrades the check
+    to a documented SKIP rather than failing the gate for an absent file.
+    """
+    import importlib.util
+
+    target = path or fleet_infra_lib_path()
+    try:
+        spec = importlib.util.spec_from_file_location("fleet_infra_findings", target)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault(spec.name, module)
+        spec.loader.exec_module(module)
+        return module
+    except (OSError, ImportError, SyntaxError):
+        return None
+
+
+def scan_fleet_infra_dups(lib, infra_board: str, boards: list[str]):
+    """``(violations, info)`` for per-project copies of a carried infra finding.
+
+    A violation is one OPEN project-board row whose pattern the shared-infra
+    board already carries open. The consolidated row's id is named so the
+    reader knows where the fix lives. The infra board itself is never scanned
+    as a source (its native rows are allowed to talk about the substrate).
+    """
+    carriers: dict[str, str] = {}
+    for row in lib.read_board(infra_board):
+        if str(row.get("status", "")).lower() not in lib.OPEN_STATUSES:
+            continue
+        if not lib.is_infra_carrier(row):
+            continue
+        pattern = lib.row_pattern(row)
+        if pattern:
+            carriers.setdefault(pattern, str(row.get("id", "")))
+    violations: list[tuple[str, str]] = []
+    scanned = 0
+    real_infra = os.path.realpath(infra_board)
+    for board in boards:
+        if os.path.realpath(board) == real_infra:
+            continue
+        for row in lib.read_board(board):
+            scanned += 1
+            if str(row.get("status", "")).lower() not in lib.OPEN_STATUSES:
+                continue
+            pattern = lib.row_pattern(row)
+            if not pattern or pattern not in carriers:
+                continue
+            violations.append((
+                "%s:%s" % (board.rsplit(os.sep, 3)[-3] if os.sep in board else board,
+                           row.get("id")),
+                "open copy of fleet-infra:%s while %s carries it on the shared-infra "
+                "board (%s) — fleet-infra findings are filed ONCE there, with this "
+                "project as a cross_ref (SCHED-GAP-128)"
+                % (pattern, carriers[pattern], infra_board)))
+    return violations, {"boards": len(boards), "rows": scanned,
+                        "carriers": len(carriers), "infra_board": infra_board}
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the invariants checks and return the process exit code (0 = clean).
 
@@ -918,6 +1003,15 @@ def main(argv: list[str] | None = None) -> int:
                          "<base>-sync-data skill (check 10). Default ~/.hermes/skills; "
                          "when the root does not exist the check skips silently, so a "
                          "runner/test rig never has to carry live fleet state.")
+    ap.add_argument("--infra-board", default=None,
+                    help="the shared-infra board for check 13 (fleet-infra-dup). "
+                         "Default: the bunker project's board resolved from the DB "
+                         "(live mode only). Point it at a fixture in tests.")
+    ap.add_argument("--fleet-boards", default=None,
+                    help="comma-separated project boards scanned by check 13. Default: "
+                         "every board the DB registers (live mode only; linked git "
+                         "worktrees are excluded). Required together with "
+                         "--infra-board when --board-only is set.")
     args = ap.parse_args(argv)
 
     violations: list[dict] = []
@@ -1578,6 +1672,40 @@ def main(argv: list[str] | None = None) -> int:
                                     f"{excepted} named exception(s), "
                                     f"window: 7d or since the lane's config last changed; "
                                     f"threshold: median gap >= base/2")})
+
+    # 13. fleet-infra duplication (SCHED-GAP-128) -----------------------------
+    # Runs whenever the shared-infra board is knowable. In live mode both sides
+    # resolve themselves (DB workdirs for the project boards, the bunker board
+    # for the carrier side); in --board-only mode (CI) the check SKIPS with an
+    # INFO unless the caller passes fixtures via --infra-board/--fleet-boards,
+    # because a runner has no fleet boards to scan.
+    infra_board = args.infra_board
+    fleet_boards: list[str] = []
+    if args.fleet_boards:
+        fleet_boards = [b for b in args.fleet_boards.split(",") if b]
+    fi_lib = load_fleet_infra_lib()
+    if fi_lib is None:
+        info.append({"class": FLEET_INFRA_DUP_CLASS, "subject": "skip",
+                     "detail": "ops/fleet-infra-findings.py is not loadable — check 13 skipped"})
+    else:
+        if infra_board is None and not args.board_only:
+            infra_board = fi_lib.resolve_infra_board()
+            if not fleet_boards:
+                fleet_boards = fi_lib.discover_boards(db_path=args.db)
+        if infra_board and fleet_boards:
+            dup_violations, dup_stats = scan_fleet_infra_dups(fi_lib, infra_board, fleet_boards)
+            for subject, detail in dup_violations:
+                bad(FLEET_INFRA_DUP_CLASS, subject, detail)
+            info.append({"class": FLEET_INFRA_DUP_CLASS, "subject": infra_board,
+                         "detail": (f"{dup_stats['rows']} row(s) scanned across "
+                                    f"{dup_stats['boards']} project board(s), "
+                                    f"{dup_stats['carriers']} carrier pattern(s) open on the "
+                                    f"shared-infra board")})
+        else:
+            info.append({"class": FLEET_INFRA_DUP_CLASS, "subject": "skip",
+                         "detail": ("no shared-infra board / project boards resolvable in "
+                                    "this mode — pass --infra-board and --fleet-boards to "
+                                    "run check 13 (CI has no fleet boards)")})
 
     counts = {c: 0 for c in CHECK_CLASSES}
     for v in violations:

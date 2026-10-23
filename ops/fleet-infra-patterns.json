@@ -1,0 +1,34 @@
+{
+  "comment": "Fleet-infra finding patterns for ops/fleet-infra-findings.py (SCHED-GAP-128). `pattern` must match the row TITLE; the optional `requires` co-signal may come from the row body. `exclude` matches titles that NAME this class in order to FIX it (the tracking rows) — those are never collapsed and never counted as duplicates.",
+  "exclude": [
+    "fleet-wide infra alert spam",
+    "alert[- ]noise",
+    "consolidat(e|ion).*(fleet[- ]infra|shared[- ]infra)"
+  ],
+  "patterns": [
+    {
+      "name": "port_pool",
+      "pattern": "port[- ]?pool|port range pool|pool exhaustion|pool[- ]exhaust",
+      "requires": "bunker|bunkerd|las-0[0-9]|agent-host|run_battery|spawn_agent|/run/bunker|ephemeral[- ]install",
+      "why": "Port-pool exhaustion is a property of the SHARED host's per-user port allocations. The `requires` half is what keeps a project's own port-allocation bug (a service binding :8080 twice) out of the fleet bucket."
+    },
+    {
+      "name": "dropped_config",
+      "pattern": "dropped[- ]config|config[- ]drop|configuration .*(dropped|missing)|daemon\\.json",
+      "requires": "bunker|bunkerd|las-0[0-9]|agent-host|/etc/|systemd|compose",
+      "why": "A config that stopped reaching the running component is a delivery-layer fault of the shared host. Local repo config bugs carry no host/substrate token."
+    },
+    {
+      "name": "stale_binary",
+      "pattern": "stale[- ]binary|binary predates|predates QA-BUNKER|older binary|installed binary|\\d+-day-old .*binary",
+      "requires": "bunker-las-0[0-9]|bunkerd|agent-host|QA-BUNKER|bunker-qa|install-bunker",
+      "why": "The fleet's stale-binary class is the QA/host binary being older than the commit it must serve. A PROJECT's own 'deployed binary stale vs HEAD' (e.g. ~/.local/bin/dagger) is project-local and must NOT be swept — the `requires` half is that discriminator, and it deliberately does NOT accept a bare 'bunker' mention: this fleet's prose says 'bunker' in almost every row, so a bare token would sweep project rows that merely discuss the host."
+    },
+    {
+      "name": "gateway_auth",
+      "pattern": "gateway_auth_error|invalid gateway api key|gateway key .*(rejected|invalid)",
+      "requires": null,
+      "why": "The Hermes gateway and its key are fleet-wide infrastructure: every lane authenticates through the same gateway, so an auth rejection is never one project's finding."
+    }
+  ]
+}
