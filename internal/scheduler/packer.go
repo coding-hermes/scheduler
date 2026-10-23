@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/config"
@@ -77,6 +78,7 @@ type Packer struct {
 	db              *sql.DB
 	calculator      *UrgencyCalculator
 	budget          int
+	budgetExempt    map[string]bool
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
 	pendingCounter  *PendingTaskCounter
@@ -116,6 +118,21 @@ func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int, b
 // SetPendingCounter overrides the pending-task counter (for tests).
 func (p *Packer) SetPendingCounter(c *PendingTaskCounter) {
 	p.pendingCounter = c
+}
+
+// SetBudgetExempt configures scheduler.budget_exempt: exact namespace IDs and
+// lane/project names exempt from the flat packer's per-tick weight budget.
+func (p *Packer) SetBudgetExempt(names []string) {
+	p.budgetExempt = make(map[string]bool, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			p.budgetExempt[name] = true
+		}
+	}
+}
+
+func (p *Packer) isBudgetExempt(s scored) bool {
+	return p.budgetExempt[s.name] || p.budgetExempt[s.namespaceID]
 }
 
 // SetBudgetGate installs the per-cycle budget gate (SCHED-GAP-066). Pass nil
@@ -491,7 +508,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			totalSkippedBudget++
 			continue
 		}
-		if used+s.weight > p.budget {
+		if !p.isBudgetExempt(s) && used+s.weight > p.budget {
 			totalSkippedBudget++
 			continue
 		}
@@ -623,7 +640,9 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			}
 		}
 		packed = append(packed, s.packed())
-		used += s.weight
+		if !p.isBudgetExempt(s) {
+			used += s.weight
+		}
 		currRunning++
 		nsRunning[s.namespaceID]++
 	}

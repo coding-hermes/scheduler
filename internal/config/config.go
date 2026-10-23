@@ -66,6 +66,9 @@ type SchedulerConfig struct {
 	MaxInterval        string `toml:"max_interval"`
 	NumLevels          int    `toml:"num_levels"`
 	WeightBudget       int    `toml:"weight_budget"`
+	// BudgetExempt lists namespace IDs and lane/project names whose weight
+	// does not consume the per-tick packer budget. Empty preserves the default.
+	BudgetExempt []string `toml:"budget_exempt"`
 	// OversubscriptionPolicy names how namespace allocations behave when
 	// reserved floors exceed the global weight budget. Over-subscription is
 	// a legitimate supported mode; the standing "proportional" algorithm

@@ -177,6 +177,34 @@ func TestPick_RespectsBudget(t *testing.T) {
 	}
 }
 
+// TestPick_RespectsBudgetExempt verifies configured lanes can exceed the normal
+// weight budget without allowing their weight to consume it for other lanes.
+func TestPick_RespectsBudgetExempt(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	for _, name := range []string{"exempt", "a", "b", "c"} {
+		if err := database.CreateProject(ctx, db, makeProject(name, 40, 5, 0, 1.0)); err != nil {
+			t.Fatalf("CreateProject %s: %v", name, err)
+		}
+	}
+	p := scheduler.NewPacker(db, scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10), 100, 10, nil)
+	p.SetBudgetExempt([]string{"exempt"})
+	got, err := p.Pick(time.Now(), nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	selected := make(map[string]bool, len(got))
+	for _, project := range got {
+		selected[project.Name] = true
+	}
+	if !selected["exempt"] {
+		t.Fatal("configured exempt lane was not selected")
+	}
+	if len(got) != 3 {
+		t.Fatalf("picked %d projects, want exempt lane plus two budgeted lanes", len(got))
+	}
+}
+
 // TestPick_SkipsDisabled verifies that disabled projects are excluded.
 func TestPick_SkipsDisabled(t *testing.T) {
 	db := newTestDB(t)

@@ -517,6 +517,12 @@ func (l *Loop) gatewayClientOrNil() *GatewayClient {
 	return l.gatewayClient
 }
 
+// SetBudgetExempt configures namespace IDs and lane/project names exempt from
+// the flat packer's per-tick weight budget.
+func (l *Loop) SetBudgetExempt(names []string) {
+	l.packer.SetBudgetExempt(names)
+}
+
 // SetBlackoutWindows updates the blackout slowdown windows on both packers.
 func (l *Loop) SetBlackoutWindows(windows []config.BlackoutWindow) {
 	l.packer.blackoutWindows = windows

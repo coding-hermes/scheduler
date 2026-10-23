@@ -699,6 +699,9 @@ func main() {
 	if err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {
 		log.Fatalf("FATAL: configure foreman routing policy: %v", err)
 	}
+	if rootCfg, err := config.LoadRootConfig(*configFile); err == nil && len(rootCfg.Scheduler.BudgetExempt) > 0 {
+		loop.SetBudgetExempt(rootCfg.Scheduler.BudgetExempt)
+	}
 	if usagePoolsConfig.Enabled {
 		loop.SetUsagePoolPolicy(scheduler.UsagePoolPolicy{Enabled: true, ObserveOnly: usagePoolsConfig.ObserveOnly, LocalPoolID: localUsagePoolID})
 		log.Printf("USAGE_POOL: enabled observe_only=%t local_pool=%s authority_db=%s", usagePoolsConfig.ObserveOnly, localUsagePoolID, *dbPath)
