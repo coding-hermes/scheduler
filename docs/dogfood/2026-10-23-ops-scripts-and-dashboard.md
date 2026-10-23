@@ -110,9 +110,18 @@ daemon was only ever `GET`-ed.
 - cell `repo-head` OK: tested HEAD `65159dd7ec1aa7a52d73c1bcb9f19a69808b0c4c` (clone dirty — pull
   skipped, recorded sha)
 - cell `launch` OK: battery started detached (`qa-run.sh`), 135,569 script bytes
-- `collect` at 16:52Z → `RUNNING … agent left intact`; the cells land in the evidence file and are
-  summarised in the next tick's entry (the battery takes 7–15 min; `bunker-qa status` showed
-  `act=no`, so the `ci-pass` cell is expected to report UNVERIFIED rather than pass).
+- `collect` at 16:45Z, 16:52Z, 16:56Z and 16:58Z → `RUNNING … agent left intact`; the evidence file
+  has not grown since launch (2 cells)
+- **STALLED-OR-SLOW, recorded rather than rounded off:** the battery's own log
+  (`/home/bunker-c4a3a2eb/qa-run.log`) read `QA-HEAD=… / HARNESS-COMPOSE=ok / HARNESS_NODE=ok` at
+  both 16:52:30Z and 16:58Z — identical tail across ~6 minutes, 20 minutes after launch. `bunker-qa
+  status` reported `act=no` at launch, so the harness bootstrap is the stage under suspicion. Not
+  filed as a row: one frozen window is a lead, not a finding, and the state did not let me separate a
+  slow `act` download from a hung step.
+- Agent left ALIVE with its 4h TTL (destroying it would lose the cells). Owed to the next tick:
+  `~/.hermes/scripts/bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261023T163802Z-1846595.jsonl`
+  → harvest the cells, attribute the harness-stage stall if it reproduced, then destroy `c4a3a2eb`.
+  This leg is **PARTIAL, not SKIPPED** — the battery ran; it has not finished.
 
 ## Verdict
 
