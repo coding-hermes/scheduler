@@ -23,7 +23,7 @@ cd "$REPO_ROOT"
 rc_board=0
 rc_pytest=0
 
-echo "=== [1/2] check-fleet-invariants --board-only (CI shape) ==="
+echo "=== [1/3] check-fleet-invariants --board-only (CI shape) ==="
 python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
 rc_board=$?
 if [ "$rc_board" -ne 0 ]; then

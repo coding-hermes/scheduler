@@ -113,3 +113,31 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
 5. If the check genuinely cannot run without the live fleet DB/TOML, say so
    IN THE TABLE with the reason and the skip shape — do not ship a fixture
    that passes because the check never ran.
+
+## Board cleanup guard (SCHED-GAP-1757)
+
+`board_cleanup_guard.py` is the mechanical half of the board doctrine **"a gap
+gets acceptance criteria, not a silent close"**. A cleanup that intends to flip
+rows to a closed status asks the guard first:
+
+```
+python3 ops/board_cleanup_guard.py --board .coding-hermes/board/tasks.jsonl \
+    --ids-file /tmp/ids-being-closed.txt --status complete
+```
+
+Exit `0` = the close may proceed, `3` = refused by policy, `2` = cannot
+evaluate (unreadable board, or a selection that matched no open row — fail
+closed). It is READ-ONLY: it never writes the board.
+
+What it refuses:
+
+| refusal | when |
+|---|---|
+| `refused-status-not-in-vocabulary` | the cleanup writes a status outside `pending`/`in_progress`/`complete`/`duplicate`. `stale` is the incident spelling: readers count `status == "pending"`, so an off-vocabulary close parks work visibly and dispatchably-nowhere |
+| `refused-mass-close-of-criteria-less-rows` | a close of >= 2 rows where ANY selected row has no acceptance criteria (`acceptance` or `acceptance_criteria`, string or list). Every offender is named; backfill the criteria or close that row individually |
+| `refused-single-close-without-criteria-or-evidence` | a one-row close of a criteria-less row that also names no completion evidence (`worker_summary`/`commit_hash`/`foreman_note`/`evidence`) |
+
+`tests/test_board_cleanup_guard.py` pins both arms (refused and allowed), the
+empty-list-is-not-criteria case, the read-only guarantee, and the CLI exit
+codes; it rides the fixture battery that `scripts/check-invariants.sh` runs.
+
