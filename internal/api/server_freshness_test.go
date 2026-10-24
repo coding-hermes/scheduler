@@ -51,7 +51,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/coding-hermes/scheduler/internal/version"
 )
