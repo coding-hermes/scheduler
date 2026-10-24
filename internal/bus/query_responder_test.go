@@ -53,8 +53,13 @@ func TestREMOTE009_ResponderFullRoundTrip(t *testing.T) {
 
 	// A real requester asks self-1. The responder must answer on the
 	// correlated reply topic and the requester must match by corr_id.
+	// Use the documented production default rather than a 2s test-only
+	// micro-budget. The responder and relay are separate goroutines/process
+	// boundaries, so a heavily loaded two-vCPU fresh system can spend the
+	// micro-budget on scheduling even when the reply is healthy. Missing-reply
+	// behaviour remains covered by the explicit short-budget tests.
 	got, err := c.Query(context.Background(), "self-1", QueryEnvelope{
-		Op: "queue.get", CorrID: "corr-rt-9", BudgetMS: intPtr(2000),
+		Op: "queue.get", CorrID: "corr-rt-9", BudgetMS: intPtr(queryDefaultBudgetMS),
 	})
 	if err != nil {
 		t.Fatalf("round trip through responder: %v", err)

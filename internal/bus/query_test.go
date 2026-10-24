@@ -297,6 +297,29 @@ func TestREMOTE009_LateReplyDropped(t *testing.T) {
 	}
 }
 
+// TestREMOTE009_MissingReplyFailsFast proves that widening the successful
+// round-trip budget does not mask a genuinely absent reply. An explicit short
+// budget still returns the named timeout close to its deadline.
+func TestREMOTE009_MissingReplyFailsFast(t *testing.T) {
+	relay := newQueryStubRelay(t)
+	c := NewClient(true, relay.srv.URL, "", "test-self")
+	budget := 100
+	started := time.Now()
+	_, err := c.Query(context.Background(), "peer-missing", QueryEnvelope{
+		Op: "peer.status", CorrID: "corr-missing", BudgetMS: &budget,
+	})
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("missing reply unexpectedly succeeded")
+	}
+	if !errors.Is(err, ErrQueryTimeout) {
+		t.Fatalf("missing reply error = %v, want ErrQueryTimeout", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("missing reply took %s, want fast failure within 1s", elapsed)
+	}
+}
+
 // TestREMOTE009_ForeignCorrIDNeverDelivered proves the correlation law: a
 // reply whose payload corr_id does not match is dropped (one log line) and
 // never returned to the caller — the real (matching) reply arriving after
