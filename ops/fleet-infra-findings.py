@@ -419,7 +419,8 @@ class BoardChangedError(RuntimeError):
 
 
 def write_board_lines(path: str, lines: list[str], backup_dir: str | None = None,
-                      expect: tuple[int, int] | None = None) -> str:
+                      expect: tuple[int, int] | None = None,
+                      make_backup: bool = True) -> str:
     """Atomically replace a board with ``lines``; returns the backup path.
 
     A full rewrite (unlike an append) is only legitimate for the ONE caller
@@ -444,7 +445,7 @@ def write_board_lines(path: str, lines: list[str], backup_dir: str | None = None
             "nothing written; re-run to pick up the new rows"
             % (path, expect, file_signature(path)))
     backup = None
-    if os.path.exists(path):
+    if make_backup and os.path.exists(path):
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         target_dir = backup_dir or os.path.dirname(path)
         if target_dir:

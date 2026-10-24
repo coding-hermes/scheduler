@@ -240,8 +240,18 @@ python3 ops/collapse-fleet-infra-findings.py --apply --include-closed
   `SKIPPED (concurrent write)`.
 * Idempotent: a second `--apply` reports `collapsed=0`.
 
-Rollback one board:
-`cp ~/.hermes/coding-hermes/fleet-infra-backups/<project>/tasks.jsonl.bak-<stamp> <repo>/.coding-hermes/board/tasks.jsonl`.
+Rollback one board (use the UTC stamp from the backup filename; the pre-write
+copy is the restore point for both newly-created and extended shared rows):
+
+```bash
+STAMP=20261024T142615Z  # replace with the stamp actually present
+cp "$HOME/.hermes/coding-hermes/fleet-infra-backups/bunker/tasks.jsonl.bak-$STAMP" \
+  "$REPO/.coding-hermes/board/tasks.jsonl"
+```
+
+No post-write image is retained; the project-scoped `.bak-<UTC>` file is the
+pre-write snapshot and is the file to restore. The shared-infra board's project
+is `bunker`, so it uses the same project-scoped directory as every other board.
 
 ### Per-tick convergence
 

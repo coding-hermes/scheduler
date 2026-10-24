@@ -124,7 +124,9 @@ def collect_candidates(boards: list[str], include_closed: bool = False) -> dict:
 
 
 def consolidate(pattern: str, candidates: list[dict], infra_board: str,
-                apply: bool, now: float, reserved: set[str] | None = None) -> dict:
+                apply: bool, now: float, reserved: set[str] | None = None,
+                backup_root: str | None = None,
+                infra_backups: dict[str, str] | None = None) -> dict:
     """File (or extend) the ONE shared row for *pattern*. Returns its record.
 
     ``reserved`` carries ids this RUN has already minted: a dry run appends
@@ -155,11 +157,18 @@ def consolidate(pattern: str, candidates: list[dict], infra_board: str,
         row_id = str(target.get("id", ""))
         action = "extended"
         if apply:
-            _extend_cross_ref(infra_board, row_id, pattern, observations, now)
+            if backup_root:
+                _ensure_prewrite_backup(infra_board, backup_root, now,
+                                        infra_backups if infra_backups is not None else {})
+            _extend_cross_ref(infra_board, row_id, pattern, observations, now,
+                              backup_root=backup_root)
     else:
         row_id = lib.mint_infra_id(taken)
         action = "created"
         if apply:
+            if backup_root:
+                _ensure_prewrite_backup(infra_board, backup_root, now,
+                                        infra_backups if infra_backups is not None else {})
             _write_consolidated_row(infra_board, row_id, pattern, observations, now)
     return {"pattern": pattern, "row_id": row_id, "action": action,
             "observations": observations, "count": len(observations)}
@@ -173,6 +182,30 @@ def project_of(board_path: str) -> str:
     except ValueError:
         return os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(board_path))))
     return parts[board_idx - 1]
+
+
+def _backup_stamp(now: float) -> str:
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+
+
+def _ensure_prewrite_backup(board: str, backup_root: str, now: float,
+                            backups: dict[str, str]) -> str:
+    """Create one project-scoped, byte-identical snapshot before the first write."""
+    if board in backups:
+        return backups[board]
+    target_dir = os.path.join(os.path.expanduser(backup_root), project_of(board))
+    os.makedirs(target_dir, exist_ok=True)
+    stamp_time = now
+    target = os.path.join(target_dir, "tasks.jsonl.bak-%s" % _backup_stamp(stamp_time))
+    while os.path.exists(target):
+        stamp_time += 1
+        target = os.path.join(target_dir, "tasks.jsonl.bak-%s" % _backup_stamp(stamp_time))
+    with open(board, "rb") as src:
+        data = src.read()
+    with open(target, "xb") as dst:
+        dst.write(data)
+    backups[board] = target
+    return target
 
 
 def _write_consolidated_row(infra_board: str, row_id: str, pattern: str,
@@ -220,7 +253,8 @@ def _write_consolidated_row(infra_board: str, row_id: str, pattern: str,
 
 
 def _extend_cross_ref(infra_board: str, row_id: str, pattern: str,
-                      observations: list[dict], now: float) -> None:
+                      observations: list[dict], now: float,
+                      backup_root: str | None = None) -> None:
     """Append observations to an existing open consolidated row (one line rewrite)."""
     lines = lib.read_board_lines(infra_board)
     for idx, line in enumerate(lines):
@@ -250,10 +284,9 @@ def _extend_cross_ref(infra_board: str, row_id: str, pattern: str,
         break
     else:  # pragma: no cover - the row vanished between read and write
         return
-    backup_dir = os.path.join(os.path.expanduser("~"), ".hermes", "coding-hermes",
-                              "fleet-infra-backups")
-    os.makedirs(backup_dir, exist_ok=True)
-    lib.write_board_lines(infra_board, lines, backup_dir=backup_dir)
+    backup_root = backup_root or DEFAULT_BACKUP_DIR
+    backup_dir = os.path.join(os.path.expanduser(backup_root), project_of(infra_board))
+    lib.write_board_lines(infra_board, lines, backup_dir=backup_dir, make_backup=False)
 
 
 def rewrite_board(board: str, drop: set[int], backup_dir: str | None = None,
@@ -307,6 +340,7 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
         "patterns": [],
         "changed_boards": [],
         "writes": [],
+        "infra_backup": "",
         "archive": "",
         "cross_project": False,
         "skipped": {"local_rows": 0, "closed_rows": 0},
@@ -339,6 +373,8 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
         return report
 
     archive_path = _archive_path(archive, now)
+    backup_root = os.path.expanduser(backup_dir or DEFAULT_BACKUP_DIR)
+    infra_backups: dict[str, str] = {}
     archived: list[dict] = []
     reserved: set[str] = set()
     # Drops are collected across ALL patterns and applied in ONE rewrite per
@@ -355,7 +391,8 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
         if not candidates:
             continue
         record = consolidate(pattern, candidates, infra_board, apply, now,
-                             reserved=reserved)
+                             reserved=reserved, backup_root=backup_root,
+                             infra_backups=infra_backups)
         reserved.add(record["row_id"])
         report["patterns"].append(record)
         report["collapsed_rows"] += len(candidates)
@@ -384,6 +421,9 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
             report["changed_boards"].append({
                 "board": board, "removed": len(drop), "backup": backup,
             })
+
+    if infra_backups:
+        report["infra_backup"] = infra_backups.get(infra_board, "")
 
     if apply and archived:
         archive_path = os.path.abspath(os.path.expanduser(archive_path))

@@ -119,6 +119,7 @@ def test_dry_run_writes_nothing(tmp_path):
 
 def test_apply_collapses_copies_and_keeps_project_local_rows(tmp_path):
     home, boards, infra, pats = _fixture(tmp_path)
+    originals = {board: Path(board).read_bytes() for board in boards}
     report = _run(tmp_path, home, boards, infra, pats, apply=True)
 
     assert report["collapsed_rows"] == 3
@@ -153,7 +154,12 @@ def test_apply_collapses_copies_and_keeps_project_local_rows(tmp_path):
     assert all(a["_collapsed"]["consolidated_row"] for a in archived)
     assert len(report["changed_boards"]) == 2
     for changed in report["changed_boards"]:
-        assert Path(changed["backup"]).exists()
+        backup = Path(changed["backup"])
+        project = collapse.project_of(changed["board"])
+        assert backup.parent == Path(tmp_path / "backups" / project)
+        assert backup.name.startswith("tasks.jsonl.bak-")
+        assert backup.read_bytes() == originals[changed["board"]]
+    assert not list((tmp_path / "backups").glob("tasks.jsonl.bak-*"))
 
 
 def test_second_apply_is_a_noop(tmp_path):
@@ -193,15 +199,55 @@ def test_an_existing_open_carrier_is_extended_not_duplicated(tmp_path):
         "title": "already carried", "cross_ref": {"pattern": "port_pool", "observations": []},
     }
     lib.append_jsonl(infra, [existing])
+    infra_before = Path(infra).read_bytes()
     report = _run(tmp_path, home, boards, infra, pats, apply=True)
     port = [p for p in report["patterns"] if p["pattern"] == "port_pool"][0]
     assert port["row_id"] == "FLEET-INFRA-1" and port["action"] == "extended"
     rows = [r for r in lib.read_board(infra) if r.get("id") == "FLEET-INFRA-1"]
     assert len(rows) == 1
     assert {o["project"] for o in rows[0]["cross_ref"]["observations"]} == {"consensus", "warpfs"}
+    backup = Path(report["infra_backup"])
+    assert backup.parent.name == "bunker"
+    assert backup.read_bytes() == infra_before
+    assert collapse._now_iso(1000.0).encode() not in backup.read_bytes()
+
+
+def test_shared_infra_backup_is_prewrite_and_restorable(tmp_path):
+    home, boards, infra, pats = _fixture(tmp_path)
+    original = Path(infra).read_bytes()
+    operator_home = tmp_path / "operator-home"
+    backup_root = operator_home / ".hermes" / "coding-hermes" / "fleet-infra-backups"
+    report = collapse.run(
+        boards=boards, infra_board=infra, home=str(home), include_worktrees=False,
+        now=1000.0, backup_dir=str(backup_root), archive=str(tmp_path / "archive.jsonl"),
+        apply=True, cross_project=True,
+    )
+
+    backup = Path(report["infra_backup"])
+    assert backup == backup_root / "bunker" / "tasks.jsonl.bak-19700101T001640Z"
+    assert backup.read_bytes() == original
+    assert collapse._now_iso(1000.0).encode() not in backup.read_bytes()
+    assert not list(backup_root.glob("tasks.jsonl.bak-*"))
+    assert Path(infra).read_bytes() != original
+
+    # Execute the ops/README.md rollback recipe against this isolated shared board.
+    stamp = backup.name.removeprefix("tasks.jsonl.bak-")
+    rollback = (
+        f"STAMP={stamp}\n"
+        'cp "$HOME/.hermes/coding-hermes/fleet-infra-backups/bunker/tasks.jsonl.bak-$STAMP" \\\n'
+        '  "$REPO/.coding-hermes/board/tasks.jsonl"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", rollback],
+        env=dict(os.environ, HOME=str(operator_home), REPO=str(home / "bunker")),
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert Path(infra).read_bytes() == original
 
 
 def test_unroutable_infra_board_touches_nothing(tmp_path):
+
     home, boards, infra, pats = _fixture(tmp_path)
     before = {b: Path(b).read_text(encoding="utf-8") for b in boards}
     report = _run(tmp_path, home, boards, str(tmp_path / "missing.jsonl"), pats, apply=True)
