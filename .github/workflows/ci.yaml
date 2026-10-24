@@ -65,15 +65,33 @@ jobs:
         run: go test ./... -count=1 -short -v -coverprofile=coverage.out
 
       - name: Race Detector
-        run: go test ./... -count=1 -short -race -timeout=1200s
-        # INT-CI-168: api race suite measures ~465s green locally (fleet host);
-        # the Go default 10m bound has no headroom on a loaded runner. -timeout=1200s
+        run: |
+          mapfile -t packages < <(go list ./... | grep -Ev '/internal/(api|scheduler|blocks)(/|$)')
+          go test "${packages[@]}" -count=1 -short -race -p 1 -timeout=1200s
 
       - name: Coverage Report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-go${{ matrix.go-version }}
           path: coverage.out
+
+  # ── API race detector ──
+  race-api:
+    name: Race Detector (internal/api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Dedicated budget preserves API race coverage while keeping a hung test
+      # bounded. Dev reproduction: go test ./internal/api -count=1 -short -race -timeout=1200s
+      # Measured basis: dev 675.780s; hosted near-bound result was
+      # "ok .../internal/api 1195.866s". A dedicated 1800s bound gives the
+      # hosted package its own headroom; timeout still fails a genuinely hung test.
+      - name: Race detector — API
+        run: go test -short -race -count=1 -p 1 -timeout=1800s ./internal/api/...
 
   # ── Simulation smoke test ──
   simulation:
@@ -143,13 +161,14 @@ jobs:
   all-clear:
     name: CI All Clear
     runs-on: ubuntu-latest
-    needs: [lint, test, simulation, integration, build-artifacts]
+    needs: [lint, test, race-api, simulation, integration, build-artifacts]
     if: always()
     steps:
       - name: Check
         run: |
           if [[ "${{ needs.lint.result }}" != "success" ]]; then echo "lint failed"; exit 1; fi
           if [[ "${{ needs.test.result }}" != "success" ]]; then echo "test failed"; exit 1; fi
+          if [[ "${{ needs.race-api.result }}" != "success" ]]; then echo "API race test failed"; exit 1; fi
           if [[ "${{ needs.simulation.result }}" != "success" ]]; then echo "simulation failed"; exit 1; fi
           if [[ "${{ needs.integration.result }}" != "success" ]]; then echo "integration failed"; exit 1; fi
           if [[ "${{ needs.build-artifacts.result }}" != "success" ]]; then echo "build failed"; exit 1; fi
