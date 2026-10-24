@@ -948,13 +948,51 @@ Three dials, set by the operator — not defaults:
 | Dial | Value | Where |
 |------|-------|-------|
 | Global slot pool | 10 | daemon flag `--max-concurrent` (systemd user unit) |
-| `coding-hermes` (foremen) | 8 | namespace `max_concurrent` |
-| Each satellite namespace (`qa`, `pm`, `dogfood`, `duckbrain-sync`, `releases`) | 1 | namespace `max_concurrent` |
+| `coding-hermes` (foremen) | 16 | namespace `max_concurrent` — R3.2, ruled 2026-10-02 |
+| Each satellite namespace (`qa`, `pm`, `dogfood`, `duckbrain-sync`, `releases`, `doc-writer`) | 1 | namespace `max_concurrent` — R3.3, ruled 2026-10-02 |
+
+**The namespace cap policy has ONE authoritative statement:
+[`docs/fleet-config-model.md`](fleet-config-model.md) §2.2–§2.3**, derived from
+[`docs/scheduler-rules.md`](scheduler-rules.md) §3 (R3.2 foremen 16, R3.3 flat-1
+satellites, both ruled 2026-10-02). The two numbers in this table are that POLICY, not an
+observation of the running fleet. **This page's earlier revision stated the foremen cap as
+8 — superseded by R3.2/R3.3 (2026-10-02)**, and
+[`docs/design-decisions.md`](design-decisions.md)'s SCHED-GAP-215 entry (9/12) is
+superseded by the same ruling. The policy constants live in
+`ops/check-fleet-invariants.py` (`FOREMAN_CAP_EXPECTED`, `SATELLITE_CAP_POLICY`), and
+`cmd/schedulerd/docs_cap_policy_parity_test.go` fails the build if any docs page states a
+cap value that disagrees with them.
+
+**Live drift (measured 2026-10-24).** The running fleet has NOT been re-pinned to that
+policy. Read the DB the packer reads:
+
+```bash
+sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db \
+  "SELECT id, max_concurrent, admission_mode FROM namespaces ORDER BY id;"
+```
+
+returns `coding-hermes 8|tasks`, `qa 9`, `pm 9`, `dogfood 9`, `duckbrain-sync 12`,
+`releases 9`, `doc-writer 1` — i.e. the drifted numbers this page used to publish as the
+default. The checker names them as violations and exits 1:
+
+```
+VIOLATION caps coding-hermes: max_concurrent=8 expected 16 (the foremen's guaranteed room)
+VIOLATION caps qa: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps pm: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps dogfood: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps duckbrain-sync: max_concurrent=12 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps releases: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+```
+
+Run `python3 ops/check-fleet-invariants.py` to reproduce. Trust the checker on policy and
+the DB on state; to converge a drifted namespace use
+`PUT /api/v1/namespaces/{id}` `{"max_concurrent": <policy>}` (durability steps in
+[`docs/fleet-config-model.md`](fleet-config-model.md) §2.3).
 
 The shape is deliberate: a satellite can hold at most one global slot, so the
-foremen always have room. (`coding-hermes` = 8 + at most one per satellite ≤ 13
-possible, inside the global 10 only when the budget is free — the packer admits
-by namespace weight and the pool's `--max-concurrent` is the hard ceiling.)
+foremen always have room. (Foremen 16 plus at most one per satellite is bounded in
+practice by the global pool's `--max-concurrent` — 10 today — the packer admits by
+namespace weight and the pool's global cap is the hard ceiling.)
 
 `admission_mode` decides when a namespace's projects may be admitted:
 

@@ -73,6 +73,15 @@ A1 → `--max-concurrent 10` · A2 → `10` · A3 → `41: maxConcurrent := flag
 
 ### 2.2 The foremen namespace — `coding-hermes` `max_concurrent` = **16**
 
+> **This section (§2.2–§2.3) is the ONE authoritative statement of the namespace cap
+> policy (DOC-24, 2026-10-24).** Every other page that mentions a namespace cap —
+> [`docs/api.md`](api.md) §6, [`docs/design-decisions.md`](design-decisions.md)'s
+> SCHED-GAP-215 entry — points here and carries an explicit `superseded by R3.2/R3.3
+> (2026-10-02)` marker where it used to state a retired value. The rulings themselves are
+> [`docs/scheduler-rules.md`](scheduler-rules.md) §3, and the machine authority the
+> checker and the parity test both read is `ops/check-fleet-invariants.py`
+> (`FOREMAN_CAP_EXPECTED`, `SATELLITE_CAP_POLICY`).
+
 ### 2.3 Each satellite namespace — the R3.3 flat-1 ruling
 
 The two are the same knob at different scope, so they get one table.
@@ -100,7 +109,7 @@ grep -n 'SATELLITE_NS = ' ops/check-fleet-invariants.py
 grep -n -A7 'SATELLITE_CAP_POLICY = ' ops/check-fleet-invariants.py
 ```
 
-Live output (2026-10-07, post R3.2/R3.3) — B2 (abridged):
+Live output as it read on 2026-10-07, immediately after R3.2/R3.3 were pinned — this is the **EXPECTED** post-ruling shape, abridged (B2):
 
 ```
 backup            1  cooldown
@@ -119,7 +128,25 @@ releases          1  cooldown
 
 B3 → `id = "coding-hermes"`, `weight = 100` — **no `max_concurrent` key** (keyless = DB wins; the DB carries 16/tasks). B5 → `SATELLITE_NS = ("qa", "pm", "dogfood", "duckbrain-sync", "releases", "doc-writer")` plus the `SATELLITE_CAP_POLICY` map (every entry 1, per R3.3).
 
-**Read this table carefully — the cap column is a policy, not a uniform rule.** Every satellite namespace sits at the **R3.3 flat 1** (ruled 2026-10-02, superseding SCHED-GAP-215's 9/12 raise), and the foremen namespace sits at **R3.2's 16**, verified by commands **B1**–**B3**. Four namespaces (`backup`, `data-cleanup`, `duckbrain-infra`, `monitoring`) were historically `0` = unlimited infra lanes; today every row reads 1. And the caps are a *ceiling*, not a target: the packer and the weight budget, not this table, decide how many actually run. The invariant checker asserts exactly the foremen-16 + R3.3 flat-1 shape and its six-namespace satellite list (command **F1**/**F6**).
+**LIVE DRIFT, measured 2026-10-24 (DOC-24): the fleet is NOT in the shape above.** B2 returns
+`coding-hermes 8|tasks`, `qa 9`, `pm 9`, `dogfood 9`, `duckbrain-sync 12`, `releases 9`,
+`doc-writer 1` — the retired pre-R3.2/pre-R3.3 values. `python3 ops/check-fleet-invariants.py`
+exits 1 with exactly six `caps` violations, quoted verbatim:
+
+```
+VIOLATION caps coding-hermes: max_concurrent=8 expected 16 (the foremen's guaranteed room)
+VIOLATION caps qa: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps pm: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps dogfood: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps duckbrain-sync: max_concurrent=12 expected 1 (R3.3 satellite cap policy)
+VIOLATION caps releases: max_concurrent=9 expected 1 (R3.3 satellite cap policy)
+```
+
+The checker is right about policy and the DB is the drifted state — do not "fix" the fleet
+toward the live rows. Converge with `PUT /api/v1/namespaces/{id}` `{"max_concurrent": <policy>}`
+(step 1 of **How to change** above), then re-read B1/B2/B3.
+
+**Read this table carefully — the cap column is a policy, not a uniform rule.** Every satellite namespace sits at the **R3.3 flat 1** (ruled 2026-10-02, superseding SCHED-GAP-215's 9/12 raise), and the foremen namespace sits at **R3.2's 16**, verified by commands **B1**–**B3**. Four namespaces (`backup`, `data-cleanup`, `duckbrain-infra`, `monitoring`) were historically `0` = unlimited infra lanes; under R3.3 every one of them reads 1. (What the live DB reads *today* is a separate question from what policy says — the 2026-10-24 drift block above states it, and the checker is the authority on which side is wrong.) And the caps are a *ceiling*, not a target: the packer and the weight budget, not this table, decide how many actually run. The invariant checker asserts exactly the foremen-16 + R3.3 flat-1 shape and its six-namespace satellite list (command **F1**/**F6**).
 
 ---
 
@@ -470,7 +497,7 @@ Every command in this page, with what it establishes. All were run on 2026-09-20
 | B1 | `curl -s 127.0.0.1:9090/api/v1/namespaces \| jq -r '.namespaces[] \| "\(.id)\t\(.max_concurrent)\t\(.admission_mode)\t\(.load_gate)"'` | Live namespace caps and modes |
 | B2 | `sqlite3 -readonly ~/.hermes/coding-hermes/scheduler.db "SELECT id, max_concurrent, admission_mode, COALESCE(load_gate,'') FROM namespaces ORDER BY id;"` | The DB rows behind B1 |
 | B3 | `grep -A6 '^id = "coding-hermes"' ~/.hermes/fleet.toml \| head -7` | The restart pin for the foremen namespace |
-| B4 | `sqlite3 -readonly … "SELECT count(*) FROM namespaces WHERE max_concurrent=1;"` and `… "SELECT 8 + (SELECT count(*) FROM namespaces WHERE max_concurrent=1 AND id <> 'coding-hermes');"` | How many namespaces are at cap 1, and the sum of caps vs the global 10 |
+| B4 | `sqlite3 -readonly … "SELECT count(*) FROM namespaces WHERE max_concurrent=1;"` and `… "SELECT 16 + (SELECT count(*) FROM namespaces WHERE max_concurrent=1 AND id <> 'coding-hermes');"` | How many namespaces are at cap 1, and the sum of caps vs the global 10 |
 | B5 | `grep -n 'SATELLITE_NS = ' ops/check-fleet-invariants.py` | The six-namespace satellite list the caps are asserted on |
 | C1 | `readlink -f <satellite-workdir>/.coding-hermes/board` (and the primary's) | The symlink that makes satellites time-based |
 | C2 | `grep -n 'admission_mode TEXT\|board_ownership TEXT' internal/database/migrations.go` | Schema defaults and CHECK constraints |
