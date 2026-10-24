@@ -41,6 +41,7 @@ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl -
 |---|---|---|---|
 | `caps` | foreman namespace cap = 8; every satellite namespace cap = 1; a missing satellite namespace is itself a violation | `tests/test_check_fleet_invariants_caps_and_admission.py` | covered (both arms) |
 | `admission` | every namespace carries `admission_mode`; `tasks` ONLY on `coding-hermes`; satellites on `cooldown` | `tests/test_check_fleet_invariants_caps_and_admission.py` | covered (both arms) |
+| `namespace-membership` | a satellite lane `<base>-<role>` must live in its ROLE's shared family namespace per the pin map (`qa`→`qa`, `pm`→`pm`, `sync`→`duckbrain-sync`, `dogfood`→`dogfood`, `releng`→`releases`, `perf`→`perf`, `review`→`review`, `readme`/`docs`→`docs`) — one line per misplaced row naming the actual and the conventional namespace (SCHED-GAP-1604: the auger family parked five satellites in a private `auger` namespace). The matcher is DERIVED from the very map it polices, so a family can be added to the pins and never left unpoliceable; lanes without a satellite suffix (foreman primaries) are not policed; DISABLED misplaced rows still fire (one resume away from live) | `tests/test_check_fleet_invariants_namespace_membership.py` | covered (seeded / null-namespace / disabled / conforming / primary-exempt / live-fleet arms). **SKIPS in `--board-only` (CI) with no line at all** — the fact lives in `projects.namespace_id`, which only the live DB carries |
 | `cooldown` | no enabled lane below the 21600s (6h) floor except documented tiers (qa-audit 86400, release-engineer 604800); tier drift fires; disabled lanes exempt | `tests/test_check_fleet_invariants_cooldown_executors_workdirs.py` | covered (both arms) |
 | `executors` | no enabled lane `command`/`prompt` drives a retired driver (5-name tuple, mirrored by `internal/api/retired_drivers.go`); explicit `RETIRED` / `do NOT run` marker exempt | `tests/test_check_fleet_invariants_cooldown_executors_workdirs.py` + pre-existing `tests/test_check_fleet_invariants_retired_drivers.py` | covered (both arms) |
 | `workdirs` | every enabled lane's workdir exists | `tests/test_check_fleet_invariants_cooldown_executors_workdirs.py` | covered (both arms) |
@@ -54,9 +55,11 @@ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl -
 | `board-vocab` | every board row carries a dispatchable status (`pending`/`in_progress`/`complete`/`duplicate`) | pre-existing `tests/test_check_fleet_invariants_board_vocab.py` | covered (pre-existing) |
 | `board-legacy-status` | legacy closed spellings (`done`/`completed`/`closed`) get their own violation so the PM cycle sweeps them | `tests/test_check_fleet_invariants_board_legacy_status.py` | covered (both arms) |
 | `board-content-dup` | two open rows with identical non-volatile content fire as one per-group violation; all-closed groups exempt; volatile-field-only diffs still collide | pre-existing `tests/test_check_fleet_invariants_board_dup_content.py` | covered (pre-existing) |
+| `board-id-slot` | an id holding TWO OR MORE OPEN rows is a recurring SLOT, not a finding — the lane re-filed each cycle under the same id without ever closing the previous row (measured 2026-09-22: 29% of open rows fleet-wide collided on id; QA-CONSENSUS-1 held 85 open rows under one id — SCHED-GAP-207). One line per id naming the open-row count; a group where every row is closed is exempt, and so is exactly ONE open row under an id with closed history (the legitimate close-then-refile cycle); status vocabulary follows the readers — legacy `done`/`completed`/`closed` are CLOSED, an off-vocabulary or missing status is OPEN, never hidden work | `tests/test_check_fleet_invariants_board_id_slot.py` | covered (seeded / refile-after-close / closed-history / distinct-id / off-vocab arms). **ASSERTS in `--board-only` (CI)** — ids come from the board file; the class skips silently only when no board resolves (checks 8/9's shape). Its per-board census rides a **`open-rows`** INFO line (`open rows=N unique open ids=M slot-inflated rows=K`) — a METER alias over every open row, deliberately NOT a `CHECK_CLASSES` entry: the class name is `board-id-slot` |
 | `sync-orientation` | every enabled `*-sync` lane's workdir carries a non-empty `README.md` naming its target DuckBrain namespace (a `namespace` line carrying the lane's base as a whole hyphen-delimited word, or a >=2-token hyphen run of it) AND a findable consumption contract (the companion `<base>-sync-data` skill under the skills root, or an in-README pointer: `/sync/` marker, `/api/` route, skill name). One violation per lane with every unmet fact in the detail; a workdir ABSENT is check 5's fact (no double-report); disabled lanes exempt; the skill axis SKIPS SILENTLY when the skills root is absent (`--skills-root`, the CI shape) while the README facts still assert | `tests/test_check_fleet_invariants_sync_orientation.py` | covered (seeded / conforming / exempt / skip arms + per-fact independence) |
 | `event-id-ascending` | every INTEGER id in `events.jsonl` (resolved from `--events`, else the sibling of `--board`, else the walk-up from the script) sits on the board's 19-digit epoch-nanosecond scale (`>= 10^18`) and does not descend below the highest id already in the file — the defect that planted two epoch-microsecond lines in this project's log and FAILed the live `boardctl validate` (SCHED-GAP-206). One violation per line, naming the LINE NUMBER and the BAD ID. Lines that fail to parse or carry no int id are skipped; the file's PRE-SCALE prefix (ids before its first `>= 10^18` id — this board has 979 on lines 1-999) and duplicate ids are tolerated, exactly as `boardctl validateEvents` tolerates them; a file with no 19-digit id at all is entirely off-scale and every int id in it fires. A missing events file SKIPS SILENTLY, same as checks 8/9 | `tests/test_check_fleet_invariants_event_ids.py` + Go `internal/scheduler/board_event_id_test.go` (`ValidateEventIDs`, floor pinned equal by `TestValidateEventIDs_ScaleMatchesPythonGate`) | covered (seeded / conforming / tolerant-prefix / duplicate / legacy-shape / skip arms) |
 | `lane-instructions` | every ENABLED lane carries instructions: the CONJUNCTION of own `prompt` AND its namespace `default_prompt` fallback both under `PROMPT_SHORT_CHARS` (400 — above the 296-char auger-releng incident state, below the thinnest healthy own prompt 1060 and fallback 777; justified at the constant) fires one line naming the lane; a `prompt_mode=replace` lane is judged on its own prompt ALONE (it replaces the base); disabled lanes exempt; skips with a documented INFO line when the schema predates the prompt columns; rides the live-DB pass so `--board-only` (CI) never runs it | `tests/test_check_fleet_invariants_lane_instructions.py` | covered (seeded / conforming / replace / boundary / disabled / schema-skip / board-only arms) |
+| `cooldown-pin-pacing` | `cooldown_pin_s` is a promise, so the OBSERVED inter-tick pacing must honour it: a cooldown-mode lane's MEDIAN gap between completed ticks must be at least HALF its effective base (`cooldown_pin_s` when set and positive, else `cooldown_s`) — under half means the lane re-ticked at least twice as fast as its own base promises (the perf-lane shape: ~25-30h gaps against a 7d floor — SCHED-GAP-1661). WINDOW is era-aware: the last 7 days, or since the lane's `updated_at` config write, because the fleet policy sync re-stamps every row and pre-era ticks measure the PREVIOUS config; backoff/blackout terms are excluded from the base so a failing lane cannot mask its pacing; fewer than 3 in-era completed ticks = no median yet. `tasks`-admission lanes are skipped as not timer-paced (the SCHED-GAP-124 pending-work waiver) and the `*-perf` lanes listed in `COOLDOWN_PIN_PACING_EXCEPTIONS` are exempt with a per-lane reason | `tests/test_check_fleet_invariants_cooldown_pin_pacing.py` | covered (seeded / no-pin / zero-pin / conforming / exact-half boundary / unmeasurable / dynamic-skip / disabled / exception / era-aware / tasks-waiver / schema-skip / board-only arms). **SKIPS in `--board-only` (CI)** — it reads the `ticks` table, so the battery never runs it. On a live DB it emits `INFO cooldown-pin-pacing schema: skipped — projects/ticks schema predates cooldown_pin_s or tick timestamps` for an old schema and a per-lane `skipped — no measurable base` INFO for a dynamic-interval (`cooldown_s=0`) lane |
 | `fleet-infra-dup` | a PROJECT board carries an OPEN row whose pattern the shared-infra board already carries open as a `FLEET-INFRA-N` carrier (`classification: fleet-infra:<pattern>` / `origin: fleet-infra-classifier|fleet-infra-collapse`) — the SCHED-GAP-128 defect where one host condition became N project rows. Rows that merely MENTION the vocabulary (a repo's own stale binary, a docs row quoting a config drop) are project-local to the same classifier the router uses, so the class never demands their deletion; closed copies exempt; the infra board's own native rows exempt. Resolves the carrier side itself in live mode; in `--board-only` (CI) it SKIPS with a documented INFO unless `--infra-board` + `--fleet-boards` fixtures are passed | `tests/test_check_fleet_invariants_fleet_infra_dup.py` | covered (seeded / clean / no-carrier / skip / table-registered arms) |
 
 The row's PASSING-FLEET requirement lives in
@@ -94,6 +97,21 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
   companion-skill half of the contract goes unchecked there. A lane whose
   workdir is absent is check 5's finding — the class stays silent so one fact
   never produces two lines.
+* **`namespace-membership` in `--board-only`** — the asserted fact is
+  `projects.namespace_id`, which only the live DB carries; the board file has
+  no namespace column, so the CI shape never evaluates the class and emits NO
+  line for it. That silent skip is why the row above says so explicitly: the
+  fixture battery seeds temp DBs and covers both arms, but the CI run alone can
+  never regress this class, and a reader must not read the clean battery as
+  coverage of it.
+* **`cooldown-pin-pacing` in `--board-only`** — the class reads the `ticks`
+  table, so the CI shape never runs it (no ticks table exists there). On a live
+  DB it skips with an explicit INFO line — `skipped — projects/ticks schema
+  predates cooldown_pin_s or tick timestamps` for an old fixture schema, and
+  `skipped — no measurable base` per lane when `cooldown_s=0` (dynamic
+  interval, not observable from ticks) — plus the per-lane `tasks`-mode waiver
+  counted in its census INFO. A NULL median always carries a reason; it never
+  passes silently as an assertion.
 
 * **`fleet-infra-dup` in `--board-only`** — the class must compare two sets of
   BOARDS (project boards vs the shared-infra board), and CI carries neither.
@@ -116,10 +134,23 @@ exits 1), both in `tests/test_check_fleet_invariants_family_floor_and_parity.py`
    a cross-firing fixture fails loudly instead of lying green.
 3. Run `bash scripts/check-invariants.sh` — both arms green.
 4. Add a row to the class table above. A class missing from the table is a
-   gap in the gate.
+   gap in the gate, and the table is now a TESTED surface:
+   `tests/test_check_fleet_invariants_class_table.py` fails the build when
+   `CHECK_CLASSES` and the table drift in EITHER direction (a class with no
+   row, a row naming a class that no longer exists, a duplicate row, or a
+   fixture path that does not resolve) — the same parity shape
+   `internal/mcp/agents_endpoint_parity_test.go` holds for the route table.
+   Flag-only variants (`parity` with `--global-cap`) are not `CHECK_CLASSES`
+   entries; list them in that test's `FLAG_ONLY_ROWS`. An INFO line tagged
+   with a name that is neither a class nor a listed METER alias
+   (`open-rows`) fails it too, so a meter can never masquerade as a class.
 5. If the check genuinely cannot run without the live fleet DB/TOML, say so
    IN THE TABLE with the reason and the skip shape — do not ship a fixture
-   that passes because the check never ran.
+   that passes because the check never ran. A row added from now on must also
+   state what happens in `--board-only` (the CI shape) — it asserts, or it
+   skips, and with which line — so no reader can mistake a CI skip for
+   coverage; the three DOC-25 rows and `tests/test_check_fleet_invariants_class_table.py`
+   hold that shape (`BOARD_ONLY_DOCUMENTED`).
 
 ## Shared-infra findings: classify, file once, collapse the copies (SCHED-GAP-128)
 

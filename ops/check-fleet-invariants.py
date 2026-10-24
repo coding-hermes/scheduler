@@ -487,8 +487,8 @@ PROMPT_SHORT_CHARS = 400
 # The half-of-cooldown threshold means ONE slow outlier cannot fire it; a
 # systematically faster lane does.
 #
-# NAMED EXCEPTIONS: lanes listed here are exempt from the class. The four
-# perf lanes carried a cooldown_s/pin value BELOW their real observed
+# NAMED EXCEPTIONS: lanes listed here are exempt from the class. The perf
+# lanes carried a cooldown_s/pin value BELOW their real observed
 # cadence when this check landed (the pin was being honored live at ~7d
 # while the row said less), so they legitimately appear here until the rows
 # and the live behavior agree. Each entry maps lane name -> reason.
