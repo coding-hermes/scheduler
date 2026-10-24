@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,6 +98,9 @@ def _fixture(tmp_path: Path):
 def _run(tmp_path, home, boards, infra, pats, **kw):
     lib._PATTERN_CACHE.clear()
     kw.setdefault("archive", str(tmp_path / "archive.jsonl"))
+    # Direct run() callers opt into the fixture's cross-project mutation; the
+    # shell wrapper tests separately pin the operator-facing acknowledgement.
+    kw.setdefault("cross_project", True)
     return collapse.run(boards=boards, infra_board=infra, home=str(home),
                         include_worktrees=False, now=1000.0,
                         backup_dir=str(tmp_path / "backups"), **kw)
@@ -249,7 +254,7 @@ def test_sweep_mode_prints_one_line_and_never_fails(tmp_path):
     try:
         import io
         sys.stdout = io.StringIO()
-        rc = collapse.main(["--apply", "--sweep", "--boards", ",".join(boards),
+        rc = collapse.main(["--apply", "--cross-project", "--sweep", "--boards", ",".join(boards),
                             "--infra-board", infra, "--home", str(home),
                             "--archive", str(tmp_path / "a.jsonl")])
         out.append(sys.stdout.getvalue())
@@ -258,4 +263,82 @@ def test_sweep_mode_prints_one_line_and_never_fails(tmp_path):
     assert rc == 0
     text = out[0].strip()
     assert text.startswith("FLEET-INFRA-COLLAPSE apply collapsed=")
+    assert "wrote=" in text
+    assert "FLEET-INFRA-1" in text and "FLEET-INFRA-2" in text
     assert "\n" not in text
+
+
+def _run_wrapper(tmp_path, *args):
+    """Run the shipped wrapper against only temporary fixture boards."""
+    import os
+    import subprocess
+
+    home, boards, infra, _ = _fixture(tmp_path)
+    env = dict(os.environ, HOME=str(tmp_path / "operator-home"))
+    result = subprocess.run(
+        [str(REPO_ROOT / "ops" / "fleet-infra-sweep.sh"),
+         *args, "--boards", ",".join(boards), "--infra-board", infra,
+         "--home", str(home), "--archive", str(tmp_path / "archive.jsonl")],
+        cwd=REPO_ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    return result, boards, infra
+
+
+def _snapshot(paths):
+    return {
+        str(path): (Path(path).read_bytes(), Path(path).stat().st_size,
+                    Path(path).stat().st_mtime_ns)
+        for path in paths
+    }
+
+
+def test_wrapper_default_is_read_only_and_apply_names_writes(tmp_path):
+    _, boards, infra = _run_wrapper(tmp_path)
+    paths = [Path(board) for board in boards + [infra]]
+    before = _snapshot(paths)
+    # The fixture was created inside _run_wrapper; snapshot it before invoking
+    # the wrapper a second time, which is the documented no-flag command.
+    result = subprocess.run(
+        [str(REPO_ROOT / "ops" / "fleet-infra-sweep.sh"), "--boards", ",".join(boards),
+         "--infra-board", infra, "--home", str(tmp_path / "home"),
+         "--archive", str(tmp_path / "default-archive.jsonl")],
+        cwd=REPO_ROOT, env=dict(os.environ, HOME=str(tmp_path / "operator-home")),
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0
+    assert "dry-run" in result.stdout and "wrote nothing" in result.stdout
+    assert _snapshot(paths) == before
+    assert not (tmp_path / "default-archive.jsonl").exists()
+
+    applied = subprocess.run(
+        [str(REPO_ROOT / "ops" / "fleet-infra-sweep.sh"), "--apply", "--cross-project",
+         "--boards", ",".join(boards), "--infra-board", infra,
+         "--home", str(tmp_path / "home"), "--archive", str(tmp_path / "apply-archive.jsonl")],
+        cwd=REPO_ROOT, env=dict(os.environ, HOME=str(tmp_path / "operator-home")),
+        text=True, capture_output=True, check=False,
+    )
+    assert applied.returncode == 0
+    assert "apply" in applied.stdout and "wrote=" in applied.stdout
+    assert "FLEET-INFRA-1" in applied.stdout and "FLEET-INFRA-2" in applied.stdout
+    assert str(boards[0]) in applied.stdout
+
+
+def test_wrapper_refuses_cross_project_apply_without_ack(tmp_path):
+    import os
+    import subprocess
+
+    home, boards, infra, _ = _fixture(tmp_path)
+    paths = [Path(board) for board in boards + [infra]]
+    before = _snapshot(paths)
+    result = subprocess.run(
+        [str(REPO_ROOT / "ops" / "fleet-infra-sweep.sh"), "--apply",
+         "--boards", ",".join(boards), "--infra-board", infra,
+         "--home", str(home), "--archive", str(tmp_path / "refused.jsonl")],
+        cwd=REPO_ROOT, env=dict(os.environ, HOME=str(tmp_path / "operator-home")),
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0
+    assert "REFUSED" in result.stdout
+    assert "wrote nothing" in result.stdout
+    assert _snapshot(paths) == before
+    assert not (tmp_path / "refused.jsonl").exists()
