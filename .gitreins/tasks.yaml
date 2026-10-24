@@ -5514,25 +5514,3 @@ tasks:
     Steady-state /queue /ticks /lanes/tree etc preserved
   status: in_progress
   created_at: '2026-10-23T17:33:10.952744+00:00'
-- id: QA-CHS-178-R2
-  title: CI race detector budget and package split
-  criteria:
-  - Fix the CI race detector workflow to retain internal/api race coverage, use -p
-    1, avoid duplicate scheduler and blocks race runs, and document a measured timeout
-    with headroom.
-  status: in_progress
-  created_at: '2026-10-24T07:58:46.751517+00:00'
-- id: QA-CHS-184
-  title: Worktree-safe daemon build identity
-  criteria:
-  - Ensure daemon builds from linked git worktrees never report a foreign or unknown
-    product commit; update documented build path and add regression coverage.
-  status: in_progress
-  created_at: '2026-10-24T07:58:48.055315+00:00'
-- id: QA-CHS-185
-  title: README package count parity
-  criteria:
-  - Correct the README Getting Started package-count claim and add a guard that prevents
-    package-count drift.
-  status: in_progress
-  created_at: '2026-10-24T07:58:49.387208+00:00'
