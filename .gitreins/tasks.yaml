@@ -5514,11 +5514,3 @@ tasks:
     Steady-state /queue /ticks /lanes/tree etc preserved
   status: in_progress
   created_at: '2026-10-23T17:33:10.952744+00:00'
-- id: DOC-24
-  title: Reconcile cap policy documentation
-  criteria:
-  - Docs state one authoritative R3.2/R3.3 cap policy, superseded values are marked,
-    and parity test enforces docs against checker constants
-  status: complete
-  created_at: '2026-10-24T07:20:06.170845+00:00'
-  completed_at: '2026-10-24T07:28:01.341211+00:00'
