@@ -1937,17 +1937,11 @@ plane:
 
 | Plane | Transport | Caller identity |
 |---|---|---|
-| CLI | crier bus topic `fed.query.<peer>` (`scheduler-query <peer> <op>`) | the local peer-registry name (bus:transport) |
-| HTTP | `POST /api/v1/federation/query` on the peer | `X-Operator-Token` header (operator:token) |
-| MCP | `fed_peer_status` / `fed_query` … tools | `mcp:auth-token` |
+| CLI | crier bus topic `fed.query.<peer>` (`scheduler-query <peer> <op>`) | `bus:transport` (the bus adapter identity; distinct from target peer id) |
+| HTTP | `POST /api/v1/federation/query` on the peer | authenticated operator identity, normally `operator:token` (`X-Operator-Token`) |
+| MCP | `fed_peer_status` / `fed_query` … tools | `mcp:auth-token` (MCP auth-mode identity) |
 
-CLI (bus:transport) vs HTTP (operator:token) vs MCP (mcp:auth-token) — the
-same peer id works only on the plane its caller identity is published for:
-a peer named in the local peer registry answers `scheduler-query` over the
-bus, while the same id posted to `/api/v1/federation/query` is read policy
-refused unless the `X-Operator-Token` caller is allowed (spec §4 auth
-posture; the per-caller allow-list in `[federation]` judges one identity
-per plane, never all three at once).
+The transport selects a destination; the authenticated caller identity is evaluated separately. A peer allowed for `bus:transport` can still be refused (`op_not_allowed`) for `operator:token` or `mcp:auth-token` until that identity is allowed in the `[federation]` per-caller policy. The allow-list judges one authenticated/transport-derived identity per request, never all identities at once.
 
 ### POST /api/v1/federation/query
 

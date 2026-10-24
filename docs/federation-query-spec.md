@@ -103,6 +103,8 @@ major bump; adding an op is a minor bump.
 | MCP | one tool per catalogue op (e.g. `fed_queue_get`) + `fed_query` as the generic escape hatch | REMOTE-010 |
 | CLI | `scheduler query <peer> <op> [--args k=v] [--want partial]` | REMOTE-011 |
 
+**Caller identity is transport-specific (SCHED-GAP-1740).** The CLI reaches the peer over the Crier bus and is authorized as `bus:transport`; `<peer>` in `fed.query.<peer>` selects the destination and is not the caller identity. HTTP `POST /api/v1/federation/query` derives its caller from the authenticated operator request (normally `operator:token` from `X-Operator-Token`). MCP tools such as `fed_peer_status` derive the caller from MCP authentication mode (`mcp:auth-token`). These identities are distinct: the per-caller allow-list evaluates the derived caller, so allowing an operation for one transport does not allow it for another. See the [API transport identity table](api.md#post-apiv1federationquery).
+
 Every adapter: parses its surface → builds the envelope → calls the SAME internal query entry point →
 returns the SAME response. An adapter that computes an answer itself is a bug (REMOTE-014 catches it).
 
