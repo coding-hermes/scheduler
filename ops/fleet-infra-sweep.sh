@@ -15,13 +15,14 @@
 # fault must never fail the tick that produced the findings — the rows on disk
 # are still readable, and the next sweep retries.
 #
-#   ops/fleet-infra-sweep.sh            # collapse (apply)
-#   ops/fleet-infra-sweep.sh --dry-run  # report only
+#   ops/fleet-infra-sweep.sh                         # report only (default)
+#   ops/fleet-infra-sweep.sh --apply --cross-project # explicitly mutate boards
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="${FLEET_INFRA_PYTHON:-python3}"
-MODE="--apply"
-[ "${1:-}" = "--dry-run" ] && MODE=""
 
-"$PY" "$HERE/collapse-fleet-infra-findings.py" $MODE --sweep 2>&1 | tail -1
+# Keep the tick-caller contract: the Python command gets a final --sweep and
+# this wrapper always emits one line and exits zero.  In particular, do not
+# manufacture --apply here; mutations need an explicit operator argument.
+"$PY" "$HERE/collapse-fleet-infra-findings.py" "$@" --sweep 2>&1 | tail -1
 exit 0

@@ -24,9 +24,10 @@ WHAT IT DOES, per run:
      mistyped run.
 
 MODES. ``--dry-run`` is the DEFAULT and writes nothing. ``--apply`` performs
-the mutation. ``--include-closed`` also collapses closed copies (the default
-leaves closed history alone: it is history, not queued noise — the AC's grep
-does not care, an operator's audit trail does).
+ the mutation only with the explicit ``--cross-project`` acknowledgement.
+ ``--include-closed`` also collapses closed copies (the default leaves closed
+ history alone: it is history, not queued noise — the AC's grep does not care,
+ an operator's audit trail does).
 
 IDEMPOTENT. A second ``--apply`` over an already-collapsed fleet finds no
 fleet-infra rows on project boards and mints nothing: the run reports
@@ -282,7 +283,7 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
         apply: bool = False, include_closed: bool = False,
         archive: str | None = None, home: str | None = None,
         include_worktrees: bool = False, now: float | None = None,
-        backup_dir: str | None = None) -> dict:
+        backup_dir: str | None = None, cross_project: bool = False) -> dict:
     """Collapse the fleet. Returns the report dict (also printed by the CLI).
 
     ``backup_dir`` overrides where the pre-rewrite board copies land (default
@@ -305,16 +306,36 @@ def run(boards: list[str] | None = None, infra_board: str | None = None,
         "collapsed_rows": 0,
         "patterns": [],
         "changed_boards": [],
+        "writes": [],
         "archive": "",
+        "cross_project": False,
         "skipped": {"local_rows": 0, "closed_rows": 0},
         "errors": [],
     }
+
     if not infra_board:
         report["errors"].append("no shared-infra board resolvable — nothing touched")
         return report
 
     by_pattern = collect_candidates(boards, include_closed=include_closed)
     if not by_pattern:
+        return report
+
+    # Applying a collapse rewrites project boards as well as the shared board.
+    # Require an explicit acknowledgement before even constructing a mutating
+    # consolidation plan; this keeps a refused run byte- and mtime-stable.
+    candidate_boards = {
+        cand["board"]
+        for candidates in by_pattern.values()
+        for cand in candidates
+        if os.path.realpath(cand["board"]) != os.path.realpath(infra_board)
+    }
+    cross_project_write = bool(candidate_boards)
+    report["cross_project"] = cross_project_write
+    if apply and cross_project_write and not cross_project:
+        report["errors"].append(
+            "REFUSED: cross-project board writes require explicit --cross-project acknowledgement"
+        )
         return report
 
     archive_path = _archive_path(archive, now)
@@ -388,15 +409,38 @@ def main(argv: list[str] | None = None) -> int:
     report = run(boards=boards, infra_board=opts.get("--infra-board"), apply=apply,
                  include_closed="--include-closed" in argv,
                  archive=opts.get("--archive"), home=opts.get("--home"),
-                 include_worktrees="--include-worktrees" in argv)
+                 include_worktrees="--include-worktrees" in argv,
+                 cross_project="--cross-project" in argv)
     if not report["infra_board"]:
         print(json.dumps(report, indent=1))
         return 2
     if sweep:
         # Tick-safe shape: one line, never an error exit for a no-op run.
-        print("FLEET-INFRA-COLLAPSE %s collapsed=%d patterns=%d boards=%d"
+        if report["changed_boards"]:
+            written_items = [
+                "%s[%s]" % (
+                    report["infra_board"],
+                    ",".join(record["row_id"] for record in report["patterns"]),
+                )
+            ]
+            written_items.extend(
+                "%s[%s]" % (
+                    item["board"],
+                    ",".join(
+                        record["row_id"] for record in report["patterns"]
+                        if any(obs["board"] == item["board"]
+                               for obs in record["observations"])
+                    ) or "none",
+                ) for item in report["changed_boards"]
+            )
+            detail = " wrote=%s" % ",".join(written_items)
+        else:
+            detail = " wrote nothing"
+        if report["errors"]:
+            detail += " error=%s" % "; ".join(report["errors"])
+        print("FLEET-INFRA-COLLAPSE %s collapsed=%d patterns=%d boards=%d%s"
               % (report["mode"], report["collapsed_rows"],
-                 len(report["patterns"]), len(report["changed_boards"])))
+                 len(report["patterns"]), len(report["changed_boards"]), detail))
         return 0
     print(json.dumps(report, indent=1))
     return 1 if report["errors"] and not report["changed_boards"] else 0

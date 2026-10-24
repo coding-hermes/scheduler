@@ -176,8 +176,8 @@ Two scripts and one gate class own the whole story:
 |---|---|
 | `ops/fleet-infra-patterns.json` | the classification table: name, `pattern` (must match the row TITLE), optional `requires` substrate co-signal (may come from the detail), and an `exclude` list for the tracking row that NAMES the class to fix it |
 | `ops/fleet-infra-findings.py` | `classify` (label a finding), `file` (route it: fleet-infra → ONE `FLEET-INFRA-N` row on the shared board with a `cross_ref`, project-local → passthrough), `stats` (fleet census), `throttle` (inspect/clear the filing ledger) |
-| `ops/collapse-fleet-infra-findings.py` | the migration + the per-tick convergence sweep: collapse existing copies into ONE row per pattern, archive every removed row, back up every rewritten board |
-| `ops/fleet-infra-sweep.sh` | tick-safe wrapper: `--sweep` mode, one output line, ALWAYS exit 0 |
+| `ops/collapse-fleet-infra-findings.py` | the migration + the per-tick convergence sweep: default is read-only; `--apply --cross-project` explicitly authorizes collapse, archive, and board rewrites |
+| `ops/fleet-infra-sweep.sh` | tick-safe wrapper: no flags is read-only; `--apply --cross-project` is required to write, output names written boards/row IDs (or says `wrote nothing`), and it ALWAYS exits 0 |
 | check 13 `fleet-infra-dup` | the regression gate: an OPEN project-board copy of a pattern the shared board already carries fires |
 
 ### The discriminator that matters
