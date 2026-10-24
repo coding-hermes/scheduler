@@ -19,12 +19,22 @@ lies — the exact failure this fleet keeps re-learning.
 bash scripts/check-invariants.sh          # the whole battery, one command
 ```
 
-The battery runs (1) the checker in `--board-only` mode against this
-checkout's board (the CI shape) and (2) the full pytest fixture battery,
-exiting non-zero if either fails. Run it after every scheduler deploy and
-from the daily report. CI runs the same script in the build job — it is
-environment-independent by construction (temp DBs/TOMLs/boards; a GitHub
-runner has no `~/.hermes/coding-hermes/scheduler.db`).
+The battery always runs three stages: the invariant checker, the lint-guard
+regression battery, and the full pytest fixture battery. After a scheduler
+deploy, the first stage resolves `~/.hermes/coding-hermes/scheduler.db` and
+`~/.hermes/fleet.toml`; when both are readable it runs the checker in live-fleet
+mode and the summary reports the live violation count. This is the operator
+verdict — a live violation makes the battery exit 1. A failing live run is
+summarized as `BATTERY: FAIL (live fleet checked; live violations=791; ...)`
+(the number is measured at run time).
+
+When the DB/TOML pair is absent (the normal CI shape), stage 1 explicitly runs
+`--board-only` against this checkout's board. A clean result is intentionally
+reported as `BATTERY: PASS (board-only; live fleet NOT checked; fleet checks not
+run: no local DB/TOML; ...)`, not as fleet conformance. This keeps CI usable
+without `~/.hermes` state while making the skipped live checks visible in the
+summary. The command exits non-zero if any of the three executed stages fails.
+Run it after every scheduler deploy and from the daily report.
 
 Operator variants of the checker itself:
 
