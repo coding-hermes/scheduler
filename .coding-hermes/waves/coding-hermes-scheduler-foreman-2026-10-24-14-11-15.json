@@ -1,0 +1,12 @@
+{
+  "tick": "coding-hermes-scheduler-foreman-2026-10-24-14-11-15",
+  "block": "SCHED-GAP-16927",
+  "path": "WAVE",
+  "wave_budget": 12,
+  "base": "origin/main@2a02cbf9",
+  "workers": [
+    {"row":"SCHED-GAP-16924","branch":"wt/SCHED-GAP-16924","worktree":"/home/kara/worktrees/coding-hermes-scheduler-SCHED-GAP-16924","brief":"/home/kara/.hermes/cache/brief-SCHED-GAP-16924.txt","seam":"ops/collapse-fleet-infra-findings.py + rollback tests/docs"},
+    {"row":"SCHED-GAP-1740","branch":"wt/SCHED-GAP-1740-R2","worktree":"/home/kara/worktrees/coding-hermes-scheduler-SCHED-GAP-1740-R2","brief":"/home/kara/.hermes/cache/brief-SCHED-GAP-1740-R2.txt","seam":"README.md + docs/api.md federation caller identity documentation"}
+  ],
+  "reason": "two pending ready rows in the resumed SCHED-GAP-16927 block; no depends_on edges and disjoint ops-versus-federation-doc seams; SCHED-GAP-16925 held for a later tick because it overlaps the ops seam"
+}
