@@ -5505,3 +5505,20 @@ tasks:
   status: complete
   created_at: '2026-10-23T08:31:00.717721+00:00'
   completed_at: '2026-10-23T08:31:05.383367+00:00'
+- id: PERF-001-R3-R2
+  title: 'Dashboard root lock-starvation: cold GET / blocks 79.7s, no request record'
+  criteria:
+  - 1. Reproduce cold shape + name the holder via goroutine dump  2. Make the wait
+    bounded (snapshot/cached read for headers, or bound the wait + degrade)  3. Prove
+    cold+warm p50/p99 with commands  4. Slow-request log line for observability  5.
+    Steady-state /queue /ticks /lanes/tree etc preserved
+  status: in_progress
+  created_at: '2026-10-23T17:33:10.952744+00:00'
+- id: DOC-24
+  title: Reconcile cap policy documentation
+  criteria:
+  - Docs state one authoritative R3.2/R3.3 cap policy, superseded values are marked,
+    and parity test enforces docs against checker constants
+  status: complete
+  created_at: '2026-10-24T07:20:06.170845+00:00'
+  completed_at: '2026-10-24T07:28:01.341211+00:00'
