@@ -1,0 +1,38 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-10-24-07-52-28",
+  "project": "coding-hermes-scheduler",
+  "wave_budget": 12,
+  "base": "origin/main",
+  "base_sha": "0bb3e89e",
+  "started_at": "2026-10-24T07:52:28-05:00",
+  "finished_at": null,
+  "workers": [
+    {
+      "row_id": "QA-CHS-178-R2",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-QA-CHS-178-R2",
+      "branch": "wt/QA-CHS-178-R2",
+      "brief_file": "/tmp/brief-QA-CHS-178-R2-coding-hermes-scheduler-foreman-2026-10-24-07-52-28.txt",
+      "model": "gpt-6-luna",
+      "provider": "openai-codex",
+      "seam": ".github/workflows/ci.yaml + race CI tests"
+    },
+    {
+      "row_id": "QA-CHS-184",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-QA-CHS-184",
+      "branch": "wt/QA-CHS-184",
+      "brief_file": "/tmp/brief-QA-CHS-184-coding-hermes-scheduler-foreman-2026-10-24-07-52-28.txt",
+      "model": "gpt-6-luna",
+      "provider": "openai-codex",
+      "seam": "internal/version + build identity tests + AGENTS.md/Makefile docs"
+    },
+    {
+      "row_id": "QA-CHS-185",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-QA-CHS-185",
+      "branch": "wt/QA-CHS-185",
+      "brief_file": "/tmp/brief-QA-CHS-185-coding-hermes-scheduler-foreman-2026-10-24-07-52-28.txt",
+      "model": "gpt-6-luna",
+      "provider": "openai-codex",
+      "seam": "README.md + package-count parity test"
+    }
+  ]
+}
