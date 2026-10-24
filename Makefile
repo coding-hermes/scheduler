@@ -3,8 +3,12 @@
 # Build identity: use `make build` as the canonical daemon build path. Bare
 # `go build` may stamp an enclosing repository's VCS metadata in a linked
 # worktree. The target injects identity resolved from this product checkout.
-VERSION    := $(shell git -C "$(CURDIR)" describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT     := $(shell git -C "$(CURDIR)" rev-parse --short=8 HEAD 2>/dev/null)
+# A tagless checkout must still expose a parseable version; an archive has no
+# git directory, so COMMIT also accepts the export-subst marker in
+# internal/version/archive_commit.txt.
+DESCRIBE   := $(shell git -C "$(CURDIR)" describe --tags --always --dirty 2>/dev/null || true)
+COMMIT     := $(shell git -C "$(CURDIR)" rev-parse --short=8 HEAD 2>/dev/null || grep -oE '[0-9a-fA-F]{8,40}' "$(CURDIR)/internal/version/archive_commit.txt" 2>/dev/null | head -1 | cut -c1-8)
+VERSION    := $(shell if git -C "$(CURDIR)" tag --merged HEAD --list 2>/dev/null | grep -q .; then printf '%s' "$(DESCRIBE)"; else printf 'dev-%s' "$(COMMIT)"; fi)
 BINDIR     ?= bin
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS    := -s -w \
@@ -38,7 +42,7 @@ tag:
 
 build:
 	@test -n "$(COMMIT)" || { echo "cannot determine product checkout commit for build identity" >&2; exit 2; }
-	git -C "$(CURDIR)" cat-file -e "$(COMMIT)^{commit}" || { echo "product build identity does not resolve to a commit" >&2; exit 2; }
+	@if git -C "$(CURDIR)" rev-parse --git-dir >/dev/null 2>&1; then git -C "$(CURDIR)" cat-file -e "$(COMMIT)^{commit}" || { echo "product build identity does not resolve to a commit" >&2; exit 2; }; fi
 	mkdir -p "$(BINDIR)"
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/schedulerd" ./cmd/schedulerd/
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/migrate" ./cmd/migrate/

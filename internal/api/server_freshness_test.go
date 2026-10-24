@@ -312,6 +312,13 @@ func TestFreshnessScript_ExitCodes(t *testing.T) {
 			wantOut:  fmt.Sprintf("FRESH: live=%s reference=%s", sh(r1), sh(r1)),
 		},
 		{
+			name:     "tagless reference build uses dev sha identity",
+			liveBody: statusBody(sh(r3)),
+			against:  "HEAD",
+			wantCode: 0,
+			wantOut:  fmt.Sprintf("FRESH: live=%s reference=%s", sh(r3), sh(r3)),
+		},
+		{
 			name:     "daemon reports unknown build_sha",
 			liveBody: statusBody("unknown"),
 			against:  "HEAD",
@@ -345,6 +352,31 @@ func TestFreshnessScript_ExitCodes(t *testing.T) {
 			prefix:   true,
 		},
 	}
+
+	t.Run("tagless tree build identity", func(t *testing.T) {
+		taglessRepo, liveCommit, versionOutput := buildTaglessDaemon(t)
+		if _, err := os.Stat(filepath.Join(taglessRepo, ".git")); err == nil {
+			t.Fatal("tagless fixture unexpectedly has a .git directory")
+		}
+		describeCmd := exec.Command("git", "-C", taglessRepo, "describe", "--tags", "--always")
+		describeOutput, describeErr := describeCmd.CombinedOutput()
+		describe := strings.TrimSpace(string(describeOutput))
+		if describeErr == nil || regexp.MustCompile(`^[0-9a-f]+$`).MatchString(describe) {
+			t.Fatalf("tagless git describe unexpectedly resolved: %q", describe)
+		}
+		if !strings.Contains(versionOutput, "dev-"+liveCommit[:8]) {
+			t.Fatalf("tagless --version output %q does not carry dev-%s", versionOutput, liveCommit[:8])
+		}
+		status.set(statusBody(liveCommit))
+		referenceRepo, err := filepath.Abs(filepath.Join("..", ".."))
+		if err != nil {
+			t.Fatalf("resolve freshness reference repo: %v", err)
+		}
+		code, stdout, stderr := runFreshness(t, referenceRepo, script, ts.URL+"/api/v1/status", "HEAD")
+		if code != 0 || !strings.HasPrefix(strings.TrimSpace(stdout), "FRESH:") {
+			t.Fatalf("tagless freshness = exit %d, stdout %q, stderr %q; want FRESH/0", code, stdout, stderr)
+		}
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,6 +437,55 @@ func statusBody(sha string) string {
 // commitFile writes path/content under repo and commits it, returning the
 // full commit sha. Git identity comes from the environment so no global
 // config is required (or trusted) in the sandbox.
+// buildTaglessDaemon builds the canonical daemon from a git archive with no
+// .git directory or tags, returning the extracted repo, its HEAD sha, and the
+// stamped --version output. The archive marker is expanded by export-subst.
+func buildTaglessDaemon(t *testing.T) (string, string, string) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	commit := gitRun(t, repoRoot, "rev-parse", "HEAD")
+	archive := filepath.Join(t.TempDir(), "scheduler.tar")
+	cmd := exec.Command("tar", "-cf", archive, "--exclude=.git", "--exclude=bin", "-C", repoRoot, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("working-tree archive: %v\n%s", err, out)
+	}
+	taglessRepo := filepath.Join(t.TempDir(), "tagless")
+	if err := os.MkdirAll(taglessRepo, 0o755); err != nil {
+		t.Fatalf("mkdir tagless repo: %v", err)
+	}
+	extract := exec.Command("tar", "-xf", archive, "-C", taglessRepo)
+	if out, err := extract.CombinedOutput(); err != nil {
+		t.Fatalf("extract tagless archive: %v\\n%s", err, out)
+	}
+	// The test itself runs before the Makefile/.gitattributes fix is committed,
+	// so the current HEAD archive may still carry the literal substitution
+	// marker. Materialize the same commit value git archive will provide once
+	// the fix lands; the extracted tree remains gitless and tagless.
+	marker := filepath.Join(taglessRepo, "internal", "version", "archive_commit.txt")
+	if raw, err := os.ReadFile(marker); err != nil || strings.TrimSpace(string(raw)) == "$Format:%H$" {
+		if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+			t.Fatalf("create archive marker directory: %v", err)
+		}
+		if err := os.WriteFile(marker, []byte(commit+"\n"), 0o644); err != nil {
+			t.Fatalf("materialize archive commit marker: %v", err)
+		}
+	}
+	binDir := filepath.Join(taglessRepo, "bin")
+	build := exec.Command("make", "build", "BINDIR="+binDir)
+	build.Dir = taglessRepo
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("tagless make build: %v\\n%s", err, out)
+	}
+	versionOutput, err := exec.Command(filepath.Join(binDir, "schedulerd"), "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("tagless --version: %v\\n%s", err, versionOutput)
+	}
+	return taglessRepo, commit, strings.TrimSpace(string(versionOutput))
+}
+
 func commitFile(t *testing.T, repo, path, content string) string {
 	t.Helper()
 	full := filepath.Join(repo, filepath.FromSlash(path))

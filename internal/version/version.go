@@ -7,7 +7,9 @@
 //  2. Go's native vcs buildinfo — every `go build` from a git checkout embeds
 //     vcs.revision / vcs.time regardless of ldflags, so bare builds report at
 //     least dev-<shorthash> instead of a silent stale string
-//  3. "dev" / "unknown" fallbacks
+//  3. The Makefile supplies dev-<shortsha> for tagless/archive builds, keeping
+//     the version parseable by the daemon-freshness guard.
+//  4. "dev" / "unknown" fallbacks
 //
 // The fatal bug this replaces: release workflows injected -X main.Version
 // while main declared no such variable — a silent no-op, so every released
