@@ -1,0 +1,31 @@
+{
+  "tick": "coding-hermes-scheduler-foreman-2026-10-24-15-04-42",
+  "block": "SCHED-GAP-16927",
+  "wave_size": 1,
+  "wave_budget": 12,
+  "path": "SERIAL FALLBACK",
+  "host": {
+    "nproc": 16,
+    "loadavg1": 4.14,
+    "slots": 12
+  },
+  "selected": "SCHED-GAP-16925",
+  "worktree": "/home/kara/worktrees/coding-hermes-scheduler-SCHED-GAP-16925-r2",
+  "branch": "wt/SCHED-GAP-16925-r2",
+  "worker_model": "gpt-6-luna",
+  "worker_provider": "openai-codex",
+  "reason": "Only one truly dispatchable implementation row in the resumed DRIVE block; other pending rows are stale/reopened, owner-decision, live-state, or blocked. First worktree was inherited stale and the worker launch could not reach it; retry worktree was also zero-write and killed after bounded liveness. No code landed.",
+  "gitreins": {
+    "task": "SCHED-GAP-16925",
+    "verdict": "bd2c8b4b",
+    "status": "PASS_DEGRADED_TIER1_ONLY",
+    "note": "completion was run before closeout as required; no implementation commit existed"
+  },
+  "landed": [],
+  "open": [
+    "SCHED-GAP-16925: no worker diff/commit; row remains pending"
+  ],
+  "local_gate": "NOT_RUN: no implementation landed; main is clean at 97b2a13c",
+  "remote_ci": "success on current main 97b2a13c; no new commit created",
+  "off_by_one": "discover negative for gitreins-tier1-phantom-pass-empty-index; corpus answers 1753/1881/1948 consulted; no novel fix designed"
+}
