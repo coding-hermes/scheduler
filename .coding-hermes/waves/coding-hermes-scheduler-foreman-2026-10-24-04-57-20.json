@@ -1,0 +1,48 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-10-24-04-57-20",
+  "block": "DOC-25",
+  "wave_budget": 12,
+  "wave_size": 2,
+  "host": {
+    "nproc": 16,
+    "loadavg1": 6.12,
+    "slots": 6
+  },
+  "rows": [
+    {
+      "id": "DOC-24",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-DOC-24",
+      "branch": "wt/DOC-24",
+      "base": "origin/main",
+      "base_sha": "9e9d6b42",
+      "title": "Cap policy is documented three contradictory ways (8/1 in api.md, 16/1 in fleet-config-model.md, 9/12 in design-decisions.md) while the gate enforces 16/1 and the live DB runs 8/9/12",
+      "priority": "P3",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek-foreman"
+    },
+    {
+      "id": "DOC-25",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-DOC-25",
+      "branch": "wt/DOC-25",
+      "base": "origin/main",
+      "base_sha": "9e9d6b42",
+      "title": "ops/README's checker class table is three live classes short (namespace-membership, board-id-slot, cooldown-pin-pacing) and its own rule calls that 'a gap in the gate'",
+      "priority": "P3",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek-foreman"
+    }
+  ],
+  "dispatched_at": "2026-10-24T04:57:20Z",
+  "finished_at": "2026-10-24T07:34:00Z",
+  "recovery": {
+    "status": "complete",
+    "merged": [
+      "DOC-24:4ce26c12",
+      "DOC-25:d33393c6"
+    ],
+    "final_main": "77974d4b",
+    "gates": "DOC-24 local Go build/vet/full short suite green; DOC-25 pytest 208 passed/2 skipped and board-only checker PASS; merged-tree closeout pending external CI completion",
+    "remote_ci": "DOC-24 success; DOC-25 in_progress at close",
+    "unmerged": []
+  }
+}
