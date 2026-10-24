@@ -1,10 +1,11 @@
 .PHONY: build test test-full run install clean lint fmt migrate deploy deploy-install release-prep tag
 
-# Build identity (KB-GAP-040 class fix): every build target must pass
-# $(LDFLAGS) — bare `go build` falls back to the vcs buildinfo resolver in
-# internal/version, so even ldflags-less builds never report a stale version.
-VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# Build identity: use `make build` as the canonical daemon build path. Bare
+# `go build` may stamp an enclosing repository's VCS metadata in a linked
+# worktree. The target injects identity resolved from this product checkout.
+VERSION    := $(shell git -C "$(CURDIR)" describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     := $(shell git -C "$(CURDIR)" rev-parse --short=8 HEAD 2>/dev/null)
+BINDIR     ?= bin
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS    := -s -w \
   -X github.com/coding-hermes/scheduler/internal/version.Version=$(VERSION) \
@@ -36,8 +37,11 @@ tag:
 	git push origin $(VERSION)
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o bin/schedulerd ./cmd/schedulerd/
-	go build -ldflags "$(LDFLAGS)" -o bin/migrate ./cmd/migrate/
+	@test -n "$(COMMIT)" || { echo "cannot determine product checkout commit for build identity" >&2; exit 2; }
+	git -C "$(CURDIR)" cat-file -e "$(COMMIT)^{commit}" || { echo "product build identity does not resolve to a commit" >&2; exit 2; }
+	mkdir -p "$(BINDIR)"
+	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/schedulerd" ./cmd/schedulerd/
+	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/migrate" ./cmd/migrate/
 
 test:
 	go test -short -count=1 ./...
