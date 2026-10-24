@@ -5,7 +5,7 @@
   "base": "origin/main",
   "base_sha": "0bb3e89e",
   "started_at": "2026-10-24T07:52:28-05:00",
-  "finished_at": null,
+  "finished_at": "2026-10-24T09:04:14Z",
   "workers": [
     {
       "row_id": "QA-CHS-178-R2",
@@ -34,5 +34,16 @@
       "provider": "openai-codex",
       "seam": "README.md + package-count parity test"
     }
-  ]
+  ],
+  "result": {
+    "status": "merged",
+    "merge_commits": {
+      "QA-CHS-178-R2": "9e0566a5",
+      "QA-CHS-184": "5676ab3d",
+      "QA-CHS-185": "ecd5b05a"
+    },
+    "closeout_commit": "c86517dd",
+    "remote_parity": 0,
+    "remote_ci": "in_progress"
+  }
 }
