@@ -1,0 +1,12 @@
+{
+  "tick": "coding-hermes-scheduler-foreman-2026-10-24-12-23-22",
+  "block": "SCHED-GAP-16927",
+  "path": "WAVE",
+  "wave_budget": 10,
+  "base": "origin/main@d3b3b33e",
+  "workers": [
+    {"row":"INT-CI-189-R2","branch":"wt/INT-CI-189-R2","worktree":"/home/kara/worktrees/coding-herms-scheduler-INT-CI-189-R2","brief":"/home/kara/.hermes/cache/brief-INT-CI-189-R2.txt","seam":"ops/check-daemon-freshness.sh + internal/api freshness/build identity tests + docs"},
+    {"row":"SCHED-GAP-16923","branch":"wt/SCHED-GAP-16923","worktree":"/home/kara/worktrees/coding-herms-scheduler-SCHED-GAP-16923","brief":"/home/kara/.hermes/cache/brief-SCHED-GAP-16923.txt","seam":"ops/fleet-infra-sweep.sh + ops tests + ops/README.md"}
+  ],
+  "reason": "two pending ready rows in the resumed SCHED-GAP-16927 block; no depends_on edges and disjoint file seams"
+}
