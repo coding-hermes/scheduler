@@ -1409,3 +1409,4 @@
 {"id": 1792786278246001956, "timestamp": "2026-10-24T23:27:18Z", "event_type": "task_updated", "task_id": "DOC-28", "actor": "foreman", "detail": "{\"status\":\"pending\"}", "tick_number": null}
 {"id": 1792786278246001957, "timestamp": "2026-10-24T23:27:18Z", "event_type": "task_updated", "task_id": "DOC-29", "actor": "foreman", "detail": "{\"status\":\"pending\"}", "tick_number": null}
 {"id": 1792786278246001958, "timestamp": "2026-10-25T02:09:17Z", "event_type": "task_created", "task_id": "INT-PATH-001", "actor": "foreman", "detail": "{\"id\":\"INT-PATH-001\",\"status\":\"pending\"}", "tick_number": null}
+{"id": 1792786278246001959, "timestamp": "2026-10-25T05:05:59Z", "event_type": "task_created", "task_id": "INT-CI-190", "actor": "foreman", "detail": "{\"id\":\"INT-CI-190\",\"status\":\"pending\"}", "tick_number": null}
