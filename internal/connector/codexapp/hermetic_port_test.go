@@ -126,9 +126,16 @@ type sidecar struct {
 
 func startSidecar(t *testing.T) *sidecar {
 	t.Helper()
+	return startSidecarWith(t, "^TestCodexAppServerChildHelper$", nil)
+}
+
+// startSidecarWith launches the re-executed child with an explicit test filter
+// and extra environment, so adversarial children can share the same wiring.
+func startSidecarWith(t *testing.T, runFilter string, extraEnv []string) *sidecar {
+	t.Helper()
 	logPath := t.TempDir() + "/child-requests.jsonl"
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCodexAppServerChildHelper$", "-test.timeout=60s")
-	cmd.Env = append(os.Environ(), "CODEXAPP_CHILD=1", "CODEXAPP_CHILD_LOG="+logPath)
+	cmd := exec.Command(os.Args[0], "-test.run="+runFilter, "-test.timeout=60s")
+	cmd.Env = append(append(os.Environ(), "CODEXAPP_CHILD=1", "CODEXAPP_CHILD_LOG="+logPath), extraEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
