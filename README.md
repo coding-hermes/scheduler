@@ -97,6 +97,12 @@ make migrate-dry
 make migrate
 ```
 
+Every flag, default, eligibility rule, SKIP reason and exit code of the
+migration tool is documented in
+[docs/reference/cli-tools.md](docs/reference/cli-tools.md#cmdmigrate) — the
+source-derived reference, which also records that the workdir rule needs the
+colon (`Workdir: /path`).
+
 ### 5. Run the Scheduler
 
 Every environment variable the daemon reads (precedence chain, env-only credentials, knobs with no flag) is tabulated in [docs/reference/env-vars.md](docs/reference/env-vars.md).
