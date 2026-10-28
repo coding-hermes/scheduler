@@ -265,3 +265,23 @@ runs, resolved from `$FLEET_INFRA_SWEEP` or this checkout's
 ```bash
 /path/to/coding-hermes-scheduler/ops/fleet-infra-sweep.sh || true
 ```
+
+## Cluster chain probe — the factory's hops, measured
+
+`cluster-chain-probe.sh` is the executable measurement for the
+distributed-code-factory goal: one arm per hop (router, crier, scheduler,
+bunker, connector), one JSON object per arm, and an exit code that can say no.
+A PASS carries the value it measured (model+provider, crier version, scheduler
+`build_sha` and its drift, bunker server and agent count); a FAIL carries a
+stable reason prefix naming the hop. It is read-only — GETs and `bunker list`
+only, no credential ever sent — so it is safe against the live fleet.
+
+```bash
+ops/cluster-chain-probe.sh all           # whole chain
+ops/cluster-chain-probe.sh scheduler     # one hop
+ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (60 checks)
+```
+
+What each arm measures, every reason code, and the list of things the probe
+does **not** cover (end-to-end travel, authenticated state, connector runtime)
+live in [../docs/cluster-chain-probe.md](../docs/cluster-chain-probe.md).
