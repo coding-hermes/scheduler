@@ -2700,7 +2700,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// unnoticed. Auth rejections never reach this block — they
 				// stay terminal on GAP-035 above and never touch the counter.
 				s.recordGatewayDrop(project.Name, tickID, gwErr)
-				return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
+				return nil, fmt.Errorf("%s and exec fallback disabled: %w", gatewayDropLabel(gwErr), gwErr)
 			}
 			if s.events != nil && (strings.Contains(gwErr.Error(), "database disk image is malformed") || strings.Contains(gwErr.Error(), "session_persistence_failed")) {
 				s.events.Emit(context.Background(), SeverityHigh, "spawn",

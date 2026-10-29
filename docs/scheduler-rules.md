@@ -168,6 +168,51 @@ green run, so a guard PASS can mean "the suite was never executed". Measured 202
 both `internal/scheduler` and `internal/api` time out under `-count=1` while the guard
 reported PASS from cache. **Filed: SCHED-GAP-1700.**
 
+**R5.7 — Gateway refusals fail FAST with a named error; there is no exec fallback, and
+"next hop" does not apply to the gateway hop.** *Ruled 2026-10-29* (Decision ordered by
+SCHED-GAP-16940, criterion 2.) The fleet runs `--no-exec-fallback`. When the gateway
+refuses a spawn the tick is DROPPED with one message that names the observed failure
+(`<label> and exec fallback disabled: <cause verbatim>`), one HIGH `spawn` event, and a
+per-project consecutive-drop counter that alerts at ≥2. Alternatives rejected, with
+reasons:
+
+- *Enable exec fallback (spawn `hermes` locally instead).* Rejected: it silently changes
+  the executor under load — the same tick would run with a different tool surface,
+  credential path and accounting, and the fleet would keep producing work while the
+  gateway is broken, which is how a 15h drain outage goes unnoticed (SCHED-GAP-134/143).
+  A drop is visible; a silent executor swap is not.
+- *Advance to the next chain hop.* Rejected HERE, correct for the MODEL hop: every hop of
+  a chain is reached THROUGH the same gateway, so advancing after a transport refusal
+  re-sends the same request through the same broken hop. Next-hop advance belongs to
+  in-gateway model failures, where it landed for stalls (SCHED-GAP-16939).
+- *Retry in place until the wall expires.* Rejected: it converts a gateway outage into
+  invisible slot-hours and defeats the consecutive-drop alert, which is the only signal
+  that the harness (not the lane) is broken.
+
+Enforced: `internal/scheduler/spawn.go` (drop path), `gateway_client.go`
+(`gatewayDropLabel`), regression `schedgap16940_drop_label_test.go`.
+
+**R5.8 — `ticks.failure_reason` names the HOP that failed, never a guessed cause.**
+*Ruled 2026-10-29* (SCHED-GAP-16940.) Closed vocabulary, one entry per observed hop:
+`gateway_drain` (the 503 drain refusal), `gateway_5xx` (the gateway ANSWERED 5xx and it
+is not the drain), `gateway_transport` (no HTTP answer at all — refused dial, teardown,
+unreadable body), `operator_restart` (the scheduler's own drain reap), `session_silent` /
+`sleep_poll` (scheduler-side kills), `instant_turn` (a one-shot gateway turn), `""`
+(project-side). Measured before the rule: 17 of 44 failed rows in 24h were the
+scheduler's own restart classed `gateway_transport`, and 13 of 24 in 3h were 502/500 the
+gateway ANSWERED while the message said "gateway unreachable" — so "how many ticks are in
+the gateway class" was unanswerable from SQL, and the P0 row's "zero in this class"
+window was unreachable by construction. Re-classing changes no lane charge for the drain
+reap: the accounting carve-outs still read `orphan_reason`/the abort text. It DOES change
+one charge deliberately — an answered 5xx no longer moves `consecutive_failures`, because
+the classifier now calls it harness-side and the codebase forbids two surfaces judging one
+class differently (the raw `gateway POST: HTTP 5xx: …` text used to charge the lane at
+spawn time while the same row, read from the DB, was excluded). The drop keeps its
+visibility on the independent GAP-050 channel: one HIGH `spawn` event per drop and the
+≥2-consecutive-drop alert. Enforced by `failureReasonClass` (`alert_escalation.go`, the
+single classifier), `HarnessFailure` (`failureclass.go`, the shared marker authority), and
+pinned by `schedgap16940_class_vocab_test.go` / `schedgap16940_drop_label_test.go`.
+
 ---
 
 ## 6. Paths and layout

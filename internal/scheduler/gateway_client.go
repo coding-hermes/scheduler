@@ -213,6 +213,30 @@ func ClassifyGatewayError(err error) string {
 	return ""
 }
 
+// gatewayDropLabel names the gateway failure about to cost a tick its run, for
+// the drop wrapper's message (SCHED-GAP-16940). Before this helper the wrapper
+// said "gateway unreachable" for EVERY drop, including the 502/500 the gateway
+// itself answered — the operator read "unreachable" about a process that had
+// just replied. The label states only what the evidence shows:
+//
+//   - *GatewayStatusError: the endpoint answered, so the label carries the
+//     status it returned (e.g. "gateway HTTP 502"). The detail body rides the
+//     wrapped error verbatim, which is what the row's criterion 1 asks for.
+//   - anything else: no HTTP answer was obtained (refused dial, teardown,
+//     unreadable body) — "gateway unreachable" is then a measurement, not a
+//     guess.
+//
+// "exec fallback disabled" is appended by the caller and stays in every
+// variant: it is the real OUTCOME (this fleet runs --no-exec-fallback), not a
+// cause, and several runbooks and tests key on it.
+func gatewayDropLabel(err error) string {
+	var gse *GatewayStatusError
+	if errors.As(err, &gse) {
+		return fmt.Sprintf("gateway HTTP %d", gse.StatusCode)
+	}
+	return "gateway unreachable"
+}
+
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
 type GatewayClient struct {
 	// clk is this component's time seam (SCHED-GAP-169). The zero value

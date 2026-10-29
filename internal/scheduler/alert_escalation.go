@@ -608,6 +608,26 @@ const (
 	// burst served 241 such instant ticks fleet-wide in one hour with no
 	// state.db sessions to contradict the healthy accounting.
 	FailureReasonInstantTurn = "instant_turn"
+	// SCHED-GAP-16940: the gateway ANSWERED with a 5xx that is not the drain
+	// refusal, so the request reached it and its own upstream/handler failed.
+	// The drop wrapper used to call this "gateway unreachable" and the class
+	// column said gateway_transport — measured 2026-10-29: 13 of 24 failed
+	// rows in 3h were 502 "timed out" (body carrying the router's own
+	// "_router" envelope) or the gateway's 500, every one booked as a
+	// transport failure. The distinction is a DIFFERENT OWNER (model/provider
+	// hop, not the gateway listener) and a different runbook step, which is
+	// why the code, not a guessed cause, names the class.
+	FailureReasonGateway5xx = "gateway_5xx"
+	// SCHED-GAP-16940: the scheduler's OWN drain reap. abortInFlightTicks
+	// stamps this text when a restart could not drain; the row was classed
+	// gateway_transport, i.e. the operator's restart was charged to the
+	// gateway. Measured 2026-10-29: 17 of 44 failed rows in 24h carried
+	// gateway_transport + orphan_reason=drain_timeout. The accounting carve
+	// outs (SCHED-GAP-1608) already read orphan_reason and the abort text, so
+	// this class changes NO charge — it makes the operator-facing column stop
+	// claiming the gateway was at fault, and makes the P0 row's "zero ticks in
+	// the gateway class" window measurable at all.
+	FailureReasonOperatorRestart = "operator_restart"
 )
 
 // failureReasonClass returns the canonical transport-class marker for a
@@ -615,9 +635,26 @@ const (
 // It is the single classifier behind ticks.failure_reason (lifecycle.Complete)
 // and the consecutive-failures rule in spawn.go, so a drained gateway and a
 // project-side crash can never be classified differently by two code paths.
+//
+// The closed vocabulary names the HOP that failed (SCHED-GAP-16940), never a
+// cause the classifier did not observe: gateway_drain (the 503 refusal),
+// gateway_5xx (the gateway answered 5xx — "not the drain"), gateway_transport
+// (no HTTP answer at all), operator_restart (our own drain reap),
+// session_silent / sleep_poll (scheduler-side kills), instant_turn (a one-shot
+// gateway turn).
 func failureReasonClass(errText string) string {
 	if !harnessFailure(errText) {
 		return ""
+	}
+	// SCHED-GAP-16940: OUR OWN drain reap comes first. The abort wording is
+	// this package's marker for "the scheduler killed this tick on restart"
+	// (OrphanAbortMarker), and before this branch it fell through to
+	// gateway_transport — the operator's restart booked as a gateway fault.
+	// Checked before every other branch: no gateway-side text can be present
+	// in a drain reap, and the instant-turn / silence markers are more
+	// specific than the transport fallback but never co-occur here.
+	if strings.Contains(strings.ToLower(errText), OrphanAbortMarker) {
+		return FailureReasonOperatorRestart
 	}
 	// SCHED-GAP-1641: the instant-turn marker rides the same machine
 	// vocabulary — its sentinel text is in the harness marker list, so a
@@ -648,7 +685,38 @@ func failureReasonClass(errText string) string {
 	if strings.Contains(strings.ToLower(errText), "draining") {
 		return FailureReasonGatewayDrain
 	}
+	// SCHED-GAP-16940: the gateway ANSWERED 5xx. Reached only after the drain
+	// branch (a drain 503 keeps its own class) and only for the status form
+	// this package produces ("gateway POST: HTTP <code>: <detail>"). A 5xx is
+	// the gateway telling us its upstream or its handler failed — the listen
+	// socket was up, so calling it unreachable (the old wrapper wording) and
+	// gateway_transport (the old class) named the wrong hop.
+	if isGatewayHTTP5xx(errText) {
+		return FailureReasonGateway5xx
+	}
 	return FailureReasonGatewayTransport
+}
+
+// isGatewayHTTP5xx reports whether a stored gateway error text carries a 5xx
+// STATUS — i.e. the gateway answered — as opposed to a dial/stream failure
+// where no HTTP status exists. The classifier is text-level by construction
+// (see failureReasonClass): the stored row, not the live error value, is what
+// every surface reads, so the same string must produce the same verdict later.
+// Deliberately narrow: it requires the "http 5xx" token followed by a
+// separator, so a body that merely mentions a number cannot flip the class.
+func isGatewayHTTP5xx(errText string) bool {
+	lower := strings.ToLower(errText)
+	for i := 0; ; {
+		j := strings.Index(lower[i:], "http 5")
+		if j < 0 {
+			return false
+		}
+		at := i + j + len("http 5")
+		if at < len(lower) && lower[at] >= '0' && lower[at] <= '9' {
+			return true
+		}
+		i = at
+	}
 }
 
 // harnessFailure and its marker list live in failureclass.go — the shared

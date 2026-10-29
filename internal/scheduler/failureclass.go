@@ -97,6 +97,19 @@ func HarnessFailure(errText string) bool {
 			return true
 		}
 	}
+	// SCHED-GAP-16940: the gateway ANSWERED a 5xx. The marker list above is
+	// substring-only, and a raw *GatewayStatusError text ("gateway POST: HTTP
+	// 502: …") carries no phrase from it — so a 502/500 refusal that the drop
+	// path handed to noteSpawnFailureClassed as its RAW error text was
+	// counted as the LANE's failure and bumped consecutive_failures, while
+	// the identical row read back from the DB (wrapper text carrying "exec
+	// fallback disabled") was excluded. One class, two verdicts. Tested
+	// through the same helper the class vocabulary uses, so the two can never
+	// drift. Measured 2026-10-29: 13 of 24 failed ticks in 3h were exactly
+	// this shape, dropped by the gateway's own upstream.
+	if isGatewayHTTP5xx(errText) {
+		return true
+	}
 	return false
 }
 

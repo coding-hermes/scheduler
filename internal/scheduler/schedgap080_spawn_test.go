@@ -178,14 +178,23 @@ func TestSCHEDGAP080_Persistent500FailsAfterRetries(t *testing.T) {
 	if got := tickStatusOf(t, db, tickID); got == "completed" {
 		t.Errorf("tick status = %q — a failed 500 tick must never be completed/committed", got)
 	}
-	// noteSpawnFailure fires exactly once (the SKIPPED block), incrementing
-	// consecutive_failures — the error is persisted, not swallowed.
+	// SCHED-GAP-16940: a persistently-5xx gateway is now classified
+	// HARNESS-side by the shared classifier, so noteSpawnFailureClassed
+	// deliberately leaves consecutive_failures untouched — same doctrine as
+	// the drain 503 (SCHED-GAP-143): the harness refused, the lane did
+	// nothing. The drop stays VISIBLE through the two surfaces this test
+	// already asserts: the SKIPPED log line carrying the gateway text and the
+	// per-drop HIGH spawn event / >=2 consecutive-drop alert (GAP-050, whose
+	// counter is independent of consecutive_failures). Before 16940 the raw
+	// "gateway POST: HTTP 500: …" text matched no harness marker while the
+	// SAME row read back from the DB (wrapper text) did, so the lane was
+	// charged at spawn time and excluded at read time.
 	var failures int
 	if err := db.QueryRow(`SELECT consecutive_failures FROM projects WHERE name = ?`, projectName).Scan(&failures); err != nil {
 		t.Fatalf("query consecutive_failures: %v", err)
 	}
-	if failures != 1 {
-		t.Errorf("consecutive_failures = %d, want 1 (noteSpawnFailure fired once on the exhausted-failure path)", failures)
+	if failures != 0 {
+		t.Errorf("consecutive_failures = %d, want 0 (an answered 5xx is harness-side; the lane must not be charged)", failures)
 	}
 	logs := buf.String()
 	// SCHED-GAP-1687: with exec fallback disabled this path NEVER execs, so
