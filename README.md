@@ -32,7 +32,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 > **Note:** releases are published on the
 > [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
-> checkout of `main` passes `make test` (all 23 packages) and `make build`,
+> checkout of `main` passes `make test` (all 25 packages) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
 > run both on a fresh checkout before trusting any step here. Past flaky-CI
 > episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project

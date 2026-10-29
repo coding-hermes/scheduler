@@ -1,0 +1,91 @@
+{
+  "execution_brief": {
+    "schema_version": "1.0",
+    "brief_id": "fixture-brief",
+    "revision_id": "r1",
+    "issued_at": "2026-10-16T00:00:00Z",
+    "issued_by": "fixture-foreman",
+    "project": "scheduler",
+    "lane": "main",
+    "task_id": "SCHED-HARNESS-003-R1",
+    "tick_id": "tick-fixture",
+    "mission": "Correct connector authority fail closed",
+    "rationale_summary": "Independent review found authority gaps",
+    "source": {
+      "repository_uri": "https://example.invalid/scheduler.git",
+      "source_ref": "main",
+      "base_revision": "abc",
+      "diff_base_revision": "abc"
+    },
+    "context_refs": [
+      {
+        "namespace": "board",
+        "key_or_id": "SCHED-HARNESS-003-R1",
+        "revision_or_digest": "board-r1",
+        "retrieved_at": "2026-10-16T00:00:00Z",
+        "authority": "board"
+      }
+    ],
+    "scope": {
+      "allowed_paths": ["internal/connector/"],
+      "forbidden_paths": ["schedulerd.toml"]
+    },
+    "constraints": [
+      {"id": "dark", "level": "must", "statement": "Remain unwired"}
+    ],
+    "non_goals": ["Deploy"],
+    "capability_requirements": {
+      "required": ["events"],
+      "optional": ["steer"]
+    },
+    "workspace_policy": {
+      "kind": "worktree",
+      "isolation": "exclusive",
+      "network": "disabled",
+      "required_tools": ["go"]
+    },
+    "permission_policy": {
+      "profile": "unattended",
+      "unattended": true,
+      "approval_timeout_s": 0
+    },
+    "resource_policy": {
+      "cpu": 1,
+      "memory_mb": 512,
+      "pids": 64,
+      "disk_mb": 1024,
+      "wall_timeout_s": 600,
+      "idle_timeout_s": 60
+    },
+    "acceptance_criteria": [
+      {
+        "id": "tests",
+        "statement": "Tests pass",
+        "required": true,
+        "proof_requirements": [
+          {
+            "id": "go-test",
+            "kind": "command",
+            "argv": ["go", "test", "./..."],
+            "cwd": ".",
+            "timeout_s": 600,
+            "expect_exit": 0,
+            "expected_artifact": null
+          }
+        ]
+      }
+    ],
+    "required_deliverables": ["commit"],
+    "closeout_policy": {
+      "requires_commit": true,
+      "requires_source_or_test_diff": true,
+      "target_remote": "origin",
+      "target_branch": "main"
+    },
+    "provenance": {
+      "foreman_run_id": "foreman-fixture",
+      "board_revision": "board-r1"
+    },
+    "brief_digest": "sha256:266bbcfa37a91ff749b7172d8a9fcc6f4a43836623d4eb3a0d79f295806c4bd9"
+  }
+}
