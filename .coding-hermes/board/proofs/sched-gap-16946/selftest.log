@@ -1,0 +1,45 @@
+
+== 1. silent when clean
+  PASS  four active units exit 0 (rc=0)
+  PASS  no output when every hop is up ()
+  PASS  no alerts file created while every hop was up
+
+== 2. a clean exit is a finding (the crier-fleet 11h outage shape)
+  PASS  a down hop is a finding, not a watcher fault: exit 0 (rc=0)
+  PASS  alert names the hop
+  PASS  alert names the unit
+  PASS  alert names the exit status
+  PASS  alert names how it ended
+  PASS  alert names the down duration
+  PASS  alert names the reason code
+  PASS  exactly one alert line (1)
+  PASS  record carries the reason code
+  PASS  record carries event=down
+  PASS  record carries a numeric down_s
+  PASS  record carries the ISO since
+  PASS  record is attributed to the watcher
+
+== 3. transitions, not polls
+  PASS  a second run over the same state is silent ()
+  PASS  and appends nothing (1)
+  PASS  a re-alert names the hop again
+  PASS  the reminder is flagged repeat
+  PASS  a hop that answers again is reported
+  PASS  recovery records how long it was down
+  PASS  recovery does not repeat on the next clean run ()
+
+== 4. refusals are named
+  PASS  a failed unit reports the failure reason
+  PASS  and the real exit code
+  PASS  and how long it has been down
+  PASS  --strict exits 2 for a down hop (rc=2)
+  PASS  a unit that does not exist is a named refusal, not silence
+  PASS  --strict exits 2 for an unknown hop (rc=2)
+  PASS  the JSON summary counts the unknown hop
+
+== 5. the selftest can fail (mutation control)
+  PASS  mutation applied at the active-state branch
+  PASS  the mutated watcher alerts on a healthy fleet — claim 1 would catch it (rc=0)
+
+== summary
+   32 checks: 32 passed, 0 failed

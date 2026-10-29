@@ -1,0 +1,16 @@
+PRE-CHANGE CONTROL at 2026-10-29T18:54:44Z
+hop-liveness timers installed: 0
+alert file present before: ABSENT
+--- clean stop of crier-fleet
+stop_rc=0
+ActiveState=inactive
+SubState=dead
+Result=success
+ExecMainCode=1
+ExecMainStatus=0
+--- waiting 75s (one watchdog interval had one existed)
+alert file after 75s: ABSENT
+hop-liveness log after 75s: ABSENT
+--- restoring crier
+start_rc=0
+active
