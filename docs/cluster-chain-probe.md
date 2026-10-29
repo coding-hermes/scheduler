@@ -17,7 +17,7 @@ is the whole reason the non-coverage list below exists.
 
 ```
 ops/cluster-chain-probe.sh <arm> [options]
-  arm ∈ router | crier | scheduler | bunker | connector | all | arms
+  arm ∈ router | proxy | crier | scheduler | bunker | connector | all | arms
 ```
 
 One JSON object per arm on its own line, shape:
@@ -38,13 +38,15 @@ One JSON object per arm on its own line, shape:
 `all` additionally prints a summary object and one human line, then exits:
 
 ```json
-{"arm":"summary","verdict":"FAIL","passed":3,"failed":1,"report_only":1,"gating":["router","crier","scheduler","bunker"],"arms":{...},"overall_exit":1,"ts":"..."}
-CLUSTER-CHAIN-PROBE: FAIL — router=PASS crier=PASS scheduler=FAIL[SCHEDULER_BUILD_DRIFT] bunker=PASS connector=REPORT(non-gating)
+{"arm":"summary","verdict":"FAIL","passed":3,"failed":1,"report_only":1,"gating":["router","proxy","crier","scheduler","bunker"],"arms":{...},"overall_exit":1,"ts":"..."}
+CLUSTER-CHAIN-PROBE: FAIL — router=PASS proxy=PASS crier=PASS scheduler=FAIL[SCHEDULER_BUILD_DRIFT] bunker=PASS connector=REPORT(non-gating)
 ```
 
 Exit codes: `0` every gating arm that ran PASSed · `1` at least one gating arm
 FAILed · `2` usage error. The `connector` arm is **report-only** and never
-gates — see its row below for why.
+gates — see its row below for why. The `proxy` arm gates on drift it can measure
+and reports when it cannot (no listener, no loaded commit, no checkout); pass
+`--proxy-required` on a host that owns the ingress to make those cases FAILs.
 
 ### Read-only by construction
 
@@ -88,6 +90,56 @@ surface agreed.
 that a spawn with that model succeeds. It reads the registry's answer; the
 `:9391` classified proxy is out of scope. `--no-router-http` skips surface 2
 (a CLI-only host), which the `measured` field states explicitly.
+
+### `proxy` — the classified model-serving ingress
+
+**Measures:** `GET <proxy>/health` on the classified proxy (`task-router-proxy`,
+`127.0.0.1:9391`, env `ROUTER_PROXY_URL`) must answer `200`; its `status` must be
+`ok`; the loaded commit is read from `commit` (falling back to
+`code.loaded_commit`). The arm then compares that commit against the ingress's
+own **deploy lineage** — `origin/main` of `~/task-router` (or `--proxy-repo`) —
+over the paths that can reach a running interpreter:
+
+* ref starts with the loaded commit → `drift=0`, PASS.
+* loaded commit resolves here → PASS, or FAIL `PROXY_BUILD_DRIFT` **naming both
+  commits**, the raw `behind`/`ahead` counts, and `compiled_behind` /
+  `compiled_ahead` counted over `*.py`.
+* loaded commit is not a commit in that checkout → FAIL
+  `PROXY_BUILD_UNKNOWN_COMMIT`.
+* `200` with `status != ok` → FAIL `PROXY_UNHEALTHY`, whatever the build is.
+
+**Why it exists:** the ingress is the one hop whose staleness is invisible by
+construction. `/health` has carried an honest `code` block since TR-141 and a
+watchdog has consumed `code.stale` since TR-255, yet the proxy served a build
+loaded from an older commit with no probe arm able to say so — measured
+2026-10-29 19:35Z: `loaded_commit=13ef7482e1d7`, `repo_commit=73d4795b0dc9`,
+`stale=true`, while every other arm the chain probe looked at was green. The
+`measured` field records `stale_flag` and `flag_agrees=yes|no`, so a flag that
+disagrees with the measurement is printed rather than believed.
+
+**Only `*.py` counts.** A Python process imported the files that were on disk
+when it started, so a commit that touches no Python source cannot be in it by
+definition. Counting board or docs commits after a deploy as drift is exactly
+the noise that made the stale ingress invisible; both raw counts are still
+printed, so nothing is hidden.
+
+**PASS means:** the ingress is answering, healthy, and serving a build that
+matches the deploy lineage for every commit that reaches a running Python
+process.
+
+**FAIL codes:** `PROXY_UNREACHABLE`, `PROXY_UNHEALTHY`, `PROXY_NO_COMMIT`,
+`PROXY_DRIFT_UNMEASURED`, `PROXY_BUILD_DRIFT`, `PROXY_BUILD_UNKNOWN_COMMIT`.
+`PROXY_*_UNMEASURED`/`PROXY_UNREACHABLE`/`PROXY_NO_COMMIT` are only a FAIL when
+`--proxy-required` (`CLUSTER_CHAIN_PROXY_REQUIRED=1`) is set; otherwise the
+verdict is `REPORT` and the arm prints `REPORT_ONLY: … exit code unaffected`. A
+host that does not run the ingress must not read a missing hop as a broken one;
+a host that owns it must not accept a report where a verdict is possible.
+
+**Does NOT cover:** that a completion was served, that any model answered, that
+the deployed ingress is the *newest* build (only that it is not behind the
+lineage on compiled paths), or that a restart would succeed. Like every arm it
+measures and never deploys — a `PROXY_BUILD_DRIFT` is fixed with sync + restart,
+by an operator.
 
 ### `crier` — the bus
 
@@ -195,9 +247,9 @@ lane, no queue.
 
 ## Reason codes at a glance
 
-Every FAIL reason begins with one of: `ROUTER_*`, `CRIER_*`, `SCHEDULER_*`,
-`BUNKER_*`, `CONNECTOR_*`, or `PROBE_INTERNAL` (an arm returned without a
-verdict — a probe bug, never a silent pass). Wrappers should match the prefix
+Every FAIL reason begins with one of: `ROUTER_*`, `PROXY_*`, `CRIER_*`,
+`SCHEDULER_*`, `BUNKER_*`, `CONNECTOR_*`, or `PROBE_INTERNAL` (an arm returned
+without a verdict — a probe bug, never a silent pass). Wrappers should match the prefix
 before the colon.
 
 ## What the probe does NOT cover, overall
@@ -238,6 +290,7 @@ ops/cluster-chain-probe.sh scheduler               # one hop, exit code tells th
 ops/cluster-chain-probe.sh all --offline           # no git ls-remote
 ops/cluster-chain-probe.sh all --repo ~/coding-hermes-scheduler/coding-herms-scheduler \
                                 --timeout 20
+ops/cluster-chain-probe.sh proxy --proxy-required      # the host owns :9391
 CRIER_URL=http://127.0.0.1:8768 SCHEDULER_URL=http://10.0.0.5:9090 \
   ops/cluster-chain-probe.sh crier scheduler
 ```
@@ -248,7 +301,7 @@ leave a process behind: the probe starts nothing.
 ## The selftest — how we know the probe can say no
 
 ```sh
-ops/cluster-chain-probe-selftest.sh            # 65 checks, exit 0
+ops/cluster-chain-probe-selftest.sh            # 117 checks, exit 0
 ops/cluster-chain-probe-selftest.sh --verbose  # shows every probe output
 ```
 
@@ -278,6 +331,22 @@ closed ports), so it needs no fleet and no external network:
    values in the environment never appear in the output.
 7. **The connector arm never gates.** Exit 0 and `verdict:REPORT` both with
    `internal/connector` present and absent.
+8. **The proxy arm measures the ingress, in both directions.** Against a
+   purpose-built 4-commit Python repo and a stub serving its tip, the arm PASSes
+   with `drift=0`; serving `HEAD~2` makes it exit 1 with `PROXY_BUILD_DRIFT`,
+   `compiled_behind=2` and **both** commits named; serving the commit from before
+   a docs-only commit PASSes with `compiled_behind=0` while still printing
+   `behind=1`. A stub whose `stale` flag lies (`false` over a behind build) still
+   FAILs and records `flag_agrees=no`; an unattributable commit gives
+   `PROXY_BUILD_UNKNOWN_COMMIT`; `200` with `status=degraded` gives
+   `PROXY_UNHEALTHY`; a `200` naming no build gives `PROXY_NO_COMMIT` as a
+   `REPORT`. Replacing the drift comparison with `p_cb="0"` in a throwaway copy
+   turns the stale case green — so the checks are attributable to it.
+9. **A complete fresh chain can say yes.** With a fresh stub, a route stub and a
+   bunker stub, `all` PASSes five gating arms (`passed:5`), reports the
+   connector (`report_only:1`) and exits 0. Green is a reachable state, not just
+   a theoretical one — the dead-everything run in check 4 proves the same
+   summary can say `failed:5`.
 
 **The selftest itself is proven non-vacuous.** Neutering the probe's
 `CRIER_UNREACHABLE` branch to `arm_pass` in a throwaway copy turns the selftest
@@ -289,18 +358,25 @@ doctrine exists to prevent.
 
 ## Reading a live run
 
-Measured on the fleet host 2026-10-28 (`ops/cluster-chain-probe.sh all`):
+Measured on the fleet host 2026-10-29 19:39Z (`ops/cluster-chain-probe.sh all`):
 
 | arm | verdict | measured |
 |---|---|---|
 | router | PASS | `model=openai/gpt-5.6-terra provider=xkiro profile=P1_CODING hop=1` (CLI and `:9092` agree; unknown project → 400) |
+| proxy | **FAIL** | `loaded_commit=13ef7482e1d7 repo_commit_at_load=73d4795b0dc9 stale_flag=true head=73d4795b drift=behind=3 ahead=0 compiled_behind=2` → `PROXY_BUILD_DRIFT` |
 | crier | PASS | `version=0.1.0-rc2-417-gac00769 commit=ac007694 auth=refused:401` |
-| scheduler | **FAIL** | `build_sha=8ec55a6f … head=c9f59578 drift=behind=110 ahead=0` → `SCHEDULER_BUILD_DRIFT` |
+| scheduler | **FAIL** | `build_sha=674d26ed … head=59a84d45 drift=behind=12 ahead=0` → `SCHEDULER_BUILD_DRIFT` |
 | bunker | PASS | `server=bunker-mvp agents=4` |
 | connector | REPORT | `internal/connector=absent tracked_files=0 origin=present:236a84ca` |
 
-That FAIL is a real finding, not a probe defect: the daemon serving the fleet
-was built 110 commits before the tree. Fixing it is a deploy+restart, which this
-probe deliberately never performs — see
-[runbook-drain-restart.md](runbook-drain-restart.md) and
-`ops/check-daemon-freshness.sh` for the operator path.
+Re-measured on the fleet host 2026-10-29 19:39Z, adding the `proxy` arm: the
+ingress had been serving a build two Python commits behind `origin/main` with
+nothing on the chain saying so. Both FAILs in that table are real deploy gaps,
+not probe defects — the probe measures and never deploys.
+
+Both FAILs are real findings, not probe defects: the scheduler daemon was built
+12 commits before the tree, and the ingress had loaded a build two `*.py` commits
+before it. Fixing either is a deploy+restart, which this probe deliberately never
+performs — see [runbook-drain-restart.md](runbook-drain-restart.md) and
+`ops/check-daemon-freshness.sh` for the daemon path; the ingress is
+`make restart-router` in `~/task-router`, verified by its own `/health`.

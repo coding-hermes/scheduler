@@ -29,9 +29,10 @@
 # USAGE
 #   ops/cluster-chain-probe.sh [ARM] [options]
 #
-#     ARM  router | crier | scheduler | bunker | connector | all | arms | help
+#     ARM  router | proxy | crier | scheduler | bunker | connector
+#          | all | arms | help
 #
-#     `all` runs every arm in order (router, crier, scheduler, bunker,
+#     `all` runs every arm in order (router, proxy, crier, scheduler, bunker,
 #     connector) and ends with a summary object + one human-readable line.
 #     `arms` prints the arm names and whether each one gates the exit code.
 #
@@ -48,6 +49,12 @@
 #   --scheduler-url URL    default http://127.0.0.1:9090
 #   --crier-url URL        default http://127.0.0.1:${CRIER_PORT:-8767}
 #   --router-url URL       default http://127.0.0.1:9092 (documented fleet API)
+#   --proxy-url URL        default http://127.0.0.1:9391 (the classified proxy;
+#                          env ROUTER_PROXY_URL, the name the router repo uses)
+#   --proxy-repo PATH      checkout the proxy's loaded commit is compared
+#                          against (default ~/task-router)
+#   --proxy-required       the proxy HOP is owned by this host, so an
+#                          unmeasurable proxy is a FAIL, not a report
 #   --bunker-bin PATH      default `bunker` on PATH, then ~/.local/bin/bunker
 #   --router-spawn PATH    default ~/.hermes/scripts/router_spawn.py
 #   --offline              skip the connector arm's `git ls-remote` (no network)
@@ -56,8 +63,9 @@
 #
 # ENVIRONMENT (same knobs, for cron/wrappers)
 #   CLUSTER_CHAIN_REPO, CLUSTER_CHAIN_PROJECT, CLUSTER_CHAIN_TIMEOUT,
-#   CLUSTER_CHAIN_OFFLINE, SCHEDULER_URL, CRIER_URL, CRIER_PORT, ROUTER_URL,
-#   BUNKER_BIN, ROUTER_SPAWN
+#   CLUSTER_CHAIN_OFFLINE, CLUSTER_CHAIN_PROXY_REQUIRED, SCHEDULER_URL,
+#   CRIER_URL, CRIER_PORT, ROUTER_URL, ROUTER_PROXY_URL,
+#   ROUTER_PROXY_REPO, BUNKER_BIN, ROUTER_SPAWN
 #
 # EXIT CODES
 #   0  every GATING arm that ran PASSed (report-only arms never gate)
@@ -79,6 +87,9 @@ TIMEOUT="${CLUSTER_CHAIN_TIMEOUT:-15}"
 SCHEDULER_URL="${SCHEDULER_URL:-http://127.0.0.1:9090}"
 CRIER_URL="${CRIER_URL:-http://127.0.0.1:${CRIER_PORT:-8767}}"
 ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:9092}"
+PROXY_URL="${ROUTER_PROXY_URL:-http://127.0.0.1:9391}"
+PROXY_REPO="${ROUTER_PROXY_REPO:-}"
+PROXY_REQUIRED="${CLUSTER_CHAIN_PROXY_REQUIRED:-0}"
 PROJECT="${CLUSTER_CHAIN_PROJECT:-coding-hermes-scheduler}"
 REPO="${CLUSTER_CHAIN_REPO:-}"
 AGAINST="${CLUSTER_CHAIN_AGAINST:-}"
@@ -87,9 +98,9 @@ ROUTER_SPAWN_PATH="${ROUTER_SPAWN:-}"
 OFFLINE="${CLUSTER_CHAIN_OFFLINE:-0}"
 ROUTER_HTTP=1
 
-GATING_ARMS=(router crier scheduler bunker)
+GATING_ARMS=(router proxy crier scheduler bunker)
 REPORT_ARMS=(connector)
-ALL_ARMS=(router crier scheduler bunker connector)
+ALL_ARMS=(router proxy crier scheduler bunker connector)
 
 declare -A VERDICT=() MEASURED=() REASON=()
 ARMS_RUN=()
@@ -312,6 +323,134 @@ arm_router() {
 
   arm_pass router "$measured" "route resolved and refusal named on both surfaces"
   return 0
+}
+
+# ─── arm: proxy (the classified model-serving ingress) ──────────────────────
+# Measures: does the ingress answer, which commit did the RUNNING PROCESS load,
+# and is that commit behind the deploy lineage on paths that reach a running
+# Python process (*.py)?
+#
+# WHY THIS ARM EXISTS: the ingress is the one hop whose staleness is invisible
+# by construction. /health has carried an honest `code` block since TR-141 and a
+# watchdog has consumed it since TR-255, yet the proxy served a build loaded
+# from an older commit with nothing on the chain's own measurement saying so —
+# measured 2026-10-29 19:35Z: loaded_commit=13ef7482e1d7, repo_commit=73d4795b0dc9,
+# stale=true, while this probe reported every hop it looked at green.
+#
+# GATING RULE: it FAILs on drift it can measure and REPORTS when it cannot (no
+# listener, no loaded commit, no checkout to compare against) — a host that does
+# not run the ingress must not read a missing hop as a broken one. Where the hop
+# IS owned, --proxy-required (CLUSTER_CHAIN_PROXY_REQUIRED=1) turns those
+# unmeasurable cases into FAILs so the arm cannot become decoration.
+proxy_unmeasurable() { # measured reason
+  if [ "$PROXY_REQUIRED" = "1" ]; then
+    arm_fail proxy "$1" "$2"
+    return 1
+  fi
+  arm_report proxy "$1" \
+    "REPORT_ONLY: ${2} — the ingress is not owned by every host; set --proxy-required (CLUSTER_CHAIN_PROXY_REQUIRED=1) where it is (exit code unaffected)"
+  return 0
+}
+
+arm_proxy() {
+  local hcode status commit loaded repo_commit stale_flag mode
+  local p_repo p_ref p_head p_short p_behind p_ahead p_cb p_ca
+  local measured drift flag_agrees
+
+  if ! have_curl; then
+    proxy_unmeasurable "" "PROXY_UNMEASURED: curl is absent, so the ingress was not probed"
+    return $?
+  fi
+
+  hcode="$(http_get "${PROXY_URL}/health" "$TMP/proxy-health.json")"
+  if [ "$hcode" != "200" ]; then
+    proxy_unmeasurable "url=${PROXY_URL} health_status=${hcode}" \
+      "PROXY_UNREACHABLE: GET ${PROXY_URL}/health answered ${hcode} ($(curl_fail_reason))"
+    return $?
+  fi
+
+  status="$(jget "$TMP/proxy-health.json" status)"
+  if [ -n "$status" ] && [ "$status" != "ok" ]; then
+    arm_fail proxy "url=${PROXY_URL} health_status=200 body_status='${status}'" \
+      "PROXY_UNHEALTHY: GET ${PROXY_URL}/health answered 200 with status='${status}' — an ingress that names itself unhealthy is failing whatever its build is"
+    return 1
+  fi
+
+  commit="$(jget "$TMP/proxy-health.json" commit)"
+  loaded="$(jget "$TMP/proxy-health.json" code.loaded_commit)"
+  [ -n "$commit" ] || commit="$loaded"
+  repo_commit="$(jget "$TMP/proxy-health.json" code.repo_commit)"
+  stale_flag="$(jget "$TMP/proxy-health.json" code.stale)"
+  mode="$(jget "$TMP/proxy-health.json" mode)"
+  if [ -z "$commit" ]; then
+    proxy_unmeasurable "url=${PROXY_URL} health=ok commit='' loaded_commit='${loaded}'" \
+      "PROXY_NO_COMMIT: /health answered 200 without a loaded commit (neither 'commit' nor 'code.loaded_commit') — the serving build cannot be attributed"
+    return $?
+  fi
+
+  p_repo="$PROXY_REPO"
+  [ -n "$p_repo" ] || p_repo="$HOME/task-router"
+  if [ ! -d "$p_repo" ]; then
+    proxy_unmeasurable "url=${PROXY_URL} commit=${commit} proxy_repo='${p_repo}'" \
+      "PROXY_DRIFT_UNMEASURED: no checkout to compare the loaded commit against (proxy_repo='${p_repo}')"
+    return $?
+  fi
+  if git -C "$p_repo" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    p_ref="origin/main"
+  else
+    p_ref="HEAD"
+  fi
+  p_head="$(git -C "$p_repo" rev-parse --verify --quiet "${p_ref}^{commit}" 2>/dev/null || true)"
+  if [ -z "$p_head" ]; then
+    proxy_unmeasurable "url=${PROXY_URL} commit=${commit} proxy_repo=${p_repo}" \
+      "PROXY_DRIFT_UNMEASURED: ${p_repo} has no resolvable ${p_ref}"
+    return $?
+  fi
+  p_short="${p_head:0:8}"
+  measured="url=${PROXY_URL} health=ok mode=${mode:-unknown} loaded_commit=${loaded:-$commit} commit=${commit} repo_commit_at_load=${repo_commit:-unknown} stale_flag=${stale_flag:-null} proxy_repo=${p_repo} against=${p_ref} head=${p_short}"
+
+  if [ "${p_head:0:${#commit}}" = "$commit" ]; then
+    flag_agrees="yes"
+    [ "$stale_flag" = "true" ] && flag_agrees="no"
+    measured="${measured} drift=0 flag_agrees=${flag_agrees}"
+    arm_pass proxy "$measured" "the serving ingress loaded the commit ${p_ref} points at"
+    return 0
+  fi
+
+  if git -C "$p_repo" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+    # Count against the RESOLVED ref, never the literal string HEAD (the
+    # scheduler arm's lesson, kept here so both arms describe the lineage).
+    p_behind="$(git -C "$p_repo" rev-list --count "${commit}..${p_head}" 2>/dev/null || echo '?')"
+    p_ahead="$(git -C "$p_repo" rev-list --count "${p_head}..${commit}" 2>/dev/null || echo '?')"
+    # COMPILED drift for a Python service is *.py: the interpreter imported the
+    # files that were on disk when it started, so a commit touching no Python
+    # source cannot be in the running process by definition. Counting board or
+    # docs commits after a deploy as drift is the noise this filter removes;
+    # both raw counts are still printed so nothing is hidden.
+    p_cb="$(git -C "$p_repo" rev-list --count "${commit}..${p_head}" -- '*.py' 2>/dev/null || echo '?')"
+    p_ca="$(git -C "$p_repo" rev-list --count "${p_head}..${commit}" -- '*.py' 2>/dev/null || echo '?')"
+    drift="behind=${p_behind} ahead=${p_ahead} compiled_behind=${p_cb} compiled_ahead=${p_ca}"
+    flag_agrees="yes"
+    if [ "$stale_flag" = "true" ] && [ "$p_cb" = "0" ] && [ "$p_ca" = "0" ]; then
+      flag_agrees="no"
+    elif [ "$stale_flag" = "false" ] && { [ "$p_cb" != "0" ] || [ "$p_ca" != "0" ]; }; then
+      # A stale build whose own flag says fresh is a lying flag, not a pass.
+      flag_agrees="no"
+    fi
+    measured="${measured} drift=${drift} flag_agrees=${flag_agrees}"
+    if [ "$p_cb" = "0" ] && [ "$p_ca" = "0" ]; then
+      arm_pass proxy "$measured" \
+        "the loaded build matches the deploy lineage for every commit that reaches a running Python process"
+      return 0
+    fi
+    arm_fail proxy "$measured" \
+      "PROXY_BUILD_DRIFT: the ingress at ${PROXY_URL} loaded ${commit}, which is ${p_behind} commit(s) behind ${p_ref} (${p_head}) and ${p_ahead} ahead of it; ${p_cb} of the behind-commits touch *.py, so the responder is serving code the deploy lineage has already replaced — redeploy the ingress (sync + restart); this probe will not"
+    return 1
+  fi
+  measured="${measured} drift=unknown-commit"
+  arm_fail proxy "$measured" \
+    "PROXY_BUILD_UNKNOWN_COMMIT: the ingress reports commit ${commit}, which is not a commit in ${p_repo}, so the serving build cannot be attributed to ${p_ref}"
+  return 1
 }
 
 # ─── arm: crier ─────────────────────────────────────────────────────────────
@@ -674,7 +813,7 @@ run_all() {
 CMD=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    router|crier|scheduler|bunker|connector|all|arms) CMD="$1"; shift ;;
+    router|proxy|crier|scheduler|bunker|connector|all|arms) CMD="$1"; shift ;;
     help|-h|--help) usage; exit 0 ;;
     --repo) REPO="${2-}"; shift 2 ;;
     --against) AGAINST="${2-}"; shift 2 ;;
@@ -683,6 +822,9 @@ while [ $# -gt 0 ]; do
     --scheduler-url) SCHEDULER_URL="${2-}"; shift 2 ;;
     --crier-url) CRIER_URL="${2-}"; shift 2 ;;
     --router-url) ROUTER_URL="${2-}"; shift 2 ;;
+    --proxy-url) PROXY_URL="${2-}"; shift 2 ;;
+    --proxy-repo) PROXY_REPO="${2-}"; shift 2 ;;
+    --proxy-required) PROXY_REQUIRED=1; shift ;;
     --bunker-bin) BUNKER_BIN_PATH="${2-}"; shift 2 ;;
     --router-spawn) ROUTER_SPAWN_PATH="${2-}"; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
@@ -699,13 +841,18 @@ case "$CMD" in
   arms)
     printf '%-12s %s\n' "ARM" "GATES"
     for a in "${ALL_ARMS[@]}"; do
-      if is_gating "$a"; then printf '%-12s %s\n' "$a" "yes"
+      if is_gating "$a"; then
+        if [ "$a" = "proxy" ]; then
+          printf '%-12s %s\n' "$a" "yes (reports when unmeasurable)"
+        else
+          printf '%-12s %s\n' "$a" "yes"
+        fi
       elif is_report_only "$a"; then printf '%-12s %s\n' "$a" "no (report-only)"
       else printf '%-12s %s\n' "$a" "no"; fi
     done
     exit 0 ;;
   all) run_all; exit $? ;;
-  router|crier|scheduler|bunker|connector)
+  router|proxy|crier|scheduler|bunker|connector)
     run_arm "$CMD"
     if [ "${VERDICT[$CMD]}" = "FAIL" ] && is_gating "$CMD"; then exit 1; fi
     exit 0 ;;

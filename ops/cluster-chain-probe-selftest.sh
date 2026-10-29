@@ -6,7 +6,7 @@
 # WHY THIS EXISTS
 #   A probe that only ever prints PASS is a probe that lies. This selftest
 #   drives the real probe against targets whose behaviour it controls, and makes
-#   six claims, each with its own checks:
+#   nine claims, each with its own checks:
 #
 #     1. CAUSALITY — the SAME probe invocation, pointed at the SAME URL, PASSes
 #        while the target answers and FAILs (exit non-zero, arm named) once that
@@ -26,6 +26,14 @@
 #        in the environment never appears in the probe's output.
 #     6. THE CONNECTOR ARM NEVER GATES — it reports presence/absence and exits 0
 #        either way, because presence is not a working hop.
+#     7. THE PROXY ARM MEASURES THE INGRESS — a stub serving an older commit
+#        FAILs with PROXY_BUILD_DRIFT naming both commits and the exact *.py
+#        count, a stub serving the tip PASSes, a docs-only commit after the
+#        deploy is not drift, and forcing the comparison to zero in a throwaway
+#        copy turns the stale case green (the checks are not vacuous).
+#     8. A COMPLETE FRESH CHAIN CAN SAY YES — with a fresh stub, a route stub
+#        and a bunker stub, `all` PASSes five gating arms, reports the connector
+#        and exits 0, so "green" is a reachable state and not just a theory.
 #
 #   Everything runs against 127.0.0.1 only: a python stub HTTP server that plays
 #   both the crier and the scheduler contracts, a black-hole socket that accepts
@@ -129,10 +137,11 @@ expect_file_has "--help names the non-coverage pointer" "$TMP/help.out" "cluster
 
 run_probe "$TMP/arms.out" "$PROBE" arms
 expect_rc "arms exits 0" 0 $?
-for a in router crier scheduler bunker connector; do
+for a in router proxy crier scheduler bunker connector; do
   expect_file_has "arms lists $a" "$TMP/arms.out" "$a"
 done
 expect_file_has "connector is declared non-gating" "$TMP/arms.out" "no (report-only)"
+expect_file_has "proxy is declared gating but reporting when unmeasurable" "$TMP/arms.out" "yes (reports when unmeasurable)"
 
 run_probe "$TMP/badarg.out" "$PROBE" --not-a-flag
 expect_rc "an unknown flag is a usage error (exit 2)" 2 $?
@@ -146,6 +155,33 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT, LOG, BSHA_FILE = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 HEALTH504 = BSHA_FILE + ".health504"
+PROXY_FILE = BSHA_FILE + ".proxy"
+
+
+def proxy_body():
+    """The classified ingress's /health shape (task-router: mode + code block).
+
+    Absent file -> the plain crier shape, so every pre-proxy check keeps the
+    exact body it was written against.
+    """
+    try:
+        with open(PROXY_FILE) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {"status": "ok"}
+    return {
+        "status": d.get("status", "ok"),
+        "service": "task-router/1.0",
+        "commit": d.get("commit", ""),
+        "stale": d.get("stale"),
+        "mode": "read-only",
+        "code": {
+            "loaded_commit": d.get("commit", ""),
+            "repo_commit": d.get("repo_commit", ""),
+            "stale": d.get("stale"),
+            "error": None,
+        },
+    }
 
 
 def build_sha():
@@ -175,7 +211,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self._rec()
         if self.path == "/health":
-            return self._send(200, {"status": "ok"})
+            return self._send(200, proxy_body())
         if self.path == "/version":
             return self._send(200, {"version": "selftest-stub-1.2.3", "commit": "deadbeef"})
         if self.path == "/status":
@@ -332,6 +368,164 @@ else
     fail "stub recorded no requests — the PASS above did not actually talk to it"
   fi
 
+  # ── 3b. proxy arm: the ingress is judged on *.py drift, both ways ───────
+  hdr "3b. proxy arm: a stale ingress FAILs, a fresh one PASSes, docs commits do not count"
+
+  PCHAIN="$TMP/proxy-chain"
+  mkdir -p "$PCHAIN"
+  git -C "$PCHAIN" init -q
+  for n in 1 2 3; do
+    printf 'VERSION = %s\n' "$n" >"$PCHAIN/service.py"
+    git -C "$PCHAIN" -c user.email=selftest@example.invalid -c user.name=selftest add service.py
+    git -C "$PCHAIN" -c user.email=selftest@example.invalid -c user.name=selftest \
+      commit -qm "py commit $n"
+  done
+  P_HEAD="$(git -C "$PCHAIN" rev-parse HEAD)"
+  P_STALE="$(git -C "$PCHAIN" rev-parse --short=12 'HEAD~2')"
+
+  # The stub's /health plays the ingress contract from a file, so each case
+  # changes ONLY what the running process says about itself.
+  proxy_say() { # commit stale [status]
+    python3 - "$TMP/bsha.txt.proxy" "$1" "${2:-false}" "$P_HEAD" "${3:-ok}" <<'PY'
+import json, sys
+json.dump({"commit": sys.argv[2], "stale": sys.argv[3] == "true",
+           "repo_commit": sys.argv[4], "status": sys.argv[5]},
+          open(sys.argv[1], "w"))
+PY
+  }
+
+  proxy_say "$P_HEAD" false
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-fresh.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-fresh.out"
+  expect_rc "proxy arm PASSes when the loaded commit is the lineage tip" 0 "$RC"
+  expect_file_has "the proxy PASS states drift=0" "$TMP/proxy-fresh.out" "drift=0"
+  expect_file_has "the proxy PASS names the commit it read" "$TMP/proxy-fresh.out" "loaded_commit=${P_HEAD:0:12}"
+
+  proxy_say "$P_STALE" true
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-stale.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-stale.out"
+  expect_rc "proxy arm exits 1 when the ingress loaded an older commit" 1 "$RC"
+  expect_file_has "the stale verdict is FAIL" "$TMP/proxy-stale.out" '"arm":"proxy","verdict":"FAIL"'
+  expect_file_has "the stale reason is named PROXY_BUILD_DRIFT" "$TMP/proxy-stale.out" "PROXY_BUILD_DRIFT"
+  expect_file_has "the stale count is exact (compiled_behind=2)" "$TMP/proxy-stale.out" "compiled_behind=2"
+  expect_file_has "the stale reason names the loaded commit" "$TMP/proxy-stale.out" "$P_STALE"
+  expect_file_has "the stale reason names the lineage commit too" "$TMP/proxy-stale.out" "$P_HEAD"
+  expect_file_has "the ingress's own stale flag is recorded" "$TMP/proxy-stale.out" "stale_flag=true"
+  expect_file_has "the flag agrees with the measured drift" "$TMP/proxy-stale.out" "flag_agrees=yes"
+
+  # A commit that touches no *.py file cannot be in a running interpreter:
+  # landing docs or board rows after a deploy must not read as ingress drift.
+  printf '# notes\n' >"$PCHAIN/NOTES.md"
+  git -C "$PCHAIN" -c user.email=selftest@example.invalid -c user.name=selftest add NOTES.md
+  git -C "$PCHAIN" -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "docs only"
+  proxy_say "$P_HEAD" false
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-docsonly.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-docsonly.out"
+  expect_rc "a docs-only commit after the ingress deploy is not drift" 0 "$RC"
+  expect_file_has "the non-Python commit is still counted and named" "$TMP/proxy-docsonly.out" "compiled_behind=0"
+  expect_file_has "the raw behind count is not hidden" "$TMP/proxy-docsonly.out" "behind=1"
+
+  # A flag that claims fresh while the code is behind must not read as agreement.
+  P_STALE_FULL="$(git -C "$PCHAIN" rev-parse 'HEAD~3')"
+  proxy_say "${P_STALE_FULL:0:12}" false
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-lyingflag.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-lyingflag.out"
+  expect_rc "a lying fresh flag still FAILs on measured drift" 1 "$RC"
+  expect_file_has "the disagreement with the flag is reported" "$TMP/proxy-lyingflag.out" "flag_agrees=no"
+
+  # An unattributable loaded commit is its own named failure.
+  proxy_say "ffffffffffff" false
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-unknown.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-unknown.out"
+  expect_rc "an unknown loaded commit fails the arm" 1 "$RC"
+  expect_file_has "the unknown-commit reason is named" "$TMP/proxy-unknown.out" "PROXY_BUILD_UNKNOWN_COMMIT"
+
+  # A 200 that names itself unhealthy fails whatever its build is.
+  proxy_say "$P_HEAD" false degraded
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-unhealthy.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-unhealthy.out"
+  expect_rc "an unhealthy ingress fails even though its build is fresh" 1 "$RC"
+  expect_file_has "the unhealthy body is named PROXY_UNHEALTHY" "$TMP/proxy-unhealthy.out" "PROXY_UNHEALTHY"
+
+  # An ingress that answers without naming its build cannot be attributed:
+  # that is a report (a host may run a proxy with no build stamp), never a pass.
+  python3 - "$TMP/bsha.txt.proxy" <<'PY'
+import json, sys
+json.dump({"commit": "", "stale": False, "repo_commit": "", "status": "ok"},
+          open(sys.argv[1], "w"))
+PY
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-nocommit.out" \
+    "$PROBE" proxy --proxy-repo "$PCHAIN"
+  RC=$?
+  show "$TMP/proxy-nocommit.out"
+  expect_rc "an unattributable ingress reports instead of passing" 0 "$RC"
+  expect_file_has "the unattributable case is named PROXY_NO_COMMIT" "$TMP/proxy-nocommit.out" "PROXY_NO_COMMIT"
+  expect_file_has "the unattributable case is a REPORT, never a PASS" "$TMP/proxy-nocommit.out" '"verdict":"REPORT"'
+
+  # A live ingress with no checkout to compare against cannot be attributed:
+  # required -> FAIL named; the same case without --proxy-required is a report.
+  proxy_say "$P_HEAD" false
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-norepo.out" \
+    "$PROBE" proxy --proxy-required --proxy-repo "$TMP/definitely-no-repo"
+  RC=$?
+  show "$TMP/proxy-norepo.out"
+  expect_rc "a required hop with no checkout to compare against fails" 1 "$RC"
+  expect_file_has "the missing-checkout failure is named" "$TMP/proxy-norepo.out" "PROXY_DRIFT_UNMEASURED"
+
+  ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-norepo-report.out" \
+    "$PROBE" proxy --proxy-repo "$TMP/definitely-no-repo"
+  RC=$?
+  show "$TMP/proxy-norepo-report.out"
+  expect_rc "the same unattributable ingress only reports when the hop is not owned" 0 "$RC"
+  expect_file_has "the report names the missing checkout" "$TMP/proxy-norepo-report.out" "PROXY_DRIFT_UNMEASURED"
+
+  # MUTATION CONTROL: neuter the drift comparison itself. If the stale case
+  # still FAILs with the comparison forced to zero, the checks above are not
+  # testing the comparison at all.
+  python3 - "$PROBE" "$TMP/probe-mutant.sh" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+out, hit = [], 0
+for line in src.splitlines(keepends=True):
+    if 'p_cb="$(git -C "$p_repo" rev-list' in line:
+        hit += 1
+        out.append('    p_cb="0"\n')
+    else:
+        out.append(line)
+if hit != 1:
+    sys.stderr.write("expected exactly one p_cb assignment, found %d\n" % hit)
+    sys.exit(3)
+open(sys.argv[2], "w").write("".join(out))
+PY
+  if [ $? -ne 0 ]; then
+    fail "the mutation control could not locate the drift comparison"
+  else
+    chmod +x "$TMP/probe-mutant.sh"
+    proxy_say "$P_STALE" true
+    ROUTER_PROXY_URL="$STUB_URL" run_probe "$TMP/proxy-mutant.out" \
+      bash "$TMP/probe-mutant.sh" proxy --proxy-repo "$PCHAIN"
+    RC=$?
+    show "$TMP/proxy-mutant.out"
+    if [ "$RC" = "0" ]; then
+      pass "neutering the drift comparison turns the stale case green — the checks above test it"
+    else
+      fail "the mutated probe still FAILed the stale case — the drift checks are not attributable to the comparison"
+    fi
+  fi
+  rm -f "$TMP/bsha.txt.proxy"
+
   # Take the target away. Nothing else about the invocation changes.
   kill "$STUB_PID" 2>/dev/null
   HOLDER="$(listener_pid "$PORT")"
@@ -413,6 +607,20 @@ BUNKER_BIN="$TMP/definitely-no-bunker" run_probe "$TMP/bunker-fail.out" "$PROBE"
 expect_rc "bunker arm exits 1 when the CLI is absent" 1 $?
 expect_file_has "bunker failure is named BUNKER_CLI_ABSENT" "$TMP/bunker-fail.out" "BUNKER_CLI_ABSENT"
 
+# The proxy arm gates on what it can measure and reports on what it cannot:
+# both halves are asserted, or the arm is either decoration or a false alarm.
+ROUTER_PROXY_URL="$DEAD_URL" run_probe "$TMP/proxy-dead.out" "$PROBE" proxy --proxy-required
+expect_rc "proxy arm exits 1 against a closed socket when the hop is owned" 1 $?
+expect_file_has "proxy failure is named PROXY_UNREACHABLE" "$TMP/proxy-dead.out" "PROXY_UNREACHABLE"
+expect_file_has "proxy failure names the arm" "$TMP/proxy-dead.out" '"arm":"proxy","verdict":"FAIL"'
+
+ROUTER_PROXY_URL="$DEAD_URL" run_probe "$TMP/proxy-dead-report.out" "$PROBE" proxy
+expect_rc "the same closed socket only REPORTS when the hop is not owned" 0 $?
+expect_file_has "the unowned-hop case is a REPORT" "$TMP/proxy-dead-report.out" '"verdict":"REPORT"'
+expect_file_has "the report still names the reason code" "$TMP/proxy-dead-report.out" "PROXY_UNREACHABLE"
+expect_file_has "the report says the exit code is unaffected" "$TMP/proxy-dead-report.out" "exit code unaffected"
+
+
 # ═══ 6. the connector arm is report-only and never gates ═══════════════════
 hdr "6. connector arm reports presence without gating"
 
@@ -438,14 +646,15 @@ ROUTER_SPAWN="$TMP/nope.py" \
 BUNKER_BIN="$TMP/nope-bunker" \
 SCHEDULER_URL="$DEAD_URL" \
 CRIER_URL="$DEAD_URL" \
-  run_probe "$TMP/all-fail.out" "$PROBE" all --offline --repo "$TMP/repo-absent" --no-router-http
+ROUTER_PROXY_URL="$DEAD_URL" \
+  run_probe "$TMP/all-fail.out" "$PROBE" all --offline --repo "$TMP/repo-absent" --no-router-http --proxy-required
 RC=$?
 show "$TMP/all-fail.out"
 expect_rc "all exits 1 when every gating arm fails" 1 "$RC"
 expect_file_has "the summary verdict is FAIL" "$TMP/all-fail.out" '"arm":"summary","verdict":"FAIL"'
-expect_file_has "the summary counts four failed gating arms" "$TMP/all-fail.out" '"failed":4'
+expect_file_has "the summary counts five failed gating arms" "$TMP/all-fail.out" '"failed":5'
 expect_file_has "the summary declares the exit code" "$TMP/all-fail.out" '"overall_exit":1'
-for needle in ROUTER_SCRIPT_ABSENT CRIER_UNREACHABLE SCHEDULER_UNREACHABLE BUNKER_CLI_ABSENT; do
+for needle in ROUTER_SCRIPT_ABSENT PROXY_UNREACHABLE CRIER_UNREACHABLE SCHEDULER_UNREACHABLE BUNKER_CLI_ABSENT; do
   expect_file_has "the run names $needle" "$TMP/all-fail.out" "$needle"
 done
 expect_file_has "the human summary line is printed" "$TMP/all-fail.out" "CLUSTER-CHAIN-PROBE: FAIL"
@@ -463,8 +672,71 @@ else
   fail "the probe printed a line that is not valid JSON"
 fi
 
-# ═══ 8. a live chain (informational, never gating) ═════════════════════════
-hdr "8. live fleet (informational — this host's own services)"
+# ═══ 8. a complete fresh chain exits 0 — the summary that can say yes ══════
+hdr "8. all: a fresh chain PASSes every gating arm and reports the connector"
+
+ALL_PORT="$(pick_port 19100)" || ALL_PORT=""
+if [ -z "$ALL_PORT" ]; then
+  fail "no free port for the all-green stub"
+else
+  ALL_URL="http://127.0.0.1:$ALL_PORT"
+  : >"$TMP/allstub.log"
+  printf '%s' "${CHAIN_HEAD:0:8}" >"$TMP/bsha.txt"
+  python3 - "$P_HEAD" "$P_HEAD" <<'PY' >"$TMP/bsha.txt.proxy"
+import json, sys
+json.dump({"commit": sys.argv[1], "stale": False, "repo_commit": sys.argv[2],
+           "status": "ok"}, sys.stdout)
+PY
+  python3 "$TMP/stub.py" "$ALL_PORT" "$TMP/allstub.log" "$TMP/bsha.txt" & ALL_PID=$!
+  # A router CLI that answers a route and names a refusal code, and a bunker
+  # CLI that answers a census line: the two non-HTTP hops, stubbed so the
+  # whole-chain verdict can be exercised without a fleet.
+  cat >"$TMP/router_spawn_stub.py" <<'PY'
+import json, sys
+if "--profile-req" in sys.argv:
+    print(json.dumps({"code": "INVALID_REQUIREMENT", "error": "unknown requirement category"}))
+else:
+    print(json.dumps({"profile": "P1_CODING",
+                      "head": {"model": "selftest/model", "provider": "selftest-provider",
+                               "hop": 1, "effective_price": 0.0}}))
+PY
+  cat >"$TMP/bunker_stub.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'Total: 2 agents (server: selftest-bunker)\n'
+SH
+  chmod +x "$TMP/bunker_stub.sh"
+
+  if ! wait_http "$ALL_URL/health" 60; then
+    fail "the all-green stub did not become reachable on 127.0.0.1:$ALL_PORT"
+  else
+    ROUTER_SPAWN="$TMP/router_spawn_stub.py" \
+    BUNKER_BIN="$TMP/bunker_stub.sh" \
+    SCHEDULER_URL="$ALL_URL" \
+    CRIER_URL="$ALL_URL" \
+    ROUTER_PROXY_URL="$ALL_URL" \
+      run_probe "$TMP/all-pass.out" "$PROBE" all --offline \
+        --repo "$CHAIN" --proxy-repo "$PCHAIN" --no-router-http --proxy-required
+    RC=$?
+    show "$TMP/all-pass.out"
+    expect_rc "all exits 0 when every gating arm answers from a fresh build" 0 "$RC"
+    expect_file_has "the summary verdict is PASS" "$TMP/all-pass.out" '"arm":"summary","verdict":"PASS"'
+    expect_file_has "the summary counts five passed gating arms" "$TMP/all-pass.out" '"passed":5'
+    expect_file_has "the summary counts no failures" "$TMP/all-pass.out" '"failed":0'
+    expect_file_has "the connector is counted as report-only" "$TMP/all-pass.out" '"report_only":1'
+    expect_file_has "the summary declares the exit code" "$TMP/all-pass.out" '"overall_exit":0'
+    expect_file_has "the gating list names the proxy" "$TMP/all-pass.out" '"gating":["router","proxy","crier","scheduler","bunker"]'
+    for a in router proxy crier scheduler bunker; do
+      expect_file_has "the $a arm PASSed in the same run" "$TMP/all-pass.out" "\"$a\":{\"verdict\":\"PASS\""
+    done
+    expect_file_has "the connector verdict is REPORT" "$TMP/all-pass.out" '"connector":{"verdict":"REPORT"'
+    expect_file_has "the human summary line says PASS" "$TMP/all-pass.out" "CLUSTER-CHAIN-PROBE: PASS"
+  fi
+  kill "$ALL_PID" 2>/dev/null
+  ALL_PID=""
+fi
+
+# ═══ 9. a live chain (informational, never gating) ═════════════════════════
+hdr "9. live fleet (informational — this host's own services)"
 
 run_probe "$TMP/live.out" "$PROBE" all --offline
 LIVE_RC=$?
