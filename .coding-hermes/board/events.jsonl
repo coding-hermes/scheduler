@@ -1437,3 +1437,6 @@
 {"id": 1792786278246001984, "timestamp": "2026-10-29T15:21:54Z", "event_type": "task_created", "task_id": "SCHED-GAP-16945", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16945\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 1792786278246001985, "timestamp": "2026-10-29T15:23:04Z", "event_type": "task_created", "task_id": "SCHED-GAP-16946", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16946\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 1792786278246001986, "timestamp": "2026-10-29T15:24:52Z", "event_type": "task_created", "task_id": "SCHED-GAP-16947", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16947\",\"status\":\"pending\"}", "tick_number": null}
+{"id": 1792786278246001987, "timestamp": "2026-10-29T15:27:53Z", "event_type": "task_created", "task_id": "SCHED-GAP-16948", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16948\",\"status\":\"pending\"}", "tick_number": null}
+{"id": 1792786278246001988, "timestamp": "2026-10-29T15:35:45Z", "event_type": "task_completed", "task_id": "SCHED-GAP-16939", "actor": "foreman", "detail": "{\"status\": \"complete\"}", "tick_number": null}
+{"id": 1792786278246001989, "timestamp": "2026-10-29T15:35:45Z", "event_type": "task_created", "task_id": "SCHED-GAP-16949", "actor": "foreman", "detail": "{\"id\": \"SCHED-GAP-16949\", \"status\": \"pending\"}", "tick_number": null}
