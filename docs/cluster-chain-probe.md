@@ -110,24 +110,41 @@ does not verify mesh peers or federation.
 
 ### `scheduler` — dispatch
 
-**Measures:** `GET 127.0.0.1:9090/api/v1/health` (`status: ok`, `db: connected`,
-`build_sha` present) and `GET /api/v1/status` (`active_ticks`,
-`active_projects`, its own `build_sha`). Then it compares the **running**
-`build_sha` against the checked-out tree's `HEAD`:
+**Measures:** `GET /api/v1/live` first — the DB-free liveness route
+(SCHED-GAP-204-A), which answers from process memory and carries `build_sha` and
+uptime. Only that route's failure is `SCHEDULER_UNREACHABLE`. Then
+`GET /api/v1/health` (the rich, DB-backed route): `200` gives `status: ok`,
+`db: connected` and the full field set; a `503`/`504` is recorded as
+`health=degraded:<code>(<helper>)` with `db=unknown` and the arm carries on —
+`/api/v1/health` runs its DB reads under `--api-read-timeout` (default 5s) on
+one serialized SQLite connection, so a busy fleet makes it answer
+`{"error":"deadline exceeded","helper":"PingContext"}` while the daemon is
+perfectly alive. `GET /api/v1/status` supplies `active_ticks`,
+`active_projects` and its own `build_sha`.
 
-* HEAD starts with `build_sha` → `drift=0`, PASS.
+Then it compares the **running** `build_sha` against the checkout's
+**deploy lineage** — `origin/main` by default, or `--against REF`:
+
+* the ref starts with `build_sha` → `drift=0`, PASS.
 * `build_sha` resolves to a commit here → FAIL `SCHEDULER_BUILD_DRIFT` **naming
-  the count**: measured live as `behind=110 ahead=0` against `c9f59578`.
+  the count and the ref**: measured live as `behind=112 ahead=0 against=origin/main`.
 * `build_sha` is not a commit in this checkout → FAIL
   `SCHEDULER_BUILD_UNKNOWN_COMMIT`.
+
+Comparing against the branch you happen to have checked out is the trap: from a
+feature worktree a correctly deployed daemon reads as drift. The `measured`
+field always carries `against=<ref>`.
 
 **PASS means:** the daemon is healthy, its database is connected, and the binary
 answering is the binary this tree builds.
 
-**FAIL codes:** `SCHEDULER_UNMEASURED`, `SCHEDULER_UNREACHABLE`,
-`SCHEDULER_UNHEALTHY`, `SCHEDULER_DB_NOT_CONNECTED`, `SCHEDULER_NO_BUILD_SHA`,
+**FAIL codes:** `SCHEDULER_UNMEASURED`, `SCHEDULER_UNREACHABLE` (the DB-free
+liveness route failed), `SCHEDULER_UNHEALTHY`, `SCHEDULER_DB_NOT_CONNECTED`,
+`SCHEDULER_NO_BUILD_SHA`, `SCHEDULER_HEALTH_UNEXPECTED`,
 `SCHEDULER_STATUS_UNAVAILABLE`, `SCHEDULER_DRIFT_UNMEASURED`,
-`SCHEDULER_BUILD_DRIFT`, `SCHEDULER_BUILD_UNKNOWN_COMMIT`.
+`SCHEDULER_BUILD_DRIFT`, `SCHEDULER_BUILD_UNKNOWN_COMMIT`. A `504` on the rich
+health route is NOT one of them: it is recorded as `degraded` and does not fail
+the arm.
 
 **Does NOT cover:** that any tick was dispatched, admitted or completed, that a
 project is configured correctly, or that a spawn reached the gateway. Active
@@ -208,7 +225,7 @@ leave a process behind: the probe starts nothing.
 ## The selftest — how we know the probe can say no
 
 ```sh
-ops/cluster-chain-probe-selftest.sh            # 60 checks, exit 0
+ops/cluster-chain-probe-selftest.sh            # 63 checks, exit 0
 ops/cluster-chain-probe-selftest.sh --verbose  # shows every probe output
 ```
 

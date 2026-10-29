@@ -279,7 +279,7 @@ only, no credential ever sent — so it is safe against the live fleet.
 ```bash
 ops/cluster-chain-probe.sh all           # whole chain
 ops/cluster-chain-probe.sh scheduler     # one hop
-ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (60 checks)
+ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (63 checks)
 ```
 
 What each arm measures, every reason code, and the list of things the probe
