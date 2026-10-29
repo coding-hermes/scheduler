@@ -141,10 +141,11 @@ expect_rc "an unknown flag is a usage error (exit 2)" 2 $?
 hdr "2. crier arm: PASS while the target answers, FAIL once it is gone"
 
 cat >"$TMP/stub.py" <<'PY'
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT, LOG, BSHA_FILE = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+HEALTH504 = BSHA_FILE + ".health504"
 
 
 def build_sha():
@@ -179,6 +180,16 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"version": "selftest-stub-1.2.3", "commit": "deadbeef"})
         if self.path == "/status":
             return self._send(401, {"error": "missing Authorization header"})
+        if self.path == "/api/v1/live":
+            return self._send(200, {
+                "status": "ok", "version": "selftest-stub",
+                "build_sha": build_sha(), "uptime": "12.5s",
+                "started": "2026-01-01T00:00:00Z",
+            })
+        if self.path == "/api/v1/health" and os.path.exists(HEALTH504):
+            return self._send(504, {"error": "deadline exceeded",
+                                    "helper": "PingContext",
+                                    "detail": "context deadline exceeded"})
         if self.path == "/api/v1/health":
             return self._send(200, {
                 "status": "ok", "db": "connected", "build_sha": build_sha(),
@@ -277,6 +288,18 @@ else
   expect_file_has "the drift verdict is FAIL" "$TMP/sched-drift.out" '"arm":"scheduler","verdict":"FAIL"'
   expect_file_has "the drift reason is named" "$TMP/sched-drift.out" "SCHEDULER_BUILD_DRIFT"
   expect_file_has "the drift count is named exactly (behind=2)" "$TMP/sched-drift.out" "drift=behind=2 ahead=0"
+
+  # A 504 on the DB-backed health route is DEGRADED, not down: the DB-free
+  # liveness route answers, so the arm must not report the daemon unreachable.
+  printf '%s' "${CHAIN_HEAD:0:8}" >"$TMP/bsha.txt"    # back to a matching build, so the ONLY
+  : >"$TMP/bsha.txt.health504"                        # defect under test is the 504 health read
+  SCHEDULER_URL="$STUB_URL" run_probe "$TMP/sched-degraded.out" "$PROBE" scheduler --repo "$CHAIN"
+  RC=$?
+  show "$TMP/sched-degraded.out"
+  rm -f "$TMP/bsha.txt.health504"
+  expect_rc "a 504 health read with live ok still PASSes" 0 "$RC"
+  expect_file_has "the degraded read is recorded, not hidden" "$TMP/sched-degraded.out" "health=degraded:504"
+  expect_file_has "the pass names the DB-free route it trusted" "$TMP/sched-degraded.out" "live=ok"
 
   # An unattributable build_sha must be its own named failure.
   printf 'ffffffff' >"$TMP/bsha.txt"

@@ -377,46 +377,93 @@ arm_scheduler() {
     return 1
   fi
 
-  hcode="$(http_get "${SCHEDULER_URL}/api/v1/health" "$TMP/sched-health.json")"
-  if [ "$hcode" != "200" ]; then
-    arm_fail scheduler "url=${SCHEDULER_URL} health_status=${hcode}" \
-      "SCHEDULER_UNREACHABLE: GET ${SCHEDULER_URL}/api/v1/health answered ${hcode} ($(curl_fail_reason))"
+  # LIVENESS FIRST (SCHED-GAP-204-A). /api/v1/live answers from process memory and
+  # never touches the DB; /api/v1/health issues DB reads on the daemon's ONE
+  # serialized SQLite connection and answers 504 naming the stalled step when the
+  # connection is busy (SCHED-GAP-1575-B, --api-read-timeout, default 5s). Probing
+  # only the rich route therefore reports a WORKING daemon as UNREACHABLE under
+  # load — measured twice on this host, most recently 34s after a clean restart.
+  local lcode live_sha live_uptime degraded=0 health_note="ok"
+  lcode="$(http_get "${SCHEDULER_URL}/api/v1/live" "$TMP/sched-live.json")"
+  if [ "$lcode" != "200" ]; then
+    arm_fail scheduler "url=${SCHEDULER_URL} live_status=${lcode}" \
+      "SCHEDULER_UNREACHABLE: GET ${SCHEDULER_URL}/api/v1/live answered ${lcode} ($(curl_fail_reason)) — the DB-free liveness route did not answer, so the process is down or wedged"
     return 1
   fi
-  status="$(jget "$TMP/sched-health.json" status)"
-  db="$(jget "$TMP/sched-health.json" db)"
-  build_sha="$(jget "$TMP/sched-health.json" build_sha)"
-  active_ticks="$(jget "$TMP/sched-health.json" active_ticks)"
-  version="$(jget "$TMP/sched-health.json" version)"
-  clock="$(jget "$TMP/sched-health.json" clock.mode)"
+  live_sha="$(jget "$TMP/sched-live.json" build_sha)"
+  live_uptime="$(jget "$TMP/sched-live.json" uptime)"
+  if [ -z "$live_sha" ]; then
+    arm_fail scheduler "url=${SCHEDULER_URL} live=ok build_sha=''" \
+      "SCHEDULER_NO_BUILD_SHA: /api/v1/live answered 200 without a build_sha — the running build cannot be attributed to a commit"
+    return 1
+  fi
 
-  if [ "$status" != "ok" ]; then
-    arm_fail scheduler "url=${SCHEDULER_URL} body_status='${status}'" \
-      "SCHEDULER_UNHEALTHY: /api/v1/health answered 200 with status='${status}'"
-    return 1
-  fi
-  if [ "$db" != "connected" ]; then
-    arm_fail scheduler "db='${db}' build_sha=${build_sha}" \
-      "SCHEDULER_DB_NOT_CONNECTED: /api/v1/health reports db='${db}'"
-    return 1
-  fi
-  if [ -z "$build_sha" ]; then
-    arm_fail scheduler "db=${db} build_sha=''" \
-      "SCHEDULER_NO_BUILD_SHA: /api/v1/health names no build_sha — the running build cannot be attributed to a commit"
-    return 1
+  hcode="$(http_get "${SCHEDULER_URL}/api/v1/health" "$TMP/sched-health.json")"
+  case "$hcode" in
+    200) : ;;
+    503|504)
+      # Degraded, not down: the process answered on the DB-free route. Record the
+      # reading and carry on with the build/drift comparison, which does not need
+      # the DB.
+      degraded=1
+      health_note="degraded:${hcode}($(jget "$TMP/sched-health.json" helper))"
+      ;;
+    *)
+      arm_fail scheduler "url=${SCHEDULER_URL} live=ok health_status=${hcode}" \
+        "SCHEDULER_HEALTH_UNEXPECTED: /api/v1/live answered 200 but /api/v1/health answered ${hcode} ($(curl_fail_reason))"
+      return 1
+      ;;
+  esac
+  if [ "$hcode" = "200" ]; then
+    status="$(jget "$TMP/sched-health.json" status)"
+    db="$(jget "$TMP/sched-health.json" db)"
+    build_sha="$(jget "$TMP/sched-health.json" build_sha)"
+    active_ticks="$(jget "$TMP/sched-health.json" active_ticks)"
+    version="$(jget "$TMP/sched-health.json" version)"
+    clock="$(jget "$TMP/sched-health.json" clock.mode)"
+    if [ "$status" != "ok" ]; then
+      arm_fail scheduler "url=${SCHEDULER_URL} live=ok body_status='${status}'" \
+        "SCHEDULER_UNHEALTHY: /api/v1/health answered 200 with status='${status}'"
+      return 1
+    fi
+    if [ "$db" != "connected" ]; then
+      arm_fail scheduler "db='${db}' build_sha=${build_sha}" \
+        "SCHEDULER_DB_NOT_CONNECTED: /api/v1/health reports db='${db}'"
+      return 1
+    fi
+    if [ -z "$build_sha" ]; then
+      arm_fail scheduler "db=${db} build_sha=''" \
+        "SCHEDULER_NO_BUILD_SHA: /api/v1/health names no build_sha — the running build cannot be attributed to a commit"
+      return 1
+    fi
+  else
+    # Degraded: the DB-backed route is over its read budget. Everything the drift
+    # comparison needs is already in hand from /api/v1/live.
+    db="unknown"
+    build_sha="$live_sha"
+    active_ticks="?"
+    version="$(jget "$TMP/sched-live.json" version)"
+    clock="?"
+    status="degraded"
   fi
 
   scode="$(http_get "${SCHEDULER_URL}/api/v1/status" "$TMP/sched-status.json")"
   if [ "$scode" != "200" ]; then
-    arm_fail scheduler "build_sha=${build_sha} status_status=${scode}" \
-      "SCHEDULER_STATUS_UNAVAILABLE: GET ${SCHEDULER_URL}/api/v1/status answered ${scode} ($(curl_fail_reason))"
-    return 1
+    if [ "$degraded" = "1" ]; then
+      # Expected companion of a 504 health read under the same budget: recorded,
+      # never a second verdict about the same condition.
+      scode="degraded:${scode}"
+    else
+      arm_fail scheduler "build_sha=${build_sha} status_status=${scode}" \
+        "SCHEDULER_STATUS_UNAVAILABLE: /api/v1/live and /api/v1/health answered but GET ${SCHEDULER_URL}/api/v1/status answered ${scode} ($(curl_fail_reason))"
+      return 1
+    fi
   fi
   s_build_sha="$(jget "$TMP/sched-status.json" build_sha)"
   s_active="$(jget "$TMP/sched-status.json" active_ticks)"
   s_projects="$(jget "$TMP/sched-status.json" active_projects)"
 
-  measured="url=${SCHEDULER_URL} health=ok db=${db} build_sha=${build_sha} version=${version} clock=${clock} active_ticks=${active_ticks}/${s_active} active_projects=${s_projects} status_build_sha=${s_build_sha}"
+  measured="url=${SCHEDULER_URL} live=ok health=${health_note} uptime=${live_uptime} db=${db} build_sha=${build_sha} version=${version} clock=${clock} active_ticks=${active_ticks}/${s_active} active_projects=${s_projects} status_build_sha=${s_build_sha}"
 
   if [ -z "$REPO" ]; then
     REPO="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" rev-parse --show-toplevel 2>/dev/null || true)"
