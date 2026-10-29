@@ -322,8 +322,9 @@ closed ports), so it needs no fleet and no external network:
    unresolvable sha gives `SCHEDULER_BUILD_UNKNOWN_COMMIT`.
 4. **Every gating arm can fail by name.** `SCHEDULER_UNREACHABLE` on a closed
    socket, `ROUTER_SCRIPT_ABSENT` with no `router_spawn.py`, `BUNKER_CLI_ABSENT`
-   with no CLI, and a dead-everything `all` run that reports `failed:4`,
-   `overall_exit:1` and every one of those codes.
+   with no CLI, and a dead-everything `all` run that reports `failed:5`,
+   `overall_exit:1` and every one of those codes (the proxy arm is required
+   there, so a missing ingress is a fifth failure rather than a report).
 5. **Bounded.** A socket that accepts and never answers fails the arm in
    ~3s under `--timeout 3`, not on a hang.
 6. **Read-only and quiet.** The stub records every request; the test asserts the

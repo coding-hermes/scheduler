@@ -269,17 +269,19 @@ runs, resolved from `$FLEET_INFRA_SWEEP` or this checkout's
 ## Cluster chain probe — the factory's hops, measured
 
 `cluster-chain-probe.sh` is the executable measurement for the
-distributed-code-factory goal: one arm per hop (router, crier, scheduler,
-bunker, connector), one JSON object per arm, and an exit code that can say no.
+distributed-code-factory goal: one arm per hop (router, proxy, crier,
+scheduler, bunker, connector), one JSON object per arm, and an exit code that
+can say no.
 A PASS carries the value it measured (model+provider, crier version, scheduler
-`build_sha` and its drift, bunker server and agent count); a FAIL carries a
-stable reason prefix naming the hop. It is read-only — GETs and `bunker list`
+`build_sha` and its drift, the ingress's loaded commit and its `*.py` drift,
+bunker server and agent count); a FAIL carries a stable reason prefix naming the
+hop. It is read-only — GETs and `bunker list`
 only, no credential ever sent — so it is safe against the live fleet.
 
 ```bash
 ops/cluster-chain-probe.sh all           # whole chain
 ops/cluster-chain-probe.sh scheduler     # one hop
-ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (65 checks)
+ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (117 checks)
 ```
 
 What each arm measures, every reason code, and the list of things the probe
