@@ -18,7 +18,7 @@
 #   ops/check-daemon-freshness.sh [--status-url URL] [--against REV]
 #
 #   --status-url URL   scheduler status endpoint
-#                      (default http://127.0.0.1:8642/api/v1/status)
+#                      (default http://127.0.0.1:9090/api/v1/status)
 #   --against REV      commit/tag/branch to measure against (default HEAD)
 #
 # Exit codes:
@@ -45,9 +45,21 @@
 
 set -euo pipefail
 
-# Defaults
-STATUS_URL="${1:-http://127.0.0.1:8642/api/v1/status}"
-AGAINST="${2:-HEAD}"
+# Defaults.
+#
+# The daemon listens on 9090 (docs/reference/flags.md; the systemd unit passes
+# --listen 127.0.0.1:9090). The old default of 8642 pointed at a port nothing on
+# this host serves, so a bare run could only ever answer UNKNOWN.
+#
+# Never seed these from positional "$1"/"$2": the flag loop below already parses
+# `--status-url`/`--against`, and seeding made the FLAG itself the value (with
+# `--status-url URL`, $2 = URL landed in AGAINST, so a documented invocation
+# exited "UNKNOWN: --against (http://…) does not resolve"). Positional arguments
+# are accepted only when they do not look like flags, for older callers.
+STATUS_URL="http://127.0.0.1:9090/api/v1/status"
+AGAINST="HEAD"
+if [[ $# -gt 0 && ${1} != -* ]]; then STATUS_URL="$1"; shift; fi
+if [[ $# -gt 0 && ${1} != -* ]]; then AGAINST="$1"; shift; fi
 MAX_STATUS_TIMEOUT="${MAX_STATUS_TIMEOUT:-10}"
 
 # Parse flags
@@ -69,7 +81,7 @@ Operational guard: is the running schedulerd fresh (contains the newest
 admission/scheduling change on --against)?
 
 Flags:
-  --status-url URL   scheduler status endpoint (default http://127.0.0.1:8642/api/v1/status)
+  --status-url URL   scheduler status endpoint (default http://127.0.0.1:9090/api/v1/status)
   --against REV      commit/tag/branch to measure against (default HEAD)
   --help             show this help
 
