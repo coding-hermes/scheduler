@@ -622,7 +622,8 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 
 	goPins := intMapIn(t, string(goSrc), `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
 	pyPins := intMapIn(t, string(pySrc), `(?s)SATELLITE_FAMILY_PINS\s*=\s*\{(.*?)\}`)
-	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200, "releng": 86400}
+	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200, "releng": 86400,
+		"docs": 604800, "readme": 604800, "perf": 604800, "review": 604800}
 
 	if len(goPins) != len(want) {
 		t.Fatalf("internal/api/lane_onboarding.go pins %d families (%v), want %d", len(goPins), goPins, len(want))

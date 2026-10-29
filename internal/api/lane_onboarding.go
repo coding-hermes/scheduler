@@ -77,6 +77,16 @@ var satelliteWorkdirRoots = map[string][]string{
 	"sync":    {"sync-workdirs"},
 	"dogfood": {"stand-in/dogfood"},
 	"releng":  {"stand-in/releng-lane"},
+	// Measured live convention (census 2026-10-29: 62 -docs, 60 -readme, 42 -review,
+	// 40+ -perf lanes, every one under stand-in/<family>/<primary>). These families were
+	// described as "offboarded" here, which was true only of the gate's vocabulary, not of
+	// the fleet: without a roots entry canonicalLaneWorkdirs returned an EMPTY allow-list and
+	// the gate refused every possible workdir, so no new docs/readme/perf/review lane could
+	// be onboarded at all.
+	"docs":   {"stand-in/docs"},
+	"readme": {"stand-in/readme"},
+	"perf":   {"stand-in/perf"},
+	"review": {"stand-in/review"},
 }
 
 // satelliteFamilyPins is the per-family cadence pin an enabled satellite
@@ -102,18 +112,22 @@ var satelliteFamilyPins = map[string]int{
 	"sync":    21600,
 	"dogfood": 259200,
 	"releng":  86400,
+	// Weekly families. The parity test reads these against SATELLITE_FAMILY_PINS in
+	// ops/check-fleet-invariants.py, which has carried all nine since the 2026-09-29
+	// matrix; only this Go map lagged, which left every docs/readme/perf/review lane
+	// unarmable through the API.
+	"docs":   604800,
+	"readme": 604800,
+	"perf":   604800,
+	"review": 604800,
 }
 
-// Out-of-scope families (SCHED-GAP-1733 criterion 2): perf/review/readme/docs
-// remain offboarded by this gate — the fleet-topology warden's --apply does
-// not CREATE those lanes (no live provisioning convention dir exists for
-// them), so onboarding them here would be dead vocabulary. FAMILY_CANONICAL
-// in ~/.hermes/scripts/fleet-cooldown-policy.py does carry cadence pins for
-// them (weekly cadence for all four), and ops/check-fleet-invariants.py's
-// SATELLITE_FAMILY_PINS mirrors that, but a pin alone is not a workdir
-// convention: until a measured live directory exists (like
-// stand-in/releng-lane for -releng), they stay out of satelliteWorkdirRoots,
-// satelliteFamilyPins, and the *_Parity key-set assertions.
+// Family scope note (supersedes the SCHED-GAP-1733 criterion-2 carve-out):
+// perf/review/readme/docs were left out of satelliteWorkdirRoots on the claim that
+// no live provisioning convention existed for them. That claim was wrong — the
+// 2026-10-29 census found 62 -docs, 60 -readme, 42 -review and 40+ -perf lanes,
+// every one under stand-in/<family>/<primary>, exactly the releng shape. The gate
+// is now total: nine families, roots and pins together.
 
 // hermesHomeDir resolves the Hermes home (~/.hermes) the way the ops scripts
 // do: HERMES_HOME when set (it IS the .hermes directory — see
@@ -148,6 +162,12 @@ func canonicalLaneWorkdirs(name string) []string {
 		leaf = strings.TrimSuffix(name, "-"+family)
 	}
 	roots := satelliteWorkdirRoots[family]
+	if len(roots) == 0 {
+		// A family in the suffix vocabulary with no roots here must NOT become an empty
+		// allow-list: that refuses every workdir and says "lanes live in " (nothing).
+		// Unpoliced is the honest state; the parity test covers the vocabulary, not this.
+		return nil
+	}
 	out := make([]string, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, filepath.Join(hermesHomeDir(), filepath.FromSlash(root), leaf))
