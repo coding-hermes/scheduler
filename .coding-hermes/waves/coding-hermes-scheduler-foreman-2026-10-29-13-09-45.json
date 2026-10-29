@@ -1,0 +1,30 @@
+{
+  "tick": "coding-hermes-scheduler-foreman-2026-10-29-13-09-45",
+  "block": "RELEASE-033",
+  "selected": ["RELEASE-033"],
+  "wave_id": "none:verification-only",
+  "wave_budget": 12,
+  "host": {
+    "nproc": 16,
+    "loadavg1": 4.50,
+    "computed_slots": 6
+  },
+  "eligible_independent": 0,
+  "wave_size": 0,
+  "workers": [],
+  "worktrees": [],
+  "briefs": [],
+  "reason": "Singleton verification-only release-readiness row; owner authorization and release artifacts are absent, so no implementation worker is safe or applicable.",
+  "owner_blocker": "Explicit release authorization is absent; do not tag or create a GitHub Release.",
+  "next_owner_action": "Authorize or reject v1.13.0; if authorized, commit version-prep and complete exact-head CI before release operations.",
+  "verification": {
+    "commands": [
+      "git status --short --branch && git rev-parse HEAD && git fetch origin && git rev-list --count origin/main..HEAD && git rev-list --count HEAD..origin/main",
+      "scripts/release-prep.sh --check v1.13.0",
+      "git ls-remote --tags origin refs/tags/v1.13.0",
+      "gh release view v1.13.0 --repo coding-hermes/scheduler",
+      "curl -fsS http://127.0.0.1:9090/api/v1/health",
+      "gh run list --repo coding-hermes/scheduler --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt"
+    ]
+  }
+}
