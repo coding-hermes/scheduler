@@ -1,0 +1,24 @@
+[Unit]
+Description=Coding Hermes hop liveness watchdog — silent when clean, LOUD when a gating hop dies (SCHED-GAP-16946)
+Documentation=file:%h/coding-hermes-scheduler/coding-herms-scheduler/docs/hop-liveness-watchdog.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# READ-ONLY DETECTOR: reads systemd's own unit state (LoadState, ActiveState,
+# Result, ExecMainStatus and the state-change stamps) and writes an alert
+# record when a hop is down. It never starts, stops or reconfigures a hop, so it
+# cannot fight an operator, cannot restart-loop and is safe against the live
+# fleet at any time.
+#
+# The script is executed from the checkout on purpose: the watchdog and the docs
+# that describe it are the same file, so there is no deployed copy to drift.
+#
+# Silent when every hop is up (no output); one loud ALERT line per transition to
+# down, then at most one reminder per hour while the hop stays down.
+ExecStart=/bin/bash %h/coding-hermes-scheduler/coding-herms-scheduler/ops/hop-liveness-watch.sh
+Nice=5
+# The user journal is not reliably readable on this box, so the alert is also
+# appended to a durable log (the watcher itself writes the JSONL alert record).
+StandardOutput=append:%h/.hermes/logs/hop-liveness-watch.log
+StandardError=append:%h/.hermes/logs/hop-liveness-watch.log

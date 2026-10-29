@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch the gating hops every minute (SCHED-GAP-16946)
+
+[Timer]
+# One minute: crier-fleet sat dead for 11h because its clean exit was not a
+# failure and nothing was looking. A hop that dies now is named inside a minute
+# instead of whenever a human next runs the chain probe. The watcher is a
+# read-only detector that is silent when clean, so a minute costs four
+# `systemctl show` calls and nothing else.
+OnBootSec=60s
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=hop-liveness-watch.service
+
+[Install]
+WantedBy=timers.target

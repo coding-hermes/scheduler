@@ -215,6 +215,21 @@ before the colon.
 * **Time.** One sample per arm; it does not trend, average or alert. Run it from
   cron and diff the JSON if you want history.
 
+## Between samples: the hop liveness watchdog
+
+A hop can exit **cleanly** and stay dead (`Restart=on-failure` never applies to
+exit 0) with nothing noticing until someone runs this probe by hand — that is how
+`crier-fleet` sat inactive for 11 hours (SCHED-GAP-16946).
+
+`ops/hop-liveness-watch.sh` + `deploy/hop-liveness-watch.timer` watch the gating
+units once a minute from systemd and append a named alert when one goes down:
+`docs/hop-liveness-watchdog.md` is the authority.
+
+The two instruments are complementary and neither is a substitute for the other:
+the watchdog proves a unit is **running** every minute, the probe proves each hop
+**answers** on demand. The watchdog's crier arm carries no HTTP check and the
+probe's crier arm carries no timer.
+
 ## Running it
 
 ```sh
