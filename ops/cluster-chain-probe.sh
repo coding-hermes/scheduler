@@ -585,6 +585,18 @@ arm_connector() {
   dir="absent"
   [ -d "$REPO/internal/connector" ] && dir="present"
   files="$(git -C "$REPO" ls-files internal/connector 2>/dev/null | wc -l | tr -d ' ')"
+  # PRESENCE IS NOT A HOP. A package nobody imports is a library, not a leg of
+  # the factory: count the files OUTSIDE internal/connector that reference it.
+  # Measured 2026-10-29 on wt/SCHED-CONNECTOR-PORT: 8 tracked files, 0 importers
+  # — the connector compiled and passed its hermetic run while being on no
+  # execution path at all, which is exactly the distinction a bare "present"
+  # hides.
+  importers="$(git -C "$REPO" grep -l 'internal/connector' -- '*.go' 2>/dev/null \
+    | grep -v '^internal/connector/' | wc -l | tr -d ' ')"
+  case "$dir" in
+    absent) wire="absent" ;;
+    *) if [ "${importers:-0}" = "0" ]; then wire="unwired"; else wire="wired:${importers}"; fi ;;
+  esac
 
   if [ "$OFFLINE" = "1" ]; then
     remote="skipped:offline"
@@ -599,9 +611,16 @@ arm_connector() {
     fi
   fi
 
-  measured="repo=${REPO} internal/connector=${dir} tracked_files=${files} branch=${CONNECTOR_BRANCH_REF} origin=${remote}"
-  arm_report connector "$measured" \
-    "REPORT_ONLY: presence on the tree and on origin; this arm never ran a connector and never gates the exit code"
+  measured="repo=${REPO} internal/connector=${dir} tracked_files=${files} wire=${wire} branch=${CONNECTOR_BRANCH_REF} origin=${remote}"
+  case "$wire" in
+    absent)
+      reason="REPORT_ONLY: no connector package on this tree; the fifth hop does not exist here (exit code unaffected)" ;;
+    unwired)
+      reason="REPORT_ONLY: connector package present (${files} files) with 0 importers outside it — the hop exists as a library on no execution path (exit code unaffected)" ;;
+    *)
+      reason="REPORT_ONLY: connector package present and imported by ${importers} file(s) outside it; this arm still never RUNS a connector (exit code unaffected)" ;;
+  esac
+  arm_report connector "$measured" "$reason"
   return 0
 }
 
