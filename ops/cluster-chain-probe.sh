@@ -503,7 +503,22 @@ arm_scheduler() {
     # "HEAD" here silently measured this checkout's branch instead.
     behind="$(git -C "$REPO" rev-list --count "${build_sha}..${head_full}" 2>/dev/null || echo '?')"
     ahead="$(git -C "$REPO" rev-list --count "${head_full}..${build_sha}" 2>/dev/null || echo '?')"
-    drift="behind=${behind} ahead=${ahead}"
+    # COMPILED drift is the number that costs anything: a commit that touches no
+    # Go source, module file or embedded template is not in the binary by
+    # definition, so counting it as "the fleet runs a build the lineage does not
+    # contain" is noise — measured: 4 ops-script commits made a daemon deployed
+    # from the previous main tip read as drifted.
+    compiled_behind="$(git -C "$REPO" rev-list --count "${build_sha}..${head_full}" -- \
+        '*.go' 'go.mod' 'go.sum' '*.html' '*.tmpl' 2>/dev/null || echo '?')"
+    compiled_ahead="$(git -C "$REPO" rev-list --count "${head_full}..${build_sha}" -- \
+        '*.go' 'go.mod' 'go.sum' '*.html' '*.tmpl' 2>/dev/null || echo '?')"
+    drift="behind=${behind} ahead=${ahead} compiled_behind=${compiled_behind} compiled_ahead=${compiled_ahead}"
+    if [ "$compiled_behind" = "0" ] && [ "$compiled_ahead" = "0" ]; then
+      measured="${measured} head=${head_short} drift=${drift}"
+      arm_pass scheduler "$measured" \
+        "running build matches the deploy lineage for every commit that reaches the binary"
+      return 0
+    fi
     arm_fail scheduler "$measured head=${head_short} drift=${drift}" \
       "SCHEDULER_BUILD_DRIFT: the running binary was built from ${build_sha}, which is ${behind} commit(s) behind ${against_ref} (${head_short}) and ${ahead} ahead of it — the fleet is executing a build the deploy lineage does not contain"
   else

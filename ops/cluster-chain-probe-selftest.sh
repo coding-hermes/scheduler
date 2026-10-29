@@ -263,9 +263,9 @@ else
   mkdir -p "$CHAIN"
   git -C "$CHAIN" init -q
   for n in 1 2 3; do
-    printf 'commit %s\n' "$n" >"$CHAIN/file.txt"
+    printf 'package main\n// commit %s\n' "$n" >"$CHAIN/main.go"
     git -C "$CHAIN" -c user.email=selftest@example.invalid -c user.name=selftest \
-      add file.txt
+      add main.go
     git -C "$CHAIN" -c user.email=selftest@example.invalid -c user.name=selftest \
       commit -qm "commit $n"
   done
@@ -288,6 +288,19 @@ else
   expect_file_has "the drift verdict is FAIL" "$TMP/sched-drift.out" '"arm":"scheduler","verdict":"FAIL"'
   expect_file_has "the drift reason is named" "$TMP/sched-drift.out" "SCHEDULER_BUILD_DRIFT"
   expect_file_has "the drift count is named exactly (behind=2)" "$TMP/sched-drift.out" "drift=behind=2 ahead=0"
+
+  # A commit that touches no compiled path is not in the binary by definition:
+  # landing an ops/docs commit after a deploy must not read as drift.
+  printf '%s' "${CHAIN_HEAD:0:8}" >"$TMP/bsha.txt"   # back to a matching build first
+  printf '# doc\n' >"$CHAIN/NOTES.md"
+  git -C "$CHAIN" -c user.email=selftest@example.invalid -c user.name=selftest add NOTES.md
+  git -C "$CHAIN" -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "docs only"
+  SCHEDULER_URL="$STUB_URL" run_probe "$TMP/sched-docsonly.out" "$PROBE" scheduler --repo "$CHAIN"
+  RC=$?
+  show "$TMP/sched-docsonly.out"
+  expect_rc "a docs-only commit after the deploy is not drift" 0 "$RC"
+  expect_file_has "the non-compiled commit is still counted and named" "$TMP/sched-docsonly.out" "compiled_behind=0"
+  git -C "$CHAIN" reset -q --hard HEAD~1
 
   # A 504 on the DB-backed health route is DEGRADED, not down: the DB-free
   # liveness route answers, so the arm must not report the daemon unreachable.

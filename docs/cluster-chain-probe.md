@@ -135,6 +135,14 @@ Comparing against the branch you happen to have checked out is the trap: from a
 feature worktree a correctly deployed daemon reads as drift. The `measured`
 field always carries `against=<ref>`.
 
+**Only commits that reach the binary count.** A commit touching no Go source,
+module file or embedded template cannot be inside the daemon by definition, so
+the arm also reports `compiled_behind` / `compiled_ahead` over
+`*.go *.mod *.sum *.html *.tmpl` and PASSes when those are 0 — otherwise an ops
+script or a doc fix landed after the deploy reads as "the fleet runs a build the
+lineage does not contain". Both counts are always printed, so the raw drift is
+never hidden.
+
 **PASS means:** the daemon is healthy, its database is connected, and the binary
 answering is the binary this tree builds.
 
@@ -225,7 +233,7 @@ leave a process behind: the probe starts nothing.
 ## The selftest — how we know the probe can say no
 
 ```sh
-ops/cluster-chain-probe-selftest.sh            # 63 checks, exit 0
+ops/cluster-chain-probe-selftest.sh            # 65 checks, exit 0
 ops/cluster-chain-probe-selftest.sh --verbose  # shows every probe output
 ```
 
