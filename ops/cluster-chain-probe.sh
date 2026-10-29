@@ -38,6 +38,10 @@
 # OPTIONS
 #   --repo PATH            checkout the live build_sha is compared against
 #                          (default: this script's own git top level)
+#   --against REF          the DEPLOY LINEAGE the running build must contain
+#                          (default: origin/main when that ref resolves here,
+#                          else HEAD). Comparing against a feature branch's HEAD
+#                          reports "drift" for a correctly deployed daemon.
 #   --project NAME         router project to resolve
 #                          (default: coding-hermes-scheduler)
 #   --timeout SECS         bound on every external command (default 15)
@@ -77,6 +81,7 @@ CRIER_URL="${CRIER_URL:-http://127.0.0.1:${CRIER_PORT:-8767}}"
 ROUTER_URL="${ROUTER_URL:-http://127.0.0.1:9092}"
 PROJECT="${CLUSTER_CHAIN_PROJECT:-coding-hermes-scheduler}"
 REPO="${CLUSTER_CHAIN_REPO:-}"
+AGAINST="${CLUSTER_CHAIN_AGAINST:-}"
 BUNKER_BIN_PATH="${BUNKER_BIN:-}"
 ROUTER_SPAWN_PATH="${ROUTER_SPAWN:-}"
 OFFLINE="${CLUSTER_CHAIN_OFFLINE:-0}"
@@ -420,12 +425,24 @@ arm_scheduler() {
     arm_fail scheduler "$measured" "SCHEDULER_DRIFT_UNMEASURED: no checkout to compare build_sha against (repo='${REPO}')"
     return 1
   fi
-  head_full="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  # The comparison ref is the DEPLOY LINEAGE, not whatever this checkout happens
+  # to have checked out: run from a feature worktree, HEAD is that branch and a
+  # daemon deployed from main would report drift forever.
+  local against_ref="$AGAINST"
+  if [ -z "$against_ref" ]; then
+    if git -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+      against_ref="origin/main"
+    else
+      against_ref="HEAD"
+    fi
+  fi
+  head_full="$(git -C "$REPO" rev-parse --verify --quiet "${against_ref}^{commit}" 2>/dev/null || true)"
   if [ -z "$head_full" ]; then
-    arm_fail scheduler "$measured repo=${REPO}" "SCHEDULER_DRIFT_UNMEASURED: ${REPO} has no resolvable HEAD"
+    arm_fail scheduler "$measured repo=${REPO}" "SCHEDULER_DRIFT_UNMEASURED: ${REPO} has no resolvable ${against_ref}"
     return 1
   fi
   head_short="${head_full:0:8}"
+  measured="${measured} against=${against_ref}"
 
   if [ "${head_full:0:${#build_sha}}" = "$build_sha" ]; then
     measured="${measured} head=${head_short} drift=0"
@@ -434,15 +451,18 @@ arm_scheduler() {
   fi
 
   if git -C "$REPO" cat-file -e "${build_sha}^{commit}" 2>/dev/null; then
-    behind="$(git -C "$REPO" rev-list --count "${build_sha}..HEAD" 2>/dev/null || echo '?')"
-    ahead="$(git -C "$REPO" rev-list --count "HEAD..${build_sha}" 2>/dev/null || echo '?')"
+    # Count against the RESOLVED ref, never the literal string HEAD: with
+    # --against origin/main the counts must describe the lineage, and a bare
+    # "HEAD" here silently measured this checkout's branch instead.
+    behind="$(git -C "$REPO" rev-list --count "${build_sha}..${head_full}" 2>/dev/null || echo '?')"
+    ahead="$(git -C "$REPO" rev-list --count "${head_full}..${build_sha}" 2>/dev/null || echo '?')"
     drift="behind=${behind} ahead=${ahead}"
     arm_fail scheduler "$measured head=${head_short} drift=${drift}" \
-      "SCHEDULER_BUILD_DRIFT: the running binary was built from ${build_sha}, which is ${behind} commit(s) behind ${head_short} and ${ahead} ahead of it — the fleet is executing a build the tree does not contain"
+      "SCHEDULER_BUILD_DRIFT: the running binary was built from ${build_sha}, which is ${behind} commit(s) behind ${against_ref} (${head_short}) and ${ahead} ahead of it — the fleet is executing a build the deploy lineage does not contain"
   else
     drift="unknown-commit"
     arm_fail scheduler "$measured head=${head_short} drift=${drift}" \
-      "SCHEDULER_BUILD_UNKNOWN_COMMIT: build_sha ${build_sha} is not a commit in ${REPO}, so the running build cannot be attributed to this tree"
+      "SCHEDULER_BUILD_UNKNOWN_COMMIT: build_sha ${build_sha} is not a commit in ${REPO}, so the running build cannot be attributed to ${against_ref}"
   fi
   return 1
 }
@@ -576,6 +596,7 @@ while [ $# -gt 0 ]; do
     router|crier|scheduler|bunker|connector|all|arms) CMD="$1"; shift ;;
     help|-h|--help) usage; exit 0 ;;
     --repo) REPO="${2-}"; shift 2 ;;
+    --against) AGAINST="${2-}"; shift 2 ;;
     --project) PROJECT="${2-}"; shift 2 ;;
     --timeout) TIMEOUT="${2-}"; shift 2 ;;
     --scheduler-url) SCHEDULER_URL="${2-}"; shift 2 ;;
