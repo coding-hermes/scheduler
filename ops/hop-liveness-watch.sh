@@ -170,6 +170,7 @@ classify() { # scope unit
   HOP_RESULT="${result:-unknown}"
   HOP_CODE="${code:--}"
   case "$code" in
+    0) HOP_EXIT_KIND="running" ;;   # no ExecMain exit recorded (unit is up)
     1) HOP_EXIT_KIND="exited" ;;
     2) HOP_EXIT_KIND="killed" ;;
     3) HOP_EXIT_KIND="dumped" ;;
