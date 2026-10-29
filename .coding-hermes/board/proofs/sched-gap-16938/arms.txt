@@ -1,0 +1,7 @@
+ARM          GATES
+router       yes
+proxy        yes (reports when unmeasurable)
+crier        yes
+scheduler    yes
+bunker       yes
+connector    no (report-only)

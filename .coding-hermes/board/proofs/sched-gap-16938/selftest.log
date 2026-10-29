@@ -1,0 +1,144 @@
+
+=== 1. probe surface ===
+  PASS  probe passes bash -n (exit 0)
+  PASS  --help exits 0 (exit 0)
+  PASS  --help documents read-only behaviour
+  PASS  --help names the non-coverage pointer
+  PASS  arms exits 0 (exit 0)
+  PASS  arms lists router
+  PASS  arms lists proxy
+  PASS  arms lists crier
+  PASS  arms lists scheduler
+  PASS  arms lists bunker
+  PASS  arms lists connector
+  PASS  connector is declared non-gating
+  PASS  proxy is declared gating but reporting when unmeasurable
+  PASS  an unknown flag is a usage error (exit 2) (exit 2)
+
+=== 2. crier arm: PASS while the target answers, FAIL once it is gone ===
+  PASS  stub server is answering on 127.0.0.1:18800
+  PASS  stub listener 2590071 is attributable to launcher 2590071
+  PASS  crier arm PASSes against a live target (exit 0)
+  PASS  PASS verdict is reported
+  PASS  PASS names the measured value, not a bare 'ok': url=http://127.0.0.1:18800 health=ok version=selftest-stub-1.2.3 commit=deadbeef auth=refu…
+  PASS  PASS records the unauthenticated refusal
+  PASS  no credential appears in the output
+
+=== 3. scheduler arm: drift=0 PASSes, drift=N FAILs naming N ===
+  PASS  scheduler arm PASSes when build_sha == HEAD (exit 0)
+  PASS  the PASS states drift=0
+  PASS  the PASS names the build_sha it read
+  PASS  the PASS names the api it read
+  PASS  scheduler arm exits 1 when the build is behind HEAD (exit 1)
+  PASS  the drift verdict is FAIL
+  PASS  the drift reason is named
+  PASS  the drift count is named exactly (behind=2)
+  PASS  a docs-only commit after the deploy is not drift (exit 0)
+  PASS  the non-compiled commit is still counted and named
+  PASS  a 504 health read with live ok still PASSes (exit 0)
+  PASS  the degraded read is recorded, not hidden
+  PASS  the pass names the DB-free route it trusted
+  PASS  an unknown build_sha fails the arm (exit 1)
+  PASS  the unknown-commit reason is named
+  PASS  probe issued GETs only (19 requests recorded by the stub)
+
+=== 3b. proxy arm: a stale ingress FAILs, a fresh one PASSes, docs commits do not count ===
+  PASS  proxy arm PASSes when the loaded commit is the lineage tip (exit 0)
+  PASS  the proxy PASS states drift=0
+  PASS  the proxy PASS names the commit it read
+  PASS  proxy arm exits 1 when the ingress loaded an older commit (exit 1)
+  PASS  the stale verdict is FAIL
+  PASS  the stale reason is named PROXY_BUILD_DRIFT
+  PASS  the stale count is exact (compiled_behind=2)
+  PASS  the stale reason names the loaded commit
+  PASS  the stale reason names the lineage commit too
+  PASS  the ingress's own stale flag is recorded
+  PASS  the flag agrees with the measured drift
+  PASS  a docs-only commit after the ingress deploy is not drift (exit 0)
+  PASS  the non-Python commit is still counted and named
+  PASS  the raw behind count is not hidden
+  PASS  a lying fresh flag still FAILs on measured drift (exit 1)
+  PASS  the disagreement with the flag is reported
+  PASS  an unknown loaded commit fails the arm (exit 1)
+  PASS  the unknown-commit reason is named
+  PASS  an unhealthy ingress fails even though its build is fresh (exit 1)
+  PASS  the unhealthy body is named PROXY_UNHEALTHY
+  PASS  an unattributable ingress reports instead of passing (exit 0)
+  PASS  the unattributable case is named PROXY_NO_COMMIT
+  PASS  the unattributable case is a REPORT, never a PASS
+  PASS  a required hop with no checkout to compare against fails (exit 1)
+  PASS  the missing-checkout failure is named
+  PASS  the same unattributable ingress only reports when the hop is not owned (exit 0)
+  PASS  the report names the missing checkout
+  PASS  neutering the drift comparison turns the stale case green — the checks above test it
+  PASS  stub target is gone and 127.0.0.1:18800 is released
+  PASS  the SAME invocation now exits non-zero (exit 1)
+  PASS  the failure names the arm
+  PASS  the failure is a FAIL verdict
+  PASS  the failure names the hop and a reason code
+
+=== 4. an unresponsive target is bounded by --timeout, not waited on ===
+  PASS  a black-hole target FAILs the arm (exit 1)
+  PASS  the timeout failure names CRIER_UNREACHABLE
+  PASS  the run was bounded by --timeout 3 (finished in 3071ms)
+
+=== 5. each gating arm can fail and names itself ===
+  PASS  scheduler arm exits 1 against a closed socket (exit 1)
+  PASS  scheduler failure is named SCHEDULER_UNREACHABLE
+  PASS  scheduler failure names the arm
+  PASS  router arm exits 1 when router_spawn.py is absent (exit 1)
+  PASS  router failure is named ROUTER_SCRIPT_ABSENT
+  PASS  bunker arm exits 1 when the CLI is absent (exit 1)
+  PASS  bunker failure is named BUNKER_CLI_ABSENT
+  PASS  proxy arm exits 1 against a closed socket when the hop is owned (exit 1)
+  PASS  proxy failure is named PROXY_UNREACHABLE
+  PASS  proxy failure names the arm
+  PASS  the same closed socket only REPORTS when the hop is not owned (exit 0)
+  PASS  the unowned-hop case is a REPORT
+  PASS  the report still names the reason code
+  PASS  the report says the exit code is unaffected
+
+=== 6. connector arm reports presence without gating ===
+  PASS  connector arm exits 0 with internal/connector present (exit 0)
+  PASS  connector reports presence
+  PASS  connector verdict is REPORT, not PASS
+  PASS  connector arm exits 0 with internal/connector absent (report-only) (exit 0)
+  PASS  connector reports absence
+
+=== 7. all: a dead chain fails overall and names every failed arm ===
+  PASS  all exits 1 when every gating arm fails (exit 1)
+  PASS  the summary verdict is FAIL
+  PASS  the summary counts five failed gating arms
+  PASS  the summary declares the exit code
+  PASS  the run names ROUTER_SCRIPT_ABSENT
+  PASS  the run names PROXY_UNREACHABLE
+  PASS  the run names CRIER_UNREACHABLE
+  PASS  the run names SCHEDULER_UNREACHABLE
+  PASS  the run names BUNKER_CLI_ABSENT
+  PASS  the human summary line is printed
+  PASS  every JSON object the probe printed parsed
+
+=== 8. all: a fresh chain PASSes every gating arm and reports the connector ===
+  PASS  all exits 0 when every gating arm answers from a fresh build (exit 0)
+  PASS  the summary verdict is PASS
+  PASS  the summary counts five passed gating arms
+  PASS  the summary counts no failures
+  PASS  the connector is counted as report-only
+  PASS  the summary declares the exit code
+  PASS  the gating list names the proxy
+  PASS  the router arm PASSed in the same run
+  PASS  the proxy arm PASSed in the same run
+  PASS  the crier arm PASSed in the same run
+  PASS  the scheduler arm PASSed in the same run
+  PASS  the bunker arm PASSed in the same run
+  PASS  the connector verdict is REPORT
+  PASS  the human summary line says PASS
+
+=== 9. live fleet (informational — this host's own services) ===
+  INFO  {"arm":"summary","verdict":"FAIL","passed":3,"failed":2,"report_only":1,"gating":["router","proxy","crier","scheduler","bunker"],"arms":{"router":{"verdict":"PASS","reason":"route resolved and refusal named on both surfaces"},"proxy":{"verdict":"FAIL","reason":"PROXY_BUILD_DRIFT: the ingress at http://127.0.0.1:9391 loaded 13ef7482e1d7, which is 3 commit(s) behind origin/main (73d4795b0dc942551f7541a8060df7a044173e66) and 0 ahead of it; 2 of the behind-commits touch *.py, so the responder is serving code the deploy lineage has already replaced — redeploy the ingress (sync + restart); this probe will not"},"crier":{"verdict":"PASS","reason":"bus reachable and build-attributable; no credential sent"},"scheduler":{"verdict":"FAIL","reason":"SCHEDULER_BUILD_DRIFT: the running binary was built from 674d26ed, which is 13 commit(s) behind origin/main (ebd2d466) and 0 ahead of it — the fleet is executing a build the deploy lineage does not contain"},"bunker":{"verdict":"PASS","reason":"agent host answered a read-only list"},"connector":{"verdict":"REPORT","reason":"REPORT_ONLY: no connector package on this tree; the fifth hop does not exist here (exit code unaffected)"}},"overall_exit":1,"ts":"2026-10-29T19:40:31Z"}
+  INFO  CLUSTER-CHAIN-PROBE: FAIL — router=PASS proxy=FAIL[PROXY_BUILD_DRIFT] crier=PASS scheduler=FAIL[SCHEDULER_BUILD_DRIFT] bunker=PASS connector=REPORT(non-gating)
+  INFO  live run exit=1 (not counted: a bare host has no fleet to measure)
+
+=== summary ===
+SELFTEST: PASS=117 FAIL=0
+RESULT: the probe is proven able to fail, and a PASS names its measurement
