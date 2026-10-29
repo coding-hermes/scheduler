@@ -11,7 +11,8 @@ import (
 // Bump it when adding a new migration to the migrations slice below.
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
-const latestMigration = 78
+// SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
+const latestMigration = 79
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1734,6 +1735,23 @@ ALTER TABLE execution_attempts ADD COLUMN start_timeout_s INTEGER NOT NULL DEFAU
 ALTER TABLE execution_attempts ADD COLUMN wall_timeout_s INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE execution_attempts ADD COLUMN budget_units INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE execution_attempts ADD COLUMN cancellation_policy TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SCHED-GAP-16939: a tick that stalls its per-turn watchdog now
+		// ADVANCES to the next eligible hop instead of dying on the first
+		// stalled pair, so the tick row must name every hop it tried —
+		// otherwise "succeeded first try" and "stalled on hop 1, succeeded
+		// on hop 2" read identically (attempts INTEGER from v67 only counts
+		// POSTs and gateway_trace carries the LAST attempt's pair).
+		// Plain additive column holding a JSON array of
+		// {hop, model, provider, duration_ms, reason}. '' = no POST
+		// attempt was recorded (exec spawn, spawn-site refusal) — the
+		// honest empty, never a fabricated completed row.
+		version: 79,
+		desc:    "SCHED-GAP-16939: ticks.gateway_attempts — per-hop attempt rows (hop, pair, duration, terminal reason) so a stall-then-advance tick is distinguishable from a first-try success",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN gateway_attempts TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

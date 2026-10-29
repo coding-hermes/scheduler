@@ -1761,6 +1761,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// turnCtx form below remains the LEGACY path's classifier.
 			var turnStalled bool
 			var postTrace *GatewayPOSTTrace
+			// SCHED-GAP-16939: the per-tick attempts[] record. Declared next to
+			// postTrace so every return path can persist it together with the
+			// trace; written only through the send seam below.
+			hopLog := &tickHopLog{}
 
 			// SCHED-GAP-1681: the merged trace's Attempts count (every POST
 			// this tick made — primary, GAP-080 retries, chain hops), read
@@ -1890,8 +1894,31 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// sendTurn (SCHED-GAP-119) picks the supervised activity-aware
 				// POST when the knob is armed, else the legacy non-streaming
 				// POST under turnCtx — one seam for every attempt below.
+				// SCHED-GAP-16939: `hops` is this tick's ordered, de-duplicated
+				// hop list, resolved from the merged chain with the pair that
+				// is ACTUALLY dispatched forced to position 0 (the router head
+				// can sit outside the chain). Indexes in attempts[] refer to
+				// this list.
+				hops := hopList(chain, chainEntry{model: model, provider: provider})
 				send := func(m, p string) (*Response, error) {
-					return s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTurnDeadline, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
+					// SCHED-GAP-16939: the stall flag is per ATTEMPT —
+					// sendTurn sets it only when ITS POST was aborted by the
+					// per-turn watch. A stale true from the previous hop
+					// would fail a tick that already succeeded on the next.
+					turnStalled = false
+					startedAt := s.clock().Now()
+					r, err := s.sendTurn(gwClient, ctx, turnCtx, superviseTurn, effectiveTurnDeadline, effectiveTimeout, prompt, m, p, endpoint.Key, tickID, project.Name, &postTrace, &turnStalled)
+					// AC 3: one attempts[] row per POST, whatever the outcome.
+					// The merged trace only knows the LAST pair; this is the
+					// only place the hop history survives a later success.
+					hopLog.add(hopAttempt{
+						Hop:        hopIndexOf(hops, m, p),
+						Model:      m,
+						Provider:   p,
+						DurationMS: s.clock().Now().Sub(startedAt).Milliseconds(),
+						Reason:     classifyHopErr(err, turnStalled),
+					})
+					return r, err
 				}
 				r, err := send(model, provider)
 				// SCHED-GAP-080: transient-only bounded retry on the SAME
@@ -1939,10 +1966,47 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						break
 					}
 				}
-				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry || isKeyRejection(err) {
+				// SCHED-GAP-16939: IDLE-STALL → NEXT-HOP ADVANCE.
+				// The per-turn watchdog aborts one POST whose hop made zero
+				// progress; before this loop that abort killed the whole tick
+				// even though the merged chain held other hops. The advance is
+				// bounded three ways and adds no budget: (1) one attempt per
+				// hop — `attempted` is the per-tick exclusion set, not durable
+				// state, so the lane stays eligible for other projects; (2)
+				// at most len(hops) advances; (3) the tick wall (ctx) still
+				// bounds the whole thing, and the per-turn deadline is
+				// unchanged — a diff that raises either is rejected by AC 5.
+				// Re-dispatch reuses the SAME session key (tickID), so the
+				// gateway re-attaches the tick's session exactly as the
+				// GAP-080 retry does rather than minting a new one.
+				for turnStalled && err != nil && ctx.Err() == nil && len(hops) > 1 {
+					next, hop, ok := nextHopAfter(hops, hopLog.attemptedPairs())
+					if !ok {
+						break // chain exhausted: fail with the honest residual
+					}
+					from := chainEntry{model: model, provider: provider}
+					log.Printf("%s", describeHopAdvance(project.Name, tickID, from, next,
+						hopIndexOf(hops, from.model, from.provider), hop, effectiveTurnDeadline.Milliseconds()))
+					// AC 2: the attempt is classified (idle-stall, recorded by
+					// the send seam) and the excluded pair is dropped from
+					// THIS tick's set before the re-dispatch.
+					r, err = send(next.model, next.provider)
+					model, provider = next.model, next.provider
+					if err == nil {
+						// SCHED-GAP-078: the tick's cost follows the pair that
+						// actually ran — the hop, not the stalled head.
+						if rr, ok := routerRes.HopRate(provider, model); ok {
+							rate = rr
+						}
+						break
+					}
+				}
+				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry || isKeyRejection(err) || hopLog.pairAttempted(retryProvider, retryModel) {
 					// GAP-035 terminal on key rejection (auth_error): the
 					// key itself is refused — no pair can fix it, no chain
 					// advance, no retry flood (2026-08-04 outage).
+					// SCHED-GAP-16939: a pair this tick already POSTed is not
+					// retried either — one attempt per hop per tick.
 					return r, err
 				}
 				// TASK-ROUTER-002: the gateway rejected the pair — record
@@ -1983,9 +2047,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					// is skipped when it duplicates a pair already attempted
 					// (single-tier projects keep the legacy fail-fast).
 					ffModel, ffProvider := s.resolveModelProvider(project)
+					// SCHED-GAP-16939: the foreman fallback is the LAST
+					// attempt of the tick, so it must also skip a pair this
+					// tick already POSTed (a stalled hop 0 can be that pair
+					// after the advance loop ran).
 					if ffModel != "" && ffProvider != "" &&
 						(ffModel != model || ffProvider != provider) &&
-						(ffModel != retryModel || ffProvider != retryProvider) {
+						(ffModel != retryModel || ffProvider != retryProvider) &&
+						!hopLog.pairAttempted(ffProvider, ffModel) {
 						log.Printf("GATEWAY FOREMAN FALLBACK: %s tick=%s chain exhausted (primary=%q/%q retry=%q/%q) — final attempt model=%q provider=%q",
 							project.Name, tickID, model, provider, retryModel, retryProvider, ffModel, ffProvider)
 						r3, err3 := send(ffModel, ffProvider)
@@ -2008,6 +2077,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// SCHED-GAP-119 AC 1: log + persist the per-POST trace on EVERY
 			// outcome (completed, aborted-by-turn-deadline, transport-error).
 			s.logPOSTTrace(tickID, postTrace)
+			// SCHED-GAP-16939 AC 3: persist the per-hop attempts[] on the same
+			// every-outcome path, so a tick that stalled on hop 1 and
+			// succeeded on hop 2 is distinguishable from a first-try success
+			// (the merged trace only carries the LAST pair).
+			s.persistHopAttempts(tickID, hopLog)
 			// SCHED-GAP-1698: the poll-loop idle guard cancelled this
 			// session (confirmed sleep-poll cycling). Checked BEFORE the
 			// silence block below — the guard's verdict is the more
