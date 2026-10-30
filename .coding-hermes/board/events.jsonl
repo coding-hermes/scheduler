@@ -1456,3 +1456,4 @@
 {"id": 1792786278246002003, "timestamp": "2026-10-29T20:06:33Z", "event_type": "task_created", "task_id": "SCHED-GAP-16969", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16969\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 1792786278246002004, "timestamp": "2026-10-29T20:06:41Z", "event_type": "task_completed", "task_id": "SCHED-GAP-16969", "actor": "foreman", "detail": "{\"status\":\"complete\"}", "tick_number": null}
 {"id": 1792786278246002005, "timestamp": "2026-10-30T05:28:39Z", "event_type": "task_created", "task_id": "SCHED-GAP-16970", "actor": "foreman", "detail": "{\"id\":\"SCHED-GAP-16970\",\"status\":\"pending\"}", "tick_number": null}
+{"id": 1792786278246002006, "timestamp": "2026-10-30T06:28:45Z", "event_type": "task_updated", "task_id": "SCHED-GAP-16970", "actor": "foreman", "detail": "{\"status\":\"in_progress\"}", "tick_number": null}
