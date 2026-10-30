@@ -900,6 +900,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				deliverAlert(st.Deliver, outcome.Project, outcome.TickID, "timeout after "+outcome.Duration.String())
 			}
 		}
+
+		// SCHED-GAP-16970: print only after lifecycle finalization and all
+		// Telegram delivery attempts, so this local sidecar cannot change
+		// the tick result or delay its report/link send.
+		if !noDeliver {
+			printTickReceipt(outcome.TickID)
+		}
 	}()
 }
 
