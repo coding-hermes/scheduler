@@ -166,8 +166,14 @@ func (t Target) MountPath(mountRoot string) (string, bool) {
 // ResolveLocal maps a target to a local filesystem path when one exists:
 //
 //	local   -> its own path (returned whether or not it exists; callers stat it)
-//	bunker  -> <mountRoot>/<agent><path-inside-agent>, only when that directory exists
+//	bunker  -> a path under <mountRoot>/<agent>, only when the directory exists there
 //	ssh/sftp/ftp -> never (no local mount is assumed)
+//
+// A bunker mount maps the agent's HOME to the mountpoint, so an in-agent path of
+// /home/bunker-<agent>/repo appears as <mountRoot>/<agent>/repo — the home prefix
+// is not part of the mounted tree. Both shapes are tried, home-stripped first,
+// because the canonical form names the absolute in-agent path while the mount
+// only carries what is below the home.
 //
 // The bool is "resolved", not "exists": for local targets the caller keeps its
 // existing stat/board logic, for bunker targets resolution is only true when
@@ -186,14 +192,30 @@ func ResolveLocal(raw, mountRoot string) (string, bool) {
 		if !ok {
 			return "", false
 		}
-		candidate := filepath.Join(mount, strings.TrimPrefix(t.Path, "/"))
-		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
-			return candidate, true
+		for _, candidate := range bunkerCandidates(mount, t.Agent, t.Path) {
+			if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
+				return candidate, true
+			}
 		}
 		return "", false
 	default:
 		return "", false
 	}
+}
+
+// bunkerCandidates lists the local paths a bunker target could appear at, in
+// preference order. The agent's home is /home/bunker-<agent>; anything under it
+// is mounted, anything above it is not.
+func bunkerCandidates(mount, agent, inAgentPath string) []string {
+	candidates := make([]string, 0, 2)
+	homePrefix := "/home/bunker-" + agent
+	if strings.HasPrefix(inAgentPath, homePrefix+"/") {
+		candidates = append(candidates, filepath.Join(mount, strings.TrimPrefix(inAgentPath, homePrefix)))
+	} else if inAgentPath == homePrefix {
+		candidates = append(candidates, mount)
+	}
+	candidates = append(candidates, filepath.Join(mount, strings.TrimPrefix(inAgentPath, "/")))
+	return candidates
 }
 
 // Describe renders a target for logs: "bunker://d274d7cc/home/... " etc.

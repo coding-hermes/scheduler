@@ -59,9 +59,16 @@ func TestResolveLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok := ResolveLocal("bunker://abc/repo", root)
+	got, ok := ResolveLocal("bunker://abc/home/bunker-abc/repo", root)
 	if !ok || got != repo {
-		t.Fatalf("bunker resolve = %q,%v want %q,true", got, ok, repo)
+		t.Fatalf("bunker resolve (home-absolute form) = %q,%v want %q,true", got, ok, repo)
+	}
+
+	// The mount maps the agent's HOME, so a path written relative to the home
+	// must resolve to the same place.
+	got, ok = ResolveLocal("bunker://abc/repo", root)
+	if !ok || got != repo {
+		t.Fatalf("bunker resolve (home-relative form) = %q,%v want %q,true", got, ok, repo)
 	}
 
 	// A path the mount does not carry must NOT resolve: a phantom board path is
