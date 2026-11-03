@@ -1198,6 +1198,11 @@ func (l *Loop) SpawnNowTargeted(project database.Project, agent string) (string,
 		GatewayKey:       project.GatewayKey,
 		Deliver:          project.Deliver,
 		DeliverMode:      project.DeliverMode,
+		// Bane 2026-11-03: the manual spawn path builds its own PackedProject
+		// from the DB row, so the per-lane routing policy has to be carried
+		// here too — otherwise an operator-driven spawn silently ignores
+		// projects.routing_mode while the packer-driven evaluation honours it.
+		RoutingMode: project.RoutingMode,
 		// SCHED-GAP-111: thread the namespace id for effectiveTickTimeout
 		// in the spawn path (manual spawns resolve the wave deadline too).
 		NamespaceID: nsIDOf(project),

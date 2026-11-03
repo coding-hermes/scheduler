@@ -86,6 +86,13 @@ type Project struct {
 	// SCHED-GAP-1607: tick-report delivery mode — full (default) | file | link.
 	// '' and unknown values resolve to full, so pre-1607 rows are unchanged.
 	DeliverMode string `json:"deliver_mode"` // see scheduler.DeliverMode* constants
+	// RoutingMode (Bane 2026-11-03): per-lane orchestration policy —
+	// "fixed" pins this lane to its own model/provider and never consults
+	// the router; "router" hands the decision to the router; "" inherits
+	// the namespace, then the daemon default. Read back verbatim; the
+	// spawn path normalises it and treats anything unrecognised as
+	// inherit so a typo can never unpin a lane.
+	RoutingMode string `json:"routing_mode"`
 	// SCHED-GAP-1586: the name of the lane this lane is a satellite of.
 	// '' = a primary/root lane. Arbitrary depth is allowed (a satellite may
 	// itself have satellites); writes are cycle-checked (see
