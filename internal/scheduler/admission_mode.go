@@ -144,6 +144,10 @@ func laneOwnsBoard(workdir string) bool {
 	if workdir == "" {
 		return false
 	}
+	local, ok := resolveWorkdir(workdir)
+	if !ok {
+		return false
+	}
 	boardPath, hasBoard := findBoardFile(workdir)
 	if !hasBoard {
 		return false
@@ -152,7 +156,7 @@ func laneOwnsBoard(workdir string) bool {
 	if err != nil {
 		return false
 	}
-	resolvedWorkdir, err := filepath.EvalSymlinks(workdir)
+	resolvedWorkdir, err := filepath.EvalSymlinks(local)
 	if err != nil {
 		return false
 	}

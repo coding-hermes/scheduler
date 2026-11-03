@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/target"
 )
 
 // Board-aware pending-task urgency boost (SCHED-GAP-019, 2026-08-09).
@@ -338,11 +339,25 @@ func (c *PendingTaskCounter) freshnessCheckedPending(workdir, boardPath string, 
 // .coding-herms/tasks.md (tracked-markdown boards). Returns the path and
 // true if found, or "" and false if neither exists.
 func findBoardFile(workdir string) (string, bool) {
-	jsonlPath := filepath.Join(workdir, ".coding-hermes", "board", "tasks.jsonl")
+	if workdir == "" {
+		return "", false
+	}
+	// A workdir can be a remote target (bunker://agent/path, user@host:/path).
+	// Resolve it to a local path before touching the filesystem: a remote target
+	// that is not mounted here has no board, and saying "no board" is only correct
+	// once we know we looked in the right place.
+	local, ok := resolveWorkdir(workdir)
+	if !ok {
+		if t, err := target.Parse(workdir); err == nil && t.Remote() {
+			noteUnresolvedWorkdir(workdir, string(t.Kind)+" target")
+		}
+		return "", false
+	}
+	jsonlPath := filepath.Join(local, ".coding-hermes", "board", "tasks.jsonl")
 	if fi, err := os.Stat(jsonlPath); err == nil && !fi.IsDir() {
 		return jsonlPath, true
 	}
-	mdPath := filepath.Join(workdir, ".coding-hermes", "tasks.md")
+	mdPath := filepath.Join(local, ".coding-hermes", "tasks.md")
 	if fi, err := os.Stat(mdPath); err == nil && !fi.IsDir() {
 		return mdPath, true
 	}
