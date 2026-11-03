@@ -1676,7 +1676,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}
 			}
 		}
-		log.Printf("SPAWN ROUTE: %s tick=%s policy=%s lane_class=%q", project.Name, tickID, routePolicy, project.LaneClass)
+		// Bane 2026-11-03: the ROUTE line must name the policy that actually
+		// took effect, not the literal branch default. A lane pinned through
+		// projects.routing_mode never enters the fixedForeman branch (that
+		// branch exists only for foreman-class lanes under the daemon-wide
+		// env switch), so reporting routePolicy verbatim would say "router"
+		// about a spawn the router was never consulted for — the exact
+		// confusion this column was added to end.
+		effectivePolicy := routePolicy
+		if routePolicy != "fixed" && s.routingMode(project) == "fixed" {
+			effectivePolicy = "fixed"
+		}
+		log.Printf("SPAWN ROUTE: %s tick=%s policy=%s lane_class=%q", project.Name, tickID, effectivePolicy, project.LaneClass)
 		chainKind := "work"
 		if idle {
 			chainKind = "idle"
