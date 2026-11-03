@@ -1483,6 +1483,37 @@ func (s *Spawner) mergedChain(project PackedProject, base []chainEntry, routerCh
 	return merged
 }
 
+// pinEntry returns the lane's hard-coded model/provider pair, or the zero
+// chainEntry when the lane has no pin (or only half of one).
+//
+// Bane 2026-11-03: this pair is the operator's explicit choice and doubles as
+// the fallback chain for a router that cannot serve. A half-configured pin is
+// not a pin — validateFixedForemanRoute rejects it on the fixed path, and here
+// it must not become a hop with an empty provider.
+func pinEntry(project PackedProject) chainEntry {
+	m := strings.TrimSpace(project.Model)
+	p := strings.TrimSpace(project.Provider)
+	if m == "" || p == "" {
+		return chainEntry{}
+	}
+	return chainEntry{model: m, provider: p}
+}
+
+// mergePinAhead returns base with pinned moved to the FRONT, removing any
+// later duplicate so the retry walk never POSTs the same pair twice
+// (SCHED-GAP-16939: one attempt per hop per tick).
+func mergePinAhead(base []chainEntry, pinned chainEntry) []chainEntry {
+	out := make([]chainEntry, 0, len(base)+1)
+	out = append(out, pinned)
+	for _, e := range base {
+		if e == pinned {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // canSpawn checks concurrency limits.
 func (s *Spawner) canSpawn() bool {
 	s.mu.Lock()
@@ -1591,7 +1622,26 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// feeds the tick's cost — provider-aware, public-price-first.
 			if res, ok := s.resolveRouterFull(project); ok {
 				routerRes = res
-				if m, p, headOK := res.OpenHead(); headOK {
+				// Bane 2026-11-03: in router mode the lane's own hard-coded
+				// model/provider is the FALLBACK for a router that cannot
+				// serve — not something the router may overwrite.
+				//
+				// The pin is a FLOOR, never a ceiling: when the router opens
+				// a head the router still wins (that is what router mode
+				// means), but when the router returns an EMPTY ladder —
+				// measured 2026-11-03: 462 ticks, chain_length 0, 0 hops
+				// attempted — the spawn must run the model the operator
+				// hard-coded instead of falling through to the global tail
+				// (or, as measured, to nothing at all). The pin is never
+				// DISCARDED either: it stays in the chain ahead of the
+				// router hops, so a 401/403 retry can still reach it.
+				//
+				// When the router DOES open a head, that head wins — the
+				// pin only prepends when the router offered nothing, so
+				// router mode keeps its meaning for every lane it can serve.
+				headOK := false
+				if m, p, okHead := res.OpenHead(); okHead {
+					headOK = true
 					model, provider = m, p
 					log.Printf("ROUTER: %s profile=%s gate=%s head=%s/%s", project.Name, res.Profile, res.Gate, p, m)
 				}
@@ -1599,8 +1649,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					chain = s.mergedChain(project, chain, routerChain)
 					model, provider = resolveChain(chain)
 					// Re-apply router head after merge
-					if m, p, headOK := res.OpenHead(); headOK {
+					if m, p, okHead := res.OpenHead(); okHead {
 						model, provider = m, p
+					}
+				}
+				if !headOK {
+					if pinned := pinEntry(project); pinned != (chainEntry{}) {
+						chain = mergePinAhead(chain, pinned)
+						model, provider = pinned.model, pinned.provider
+						log.Printf("ROUTER-PIN: %s router opened no head — lane pin %s/%s is the fallback the router could not serve", project.Name, pinned.provider, pinned.model)
 					}
 				}
 				// SCHED-GAP-1651: the primary dispatch pair carries the router's

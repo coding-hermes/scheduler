@@ -68,7 +68,46 @@ func (l *Loop) SetForemanRoutingMode(mode string) error {
 }
 
 func (s *Spawner) fixedForeman(project PackedProject) bool {
-	return s.foremanRoutingMode == "fixed" && project.LaneClass == LaneClassForeman
+	return s.routingMode(project) == "fixed" && project.LaneClass == LaneClassForeman
+}
+
+// routingMode resolves the orchestration policy for one spawn.
+//
+// Bane 2026-11-03: this is the SAME layered shape as the model chains —
+// lane > namespace > global — so a project that hard-codes its model can be
+// pinned WITHOUT flipping the whole daemon:
+//
+//	projects.routing_mode    'fixed' | 'router'   (explicit per-lane choice)
+//	namespaces.routing_mode  'fixed' | 'router'   (whole namespace pinned)
+//	foremanRoutingMode       the process-wide env default (boot-resolved)
+//
+// An unrecognised value is treated as inherit rather than as 'router': the
+// failure mode of a typo must be \"keeps inheriting\", never \"silently
+// unpins a foreman that the operator hard-coded on purpose\".
+func (s *Spawner) routingMode(project PackedProject) string {
+	if v := normalizeRoutingMode(project.RoutingMode); v != "" {
+		return v
+	}
+	if v := normalizeRoutingMode(project.NamespaceRoutingMode); v != "" {
+		return v
+	}
+	if s.foremanRoutingMode == "fixed" {
+		return "fixed"
+	}
+	return "router"
+}
+
+// normalizeRoutingMode accepts only the two explicit policy words; everything
+// else (empty, whitespace, a typo) means \"no opinion at this tier\".
+func normalizeRoutingMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "fixed":
+		return "fixed"
+	case "router":
+		return "router"
+	default:
+		return ""
+	}
 }
 
 func validateFixedForemanRoute(project PackedProject) error {

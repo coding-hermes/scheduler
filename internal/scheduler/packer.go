@@ -40,6 +40,16 @@ type PackedProject struct {
 	PromptMode      string // "append" (default) | "replace"
 	NamespacePrompt string // namespace default_prompt (empty = built-in prompt)
 	NamespaceChain  string // namespace model_chain (JSON array); tier between project chain and router (Bane 2026-08-27)
+	// RoutingMode (Bane 2026-11-03) is the per-lane orchestration policy:
+	// "fixed" pins the spawn to this lane's own model/provider and never
+	// consults the router; "router" hands the decision to the router;
+	// "" inherits the namespace, then the process-wide env default. It
+	// exists so a project with a hard-coded model can be pinned without
+	// flipping the daemon for every lane.
+	RoutingMode string
+	// NamespaceRoutingMode is the namespace tier of the same policy —
+	// resolved exactly like NamespaceChain.
+	NamespaceRoutingMode string
 	// NamespaceID (SCHED-GAP-111): the project's namespace, threaded from
 	// the packer's namespace join. Spawn() uses it to resolve the effective
 	// tick deadline for wave-enabled namespaces (S12 §4.3). Empty = no
@@ -185,6 +195,8 @@ type scored struct {
 	fallbackProvider    string
 	noGlobalFallback    bool
 	modelChain          string
+	routingMode         string
+	namespaceRoutingMode string
 	idleModel           string
 	idleProvider        string
 	dailyBudgetUSD      float64
@@ -233,7 +245,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       p.last_tick_completed,
 		       p.created_at, p.workdir, p.repo_url, COALESCE(p.command, ''),
 		       COALESCE(p.model, ''), COALESCE(p.provider, ''), COALESCE(p.fallback_model, ''), COALESCE(p.fallback_provider, ''), COALESCE(p.no_global_fallback, 0), COALESCE(p.model_chain, ''), COALESCE(p.idle_model, ''), COALESCE(p.idle_provider, ''), COALESCE(p.daily_budget_usd, 0.0), COALESCE(p.weekly_budget_usd, 0.0), COALESCE(p.final_budget_usd, 0.0), COALESCE(p.worker_model, ''), COALESCE(p.worker_provider, ''), COALESCE(p.gateway_key, ''), COALESCE(p.deliver, ''), COALESCE(p.deliver_mode, ''),
-		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''),
+		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''), COALESCE(p.routing_mode, ''), COALESCE(ns.routing_mode, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
 		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, ''),
@@ -264,7 +276,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&pinS, &lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
 			&s.model, &s.provider, &s.fallbackModel, &s.fallbackProvider, &s.noGlobalFallback, &s.modelChain, &s.idleModel, &s.idleProvider, &s.dailyBudgetUSD, &s.weeklyBudgetUSD, &s.finalBudgetUSD, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver, &s.deliverMode,
-			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain,
+			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain, &s.routingMode, &s.namespaceRoutingMode,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
 			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership,
@@ -830,6 +842,8 @@ func (s scored) packed() PackedProject {
 		PromptMode:       s.promptMode,
 		NamespacePrompt:  s.namespaceDefaultPmt,
 		NamespaceChain:   s.namespaceChain,
+		RoutingMode:      s.routingMode,
+		NamespaceRoutingMode: s.namespaceRoutingMode,
 		NamespaceID:      s.namespaceID,
 		// SCHED-GAP-1688 AC5: the hook's lane + namespace switches ride the
 		// row to Spawn(), which resolves lane > namespace > global env.

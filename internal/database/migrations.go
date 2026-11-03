@@ -12,7 +12,7 @@ import (
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
 // SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
-const latestMigration = 79
+const latestMigration = 80
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1752,6 +1752,26 @@ ALTER TABLE execution_attempts ADD COLUMN cancellation_policy TEXT NOT NULL DEFA
 		desc:    "SCHED-GAP-16939: ticks.gateway_attempts — per-hop attempt rows (hop, pair, duration, terminal reason) so a stall-then-advance tick is distinguishable from a first-try success",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN gateway_attempts TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// Bane 2026-11-03: the orchestration policy (router vs fixed) is a
+		// PER-LANE decision, resolved exactly like the model chains:
+		// lane > namespace > global env default. Before this the only
+		// switch was the process-wide SCHEDULER_FOREMAN_ROUTING_MODE, so a
+		// project with a hard-coded model+provider (code-factory →
+		// gpt-6.1-sol@openai-codex) could not be pinned without pinning
+		// the whole fleet, and the spawn path merged the router's chain
+		// OVER the project pin and re-applied the router head on top of
+		// it. '' = inherit (namespace, then env), 'router' and 'fixed'
+		// are the only explicit values — a typo must NOT silently unpin
+		// a foreman, so resolution treats anything unrecognised on a lane
+		// as inherit rather than as a routable value.
+		version: 80,
+		desc:    "Bane 2026-11-03: per-lane routing policy — projects.routing_mode and namespaces.routing_mode ('' = inherit; 'router' | 'fixed'), so a pinned project stays pinned without flipping the whole daemon",
+		stmt: `
+ALTER TABLE projects ADD COLUMN routing_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE namespaces ADD COLUMN routing_mode TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

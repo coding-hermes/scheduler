@@ -456,6 +456,13 @@ type ProjectUpdates struct {
 	ModelChain  *string `json:"model_chain"`  // SCHED-GAP-095: ordered "model@provider" hops (JSON array); "" clears
 	Deliver     *string `json:"deliver"`      // SCHED-GAP-095: delivery target platform:chat_id:thread_id; "" clears
 	DeliverMode *string `json:"deliver_mode"` // SCHED-GAP-1607: "full" (default) | "file" | "link"; "" resets to full
+	// RoutingMode (Bane 2026-11-03): per-lane orchestration policy —
+	// "fixed" pins this lane to its own model/provider and never consults
+	// the router; "router" hands the decision to the router; "" inherits
+	// the namespace, then the daemon default. Any other value is stored
+	// verbatim and treated as inherit at spawn time (a typo must not
+	// silently unpin a lane).
+	RoutingMode *string `json:"routing_mode"`
 	// SCHED-GAP-1586: parent lane reference — the name of the lane this lane
 	// is a satellite of; "" clears back to a primary/root lane. Every write
 	// is cycle-checked (self-parenting and any chain that loops back to the
@@ -890,6 +897,13 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 	if updates.DeliverMode != nil {
 		setClauses = append(setClauses, "deliver_mode = ?")
 		args = append(args, *updates.DeliverMode)
+	}
+	// Bane 2026-11-03: per-lane routing policy, settable exactly the way
+	// deliver_mode is. Stored verbatim; the spawn path normalises it and
+	// treats anything unrecognised as "inherit".
+	if updates.RoutingMode != nil {
+		setClauses = append(setClauses, "routing_mode = ?")
+		args = append(args, *updates.RoutingMode)
 	}
 	// SCHED-GAP-1586: parent lane reference with cycle validation — a lane
 	// can never become its own ancestor. Self-parenting and any parent
