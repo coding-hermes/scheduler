@@ -232,15 +232,11 @@ func isProjectCheckoutFor(dir, name string) bool {
 		return false
 	}
 	// Must be the top of a checkout: a .git entry here (dir for a clone, file for
-	// a linked worktree) and none in the parent, so a lane cannot claim a
-	// subdirectory of some unrelated repo by naming a parent directory.
+	// a linked worktree), so a bare directory that happens to be named after the
+	// project cannot pass as its repo. A subdirectory fails the same test, since
+	// it carries no .git of its own.
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return false
-	}
-	if parent := filepath.Dir(dir); parent != dir {
-		if _, err := os.Stat(filepath.Join(parent, ".git")); err == nil {
-			return false
-		}
 	}
 	fi, err := os.Stat(dir)
 	return err == nil && fi.IsDir()
