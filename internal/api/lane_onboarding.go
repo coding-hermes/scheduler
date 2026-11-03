@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/target"
 )
 
 // Lane onboarding shape gate (SCHED-GAP-138).
@@ -186,6 +187,14 @@ func canonicalLaneWorkdirs(name string) []string {
 func validateLaneWorkdir(name, workdir string) error {
 	family := laneSatelliteFamily(name)
 	if family == "" {
+		return nil
+	}
+	// A REMOTE target is its own identity. The convention exists because a local
+	// workdir is just a directory and two lanes can silently share one (or land in
+	// $HOME); a bunker://<agent>/<path> (or user@host:/path, ssh://…, sftp://…)
+	// names the node and the path inside it explicitly, so the local naming
+	// convention does not apply and must not veto it.
+	if t, err := target.Parse(workdir); err == nil && t.Remote() {
 		return nil
 	}
 	accepted := canonicalLaneWorkdirs(name)
