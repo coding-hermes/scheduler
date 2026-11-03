@@ -205,9 +205,45 @@ func validateLaneWorkdir(name, workdir string) error {
 				return nil
 			}
 		}
+		if isProjectCheckoutFor(got, name) {
+			return nil
+		}
 	}
 	return fmt.Errorf("lane %q workdir %q is off-convention: -%s lanes live in %s",
 		name, workdir, family, quotedOrJoin(accepted))
+}
+
+// isProjectCheckoutFor reports whether dir is the PROJECT'S OWN checkout for a
+// lane: a real git worktree whose directory name is the lane's project prefix.
+//
+// Satellites do not need a stand-in directory to do their best work — a docs or
+// qa lane belongs in the repository it documents and tests, and sharing the
+// project checkout is the point, not an accident. The stand-in roots remain
+// accepted for lanes that genuinely work in a scratch tree. The prefix rule is
+// what keeps this from becoming a licence to point any lane at any directory:
+// `code-factory-duckbrain-pm` may live in `.../code-factory` or
+// `.../code-factory-duckbrain`, never in `/home`, `/tmp` or another project.
+func isProjectCheckoutFor(dir, name string) bool {
+	base := filepath.Base(dir)
+	if base == "" || base == "/" || base == "." || base == ".." {
+		return false
+	}
+	if name != base && !strings.HasPrefix(name, base+"-") {
+		return false
+	}
+	// Must be the top of a checkout: a .git entry here (dir for a clone, file for
+	// a linked worktree) and none in the parent, so a lane cannot claim a
+	// subdirectory of some unrelated repo by naming a parent directory.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false
+	}
+	if parent := filepath.Dir(dir); parent != dir {
+		if _, err := os.Stat(filepath.Join(parent, ".git")); err == nil {
+			return false
+		}
+	}
+	fi, err := os.Stat(dir)
+	return err == nil && fi.IsDir()
 }
 
 // quotedOrJoin renders an accepted-path list for an error message:
