@@ -76,6 +76,27 @@ func (e *GatewayStatusError) Error() string {
 // Measured 2026-11-03: four code-factory satellite ticks on
 // z-ai/glm-5.3-flash@xkiro died with chain_length=0 because this class of error
 // landed in the "other errors keep single-attempt behavior" bucket.
+//
+// routerRefusalMarkers are the texts the task-router uses for its OWN "I declined
+// to route" 503s. Kept identical to the router's _ROUTER_GENERATED_MARKERS
+// (task-router scripts/router_server.py, TR-340) on purpose: the router already
+// decided this text is evidence about the RATING and the GATES, never about the
+// (provider, model) pair. The scheduler must reach the same conclusion, or it
+// charges a pair for the router's veto and, worse, kills a tick whose fallback
+// could have served it.
+//
+// Measured 2026-11-03 20:21:15: ticks died with `gateway HTTP 503 ...
+// {"error": "no open hop for this request"}` — a refusal the first cut of
+// isRouterRefusal did not classify, because it only knew "unservable-rating".
+var routerRefusalMarkers = []string{
+	"no open hop",
+	"no-hops",
+	"no hops",
+	"unservable-rating",
+	"registry-missing",
+	"no eligible model",
+}
+
 func isRouterRefusal(err error) bool {
 	var gse *GatewayStatusError
 	if !errors.As(err, &gse) {
@@ -84,7 +105,13 @@ func isRouterRefusal(err error) bool {
 	if gse.StatusCode != http.StatusServiceUnavailable {
 		return false
 	}
-	return strings.Contains(gse.msg, "unservable-rating")
+	body := strings.ToLower(gse.msg)
+	for _, marker := range routerRefusalMarkers {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsTransientGatewayErr reports whether err is a transient gateway failure

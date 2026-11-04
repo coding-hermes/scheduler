@@ -48,6 +48,21 @@ func TestIsRouterRefusal_ClassifiesOnlyServable503(t *testing.T) {
 			err:  fmt.Errorf("dispatch leg: %w", &GatewayStatusError{StatusCode: http.StatusServiceUnavailable, msg: `gateway POST: HTTP 503: {"failure_reason": "unservable-rating"}`}),
 			want: true,
 		},
+		{
+			name: "503 no-open-hop is a refusal too (TR-340 marker set)",
+			err:  &GatewayStatusError{StatusCode: http.StatusServiceUnavailable, msg: `gateway POST: HTTP 503: {"error": "no open hop for this request", "chain_length": 0}`},
+			want: true,
+		},
+		{
+			name: "503 registry-missing is a refusal too",
+			err:  &GatewayStatusError{StatusCode: http.StatusServiceUnavailable, msg: `gateway POST: HTTP 503: {"error": "registry-missing for lane docs"}`},
+			want: true,
+		},
+		{
+			name: "503 no eligible model is a refusal too",
+			err:  &GatewayStatusError{StatusCode: http.StatusServiceUnavailable, msg: `gateway POST: HTTP 503: {"error": "no eligible model for this rating"}`},
+			want: true,
+		},
 		{name: "nil", err: nil, want: false},
 		{name: "plain transport error", err: errors.New("dial tcp 127.0.0.1:9391: connect: connection refused"), want: false},
 		{name: "key rejection", err: fmt.Errorf("%w (HTTP 401): bad key", ErrGatewayKeyRejected), want: false},
