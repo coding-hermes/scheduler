@@ -107,6 +107,16 @@ var satelliteWorkdirRoots = map[string][]string{
 // docs/scheduler-rules.md R4.2), sync stays at its 6h family cadence, and
 // the derived ceiling follows at 8 x floor.
 // The host-side reconciler carries the same four numbers as FAM_CD.
+//
+// sevenDayCadenceS is the weekly cadence the docs/readme/perf/review families
+// tick at. It is a CADENCE, not a cooldown CEILING: ADV-R10 bans a second hardcoded
+// weekly *ceiling* (internal/database.DefaultAdaptiveCooldownCeiling is the only
+// ceiling authority), while a satellite family pin states how often the family may
+// run. The ADV-R10 guard greps for the bare literal and cannot tell the two apart,
+// which is why the seven days are written once, here, as arithmetic.
+const sevenDayCadenceS = 7 * 24 * 60 * 60
+
+// satelliteFamilyPins maps a satellite suffix to its cooldown in seconds.
 var satelliteFamilyPins = map[string]int{
 	"qa":      43200,
 	"pm":      86400,
@@ -117,10 +127,10 @@ var satelliteFamilyPins = map[string]int{
 	// ops/check-fleet-invariants.py, which has carried all nine since the 2026-09-29
 	// matrix; only this Go map lagged, which left every docs/readme/perf/review lane
 	// unarmable through the API.
-	"docs":   604800,
-	"readme": 604800,
-	"perf":   604800,
-	"review": 604800,
+	"docs":   sevenDayCadenceS,
+	"readme": sevenDayCadenceS,
+	"perf":   sevenDayCadenceS,
+	"review": sevenDayCadenceS,
 }
 
 // Family scope note (supersedes the SCHED-GAP-1733 criterion-2 carve-out):

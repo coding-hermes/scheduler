@@ -2069,7 +2069,31 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 						break
 					}
 				}
-				if err == nil || !errors.Is(err, ErrGatewayKeyRejected) || !hasRetry || isKeyRejection(err) || hopLog.pairAttempted(retryProvider, retryModel) {
+				// SCHED-GAP-243 (Bane 2026-11-03): a router REFUSAL is not an outage.
+				//
+				// When the gateway answers 503 with failure_reason "unservable-rating"
+				// the routing layer classified this pair as unable to serve the tick —
+				// the same "this pair cannot serve this request" meaning as a 401/403
+				// pair rejection, and the opposite of a transport/timeout failure. It
+				// used to fall into the "Other errors (network, 5xx, timeout) keep the
+				// single-attempt behavior" bucket, so the tick died with
+				// chain_length=0 even though the lane's fallback could serve it.
+				//
+				// Scope of the widening: ONLY 503 + unservable-rating advances the
+				// chain. Other 5xx stay single-attempt — an outage is not a routing
+				// verdict, and walking the chain through an outage multiplies load on
+				// a gateway that is already sick.
+				refusal := isRouterRefusal(err)
+				// A refusal with no next chain entry still deserves the foreman
+				// fallback, so make it the single retry hop rather than skipping the
+				// advance entirely (single-tier lanes are the common case).
+				if refusal && !hasRetry {
+					ffM, ffP := s.resolveModelProvider(project)
+					if ffM != "" && ffP != "" && !hopLog.pairAttempted(ffP, ffM) {
+						retryModel, retryProvider, hasRetry = ffM, ffP, true
+					}
+				}
+				if err == nil || (!errors.Is(err, ErrGatewayKeyRejected) && !refusal) || !hasRetry || isKeyRejection(err) || hopLog.pairAttempted(retryProvider, retryModel) {
 					// GAP-035 terminal on key rejection (auth_error): the
 					// key itself is refused — no pair can fix it, no chain
 					// advance, no retry flood (2026-08-04 outage).
@@ -2084,10 +2108,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// router_circuit.py) becomes the backoff: the pair is
 				// excluded from future router heads until it cools, and
 				// this tick never re-sends it (max 1 attempt per hop).
-				s.recordCircuitFailure(provider, model, "gateway 401/403 rejected pair")
-				circuitFailureRecorded = true
-				log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
-					project.Name, tickID, model, provider, retryModel, retryProvider)
+				if !refusal {
+					// A router refusal is the RATING layer declining this class of
+					// tick, not the pair failing — tripping the breaker here would
+					// exclude a pair that may serve other ticks fine. The terminal
+					// failure path below still records the primary pair once if the
+					// whole advance (hop + foreman fallback) comes up empty.
+					s.recordCircuitFailure(provider, model, "gateway 401/403 rejected pair")
+					circuitFailureRecorded = true
+					log.Printf("GATEWAY FALLBACK: %s tick=%s primary model=%q provider=%q rejected (HTTP 401/403) — retrying once with model=%q provider=%q",
+						project.Name, tickID, model, provider, retryModel, retryProvider)
+				} else {
+					log.Printf("GATEWAY ROUTER REFUSAL: %s tick=%s model=%q provider=%q unservable-rating (HTTP 503) — advancing to model=%q provider=%q (no breaker trip: the rating was unservable, not the pair dead)",
+						project.Name, tickID, model, provider, retryModel, retryProvider)
+				}
 				r2, err2 := send(retryModel, retryProvider)
 				if err2 == nil {
 					model, provider = retryModel, retryProvider
@@ -2099,11 +2133,15 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					if rr, ok := routerRes.HopRate(provider, model); ok {
 						rate = rr
 					}
-				} else if errors.Is(err2, ErrGatewayKeyRejected) {
-					// The retry hop is rejected too — record it as well.
+				} else if errors.Is(err2, ErrGatewayKeyRejected) || isRouterRefusal(err2) {
+					// The retry hop failed too — record it as well, unless the
+					// failure was another routing refusal (same reasoning as the
+					// primary: a rating verdict is not a dead pair).
 					// No further hops: max 1 attempt per hop per tick,
 					// and the breaker cooldown IS the cross-tick backoff.
-					s.recordCircuitFailure(retryProvider, retryModel, "gateway 401/403 retry hop rejected")
+					if errors.Is(err2, ErrGatewayKeyRejected) {
+						s.recordCircuitFailure(retryProvider, retryModel, "gateway 401/403 retry hop rejected")
+					}
 					// Bane 2026-08-27 (final-fallback rule): when the whole
 					// chain is exhausted (or empty), make ONE final attempt
 					// with the FOREMAN FALLBACK — the config-set ultimate

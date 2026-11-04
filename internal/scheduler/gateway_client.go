@@ -64,6 +64,29 @@ func (e *GatewayStatusError) Error() string {
 	return e.msg
 }
 
+// isRouterRefusal reports whether err is the routing layer DECLINING to serve a
+// pair — HTTP 503 whose body carries failure_reason "unservable-rating".
+//
+// Why this is not just "a 5xx": a refusal is a verdict about the pair and the
+// tick's complexity class, so advancing the fallback chain is the correct
+// response (the next pair may serve what this one could not). An outage, a
+// timeout, or a 500 is not a verdict about anything and must stay single-attempt
+// — walking the chain through an outage multiplies load on a sick gateway.
+//
+// Measured 2026-11-03: four code-factory satellite ticks on
+// z-ai/glm-5.3-flash@xkiro died with chain_length=0 because this class of error
+// landed in the "other errors keep single-attempt behavior" bucket.
+func isRouterRefusal(err error) bool {
+	var gse *GatewayStatusError
+	if !errors.As(err, &gse) {
+		return false
+	}
+	if gse.StatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	return strings.Contains(gse.msg, "unservable-rating")
+}
+
 // IsTransientGatewayErr reports whether err is a transient gateway failure
 // worth a bounded same-pair retry (SCHED-GAP-080): HTTP 5xx responses,
 // network/timeout errors from client.Do (*url.Error), and read/unmarshal

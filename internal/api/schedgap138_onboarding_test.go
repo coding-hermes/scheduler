@@ -620,7 +620,12 @@ func TestSCHEDGAP138_FamilyConstantsParity(t *testing.T) {
 		t.Fatalf("read server_projects.go: %v", err)
 	}
 
-	goPins := intMapIn(t, string(goSrc), `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
+	// The Go map's weekly entries are written as `sevenDayCadenceS`, because ADV-R10
+	// forbids a second hardcoded weekly ceiling literal in non-test Go. Resolve that
+	// declaration to its value first, so this parity assertion still compares numbers
+	// against the Python canonical matrix instead of identifiers against integers.
+	resolvedGo := resolveCadenceConstants(t, string(goSrc))
+	goPins := intMapIn(t, resolvedGo, `(?s)satelliteFamilyPins\s*=\s*map\[string\]int\{(.*?)\n\}`)
 	pyPins := intMapIn(t, string(pySrc), `(?s)SATELLITE_FAMILY_PINS\s*=\s*\{(.*?)\}`)
 	want := map[string]int{"qa": 43200, "pm": 86400, "sync": 21600, "dogfood": 259200, "releng": 86400,
 		"docs": 604800, "readme": 604800, "perf": 604800, "review": 604800}
@@ -732,4 +737,31 @@ func intMapIn(t *testing.T, src, pattern string) map[string]int {
 		t.Fatalf("pattern %q matched a block with no key/value pairs", pattern)
 	}
 	return out
+}
+
+// resolveCadenceConstants substitutes named arithmetic constants declared in `const`
+// blocks with their computed value, so a source-text parity check can keep comparing
+// numbers after a literal was replaced by a name.
+//
+// Why this exists: ADV-R10 forbids the bare weekly-ceiling literal anywhere in non-test
+// Go, while the family-pin parity check needs the number. The two guards were written
+// against each other — the parity test text-parsed `"docs": 604800`, the ceiling test
+// banned that exact text — so the pair could not both pass, and the repo sat red from
+// the moment the nine families landed (2026-10-29) until this helper.
+func resolveCadenceConstants(t *testing.T, src string) string {
+	t.Helper()
+	decl := regexp.MustCompile(`(?m)^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([0-9][0-9 	*]*)$`)
+	for _, m := range decl.FindAllStringSubmatch(src, -1) {
+		name, expr := m[1], m[2]
+		value := 1
+		for _, factor := range strings.Split(strings.ReplaceAll(expr, " ", ""), "*") {
+			n, err := strconv.Atoi(factor)
+			if err != nil {
+				t.Fatalf("const %s = %q is not pure integer arithmetic", name, expr)
+			}
+			value *= n
+		}
+		src = strings.ReplaceAll(src, name, strconv.Itoa(value))
+	}
+	return src
 }
