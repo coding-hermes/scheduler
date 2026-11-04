@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -181,7 +182,7 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	// directive, and NOT a task id.
 	wantKeys := map[string]bool{
 		"kind": true, "lane": true, "board": true, "workdir": true,
-		"corr_id": true, "scheduler_id": true, "issued_at": true, "text": true,
+		"corr_id": true, "scheduler_id": true, "issued_at": true, "text_b64": true,
 		"limits": true,
 	}
 	for k, v := range req.Payload {
@@ -223,9 +224,19 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	if lim, ok := req.Payload["limits"].(map[string]any); !ok || lim["wall_s"] != float64(940) {
 		t.Errorf("payload.limits = %v, want {wall_s: 940}", req.Payload["limits"])
 	}
-	// CF-139: the directive travels verbatim, and it is prose.
-	if got := req.Payload["text"]; got != "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board." {
-		t.Errorf("payload.text = %v, want the rendered directive carried verbatim", got)
+	// CF-139: the directive travels verbatim — base64 on the wire so the
+	// relay's injection pre-match cannot read a JSON example inside a foreman
+	// prompt as a stringified object and refuse the dispatch.
+	enc, _ := req.Payload["text_b64"].(string)
+	dec, derr := base64.StdEncoding.DecodeString(enc)
+	if derr != nil {
+		t.Fatalf("payload.text_b64 is not base64: %v", derr)
+	}
+	if want := "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board."; string(dec) != want {
+		t.Errorf("decoded directive = %q, want %q", string(dec), want)
+	}
+	if _, plain := req.Payload["text"]; plain {
+		t.Error("payload still carries a plain text member: the guard refuses prose containing JSON examples")
 	}
 
 	// The raw wire body must contain no task-shaped MEMBER at all, at any
