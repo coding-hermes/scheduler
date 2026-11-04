@@ -199,6 +199,10 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 		// payload.reply_to, so naming ourselves is what makes the reply
 		// arrive where the correlation id can be matched.
 		ReplyTo: client.InboxAgentID(),
+		// The DIRECTIVE (CF-139). Identical to what a local tick receives, so
+		// the remote harness is asked to do the lane's work instead of being
+		// handed the envelope and told to run it.
+		Text: buildForemanPrompt(proj, tickID),
 	}
 
 	receipt, err := dispatchToTarget(dctx, client, proj, target, item, db)

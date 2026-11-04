@@ -121,6 +121,16 @@ type WorkItem struct {
 	// dispatcher's historical default and is only correct for a caller with
 	// no reply leg.
 	ReplyTo string
+	// Text is the DIRECTIVE: the prose the node's harness is asked to carry
+	// out (CF-139). The envelope addresses a LANE, and the lane's directive is
+	// rendered by the scheduler — buildForemanPrompt — so the remote tick
+	// receives exactly what a local tick would. Without this the node was
+	// handed json.Marshal of the envelope and asked to execute it.
+	//
+	// Never a task id (that is the foreman's choice, see the payload law), and
+	// never a JSON blob (validate refuses one): a harness told to "run" JSON
+	// invents an instruction or executes the envelope.
+	Text string
 }
 
 // validate refuses an incomplete work item by name, before any I/O. A
@@ -132,13 +142,28 @@ func (w WorkItem) validate() error {
 	if strings.TrimSpace(w.Board) == "" && strings.TrimSpace(w.Workdir) == "" {
 		return errors.New("bus: dispatch: a board or workdir reference is required")
 	}
+	// A dispatch whose text is itself JSON is not a directive: the receiving
+	// harness would be asked to execute an envelope, which is how the first
+	// remote tick burned its whole budget producing nothing (CF-139). Empty is
+	// allowed here so non-lane callers (federation queries, probes) still work;
+	// the lane path always renders prose.
+	//
+	// The test is "parses as JSON", not "starts with a bracket": a real
+	// directive opens with "[Scheduler tick: …]".
+	if t := strings.TrimSpace(w.Text); t != "" && (t[0] == '{' || t[0] == '[') {
+		var probe any
+		if jerr := json.Unmarshal([]byte(t), &probe); jerr == nil {
+			return errors.New("bus: dispatch: text is a JSON blob, not a directive")
+		}
+	}
 	return nil
 }
 
 // payload renders the work item as the deliver body's payload object. Keys
 // are stable and json.Marshal orders map keys, so the wire shape is
-// deterministic (and diffable in tests). No task field exists, here or
-// anywhere in the dispatch path.
+// deterministic (and diffable in tests). There is no task field: the scheduler
+// addresses a LANE, and the foreman picks the task. `text` is the lane's
+// directive (CF-139), not a task reference.
 func (w WorkItem) payload(schedulerID string, now time.Time) map[string]any {
 	p := map[string]any{
 		"kind":         KindWorkDispatch,
@@ -155,6 +180,9 @@ func (w WorkItem) payload(schedulerID string, now time.Time) map[string]any {
 	}
 	if w.ReplyTo != "" {
 		p["reply_to"] = w.ReplyTo
+	}
+	if w.Text != "" {
+		p["text"] = w.Text
 	}
 	return p
 }

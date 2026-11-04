@@ -133,6 +133,7 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 		Lane:    "auger",
 		Board:   "/home/kara/auger/.coding-hermes/board/tasks.jsonl",
 		Workdir: "/home/kara/auger",
+		Text:    "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board.",
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -175,10 +176,11 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 		t.Errorf("idempotency_key = %q, want the receipt corr id %q (retry-safe)", req.IdempotencyKey, receipt.CorrID)
 	}
 
-	// THE PAYLOAD LAW: lane + board/workdir ref + corr id, and NOT a task id.
+	// THE PAYLOAD LAW: lane + board/workdir ref + corr id + the lane's
+	// directive, and NOT a task id.
 	wantKeys := map[string]bool{
 		"kind": true, "lane": true, "board": true, "workdir": true,
-		"corr_id": true, "scheduler_id": true, "issued_at": true,
+		"corr_id": true, "scheduler_id": true, "issued_at": true, "text": true,
 	}
 	for k, v := range req.Payload {
 		if !wantKeys[k] {
@@ -266,6 +268,31 @@ func TestDispatchMintsCorrIDWhenEmpty(t *testing.T) {
 	}
 	if first.CorrID == second.CorrID {
 		t.Fatalf("two dispatches share a minted corr id: %q", first.CorrID)
+	}
+}
+
+func TestDispatchRefusesJSONBlobAsText(t *testing.T) {
+	// CF-139: the first remote tick was handed json.Marshal of its own
+	// envelope and told to run it. A directive is prose; a JSON blob is the
+	// envelope leaking into the instruction field.
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called.Store(true)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := newDispatchClient(t, srv.URL)
+	for _, blob := range []string{`{"kind":"work.dispatch","lane":"auger"}`, `  [1,2,3]`} {
+		_, err := c.Dispatch(context.Background(), "agent-7", WorkItem{
+			Lane: "auger", Board: "b", Text: blob,
+		})
+		if err == nil || !strings.Contains(err.Error(), "JSON blob") {
+			t.Fatalf("text %q: err = %v, want a refusal naming a JSON blob", blob, err)
+		}
+	}
+	if called.Load() {
+		t.Fatal("a JSON-blob dispatch reached the relay: the refusal must run before any I/O")
 	}
 }
 
