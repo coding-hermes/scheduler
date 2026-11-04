@@ -216,6 +216,10 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	if req.Payload["issued_at"] != "2026-10-02T15:30:00Z" {
 		t.Errorf("payload.issued_at = %v, want the injected clock stamp", req.Payload["issued_at"])
 	}
+	// CF-139: the directive travels verbatim, and it is prose.
+	if got := req.Payload["text"]; got != "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board." {
+		t.Errorf("payload.text = %v, want the rendered directive carried verbatim", got)
+	}
 
 	// The raw wire body must contain no task-shaped MEMBER at all, at any
 	// nesting depth (the board path is named tasks.jsonl and that is fine —
