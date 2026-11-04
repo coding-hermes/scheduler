@@ -746,6 +746,7 @@ func (l *Loop) Run() {
 	// that function returns early when it finds no dead rows, and its
 	// running-row contract stays byte-identical this way.
 	l.reapStaleQueuedRows()
+	l.reapOrphanedDispatchRows()
 
 	// SCHED-GAP-1706: flip tick_workers rows stuck in state='running' whose
 	// tick row is already terminal (completed/failed/timeout) or whose

@@ -1195,3 +1195,56 @@ func (l *Loop) reapZombies() {
 	// the goroutine's own deferred Release.
 	l.slotPool.releaseReaped(reapedProjects)
 }
+
+// orphanedDispatchRowsSQL selects hand-outs still marked 'dispatched' whose
+// tick is no longer running — the owner of the await is gone (a restart, a
+// crash, or a tick that closed on timeout while the reply never arrived).
+const orphanedDispatchRowsSQL = `
+SELECT d.tick_id, d.lane, COALESCE(t.status, 'missing')
+FROM tick_dispatch d
+LEFT JOIN ticks t ON t.id = d.tick_id
+WHERE d.state = 'dispatched'
+  AND (t.id IS NULL OR t.status NOT IN ('running','queued'))`
+
+// reapOrphanedDispatchRows closes hand-outs nobody is waiting for any more.
+// A 'dispatched' row is a promise that someone holds the correlation id and
+// will write the outcome; when the process that made that promise restarts,
+// the promise is void and the row lies forever (measured 2026-11-04: the
+// 05:53:34 dispatch stayed 'dispatched' across two restarts while its tick had
+// already closed). The tick is the authority on whether work is in flight.
+func (l *Loop) reapOrphanedDispatchRows() int {
+	ctx := context.Background()
+	rows, err := l.db.QueryContext(ctx, orphanedDispatchRowsSQL)
+	if err != nil {
+		log.Printf("DISPATCH: orphan sweep query failed: %v", err)
+		return 0
+	}
+	type orphan struct{ tickID, lane, tickStatus string }
+	var orphans []orphan
+	for rows.Next() {
+		var o orphan
+		if err := rows.Scan(&o.tickID, &o.lane, &o.tickStatus); err != nil {
+			continue
+		}
+		orphans = append(orphans, o)
+	}
+	rows.Close() // before any UPDATE: SQLite has a single writer
+
+	var reaped int
+	now := l.clock().Now().UTC().Format(time.RFC3339Nano)
+	for _, o := range orphans {
+		why := "dispatch abandoned: the awaiting process is gone (tick status " + o.tickStatus + ")"
+		if _, err := l.db.ExecContext(ctx,
+			`UPDATE tick_dispatch SET state = ?, error = ?, updated_at = ? WHERE tick_id = ? AND state = 'dispatched'`,
+			"expired", why, now, o.tickID); err != nil {
+			log.Printf("DISPATCH: reaping orphaned hand-out %s (lane %s): %v", o.tickID, o.lane, err)
+			continue
+		}
+		reaped++
+		log.Printf("DISPATCH: hand-out %s (lane %s) closed as expired — %s", o.tickID, o.lane, why)
+	}
+	if reaped == 0 {
+		log.Printf("DISPATCH: orphan sweep — no abandoned hand-outs")
+	}
+	return reaped
+}
