@@ -134,6 +134,7 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 		Board:   "/home/kara/auger/.coding-hermes/board/tasks.jsonl",
 		Workdir: "/home/kara/auger",
 		Text:    "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board.",
+		WallS:   940,
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -181,6 +182,7 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	wantKeys := map[string]bool{
 		"kind": true, "lane": true, "board": true, "workdir": true,
 		"corr_id": true, "scheduler_id": true, "issued_at": true, "text": true,
+		"limits": true,
 	}
 	for k, v := range req.Payload {
 		if !wantKeys[k] {
@@ -215,6 +217,11 @@ func TestDispatchPayloadNeverContainsTaskID(t *testing.T) {
 	}
 	if req.Payload["issued_at"] != "2026-10-02T15:30:00Z" {
 		t.Errorf("payload.issued_at = %v, want the injected clock stamp", req.Payload["issued_at"])
+	}
+	// CF-138: the deadline travels with the work, so the node kills on the
+	// caller's clock rather than a constant of its own.
+	if lim, ok := req.Payload["limits"].(map[string]any); !ok || lim["wall_s"] != float64(940) {
+		t.Errorf("payload.limits = %v, want {wall_s: 940}", req.Payload["limits"])
 	}
 	// CF-139: the directive travels verbatim, and it is prose.
 	if got := req.Payload["text"]; got != "[Scheduler tick: t-1] You are the foreman for lane auger. Work the board." {

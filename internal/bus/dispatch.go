@@ -131,6 +131,13 @@ type WorkItem struct {
 	// never a JSON blob (validate refuses one): a harness told to "run" JSON
 	// invents an instruction or executes the envelope.
 	Text string
+	// WallS is the session deadline in seconds the caller will wait for this
+	// work, sent as payload.limits.wall_s (CF-138). The node must stop before
+	// the near end gives up, so it derives its own kill from this rather than
+	// from a constant: the proven dispatcher used a fixed 240s while the
+	// scheduler waited 940s, and every real task died at the far end while the
+	// near end was still listening. Zero means "caller did not say".
+	WallS int
 }
 
 // validate refuses an incomplete work item by name, before any I/O. A
@@ -183,6 +190,9 @@ func (w WorkItem) payload(schedulerID string, now time.Time) map[string]any {
 	}
 	if w.Text != "" {
 		p["text"] = w.Text
+	}
+	if w.WallS > 0 {
+		p["limits"] = map[string]any{"wall_s": w.WallS}
 	}
 	return p
 }

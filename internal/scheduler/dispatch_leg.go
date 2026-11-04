@@ -190,6 +190,13 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 	p.spawner.RegisterTickSessionContext(tickID, dcancel)
 	defer p.spawner.UnregisterTickSessionContext(tickID)
 
+	// The session deadline a local tick would have had, computed ONCE
+	// (effectiveTickTimeout records feature use on wave-enabled namespaces, so
+	// a second call would double-count). It bounds the await below AND travels
+	// to the node as limits.wall_s (CF-138), so the far end cannot kill work
+	// the near end is still waiting for.
+	timeout := p.spawner.effectiveTickTimeout(proj)
+
 	item := bus.WorkItem{
 		Lane:    proj.Name,
 		Board:   board,
@@ -203,6 +210,9 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 		// the remote harness is asked to do the lane's work instead of being
 		// handed the envelope and told to run it.
 		Text: buildForemanPrompt(proj, tickID),
+		// The same deadline the await below uses. The node must stop before
+		// we do, not at some fixed constant of its own (CF-138).
+		WallS: int(timeout.Seconds()),
 	}
 
 	receipt, err := dispatchToTarget(dctx, client, proj, target, item, db)
@@ -232,8 +242,8 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 		proj.Name, tickID, receipt.AgentID, receipt.CorrID, receipt.MessageID, receipt.Transport, workdir, board)
 
 	// Wait for the answer, bounded by the same session deadline a local tick
-	// would have had.
-	timeout := p.spawner.effectiveTickTimeout(proj)
+	// would have had (computed above, and already carried to the node as
+	// limits.wall_s).
 	reply, ok, waitErr := p.awaitDispatchReply(dctx, proj, tickID, receipt, timeout)
 
 	finished := p.clock().Now()
