@@ -497,8 +497,18 @@ func (l *Loop) evaluate() {
 		// once load drops. DEFER, not drop — no cooldown consumed, no
 		// failure recorded, no slot taken, no nudge budget spent, no row.
 		if LoadGateShouldDefer(l.db, proj.NamespaceID) {
-			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
-			continue
+			// A lane whose work is handed to a remote agent does not load
+			// THIS host: the gate measures the wrong machine. Bypass it and
+			// say so — a silent bypass would look exactly like a gate that
+			// never fired, which is how the 2026-11-04 queue wedges were
+			// misread as stuck ticks.
+			if tgt, ok, terr := resolveSpawnTarget(proj); terr == nil && ok && tgt.IsEnabled() {
+				log.Printf("LOAD-GATE: bypassed for %s — work runs on %s (remote dispatch); local load %.2f is not the constraint",
+					proj.Name, tgt.Agent, loadGateThreshold())
+			} else {
+				l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, "")
+				continue
+			}
 		}
 		// SCHED-GAP-170 / t_cadba34c: the gateway-health gate — the same
 		// defer-not-drop contract as the load gate above, for the gateway

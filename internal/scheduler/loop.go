@@ -1240,8 +1240,16 @@ func (l *Loop) SpawnNowTargeted(project database.Project, agent string) (string,
 	// 409 from the next SpawnNow (ErrProjectRunning) — which reads like a
 	// stuck tick rather than a gate decision.
 	if LoadGateShouldDefer(l.db, proj.NamespaceID) {
-		l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, tickID)
-		return tickID, nil
+		// Same exemption as the evaluation path: a remote-dispatch lane does
+		// its work on another host, so this host's load cannot make it unsafe.
+		// The row still exists and the tick still runs — but on the node.
+		if tgt, ok, terr := resolveSpawnTarget(proj); terr == nil && ok && tgt.IsEnabled() {
+			log.Printf("LOAD-GATE: bypassed for %s (tick %s) — work runs on %s (remote dispatch)",
+				proj.Name, tickID, tgt.Agent)
+		} else {
+			l.emitLoadGateDeferred(proj.Name, proj.NamespaceID, tickID)
+			return tickID, nil
+		}
 	}
 
 	// SCHED-GAP-170 / t_cadba34c: the gateway-health gate, consulted at the
