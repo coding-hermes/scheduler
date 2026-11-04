@@ -484,6 +484,24 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx, obs := s.newRequestDeadline(r.Context(), "status", s.readTimeout())
 	defer obs.finish()
 
+	// SCHED-GAP-16976: OPTIONAL sections answer best-effort. Each runs under
+	// its own short budget; when it cannot finish, the section is NAMED in the
+	// response's "partial" list and the handler still returns 200 with the
+	// required fields (active_ticks, paused, build_sha, ...). Before this, a
+	// single slow section turned the whole surface into a 504 and the operator
+	// learned nothing at all.
+	partial := make([]string, 0, 8)
+	softSection := func(step string, fn func(context.Context)) {
+		sctx, cancel := context.WithTimeout(ctx, softSectionBudget)
+		defer cancel()
+		obs.enter(step)
+		fn(sctx)
+		if err := sctx.Err(); err != nil {
+			partial = append(partial, step)
+			log.Printf("WARN: /api/v1/status section %q skipped (%v) — answering with the required fields (SCHED-GAP-16976)", step, err)
+		}
+	}
+
 	obs.enter("ListProjects")
 	projects, err := database.ListProjects(ctx, s.db, true)
 	if !obs.check(w, ctx) {
@@ -516,11 +534,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if !obs.check(w, ctx) {
 		return
 	}
-	obs.enter("computeProjectFailureRates")
-	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
-	if !obs.check(w, ctx) {
-		return
-	}
+	// Optional: measured 18-30s on 368 projects before SCHED-PERF-002.
+	var failureRates map[string]ProjectFailureRate
+	softSection("computeProjectFailureRates", func(sctx context.Context) {
+		failureRates = computeProjectFailureRates(sctx, s.db, s.failureWindow, adThreshold, adMinTicks)
+	})
 	// PERF-001: serve last_evaluation from the loop's in-memory state when a
 	// loop is attached. evaluate() sets lastEval immediately BEFORE emitting
 	// the 'evaluation started' event (internal/scheduler/tick_process.go), so
@@ -601,60 +619,55 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"min_ticks": adMinTicks,
 		},
 	}
-	obs.enter("usagePoolStats")
-	usagePools, poolErr := database.UsagePoolStats(ctx, s.db)
-	if !obs.check(w, ctx) {
-		return
+	// Optional: lease board walk. A failure now degrades ONE field instead of
+	// failing the request — the required fields are already in hand.
+	var usagePools []database.UsagePoolLease
+	softSection("usagePoolStats", func(sctx context.Context) {
+		pools, err := database.UsagePoolStats(sctx, s.db)
+		if err != nil {
+			log.Printf("WARN: /api/v1/status usage-pool stats unavailable: %v", err)
+			return
+		}
+		usagePools = pools
+	})
+	if usagePools != nil {
+		status["usage_pools"] = usagePools
 	}
-	if poolErr != nil {
-		writeError(w, 500, "usage-pool stats: "+poolErr.Error())
-		return
-	}
-	status["usage_pools"] = usagePools
 	// ADV-R09/G8 — spend reality block: what "recorded spend" actually is.
 	// Splits ticks.cost_usd by cost_source so measured/gateway money is
 	// never silently blended with the estimate tier, and states the price
 	// vintage the USD figures were priced at (as-of + provenance of the
 	// sticker maps). One GROUP BY, no per-project loop.
-	obs.enter("spendByCostSource")
-	status["spend"] = s.spendByCostSource(ctx)
-	if !obs.check(w, ctx) {
-		return
-	}
+	softSection("spendByCostSource", func(sctx context.Context) {
+		status["spend"] = s.spendByCostSource(sctx)
+	})
 	// SCHED-GAP-107: active bump badge + remaining count per project.
 	status["bumps"] = listActiveBumps(projects)
 	// SCHED-GAP-112 / S12 §9.4: live wave load. ONE indexed query over
 	// running ticks (no per-project loop, <2ms budget per S12 §14) —
 	// workers NEVER enter active_ticks (W1/W3).
-	obs.enter("listRunningWaves")
-	waves := s.listRunningWaves(ctx)
-	if !obs.check(w, ctx) {
-		return
-	}
+	var waves []activeWave
+	softSection("listRunningWaves", func(sctx context.Context) {
+		waves = s.listRunningWaves(sctx)
+	})
 	// SCHED-GAP-177: non-code family output rollup — the fleet-level view
 	// of the qa/pm/sync/dogfood counters (lanes, lifetime output ticks,
 	// worst zero-output streak, lanes at the alert threshold).
-	obs.enter("laneFamilyOutputTotals")
-	status["lane_output_families"] = laneFamilyOutputTotals(ctx, s.db)
-	if !obs.check(w, ctx) {
-		return
-	}
+	softSection("laneFamilyOutputTotals", func(sctx context.Context) {
+		status["lane_output_families"] = laneFamilyOutputTotals(sctx, s.db)
+	})
 	status["wave_depth_total"] = waveDepthTotal(waves)
-	obs.enter("waveWorkersCapConfigured")
-	status["wave_workers_cap_configured"] = waveWorkersCapConfigured(ctx, s.db)
-	if !obs.check(w, ctx) {
-		return
-	}
+	softSection("waveWorkersCapConfigured", func(sctx context.Context) {
+		status["wave_workers_cap_configured"] = waveWorkersCapConfigured(sctx, s.db)
+	})
 	status["waves"] = waves
 	// SCHED-GAP-115 (S12 §11): attributed wave cost — the cost twin of
 	// wave_depth_total. Sum of tick_workers.cost_usd over running waves;
 	// attribution-only figures (W4), so this is what the replica holds,
 	// not an additive fleet total.
-	obs.enter("runningWaveCostTotal")
-	status["wave_cost_total"] = s.runningWaveCostTotal(ctx)
-	if !obs.check(w, ctx) {
-		return
-	}
+	softSection("runningWaveCostTotal", func(sctx context.Context) {
+		status["wave_cost_total"] = s.runningWaveCostTotal(sctx)
+	})
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
 	if s.loop != nil {
@@ -719,10 +732,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	status["gateway_health_gate"] = gatewayHealthGateStatusBlock()
 	// SCHED-GAP-219: the config-drift tripwire (formerly the ops script's
 	// --verify) as an API surface — DB operator pins vs the seed fleet.toml.
-	obs.enter("configDriftBlock")
-	status["config_drift"] = s.configDriftBlock(ctx, s.db)
-	if !obs.check(w, ctx) {
-		return
+	softSection("configDriftBlock", func(sctx context.Context) {
+		status["config_drift"] = s.configDriftBlock(sctx, s.db)
+	})
+	// The response states its own completeness: absent "partial" means every
+	// section answered.
+	if len(partial) > 0 {
+		status["partial"] = partial
 	}
 	writeJSON(w, 200, status)
 }

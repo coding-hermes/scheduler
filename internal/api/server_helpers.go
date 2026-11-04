@@ -103,6 +103,24 @@ const (
 	slowRequestWarnFraction = 0.8
 )
 
+// softSectionBudget bounds ONE optional section of a read handler
+// (SCHED-GAP-16976).
+//
+// The status surface has two kinds of work. The REQUIRED fields answer the
+// operator's core question — is the fleet running, is it paused, which build is
+// live — and they are cheap. The rest (per-project failure rates, usage pools,
+// spend reconciliation, running-wave aggregation, config drift) can take
+// seconds under load, and when they did, the whole response became a 504 and the
+// operator lost the cheap answers too: measured 2026-11-03 20:59:10,
+// "SLOW-REQ: GET /api/v1/status 5.068s status=504 bytes=99" while the capacity
+// guard was reading it. A monitoring surface that goes blind under exactly the
+// load it exists to report is worse than useless.
+//
+// An optional section therefore runs under this budget. When it cannot finish,
+// the section is named in the response's "partial" list and the handler still
+// answers 200 with everything it did manage to compute.
+const softSectionBudget = 1500 * time.Millisecond
+
 // readTimeout returns the armed deadline for the heavy read surfaces: the
 // value installed by SetReadTimeout, or readTimeoutDefault when unset (a
 // Server built without it — unit tests, embedded use).

@@ -14,10 +14,14 @@ package api
 // What these tests pin (each one asserts the MECHANISM, not just a status
 // code):
 //
-//  1. StatusRespectsDeadline — with a NAMED status step stalled past the
-//     deadline, the handler returns 504 INSIDE the budget (not after the
-//     stall), the body names the step that blew it, and the response is not
-//     a 200 with degraded data.
+//  1. StatusRespectsDeadline — with a NAMED OPTIONAL status step stalled past
+//     the deadline, the handler still answers INSIDE the budget. SCHED-GAP-16976
+//     narrowed this contract deliberately: the step is named in the response's
+//     "partial" list and the required fields are served, because a 504 took the
+//     cheap answers down with the expensive section (measured live 2026-11-03
+//     20:59: 504 after 5.068s while the capacity guard was reading it). A hard
+//     504 still exists for a REQUIRED step, which is what the deadline itself
+//     guards; see TestSCHED16976_StatusDegradesInsteadOf504 for the sibling.
 //  2. LivenessStillFast — the healthy path still answers 200 well under the
 //     deadline and never emits the deadline body (the fix must not turn a
 //     healthy status call into a 504 on a box whose loadavg is merely high).
@@ -99,8 +103,10 @@ func TestSCHEDGAP1575B_StatusRespectsDeadline(t *testing.T) {
 	srv.status(rec, req)
 	elapsed := time.Since(started)
 
-	if rec.Code != http.StatusGatewayTimeout && rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/api/v1/status with %s stalled past the deadline = %d, want 504 (or 503); body=%s",
+	// SCHED-GAP-16976 supersedes the old 504 expectation for an OPTIONAL step:
+	// the surface must keep answering the questions an operator came for.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/v1/status with %s stalled past the deadline = %d, want 200 with a named partial (SCHED-GAP-16976); body=%s",
 			gap1575StalledStep, rec.Code, strings.TrimSpace(rec.Body.String()))
 	}
 	if elapsed > budget+slack {
@@ -108,25 +114,36 @@ func TestSCHEDGAP1575B_StatusRespectsDeadline(t *testing.T) {
 			elapsed, budget, budget+slack)
 	}
 
-	var body map[string]string
+	var body map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("deadline body is not a JSON object (%v): %s", err, rec.Body.String())
+		t.Fatalf("status body is not a JSON object (%v): %s", err, rec.Body.String())
 	}
-	if body["error"] != "deadline exceeded" {
-		t.Errorf(`body "error" = %q, want "deadline exceeded"`, body["error"])
+	// Careful: a degraded response legitimately quotes "context deadline
+	// exceeded" INSIDE a section's error text (config_drift.reason). The thing
+	// that must not happen is the TIMEOUT BODY shape — the whole response
+	// replaced by {"error":"deadline exceeded","helper":...}.
+	if body["error"] == "deadline exceeded" && body["helper"] != nil {
+		t.Errorf("the response carried the timeout body instead of degrading: %s", rec.Body.String())
 	}
-	if body["helper"] != gap1575StalledStep {
-		t.Errorf(`body "helper" = %q, want %q — the response must name WHICH helper blew the deadline`,
-			body["helper"], gap1575StalledStep)
+	// The required fields are the point: they answer "is the fleet running".
+	for _, field := range []string{"active_ticks", "paused", "build_sha", "active_projects"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("degraded status body is missing required field %q: %s", field, rec.Body.String())
+		}
 	}
-	if !strings.Contains(body["detail"], "deadline exceeded") {
-		t.Errorf(`body "detail" = %q, want it to carry the context error (context deadline exceeded)`, body["detail"])
+	// And the response must SAY which section it could not finish.
+	rawPartial, ok := body["partial"].([]interface{})
+	if !ok {
+		t.Fatalf("degraded status body has no \"partial\" list naming the skipped section: %s", rec.Body.String())
 	}
-	// The response must be the structured deadline body, never the fleet
-	// overview with missing/zeroed blocks (a 200 with degraded data would
-	// hide the stall from every operator surface).
-	if strings.Contains(rec.Body.String(), "active_projects") {
-		t.Error("the deadline response carried the status payload — it must be the timeout body only")
+	named := false
+	for _, v := range rawPartial {
+		if str, _ := v.(string); str == gap1575StalledStep {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf(`"partial" = %v, want it to name %q — an operator has to see WHICH section was skipped`, rawPartial, gap1575StalledStep)
 	}
 }
 
