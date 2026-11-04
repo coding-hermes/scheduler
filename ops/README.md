@@ -287,3 +287,27 @@ ops/cluster-chain-probe-selftest.sh      # prove the probe can fail (117 checks)
 What each arm measures, every reason code, and the list of things the probe
 does **not** cover (end-to-end travel, authenticated state, connector runtime)
 live in [../docs/cluster-chain-probe.md](../docs/cluster-chain-probe.md).
+
+## Load attribution — who is holding the host (SCHED-GAP-16977)
+
+`load-attribution.sh` answers the question the load gate cannot: when `ADMIT`
+defers every candidate, WHICH processes are actually burning the box, and does
+that break the host's heavy-job policy?
+
+```
+ops/load-attribution.sh            # human summary; exit 1 on a violation
+ops/load-attribution.sh --json     # machine shape
+ops/load-attribution-selftest.sh   # 17 checks, incl. a mutated probe that must fail
+```
+
+Read-only: it reads `/proc`, `ps` and the scheduler API. It writes nothing,
+signals nothing, kills nothing. Each named job carries pid, class
+(test/build/compress/image/install), CPU, elapsed time, cwd, a **digest** of its
+command line (never the raw argv) and the lane whose workdir contains that cwd.
+
+Policy and limits — at most ONE heavy job per host, what counts as heavy, and
+what the probe cannot see — are in `docs/load-attribution.md`. The selftest makes
+the probe's claims falsifiable: an idle fixture must exit 0, three concurrent
+jobs against a limit of 1 must exit 1 naming each of them, a shut gate with a
+named holder must exit 1 even inside the count, and a mutated copy (verdict
+forced to OK) must be caught.
