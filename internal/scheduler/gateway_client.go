@@ -128,6 +128,17 @@ func IsTransientGatewayErr(err error) bool {
 	if errors.Is(err, ErrGatewayKeyRejected) {
 		return false
 	}
+	// A router REFUSAL is a verdict, not a blip (SCHED-GAP-16974). The routing
+	// layer already decided this pair cannot serve this class of tick, so
+	// re-POSTing the identical request to the identical pair cannot change the
+	// answer — it only burns the transient budget before the chain advance that
+	// was the right response all along. Measured in the spawn-level test for
+	// 16974: refusals were retried 3 times on the same pair before advancing.
+	// Note this does NOT weaken outage handling: a plain 5xx carries no router
+	// marker, stays transient, and keeps its bounded same-pair retry.
+	if isRouterRefusal(err) {
+		return false
+	}
 	var gse *GatewayStatusError
 	if errors.As(err, &gse) {
 		return gse.StatusCode >= http.StatusInternalServerError
