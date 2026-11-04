@@ -45,6 +45,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -437,6 +438,9 @@ func correlateDispatchReply(msg bus.InboxMessage, receipt bus.DispatchReceipt) (
 // flag.
 func dispatchReplyVerdict(payload map[string]any) (bool, string) {
 	if v, ok := payload["ok"].(bool); ok && !v {
+		if s := decodedReplyField(payload, "error_b64"); s != "" {
+			return false, s
+		}
 		for _, k := range []string{"error", "err", "reply", "text", "message"} {
 			if s, ok := payload[k].(string); ok && strings.TrimSpace(s) != "" {
 				return false, s
@@ -447,10 +451,32 @@ func dispatchReplyVerdict(payload map[string]any) (bool, string) {
 	return true, ""
 }
 
+// decodedReplyField returns the base64-encoded member `key` as text, or "".
+func decodedReplyField(payload map[string]any, key string) string {
+	enc, _ := payload[key].(string)
+	if enc == "" {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
 // dispatchReplyText extracts the agent's answer text. An answer that is not a
 // string is rendered as JSON rather than dropped: an opaque reply is still a
 // reply, and the operator can read it.
 func dispatchReplyText(payload map[string]any) string {
+	// The completion travels base64 (reply_b64) when the agent's own answer
+	// quotes JSON — a foreman report names board rows and curl bodies, and the
+	// relay's pre-match refuses that shape 403 GUARD_BLOCKED on the way home.
+	// Same reason the directive is encoded outbound.
+	if enc, ok := payload["reply_b64"].(string); ok && enc != "" {
+		if raw, err := base64.StdEncoding.DecodeString(enc); err == nil {
+			return string(raw)
+		}
+	}
 	for _, k := range []string{"reply", "answer", "text", "message", "output"} {
 		if s, ok := payload[k].(string); ok && strings.TrimSpace(s) != "" {
 			return s
