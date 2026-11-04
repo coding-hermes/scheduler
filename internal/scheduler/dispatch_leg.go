@@ -239,8 +239,11 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 		IssuedAt: issued.UTC().Format(time.RFC3339Nano),
 	}
 	p.recordDispatchReceipt(db, rec)
-	log.Printf("DISPATCH: %s tick=%s agent=%s corr=%s message=%s transport=%s lane_ref=%s board_ref=%s",
-		proj.Name, tickID, receipt.AgentID, receipt.CorrID, receipt.MessageID, receipt.Transport, workdir, board)
+	// wall is printed because it decides how long the node is allowed to work
+	// and how long we wait (CF-138's one clock). Without it an operator cannot
+	// tell a 15-minute budget from a 3-hour one after the fact.
+	log.Printf("DISPATCH: %s tick=%s agent=%s corr=%s message=%s transport=%s wall=%s lane_ref=%s board_ref=%s",
+		proj.Name, tickID, receipt.AgentID, receipt.CorrID, receipt.MessageID, receipt.Transport, timeout, workdir, board)
 
 	// Wait for the answer, bounded by the same session deadline a local tick
 	// would have had (computed above, and already carried to the node as
