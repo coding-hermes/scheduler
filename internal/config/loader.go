@@ -131,6 +131,11 @@ func LoadConfig(tomlPath string) (*RootConfig, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}
+	// CF-245: name every lane whose pin the router cannot serve. This is a
+	// WARNING, never an error — the registry lives in another repository and a
+	// host that only runs the scheduler may not have it, so a validator that
+	// refused to load would take the fleet down to report a preference.
+	WarnUnservablePins(cfg, tomlPath)
 	return cfg, nil
 }
 
