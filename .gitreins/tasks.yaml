@@ -5684,3 +5684,13 @@ tasks:
   status: complete
   created_at: '2026-11-05T17:26:19.716312+00:00'
   completed_at: '2026-11-05T17:26:34.099401+00:00'
+- id: INT-CI-190
+  title: Decouple SCHEDGAP143 auto-disable test from fixed wall clock
+  criteria:
+  - Decouple TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain from the fixed 30-second
+    wall-clock assertion by waiting on the actual terminal-tick condition with a bound
+    above the fixture cooldown, preserving the project-side positive control; run
+    the named focused and race tests plus build and vet.
+  status: complete
+  created_at: '2026-11-05T18:03:46.514498+00:00'
+  completed_at: '2026-11-05T18:38:16.555918+00:00'
