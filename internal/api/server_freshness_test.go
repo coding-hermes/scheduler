@@ -139,6 +139,35 @@ func TestStatusIncludesBuildIdentity(t *testing.T) {
 	}
 }
 
+// treeBuildIdentityCommit resolves the commit identity the product tree at
+// repoRoot carries for `make build`, mirroring the Makefile's own rule
+// (COMMIT := git rev-parse HEAD || grep archive_commit.txt): the checkout's
+// HEAD when the tree has a git repository, otherwise the export-subst
+// -expanded commit in internal/version/archive_commit.txt — the only identity
+// a tree materialized by `git archive` carries, because it has no .git for
+// rev-parse to resolve (and on a re-committed archive sync the HEAD rev-parse
+// finds is the synthetic sync commit, not what a gitless build of the same
+// tree stamps from the marker).
+func treeBuildIdentityCommit(t *testing.T, repoRoot string) string {
+	t.Helper()
+	shaRe := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	if head, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output(); err == nil {
+		if sha := strings.TrimSpace(string(head)); shaRe.MatchString(sha) {
+			return sha
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "internal", "version", "archive_commit.txt"))
+	if err != nil {
+		t.Fatalf("resolve build identity for %s: no git HEAD and no archive marker: %v", repoRoot, err)
+	}
+	sha := strings.ToLower(strings.TrimSpace(string(raw)))
+	if !shaRe.MatchString(sha) {
+		t.Fatalf("resolve build identity for %s: no git HEAD and archive_commit.txt is not an expanded commit: %q",
+			repoRoot, strings.TrimSpace(string(raw)))
+	}
+	return sha
+}
+
 // TestBuiltDaemonReportsStampedBuildIdentity proves the canonical `make build`
 // path reports the exact commit checked out in this product worktree. A bare
 // `go build` can discover an enclosing repository when this checkout is a
@@ -151,11 +180,7 @@ func TestBuiltDaemonReportsStampedBuildIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	head, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatalf("resolve product worktree HEAD: %v", err)
-	}
-	wantCommit := strings.TrimSpace(string(head))
+	wantCommit := treeBuildIdentityCommit(t, repoRoot)
 	binDir := t.TempDir()
 	build := exec.Command("make", "build", "BINDIR="+binDir)
 	build.Dir = repoRoot
@@ -354,7 +379,14 @@ func TestFreshnessScript_ExitCodes(t *testing.T) {
 	}
 
 	t.Run("tagless tree build identity", func(t *testing.T) {
-		taglessRepo, liveCommit, versionOutput := buildTaglessDaemon(t)
+		// identity = r4, a commit in THIS test's scratch repo: a docs-only
+		// descendant of r3. The fixture is gitless by construction, so the
+		// daemon's identity comes from the archive marker (stamped by
+		// buildTaglessDaemon), and the guard run below needs a git-enabled
+		// reference that contains that commit — the scratch repo — because
+		// an archive-materialized product tree has no .git for the guard's
+		// rev-parse/rev-list at all.
+		taglessRepo, liveCommit, versionOutput := buildTaglessDaemon(t, r4)
 		if _, err := os.Stat(filepath.Join(taglessRepo, ".git")); err == nil {
 			t.Fatal("tagless fixture unexpectedly has a .git directory")
 		}
@@ -368,11 +400,7 @@ func TestFreshnessScript_ExitCodes(t *testing.T) {
 			t.Fatalf("tagless --version output %q does not carry dev-%s", versionOutput, liveCommit[:8])
 		}
 		status.set(statusBody(liveCommit))
-		referenceRepo, err := filepath.Abs(filepath.Join("..", ".."))
-		if err != nil {
-			t.Fatalf("resolve freshness reference repo: %v", err)
-		}
-		code, stdout, stderr := runFreshness(t, referenceRepo, script, ts.URL+"/api/v1/status", "HEAD")
+		code, stdout, stderr := runFreshness(t, repo, script, ts.URL+"/api/v1/status", "HEAD")
 		if code != 0 || !strings.HasPrefix(strings.TrimSpace(stdout), "FRESH:") {
 			t.Fatalf("tagless freshness = exit %d, stdout %q, stderr %q; want FRESH/0", code, stdout, stderr)
 		}
@@ -438,15 +466,27 @@ func statusBody(sha string) string {
 // full commit sha. Git identity comes from the environment so no global
 // config is required (or trusted) in the sandbox.
 // buildTaglessDaemon builds the canonical daemon from a git archive with no
-// .git directory or tags, returning the extracted repo, its HEAD sha, and the
-// stamped --version output. The archive marker is expanded by export-subst.
-func buildTaglessDaemon(t *testing.T) (string, string, string) {
+// .git directory or tags, returning the extracted repo, the commit identity
+// the built daemon carries, and the stamped --version output. The archive
+// marker is expanded by export-subst.
+//
+// The commit identity is materialized into the extracted copy's
+// internal/version/archive_commit.txt unconditionally, from a commit the
+// CALLER owns. On a plain checkout this simulates what `git archive` provides
+// once export-subst expands the placeholder; on an archive-materialized tree
+// the marker already holds the real expanded commit, which no local git
+// reference can resolve for the guard's ancestor test — overwriting it with a
+// caller-owned commit keeps the provenance chain checkable end to end:
+// marker file → gitless `make build` (the Makefile greps the marker when the
+// tree has no HEAD) → --version → the guard resolves that exact commit in the
+// caller's git-enabled reference repo. The extracted copy is test-owned; the
+// source tree is never touched.
+func buildTaglessDaemon(t *testing.T, identity string) (string, string, string) {
 	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	commit := gitRun(t, repoRoot, "rev-parse", "HEAD")
 	archive := filepath.Join(t.TempDir(), "scheduler.tar")
 	cmd := exec.Command("tar", "-cf", archive, "--exclude=.git", "--exclude=bin", "-C", repoRoot, ".")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -460,18 +500,12 @@ func buildTaglessDaemon(t *testing.T) (string, string, string) {
 	if out, err := extract.CombinedOutput(); err != nil {
 		t.Fatalf("extract tagless archive: %v\\n%s", err, out)
 	}
-	// The test itself runs before the Makefile/.gitattributes fix is committed,
-	// so the current HEAD archive may still carry the literal substitution
-	// marker. Materialize the same commit value git archive will provide once
-	// the fix lands; the extracted tree remains gitless and tagless.
 	marker := filepath.Join(taglessRepo, "internal", "version", "archive_commit.txt")
-	if raw, err := os.ReadFile(marker); err != nil || strings.TrimSpace(string(raw)) == "$Format:%H$" {
-		if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
-			t.Fatalf("create archive marker directory: %v", err)
-		}
-		if err := os.WriteFile(marker, []byte(commit+"\n"), 0o644); err != nil {
-			t.Fatalf("materialize archive commit marker: %v", err)
-		}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatalf("create archive marker directory: %v", err)
+	}
+	if err := os.WriteFile(marker, []byte(identity+"\n"), 0o644); err != nil {
+		t.Fatalf("materialize archive commit marker: %v", err)
 	}
 	binDir := filepath.Join(taglessRepo, "bin")
 	build := exec.Command("make", "build", "BINDIR="+binDir)
@@ -483,7 +517,7 @@ func buildTaglessDaemon(t *testing.T) (string, string, string) {
 	if err != nil {
 		t.Fatalf("tagless --version: %v\\n%s", err, versionOutput)
 	}
-	return taglessRepo, commit, strings.TrimSpace(string(versionOutput))
+	return taglessRepo, identity, strings.TrimSpace(string(versionOutput))
 }
 
 func commitFile(t *testing.T, repo, path, content string) string {
