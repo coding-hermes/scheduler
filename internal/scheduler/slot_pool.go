@@ -472,6 +472,31 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		var nudgeSource string
 		if loop := p.loopOrNil(); loop != nil {
 			nudgeSource = loop.clearNudgeSource()
+			// SCHED-GAP-16928: the board-wake stamp is process-wide — one
+			// fired wake stamps the loop and the NEXT spawn consumes it,
+			// whatever lane it belongs to. The fired-target gate
+			// (boardWakeAdmissionHook, SCHED-GAP-1666) judges only the lane
+			// whose board changed, so a DIFFERENT cooldown-class lane
+			// spawning in the same window inherits the stamp and runs ahead
+			// of its own cooldown (measured: "resume:board_wake (EARLY)"
+			// admissions with cooldown_remaining > 0 on -sync/-qa/-duckbrain
+			// satellites). At the consumption point the ONE shared admission
+			// predicate must sanction THIS lane: only the SCHED-GAP-1660
+			// entries a board write is allowed — the tasks-mode waiver, or
+			// the parked-empty flip — may ride the stamp. The spawn is
+			// refused BEFORE the enqueue, so a refusal strands no row (the
+			// enqueued callers — operator spawn, orphan resume — stamp their
+			// own nudge source and gate themselves at their entry points;
+			// this arm guards the packer-sourced spawns the stamp leaks
+			// onto). Fail-open on unreadable lane facts, per the predicate's
+			// own contract.
+			if nudgeSource == NudgeSourceBoardWake && !enqueued {
+				if dec, ok := boardWakeCooldownGate(loop, proj.Name); ok && dec.Defer {
+					log.Printf("BOARD-WAKE: %s tick=%s — inherited board-wake stamp refused: shared cooldown gate (%s, remaining=%.0fs of %.0fs, mode=%s); spawn dropped (SCHED-GAP-16928)",
+						proj.Name, tickID, dec.Reason, dec.RemainingS, dec.EffectiveS, dec.Mode)
+					return
+				}
+			}
 		}
 
 		// SCHED-GAP-144: namespace-cap admission at the DECLARED admission

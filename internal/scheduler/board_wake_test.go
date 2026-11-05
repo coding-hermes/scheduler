@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // ── ADV-R07 (Option C): board-driven wake + ordering boost ─────────────
@@ -624,4 +625,178 @@ func highWakeEvents(t *testing.T, db *sql.DB) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// ── SCHED-GAP-16928: a board write may not admit a cooldown lane early ──
+//
+// The board-wake stamp is PROCESS-WIDE (SCHED-GAP-157): one fired wake
+// stamps the loop, and the next spawn on the fleet consumes it — whatever
+// lane it belongs to. The SCHED-GAP-1666 fired-target gate judges only the
+// lane whose board changed, so a DIFFERENT cooldown-class lane spawning in
+// the same window inherits the stamp and runs ahead of its own cooldown:
+// the scheduler log carried 25 "reason=resume:board_wake ... (EARLY)"
+// admissions with cooldown_remaining still > 0, including satellite lanes
+// (-sync / -qa / -duckbrain families). The law at the consumption point:
+// whatever spawn carries the board_wake nudge must itself be sanctioned by
+// the ONE shared admission predicate (SCHED-GAP-1666) — the tasks-mode
+// waiver, or the parked-empty flip. Anything else is refused before a row
+// exists.
+
+// gap16928NSLoopAndWatcher is the production wiring shape: NewLoop with
+// namespace mode ON (how the daemon runs), the httptest gateway so real
+// spawns settle in-process, and the watcher consuming NewLoop's wrapped
+// nudge hook.
+func gap16928NSLoopAndWatcher(t *testing.T, db *sql.DB) (*Loop, *BoardWakeWatcher) {
+	t.Helper()
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4, true)
+	l.noDeliver = true
+	gw := newResumeGateway(t)
+	gw.wire(l)
+	w := NewBoardWakeWatcher(db, l.ForceEvaluate)
+	return l, w
+}
+
+// gap16928AwaitTickReasons polls a lane's tick rows for up to d, returning
+// the admit_reason list once ANY row exists (or an empty list on timeout —
+// the caller decides which outcome is the violation).
+func gap16928AwaitTickReasons(t *testing.T, db *sql.DB, project string, d time.Duration) []string {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if reasons := gap1660TickReasons(t, db, project); len(reasons) > 0 {
+			return reasons
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil
+}
+
+// TestBoardWake_SatelliteDoesNotInheritWakeStamp reproduces the defect: a
+// wake fires for a tasks lane that is ALREADY RUNNING (its board was
+// written mid-tick — the common fleet shape), so the forced pass cannot
+// spawn the target; the only candidate left is a cooldown-mode satellite
+// with live cooldown, and it inherits the stamp. RED before the
+// consumption-side gate: the satellite is admitted with
+// admit_reason=resume:board_wake while its own cooldown still had ~3300s
+// left. The satellite has NO ticks rows, so the namespace packer's
+// ticks-derived last-completion map misses it and its selection-time
+// cooldown gate never runs — the wall-clock cooldown in its own project row
+// is the law the consumption gate enforces.
+func TestBoardWake_SatelliteDoesNotInheritWakeStamp(t *testing.T) {
+	db := newTestDB(t)
+	satWD, _ := gap1660BoardDir(t, `{"id":"S1","status":"pending","title":"satellite work"}`)
+	taskWD, taskBoard := gap1660BoardDir(t, `{"id":"T1","status":"pending","title":"wake target work"}`)
+
+	if _, err := db.Exec(`INSERT INTO namespaces (id, weight, max_concurrent, admission_mode) VALUES ('gap16928-ns', 10, 0, 'cooldown')`); err != nil {
+		t.Fatal(err)
+	}
+
+	const sat, wakeLane = "gap16928coollane", "gap16928wakelane"
+	// The satellite: cooldown-mode builder, 3600s cooldown, last tick 5
+	// minutes ago — 3300s of its cooldown are still live.
+	insertGap1660Project(t, db, sat, satWD, 3600, database.AdmissionModeCooldown)
+	gap1660SetLastCompleted(t, db, sat, 5*time.Minute)
+	// The wake target: tasks mode, board with work, cooldown long elapsed.
+	// A RUNNING tick row keeps it out of the forced pass (running lanes are
+	// never re-packed), so the satellite is the pass's only candidate — the
+	// deterministic consumer of the stamp.
+	insertGap1660Project(t, db, wakeLane, taskWD, 90, database.AdmissionModeTasks)
+	gap1660SetLastCompleted(t, db, wakeLane, 24*time.Hour)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, created_at) VALUES (?, ?, 'running', ?)`,
+		"gap16928-wake-running", wakeLane, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE projects SET namespace_id = 'gap16928-ns' WHERE name IN (?, ?)`, sat, wakeLane); err != nil {
+		t.Fatal(err)
+	}
+
+	l, w := gap16928NSLoopAndWatcher(t, db)
+	defer l.Stop()
+	defer w.Stop()
+
+	gap1660WakeNow(t, w, wakeLane, taskWD, taskBoard)
+
+	gap16928AwaitTickReasons(t, db, sat, 3*time.Second)
+
+	if wakes := wakeEvents(t, db); len(wakes) == 0 {
+		t.Fatal("no board_wake event recorded — the wake never fired, so the assertion below would be vacuous")
+	}
+
+	if reasons := gap1660TickReasons(t, db, sat); len(reasons) != 0 {
+		t.Fatalf("cooldown satellite admitted %d tick(s) from a board write on ANOTHER lane (admit_reasons=%v, its own row carried 3300s of live cooldown) — a board write may not admit a cooldown lane ahead of its cooldown (SCHED-GAP-16928)",
+			len(reasons), reasons)
+	}
+}
+
+// TestBoardWake_TasksLaneLiveCooldownStillRefused pins the second arm of
+// the law: a TASKS-mode wake target whose waiver is stood down (its last
+// tick FAILED — SCHED-GAP-214) and whose cooldown is still live must not
+// be admitted by the board write either: the shared gate refuses the fired
+// target and drops the stamp before any spawn exists.
+func TestBoardWake_TasksLaneLiveCooldownStillRefused(t *testing.T) {
+	db := newTestDB(t)
+	wd, board := gap1660BoardDir(t, `{"id":"F1","status":"pending","title":"work"}`)
+	const proj = "gap16928failedtasks"
+	insertGap1660Project(t, db, proj, wd, 3600, database.AdmissionModeTasks)
+	gap1660SetLastCompleted(t, db, proj, 5*time.Minute)
+	if _, err := db.Exec(`UPDATE projects SET last_tick_status = ? WHERE name = ?`, database.LastStatusFailed, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	l, w := gap1660WallLoopAndWatcher(t, db)
+	defer l.Stop()
+	defer w.Stop()
+
+	gap1660WakeNow(t, w, proj, wd, board)
+	time.Sleep(500 * time.Millisecond) // settle any illegal async spawn
+
+	if got := l.clearNudgeSource(); got != "" {
+		t.Fatalf("a board write on a failed tasks lane inside its cooldown left a %q stamp behind — the gate must refuse it and drop the stamp (SCHED-GAP-16928)", got)
+	}
+	if reasons := gap1660TickReasons(t, db, proj); len(reasons) != 0 {
+		t.Fatalf("failed tasks lane admitted %d tick(s) from a board write inside its live cooldown (admit_reasons=%v)", len(reasons), reasons)
+	}
+}
+
+// TestBoardWake_ElapsedCooldownWakeStillAdmits keeps the legitimate wake
+// green: a tasks lane whose cooldown has fully ELAPSED is admitted by the
+// board write on schedule (cooldown_remaining_s = 0) and keeps the wake
+// label. The consumption-side gate refuses only admissions AHEAD of the
+// cooldown — never a wake whose target ran on schedule.
+func TestBoardWake_ElapsedCooldownWakeStillAdmits(t *testing.T) {
+	db := newTestDB(t)
+	wd, board := gap1660BoardDir(t, `{"id":"E1","status":"pending","title":"work"}`)
+	const proj = "gap16928elapsed"
+	insertGap1660Project(t, db, proj, wd, 90, database.AdmissionModeTasks)
+	gap1660SetLastCompleted(t, db, proj, 24*time.Hour) // the 90s cooldown long elapsed
+
+	l, w := gap1660WallLoopAndWatcher(t, db)
+	defer l.Stop()
+	defer w.Stop()
+
+	gap1660WakeNow(t, w, proj, wd, board)
+
+	var reason, nudge string
+	var remaining float64
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		err := db.QueryRow(`SELECT COALESCE(admit_reason, ''), COALESCE(nudge_source, ''),
+			                  COALESCE(cooldown_remaining_s, 0)
+			  FROM ticks WHERE project_name = ? ORDER BY id LIMIT 1`, proj).
+			Scan(&reason, &nudge, &remaining)
+		if err == nil && reason != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("elapsed-cooldown lane was never admitted by its legitimate wake (last query error: %v, reason=%q)", err, reason)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if reason != "resume:"+NudgeSourceBoardWake {
+		t.Fatalf("legitimate wake admission recorded admit_reason=%q, want %q", reason, "resume:"+NudgeSourceBoardWake)
+	}
+	if remaining != 0 {
+		t.Fatalf("an ON-SCHEDULE wake admission recorded cooldown_remaining_s=%.0f, want 0", remaining)
+	}
 }
