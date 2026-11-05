@@ -5533,3 +5533,15 @@ tasks:
   status: complete
   created_at: '2026-11-04T23:39:21.496138+00:00'
   completed_at: '2026-11-05T00:27:51.544385+00:00'
+- id: PERF-001-R3-R3
+  title: 'PERF-001-R3-R3: daemon boot on a live-sized DB must not starve DB-backed
+    reads'
+  criteria:
+  - 'With a current-HEAD build and a live-sized DB copy, /api/v1/health answers 200
+    <1s within 5s of boot; /api/v1/status, /api/v1/projects, /api/v1/cadence answer
+    200 <5s in the same window; the dashboard root is not truncated; a goroutine dump
+    mid-window shows the evaluate/pending-count path no longer holds the DB read path
+    for the duration of the board-freshness scan. Evidence: probe output captured
+    in the commit body or evidence file, plus go build/vet/test green.'
+  status: in_progress
+  created_at: '2026-11-05T00:53:41.634571+00:00'
