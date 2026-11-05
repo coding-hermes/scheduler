@@ -5520,8 +5520,9 @@ tasks:
   - golangci-lint run ./... reports 0 issues; go build ./... and go vet ./... exit
     0; go test -count=1 ./internal/scheduler/ ./internal/target/ passes; the working
     tree is committed and pushed
-  status: in_progress
+  status: complete
   created_at: '2026-11-04T23:38:21.982516+00:00'
+  completed_at: '2026-11-05T00:24:20.676674+00:00'
 - id: QA-CHS-186
   title: 'ADVR10 clean-machine red is resolved at HEAD: no bare 604800 weekly ceiling
     remains in non-test Go sources'
@@ -5529,5 +5530,6 @@ tasks:
   - grep -rn 604800 --include=*.go . | grep -v _test.go returns nothing; go test -count=1
     -run TestADVR10_NoSecondHardcodedWeeklyCeiling ./internal/database/ reports ok;
     go test -count=1 ./... reports ok for every package
-  status: in_progress
+  status: complete
   created_at: '2026-11-04T23:39:21.496138+00:00'
+  completed_at: '2026-11-05T00:27:51.544385+00:00'
