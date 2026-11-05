@@ -5632,8 +5632,9 @@ tasks:
     wall is no longer the sole verdict; a deliberate restoration of the per-id quadratic
     scan still FAILS the arm (teeth proven by mutation, not assertion); every arm
     keeps printing rows=, msg= and best=.
-  status: in_progress
+  status: complete
   created_at: '2026-11-05T14:13:18.602211+00:00'
+  completed_at: '2026-11-05T15:16:50.696824+00:00'
 - id: SCHED-GAP-16984
   title: Uncorrelatable replies are counted, named and acked instead of parking in
     the live inbox
@@ -5646,8 +5647,9 @@ tasks:
     one non-matching reply proves the matching one completes the tick while the non-matching
     one is named and does not, with go build ./..., go vet ./... and go test ./internal/scheduler/
     -count=1 green.
-  status: in_progress
+  status: complete
   created_at: '2026-11-05T14:13:22.922246+00:00'
+  completed_at: '2026-11-05T15:16:52.041110+00:00'
 - id: INT-CI-4183
   title: Delete the dead (*SlotPool).hookEmitter adapter so golangci-lint is clean
   criteria:
@@ -5655,5 +5657,6 @@ tasks:
     method, so golangci-lint v2.15.0 reports 0 findings for the package; go build
     ./... and go vet ./... stay green; go test ./internal/scheduler/ -run TestBoardFreshness
     -count=1 green; the pushed tip produces a CI lint job that concludes success.
-  status: in_progress
+  status: complete
   created_at: '2026-11-05T14:13:26.989230+00:00'
+  completed_at: '2026-11-05T15:00:26.468033+00:00'
