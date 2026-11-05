@@ -47,12 +47,18 @@ func repoPath(u string) string {
 }
 
 // hookEnv builds the environment handed to every step.
+//
+// Project and Role come from RoleFor, the same split the lane scripts use to
+// name a branch: lane `code-factory-qa` is project `code-factory`, role `qa`.
+// This used to set Project = the LANE name while deriving only the role, so
+// `{project}` expanded to `code-factory-qa` — a lane name where a project was
+// asked for — and any hook building a path from {project} got one level wrong.
 func hookEnv(proj PackedProject, tickID string, deadline time.Time) lanehook.Env {
-	_, role := lanehook.RoleFor(proj.Name)
+	project, role := lanehook.RoleFor(proj.Name)
 	return lanehook.Env{
 		TickID:    tickID,
 		Lane:      proj.Name,
-		Project:   proj.Name,
+		Project:   project,
 		Role:      role,
 		Namespace: proj.NamespaceID,
 		Workdir:   proj.Workdir,
@@ -118,7 +124,7 @@ func (p *SlotPool) runPostHooks(proj PackedProject, tickID string, plan lanehook
 	if len(plan.Post) == 0 || p.hookRunner == nil {
 		return
 	}
-	env := hookEnv(proj, tickID, time.Now().Add(p.hookDeadlineHint()))
+	env := hookEnv(proj, tickID, p.clock().Now().Add(p.hookDeadlineHint()))
 	ctx, cancel := context.WithTimeout(context.Background(), p.hookDeadlineHint())
 	defer cancel()
 	p.hookRunner.Post(ctx, env, plan)

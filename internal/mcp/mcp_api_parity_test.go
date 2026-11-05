@@ -53,10 +53,17 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 // in server.go; a renamed tool fails the coverage_map_tools_exist subtest
 // instead of silently un-covering its route.
 var apiToolCoverage = map[string][]string{
-	"GET /api/v1/status":     {"fleet_status"},
-	"GET /api/v1/projects":   {"fleet_projects"},
-	"GET /api/v1/lanes":      {"fleet_projects"},
-	"GET /api/v1/lanes/tree": {"fleet_lane_tree"},
+	// S13 lane hooks: five operations, five tools — a hook edit is a
+	// control operation, so none of them is skip-eligible.
+	"GET /api/v1/hooks":         {"hooks_list"},
+	"GET /api/v1/hooks/plan":    {"hooks_plan"},
+	"POST /api/v1/hooks/reload": {"hooks_reload"},
+	"PUT /api/v1/hooks/{id}":    {"hooks_upsert"},
+	"DELETE /api/v1/hooks/{id}": {"hooks_delete"},
+	"GET /api/v1/status":        {"fleet_status"},
+	"GET /api/v1/projects":      {"fleet_projects"},
+	"GET /api/v1/lanes":         {"fleet_projects"},
+	"GET /api/v1/lanes/tree":    {"fleet_lane_tree"},
 	// SCHED-GAP-1700: the lane relationship map. The four traversal reads
 	// share one tool (direction discriminates), the CRUD pair map one-to-one.
 	"GET /api/v1/links":                   {"lane_links_list"},

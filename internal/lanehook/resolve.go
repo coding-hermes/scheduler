@@ -46,6 +46,21 @@ func Validate(set []Step) error {
 		if !filepath.IsAbs(s.Command) {
 			return fmt.Errorf("hook %q: command must be an absolute path, got %q", s.ID, s.Command)
 		}
+		// A placeholder Expand cannot fill is passed to the command as literal
+		// "{workdirr}" text. That is worse than a missing argument: the hook
+		// runs, exits non-zero for a reason nobody can see from the receipt,
+		// and a typo in a lane name or path looks like a broken script. Refuse
+		// it at load time, where the operator is still watching.
+		if bad := UnknownPlaceholders(s.Command); len(bad) > 0 {
+			return fmt.Errorf("hook %q: command uses unknown placeholder(s) %s — known: %s",
+				s.ID, quoteBraced(bad), KnownPlaceholderList())
+		}
+		for i, a := range s.Args {
+			if bad := UnknownPlaceholders(a); len(bad) > 0 {
+				return fmt.Errorf("hook %q: args[%d] uses unknown placeholder(s) %s — known: %s",
+					s.ID, i, quoteBraced(bad), KnownPlaceholderList())
+			}
+		}
 		if s.TimeoutS < 0 {
 			return fmt.Errorf("hook %q: timeout_s must be >= 0", s.ID)
 		}

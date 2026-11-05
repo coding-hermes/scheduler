@@ -1,25 +1,38 @@
 # hooks.example.toml — S13/S14 lane hook definitions.
 #
-# Install:  cp this file to ~/.hermes/hooks.toml and edit.
-# Scripts:  scripts/hooks/*.sh in this repo (install to ~/.hermes/hooks/).
+# Install:  bash scripts/hooks/install-hooks.sh   (copies the scripts, then this
+#           file to ~/.hermes/hooks.toml on first run)
+# Scripts:  scripts/hooks/*.sh in this repo (installed to ~/.hermes/hooks/).
 #
 # This file is the SINGLE SOURCE OF TRUTH for lane hooks (S13 H0). The daemon
 # reloads it when mtime/size change; a broken edit keeps the previous set armed.
+#
+# ORDERING (lanehook.Resolve, hook_order = "level_first"):
+#   PRE  — priority ASCENDING, global -> namespace -> lane.
+#   POST — priority DESCENDING, lane -> namespace -> global.
+# A POST chain declared quiesce(95)/merge(80)/prune(20) therefore runs in that
+# order: nothing is merged while a process holds the tree, and nothing is pruned
+# before it has been merged.
+#
+# PREVIEW WITHOUT RUNNING (works with the daemon stopped):
+#   schedulerd hooks preview --lane code-factory-qa \
+#     --repo /home/kara/code-factory --workdir /path/to/the/worktree
+#   schedulerd hooks preview --lane code-factory-qa --json
+#
+# An unknown {...} placeholder is a LOAD ERROR. Known vocabulary:
+#   {lane} {project} {role} {namespace} {workdir} {repo} {tick} {phase} {hook}
+# (Before that check existed a typo reached the command as literal text, so the
+# hook failed for a reason its receipt could not explain.)
 
 [scheduler]
 hook_order = "level_first"
 
 # ---------------------------------------------------------------- global PRE
-[[hook]]
-id = "lease-acquire"
-phase = "pre"
-level = "global"
-target = "*"
-priority = 5
-command = "/home/kara/.hermes/hooks/lease-acquire.sh"
-timeout_s = 30
-on_failure = "closed"
-
+# Keep origin/<base> current before any lane worktree is created or refreshed.
+# on_failure = open on purpose: a transient fetch failure (network, credentials)
+# must not veto every tick of every lane. worktree-ensure is the arm that
+# enforces the real precondition — it refuses with 78 when origin/<base> is
+# missing.
 [[hook]]
 id = "repo-fetch"
 phase = "pre"
@@ -28,12 +41,15 @@ target = "*"
 priority = 10
 command = "/usr/bin/git"
 args = ["-C", "{repo}", "fetch", "--prune", "origin"]
-timeout_s = 30
-on_failure = "closed"
+timeout_s = 60
+on_failure = "open"
 
 # ------------------------------------------------------------- lane PRE/POST
-# One block per lane that owns a worktree. Copy for each lane; the ids differ
-# per lane so a receipt names the lane that produced it.
+# One block per lane that owns a worktree; target is the LANE name. {lane},
+# {project} and {role} come from the project row (lanehook.RoleFor: lane
+# `code-factory-qa` is project `code-factory`, role `qa`), and the scripts name
+# the branch lane/<project>/<role> from that same split — pass --project/--role
+# so the script does not have to re-derive it.
 [[hook]]
 id = "worktree-ensure"
 phase = "pre"
@@ -41,10 +57,13 @@ level = "lane"
 target = "code-factory-qa"
 priority = 20
 command = "/home/kara/.hermes/hooks/worktree-ensure.sh"
-args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}"]
+args = ["--lane", "{lane}", "--project", "{project}", "--role", "{role}",
+        "--repo", "{repo}", "--worktree", "{workdir}", "--base", "main",
+        "--policy", "persistent", "--floor-gib", "5"]
 timeout_s = 120
 on_failure = "closed"
 
+# 95 — first: a tree with a live process inside must not be merged or pruned.
 [[hook]]
 id = "quiesce-check"
 phase = "post"
@@ -56,6 +75,9 @@ args = ["--worktree", "{workdir}"]
 timeout_s = 60
 on_failure = "closed"   # stops the rest of POST: a busy tree must not merge or prune
 
+# 80 — land the lane branch on the base branch and PROVE it (ancestry checked,
+# and every changed file present in the landed tree). Keep push = 0 while
+# arming: the merge stays local, so a bad hook cannot publish.
 [[hook]]
 id = "lane-merge"
 phase = "post"
@@ -63,10 +85,14 @@ level = "lane"
 target = "code-factory-qa"
 priority = 80
 command = "/home/kara/.hermes/hooks/lane-merge.sh"
-args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}", "--push", "1"]
+args = ["--lane", "{lane}", "--project", "{project}", "--role", "{role}",
+        "--repo", "{repo}", "--worktree", "{workdir}", "--base", "main",
+        "--push", "0"]
 timeout_s = 240
 on_failure = "closed"
 
+# 20 — last: remove the tree once its commits are on the base branch.
+# on_failure = open: a prune that cannot run is noise, not a failed tick.
 [[hook]]
 id = "worktree-prune"
 phase = "post"
@@ -74,17 +100,20 @@ level = "lane"
 target = "code-factory-qa"
 priority = 20
 command = "/home/kara/.hermes/hooks/worktree-prune.sh"
-args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}", "--merged", "1"]
+args = ["--lane", "{lane}", "--project", "{project}", "--role", "{role}",
+        "--repo", "{repo}", "--worktree", "{workdir}", "--base", "main",
+        "--merged", "1"]
 timeout_s = 60
 on_failure = "open"
 
 # ------------------------------------------------------------------- lane spec
-# S14 §2.1. `workdir` on the project row must equal `path` here.
+# S14 §2.1. The daemon passes the project row's workdir as {workdir}; this
+# block declares the policy that applies to it.
 [lane."code-factory-qa"]
 repo = "/home/kara/code-factory"
 base = "main"
 policy = "persistent"
-push = true
+push = false
 floor_gib = 8.0
-gates = ["make selftest"]
+gates = []
 skip_hooks = []

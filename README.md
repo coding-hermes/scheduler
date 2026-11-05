@@ -32,7 +32,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 > **Note:** releases are published on the
 > [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
-> checkout of `main` passes `make test` (all 24 packages) and `make build`,
+> checkout of `main` passes `make test` (all 25 packages) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
 > run both on a fresh checkout before trusting any step here. Past flaky-CI
 > episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
@@ -262,7 +262,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (71 tools)            │
+│  /mcp      → MCP server (76 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -303,7 +303,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 71 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 76 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (older
 deployed builds report fewer tools):
@@ -386,6 +386,11 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `agents_list` | Agent registry (SCHED-GAP-1665): the execution targets work can be handed to — name, capabilities, endpoint, registered_at, updated_at. Advisory inventory (the relay decides whether an agent exists). Optional `capability` filter |
 | `agents_register` | Register or refresh an agent (operator credential required): `name` (the bus identity), `capabilities` (free-form comma list, normalized on write), `endpoint` (optional absolute http(s) relay base URL; empty inherits the scheduler's `[crier]` url) |
 | `agents_unregister` | Unregister an agent (operator credential required); an unknown name is a not-found error, never a silent success. Routing is unaffected — the dispatch-targets file, not the registry, decides which agent runs a lane |
+| `hooks_list` | S13 lane hooks: the armed pre/post definitions — hooks file path, ordering mode, and every step (id, phase, level, target, priority, command, args, timeout_s, on_failure, enabled). `error` present when the last reload was rejected (the previous set stays armed) |
+| `hooks_plan` | Resolve the pre/post plan one lane would actually run (`lane` required; `namespace`/`workdir`/`repo` substitute the placeholders) — the same `lanehook.Resolve` the tick path uses |
+| `hooks_reload` | Re-read the hooks file now (operator credential required). A rejected edit reports the error and leaves the PREVIOUS set armed |
+| `hooks_upsert` | Create or replace one hook step by id (operator credential required); writes through to the file and reloads. Validation refuses an unknown `{placeholder}` or a relative command before anything is written |
+| `hooks_delete` | Delete one hook step by id (operator credential required); an unknown id is a not-found error, never a silent success |
 
 Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it. `fed_peer_status` (op `peer.status`) **requires** `args.peer` — the identity the read is about — and the other reads default to this scheduler while accepting `args.peer` only as an assertion of that same id. A peer naming a *different* scheduler is refused (SCHED-GAP-1741) instead of silently being answered from the local read; to read a remote peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
 
@@ -509,6 +514,7 @@ Every environment variable the daemon reads — precedence chain (flag > env > T
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
+| `-hooks-file` | `$HOME/.hermes/hooks.toml` | S13 lane hooks: ordered PRE/POST definitions (global / namespace / lane). Missing file = no hooks (the pre-S13 behaviour); a broken edit keeps the previous set armed. Preview a lane with `schedulerd hooks preview --lane <lane>`. Env: `SCHEDULER_HOOKS_FILE` |
 | `-listen` | `127.0.0.1:9090` | HTTP listen address |
 | `-public-url` | _(empty)_ | Public base URL of the dashboard (e.g. `https://sched.example.com`) used to build tick-report permalinks for `deliver_mode=link`; empty = link mode falls back to full (SCHED-GAP-1607). Env: `SCHEDULER_PUBLIC_URL` |
 | `-tls-cert` | _(empty)_ | PEM certificate chain; with `-tls-key`, serves the dashboard/API/MCP over HTTPS so the origin is a browser **secure context** — required for `Notification` and service workers, which the plain-HTTP tailnet origin denies outright (SCHED-GAP-1600). Empty = plain HTTP, the unchanged default. See [docs/reference/https-origin.md](docs/reference/https-origin.md). Env: `SCHEDULER_TLS_CERT` |
@@ -1073,7 +1079,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 71 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, the `agents_*` execution-target registry (SCHED-GAP-1665), the `lane_*` lane-relationship map tools (SCHED-GAP-1700), and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 76 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, the `agents_*` execution-target registry (SCHED-GAP-1665), the `lane_*` lane-relationship map tools (SCHED-GAP-1700), and the S13 lane-hook tools (`hooks_list`/`hooks_plan` reads, `hooks_reload`/`hooks_upsert`/`hooks_delete` writes), and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP

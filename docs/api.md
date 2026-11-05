@@ -166,6 +166,10 @@ documented in [§1a Deploy templates](#1a-deploy-templates-jsonl-deploy-routes))
 | GET | `/api/v1/observatory` | [§16](#16-observatory-sched-gap-1592) |
 | GET | `/api/v1/observatory/stream` | [§16](#16-observatory-sched-gap-1592) |
 | GET | `/api/v1/gateway-errors` | [§17](#17-gateway-availability-losses-sched-gap-1654) |
+| GET | `/api/v1/hooks` | [§20](#20-lane-hooks-s13) |
+| GET | `/api/v1/hooks/plan` | [§20](#20-lane-hooks-s13) |
+| POST | `/api/v1/hooks/reload` | [§20](#20-lane-hooks-s13) |
+| PUT, DELETE | `/api/v1/hooks/{id}` | [§20](#20-lane-hooks-s13) |
 | GET, POST, DELETE | `/api/v1/links` | [§18](#18-lane-relationship-map-sched-gap-1700) |
 | GET | `/api/v1/links/parents` | [§18](#18-lane-relationship-map-sched-gap-1700) |
 | GET | `/api/v1/links/children` | [§18](#18-lane-relationship-map-sched-gap-1700) |
@@ -2459,3 +2463,30 @@ observe-only mode) when you need targeted dispatch under enforcement.
 All three call the SAME `internal/database/agents.go` functions as REST, so the
 two surfaces cannot disagree about normalization, not-found semantics or the
 `created` vs `updated` distinction.
+
+## 20. Lane hooks (S13)
+
+Ordered PRE/POST scripts at global, namespace and lane scope, defined in
+`~/.hermes/hooks.toml` (`--hooks-file`) and executed around every tick: a PRE
+step can veto the spawn, a POST step lands and prunes the lane's worktree. The
+file is the single source of truth; these routes read it and write through to it.
+
+| Method | Path | Gate | Notes |
+|--------|------|------|-------|
+| GET | `/api/v1/hooks` | open | `path`, `order`, `steps[]`, plus `error` when the last reload was rejected. 503 — not an empty list — when no `--hooks-file` is configured |
+| GET | `/api/v1/hooks/plan?lane=&namespace=&workdir=&repo=` | open | The resolved PRE/POST plan for one lane, from the same `lanehook.Resolve` the runner uses |
+| POST | `/api/v1/hooks/reload` | operator | Re-read the file now (the daemon also reloads on mtime/size change). A rejected edit answers 400 and the previous set stays armed |
+| PUT, DELETE | `/api/v1/hooks/{id}` | operator | Upsert or remove one step; writes through to the file |
+
+```bash
+# what would this lane run, resolved and in order?
+curl -s "http://127.0.0.1:9090/api/v1/hooks/plan?lane=code-factory-qa&repo=/home/kara/code-factory&workdir=/home/kara/proj-wt-code-factory-qa" | jq
+
+# see exactly what will be sent, without a daemon at all
+schedulerd hooks preview --lane code-factory-qa --repo /home/kara/code-factory --workdir /home/kara/proj-wt-code-factory-qa
+```
+
+A hook that fails closed during PRE does not spawn the tick: the tick row is
+`failed` with `failure_reason = hook_failed:<id>`, and the POST list still runs so
+a lease taken in PRE is released. Every step writes a `hook_runs` receipt
+including the resolved `argv`.

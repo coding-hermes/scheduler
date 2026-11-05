@@ -1181,6 +1181,10 @@ var documentedPaths = []string{
 	"/api/v1/agents/{name}",
 	"/api/v1/federation/query",
 	"/api/v1/federation/catalogue",
+	"/api/v1/hooks",
+	"/api/v1/hooks/plan",
+	"/api/v1/hooks/reload",
+	"/api/v1/hooks/{id}",
 	"/api/v1/openapi.json",
 }
 

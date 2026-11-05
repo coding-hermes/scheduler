@@ -6,7 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 
 	"github.com/BurntSushi/toml"
 )
@@ -38,7 +39,7 @@ func SaveFile(path string, f *File) error {
 	}
 
 	if _, err := os.Stat(path); err == nil {
-		bak := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
+		bak := fmt.Sprintf("%s.bak-%s", path, clock.Real().Now().Format("20060102-150405"))
 		if data, rerr := os.ReadFile(path); rerr == nil {
 			if werr := os.WriteFile(bak, data, 0o644); werr != nil {
 				return fmt.Errorf("backup %s: %w", bak, werr)

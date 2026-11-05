@@ -21,7 +21,12 @@ func TestExampleFileResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eq(t, ids(plan.Pre), []string{"lease-acquire", "repo-fetch", "worktree-ensure"})
+	// lease-acquire was removed from the example: it named
+	// ~/.hermes/hooks/lease-acquire.sh, a script install-hooks.sh does not
+	// ship, so a verbatim copy of the example would have vetoed EVERY tick
+	// (on_failure=closed) on a host that installed exactly what the repo
+	// provides. The example now only declares hooks whose commands exist here.
+	eq(t, ids(plan.Pre), []string{"repo-fetch", "worktree-ensure"})
 	eq(t, ids(plan.Post), []string{"quiesce-check", "lane-merge", "worktree-prune"})
 
 	if spec, ok := f.Lanes["code-factory-qa"]; !ok || spec.Repo == "" || spec.Base != "main" {
@@ -33,7 +38,7 @@ func TestExampleFileResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eq(t, ids(other.Pre), []string{"lease-acquire", "repo-fetch"})
+	eq(t, ids(other.Pre), []string{"repo-fetch"})
 	if len(other.Post) != 0 {
 		t.Fatalf("undeclared lane must have no POST steps, got %v", ids(other.Post))
 	}

@@ -1678,6 +1678,99 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/hooks": {
+      "get": {
+        "operationId": "getApiV1Hooks",
+        "summary": "S13 lane hooks: the armed PRE/POST step definitions (S13 H0)",
+        "responses": {
+          "200": {"description": "path, order and steps[] (id, phase, level, target, priority, command, args, timeout_s, on_failure); error present when the last reload was rejected"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No --hooks-file configured (an empty list would read as \"no hooks exist\")"}
+        }
+      }
+    },
+    "/api/v1/hooks/plan": {
+      "get": {
+        "operationId": "getApiV1HooksPlan",
+        "summary": "Resolved PRE/POST plan for one lane, from the same resolver the runner uses",
+        "parameters": [
+          {"name": "lane", "in": "query", "schema": {"type": "string"}, "description": "Lane name (required)"},
+          {"name": "namespace", "in": "query", "schema": {"type": "string"}, "description": "Namespace id for namespace-level hooks"},
+          {"name": "workdir", "in": "query", "schema": {"type": "string"}, "description": "Worktree path substituted for {workdir}"},
+          {"name": "repo", "in": "query", "schema": {"type": "string"}, "description": "Source repository substituted for {repo}"}
+        ],
+        "responses": {
+          "200": {"description": "Ordered PRE and POST steps for the lane, with the lane policy when declared"},
+          "400": {"description": "Missing lane, or the definition set failed to resolve"},
+          "405": {"description": "Non-GET method"},
+          "503": {"description": "No --hooks-file configured"}
+        }
+      }
+    },
+    "/api/v1/hooks/reload": {
+      "post": {
+        "operationId": "postApiV1HooksReload",
+        "security": [{"operatorToken": []}],
+        "summary": "Re-read the hooks file now (the daemon also reloads on mtime/size change)",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
+        "responses": {
+          "200": {"description": "changed, steps, path"},
+          "400": {"description": "Reload rejected — the PREVIOUS set stays armed"},
+          "401": {"description": "Operator token required"},
+          "405": {"description": "Non-POST method"},
+          "503": {"description": "No --hooks-file configured"}
+        }
+      }
+    },
+    "/api/v1/hooks/{id}": {
+      "put": {
+        "operationId": "putApiV1HooksId",
+        "security": [{"operatorToken": []}],
+        "summary": "Upsert one hook step (writes through to the hooks file)",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["id", "phase", "level", "target", "command"],
+            "properties": {
+              "id": {"type": "string"},
+              "phase": {"type": "string", "enum": ["pre", "post"]},
+              "level": {"type": "string", "enum": ["global", "namespace", "lane"]},
+              "target": {"type": "string"},
+              "priority": {"type": "integer"},
+              "command": {"type": "string"},
+              "args": {"type": "array", "items": {"type": "string"}},
+              "timeout_s": {"type": "integer"},
+              "on_failure": {"type": "string", "enum": ["open", "closed"]},
+              "enabled": {"type": "boolean"}
+            }
+          }}}
+        },
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Step written; the armed set is reloaded"},
+          "400": {"description": "Invalid definition (rejected by lanehook.Validate)"},
+          "503": {"description": "No --hooks-file configured"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteApiV1HooksId",
+        "security": [{"operatorToken": []}],
+        "summary": "Delete one hook step by id (writes through to the hooks file)",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Step removed"},
+          "404": {"description": "No step with that id"},
+          "503": {"description": "No --hooks-file configured"}
+        }
+      }
+    },
     "/api/v1/observatory": {
       "get": {
         "operationId": "getApiV1Observatory",

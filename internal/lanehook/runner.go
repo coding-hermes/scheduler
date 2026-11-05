@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/coding-hermes/scheduler/internal/clock"
 )
 
 // ErrHookFailed is returned by Pre when a closed step failed. The caller turns
@@ -36,11 +38,45 @@ var ErrBudgetExhausted = errors.New("hook budget exhausted")
 type ExecRunner struct {
 	db   *sql.DB
 	emit Emitter
+	// clk is the time choke point (internal/clock). Every read goes through it
+	// so a sim clock can drive hook timeouts and receipts deterministically;
+	// nil falls back to clock.Real(), which is byte-identical to stdlib.
+	clk clock.Clock
 }
 
 // NewExecRunner builds a runner. db may be nil (no receipts), emit may be nil.
+// Time defaults to the real clock; use SetClock to install a simulated one.
 func NewExecRunner(db *sql.DB, emit Emitter) *ExecRunner {
-	return &ExecRunner{db: db, emit: emit}
+	return &ExecRunner{db: db, emit: emit, clk: clock.Real()}
+}
+
+// SetClock installs the clock used for timeouts and receipt timestamps.
+func (r *ExecRunner) SetClock(c clock.Clock) {
+	if c != nil {
+		r.clk = c
+	}
+}
+
+// now is the one place this package reads the wall clock.
+func (r *ExecRunner) now() time.Time {
+	if r.clk == nil {
+		return clock.Real().Now()
+	}
+	return r.clk.Now()
+}
+
+func (r *ExecRunner) since(t time.Time) time.Duration {
+	if r.clk == nil {
+		return clock.Real().Since(t)
+	}
+	return r.clk.Since(t)
+}
+
+func (r *ExecRunner) after(d time.Duration) <-chan time.Time {
+	if r.clk == nil {
+		return clock.Real().After(d)
+	}
+	return r.clk.After(d)
 }
 
 // Pre runs the PRE list. A non-nil error means the tick must not spawn.
@@ -52,13 +88,13 @@ func (r *ExecRunner) Pre(ctx context.Context, env Env, plan Plan) error {
 	for _, s := range plan.Pre {
 		budget += int64(s.Timeout())
 	}
-	deadline := time.Now().Add(time.Duration(budget))
+	deadline := r.now().Add(time.Duration(budget))
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
 	for i, step := range plan.Pre {
 		seq := i + 1
-		if time.Now().After(deadline) {
+		if r.now().After(deadline) {
 			r.markSkipped(ctx, env, plan.Pre[i:], seq, "budget_exhausted")
 			r.event(ctx, "HIGH", "hook.pre.budget", map[string]any{
 				"tick_id": env.TickID, "lane": env.Lane, "skipped": len(plan.Pre) - i,
@@ -127,7 +163,7 @@ func (r *ExecRunner) run(ctx context.Context, env Env, step Step, seq int, phase
 			select {
 			case <-ctx.Done():
 				return res
-			case <-time.After(time.Duration(step.RetryDelayS) * time.Second):
+			case <-r.after(time.Duration(step.RetryDelayS) * time.Second):
 			}
 		}
 	}
@@ -168,10 +204,10 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 		"timeout_s": int(step.Timeout().Seconds()), "attempt": attempt,
 	})
 
-	started := time.Now()
-	runID := r.insertReceipt(ctx, env, step, seq, phase, attempt, started)
+	started := r.now()
+	runID := r.insertReceipt(ctx, env, step, seq, phase, attempt, started, RenderArgv(step, stepEnv))
 	err := cmd.Run()
-	dur := time.Since(started)
+	dur := r.since(started)
 
 	res := stepResult{state: "ok", attempts: attempt}
 	reason := ""
@@ -276,15 +312,15 @@ func truncate(s string) string {
 	return s[:half] + "\n…[truncated]…\n" + s[len(s)-half:]
 }
 
-func (r *ExecRunner) insertReceipt(ctx context.Context, env Env, step Step, seq int, phase Phase, attempt int, started time.Time) int64 {
+func (r *ExecRunner) insertReceipt(ctx context.Context, env Env, step Step, seq int, phase Phase, attempt int, started time.Time, argv string) int64 {
 	if r.db == nil {
 		return 0
 	}
 	res, err := r.db.ExecContext(ctx, `INSERT INTO hook_runs
-        (tick_id, lane, phase, level, hook_id, priority, seq, command, state, started_at, attempts)
-        VALUES (?,?,?,?,?,?,?,?,'running',?,?)`,
+        (tick_id, lane, phase, level, hook_id, priority, seq, command, argv, state, started_at, attempts)
+        VALUES (?,?,?,?,?,?,?,?,?,'running',?,?)`,
 		env.TickID, env.Lane, string(phase), string(step.Level), step.ID, step.Priority, seq,
-		step.Command, started.UTC().Format(time.RFC3339), attempt)
+		step.Command, argv, started.UTC().Format(time.RFC3339), attempt)
 	if err != nil {
 		log.Printf("hook receipt insert failed: %v", err)
 		return 0
@@ -299,7 +335,7 @@ func (r *ExecRunner) finishReceipt(ctx context.Context, id int64, res stepResult
 	}
 	_, err := r.db.ExecContext(ctx, `UPDATE hook_runs
         SET state=?, exit_code=?, finished_at=?, duration_ms=?, output=? WHERE run_id=?`,
-		res.state, res.code, time.Now().UTC().Format(time.RFC3339), dur.Milliseconds(),
+		res.state, res.code, r.now().UTC().Format(time.RFC3339), dur.Milliseconds(),
 		truncate(output), id)
 	if err != nil {
 		log.Printf("hook receipt update failed: %v", err)
@@ -310,11 +346,15 @@ func (r *ExecRunner) insertSkippedReceipt(ctx context.Context, env Env, step Ste
 	if r.db == nil {
 		return
 	}
+	// One instant for both stamps: a skipped step has no duration, so a
+	// started_at/finished_at pair that differs by the time it took to format
+	// the first one is an artefact, not a measurement.
+	stamp := r.now().UTC().Format(time.RFC3339)
 	_, err := r.db.ExecContext(ctx, `INSERT INTO hook_runs
-        (tick_id, lane, phase, level, hook_id, priority, seq, command, state, started_at, finished_at, output)
-        VALUES (?,?,?,?,?,?,?,?,'skipped',?,?,?)`,
+        (tick_id, lane, phase, level, hook_id, priority, seq, command, argv, state, started_at, finished_at, output)
+        VALUES (?,?,?,?,?,?,?,?,?,'skipped',?,?,?)`,
 		env.TickID, env.Lane, string(step.Phase), string(step.Level), step.ID, step.Priority, seq,
-		step.Command, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339),
+		step.Command, RenderArgv(step, env), stamp, stamp,
 		"skipped: "+reason)
 	if err != nil {
 		log.Printf("hook skip receipt failed: %v", err)

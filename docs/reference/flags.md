@@ -5,6 +5,7 @@ Defaults match `cmd/schedulerd/main.go` — the canonical source. This is the ag
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
+| `--hooks-file` | `$HOME/.hermes/hooks.toml` | S13 lane hooks: the ordered PRE/POST step definitions (global / namespace / lane). A missing file means NO hooks — the pre-S13 behaviour — and a broken edit keeps the previous set armed rather than disarming a running fleet. Preview what a lane would run with `schedulerd hooks preview --lane <lane>`. Env: `SCHEDULER_HOOKS_FILE` |
 | `--listen` | `127.0.0.1:9090` | HTTP listen address |
 | `--public-url` | (none) | Public base URL of the dashboard (e.g. `https://sched.example.com`) used to build tick-report permalinks for `deliver_mode=link`; empty = link mode falls back to full (SCHED-GAP-1607) |
 | `--tls-cert` | (none) | PEM certificate chain for serving the dashboard/API/MCP over HTTPS (SCHED-GAP-1600). A browser treats an `https://` origin as a SECURE CONTEXT, which is what `Notification` and `navigator.serviceWorker` require — on the plain-HTTP tailnet origin the browser reports `isSecureContext=false` and pins `Notification.permission` to `denied`, permanently. Set together with `--tls-key`; empty = plain HTTP (unchanged default). See [https-origin.md](https-origin.md). Env: `SCHEDULER_TLS_CERT` |

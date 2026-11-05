@@ -63,6 +63,12 @@ type OperatorAuth interface {
 // scheduler pause/resume, groups/templates CRUD + deploy, namespace CRUD +
 // move, project delete/spawn/bump/unbump — is a mutation.
 var mutatingTools = map[string]bool{
+	// S13 lane hooks: reload re-reads the file into the armed set,
+	// upsert/delete rewrite it — all three change what every future tick
+	// executes, so they belong behind the credential gate.
+	"hooks_reload":           true,
+	"hooks_upsert":           true,
+	"hooks_delete":           true,
 	"fleet_set_weight":       true,
 	"fleet_set_priority":     true,
 	"fleet_set_cooldown":     true,
@@ -112,6 +118,8 @@ var mutatingTools = map[string]bool{
 // surface — cron probes, the ops watchdog, Observatory-style pullers — are
 // read-only, and the mutation is the danger, not the observation.
 var readOnlyTools = map[string]bool{
+	"hooks_list":           true,
+	"hooks_plan":           true,
 	"fleet_status":         true,
 	"fleet_projects":       true,
 	"fleet_project_detail": true,

@@ -12,6 +12,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
+	"github.com/coding-hermes/scheduler/internal/lanehook"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
@@ -29,6 +30,10 @@ type Server struct {
 	// via SetBlocksStore; when nil the blocks tools answer a clear
 	// configuration error instead of panicking.
 	blocksStore *blocks.Store
+	// hooks is the armed lane-hook definition set (S13), shared with the tick
+	// path via SetHooks. nil = the hooks tools answer an explicit
+	// configuration error (fail-closed), never an empty list.
+	hooks *lanehook.Set
 	// observatoryCollector (SCHED-GAP-1592) is the dashboard-side snapshot
 	// collector behind the observatory_snapshot tool. An interface so the
 	// MCP package does not import the dashboard; nil = the tool answers an
@@ -862,6 +867,9 @@ var tools = []ToolDefinition{
 // guards count it).
 var _ = func() struct{} { tools = append(tools, federationTools()...); return struct{}{} }()
 
+// S13 lane hooks (CTL-003 parity with /api/v1/hooks*).
+var _ = func() struct{} { tools = append(tools, hooksTools()...); return struct{}{} }()
+
 // handleMCP routes MCP protocol requests.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1031,6 +1039,17 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolPeersEvents(ctx, args)
 	case "cadence":
 		return s.toolCadence(ctx)
+	// S13 — lane hooks (CTL-003 parity with /api/v1/hooks*).
+	case "hooks_list":
+		return s.toolHooksList(ctx, args)
+	case "hooks_plan":
+		return s.toolHooksPlan(ctx, args)
+	case "hooks_reload":
+		return s.toolHooksReload(ctx, args)
+	case "hooks_upsert":
+		return s.toolHooksUpsert(ctx, args)
+	case "hooks_delete":
+		return s.toolHooksDelete(ctx, args)
 	// SCHED-GAP-1665 — the agent registry (CTL-003 parity with
 	// /api/v1/agents + /api/v1/agents/{name}).
 	case "agents_list":

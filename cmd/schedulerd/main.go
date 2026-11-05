@@ -84,6 +84,14 @@ func serveDashboard(srv *http.Server, certFile, keyFile string) error {
 }
 
 func main() {
+	// S13: `schedulerd hooks ...` is an operator surface, not a daemon mode, so
+	// it short-circuits before the flag set below. `hooks preview` answers "what
+	// command will this lane run, exactly?" without a running daemon and
+	// without executing anything — the question that had no answer while this
+	// feature sat armed-but-unproven.
+	if len(os.Args) > 1 && os.Args[1] == "hooks" {
+		os.Exit(runHooksCommand(os.Args[2:]))
+	}
 	dbPath := flag.String("db", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.db"), "SQLite database path")
 	listen := flag.String("listen", "127.0.0.1:9090", "HTTP listen address")
 	// SCHED-GAP-1600: optional TLS front. Browser Notifications and service
@@ -698,10 +706,18 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
-
+	if err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {
+		log.Fatalf("FATAL: configure foreman routing policy: %v", err)
+	}
 	// S13: arm lane hooks from the definition file. A parse error keeps the
 	// fleet running with NO hooks rather than refusing to boot; the error is
 	// logged loudly and surfaced again by the API's reload route.
+	//
+	// This block sits AFTER the routing-mode application on purpose: the
+	// routing policy is validated immediately after Loop construction (pinned
+	// by TestHarness001ProductionRoutingWiring, which reads this file as text).
+	// Inserting the hooks block between the two broke that invariant when the
+	// feature landed.
 	hookPath := *hooksFile
 	if v := os.Getenv("SCHEDULER_HOOKS_FILE"); v != "" {
 		hookPath = v
@@ -716,9 +732,6 @@ func main() {
 			loop.SetLaneHooks(hookSet)
 			log.Printf("HOOKS: %d step(s) armed from %s", len(hookSet.Steps()), hookPath)
 		}
-	}
-	if err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {
-		log.Fatalf("FATAL: configure foreman routing policy: %v", err)
 	}
 	if rootCfg, err := config.LoadRootConfig(*configFile); err == nil && len(rootCfg.Scheduler.BudgetExempt) > 0 {
 		loop.SetBudgetExempt(rootCfg.Scheduler.BudgetExempt)
@@ -1360,6 +1373,11 @@ func main() {
 		}
 	})
 	mcpServer := mcp.NewServer(db, loop)
+	// S13: the hooks MCP tools read and write the SAME armed set the tick path
+	// uses; without this the five tools would answer a configuration error.
+	if hookSet != nil {
+		mcpServer.SetHooks(hookSet)
+	}
 	// SCHED-GAP-1619: MCP mutations run behind the SAME resolved
 	// operator-credential contract the REST gate (SCHED-GAP-1602) was armed
 	// with above — one credential, one rotation, one decision ladder. Nil

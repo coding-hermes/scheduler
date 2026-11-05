@@ -12,7 +12,7 @@ import (
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
 // SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
-const latestMigration = 81 // S13 lane hooks: hook_runs receipts
+const latestMigration = 82 // S13 lane hooks: hook_runs.argv (the resolved argv a step ran)
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1802,6 +1802,18 @@ CREATE TABLE IF NOT EXISTS hook_runs (
 );
 CREATE INDEX IF NOT EXISTS hook_runs_tick_idx ON hook_runs(tick_id, phase, seq);
 CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at DESC);
+`,
+	},
+	{
+		// The receipt recorded the step's COMMAND but not the argv actually
+		// handed to it, so a receipt could not answer the only question that
+		// matters after a failed hook: what exactly did we send? With
+		// placeholders ({lane},{project},{workdir}...) the command string alone
+		// does not: the same definition runs different argv for every lane.
+		version: 82,
+		desc:    "lane hooks: hook_runs.argv records the resolved argv (command + expanded args) a step actually ran",
+		stmt: `
+ALTER TABLE hook_runs ADD COLUMN argv TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

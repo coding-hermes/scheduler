@@ -1489,8 +1489,12 @@ func TestMCP_ToolsList_BlocksTools(t *testing.T) {
 	// SCHED-GAP-1700 added the 5 lane relationship tools.
 	// SCHED-GAP-1665 added the 3 agent registry tools (agents_list,
 	// agents_register, agents_unregister).
-	if len(toolsList) != 71 {
-		t.Errorf("tool count = %d, want 71 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_* + 5 lane relationship tools + 3 agent registry tools)", len(toolsList))
+	// S13 added the 5 lane-hook tools (hooks_list/hooks_plan reads,
+	// hooks_reload/hooks_upsert/hooks_delete writes) — CTL-003 parity with
+	// /api/v1/hooks, /api/v1/hooks/plan, /api/v1/hooks/reload and
+	// PUT/DELETE /api/v1/hooks/{id}.
+	if len(toolsList) != 76 {
+		t.Errorf("tool count = %d, want 76 (18 fleet_* incl. fleet_lane_tree + 12 blocks/events + 18 CTL-003 incl. observatory_snapshot + gateway_errors + 2 features_* + 1 cooldown_residue + 5 peers incl. peers_events + 1 cadence + 7 REMOTE-010 fed_* + 5 lane relationship tools + 3 agent registry tools + 5 S13 lane-hook tools)", len(toolsList))
 	}
 }
 

@@ -9,6 +9,7 @@
 set -eu
 
 LANE=""; REPO=""; WT=""; BASE="main"; POLICY="persistent"; FLOOR_GIB="5"
+PROJECT=""; ROLE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane) LANE="$2"; shift 2 ;;
@@ -17,6 +18,8 @@ while [ $# -gt 0 ]; do
     --base) BASE="$2"; shift 2 ;;
     --policy) POLICY="$2"; shift 2 ;;
     --floor-gib) FLOOR_GIB="$2"; shift 2 ;;
+    --project) PROJECT="$2"; shift 2 ;;
+    --role) ROLE="$2"; shift 2 ;;
     *) echo "worktree-ensure: unknown arg $1" >&2; exit 65 ;;
   esac
 done
@@ -24,7 +27,14 @@ done
 
 die() { echo "worktree-ensure: $2" >&2; exit "$1"; }
 
-BRANCH="lane/$(printf '%s' "$LANE" | tr '-' '/')"
+# The lane -> branch rule lives in ONE place (lane-lib.sh) and mirrors
+# lanehook.RoleFor: branch = lane/<project>/<role>. The old spelling turned
+# every dash into a slash, so `code-factory-qa` became lane/code/factory/qa and
+# the project half was invented. Callers that already resolved project/role may
+# pass --project/--role and lane_branch uses them verbatim.
+. "$(dirname "$0")/lane-lib.sh"
+BRANCH=$(lane_branch "$LANE" "$PROJECT" "$ROLE") \
+  || die 65 "cannot derive a lane branch from lane=$LANE project=$PROJECT role=$ROLE"
 
 # 1. repo sanity
 [ -d "$REPO/.git" ] || die 78 "not a git work tree: $REPO"
