@@ -38,8 +38,11 @@ func (s *Server) cadence(w http.ResponseWriter, r *http.Request) {
 	ctx, obs := s.newRequestDeadline(r.Context(), "cadence", s.readTimeout())
 	defer obs.finish()
 
+	// PERF-001-R3-R3: all three reads below go through the read-only pool so
+	// the boot pass's writes on the single serialized connection cannot queue
+	// them (measured 504-class starvation on the 16.7 GB boot window).
 	obs.enter("ListProjects")
-	projects, err := database.ListProjects(ctx, s.db, false)
+	projects, err := database.ListProjects(ctx, s.rdb(), false)
 	if !obs.check(w, ctx) {
 		return
 	}
@@ -49,7 +52,7 @@ func (s *Server) cadence(w http.ResponseWriter, r *http.Request) {
 	}
 
 	obs.enter("LoadCadenceRates")
-	rates, err := database.LoadCadenceRates(ctx, s.db, s.clock().Now(), cadenceWindow)
+	rates, err := database.LoadCadenceRates(ctx, s.rdb(), s.clock().Now(), cadenceWindow)
 	if !obs.check(w, ctx) {
 		return
 	}
@@ -63,7 +66,7 @@ func (s *Server) cadence(w http.ResponseWriter, r *http.Request) {
 	// resolution chain the scheduler's admissionModeFor applies (project
 	// override → namespace default → cooldown).
 	obs.enter("ListNamespaces")
-	namespaces, err := database.ListNamespaces(ctx, s.db, false)
+	namespaces, err := database.ListNamespaces(ctx, s.rdb(), false)
 	if !obs.check(w, ctx) {
 		return
 	}

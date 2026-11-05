@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/blocks"
@@ -137,6 +138,23 @@ type Server struct {
 	// armed policy is safe by construction (fail-closed, the SCHED-GAP-1602
 	// posture carried to the read path).
 	fedPolicy FederationReadPolicy
+
+	// readPool (PERF-001-R3-R3) is the READ-ONLY handler pool opened by
+	// database.OpenReadPool and installed via SetReadDB. The DB-backed GET
+	// surfaces route their SELECTs through rdb() so they no longer queue
+	// behind the boot orphan-resume pass (or any writer) on the single
+	// serialized write connection. Nil (every test Server) = rdb() falls
+	// back to s.db — the historical behavior, byte for byte.
+	readPool *sql.DB
+
+	// healthSnapshot (PERF-001-R3-R3) is the latest warm /api/v1/health DB
+	// payload, refreshed by StartHealthRefresher (main.go) once per second
+	// on the read pool. Non-nil = the handler serves active_ticks and the
+	// stall census from here and issues NO cold SELECT on the hot path.
+	healthSnapshot atomic.Pointer[healthSnapshot]
+
+	// healthRefresherStarted makes StartHealthRefresher idempotent.
+	healthRefresherStarted atomic.Bool
 }
 
 // SetAuthConfig installs the resolved operator-authentication configuration
@@ -359,11 +377,20 @@ func (s *Server) Handler() http.Handler {
 // ops watchdog probes that route first and falls back to this one for the
 // rich payload.
 //
-// SCHED-GAP-1575-B: this surface is DB-backed, so its two DB calls run under
+// SCHED-GAP-1575-B: this surface is DB-backed, so its DB calls run under
 // a 1s deadline (livenessTimeout) derived from the request context — a health
 // probe that cannot answer within a second is not healthy, and it must fail
 // fast (504 naming the stalled helper) instead of queueing behind tick work
 // on the single serialized SQLite connection.
+//
+// PERF-001-R3-R3: the reads go through the read-only pool (rdb), and
+// active_ticks + the stall census are additionally served from the warm
+// health snapshot when the boot refresher has produced one — the hot path
+// then issues NO cold SELECT at all (the 16.7 GB-copy boot probe measured
+// 504 at 1.001s at t+1s and t+5s when this handler had to count through the
+// serialized connection the boot pass was holding). A Server without a
+// refresher (every test) computes inline under the same deadline, byte for
+// byte the pre-row behavior.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, 405, "GET only")
@@ -371,14 +398,28 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, obs := s.newRequestDeadline(r.Context(), "health", livenessTimeout)
 	defer obs.finish()
-	obs.enter("countActiveTicks")
-	activeTicks := countActiveTicks(ctx, s.db)
+	var activeTicks int
+	var stall map[string]*StallCensusEntry
+	if snap := s.healthSnapshot.Load(); snap != nil {
+		obs.enter("healthSnapshot")
+		activeTicks = snap.activeTicks
+		stall = snap.stall
+	} else {
+		obs.enter("countActiveTicks")
+		activeTicks = countActiveTicks(ctx, s.rdb())
+		if !obs.check(w, ctx) {
+			return
+		}
+		stall = stallCensus(ctx, s.rdb())
+	}
 	if !obs.check(w, ctx) {
 		return
 	}
 	dbOK := "connected"
 	obs.enter("PingContext")
-	if err := s.db.PingContext(ctx); err != nil {
+	// Ping on the read pool: a no-op round trip that never takes a SQLite
+	// lock, so it cannot queue behind the boot pass even on the first second.
+	if err := s.rdb().PingContext(ctx); err != nil {
 		if !obs.check(w, ctx) {
 			return
 		}
@@ -434,8 +475,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		// SCHED-GAP-1755 AC 2: per-family stall census — stalls_24h and the
 		// stall rate by namespace, with the per-turn deadline value armed per
 		// family ('0s' = exempt). Present whenever the census query answers;
-		// a fresh/dry fleet carries the empty map.
-		"stall_census": stallCensus(ctx, s.db),
+		// a fresh/dry fleet carries the empty map. PERF-001-R3-R3: served
+		// from the warm snapshot when one exists.
+		"stall_census": stall,
 	})
 }
 
@@ -514,8 +556,15 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// PERF-001-R3-R3: every DB step below routes through the read-only pool
+	// (rdb) so the boot orphan-resume pass — or any writer holding the single
+	// serialized write connection — can no longer queue these SELECTs. The
+	// measured boot-window failure this closes: on the 16.7 GB copy, /status
+	// answered 5.17s at t+5s (the deadline) with computeProjectFailureRates
+	// and countRecentOutcomes stalled behind boot writes on pprof.
+
 	obs.enter("ListProjects")
-	projects, err := database.ListProjects(ctx, s.db, true)
+	projects, err := database.ListProjects(ctx, s.rdb(), true)
 	if !obs.check(w, ctx) {
 		return
 	}
@@ -529,12 +578,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	adThreshold := s.resolvedConfig.AutoDisableFailureRate
 	adMinTicks := s.resolvedConfig.AutoDisableMinTicks
 	obs.enter("countActiveTicks")
-	activeTicks := countActiveTicks(ctx, s.db)
+	activeTicks := countActiveTicks(ctx, s.rdb())
 	if !obs.check(w, ctx) {
 		return
 	}
 	obs.enter("countRecentOutcomes")
-	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	recentOutcomes := countRecentOutcomes(ctx, s.rdb())
 	if !obs.check(w, ctx) {
 		return
 	}
@@ -542,14 +591,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// false-green shape the tightened completion gate now fails at spawn
 	// time — operators watch it drain to 0 to verify the live fix.
 	obs.enter("countZeroOutputCommitted24h")
-	zeroOutputCommitted24h := countZeroOutputCommitted24h(ctx, s.db)
+	zeroOutputCommitted24h := countZeroOutputCommitted24h(ctx, s.rdb())
 	if !obs.check(w, ctx) {
 		return
 	}
 	// Optional: measured 18-30s on 368 projects before SCHED-PERF-002.
 	var failureRates map[string]ProjectFailureRate
 	softSection("computeProjectFailureRates", func(sctx context.Context) {
-		failureRates = computeProjectFailureRates(sctx, s.db, s.failureWindow, adThreshold, adMinTicks)
+		failureRates = computeProjectFailureRates(sctx, s.rdb(), s.failureWindow, adThreshold, adMinTicks)
 	})
 	// PERF-001: serve last_evaluation from the loop's in-memory state when a
 	// loop is attached. evaluate() sets lastEval immediately BEFORE emitting
@@ -566,7 +615,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		obs.enter("getLastEvalTime")
-		lastEval = getLastEvalTime(ctx, s.db)
+		lastEval = getLastEvalTime(ctx, s.rdb())
 		if !obs.check(w, ctx) {
 			return
 		}
@@ -578,7 +627,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// number that must read 0 (enabled foremen all tasks, enabled satellites
 	// all cooldown, every enabled foreman in a tasks-mode namespace).
 	nsAdmission := map[string]string{}
-	if nss, nerr := database.ListNamespaces(ctx, s.db, false); nerr == nil {
+	if nss, nerr := database.ListNamespaces(ctx, s.rdb(), false); nerr == nil {
 		for _, ns := range nss {
 			nsAdmission[ns.ID] = ns.AdmissionMode
 		}
@@ -635,7 +684,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// failing the request — the required fields are already in hand.
 	var usagePools []database.UsagePoolLease
 	softSection("usagePoolStats", func(sctx context.Context) {
-		pools, err := database.UsagePoolStats(sctx, s.db)
+		pools, err := database.UsagePoolStats(sctx, s.rdb())
 		if err != nil {
 			log.Printf("WARN: /api/v1/status usage-pool stats unavailable: %v", err)
 			return
@@ -666,11 +715,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// of the qa/pm/sync/dogfood counters (lanes, lifetime output ticks,
 	// worst zero-output streak, lanes at the alert threshold).
 	softSection("laneFamilyOutputTotals", func(sctx context.Context) {
-		status["lane_output_families"] = laneFamilyOutputTotals(sctx, s.db)
+		status["lane_output_families"] = laneFamilyOutputTotals(sctx, s.rdb())
 	})
 	status["wave_depth_total"] = waveDepthTotal(waves)
 	softSection("waveWorkersCapConfigured", func(sctx context.Context) {
-		status["wave_workers_cap_configured"] = waveWorkersCapConfigured(sctx, s.db)
+		status["wave_workers_cap_configured"] = waveWorkersCapConfigured(sctx, s.rdb())
 	})
 	status["waves"] = waves
 	// SCHED-GAP-115 (S12 §11): attributed wave cost — the cost twin of
@@ -745,7 +794,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// SCHED-GAP-219: the config-drift tripwire (formerly the ops script's
 	// --verify) as an API surface — DB operator pins vs the seed fleet.toml.
 	softSection("configDriftBlock", func(sctx context.Context) {
-		status["config_drift"] = s.configDriftBlock(sctx, s.db)
+		status["config_drift"] = s.configDriftBlock(sctx, s.rdb())
 	})
 	// The response states its own completeness: absent "partial" means every
 	// section answered.
@@ -826,7 +875,7 @@ type activeWave struct {
 // returned when no wave is running so the JSON carries "waves": [] rather
 // than null (the bumps convention).
 func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
-	rows, err := database.ListRunningWaves(ctx, s.db)
+	rows, err := database.ListRunningWaves(ctx, s.rdb())
 	if err != nil {
 		log.Printf("status: list running waves: %v", err)
 		return make([]activeWave, 0)
@@ -834,7 +883,7 @@ func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
 	// SCHED-GAP-115: per-tick attributed cost — one indexed join, shared
 	// with runningWaveCostTotal. A failed lookup leaves costs at 0 (the
 	// status surface must never 500 on a dirty read).
-	costs, _, err := database.RunningWaveCosts(ctx, s.db)
+	costs, _, err := database.RunningWaveCosts(ctx, s.rdb())
 	if err != nil {
 		log.Printf("status: running wave costs: %v", err)
 		costs = nil
@@ -869,7 +918,7 @@ func (s *Server) listRunningWaves(ctx context.Context) []activeWave {
 // returns 0 (attribution is observability; a dirty read must never 500 the
 // status surface).
 func (s *Server) runningWaveCostTotal(ctx context.Context) float64 {
-	_, total, err := database.RunningWaveCosts(ctx, s.db)
+	_, total, err := database.RunningWaveCosts(ctx, s.rdb())
 	if err != nil {
 		log.Printf("status: running wave costs: %v", err)
 		return 0

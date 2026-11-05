@@ -675,7 +675,26 @@ type HealthData struct {
 	HostSampleSource    string
 }
 
-func (g *Generator) collect(ctx context.Context) FleetData {
+// collectOpts carries the boot fast-pass switch for collect(). The zero
+// value (every request-driven caller) collects the full pipeline.
+type collectOpts struct {
+	// fastPass skips the subprocess stages (ci-warm dispatch, per-lane git
+	// enrichment) and keeps every lane's DB-derived fields — the render
+	// state the enrichment work deadline already produces on a tripped
+	// budget. Only the boot warm-up's first pass sets it, so the first
+	// snapshot lands inside the 2.5s render budget on an 880-lane fleet.
+	fastPass bool
+}
+
+func (g *Generator) collect(ctx context.Context, opts ...collectOpts) FleetData {
+	// PERF-001-R3-R3: the boot warm-up's first pass runs with fastPass set —
+	// the DB core only, no subprocess stages — so the first snapshot lands
+	// inside the render budget (see warmup.go for the measured pipeline that
+	// motivated it). Request-driven collects are unchanged (zero options).
+	var opt collectOpts
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	// ADV-R09/G8: the effective budget from the resolution chain; 0 (tests,
 	// SetWeightBudget never called) renders the documented default of 100.
 	budgetTotal := g.weightBudget
@@ -800,14 +819,25 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	}
 	endLanes()
 
+	// PERF-001-R3-R3: the boot fast pass stops here for the LEARNED model —
+	// fleetLearned classifies up to 200 recent ticks with `git log`
+	// SUBPROCESSES, and its only consumer (learnedETA inside the enrichment
+	// loop) is past the fast pass's spent enrichment deadline for every
+	// lane. The full passes (2+) collect it.
+	var fleet *fleetModel
+	if !opt.fastPass {
+		endLearned := stageTimer(ctx, "fleet-learned")
+		fleet = g.fleetLearned(ctx)
+		endLearned()
+	}
+
 	// Second pass for cost sparklines + recent failure flags + observability.
 	// Done AFTER the project rows cursor is fully closed — the modernc.org/sqlite
 	// driver deadlocks if we open nested queries on the same connection while a
 	// rows cursor is still open (the collect() N+1 warning).
 	// The fleet-wide learned prior is built ONCE and shared across all projects.
-	endLearned := stageTimer(ctx, "fleet-learned")
-	fleet := g.fleetLearned(ctx)
-	endLearned()
+	// (PERF-001-R3-R3: moved ABOVE the workdirs build and gated on
+	// !fastPass — see the block right after db-lanes.)
 	// CI conclusions (DASH-PERF-001): warm the TTL cache once, with bounded
 	// concurrency, before the per-project loop — the ciConclusion reads below
 	// then hit the cache and no render ever serializes N gh subprocesses again.
@@ -823,9 +853,11 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			workdirs = append(workdirs, wd)
 		}
 	}
-	endCI := stageTimer(ctx, "ci-warm")
-	g.warmCIConclusionsWithin(ctx, workdirs)
-	endCI()
+	if !opt.fastPass {
+		endCI := stageTimer(ctx, "ci-warm")
+		g.warmCIConclusionsWithin(ctx, workdirs)
+		endCI()
+	}
 	// DASH-PERF-003: the per-project stats below previously cost ~4-5 serial
 	// DB round-trips per project (~176 total on the single shared connection —
 	// the warm-render bottleneck). Two window-function queries now fetch every
@@ -834,10 +866,20 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// (projMaxConcurrent). Parallel DB queries would serialize on the
 	// SetMaxOpenConns(1) pool anyway; batching is the only lever that cuts
 	// serial DB time.
-	endSamples := stageTimer(ctx, "db-samples")
-	samplesByProject := g.batchCompletedSamples(ctx)
-	healthByProject := g.batchTickHealth(ctx)
-	endSamples()
+	// PERF-001-R3-R3: the boot fast pass also skips the two batched window
+	// queries — each ROW_NUMBER()s the WHOLE ticks table (101k rows on the
+	// live-sized copy) and the boot-cold sort is seconds the render budget
+	// does not have. Their only consumer is the enrichment loop's
+	// cost-series/health cells, which the spent deadline already renders
+	// from DB-derived fields; pass 2 fills them.
+	var samplesByProject map[string][]completedSample
+	var healthByProject map[string]tickHealth
+	if !opt.fastPass {
+		endSamples := stageTimer(ctx, "db-samples")
+		samplesByProject = g.batchCompletedSamples(ctx)
+		healthByProject = g.batchTickHealth(ctx)
+		endSamples()
+	}
 	endEnrich := stageTimer(ctx, "enrich")
 	// PERF-001-R3-R2: the per-lane enrichment is bounded by a WORK deadline.
 	// It is the O(lanes) subprocess/walk stage (tick-work git classification,
@@ -847,6 +889,14 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	enrichDeadline := time.Time{}
 	if b := g.overviewBudget(); b > 0 {
 		enrichDeadline = g.clock().Now().Add(b)
+	}
+	if opt.fastPass {
+		// Boot fast path: every lane sits past this already-spent deadline,
+		// so the pass keeps the DB-derived fields for ALL of them — exactly
+		// the render state the work deadline produces on a tripped budget
+		// ("lanes past the deadline keep their DB-derived fields") — and the
+		// snapshot lands inside the render budget. The next pass enriches.
+		enrichDeadline = g.clock().Now().Add(-time.Second)
 	}
 	data.EnrichSkipped = g.enrichProjectsWithin(data.Projects, samplesByProject, healthByProject, fleet, enrichDeadline)
 	endEnrich()
@@ -858,11 +908,15 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// SCHED-GAP-1642: expose recent one-shot burst activity from the same
 	// failure_reason marker written by SCHED-GAP-1641. The best-effort read
 	// leaves the card at zero for an empty or legacy dataset.
-	instantSince := g.clock().Now().UTC().Add(-instantTurnDashboardWindow).Format(time.RFC3339)
-	_ = g.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM ticks
-		WHERE failure_reason = ? AND spawned_at >= ?
-	`, instantTurnFailureReason, instantSince).Scan(&data.InstantTurnCount)
+	// PERF-001-R3-R3: the boot fast pass skips it — failure_reason carries no
+	// index, so this is a full ticks-table scan, and pass 2 fills the card.
+	if !opt.fastPass {
+		instantSince := g.clock().Now().UTC().Add(-instantTurnDashboardWindow).Format(time.RFC3339)
+		_ = g.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM ticks
+			WHERE failure_reason = ? AND spawned_at >= ?
+		`, instantTurnFailureReason, instantSince).Scan(&data.InstantTurnCount)
+	}
 
 	// Recent ticks.
 	tickRows, _ := g.db.QueryContext(ctx, `SELECT id, project_name, status, COALESCE(outcome,''), COALESCE(session_id,''), spawned_at, COALESCE(completed_at,''), commits, files_changed FROM ticks ORDER BY spawned_at DESC LIMIT 20`)

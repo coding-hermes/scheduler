@@ -78,7 +78,10 @@ func (s *Server) spendByCostSource(ctx context.Context) map[string]interface{} {
 		TokensOutAvg float64 `json:"tokens_out_avg"`
 	}
 	tiers := map[string]*spendTier{}
-	rows, err := s.db.QueryContext(ctx, `
+	// PERF-001-R3-R3: this aggregate is the /status soft section's most
+	// expensive scan; route it through the read-only pool so it never queues
+	// behind a writer on the single serialized connection.
+	rows, err := s.rdb().QueryContext(ctx, `
 SELECT COALESCE(NULLIF(cost_source,''),'legacy') AS src,
        COALESCE(SUM(cost_usd),0),
        COALESCE(SUM(tokens_in),0),

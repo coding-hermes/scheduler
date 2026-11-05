@@ -97,7 +97,7 @@ func (s *Server) loadBudgetSpends(ctx context.Context, now time.Time) (map[strin
 	if spends, ok := s.budgetSpends.get(now, ttl); ok {
 		return spends, nil
 	}
-	spends, err := scheduler.LoadBudgetSpends(ctx, s.db, now)
+	spends, err := scheduler.LoadBudgetSpends(ctx, s.rdb(), now)
 	if err != nil {
 		return nil, err
 	}
