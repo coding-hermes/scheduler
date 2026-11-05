@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -155,5 +158,119 @@ func TestRunRefusedDispatchExitsOne(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "NOT dispatched") {
 		t.Errorf("stderr = %q, want an explicit NOT-dispatched line", stderr.String())
+	}
+}
+
+// TestRunDirectiveReachesTheWireAsTextB64 is the assertion that makes the
+// directive flags real: it decodes the member the relay will actually receive
+// and requires the operator's text back byte-for-byte. A test that only
+// checked the flag parsed would pass on a surface that drops the value.
+func TestRunDirectiveReachesTheWireAsTextB64(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	const directive = "read the board, pick the top open row, work it"
+	code := run([]string{
+		"agent-7", "--lane", "code-factory", "--board", "/b/tasks.jsonl",
+		"--corr-id", "q-cli-text", "--scheduler-id", "sched-cli",
+		"--text", directive, "--dry-run",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\nstderr=%s", code, stderr.String())
+	}
+	body := strings.TrimSpace(stdout.String()[strings.Index(stdout.String(), "body: ")+len("body: "):])
+	var req struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("dry-run body is not JSON: %v (%s)", err, body)
+	}
+	enc, ok := req.Payload["text_b64"].(string)
+	if !ok {
+		t.Fatalf("payload carries no text_b64 member: %v", req.Payload)
+	}
+	dec, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("text_b64 is not base64: %v", err)
+	}
+	if string(dec) != directive {
+		t.Errorf("decoded directive = %q, want %q", string(dec), directive)
+	}
+	// The text must NOT also ride in the clear: the envelope is the thing the
+	// relay logs, and a directive that leaks there defeats the base64 carrier.
+	if _, leaked := req.Payload["text"]; leaked {
+		t.Errorf("payload carries a plaintext text member alongside text_b64: %v", req.Payload)
+	}
+}
+
+// TestRunRefusesTwoDirectivesAndAnUnreadableFile pins the refusals that keep
+// this surface honest: a caller with two directives has not decided which one
+// the node runs, and both cases must exit 2 having attempted nothing.
+func TestRunRefusesTwoDirectivesAndAnUnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "brief.txt")
+	if err := os.WriteFile(good, []byte("do the thing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"both", []string{"--text", "a", "--text-file", good}, "mutually exclusive"},
+		{"missing", []string{"--text-file", filepath.Join(dir, "nope.txt")}, "no such file"},
+		{"empty", []string{"--text-file", empty}, "is empty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"agent-7", "--lane", "code-factory", "--board", "/b/tasks.jsonl", "--dry-run"}, tc.args...)
+			if code := run(args, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit %d, want 2 (usage)\nstderr=%s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Errorf("stderr = %q, want it to mention %q", stderr.String(), tc.want)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("nothing should be rendered, got %q", stdout.String())
+			}
+		})
+	}
+}
+
+// TestRunTextFileIsTheDocumentedCarrierForALongPrompt proves the file form is
+// the same member as --text (one carrier, two entry points, no drift).
+func TestRunTextFileIsTheDocumentedCarrierForALongPrompt(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "brief.md")
+	const directive = "line one\nline 'two' with \"quotes\" and $dollars\n"
+	if err := os.WriteFile(p, []byte(directive), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"agent-7", "--lane", "code-factory", "--board", "/b/tasks.jsonl",
+		"--corr-id", "q-cli-file", "--scheduler-id", "sched-cli",
+		"--text-file", p, "--dry-run",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\nstderr=%s", code, stderr.String())
+	}
+	body := strings.TrimSpace(stdout.String()[strings.Index(stdout.String(), "body: ")+len("body: "):])
+	var req struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("dry-run body is not JSON: %v", err)
+	}
+	dec, err := base64.StdEncoding.DecodeString(req.Payload["text_b64"].(string))
+	if err != nil {
+		t.Fatalf("text_b64 is not base64: %v", err)
+	}
+	if string(dec) != directive {
+		t.Errorf("decoded directive = %q, want the file's bytes %q", string(dec), directive)
 	}
 }

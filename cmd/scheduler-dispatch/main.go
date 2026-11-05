@@ -89,6 +89,13 @@ flags:
   --corr-id <id>         correlation id (default: minted unique; reused as the
                          relay's request id + idempotency key, so retrying the
                          SAME id is safe)
+  --text <directive>     what the node's harness is asked to carry. Without it
+                         the payload has no directive member at all and the
+                         node receives the bare envelope, so an operator
+                         dispatch carries its own prompt here.
+  --text-file <path>     read the directive from a file (same member; mutually
+                         exclusive with --text — quoting a long prompt in argv
+                         is how a shell mangles it)
   --url <url>            Crier relay base URL (env CRIER_URL; default %s)
   --scheduler-id <id>    sender identity (env SCHEDULER_ID; default %s)
   --dry-run              print the endpoint + exact body, send nothing
@@ -113,6 +120,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	board := fs.String("board", "", "board reference the agent resolves (path or path@host)")
 	workdir := fs.String("workdir", "", "workdir reference the agent resolves")
 	corrID := fs.String("corr-id", "", "correlation id (default minted)")
+	text := fs.String("text", "", "directive the node's harness is asked to carry (inline)")
+	textFile := fs.String("text-file", "", "read the directive from this file (mutually exclusive with --text)")
 	relayURL := fs.String("url", "", "Crier relay base URL (env CRIER_URL)")
 	schedulerID := fs.String("scheduler-id", "", "sender scheduler identity (env SCHEDULER_ID)")
 	dryRun := fs.Bool("dry-run", false, "print the endpoint + exact body, send nothing")
@@ -134,11 +143,17 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	sfid := firstNonEmpty(*schedulerID, defaultSchedulerID())
 	token := envOr("CRIER_AUTH_TOKEN")
 
+	directive, code := resolveText(*text, *textFile, stderr)
+	if code != 0 {
+		return code
+	}
+
 	item := bus.WorkItem{
 		Lane:    *lane,
 		Board:   *board,
 		Workdir: *workdir,
 		CorrID:  *corrID,
+		Text:    directive,
 	}
 
 	// Render (and validate) ONCE. An incomplete work item is a usage error —
@@ -179,6 +194,32 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// resolveText turns the directive flags into the string the work item carries.
+// Both flags at once is a usage error: a caller that sets two directives has
+// not decided which one the node should run, and a silently-preferred one is
+// how an operator ships the wrong prompt. An empty result is legal (the node's
+// harness falls back to the lane's own prompt), so this refuses only genuine
+// conflicts and unreadable files.
+func resolveText(inline, path string, stderr io.Writer) (string, int) {
+	if strings.TrimSpace(inline) != "" && strings.TrimSpace(path) != "" {
+		_, _ = fmt.Fprintln(stderr, "scheduler-dispatch: --text and --text-file are mutually exclusive")
+		return "", 2
+	}
+	if strings.TrimSpace(path) == "" {
+		return inline, 0
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: --text-file %s: %v\n", path, err)
+		return "", 2
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: --text-file %s is empty\n", path)
+		return "", 2
+	}
+	return string(b), 0
+}
+
 // firstNonEmpty returns the first non-empty string.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
@@ -206,6 +247,12 @@ func splitPositionals(argv []string) (positional, flags []string) {
 	valueFlags := map[string]bool{
 		"lane": true, "board": true, "workdir": true,
 		"corr-id": true, "url": true, "scheduler-id": true,
+		// The directive flags take a value too. Omitting them here is not a
+		// cosmetic slip: their argument is hoisted into the positional list,
+		// the flag package then reports "flag needs an argument", and the
+		// surface exits 2 while claiming a usage problem the caller did not
+		// have. Every value-taking flag must be mirrored in this map.
+		"text": true, "text-file": true,
 	}
 	noMoreFlags := false
 	for i := 0; i < len(argv); i++ {
