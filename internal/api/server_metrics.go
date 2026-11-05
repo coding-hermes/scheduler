@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/scheduler"
 )
 
 // SCHED-GAP-156: GET /api/v1/metrics — the eight fleet questions that used to
@@ -112,6 +113,9 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		"stalls":      s.metricsStalls(ctx, cutoff),
 		"escalations": s.metricsEscalations(ctx, cutoff),
 		"lane_churn":  s.metricsLaneChurn(ctx, cutoff),
+		// SCHED-GAP-16984: the dispatch reply inbox's correlation accounting,
+		// readable without opening the DB.
+		"dispatch_inbox": metricsDispatchInbox(),
 	})
 }
 
@@ -706,5 +710,37 @@ GROUP BY day`, cutoff)
 		"disabled_total":  total,
 		"enabled_per_day": enabledPerDay,
 		"enabled_current": enabledCurrent,
+		"dispatch_inbox": "PER-PROCESS dispatch reply-inbox counters (SCHED-GAP-16984), in-memory like the " +
+			"deferrals block's admission counters: monotonic since daemon boot, reset by a restart, no persisted " +
+			"equivalent. seen_total = every inbox message a dispatch reply await examined; correlated_total = " +
+			"messages matched to the awaiting tick's hand-out; uncorrelated_total = messages that matched no " +
+			"hand-out (each is named with the correlation key it claimed in the scheduler log and in the " +
+			"awaiting tick's tick_dispatch receipt); acked_total / deferred_total = how the uncorrelated ones " +
+			"left the lease (true residue is acked; a message answering another tick's outstanding hand-out, " +
+			"or one whose ack failed or ran out of deadline, is deferred with the reason in the tick detail); " +
+			"unacked_current = the process's belief of uncorrelated messages still parked unacked (deferred " +
+			"ones minus any later seen acked or consumed by their owner; a steady nonzero value is the " +
+			"inbox-residue alarm), bounded by a 4096-identity set with unacked_overflow counting identities " +
+			"dropped past the bound. No window — all-time for this process.",
+	}
+}
+
+// metricsDispatchInbox (SCHED-GAP-16984) reads the process-wide dispatch
+// reply-inbox counters (scheduler.DispatchInboxCounters). The counters exist
+// in every process, so the block is always available — zeros before any
+// dispatch are real zeros (the same seeded-zeros rule by_outcome follows),
+// never an invented number — and the caller of this endpoint never opens the
+// DB to read them.
+func metricsDispatchInbox() map[string]interface{} {
+	c := scheduler.DispatchInboxCounters()
+	return map[string]interface{}{
+		"available":          true,
+		"seen_total":         c.SeenTotal,
+		"correlated_total":   c.CorrelatedTotal,
+		"uncorrelated_total": c.UncorrelatedTotal,
+		"acked_total":        c.AckedTotal,
+		"deferred_total":     c.DeferredTotal,
+		"unacked_current":    c.UnackedCurrent,
+		"unacked_overflow":   c.UnackedOverflow,
 	}
 }

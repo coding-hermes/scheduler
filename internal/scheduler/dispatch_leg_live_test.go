@@ -238,7 +238,7 @@ func TestLiveDispatchLeg_RoundTripIntoATick(t *testing.T) {
 		t.Fatalf("record receipt: %v", err)
 	}
 
-	reply, ok, err := pool.awaitDispatchReply(context.Background(), PackedProject{Name: "helix"}, "tick-live-1710", receipt, 90*time.Second)
+	reply, ok, _, err := pool.awaitDispatchReply(context.Background(), PackedProject{Name: "helix"}, "tick-live-1710", receipt, db, 90*time.Second)
 	if err != nil {
 		t.Fatalf("live awaitDispatchReply: %v", err)
 	}

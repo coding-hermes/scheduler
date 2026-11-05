@@ -37,10 +37,16 @@ package scheduler
 //	autonomy law, scoped to this path only).
 //
 //	CORRELATION BY IDENTITY, NEVER BY ARRIVAL. A message on the scheduler's
-//	inbox that cannot be matched to a hand-out this process made is left
-//	strictly alone: not read for another owner's benefit, not acked, and never
-//	allowed to close a tick. Only a message whose correlation id (or the relay
-//	message id it answers) names a dispatch WE made is acked.
+//	inbox that cannot be matched to a hand-out this process made is never
+//	allowed to close a tick. SCHED-GAP-16984 amended the silence: such a
+//	message is now COUNTED and NAMED — one structured log line per retrieve
+//	batch, the same numbers and the correlation keys it claimed in the tick's
+//	dispatch receipt, and per-process counters on /api/v1/metrics — and then
+//	settled: true residue is acked (five real cf-node answers once parked
+//	unacked to TTL because "answered with the wrong key" looked identical to
+//	"never answered"), while a message whose claimed identity names another
+//	tick's OUTSTANDING hand-out is deferred with that reason, never consumed,
+//	so a concurrent await can still collect its own answer.
 
 import (
 	"context"
@@ -51,6 +57,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/bus"
@@ -247,12 +254,25 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 
 	// Wait for the answer, bounded by the same session deadline a local tick
 	// would have had (computed above, and already carried to the node as
-	// limits.wall_s).
-	reply, ok, waitErr := p.awaitDispatchReply(dctx, proj, tickID, receipt, timeout)
+	// limits.wall_s). The db rides along so an uncorrelatable message can be
+	// checked against every OUTSTANDING hand-out before it is consumed
+	// (SCHED-GAP-16984).
+	reply, ok, inbox, waitErr := p.awaitDispatchReply(dctx, proj, tickID, receipt, db, timeout)
 
 	finished := p.clock().Now()
 	rec.UpdatedAt = finished.UTC().Format(time.RFC3339Nano)
 	rec.Reply = reply
+	// SCHED-GAP-16984: the inbox correlation accounting rides in the tick
+	// detail whenever there is something to report (an uncorrelatable message
+	// would otherwise be invisible); a matched reply with no stray traffic
+	// keeps the receipt byte-identical to the pre-16984 shape.
+	if ann := inbox.annotate(); ann != "" {
+		if rec.Reply == "" {
+			rec.Reply = ann
+		} else {
+			rec.Reply += "\n" + ann
+		}
+	}
 	st := &SpawnedTick{
 		TickID:      tickID,
 		Project:     proj.Name,
@@ -314,17 +334,30 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 
 // awaitDispatchReply polls the scheduler's own inbox until a message
 // correlating to THIS hand-out arrives, the deadline passes, or the caller's
-// context ends. Messages that do not correlate are never acked: they belong to
-// someone else, and the short lease returns them to their owner.
+// context ends.
 //
-// Reply correlation accepts the two identities the hand-out actually
-// established — the relay message id (echoed by the fleet dispatcher as
-// in_reply_to) and the correlation id (echoed directly, or inside the original
-// payload the dispatcher hands back as `task`) — and nothing else.
-func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, tickID string, receipt bus.DispatchReceipt, budget time.Duration) (string, bool, error) {
+// SCHED-GAP-16984 — the poll is no longer silent about the messages it cannot
+// correlate. Every message is counted (seen / correlated / uncorrelated),
+// each uncorrelatable message is named by the correlation key it claims
+// (bounded, so a hostile inbox cannot blow up a log line), and is then
+// EXPLICITLY SETTLED: acked when it is true residue, deferred with a spelled
+// reason when it may still belong to someone — another tick's outstanding
+// hand-out, no lease, ack error, past deadline. ONE structured line is logged
+// per retrieve batch that carried messages (never per message):
+//
+//	DISPATCH: <proj> tick=<id> inbox seen=<n> correlated=<n> uncorrelated=<n> keys=<csv> acked=<n> deferred=<n>
+//
+// and the batch totals accumulate into the returned dispatchInboxStats, which
+// the caller records on the tick's dispatch receipt. The same events bump the
+// process-wide counters surfaced on /api/v1/metrics as dispatch_inbox. The
+// matched-reply behaviour — the verdict, the ack, the return values — is
+// byte-identical to the pre-16984 leg; a matched reply still wins over
+// everything else in the batch, and the rest of the batch is settled instead
+// of being left leased to TTL.
+func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, tickID string, receipt bus.DispatchReceipt, db *sql.DB, budget time.Duration) (string, bool, dispatchInboxStats, error) {
 	client := p.busClientForDispatch()
 	if client == nil || !client.InboxEnabled() {
-		return "", false, fmt.Errorf("%w: no inbox identity while awaiting the answer to %s", ErrDispatchNotConfigured, receipt.CorrID)
+		return "", false, dispatchInboxStats{}, fmt.Errorf("%w: no inbox identity while awaiting the answer to %s", ErrDispatchNotConfigured, receipt.CorrID)
 	}
 	if budget <= 0 {
 		budget = DefaultGatewayResponseTimeout
@@ -334,10 +367,11 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 		return fmt.Errorf("no correlated reply for corr=%s (message=%s) within %s — the hand-out is recorded and the agent may still answer",
 			receipt.CorrID, receipt.MessageID, budget.Round(time.Millisecond))
 	}
+	var stats dispatchInboxStats
 	for {
 		remaining := deadline.Sub(p.clock().Now())
 		if remaining <= 0 {
-			return "", false, deadlineErr()
+			return "", false, stats, deadlineErr()
 		}
 		// InboxRetrieve has its own longer request timeout. Bound it by the
 		// remaining tick budget, or a long-poll can overrun a short tick
@@ -348,42 +382,87 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 		retrieveCancel()
 		if err != nil {
 			if ctx.Err() != nil {
-				return "", false, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
+				return "", false, stats, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
 			}
 			if retrieveDeadline || errors.Is(err, context.DeadlineExceeded) {
-				return "", false, deadlineErr()
+				return "", false, stats, deadlineErr()
 			}
 			// A bus blip is not a verdict about the work: log and keep
 			// waiting until the budget runs out.
 			log.Printf("DISPATCH: %s tick=%s inbox retrieve: %v (retrying)", proj.Name, tickID, err)
 		} else {
+			batch := dispatchInboxStats{}
+			var replyText string
+			replyOK := false
+			replied := false
 			for _, msg := range lease.Messages {
+				stats.Seen++
+				batch.Seen++
 				payload, matched := correlateDispatchReply(msg, receipt)
-				if !matched {
+				if matched {
+					stats.Correlated++
+					batch.Correlated++
+					remaining := deadline.Sub(p.clock().Now())
+					if remaining > 0 {
+						ackCtx, ackCancel := context.WithTimeout(ctx, remaining)
+						if aerr := client.InboxAck(ackCtx, lease.LeaseID, msg.ID); aerr != nil {
+							log.Printf("DISPATCH: %s tick=%s ack %s: %v", proj.Name, tickID, msg.ID, aerr)
+						} else {
+							// Consumed by its owner (this or a sibling
+							// await): drop any residue belief held for the
+							// id (SCHED-GAP-16984 unacked accounting).
+							dispatchInboxUnackedRelease(msg.ID)
+						}
+						ackCancel()
+					}
+					// First correlated message wins, exactly as before; a
+					// duplicate late answer for the same hand-out is
+					// consumed above instead of rotting on the lease.
+					if !replied {
+						replied = true
+						ok, why := dispatchReplyVerdict(payload)
+						text := dispatchReplyText(payload)
+						if !ok {
+							if strings.TrimSpace(text) == "" {
+								text = why
+							}
+							replyText, replyOK = text, false
+						} else {
+							replyText, replyOK = text, true
+						}
+					}
 					continue
 				}
-				remaining := deadline.Sub(p.clock().Now())
-				if remaining > 0 {
-					ackCtx, ackCancel := context.WithTimeout(ctx, remaining)
-					if aerr := client.InboxAck(ackCtx, lease.LeaseID, msg.ID); aerr != nil {
-						log.Printf("DISPATCH: %s tick=%s ack %s: %v", proj.Name, tickID, msg.ID, aerr)
-					}
-					ackCancel()
+				// SCHED-GAP-16984: a message that names no hand-out of ours
+				// is reported, then settled — never silently leased to TTL.
+				key := dispatchReplyKey(msg)
+				stats.Uncorrelated++
+				batch.Uncorrelated++
+				stats.Keys = appendBoundedDispatchKey(stats.Keys, &stats.KeysOverflow, key)
+				batch.Keys = appendBoundedDispatchKey(batch.Keys, &batch.KeysOverflow, key)
+				outcome := p.settleDispatchInboxResidue(ctx, client, db, lease, msg, deadline)
+				stats.settle(outcome)
+				batch.settle(outcome)
+			}
+			if batch.Seen > 0 {
+				// ONE line per batch that carried messages, and the same
+				// events into the per-process counters.
+				recordDispatchInboxBatch(batch)
+				line := fmt.Sprintf("DISPATCH: %s tick=%s inbox seen=%d correlated=%d uncorrelated=%d keys=%s acked=%d deferred=%d",
+					proj.Name, tickID, batch.Seen, batch.Correlated, batch.Uncorrelated,
+					boundedDispatchCSV(batch.Keys, batch.KeysOverflow), batch.Acked, batch.Deferred)
+				if len(batch.DeferredReasons) > 0 {
+					line += " deferred_reasons=" + boundedDispatchCSV(batch.DeferredReasons, batch.DeferredOverflow)
 				}
-				ok, why := dispatchReplyVerdict(payload)
-				text := dispatchReplyText(payload)
-				if !ok {
-					if strings.TrimSpace(text) == "" {
-						text = why
-					}
-					return text, false, nil
-				}
-				return text, true, nil
+				log.Print(line)
+			}
+			if replied {
+				return replyText, replyOK, stats, nil
 			}
 		}
 		remaining = deadline.Sub(p.clock().Now())
 		if remaining <= 0 {
-			return "", false, deadlineErr()
+			return "", false, stats, deadlineErr()
 		}
 		poll := dispatchReplyPollInterval
 		if poll > remaining {
@@ -391,10 +470,197 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 		}
 		select {
 		case <-ctx.Done():
-			return "", false, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
+			return "", false, stats, fmt.Errorf("dispatch %s: %w", receipt.CorrID, ctx.Err())
 		case <-p.clock().After(poll):
 		}
 	}
+}
+
+// dispatchInboxStats accumulates the reply-inbox correlation accounting for
+// one awaitDispatchReply (stats) or one retrieve batch (batch): every message
+// seen, how many correlated to the hand-out, how many did not, the
+// correlation keys the uncorrelated ones claimed (bounded by
+// maxDispatchInboxKeys plus an overflow count), and how the uncorrelated ones
+// were settled (acked / deferred with a reason, bounded the same way).
+type dispatchInboxStats struct {
+	Seen             int
+	Correlated       int
+	Uncorrelated     int
+	Keys             []string
+	KeysOverflow     int
+	Acked            int
+	Deferred         int
+	DeferredReasons  []string
+	DeferredOverflow int
+}
+
+// settle records one settleDispatchInboxResidue outcome ("acked" or
+// "deferred: <reason>") into the accumulator.
+func (s *dispatchInboxStats) settle(outcome string) {
+	if strings.HasPrefix(outcome, dispatchSettleAcked) {
+		s.Acked++
+		return
+	}
+	s.Deferred++
+	s.DeferredReasons = appendBoundedDispatchKey(s.DeferredReasons, &s.DeferredOverflow, outcome)
+}
+
+// annotate renders the inbox-correlation summary the tick's dispatch receipt
+// carries. Empty by design when nothing uncorrelated was seen: a matched
+// reply with no stray traffic keeps the receipt byte-identical to the
+// pre-16984 shape, while any uncorrelatable message is spelled out — counts,
+// claimed keys, and how each left the lease — rather than left silent.
+func (s dispatchInboxStats) annotate() string {
+	if s.Uncorrelated == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("[dispatch-inbox] seen=%d correlated=%d uncorrelated=%d keys=%s acked=%d deferred=%d",
+		s.Seen, s.Correlated, s.Uncorrelated, boundedDispatchCSV(s.Keys, s.KeysOverflow), s.Acked, s.Deferred)
+	if len(s.DeferredReasons) > 0 {
+		line += " deferred_reasons=" + boundedDispatchCSV(s.DeferredReasons, s.DeferredOverflow)
+	}
+	return line
+}
+
+// dispatchSettleAcked prefixes a settled-ack outcome.
+const dispatchSettleAcked = "acked"
+
+// maxDispatchInboxKeys bounds how many correlation keys / defer reasons one
+// accumulator retains (per batch, per tick detail). Beyond the bound the
+// events still COUNT — only their names stop being retained — so a hostile
+// inbox cannot blow up a log line while the totals stay exact.
+const maxDispatchInboxKeys = 10
+
+func appendBoundedDispatchKey(list []string, overflow *int, key string) []string {
+	if len(list) >= maxDispatchInboxKeys {
+		*overflow++
+		return list
+	}
+	return append(list, key)
+}
+
+// boundedDispatchCSV renders a bounded key list; overflow is spelled out as a
+// trailing "+N-more" element so a reader knows names were dropped.
+func boundedDispatchCSV(list []string, overflow int) string {
+	if overflow <= 0 {
+		return strings.Join(list, ",")
+	}
+	if len(list) == 0 {
+		return fmt.Sprintf("+%d-more", overflow)
+	}
+	return strings.Join(list, ",") + fmt.Sprintf(",+%d-more", overflow)
+}
+
+// dispatchReplyKey names the correlation identity an inbox message CLAIMS —
+// the key it would have had to carry to correlate, extracted even when the
+// payload is unreadable — so the log line and the tick detail name what was
+// seen instead of a bare count (SCHED-GAP-16984).
+func dispatchReplyKey(msg bus.InboxMessage) string {
+	suffix := "no-id"
+	if strings.TrimSpace(msg.ID) != "" {
+		suffix = msg.ID
+	}
+	payload, err := msg.Payload()
+	if err != nil || payload == nil {
+		return "unreadable:" + suffix
+	}
+	if s, _ := payload["corr_id"].(string); s != "" {
+		return s
+	}
+	if s, _ := payload["in_reply_to"].(string); s != "" {
+		return s
+	}
+	if echoed, ok := payload["task"].(map[string]any); ok {
+		if id, _ := echoed["corr_id"].(string); id != "" {
+			return id
+		}
+	}
+	return "unidentified:" + suffix
+}
+
+// truncateDispatchReason keeps a defer reason readable without letting a
+// hostile error string blow up the log line or the tick detail.
+func truncateDispatchReason(s string) string {
+	const max = 160
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// settleDispatchInboxResidue decides the fate of one inbox message that did
+// not correlate to THIS tick's hand-out (SCHED-GAP-16984): true residue is
+// acked so the inbox cannot accumulate unclassifiable leases; anything that
+// may still belong to someone is deferred with the reason spelled out. The
+// return value is exactly "acked" or "deferred: <reason>". The same events
+// maintain the process-wide unacked-residue belief set.
+func (p *SlotPool) settleDispatchInboxResidue(ctx context.Context, client *bus.Client, db *sql.DB, lease bus.InboxLease, msg bus.InboxMessage, deadline time.Time) string {
+	if lease.LeaseID == "" {
+		dispatchInboxUnackedAdd(msg.ID)
+		return "deferred: no lease id"
+	}
+	if msg.ID == "" {
+		return "deferred: no message id"
+	}
+	payload, perr := msg.Payload()
+	corrID, inReplyTo := "", ""
+	if perr == nil && payload != nil {
+		corrID, _ = payload["corr_id"].(string)
+		inReplyTo, _ = payload["in_reply_to"].(string)
+	}
+	owned, oerr := dispatchReplyOwnedElsewhere(ctx, db, corrID, inReplyTo)
+	switch {
+	case oerr != nil:
+		dispatchInboxUnackedAdd(msg.ID)
+		return "deferred: ownership check failed: " + truncateDispatchReason(oerr.Error())
+	case owned:
+		// A live answer to ANOTHER tick's outstanding hand-out: that tick's
+		// own await may still correlate it. Not residue — left for its owner
+		// (the short lease returns it to the inbox) and never acked here.
+		return "deferred: answers an in-flight hand-out"
+	}
+	remaining := deadline.Sub(p.clock().Now())
+	if remaining <= 0 {
+		dispatchInboxUnackedAdd(msg.ID)
+		return "deferred: past deadline"
+	}
+	ackCtx, ackCancel := context.WithTimeout(ctx, remaining)
+	aerr := client.InboxAck(ackCtx, lease.LeaseID, msg.ID)
+	ackCancel()
+	if aerr != nil {
+		dispatchInboxUnackedAdd(msg.ID)
+		return "deferred: ack error: " + truncateDispatchReason(aerr.Error())
+	}
+	dispatchInboxUnackedRelease(msg.ID)
+	return dispatchSettleAcked
+}
+
+// dispatchReplyOwnedElsewhere reports whether the identity a message claims
+// names an OUTSTANDING hand-out of this scheduler — a tick_dispatch row still
+// in state=dispatched, i.e. work whose answer another await may still be
+// polling for. Such a message is not residue and must not be consumed. The
+// current tick's own receipt cannot false-positive here: the message already
+// failed to correlate against it. A nil db cannot answer the question, which
+// is itself the error (fail-closed: never consume what may be a sibling's
+// answer).
+func dispatchReplyOwnedElsewhere(ctx context.Context, db *sql.DB, corrID, inReplyTo string) (bool, error) {
+	if db == nil {
+		return false, errors.New("no db to check outstanding hand-outs")
+	}
+	if corrID == "" && inReplyTo == "" {
+		return false, nil
+	}
+	var one int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM tick_dispatch WHERE state = ? AND (corr_id = ? OR message_id = ?) LIMIT 1`,
+		database.DispatchStateDispatched, corrID, inReplyTo).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("query outstanding hand-outs: %w", err)
+	}
+	return true, nil
 }
 
 // correlateDispatchReply decides whether one inbox message is the answer to a
@@ -505,5 +771,118 @@ func (p *SlotPool) recordDispatchReceipt(db *sql.DB, rec database.TickDispatch) 
 	}
 	if err := database.RecordTickDispatchReceipt(context.Background(), db, rec); err != nil {
 		log.Printf("DISPATCH: %s tick=%s receipt write failed: %v", rec.Lane, rec.TickID, err)
+	}
+}
+
+// DispatchInboxSnapshot is the per-process snapshot of the dispatch reply
+// inbox's correlation accounting (SCHED-GAP-16984), returned by
+// DispatchInboxCounters. Like Loop.AdmissionCounters
+// (the SCHED-GAP-155 precedent) the counters are in-memory process state,
+// monotonic since daemon boot and reset by a restart — there is no persisted
+// equivalent, and inventing one from the ticks table would fabricate numbers
+// this endpoint is contractually forbidden from inventing.
+type DispatchInboxSnapshot struct {
+	// SeenTotal: every inbox message a dispatch reply await examined.
+	SeenTotal int64
+	// CorrelatedTotal: messages matched to the awaiting tick's hand-out.
+	CorrelatedTotal int64
+	// UncorrelatedTotal: messages that matched no hand-out (the residue the
+	// row exists to make visible; each is named in the scheduler log and in
+	// the awaiting tick's dispatch receipt).
+	UncorrelatedTotal int64
+	// AckedTotal: uncorrelated messages consumed with an ack.
+	AckedTotal int64
+	// DeferredTotal: uncorrelated messages explicitly deferred with a reason
+	// (in-flight hand-out, no lease, ack error, past deadline).
+	DeferredTotal int64
+	// UnackedCurrent: the process's belief of how many uncorrelated messages
+	// are STILL parked without an ack — deferred ones, minus any later seen
+	// successfully acked or consumed by their owner. A steady nonzero value
+	// is the inbox-residue alarm.
+	UnackedCurrent int64
+	// UnackedOverflow: identities dropped once the belief set hit
+	// dispatchInboxUnackedMax (the count stays honest; the identity tracking
+	// is bounded).
+	UnackedOverflow int64
+}
+
+// dispatchInboxUnackedMax bounds the unacked-residue belief set.
+const dispatchInboxUnackedMax = 4096
+
+// dispatchInboxMetricsState is the process-wide counter set behind
+// DispatchInboxCounters. One daemon owns one SlotPool, so per-process (not
+// per-pool) state is the honest granularity; a mutex (not atomics) keeps the
+// belief-set updates and the snapshot trivially race-free at one bump per
+// retrieve batch.
+type dispatchInboxMetricsState struct {
+	mu              sync.Mutex
+	seen            int64
+	correlated      int64
+	uncorrelated    int64
+	acked           int64
+	deferred        int64
+	unackedOverflow int64
+	unacked         map[string]struct{}
+}
+
+var processDispatchInbox = dispatchInboxMetricsState{unacked: map[string]struct{}{}}
+
+// recordDispatchInboxBatch folds one retrieve batch's settled accounting into
+// the process counters.
+func recordDispatchInboxBatch(b dispatchInboxStats) {
+	processDispatchInbox.mu.Lock()
+	defer processDispatchInbox.mu.Unlock()
+	processDispatchInbox.seen += int64(b.Seen)
+	processDispatchInbox.correlated += int64(b.Correlated)
+	processDispatchInbox.uncorrelated += int64(b.Uncorrelated)
+	processDispatchInbox.acked += int64(b.Acked)
+	processDispatchInbox.deferred += int64(b.Deferred)
+}
+
+// dispatchInboxUnackedAdd records that an uncorrelated message was deferred
+// (kept) — it is believed still parked unacked until released. Re-adding an
+// already-tracked id (the same message failing to ack across batches) is not
+// a new residue.
+func dispatchInboxUnackedAdd(id string) {
+	if strings.TrimSpace(id) == "" {
+		return
+	}
+	processDispatchInbox.mu.Lock()
+	defer processDispatchInbox.mu.Unlock()
+	if _, ok := processDispatchInbox.unacked[id]; ok {
+		return
+	}
+	if len(processDispatchInbox.unacked) >= dispatchInboxUnackedMax {
+		processDispatchInbox.unackedOverflow++
+		return
+	}
+	processDispatchInbox.unacked[id] = struct{}{}
+}
+
+// dispatchInboxUnackedRelease drops the residue belief for an id that was
+// successfully acked (by this settle, or later by its owning await).
+func dispatchInboxUnackedRelease(id string) {
+	if strings.TrimSpace(id) == "" {
+		return
+	}
+	processDispatchInbox.mu.Lock()
+	defer processDispatchInbox.mu.Unlock()
+	delete(processDispatchInbox.unacked, id)
+}
+
+// DispatchInboxCounters returns the process-wide snapshot. Always populated:
+// before any dispatch the counters read as honest zeros, never an invented
+// number.
+func DispatchInboxCounters() DispatchInboxSnapshot {
+	processDispatchInbox.mu.Lock()
+	defer processDispatchInbox.mu.Unlock()
+	return DispatchInboxSnapshot{
+		SeenTotal:         processDispatchInbox.seen,
+		CorrelatedTotal:   processDispatchInbox.correlated,
+		UncorrelatedTotal: processDispatchInbox.uncorrelated,
+		AckedTotal:        processDispatchInbox.acked,
+		DeferredTotal:     processDispatchInbox.deferred,
+		UnackedCurrent:    int64(len(processDispatchInbox.unacked)),
+		UnackedOverflow:   processDispatchInbox.unackedOverflow,
 	}
 }

@@ -68,6 +68,11 @@ type fakeRelay struct {
 	replyText      string
 	agentOK        *bool // nil = no verdict member (a plain answer)
 	holdReply      bool  // leave accepted work unanswered to exercise cancel/timeout exits
+	// preseed (SCHED-GAP-16984): foreign messages dropped into the
+	// scheduler's inbox once, before the answer materialises, so the first
+	// retrieve leases them together.
+	preseed   []fakeMsg
+	preseeded bool
 
 	pub ed25519.PublicKey
 
@@ -147,6 +152,12 @@ func (f *fakeRelay) handleRetrieve(agent string, r *http.Request, w http.Respons
 	f.leases++
 	if agent == f.schedulerInbox {
 		f.retrieves++
+		// SCHED-GAP-16984: any preseeded foreign messages land first, so the
+		// first batch leases them next to the answer.
+		if !f.preseeded && len(f.preseed) > 0 {
+			f.inbox[agent] = append(f.inbox[agent], f.preseed...)
+			f.preseeded = true
+		}
 		// The agent has RECEIVED the work (the hand-out is in its inbox) and
 		// now answers: the scheduler's first read of its own inbox is when the
 		// answer materialises, which is exactly the ordering the live fleet
@@ -462,6 +473,211 @@ func TestCorrelateDispatchReply_IdentityNotArrival(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDispatchLeg_NamesAndAcksUncorrelatableReply (SCHED-GAP-16984): one
+// matching reply and one foreign reply share the first batch. The matching one
+// completes the tick as before; the foreign one — which the pre-16984 leg
+// would have left leased and silent until TTL — is named in the tick detail
+// with the correlation key it claimed and the seen/correlated/uncorrelated
+// counts, and is acked so the inbox cannot accumulate unclassifiable residue.
+func TestDispatchLeg_NamesAndAcksUncorrelatableReply(t *testing.T) {
+	relay := newFakeRelay(t, "test-sched-inbox", "helix-agent", "AGENT ANSWER: shipped the fix")
+	relay.preseed = []fakeMsg{{
+		id:     "stray-1",
+		sender: "helix-agent",
+		// Claims a correlation id that matches nothing this scheduler has
+		// handed out: the exact shape the live inbox parked five of.
+		payload: mustJSON(t, map[string]any{"corr_id": "q-foreign-16984-1", "reply": "someone else's answer"}),
+	}}
+	_, pool, _, gatewayHits, _ := newDispatchTestRig(t, relay, true)
+
+	before := DispatchInboxCounters()
+
+	db := pool.spawner.db
+	pool.Spawn(PackedProject{Name: "helix", Workdir: "/tmp/helix"}, time.Now(), true, db)
+
+	row := waitForTerminalTick(t, db, "helix", 30*time.Second)
+	if row.Status != "completed" {
+		t.Fatalf("tick status = %q (error %q), want completed via the matching reply", row.Status, row.Err)
+	}
+
+	// 1 · The matching one completed the tick AND both messages left the
+	//     lease: the matched answer (as before) and the stray (the new
+	//     settle path).
+	_, _, acks := relay.counts()
+	if !slicesContain(acks, "reply-1") {
+		t.Errorf("acks = %v, want the matched reply acked", acks)
+	}
+	if !slicesContain(acks, "stray-1") {
+		t.Errorf("acks = %v, want the uncorrelatable stray ACKED (not parked to TTL)", acks)
+	}
+
+	// 2 · The tick detail names the stray: counts, its claimed key, and how
+	//     it left the lease — appended after the byte-unchanged answer.
+	rec, ok, err := database.TickDispatchForTick(context.Background(), db, row.ID)
+	if err != nil || !ok {
+		t.Fatalf("tick_dispatch row for %s: ok=%v err=%v", row.ID, ok, err)
+	}
+	if rec.State != database.DispatchStateReplied {
+		t.Errorf("receipt state = %q, want replied", rec.State)
+	}
+	for _, want := range []string{
+		"AGENT ANSWER: shipped the fix",
+		"[dispatch-inbox] seen=2 correlated=1 uncorrelated=1 keys=q-foreign-16984-1 acked=1 deferred=0",
+	} {
+		if !strings.Contains(rec.Reply, want) {
+			t.Errorf("receipt reply = %q, want it to carry %q", rec.Reply, want)
+		}
+	}
+
+	// 3 · The counters moved by exactly the batch: seen=2, correlated=1,
+	//     uncorrelated=1, acked=1, and no residue belief left behind.
+	after := DispatchInboxCounters()
+	if got := after.SeenTotal - before.SeenTotal; got != 2 {
+		t.Errorf("seen_total delta = %d, want 2", got)
+	}
+	if got := after.CorrelatedTotal - before.CorrelatedTotal; got != 1 {
+		t.Errorf("correlated_total delta = %d, want 1", got)
+	}
+	if got := after.UncorrelatedTotal - before.UncorrelatedTotal; got != 1 {
+		t.Errorf("uncorrelated_total delta = %d, want 1", got)
+	}
+	if got := after.AckedTotal - before.AckedTotal; got != 1 {
+		t.Errorf("acked_total delta = %d, want 1", got)
+	}
+	if got := after.DeferredTotal - before.DeferredTotal; got != 0 {
+		t.Errorf("deferred_total delta = %d, want 0 (the stray was acked, not deferred)", got)
+	}
+	if got := after.UnackedCurrent - before.UnackedCurrent; got != 0 {
+		t.Errorf("unacked_current delta = %d, want 0 (an acked stray is not residue)", got)
+	}
+
+	// 4 · NO FALLBACK: not one request reached the shared gateway.
+	if n := atomic.LoadInt64(gatewayHits); n != 0 {
+		t.Errorf("gateway saw %d requests — a remote lane must never fall back to the shared gateway", n)
+	}
+}
+
+// TestDispatchLeg_AllUncorrelatedBatchNeverCompletesTheTick (SCHED-GAP-16984
+// negative control): a batch in which EVERY message fails to correlate must
+// not complete the tick, must report uncorrelated == seen with every claimed
+// key named, and must still settle the messages (acked here: nothing
+// outstanding claims them).
+func TestDispatchLeg_AllUncorrelatedBatchNeverCompletesTheTick(t *testing.T) {
+	relay := newFakeRelay(t, "test-sched-inbox", "helix-agent", "irrelevant: never delivered")
+	relay.holdReply = true // no correlatable answer ever materialises
+	relay.preseed = []fakeMsg{
+		{id: "stray-1", sender: "helix-agent", payload: mustJSON(t, map[string]any{"corr_id": "q-foreign-a-16984", "reply": "no one's answer"})},
+		{id: "stray-2", sender: "helix-agent", payload: mustJSON(t, map[string]any{"corr_id": "q-foreign-b-16984", "reply": "still no one's answer"})},
+	}
+	_, pool, _, gatewayHits, _ := newDispatchTestRig(t, relay, true)
+	// A short await budget: the deadline is the verdict under test.
+	pool.owner.SetTickTimeout(2 * time.Second)
+
+	before := DispatchInboxCounters()
+
+	db := pool.spawner.db
+	pool.Spawn(PackedProject{Name: "helix", Workdir: "/tmp/helix"}, time.Now(), true, db)
+
+	row := waitForTerminalTick(t, db, "helix", 30*time.Second)
+	if row.Status == "completed" {
+		t.Fatal("a batch with NO correlatable reply completed the tick — residue must never close it")
+	}
+
+	// The receipt expired AND records the whole batch as uncorrelated: the
+	// counts, every claimed key, and the acks that drained them.
+	rec, ok, err := database.TickDispatchForTick(context.Background(), db, row.ID)
+	if err != nil || !ok {
+		t.Fatalf("tick_dispatch row for %s: ok=%v err=%v", row.ID, ok, err)
+	}
+	if rec.State != database.DispatchStateExpired {
+		t.Errorf("receipt state = %q, want expired (no correlated reply arrived)", rec.State)
+	}
+	want := "[dispatch-inbox] seen=2 correlated=0 uncorrelated=2 keys=q-foreign-a-16984,q-foreign-b-16984 acked=2 deferred=0"
+	if !strings.Contains(rec.Reply, want) {
+		t.Errorf("receipt reply = %q, want it to carry %q (uncorrelated == seen, keys named)", rec.Reply, want)
+	}
+
+	_, _, acks := relay.counts()
+	if !slicesContain(acks, "stray-1") || !slicesContain(acks, "stray-2") {
+		t.Errorf("acks = %v, want both strays acked instead of parked to TTL", acks)
+	}
+
+	after := DispatchInboxCounters()
+	if got := after.UncorrelatedTotal - before.UncorrelatedTotal; got != 2 {
+		t.Errorf("uncorrelated_total delta = %d, want 2", got)
+	}
+	if got := after.SeenTotal - before.SeenTotal; got != after.UncorrelatedTotal-before.UncorrelatedTotal {
+		t.Errorf("seen delta %d != uncorrelated delta %d — a batch that ALL fails to correlate must report uncorrelated == seen",
+			after.SeenTotal-before.SeenTotal, after.UncorrelatedTotal-before.UncorrelatedTotal)
+	}
+	if got := after.AckedTotal - before.AckedTotal; got != 2 {
+		t.Errorf("acked_total delta = %d, want 2", got)
+	}
+
+	if n := atomic.LoadInt64(gatewayHits); n != 0 {
+		t.Errorf("gateway saw %d requests, want 0", n)
+	}
+}
+
+// TestDispatchReplyOwnedElsewhere_GuardsAnInFlightHandOut (SCHED-GAP-16984):
+// the guard that keeps residue-acking from consuming a SIBLING tick's live
+// answer. A message whose claimed identity names a tick_dispatch row still in
+// state=dispatched is owned elsewhere; once that hand-out is answered (or for
+// strangers) it is not; without a db the answer must fail closed.
+func TestDispatchReplyOwnedElsewhere_GuardsAnInFlightHandOut(t *testing.T) {
+	db := newTestDB(t)
+	issued := time.Now().UTC().Format(time.RFC3339Nano)
+	rec := database.TickDispatch{
+		TickID: "tick-owned-16984", Lane: "helix", Agent: "helix-agent",
+		CorrID: "q-owned-16984", MessageID: "m-owned-16984", Transport: "inbox",
+		State: database.DispatchStateDispatched, IssuedAt: issued, UpdatedAt: issued,
+	}
+	if err := database.RecordTickDispatchReceipt(context.Background(), db, rec); err != nil {
+		t.Fatalf("record receipt: %v", err)
+	}
+	ctx := context.Background()
+
+	owned, err := dispatchReplyOwnedElsewhere(ctx, db, "q-owned-16984", "")
+	if err != nil || !owned {
+		t.Errorf("corr_id of an in-flight hand-out: owned=%v err=%v, want true", owned, err)
+	}
+	owned, err = dispatchReplyOwnedElsewhere(ctx, db, "", "m-owned-16984")
+	if err != nil || !owned {
+		t.Errorf("message id of an in-flight hand-out: owned=%v err=%v, want true", owned, err)
+	}
+	owned, err = dispatchReplyOwnedElsewhere(ctx, db, "q-stranger", "m-stranger")
+	if err != nil || owned {
+		t.Errorf("a stranger's identity: owned=%v err=%v, want false", owned, err)
+	}
+
+	// Once the hand-out is answered it is no longer outstanding.
+	rec.State = database.DispatchStateReplied
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := database.RecordTickDispatchReceipt(context.Background(), db, rec); err != nil {
+		t.Fatalf("update receipt: %v", err)
+	}
+	owned, err = dispatchReplyOwnedElsewhere(ctx, db, "q-owned-16984", "")
+	if err != nil || owned {
+		t.Errorf("answered hand-out: owned=%v err=%v, want false (no longer outstanding)", owned, err)
+	}
+
+	// Fail-closed: without a db the question is unanswerable and must say so
+	// (the settle path defers rather than consuming).
+	if _, err := dispatchReplyOwnedElsewhere(ctx, nil, "q-owned-16984", ""); err == nil {
+		t.Error("nil db must fail closed with an error, not pretend ownership is knowable")
+	}
+}
+
+// slicesContain reports whether vs contains v (test helper for the ack lists).
+func slicesContain(vs []string, v string) bool {
+	for _, s := range vs {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 // tickRow is the slice of a ticks row these tests assert on.
