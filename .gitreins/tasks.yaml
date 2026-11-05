@@ -5546,3 +5546,18 @@ tasks:
   status: complete
   created_at: '2026-11-05T00:53:41.634571+00:00'
   completed_at: '2026-11-05T10:15:22.434644+00:00'
+- id: INT-PATH-001
+  title: 'DAGger role wrapper: env-first DAGGER_BIN/DAGGER_HOME resolution, no legacy
+    /home/kara path, regression test wired into pytest tests/'
+  criteria:
+  - '1. No wrapper carries the legacy path: grep -l ''/home/kara/hermes-dagger'' ops/dagger-role-tick.sh
+    ~/.hermes/scripts/dagger-role-tick.sh prints no filenames; DAGGER_HOME/DAGGER_BIN
+    resolve from env first and fall back to a documented $HOME-based default. 2. The
+    live wrapper is path-agnostic: running it with DAGGER_HOME=/tmp/nonexistent sl
+    dagger exits 2 naming /tmp/nonexistent/dagger/dagger (proving env wins and no
+    absolute /home/kara path is consulted). 3. tests/test_dagger_role_tick_path_resolution.py
+    fails if any wrapper copy reintroduces an absolute legacy path and passes under
+    python3 -m pytest tests/ -q.'
+  status: in_progress
+  created_at: '2026-11-05T10:33:16.883941+00:00'
+  completed_at: '2026-11-05T10:45:47.144545+00:00'
