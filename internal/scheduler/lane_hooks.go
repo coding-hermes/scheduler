@@ -67,17 +67,6 @@ func hookEnv(proj PackedProject, tickID string, deadline time.Time) lanehook.Env
 	}
 }
 
-// hookEmitter adapts the pool's event logger to lanehook.Emitter.
-func (p *SlotPool) hookEmitter() lanehook.Emitter {
-	events := p.events
-	if events == nil {
-		return nil
-	}
-	return func(ctx context.Context, severity, message string, details map[string]any) {
-		events.Emit(ctx, EventSeverity(severity), "hook", message, details)
-	}
-}
-
 // hookPlan resolves the lane's plan. The second return is false when hooks are
 // off or the plan is empty, so callers can skip both phases cheaply.
 func (p *SlotPool) hookPlan(proj PackedProject) (lanehook.Plan, bool) {
