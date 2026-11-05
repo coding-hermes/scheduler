@@ -23,7 +23,7 @@ import (
 // bunkerMountRoot is where agent homes are mounted (/mnt/bunker/<agent>).
 // Overridable so a host that mounts elsewhere — or a test — can point it.
 func bunkerMountRoot() string {
-	if v := os.Getenv("BUNKER_MOUNT_ROOT"); v != "" {
+	if v := os.Getenv(workdirTargetEnv); v != "" {
 		return v
 	}
 	return target.DefaultMountRoot

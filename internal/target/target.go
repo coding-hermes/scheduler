@@ -95,11 +95,12 @@ func Parse(raw string) (Target, error) {
 				return Target{}, fmt.Errorf("%s target needs %s://[user@]host[:port]/<path>: %q", scheme, scheme, raw)
 			}
 			t := Target{Raw: raw, Scheme: scheme, Path: filepath.Clean("/" + path)}
-			if scheme == "sftp" {
+			switch scheme {
+			case "sftp":
 				t.Kind = KindSFTP
-			} else if scheme == "ftp" || scheme == "ftps" {
+			case "ftp", "ftps":
 				t.Kind = KindFTP
-			} else {
+			default:
 				t.Kind = KindSSH
 			}
 			if user, hostPort, hasUser := strings.Cut(creds, "@"); hasUser {

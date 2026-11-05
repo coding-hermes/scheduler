@@ -182,43 +182,43 @@ type scored struct {
 	// applies when the previous tick COMPLETED — a failed/timeout/deferred
 	// tick may have died before reading its board, so stasis proves nothing
 	// and the lane must be retried.
-	lastTickStatus      string
-	budgetBlocked       bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
-	lastTickAt          *time.Time
-	createdAt           time.Time
-	workdir             string
-	repoURL             string
-	command             string
-	model               string
-	provider            string
-	fallbackModel       string
-	fallbackProvider    string
-	noGlobalFallback    bool
-	modelChain          string
-	routingMode         string
+	lastTickStatus       string
+	budgetBlocked        bool // SCHED-GAP-066 spend gate excluded this project from the greedy pack (GAP-011 overdue force-select may still pick it)
+	lastTickAt           *time.Time
+	createdAt            time.Time
+	workdir              string
+	repoURL              string
+	command              string
+	model                string
+	provider             string
+	fallbackModel        string
+	fallbackProvider     string
+	noGlobalFallback     bool
+	modelChain           string
+	routingMode          string
 	namespaceRoutingMode string
-	idleModel           string
-	idleProvider        string
-	dailyBudgetUSD      float64
-	weeklyBudgetUSD     float64
-	finalBudgetUSD      float64
-	workerModel         string
-	workerProvider      string
-	gatewayKey          string
-	deliver             string
-	deliverMode         string // SCHED-GAP-1607: "" | full | file | link
-	prompt              string // Bane 2026-08-27: per-project extra foreman prompt
-	promptMode          string // "append" (default) | "replace"
-	bumpActive          bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
-	bumpCooldownS       int
-	bumpRemaining       int
-	namespaceDefaultPmt string // namespace default_prompt (empty = built-in)
-	namespaceID         string // namespace_id (empty = no namespace)
-	namespaceMaxConc    int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
-	namespaceChain      string // namespace model_chain (JSON array string) (Bane 2026-08-27)
-	admissionNsMode     string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
-	admissionMode       string // SCHED-GAP-124: project admission_mode override ('' = inherit)
-	boardOwnership      string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
+	idleModel            string
+	idleProvider         string
+	dailyBudgetUSD       float64
+	weeklyBudgetUSD      float64
+	finalBudgetUSD       float64
+	workerModel          string
+	workerProvider       string
+	gatewayKey           string
+	deliver              string
+	deliverMode          string // SCHED-GAP-1607: "" | full | file | link
+	prompt               string // Bane 2026-08-27: per-project extra foreman prompt
+	promptMode           string // "append" (default) | "replace"
+	bumpActive           bool   // SCHED-GAP-107: bump owns the effective cooldown + gets an urgency boost
+	bumpCooldownS        int
+	bumpRemaining        int
+	namespaceDefaultPmt  string // namespace default_prompt (empty = built-in)
+	namespaceID          string // namespace_id (empty = no namespace)
+	namespaceMaxConc     int    // namespace max_concurrent; 0 = unlimited (Bane 2026-08-27)
+	namespaceChain       string // namespace model_chain (JSON array string) (Bane 2026-08-27)
+	admissionNsMode      string // SCHED-GAP-124: namespace admission_mode ('' = cooldown)
+	admissionMode        string // SCHED-GAP-124: project admission_mode override ('' = inherit)
+	boardOwnership       string // SCHED-GAP-141: project board_ownership override ('' = auto/derived)
 	// SCHED-GAP-1688 AC5: the end-of-tick hook's tri-state switch, lane then
 	// namespace (-1 inherit | 0 off | 1 on); the global (env) default is the
 	// last resort at spawn time.
@@ -817,34 +817,34 @@ func (p *Packer) isOverdue(s scored, now time.Time) bool {
 // packed renders the scored project as a PackedProject for selection output.
 func (s scored) packed() PackedProject {
 	return PackedProject{
-		LaneClass:        s.laneClass,
-		Name:             s.name,
-		Priority:         s.priority,
-		Weight:           s.weight,
-		Urgency:          s.urgency,
-		Workdir:          s.workdir,
-		RepoURL:          s.repoURL,
-		Command:          s.command,
-		Model:            s.model,
-		Provider:         s.provider,
-		FallbackModel:    s.fallbackModel,
-		FallbackProvider: s.fallbackProvider,
-		NoGlobalFallback: s.noGlobalFallback,
-		ModelChain:       s.modelChain,
-		IdleModel:        s.idleModel,
-		IdleProvider:     s.idleProvider,
-		WorkerModel:      s.workerModel,
-		WorkerProvider:   s.workerProvider,
-		GatewayKey:       s.gatewayKey,
-		Deliver:          s.deliver,
-		DeliverMode:      s.deliverMode,
-		Prompt:           s.prompt,
-		PromptMode:       s.promptMode,
-		NamespacePrompt:  s.namespaceDefaultPmt,
-		NamespaceChain:   s.namespaceChain,
-		RoutingMode:      s.routingMode,
+		LaneClass:            s.laneClass,
+		Name:                 s.name,
+		Priority:             s.priority,
+		Weight:               s.weight,
+		Urgency:              s.urgency,
+		Workdir:              s.workdir,
+		RepoURL:              s.repoURL,
+		Command:              s.command,
+		Model:                s.model,
+		Provider:             s.provider,
+		FallbackModel:        s.fallbackModel,
+		FallbackProvider:     s.fallbackProvider,
+		NoGlobalFallback:     s.noGlobalFallback,
+		ModelChain:           s.modelChain,
+		IdleModel:            s.idleModel,
+		IdleProvider:         s.idleProvider,
+		WorkerModel:          s.workerModel,
+		WorkerProvider:       s.workerProvider,
+		GatewayKey:           s.gatewayKey,
+		Deliver:              s.deliver,
+		DeliverMode:          s.deliverMode,
+		Prompt:               s.prompt,
+		PromptMode:           s.promptMode,
+		NamespacePrompt:      s.namespaceDefaultPmt,
+		NamespaceChain:       s.namespaceChain,
+		RoutingMode:          s.routingMode,
 		NamespaceRoutingMode: s.namespaceRoutingMode,
-		NamespaceID:      s.namespaceID,
+		NamespaceID:          s.namespaceID,
 		// SCHED-GAP-1688 AC5: the hook's lane + namespace switches ride the
 		// row to Spawn(), which resolves lane > namespace > global env.
 		IdleIntervention:          s.idleIntervention,
