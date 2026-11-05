@@ -5577,3 +5577,46 @@ tasks:
   status: complete
   created_at: '2026-11-05T10:53:46.703196+00:00'
   completed_at: '2026-11-05T12:57:41.693281+00:00'
+- id: INT-CI-4184
+  title: Build-tag the Unix process-group kill so windows cross-compile passes
+  criteria:
+  - GOOS=windows GOARCH=amd64 go build ./... exits 0
+  - GOOS=windows GOARCH=arm64 go build ./... exits 0
+  - The Setpgid/syscall.Kill logic lives in a build-tagged file with a windows stub
+  - go test ./internal/lanehook/ -count=1 passes on linux
+  status: complete
+  created_at: '2026-11-05T13:20:03.065838+00:00'
+  completed_at: '2026-11-05T13:54:35.226066+00:00'
+- id: SUBSTRING-ID-CLASS
+  title: Derive freshness mis-attribution expected hits from the index, not len(ids)-1
+  criteria:
+  - go test ./internal/scheduler -run TestBoardFreshnessMisattributionScanProbeBudget
+    -count=1 exits 0
+  - git grep -F "len(ids)-1" -- internal/scheduler/board_freshness_bench_test.go prints
+    no match (exit 1)
+  - The expected hit count is derived from the mis-attribution index rather than a
+    data-dependent literal
+  status: in_progress
+  created_at: '2026-11-05T13:20:07.547166+00:00'
+- id: INT-CI-189-R2-R2
+  title: Freshness tests pass on an export-subst-materialized archive tree
+  criteria:
+  - TestFreshnessScript_ExitCodes and TestADMIT148_FreshnessGuard pass in a git-archive-materialized
+    tree of HEAD
+  - The same two tests stay green on a plain checkout control arm
+  - The expected commit comes from the marker the tree carries, not git rev-parse
+    HEAD on a synthetic sync tree
+  status: in_progress
+  created_at: '2026-11-05T13:20:08.863341+00:00'
+- id: SCHED-GAP-16922-V
+  title: Verify fractional namespace reserved floors landed live (verification-only
+    close)
+  criteria:
+  - go test ./internal/scheduler -run ReservedFractional -count=1 exits 0
+  - internal/database/migrations.go declares namespaces.reserved with REAL affinity
+    and records a migration for SCHED-GAP-16922
+  - internal/api namespace PUT accepts a fractional reserved value (0.5) without integer
+    truncation
+  status: complete
+  created_at: '2026-11-05T13:24:35.892021+00:00'
+  completed_at: '2026-11-05T13:24:43.885852+00:00'
