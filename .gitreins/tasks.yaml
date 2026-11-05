@@ -5660,3 +5660,27 @@ tasks:
   status: complete
   created_at: '2026-11-05T14:13:26.989230+00:00'
   completed_at: '2026-11-05T15:00:26.468033+00:00'
+- id: QA-CODING-HERMES-SCHEDULER-PERF-1-V
+  title: 'Verification: scheduler perf QA stand-in is no longer refused by bunker-qa.sh'
+  criteria:
+  - bash /home/kara/.hermes/scripts/bunker-qa.sh resolve /home/kara/.hermes/stand-in/perf/coding-hermes-scheduler
+    exits 0 and prints /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+  - "the resolve probe emits no ERROR and no refusal line for that stand-in \u2014\
+    \ the filed subdirectory-of-parent refusal no longer reproduces"
+  - 'git -C /home/kara rev-parse --show-toplevel exits non-zero: no enclosing parent
+    repo exists over /home/kara/.hermes'
+  status: complete
+  created_at: '2026-11-05T17:25:43.510036+00:00'
+  completed_at: '2026-11-05T17:25:49.203540+00:00'
+- id: QA-CODING-HERMES-SCHEDULER-REVIEW-1-V
+  title: 'Verification: scheduler review QA stand-in is no longer refused by bunker-qa.sh'
+  criteria:
+  - bash /home/kara/.hermes/scripts/bunker-qa.sh resolve /home/kara/.hermes/stand-in/review/coding-hermes-scheduler
+    exits 0 and prints /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+  - "the resolve probe emits no ERROR and no refusal line for that stand-in \u2014\
+    \ the filed subdirectory-of-parent refusal no longer reproduces"
+  - 'git -C /home/kara rev-parse --show-toplevel exits non-zero: no enclosing parent
+    repo exists over /home/kara/.hermes'
+  status: complete
+  created_at: '2026-11-05T17:26:19.716312+00:00'
+  completed_at: '2026-11-05T17:26:34.099401+00:00'
