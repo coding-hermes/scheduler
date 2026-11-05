@@ -5596,8 +5596,9 @@ tasks:
     no match (exit 1)
   - The expected hit count is derived from the mis-attribution index rather than a
     data-dependent literal
-  status: in_progress
+  status: complete
   created_at: '2026-11-05T13:20:07.547166+00:00'
+  completed_at: '2026-11-05T13:55:24.418893+00:00'
 - id: INT-CI-189-R2-R2
   title: Freshness tests pass on an export-subst-materialized archive tree
   criteria:
@@ -5606,8 +5607,9 @@ tasks:
   - The same two tests stay green on a plain checkout control arm
   - The expected commit comes from the marker the tree carries, not git rev-parse
     HEAD on a synthetic sync tree
-  status: in_progress
+  status: complete
   created_at: '2026-11-05T13:20:08.863341+00:00'
+  completed_at: '2026-11-05T13:55:42.203047+00:00'
 - id: SCHED-GAP-16922-V
   title: Verify fractional namespace reserved floors landed live (verification-only
     close)
