@@ -5622,3 +5622,38 @@ tasks:
   status: complete
   created_at: '2026-11-05T13:24:35.892021+00:00'
   completed_at: '2026-11-05T13:24:43.885852+00:00'
+- id: INT-CI-4185
+  title: 'Scan-budget gate is load-honest: ratio arm beside the absolute wall, teeth
+    proven by quadratic-scan mutation'
+  criteria:
+  - go build ./... and go vet ./... pass; go test ./internal/scheduler/ -run TestBoardFreshnessMisattributionScanBudget
+    -count=1 passes both at idle and under an artificial CPU-load arm; the gate carries
+    a ratio arm (longest-real-message vs a fixed-cost baseline) so the absolute 100ms
+    wall is no longer the sole verdict; a deliberate restoration of the per-id quadratic
+    scan still FAILS the arm (teeth proven by mutation, not assertion); every arm
+    keeps printing rows=, msg= and best=.
+  status: in_progress
+  created_at: '2026-11-05T14:13:18.602211+00:00'
+- id: SCHED-GAP-16984
+  title: Uncorrelatable replies are counted, named and acked instead of parking in
+    the live inbox
+  criteria:
+  - internal/scheduler records how many inbox messages it saw and how many it could
+    not correlate, naming the corr_id values it saw, in the tick detail; uncorrelatable
+    messages are acked or explicitly deferred with a reason so the inbox does not
+    accumulate unclassifiable residue; a counter or metric exposes the current unacked-uncorrelated
+    count readable without opening the DB; and a fixture that posts one matching and
+    one non-matching reply proves the matching one completes the tick while the non-matching
+    one is named and does not, with go build ./..., go vet ./... and go test ./internal/scheduler/
+    -count=1 green.
+  status: in_progress
+  created_at: '2026-11-05T14:13:22.922246+00:00'
+- id: INT-CI-4183
+  title: Delete the dead (*SlotPool).hookEmitter adapter so golangci-lint is clean
+  criteria:
+  - internal/scheduler/lane_hooks.go no longer defines the unused (*SlotPool).hookEmitter
+    method, so golangci-lint v2.15.0 reports 0 findings for the package; go build
+    ./... and go vet ./... stay green; go test ./internal/scheduler/ -run TestBoardFreshness
+    -count=1 green; the pushed tip produces a CI lint job that concludes success.
+  status: in_progress
+  created_at: '2026-11-05T14:13:26.989230+00:00'
