@@ -25,8 +25,14 @@ package scheduler
 //     The indexed scan must answer identically on every (message, row)
 //     pair, because the row's correctness guarantee is the same one.
 //   - TestBoardFreshnessMisattributionScanBudget is the recurrence catcher:
-//     a full fleet-board sweep must stay under 100ms. The pre-fix scan took
-//     ~5.1s at this size, so a recurrence — not host noise — is what fails.
+//     every heavy arm's sweep must stay within a fixed multiple of a
+//     fixed-cost baseline measured in the same process run — NOT inside an
+//     absolute wall clock. The old flat 100ms gate failed on a loaded CI
+//     runner (gh run 42039932004: 112ms) while the same commit passed the
+//     same test in two other CI jobs and on the fleet host; a wall decides
+//     on runner load, not code. The pre-fix scan took ~5.1s at this size,
+//     >30000x the baseline, so a recurrence — not host noise — is what
+//     fails the ratio bound.
 //   - TestBoardFreshnessMisattributionScanProbeBudget pins the operation
 //     count, which no slow host can mask: the scan must not go back to
 //     probing every id.
@@ -51,11 +57,28 @@ const (
 	// fleetScanMinRows is the fleet board size the scan must survive.
 	// The live board carried 656 rows when the regression was profiled.
 	fleetScanMinRows = 600
-	// misattributionScanBudget is the per-sweep wall-clock ceiling at
-	// fleet size. The pre-fix scan measured ~5.1s here; the indexed scan
-	// measures single-digit milliseconds, so the budget catches the
-	// quadratic recurrence without being a host-speed test.
-	misattributionScanBudget = 100 * time.Millisecond
+	// misattributionScanRatioBound is the ceiling on every heavy arm's
+	// best/baseline sweep-time ratio (the baseline is the fixed-cost
+	// names-no-row arm; see TestBoardFreshnessMisattributionScanBudget).
+	// Derivation, from the measured fleet board (rows=779): healthy
+	// longest/baseline = ~856x on a LOADED CI runner (gh run 42039932004:
+	// 112.274ms / 131.2µs) and ~943x on the idle fleet host (36.955ms /
+	// 39.2µs) — stable to within ~10% across a 3x absolute-speed
+	// difference. The pre-fix per-id quadratic scan measured ~5.1s at 656
+	// rows against the same class of baseline, i.e. >30000x. 4000x sits
+	// >4x above the worst measured healthy ratio — a runner four times
+	// noisier than anything ever observed still passes — and ~7.5x below
+	// the recurrence, which cannot hide under it on any host.
+	misattributionScanRatioBound = 4000.0
+	// misattributionScanSanityCeiling is the loud absolute backstop, not
+	// the verdict: ~9x the worst CI observation for the heavy arms
+	// (112ms). It fires only when the ratio looks fine but the sweep is
+	// pathologically slow anyway — a degraded host the ratio can no
+	// longer be trusted on, or a uniform regression (an index build
+	// landing inside the sweep). The ratio bound above carries the
+	// verdict; this ceiling must never be the only thing standing
+	// between a slow scan and a pass.
+	misattributionScanSanityCeiling = 1 * time.Second
 )
 
 // scanSink absorbs benchmark results so the compiler cannot delete the
@@ -335,11 +358,26 @@ func TestBoardFreshnessMisattributionScanFuzz(t *testing.T) {
 }
 
 // TestBoardFreshnessMisattributionScanBudget is the recurrence catcher: one
-// full fleet-board sweep of the mis-attribution scan must finish inside the
-// budget. The pre-fix scan took ~5.1s at this size (656 rows x 656 ids =
-// 400,160 MatchString calls), so the ~100ms budget fails loudly on a
-// regression and never on host noise. Best of three rounds, because the
-// fleet host is shared and a single round can be descheduled.
+// full fleet-board sweep of the mis-attribution scan must stay within a
+// fixed multiple of a fixed-cost baseline measured in the same process run.
+//
+// Why a ratio, not an absolute wall clock: the gate used to fail every arm
+// against a flat 100ms, and one loaded CI runner tripped it while the same
+// commit passed the same test everywhere else — gh run 42039932004 (head
+// a5b62c20) failed longest-real-message at 112.274ms while the build and
+// race-scheduler jobs on the SAME tree passed at 89.354ms and the fleet host
+// measured 36.955ms. An absolute wall decides on runner load, not on code.
+// The baseline is the names-no-row arm (a 62-byte message naming nothing):
+// the indexed scan does zero id work for a message that names nothing, so
+// that arm cannot regress into a scan blowup — which is exactly what makes
+// it a sound denominator. Any per-id recurrence inflates only the heavy
+// arms, so the ratio blows past the bound on any host, however slow.
+//
+// The bound's derivation (measured stability of longest/baseline at
+// rows=779) lives on misattributionScanRatioBound; the sanity ceiling's
+// role on misattributionScanSanityCeiling. Best of three rounds per arm,
+// because the fleet host is shared and a single round can be descheduled —
+// the floor, not the mean, is the arm's cost.
 func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 	ids := fleetScanIDs(t)
 	n := len(ids)
@@ -363,27 +401,36 @@ func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 	}
 
 	arms := []struct {
-		name string
-		msg  string
+		name     string
+		msg      string
+		baseline bool
 	}{
-		// Worst case for the pre-fix loop: nothing matches, so every id
-		// regex runs — the exact product the profile caught.
-		{"names-no-row", "chore: routine maintenance with no board row referenced at all"},
+		// The BASELINE arm, measured first in the same process: a message
+		// that names no row does zero id work in the indexed scan, so its
+		// cost is the fixed floor of a 779-row sweep — it cannot regress
+		// into a scan blowup, and it inherits exactly the runner load the
+		// heavy arms see.
+		{"names-no-row", "chore: routine maintenance with no board row referenced at all", true},
 		// The production input shape: a real multi-KB commit body.
-		{"real-median-message", median},
+		{"real-median-message", median, false},
 		// The longest message in the repo's history, applied to every row
-		// — a harsher-than-production amplification of message size.
-		{"longest-real-message", longest},
+		// — a harsher-than-production amplification of message size and
+		// the arm the pre-fix loop blew up on hardest (nothing matches, so
+		// every id regex runs — the exact product the profile caught).
+		{"longest-real-message", longest, false},
 		// The common case: the message names exactly one row (not self).
-		{"names-one-row", "feat: wire the index. Addresses " + ids[n-1] + "."},
+		{"names-one-row", "feat: wire the index. Addresses " + ids[n-1] + ".", false},
 	}
-	for _, arm := range arms {
+
+	// sweepBest runs three full-board sweeps of the indexed scan and keeps
+	// the cheapest round.
+	sweepBest := func(msg string) time.Duration {
 		best := time.Duration(0)
 		for round := 0; round < 3; round++ {
 			start := time.Now()
 			hits := 0
 			for _, self := range ids {
-				if idx.namesOtherID(arm.msg, self) {
+				if idx.namesOtherID(msg, self) {
 					hits++
 				}
 			}
@@ -392,11 +439,32 @@ func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 				best = elapsed
 			}
 		}
-		t.Logf("scan budget arm %-20s rows=%d msg=%dB best=%v (budget %v)",
-			arm.name, len(ids), len(arm.msg), best, misattributionScanBudget)
-		if best > misattributionScanBudget {
-			t.Fatalf("mis-attribution scan arm %q at %d rows took %v (budget %v) — the per-id quadratic scan is back",
-				arm.name, len(ids), best, misattributionScanBudget)
+		return best
+	}
+
+	baseline := sweepBest(arms[0].msg)
+	for _, arm := range arms {
+		best := baseline
+		if !arm.baseline {
+			best = sweepBest(arm.msg)
+		}
+		ratio := float64(best) / float64(baseline)
+		tag := ""
+		if arm.baseline {
+			tag = " (baseline)"
+		}
+		t.Logf("scan budget arm %-20s rows=%d msg=%dB best=%v baseline=%v ratio=%.0fx%s",
+			arm.name, len(ids), len(arm.msg), best, baseline, ratio, tag)
+		if arm.baseline {
+			continue // 1x by construction; the verdict arms follow.
+		}
+		if ratio > misattributionScanRatioBound {
+			t.Fatalf("arm %q ratio %.0fx exceeded bound %.0fx (best=%v baseline=%v at rows=%d) - the per-id quadratic scan is back",
+				arm.name, ratio, misattributionScanRatioBound, best, baseline, len(ids))
+		}
+		if best > misattributionScanSanityCeiling {
+			t.Fatalf("arm %q best=%v exceeded the %v sanity ceiling with ratio %.0fx inside the %.0fx bound - the scan is pathologically slow even relative to its baseline; index build or sweep cost regressed",
+				arm.name, best, misattributionScanSanityCeiling, ratio, misattributionScanRatioBound)
 		}
 	}
 }
