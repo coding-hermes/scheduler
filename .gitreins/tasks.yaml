@@ -5514,3 +5514,20 @@ tasks:
     Steady-state /queue /ticks /lanes/tree etc preserved
   status: in_progress
   created_at: '2026-10-23T17:33:10.952744+00:00'
+- id: INT-CI-4182
+  title: 'Clear the exact-head CI red at a9d83262: 3 golangci-lint findings'
+  criteria:
+  - golangci-lint run ./... reports 0 issues; go build ./... and go vet ./... exit
+    0; go test -count=1 ./internal/scheduler/ ./internal/target/ passes; the working
+    tree is committed and pushed
+  status: in_progress
+  created_at: '2026-11-04T23:38:21.982516+00:00'
+- id: QA-CHS-186
+  title: 'ADVR10 clean-machine red is resolved at HEAD: no bare 604800 weekly ceiling
+    remains in non-test Go sources'
+  criteria:
+  - grep -rn 604800 --include=*.go . | grep -v _test.go returns nothing; go test -count=1
+    -run TestADVR10_NoSecondHardcodedWeeklyCeiling ./internal/database/ reports ok;
+    go test -count=1 ./... reports ok for every package
+  status: in_progress
+  created_at: '2026-11-04T23:39:21.496138+00:00'
