@@ -1521,3 +1521,5 @@
 {"actor":"foreman","event_type":"task_completed","task_id":"INT-CI-4183","tick_number":null,"timestamp":"2026-11-05T15:08:17Z","detail":"{\"status\":\"complete\"}","id":1792786278246002068}
 {"actor":"foreman","event_type":"task_completed","task_id":"INT-CI-4185","tick_number":null,"timestamp":"2026-11-05T15:19:33Z","detail":"{\"status\":\"complete\"}","id":1792786278246002069}
 {"actor":"foreman","event_type":"task_completed","task_id":"SCHED-GAP-16984","tick_number":null,"timestamp":"2026-11-05T15:19:37Z","detail":"{\"status\":\"complete\"}","id":1792786278246002070}
+{"actor":"foreman","event_type":"task_completed","task_id":"SCHED-GAP-NODRAIN","tick_number":null,"timestamp":"2026-11-05T16:46:57Z","detail":"{\"status\":\"complete\"}","id":1792786278246002071}
+{"actor":"foreman","event_type":"task_completed","task_id":"SCHED-GAP-NODRAIN","tick_number":null,"timestamp":"2026-11-05T16:47:08Z","detail":"{\"status\":\"complete\"}","id":1792786278246002072}
