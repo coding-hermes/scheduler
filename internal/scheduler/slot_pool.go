@@ -3,12 +3,14 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/lanehook"
 )
 
 // SlotPool manages concurrent tick slots using a buffered channel as a
@@ -23,6 +25,11 @@ import (
 // on re-push = deadlock) and temporarily pulls tokens out of circulation
 // (over-admission). The refcount map makes Release(name) exact.
 type SlotPool struct {
+	// S13 lane hooks: the armed definition set plus its runner. Both nil is
+	// the feature-off path (a fleet with no hooks.toml behaves exactly as
+	// before S13).
+	hooks      *lanehook.Set
+	hookRunner lanehook.Runner
 	// clk is this component's time seam (SCHED-GAP-169). The zero value
 	// reads as the wall clock; NewLoop propagates its own clock here so a
 	// test that installs a simulator clock drives the whole component tree,
@@ -724,6 +731,35 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				}
 			}
 		}
+		// S13: PRE hook list. Runs after the slot is claimed and before the
+		// model is resolved, so a vetoed tick costs one receipt and nothing
+		// else. A nil plan (hooks off / nothing declared) is the old path.
+		hookPlan, haveHooks := p.hookPlan(proj)
+		if haveHooks {
+			if herr := p.runPreHooks(proj, tickID, now, hookPlan); herr != nil {
+				hookID := "unknown"
+				var hf *lanehook.ErrHookFailed
+				if errors.As(herr, &hf) {
+					hookID = hf.HookID
+				}
+				log.Printf("HOOK: %s tick=%s vetoed by %s: %v", proj.Name, tickID, hookID, herr)
+				_ = p.lifecycle.Complete(TickOutcome{
+					TickID:             tickID,
+					Project:            proj.Name,
+					Started:            now,
+					Finished:           p.clock().Now(),
+					Status:             TickFailed,
+					ExitCode:           -1,
+					Error:              "hook_failed:" + hookID + " — " + herr.Error(),
+					DispatchDispatched: false,
+					DispatchReason:     database.DispatchReasonUnavailable,
+				})
+				// POST still runs: a lease taken in PRE must be released.
+				p.runPostHooks(proj, tickID, hookPlan)
+				return
+			}
+		}
+
 		var st *SpawnedTick
 		var err error
 		if remoteLane {
@@ -816,6 +852,13 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		usageLeaseID = ""
 		if err := p.lifecycle.Complete(outcome); err != nil {
 			log.Printf("SPAWN: complete %s: %v", tickID, err)
+		}
+
+		// S13: POST hook list, after the tick row is durable. A POST failure
+		// raises events and can stop the remaining chain, but never changes
+		// the outcome that was just written.
+		if haveHooks {
+			p.runPostHooks(proj, tickID, hookPlan)
 		}
 
 		// SCHED-GAP-110: ingest the foreman's wave manifest (S12 §9.3) now

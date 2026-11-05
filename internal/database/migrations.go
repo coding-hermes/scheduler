@@ -12,7 +12,7 @@ import (
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
 // SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
-const latestMigration = 80
+const latestMigration = 81 // S13 lane hooks: hook_runs receipts
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1772,6 +1772,36 @@ ALTER TABLE ticks ADD COLUMN gateway_attempts TEXT NOT NULL DEFAULT '';
 		stmt: `
 ALTER TABLE projects ADD COLUMN routing_mode TEXT NOT NULL DEFAULT '';
 ALTER TABLE namespaces ADD COLUMN routing_mode TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// S13: one receipt row per hook attempt. No foreign key to ticks on
+		// purpose — a PRE receipt is written before the spawn creates the
+		// tick row on the gateway path, so an FK would refuse the honest
+		// first receipt of every hooked tick. tick_id is indexed instead.
+		version: 81,
+		desc:    "S13 lane hooks: hook_runs receipts (tick_id, phase, level, hook_id, priority, seq, state, exit_code, duration, output)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS hook_runs (
+    run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick_id      TEXT NOT NULL,
+    lane         TEXT NOT NULL,
+    phase        TEXT NOT NULL CHECK(phase IN ('pre','post')),
+    level        TEXT NOT NULL CHECK(level IN ('global','namespace','lane')),
+    hook_id      TEXT NOT NULL,
+    priority     INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    command      TEXT NOT NULL,
+    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped')),
+    exit_code    INTEGER NOT NULL DEFAULT 0,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    duration_ms  INTEGER NOT NULL DEFAULT 0,
+    attempts     INTEGER NOT NULL DEFAULT 1,
+    output       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS hook_runs_tick_idx ON hook_runs(tick_id, phase, seq);
+CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at DESC);
 `,
 	},
 }

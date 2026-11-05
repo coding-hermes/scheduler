@@ -206,6 +206,43 @@ func TestMigrate_Idempotent(t *testing.T) {
 // TestMigrate_TicksHeartbeatColumn pins migration v10 (S-GAP-003): the ticks
 // table must gain heartbeat_at so gateway-spawn (pid=0) rows have a liveness
 // signal the zombie reapers can check.
+// TestMigrate_HookRuns pins migration v81 (S13): the receipts table must
+// exist with its two indexes, and hook_runs.tick_id must carry NO foreign key
+// so a PRE receipt can be written before the spawner inserts the tick row.
+func TestMigrate_HookRuns(t *testing.T) {
+	db := newTestDB(t)
+
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('hook_runs')`).Scan(&n); err != nil {
+		t.Fatalf("pragma_table_info(hook_runs): %v", err)
+	}
+	if n == 0 {
+		t.Fatal("hook_runs table missing after Migrate")
+	}
+	var idx int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('hook_runs_tick_idx','hook_runs_hook_idx')`,
+	).Scan(&idx); err != nil {
+		t.Fatalf("index query: %v", err)
+	}
+	if idx != 2 {
+		t.Fatalf("hook_runs indexes = %d, want 2", idx)
+	}
+	var fks int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_foreign_key_list('hook_runs')`).Scan(&fks); err != nil {
+		t.Fatalf("pragma_foreign_key_list: %v", err)
+	}
+	if fks != 0 {
+		t.Fatalf("hook_runs must have no foreign keys (PRE precedes the tick row), got %d", fks)
+	}
+	// A receipt insert that names a tick which does not exist must succeed.
+	if _, err := db.Exec(`INSERT INTO hook_runs
+        (tick_id, lane, phase, level, hook_id, priority, seq, command, state, started_at)
+        VALUES ('no-such-tick','l','pre','global','h',1,1,'/bin/true','ok','2026-11-04T00:00:00Z')`); err != nil {
+		t.Fatalf("receipt insert against an absent tick must work: %v", err)
+	}
+}
+
 func TestMigrate_TicksHeartbeatColumn(t *testing.T) {
 	db := newTestDB(t)
 

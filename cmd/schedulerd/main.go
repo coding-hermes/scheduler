@@ -28,6 +28,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/config"
 	"github.com/coding-hermes/scheduler/internal/dashboard"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/lanehook"
 	"github.com/coding-hermes/scheduler/internal/mcp"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/sync"
@@ -139,6 +140,7 @@ func main() {
 	peerWindow := flag.Int("peer-freshness-window", database.PeerFreshnessWindowDefault, "REMOTE-003: peer freshness window in seconds — a peer heartbeating less recently renders stale=true (never \"down\") on GET /api/v1/peers; env SCHEDULER_PEER_FRESHNESS_WINDOW")
 	spawnMemLimitMB := flag.Int64("spawn-mem-limit-mb", 0, "Per-spawn RLIMIT_AS memory cap in MiB applied to spawned foreman processes (ADV-R11, GAP-048 cure); 0 = off (default). NOT an admission gate — every selected project still spawns; the cap constrains the spawned process's resources at spawn time (inherited by its workers). Best-effort: a failed cap WARNs and the spawn continues")
 	boardStasisGate := flag.Bool("board-stasis-gate", true, "SCHED-GAP-1678: exclude a cooldown-mode BUILDER lane from selection while its board file has NOT changed since its previous completed tick (mtime+size+content-digest fingerprint; tasks-mode and reporter-class lanes are exempt, an unreadable board fails open, no cooldown is consumed, and an operator ForceEvaluate bypasses it for one pass). true = armed (fleet default); false = pre-gate scheduling, byte-identical. Env: SCHEDULER_BOARD_STASIS_GATE")
+	hooksFile := flag.String("hooks-file", os.ExpandEnv("$HOME/.hermes/hooks.toml"), "S13 lane hooks: path to the ordered pre/post hook definition file. Missing file = no hooks (the pre-S13 behaviour). Env: SCHEDULER_HOOKS_FILE")
 	// SCHED-GAP-1707: session-silence watchdog grace. A gateway tick whose
 	// Hermes-state telemetry shows no token delta and no tool activity for
 	// this long is cancelled early with failure_reason=session_silent and
@@ -696,6 +698,25 @@ func main() {
 	}
 
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
+
+	// S13: arm lane hooks from the definition file. A parse error keeps the
+	// fleet running with NO hooks rather than refusing to boot; the error is
+	// logged loudly and surfaced again by the API's reload route.
+	hookPath := *hooksFile
+	if v := os.Getenv("SCHEDULER_HOOKS_FILE"); v != "" {
+		hookPath = v
+	}
+	var hookSet *lanehook.Set
+	if hookPath != "" {
+		hs, herr := lanehook.Open(hookPath)
+		if herr != nil {
+			log.Printf("HOOKS: %s rejected (%v) — running with NO hooks armed", hookPath, herr)
+		} else {
+			hookSet = hs
+			loop.SetLaneHooks(hookSet)
+			log.Printf("HOOKS: %d step(s) armed from %s", len(hookSet.Steps()), hookPath)
+		}
+	}
 	if err := loop.SetForemanRoutingMode(foremanRoutingMode); err != nil {
 		log.Fatalf("FATAL: configure foreman routing policy: %v", err)
 	}
@@ -1217,6 +1238,9 @@ func main() {
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	if hookSet != nil {
+		apiServer.SetHooks(hookSet)
+	}
 	// REMOTE-003 (§2): the peer freshness window for the /api/v1/peers
 	// surfaces (rendering law: stale + last_contact, never "down").
 	apiServer.SetPeerFreshnessWindow(*peerWindow)

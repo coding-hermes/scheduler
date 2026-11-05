@@ -194,6 +194,18 @@ command = "/home/kara/.hermes/hooks/lease-acquire.sh"
 timeout_s = 30
 on_failure = "closed"
 
+# Per-lane declaration (S14 §2.1). skip_hooks is here rather than a project
+# column on purpose: a column would be dropped by the fleet.toml generator,
+# while this file is the definition store the daemon actually reads.
+[lane."code-factory-qa"]
+repo = "/home/kara/code-factory"
+base = "main"
+policy = "persistent"
+push = true
+floor_gib = 8.0
+gates = ["make selftest"]
+skip_hooks = ["repo-fetch"]
+
 [[hook]]
 id = "worktree-ensure"
 phase = "pre"
@@ -219,9 +231,12 @@ on_failure = "open"
 ### 3.2 Receipts — `hook_runs`
 
 ```sql
+-- tick_id carries NO foreign key: on the gateway path a PRE receipt is
+-- written before the spawner inserts the tick row, so an FK would refuse the
+-- first receipt of every hooked tick. The index is the join path instead.
 CREATE TABLE IF NOT EXISTS hook_runs (
     run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    tick_id      TEXT NOT NULL REFERENCES ticks(id) ON DELETE CASCADE,
+    tick_id      TEXT NOT NULL,
     lane         TEXT NOT NULL,
     phase        TEXT NOT NULL CHECK(phase IN ('pre','post')),
     level        TEXT NOT NULL CHECK(level IN ('global','namespace','lane')),
@@ -279,13 +294,12 @@ resolves on demand. Nothing about a plan survives a restart, by design: the file
 | env | `SCHEDULER_HOOK_ORDER` | string | `level_first` | must be `level_first` or `flat`, else boot refuses |
 | toml | `[scheduler].hook_order` | string | `level_first` | as above (env > toml) |
 | toml | `[scheduler].hook_total_budget_s` | int | `tick_timeout − 300` | `> 0` and `< tick_timeout` |
-| project field | `skip_hooks` | `[]string` | empty | unknown IDs ignored |
+| hooks.toml | `[lane."<name>"].skip_hooks` | `[]string` | empty | unknown IDs ignored |
 
-`ProjectDef` gains one field:
-
-```go
-SkipHooks []string `toml:"skip_hooks"` // S13: step IDs this lane opts out of
-```
+`ProjectDef` gains **no** field: `skip_hooks` is declared in hooks.toml beside
+the lane's worktree spec (`LaneSpec.SkipHooks`), because the fleet.toml
+generator rewrites `[[projects]]` blocks from the DB and would silently drop a
+column-less key. The lane's own row is untouched by hook configuration.
 
 Reload: the file's mtime+size are stat'ed once per evaluation pass. A change reloads
 atomically (parse to a new set, validate, swap); a parse error keeps the **previous** set

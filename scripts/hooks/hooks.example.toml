@@ -1,0 +1,90 @@
+# hooks.example.toml — S13/S14 lane hook definitions.
+#
+# Install:  cp this file to ~/.hermes/hooks.toml and edit.
+# Scripts:  scripts/hooks/*.sh in this repo (install to ~/.hermes/hooks/).
+#
+# This file is the SINGLE SOURCE OF TRUTH for lane hooks (S13 H0). The daemon
+# reloads it when mtime/size change; a broken edit keeps the previous set armed.
+
+[scheduler]
+hook_order = "level_first"
+
+# ---------------------------------------------------------------- global PRE
+[[hook]]
+id = "lease-acquire"
+phase = "pre"
+level = "global"
+target = "*"
+priority = 5
+command = "/home/kara/.hermes/hooks/lease-acquire.sh"
+timeout_s = 30
+on_failure = "closed"
+
+[[hook]]
+id = "repo-fetch"
+phase = "pre"
+level = "global"
+target = "*"
+priority = 10
+command = "/usr/bin/git"
+args = ["-C", "{repo}", "fetch", "--prune", "origin"]
+timeout_s = 30
+on_failure = "closed"
+
+# ------------------------------------------------------------- lane PRE/POST
+# One block per lane that owns a worktree. Copy for each lane; the ids differ
+# per lane so a receipt names the lane that produced it.
+[[hook]]
+id = "worktree-ensure"
+phase = "pre"
+level = "lane"
+target = "code-factory-qa"
+priority = 20
+command = "/home/kara/.hermes/hooks/worktree-ensure.sh"
+args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}"]
+timeout_s = 120
+on_failure = "closed"
+
+[[hook]]
+id = "quiesce-check"
+phase = "post"
+level = "lane"
+target = "code-factory-qa"
+priority = 95
+command = "/home/kara/.hermes/hooks/quiesce-check.sh"
+args = ["--worktree", "{workdir}"]
+timeout_s = 60
+on_failure = "closed"   # stops the rest of POST: a busy tree must not merge or prune
+
+[[hook]]
+id = "lane-merge"
+phase = "post"
+level = "lane"
+target = "code-factory-qa"
+priority = 80
+command = "/home/kara/.hermes/hooks/lane-merge.sh"
+args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}", "--push", "1"]
+timeout_s = 240
+on_failure = "closed"
+
+[[hook]]
+id = "worktree-prune"
+phase = "post"
+level = "lane"
+target = "code-factory-qa"
+priority = 20
+command = "/home/kara/.hermes/hooks/worktree-prune.sh"
+args = ["--lane", "{lane}", "--repo", "{repo}", "--worktree", "{workdir}", "--merged", "1"]
+timeout_s = 60
+on_failure = "open"
+
+# ------------------------------------------------------------------- lane spec
+# S14 §2.1. `workdir` on the project row must equal `path` here.
+[lane."code-factory-qa"]
+repo = "/home/kara/code-factory"
+base = "main"
+policy = "persistent"
+push = true
+floor_gib = 8.0
+gates = ["make selftest"]
+skip_hooks = []

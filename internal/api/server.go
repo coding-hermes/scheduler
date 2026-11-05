@@ -12,6 +12,7 @@ import (
 	"github.com/coding-hermes/scheduler/internal/blocks"
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
+	"github.com/coding-hermes/scheduler/internal/lanehook"
 	"github.com/coding-hermes/scheduler/internal/scheduler"
 	"github.com/coding-hermes/scheduler/internal/version"
 )
@@ -65,6 +66,11 @@ type Server struct {
 	// config_drift block on /api/v1/status probes THIS file. Empty = the
 	// historical default (~/.hermes/fleet.toml).
 	fleetTomlPath string
+
+	// hooks is the armed S13 lane-hook definition set (nil = not configured,
+	// and every /api/v1/hooks route answers 503 rather than an empty list
+	// that would read as "no hooks exist").
+	hooks *lanehook.Set
 
 	// readDeadline is the per-request deadline armed for the heavy DB-backed
 	// read surfaces (SCHED-GAP-1575-B), installed by main.go via
@@ -269,6 +275,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/status", s.status)
 	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
+	// S13 lane hooks: file is the source of truth, these are the read plan and
+	// the validated writer.
+	mux.HandleFunc("/api/v1/hooks", s.handleHooks)
+	mux.HandleFunc("/api/v1/hooks/plan", s.handleHookPlan)
+	mux.HandleFunc("/api/v1/hooks/reload", s.handleHookReload)
+	mux.HandleFunc("/api/v1/hooks/{id}", s.handleHookItem)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
 	// SCHED-GAP-1587: lane tree views. /lanes/tree is the hierarchical
 	// parent→children surface resolved through database.BuildLaneTree;
