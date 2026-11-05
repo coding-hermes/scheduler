@@ -595,6 +595,32 @@ func main() {
 	defer func() { _ = db.Close() }()
 	log.Printf("Database: %s (WAL mode)", *dbPath)
 
+	// PERF-001-R3-R3: the handler READ pool. WAL readers run concurrently
+	// with the single writer, so the DB-backed GET surfaces (health, status,
+	// projects, cadence, the dashboard collect) stop queueing behind boot
+	// work on the one serialized write connection — the measured boot-window
+	// starvation (/health 504 at t+1s/t+5s, /status 5.17s, first render
+	// partial) on a live-sized 16.7 GB copy. The write pool stays
+	// SetMaxOpenConns(1); nothing about the FK OFF/ON invariant moves.
+	// ":memory:" keeps the shared handle — two connections cannot share one
+	// in-memory database, and main() never sees that value in production.
+	var readPool *sql.DB
+	if *dbPath != ":memory:" {
+		rp, rpErr := database.OpenReadPool(*dbPath, database.DefaultReadPoolSize)
+		if rpErr != nil {
+			log.Printf("WARN: read pool unavailable (%v) — read surfaces fall back to the serialized pool", rpErr)
+		} else {
+			readPool = rp
+			defer func() { _ = readPool.Close() }()
+			log.Printf("Read pool: %d read-only connections (PERF-001-R3-R3)", database.DefaultReadPoolSize)
+		}
+	}
+	// Torn down with the daemon: cancels the health snapshot refresher so
+	// shutdown does not leave a goroutine mid-SELECT. Declared here, next to
+	// the pool it guards, and called in the shutdown sequence below.
+	readPoolCtx, readPoolCancel := context.WithCancel(context.Background())
+	defer readPoolCancel()
+
 	// ── REMOTE-003 (§1): the scheduler identity ──
 	// Resolved ONCE at boot: SCHEDULER_ID env > [scheduler] id TOML > the
 	// short hostname. Assigned to the daemon for its whole lifetime (stable
@@ -1237,6 +1263,16 @@ func main() {
 	duckbrain.SetClock(clk)
 	duckbrain.SetInterval(*duckbrainInterval)
 	apiServer := api.NewServer(db, loop)
+	// PERF-001-R3-R3: route the DB-backed read surfaces through the
+	// read-only pool (nil-safe: without it rdb() falls back to the shared
+	// handle), and warm the /api/v1/health snapshot from boot so the first
+	// second of the window serves it with no cold SELECT. Started BEFORE the
+	// HTTP listener wires up below, so the first compute has usually already
+	// landed by the time the first probe arrives.
+	if readPool != nil {
+		apiServer.SetReadDB(readPool)
+		apiServer.StartHealthRefresher(readPoolCtx, 0)
+	}
 	apiServer.SetFailureWindow(*failureWindow)
 	if hookSet != nil {
 		apiServer.SetHooks(hookSet)
@@ -1389,6 +1425,14 @@ func main() {
 	// became cfg.MinInterval/cfg.MaxInterval/cfg.NumLevels; duration strings
 	// round-trip exactly through ParseDuration, so both derivations are equal.
 	dashGen := dashboard.NewGenerator(db, scheduler.NewUrgencyCalculator(*minInterval, *maxInterval, *numLevels), *gatewayURL)
+	// PERF-001-R3-R3: the dashboard's collect reads move to the read-only
+	// pool too (Generator.SetDB, all read-only QueryContext/QueryRowContext
+	// call sites) — db-projects/db-lanes/fleet-learned were the stages the
+	// boot-window partial page named. Nil-safe: without a pool the generator
+	// keeps the shared handle.
+	if readPool != nil {
+		dashGen.SetDB(readPool)
+	}
 	dashGen.SetClock(clk)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
 	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
@@ -1430,6 +1474,18 @@ func main() {
 	// REMOTE-006: the dashboard's Remote section reads the SAME freshness
 	// window the API's peer surfaces resolve, so "stale" means one thing.
 	dashGen.SetPeerFreshnessWindow(*peerWindow)
+	// PERF-001-R3-R3: warm the fleet-overview snapshot at boot, before any
+	// render can ask for it. The collect pipeline's tail is subprocess work
+	// (ci-warm gh probes, per-lane git enrichment) that cannot fit the 2.5s
+	// render budget cold on an 880-lane fleet — measured rework1:
+	// stages=db-projects[820ms],ci-warm[1.2s,in-flight] → served=partial on
+	// the very first render even with DB reads on the read pool. A few
+	// background passes right after wiring (bounded, detached, converged on
+	// the CI cache) put the full snapshot in place before the boot window's
+	// probes arrive, so GET / serves full pages instead of degrading.
+	if readPool != nil {
+		go dashGen.WarmOverviewBoot(readPoolCtx, 0)
+	}
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -1813,6 +1869,10 @@ func main() {
 
 	// ADV-R07: stop the board watcher before the loop drains.
 	boardWatcher.Stop()
+
+	// PERF-001-R3-R3: stop the health snapshot refresher first so its
+	// in-flight compute lands before the read pool closes.
+	readPoolCancel()
 
 	// REMOTE-004: stop the bus subscriber before the loop drains — Close
 	// tears the connections down and joins the loops (no-op when disabled).

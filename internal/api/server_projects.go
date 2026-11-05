@@ -137,7 +137,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	ctx, obs := s.newRequestDeadline(r.Context(), "projects", s.readTimeout())
 	defer obs.finish()
 	obs.enter("ListProjectsPage")
-	page, err := database.ListProjectsPage(ctx, s.db, false, listProjectsQuery(r))
+	page, err := database.ListProjectsPage(ctx, s.rdb(), false, listProjectsQuery(r))
 	if !obs.check(w, ctx) {
 		return
 	}
