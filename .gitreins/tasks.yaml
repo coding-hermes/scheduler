@@ -5561,3 +5561,19 @@ tasks:
   status: in_progress
   created_at: '2026-11-05T10:33:16.883941+00:00'
   completed_at: '2026-11-05T10:45:47.144545+00:00'
+- id: SCHED-GAP-NODRAIN
+  title: tasks-mode admission must require a WORKABLE row, not merely an open row
+  criteria:
+  - go build ./... succeeds on the committed tree
+  - go vet ./... succeeds on the committed tree
+  - go test -short -p 1 ./internal/scheduler passes on the committed tree
+  - a new unit test in internal/scheduler proves tasksAdmissionDue is false for a
+    board containing only blocked rows, false for a board whose only rows have unmet
+    depends_on, true for a board with one plain pending row, and true for a board
+    with one blocked row plus one workable row
+  - missing or unreadable board still yields false (fail-open unchanged) and a test
+    covers it
+  - docs/design-decisions.md records the change
+  status: complete
+  created_at: '2026-11-05T10:53:46.703196+00:00'
+  completed_at: '2026-11-05T11:44:22.779321+00:00'
