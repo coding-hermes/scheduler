@@ -208,10 +208,16 @@ func noteOwnershipRefusal(workdir string) {
 // tasksAdmissionDue reports whether a tasks-mode project has admissible work
 // RIGHT NOW, with the per-project board_ownership override applied
 // (SCHED-GAP-141; empty ownership = auto, the default for every existing
-// row). It uses the GAP-105/106 open-row scanner (shared with adaptive
-// cooldown and the pending boost) so the definition of "work" is identical
-// across every consumer: pending/open/in-progress vocabulary, malformed rows
-// count open, perpetual fixtures excluded.
+// row). It uses the SCHED-GAP-NODRAIN workability scanner (board_workable.go):
+// "drained" means no WORKABLE row — open by the fleet vocabulary, not
+// blocked, with every depends_on id resolved to a terminal row — not merely
+// "no open row". (Pre-NODRAIN this keyed on the GAP-105/106 open-row
+// scanner shared with adaptive cooldown, and a board holding only blocked
+// rows or only dependency-unmet rows re-admitted the lane on the 5s eval
+// debounce forever.) The exclusions are unchanged: perpetual fixtures and
+// deferred rows stay out of the count, and malformed rows stay workable,
+// exactly as the open-row scanner treats them — only the workability rule
+// is new, and boardOpenRows itself is untouched for its other consumers.
 //
 // The waiver requires board OWNERSHIP: a lane that only reads another
 // project's board is a time-based lane, so it falls back to its cooldown
@@ -229,11 +235,11 @@ func tasksAdmissionDue(workdir, ownership string) bool {
 		noteOwnershipRefusal(workdir)
 		return false
 	}
-	open, ok := boardOpenRows(workdir)
+	workable, ok := boardWorkableRows(workdir)
 	if !ok {
 		return false
 	}
-	return open > 0
+	return workable > 0
 }
 
 // lastTickStatusFailed reports whether the project's most recent tick FAILED
