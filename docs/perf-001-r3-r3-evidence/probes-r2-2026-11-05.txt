@@ -1,0 +1,62 @@
+daemon_pid=3298374
+boot_utc=2026-11-05T10:04:54Z
+SAMPLE t+1s wall=3s
+  health   200 0.000381
+  status   200 0.505177
+  projects 200 0.040061
+  cadence  200 0.023193
+  root     200 1.755474 bytes=142209 html_end=1
+  config   200 0.000295
+SAMPLE t+5s wall=6s
+  health   200 0.002043
+  status   200 0.740883
+  projects 200 0.017256
+  cadence  200 0.030215
+  root     200 0.019431 bytes=142205 html_end=1
+  config   200 0.000311
+SAMPLE t+10s wall=11s
+  health   200 0.000500
+  status   200 0.621994
+  projects 200 0.007340
+  cadence  200 0.019297
+  root     200 0.010091 bytes=153390 html_end=1
+  config   200 0.000387
+SAMPLE t+15s wall=16s
+  health   200 0.002053
+  status   200 0.912344
+  projects 200 0.010802
+  cadence  200 0.036251
+  root     200 0.016435 bytes=153223 html_end=1
+  config   200 0.001014
+SAMPLE t+30s wall=30s
+  health   200 0.000513
+  status   200 0.735668
+  projects 200 0.034501
+  cadence  200 0.022289
+  root     200 0.007518 bytes=153221 html_end=1
+  config   200 0.000236
+SAMPLE t+45s wall=46s
+  health   200 0.000480
+  status   200 0.431073
+  projects 200 0.033917
+  cadence  200 0.016468
+  root     200 0.007826 bytes=153221 html_end=1
+  config   200 0.000247
+SAMPLE t+60s wall=61s
+  health   200 0.000570
+  status   200 0.681336
+  projects 200 0.007864
+  cadence  200 0.024752
+  root     200 0.013795 bytes=153221 html_end=1
+  config   200 0.000460
+SAMPLE t+91s wall=93s
+  health   200 0.000446
+  status   200 0.636924
+  projects 200 0.033858
+  cadence  200 0.016707
+  root     200 2.519088 bytes=101714 html_end=1
+  config   200 0.000282
+eval_lines=75
+slow_req_lines=2
+eval_start=last_eval=05:04:56
+daemon_stopped_utc=2026-11-05T10:06:28Z

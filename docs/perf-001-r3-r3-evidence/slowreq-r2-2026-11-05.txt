@@ -1,0 +1,2 @@
+2026/11/05 05:04:57 slowreq.go:124: SLOW-REQ: GET / 1.755s status=200 bytes=142209 wait=await-collect[1.7s] stages=await-collect[1.7s] budget=2.5s
+2026/11/05 05:06:27 slowreq.go:124: SLOW-REQ: GET / 2.519s status=200 bytes=101714 wait=db-samples[230ms,in-flight] stages=db-projects[259ms],db-lanes[17ms],fleet-learned[198ms],ci-warm[1.8s] served=stale[1m14.5s] note="collect exceeded the 2.5s render budget" budget=2.5s
