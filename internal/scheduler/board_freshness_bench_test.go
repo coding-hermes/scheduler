@@ -134,7 +134,8 @@ func scanProbeMessages(ids []string) []string {
 		return nil
 	}
 	a, b := ids[0], ids[len(ids)/2]
-	last := ids[len(ids)-1]
+	n := len(ids)
+	last := ids[n-1]
 	return []string{
 		"", // empty message
 		"chore: routine maintenance, no board row referenced", // names nothing
@@ -341,8 +342,9 @@ func TestBoardFreshnessMisattributionScanFuzz(t *testing.T) {
 // fleet host is shared and a single round can be descheduled.
 func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 	ids := fleetScanIDs(t)
-	if len(ids) < fleetScanMinRows {
-		t.Fatalf("corpus too small for a fleet-size budget claim: %d ids", len(ids))
+	n := len(ids)
+	if n < fleetScanMinRows {
+		t.Fatalf("corpus too small for a fleet-size budget claim: %d ids", n)
 	}
 	idx := newRowIDIndex(ids, newIDMatcher())
 	msgs := gitLogMessages(t, 60)
@@ -373,7 +375,7 @@ func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 		// — a harsher-than-production amplification of message size.
 		{"longest-real-message", longest},
 		// The common case: the message names exactly one row (not self).
-		{"names-one-row", "feat: wire the index. Addresses " + ids[len(ids)-1] + "."},
+		{"names-one-row", "feat: wire the index. Addresses " + ids[n-1] + "."},
 	}
 	for _, arm := range arms {
 		best := time.Duration(0)
@@ -404,8 +406,16 @@ func TestBoardFreshnessMisattributionScanBudget(t *testing.T) {
 // id) pair — len(ids)^2 ≈ 450k at fleet size; the indexed scan probes only
 // what the message names. This is the deterministic sibling of the
 // wall-clock budget above.
+//
+// The expected hit count is derived from the `\bid\b` matcher rather than
+// hardcoded: a board id can be a word-edged substring of the named id
+// (SCHED-GAP-138 inside SCHED-GAP-138-R2), and then the message
+// legitimately names two rows — the named row itself reports a hit and the
+// true count is len(ids), not one-short-of-it. Both counts pass here; what
+// must never regress is agreement with the matcher the scan defers to.
 func TestBoardFreshnessMisattributionScanProbeBudget(t *testing.T) {
 	ids := fleetScanIDs(t)
+	n := len(ids)
 	probes := 0
 	base := newIDMatcher()
 	counted := func(id string) *regexp.Regexp {
@@ -428,17 +438,46 @@ func TestBoardFreshnessMisattributionScanProbeBudget(t *testing.T) {
 	}
 
 	// A message naming one row (the last, so a per-id loop would walk the
-	// whole list to find it): at most one probe per row.
-	named := ids[len(ids)-1]
+	// whole list to find it): at most one probe per row. The expectation
+	// is derived, never hardcoded one-short-of-the-row-count: if some
+	// other corpus id is a word-edged substring of the named id, the
+	// named row itself hits too and the count legitimately rises.
+	named := ids[n-1]
+	msg := "Addresses " + named + "."
+	// Which corpus ids the message actually names, straight from the
+	// matcher that is the authority on attribution — the same one the
+	// index confirms every candidate with. This derivation deliberately
+	// uses `base`, not `counted`, so it cannot move the probe counter.
+	namedSet := make(map[string]struct{}, 2)
+	for _, id := range ids {
+		if m := base(id); m != nil && m.MatchString(msg) {
+			namedSet[id] = struct{}{}
+		}
+	}
 	probes = 0
 	hits := 0
 	for _, self := range ids {
-		if idx.namesOtherID("Addresses "+named+".", self) {
+		if idx.namesOtherID(msg, self) {
 			hits++
 		}
 	}
-	if hits != len(ids)-1 {
-		t.Fatalf("mis-attribution hits = %d, want %d (every row but the named one)", hits, len(ids)-1)
+	// The scan's documented rule, aggregated over the corpus: a row
+	// reports a mis-attribution hit iff the message names some id OTHER
+	// than that row. On a substring-free corpus this is every row but the
+	// named one; with a word-edged substring pair it is every row —
+	// either way it is derived from the corpus, not assumed.
+	want := 0
+	for _, self := range ids {
+		for id := range namedSet {
+			if id != self {
+				want++
+				break
+			}
+		}
+	}
+	if hits != want {
+		t.Fatalf("mis-attribution hits = %d, want %d (derived from the matcher: the message word-edge-names %d of the %d corpus ids; a row hits iff one of them is not itself)",
+			hits, want, len(namedSet), n)
 	}
 	if probes > len(ids)*2 {
 		t.Fatalf("scan probed %d ids for a one-id message at %d rows (pre-fix would be %d): the per-id loop is back",
