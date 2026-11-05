@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -217,5 +218,52 @@ func TestMissingCommandFails(t *testing.T) {
 	var hf *ErrHookFailed
 	if !errors.As(err, &hf) {
 		t.Fatalf("want ErrHookFailed, got %v", err)
+	}
+}
+
+// moduleRoot walks up from the test's package dir to the go.mod that
+// anchors the module, so the cross-compile guard can build the whole
+// module the way the board-row gates do.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod found above the lanehook package")
+		}
+		dir = parent
+	}
+}
+
+// TestLanehookCrossCompileWindows is the INT-CI-4184 guard: runner.go once
+// used syscall.SysProcAttr{Setpgid: true} and syscall.Kill without build
+// tags, so GOOS=windows go build ./... failed repo-wide and only a tagged
+// multiarch release would have noticed. This shells the REAL compiler for
+// both windows targets on every `go test` run, so a regression fails
+// loudly in the suite instead of silently. CGO stays off because the
+// module is pure Go (modernc.org/sqlite), matching the multiarch
+// workflow's cross-build contract; the platform split itself lives in
+// runner_unix.go / runner_windows.go.
+func TestLanehookCrossCompileWindows(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("cross-compile guard needs the go toolchain on PATH: %v", err)
+	}
+	root := moduleRoot(t)
+	for _, arch := range []string{"amd64", "arm64"} {
+		build := exec.Command(goBin, "build", "./...")
+		build.Dir = root
+		build.Env = append(os.Environ(),
+			"GOOS=windows", "GOARCH="+arch, "CGO_ENABLED=0")
+		if out, berr := build.CombinedOutput(); berr != nil {
+			t.Fatalf("GOOS=windows GOARCH=%s go build ./... failed: %v\n%s", arch, berr, out)
+		}
 	}
 }

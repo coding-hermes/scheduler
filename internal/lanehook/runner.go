@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -183,14 +182,17 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 	cmd.Dir = env.Workdir
 	cmd.Env = append(os.Environ(), envVars(stepEnv)...)
 	// Own process group: a timeout must kill the children too (S13 §2.3.2).
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The syscall level is platform-specific (INT-CI-4184): runner_unix.go
+	// sets Setpgid and does the negative-pid group kill; runner_windows.go
+	// carries the documented windows degradation (no POSIX process groups).
+	cmd.SysProcAttr = processGroupAttrs()
 	// Go's default Cancel kills only the leader; kill the whole group. A
 	// WaitDelay bounds how long a grandchild holding a pipe can block us.
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
 		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return killProcessGroup(cmd.Process, os.Kill)
 	}
 	cmd.WaitDelay = 5 * time.Second
 
