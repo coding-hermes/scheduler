@@ -262,11 +262,17 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 	defer rows.Close()
 
 	var list []scored
-	skippedBudgetCap := 0
-
+	// PERF-001-R3-R3: PHASE 1 is SCAN-ONLY. Every SQLite statement in this
+	// process is serialized through ONE connection
+	// (database/schema.go SetMaxOpenConns(1)), so a SELECT cursor left open
+	// across per-project work pins that connection for the whole scan and
+	// starves every other reader — /api/v1/health (1s) and
+	// /api/v1/status|projects|cadence (5s) all returned 504 at their exact
+	// budgets on a live-sized DB. PHASE 2 (below) is where the per-project
+	// board-freshness battery runs, and that battery shells out to git per
+	// pending marker; the cursor is therefore released first.
 	for rows.Next() {
 		var s scored
-		var lastCompleted *time.Time
 		var lastStr sql.NullString
 		var createdAtStr string
 		var enabled bool
@@ -304,23 +310,37 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		// SCHED-GAP-1678: keep the raw status for the board-stasis gate's
 		// completed-previous-tick leg.
 		s.lastTickStatus = lastStatus
+		s.createdAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		if lastStr.Valid && lastStr.String != "" {
+			if t, err := time.Parse(time.RFC3339, lastStr.String); err == nil {
+				s.lastTickAt = &t
+			}
+		}
+		list = append(list, s)
+	}
+	// Release the shared connection before PHASE 2 does any file/git I/O.
+	// Close is idempotent (database/sql also closes on an exhausted Next),
+	// and the deferred Close still covers the error paths above.
+	rows.Close()
+
+	// PHASE 2 — scoring. Pure arithmetic plus the CountPending seam (board
+	// file read + git freshness battery). No cursor is open here, so that
+	// work can no longer hold the single connection hostage.
+	skippedBudgetCap := 0
+	for i := range list {
+		s := &list[i]
 		// SCHED-GAP-066: budget-exhausted projects are excluded from the
 		// greedy pack — but kept in the candidate list, flagged, so the
 		// GAP-011 overdue force-select below can still pick them (a spend
 		// gate must not starve an overdue project). The gate filters NEW
-		// spawns only — a running tick is never touched.
+		// spawns only — a running tick is never touched. The gate itself is
+		// in-memory (spends are precomputed once per cycle), so it does not
+		// re-enter the pool.
 		if p.budgetGate != nil {
 			if detail, blocked := p.budgetGate(s.name, s.dailyBudgetUSD, s.weeklyBudgetUSD, s.finalBudgetUSD); blocked {
 				s.budgetBlocked = true
 				skippedBudgetCap++
 				log.Printf("BUDGET: %s blocked (%s) — excluded from greedy selection; running ticks untouched", s.name, detail)
-			}
-		}
-		s.createdAt, _ = time.Parse(time.RFC3339, createdAtStr)
-		if lastStr.Valid && lastStr.String != "" {
-			t, err := time.Parse(time.RFC3339, lastStr.String)
-			if err == nil {
-				lastCompleted = &t
 			}
 		}
 		// SCHED-GAP-107: an active bump overrides the stored cooldown for
@@ -331,19 +351,21 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if s.bumpActive && s.bumpCooldownS > 0 {
 			s.cooldownS = s.bumpCooldownS
 		}
-		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
+		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, s.lastTickAt, s.createdAt)
 		// S-GAP-001 fairness: starvation boost in the flat path too, or the
 		// two selection paths would diverge. Monotonic in starvation age so
 		// the most-starved project sorts first regardless of priority.
-		if isStarving(s.cooldownS, s.consecutiveFailures, lastCompleted, s.createdAt, now) && s.urgency < starvationBoostUrgency {
-			age := starvationAge(lastCompleted, s.createdAt, now)
+		if isStarving(s.cooldownS, s.consecutiveFailures, s.lastTickAt, s.createdAt, now) && s.urgency < starvationBoostUrgency {
+			age := starvationAge(s.lastTickAt, s.createdAt, now)
 			s.urgency = starvationBoostUrgencyFor(age)
 			log.Printf("FAIRNESS: %s boosted in flat packer (cooldown=%ds failures=%d window=%v starved=%v)",
 				s.name, s.cooldownS, s.consecutiveFailures, StarvationWindow(s.cooldownS), age)
 		}
 		// SCHED-GAP-019: board-aware pending-task boost — same tier as the
 		// namespace and flat-fallback paths, so all three selection paths
-		// stay in sync. Cooldown is NOT bypassed.
+		// stay in sync. Cooldown is NOT bypassed. This is the expensive
+		// seam (per-row git freshness probe); it runs cursor-free by
+		// construction, and its fail-open contract is unchanged.
 		if p.pendingCounter != nil {
 			if pending := p.pendingCounter.CountPending(s.workdir); pending > 0 && s.urgency < pendingBoostUrgency {
 				s.urgency = pendingBoostUrgencyFor(pending)
@@ -362,8 +384,6 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		s.urgency = cadenceAdjustedUrgency(s.urgency, database.Project{
 			Name: s.name, TargetRunsPerDay: s.targetRunsPerDay, CooldownPinS: s.cooldownPinS,
 		}, p.cadenceRates[s.name])
-		s.lastTickAt = lastCompleted
-		list = append(list, s)
 	}
 
 	// Sort by urgency descending, priority descending, then last tick
