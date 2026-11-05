@@ -5693,4 +5693,19 @@ tasks:
     the named focused and race tests plus build and vet.
   status: complete
   created_at: '2026-11-05T18:03:46.514498+00:00'
-  completed_at: '2026-11-05T18:38:16.555918+00:00'
+  completed_at: '2026-11-05T19:30:13.286228+00:00'
+- id: SCHED-GAP-16928
+  title: Cooldown satellites must not be admitted on board-wake (WAKE LAW recurrence)
+  criteria:
+  - '1) Prove the defect: a repeatable regression test in internal/scheduler (or documented
+    journal recount) that produces reason=resume:board_wake for a cooldown-class satellite
+    on the current build. 2) Fix: the board-wake admission path applies the same shared
+    cooldown gate to cooldown-mode satellites that schedgap1660.go applies to tasks-mode
+    lanes; a board write on a satellite''s board arms nothing and logs the refusal
+    with the lane''s remaining cooldown. 3) Regression test: satellite + board write
+    => no ADMIT with reason=resume:board_wake; tasks-mode + board write with live
+    remaining cooldown still refused; and a legitimate wake (cooldown elapsed) still
+    admits. 4) go build ./... && go vet ./... && go test ./internal/scheduler/ -run
+    ''WAKE|SchedGap'' -count=1 PASS.'
+  status: in_progress
+  created_at: '2026-11-05T19:58:39.479316+00:00'
