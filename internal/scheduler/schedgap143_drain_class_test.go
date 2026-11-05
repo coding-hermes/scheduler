@@ -49,13 +49,32 @@ import (
 // count against the lane (failure counter + auto-disable breaker).
 const gap143LaneFailureText = "tick timeout after 7200s: no board progress"
 
+// gap143FixtureCooldownS is the fixture cooldown gap143SetEligible writes into
+// projects.cooldown_s. It is the natural time scale of this battery's
+// fixtures, and the budget every terminal-tick wait below derives from.
+const gap143FixtureCooldownS = 60
+
+// gap143TerminalTickWait is the bounded deadline for awaiting terminal tick
+// rows (INT-CI-190). The previous hard-coded 30s sat BELOW this battery's own
+// fixture cooldown (gap143FixtureCooldownS = 60) and far below the spawn
+// path's legitimate patience (slot_pool defaultSlotPatience = 5m): on a loaded
+// race-detector runner the second drain tick landed at ~33.5s and the test
+// failed on the wall clock, not on the behavior (INT-CI-158, run
+// 35848734429). The wait is now 2× the fixture cooldown — comfortably above
+// the slowest healthy path, still bounded so a genuinely missing tick fails
+// in bounded time and names the last observed state. Both properties (above
+// the retired 30s, derived from the cooldown) are pinned by
+// TestINTCI190_TerminalTickWaitBudgetCoversCooldown; the predicate itself is
+// unchanged — poll the real terminal-tick rows, never sleep-and-hope.
+const gap143TerminalTickWait = 2 * gap143FixtureCooldownS * time.Second
+
 // gap143SetEligible arms a project for the next evaluate() pass: a small
 // cooldown and an attempt clock 1h in the past. It deliberately does NOT touch
 // consecutive_failures — tests 1/3/4 assert on that counter across ticks.
 func gap143SetEligible(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
 	gap143SetLastCompleted(t, db, name, time.Hour)
-	if _, err := db.Exec(`UPDATE projects SET cooldown_s = 60 WHERE name = ?`, name); err != nil {
+	if _, err := db.Exec(`UPDATE projects SET cooldown_s = ? WHERE name = ?`, gap143FixtureCooldownS, name); err != nil {
 		t.Fatalf("set cooldown_s for %s: %v", name, err)
 	}
 }
@@ -75,15 +94,22 @@ func gap143SetLastCompleted(t *testing.T, db *sql.DB, name string, age time.Dura
 
 // gap143RunEvalTick runs one evaluation cycle and waits for the tick it
 // spawned to reach a terminal state, returning its id. want is the number of
-// terminal rows expected for the project AFTER this cycle.
+// terminal rows expected for the project AFTER this cycle. The wait budget is
+// gap143TerminalTickWait (2× the fixture cooldown, INT-CI-190) — never a
+// razor-edge wall-clock window that a loaded runner can expire first.
 func gap143RunEvalTick(t *testing.T, l *Loop, db *sql.DB, project string, want int) string {
 	t.Helper()
 	l.evaluate()
-	return gap143AwaitTerminalTicks(t, db, project, want, 30*time.Second)[want-1]
+	return gap143AwaitTerminalTicks(t, db, project, want, gap143TerminalTickWait)[want-1]
 }
 
 // gap143AwaitTerminalTicks polls until the project has `want` terminal tick
-// rows (failed/timeout/completed) and returns their ids oldest-first.
+// rows (failed/timeout/completed) and returns their ids oldest-first. The
+// predicate is the REAL condition — the rows themselves — so the wait cannot
+// pass vacuously. On deadline expiry it fails naming the last observed
+// terminal-tick count plus the project's cooldown/counter/enabled state
+// (INT-CI-190), distinguishing "slow under load" from "admission closed" at
+// a glance.
 func gap143AwaitTerminalTicks(t *testing.T, db *sql.DB, project string, want int, timeout time.Duration) []string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -93,7 +119,9 @@ func gap143AwaitTerminalTicks(t *testing.T, db *sql.DB, project string, want int
 			return ids
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("project %s reached %d terminal ticks, want %d within %v", project, len(ids), want, timeout)
+			cd, streak := gap143Cooldown(t, db, project)
+			t.Fatalf("project %s reached %d terminal ticks, want %d within %v (last observed: cooldown_s=%d, no_progress_ticks=%d, enabled=%t)",
+				project, len(ids), want, timeout, cd, streak, gap143ProjectEnabled(t, db, project))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -327,6 +355,18 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 // production-code race. The test assertion is unchanged; if the failure shape
 // changes (different companion log line, or a non-33s timeout) re-classify
 // before treating it as a regression.
+//
+// RESOLVED — INT-CI-190 (2026-11-05): the terminal-tick wait was decoupled
+// from the wall clock. The assertion no longer bounds the second drain tick
+// by a fixed 30s (below the fixture cooldown of 60s and the slot pool's 5m
+// patience); gap143RunEvalTick now polls the ACTUAL condition — the terminal
+// tick rows themselves — for gap143TerminalTickWait (2× the fixture
+// cooldown), and on expiry fails naming the last observed tick count,
+// cooldown_s and enabled state. TestINTCI190_TerminalTickWaitBudgetCoversCooldown
+// fails the build if the budget is ever reverted to the old 30s deadline or
+// the predicate stops observing real second ticks. The positive control
+// (laneProj must still auto-disable on 10 project-side failures) is preserved
+// untouched: same window, same 0.5 threshold, same min_ticks.
 func TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain(t *testing.T) {
 	db := newTestDB(t)
 	const (
@@ -562,5 +602,66 @@ func TestFND002_DrainCooldownReadIsBounded(t *testing.T) {
 	cd, streak := gap143PollCooldown(t, db, project, 900, 0)
 	if cd != 900 || streak != 0 {
 		t.Errorf("after the recovery tick the bounded poll observed cooldown_s = %d / no_progress_ticks = %d, want 900 / 0", cd, streak)
+	}
+}
+
+// TestINTCI190_TerminalTickWaitBudgetCoversCooldown — INT-CI-190 regression
+// guard for the flake documented on TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain.
+//
+// It pins the two properties the fix depends on, so neither can silently
+// regress:
+//
+//	(1) The terminal-tick wait budget is materially above the fixture
+//	    cooldown and strictly above the retired 30s wall clock. Reverting
+//	    gap143TerminalTickWait to the old 30s deadline re-opens the loaded-
+//	    runner race (a healthy second drain tick landed at ~33.5s under the
+//	    race detector) and this test fails the build at zero cost instead of
+//	    flaking on some future CI runner.
+//	(2) The wait's predicate is grounded in real terminal-tick rows and
+//	    observes the SECOND tick: a predicate that never sees a second tick
+//	    (wrong status filter, wrong project scope) or one that counts rows it
+//	    did not earn makes the exact-count assertions below fail. Synthetic
+//	    rows keep this arm deterministic — no gateway, no slots, no load
+//	    dependence.
+//
+// ch:trace row=INT-CI-190 spec=none:ci-flake-followup wave=none:serial-singleton-block test=internal/scheduler/schedgap143_drain_class_test.go::TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain doc=none:ci-test-fix evidence=none:worker-branch witness=none:worker-branch verdict=none:pending-merged-judge commit=none:worker-commit memory=none:foreman-closeout
+func TestINTCI190_TerminalTickWaitBudgetCoversCooldown(t *testing.T) {
+	// (1) Budget properties. 30*time.Second below is the retired deadline,
+	// spelled out so a future reader sees exactly which value must never
+	// return.
+	if gap143TerminalTickWait <= 30*time.Second {
+		t.Fatalf("gap143TerminalTickWait = %v, must be strictly above the retired 30s deadline (INT-CI-190: 30s expired before a healthy second drain tick landed on a loaded race-detector runner)", gap143TerminalTickWait)
+	}
+	if minBudget := 2 * gap143FixtureCooldownS * time.Second; gap143TerminalTickWait < minBudget {
+		t.Fatalf("gap143TerminalTickWait = %v, want >= %v (2× the fixture cooldown gap143FixtureCooldownS=%d, so the deadline cannot expire before a cooldown-scale tick lands)", gap143TerminalTickWait, minBudget, gap143FixtureCooldownS)
+	}
+
+	// (2) Predicate non-vacuity: gap143TerminalTickIDs / gap143AwaitTerminalTicks
+	// must observe exactly the terminal rows that exist — one when one
+	// exists, two (oldest-first) when a second lands — so the fixed 30s →
+	// bounded-poll conversion can never hide a second tick that never
+	// happened, nor pass on rows that were never written.
+	db := newTestDB(t)
+	const (
+		project  = "gap143-intci190-predicate"
+		firstID  = "gap143-190-tick-first"
+		secondID = "gap143-190-tick-second"
+	)
+	mustCreateProjectINFRA012(t, db, project)
+	if ids := gap143TerminalTickIDs(t, db, project); len(ids) != 0 {
+		t.Fatalf("fresh project %s already has %d terminal ticks, want 0 — the predicate is counting rows that do not exist", project, len(ids))
+	}
+	now := time.Now().UTC()
+	gap143InsertFailedTick(t, db, firstID, project, gap143LaneFailureText, "", now)
+	if ids := gap143TerminalTickIDs(t, db, project); len(ids) != 1 {
+		t.Fatalf("after the first insert the predicate sees %d terminal ticks, want 1 — a wait for the second tick would time out against ground truth", len(ids))
+	}
+	gap143InsertFailedTick(t, db, secondID, project, gap143LaneFailureText, "", now.Add(time.Minute))
+	ids := gap143AwaitTerminalTicks(t, db, project, 2, 2*time.Second)
+	if len(ids) != 2 {
+		t.Fatalf("after the second insert the predicate sees %d terminal ticks, want 2 (last observed: %v) — the second tick must be observable for the drain battery's want=2 waits to be meaningful", len(ids), ids)
+	}
+	if ids[0] != firstID || ids[1] != secondID {
+		t.Fatalf("terminal tick ids = [%s, %s], want oldest-first [%s, %s]", ids[0], ids[1], firstID, secondID)
 	}
 }
