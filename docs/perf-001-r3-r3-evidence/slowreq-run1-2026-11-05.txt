@@ -1,0 +1,24 @@
+2026/11/04 21:32:30 server_helpers.go:278: WARN: slow request handler=health step=countActiveTicks elapsed=1s slowest_step=countActiveTicks slowest_step_elapsed=1s budget=1s
+2026/11/04 21:32:30 slowreq.go:124: SLOW-REQ: GET /api/v1/health 1s status=504 bytes=95 wait=not-instrumented
+2026/11/04 21:32:30 slowreq.go:124: SLOW-REQ: GET /api/v1/projects 1.349s status=200 bytes=663713 wait=not-instrumented
+2026/11/04 21:32:30 slowreq.go:124: SLOW-REQ: GET /api/v1/cadence 1.681s status=200 bytes=191091 wait=not-instrumented
+2026/11/04 21:32:31 slowreq.go:124: SLOW-REQ: GET / 2.507s status=200 bytes=40320 wait=fleet-learned[316ms,in-flight] stages=db-projects[1.7s],db-lanes[519ms] served=partial note="collect exceeded the 2.5s render budget" budget=2.5s
+2026/11/04 21:32:31 slowreq.go:124: SLOW-REQ: GET /api/v1/status 2.689s status=200 bytes=71926 wait=not-instrumented
+2026/11/04 21:32:34 server_helpers.go:278: WARN: slow request handler=health step=countActiveTicks elapsed=1s slowest_step=countActiveTicks slowest_step_elapsed=1s budget=1s
+2026/11/04 21:32:34 slowreq.go:124: SLOW-REQ: GET /api/v1/health 1.001s status=504 bytes=95 wait=not-instrumented
+2026/11/04 21:32:35 slowreq.go:124: SLOW-REQ: GET /api/v1/projects 1.523s status=200 bytes=663713 wait=not-instrumented
+2026/11/04 21:32:35 slowreq.go:124: SLOW-REQ: GET /api/v1/cadence 1.639s status=200 bytes=191091 wait=not-instrumented
+2026/11/04 21:32:36 slowreq.go:124: SLOW-REQ: GET / 2.501s status=200 bytes=40331 wait=await-collect[2.5s] stages=await-collect[2.5s] served=partial note="waiting for the overview collect already in flight" budget=2.5s
+2026/11/04 21:32:39 server_helpers.go:278: WARN: slow request handler=status step=configDriftBlock elapsed=5.169s slowest_step=ListProjects slowest_step_elapsed=1.483s budget=5s
+2026/11/04 21:32:39 slowreq.go:124: SLOW-REQ: GET /api/v1/status 5.17s status=200 bytes=72619 wait=not-instrumented
+2026/11/04 21:32:40 server_helpers.go:278: WARN: slow request handler=health step=PingContext elapsed=1.01s slowest_step=countActiveTicks slowest_step_elapsed=649ms budget=1s
+2026/11/04 21:32:40 slowreq.go:124: SLOW-REQ: GET /api/v1/health 1.01s status=200 bytes=379 wait=not-instrumented
+2026/11/04 21:32:40 slowreq.go:124: SLOW-REQ: GET /api/v1/status 1.793s status=200 bytes=72499 wait=not-instrumented
+2026/11/04 21:32:44 slowreq.go:124: SLOW-REQ: GET /api/v1/status 1.044s status=200 bytes=72502 wait=not-instrumented
+2026/11/04 21:32:58 server_helpers.go:278: WARN: slow request handler=health step=PingContext elapsed=820ms slowest_step=PingContext slowest_step_elapsed=789ms budget=1s
+2026/11/04 21:32:59 slowreq.go:124: SLOW-REQ: GET /api/v1/status 1.058s status=200 bytes=72502 wait=not-instrumented
+2026/11/04 21:33:14 slowreq.go:124: SLOW-REQ: GET /api/v1/status 1.158s status=200 bytes=72502 wait=not-instrumented
+2026/11/04 21:34:00 server_helpers.go:278: WARN: slow request handler=health step=PingContext elapsed=1.029s slowest_step=PingContext slowest_step_elapsed=1.024s budget=1s
+2026/11/04 21:34:00 slowreq.go:124: SLOW-REQ: GET /api/v1/health 1.029s status=200 bytes=382 wait=not-instrumented
+2026/11/04 21:34:01 slowreq.go:124: SLOW-REQ: GET /api/v1/status 1.878s status=200 bytes=72902 wait=not-instrumented
+2026/11/04 21:34:02 slowreq.go:124: SLOW-REQ: GET / 2.505s status=200 bytes=101929 wait=db-samples[401ms,in-flight] stages=db-projects[363ms],db-lanes[28ms],fleet-learned[192ms],ci-warm[1.5s] served=stale[1m22.3s] note="collect exceeded the 2.5s render budget" budget=2.5s

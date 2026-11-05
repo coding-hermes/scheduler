@@ -1,0 +1,144 @@
+goroutine profile: total 15
+2 @ 0x48ebae 0x450117 0x48dd85 0x50c6c7 0x50d8ee 0x50d8dc 0x5f5145 0x601045 0x9b8733 0x4966e1
+#	0x48dd84	internal/poll.runtime_pollWait+0x84		/home/kara/sdk/go1.26.6/src/runtime/netpoll.go:351
+#	0x50c6c6	internal/poll.(*pollDesc).wait+0x26		/home/kara/sdk/go1.26.6/src/internal/poll/fd_poll_runtime.go:84
+#	0x50d8ed	internal/poll.(*pollDesc).waitRead+0x2ad	/home/kara/sdk/go1.26.6/src/internal/poll/fd_poll_runtime.go:89
+#	0x50d8db	internal/poll.(*FD).Read+0x29b			/home/kara/sdk/go1.26.6/src/internal/poll/fd_unix.go:165
+#	0x5f5144	net.(*netFD).Read+0x24				/home/kara/sdk/go1.26.6/src/net/fd_posix.go:68
+#	0x601044	net.(*conn).Read+0x44				/home/kara/sdk/go1.26.6/src/net/net.go:196
+#	0x9b8732	net/http.(*connReader).backgroundRead+0x32	/home/kara/sdk/go1.26.6/src/net/http/server.go:702
+
+1 @ 0x424849 0x490fb8 0x5db913 0x4966e1
+#	0x490fb7	os/signal.signal_recv+0x97	/home/kara/sdk/go1.26.6/src/runtime/sigqueue.go:152
+#	0x5db912	os/signal.loop+0x12		/home/kara/sdk/go1.26.6/src/os/signal/signal_unix.go:23
+
+1 @ 0x44cbd1 0x48d9dd 0xb48791 0xb485c5 0xb45449 0xb5f6ea 0xb6017a 0x9c09c9 0x9c27c7 0x9c27c7 0xc210f1 0x9c09c9 0x9dfdae 0x9bea30 0x4966e1
+#	0xb48790	runtime/pprof.writeRuntimeProfile+0xb0	/home/kara/sdk/go1.26.6/src/runtime/pprof/pprof.go:851
+#	0xb485c4	runtime/pprof.writeGoroutine+0x44	/home/kara/sdk/go1.26.6/src/runtime/pprof/pprof.go:784
+#	0xb45448	runtime/pprof.(*Profile).WriteTo+0x148	/home/kara/sdk/go1.26.6/src/runtime/pprof/pprof.go:408
+#	0xb5f6e9	net/http/pprof.handler.ServeHTTP+0x529	/home/kara/sdk/go1.26.6/src/net/http/pprof/pprof.go:273
+#	0xb60179	net/http/pprof.Index+0xd9		/home/kara/sdk/go1.26.6/src/net/http/pprof/pprof.go:397
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28	/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6	/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6	/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0xc210f0	main.slowRequests.func1+0x2f0		/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/slowreq.go:106
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28	/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9dfdad	net/http.serverHandler.ServeHTTP+0x8d	/home/kara/sdk/go1.26.6/src/net/http/server.go:3309
+#	0x9bea2f	net/http.(*conn).serve+0x68f		/home/kara/sdk/go1.26.6/src/net/http/server.go:2067
+
+1 @ 0x48ebae 0x41e32e 0x41de52 0xc17265 0x457695 0x4966e1
+#	0xc17264	main.main+0x87e4	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/main.go:1787
+#	0x457694	runtime.main+0x2d4	/home/kara/sdk/go1.26.6/src/runtime/proc.go:290
+
+1 @ 0x48ebae 0x450117 0x48dd85 0x50c6c7 0x51174c 0x51173a 0x5f6e89 0x609dfb 0x609090 0x9c42ac 0x9c3e92 0xc0e9d0 0xc19128 0x4966e1
+#	0x48dd84	internal/poll.runtime_pollWait+0x84		/home/kara/sdk/go1.26.6/src/runtime/netpoll.go:351
+#	0x50c6c6	internal/poll.(*pollDesc).wait+0x26		/home/kara/sdk/go1.26.6/src/internal/poll/fd_poll_runtime.go:84
+#	0x51174b	internal/poll.(*pollDesc).waitRead+0x28b	/home/kara/sdk/go1.26.6/src/internal/poll/fd_poll_runtime.go:89
+#	0x511739	internal/poll.(*FD).Accept+0x279		/home/kara/sdk/go1.26.6/src/internal/poll/fd_unix.go:613
+#	0x5f6e88	net.(*netFD).accept+0x28			/home/kara/sdk/go1.26.6/src/net/fd_unix.go:150
+#	0x609dfa	net.(*TCPListener).accept+0x1a			/home/kara/sdk/go1.26.6/src/net/tcpsock_posix.go:159
+#	0x60908f	net.(*TCPListener).Accept+0x2f			/home/kara/sdk/go1.26.6/src/net/tcpsock.go:387
+#	0x9c42ab	net/http.(*Server).Serve+0x30b			/home/kara/sdk/go1.26.6/src/net/http/server.go:3432
+#	0x9c3e91	net/http.(*Server).ListenAndServe+0x71		/home/kara/sdk/go1.26.6/src/net/http/server.go:3358
+#	0xc0e9cf	main.serveDashboard+0x2f			/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/main.go:77
+#	0xc19127	main.main.func25+0x5c7				/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/main.go:1743
+
+1 @ 0x48ebae 0x46aea5 0x53dbc9 0x4966e1
+#	0x53dbc8	database/sql.(*DB).connectionOpener+0x88	/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1261
+
+1 @ 0x48ebae 0x46aea5 0x53e4b5 0x5400d4 0x53ff6f 0x53f602 0x53fe7b 0x86ce76 0xc039d4 0xc03318 0xc02892 0xc18b05 0x4966e1
+#	0x53e4b4	database/sql.(*DB).conn+0x414								/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1369
+#	0x5400d3	database/sql.(*DB).exec+0x53								/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1689
+#	0x53ff6e	database/sql.(*DB).ExecContext.func1+0x4e						/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1672
+#	0x53f601	database/sql.(*DB).retry+0x41								/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1576
+#	0x53fe7a	database/sql.(*DB).ExecContext+0x9a							/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1671
+#	0x86ce75	github.com/coding-hermes/scheduler/internal/database.SpoolMemory+0x175			/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/database/spool.go:26
+#	0xc039d3	github.com/coding-hermes/scheduler/internal/sync.(*DuckBrainSync).flushPending+0x213	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/sync/duckbrain.go:283
+#	0xc03317	github.com/coding-hermes/scheduler/internal/sync.(*DuckBrainSync).syncOnce+0x777	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/sync/duckbrain.go:262
+#	0xc02891	github.com/coding-hermes/scheduler/internal/sync.(*DuckBrainSync).Run+0x2d1		/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/sync/duckbrain.go:177
+#	0xc18b04	main.main.func26+0x24									/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/main.go:1763
+
+1 @ 0x48ebae 0x46aea5 0x53e4b5 0x540e77 0x540d0f 0x53f602 0x540c38 0xb166d0 0xb072a7 0x9c09c9 0x9c27c7 0x9c27c7 0x9c27c7 0xc210f1 0x9c09c9 0x9dfdae 0x9bea30 0x4966e1
+#	0x53e4b4	database/sql.(*DB).conn+0x414							/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1369
+#	0x540e76	database/sql.(*DB).query+0x56							/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1759
+#	0x540d0e	database/sql.(*DB).QueryContext.func1+0x4e					/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1742
+#	0x53f601	database/sql.(*DB).retry+0x41							/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1576
+#	0x540c37	database/sql.(*DB).QueryContext+0x97						/home/kara/sdk/go1.26.6/src/database/sql/sql.go:1741
+#	0xb166cf	github.com/coding-hermes/scheduler/internal/api.countRecentOutcomes+0xef	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/api/server_helpers.go:420
+#	0xb072a6	github.com/coding-hermes/scheduler/internal/api.(*Server).status+0x346		/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/api/server.go:525
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28						/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6						/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6						/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6						/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0xc210f0	main.slowRequests.func1+0x2f0							/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/slowreq.go:106
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28						/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9dfdad	net/http.serverHandler.ServeHTTP+0x8d						/home/kara/sdk/go1.26.6/src/net/http/server.go:3309
+#	0x9bea2f	net/http.(*conn).serve+0x68f							/home/kara/sdk/go1.26.6/src/net/http/server.go:2067
+
+1 @ 0x48ebae 0x46aea5 0x546a0c 0x4966e1
+#	0x546a0b	database/sql.(*Rows).awaitDone+0xeb	/home/kara/sdk/go1.26.6/src/database/sql/sql.go:3009
+
+1 @ 0x48ebae 0x46aea5 0xa39605 0x4966e1
+#	0xa39604	github.com/coding-hermes/scheduler/internal/scheduler.(*BoardWakeWatcher).run+0x184	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_wake.go:270
+
+1 @ 0x48ebae 0x46aea5 0xa3b425 0x4966e1
+#	0xa3b424	github.com/coding-hermes/scheduler/internal/scheduler.(*BoardWakeWatcher).runWatchdog+0x184	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_wake.go:444
+
+1 @ 0x4966e1
+
+1 @ 0x4b2f39 0x50b339 0x51dbc7 0x51dba8 0x51dae6 0x51903a 0x5d81e5 0x5d81dd 0x5d6ecd 0xa336d8 0xa31a25 0xa3120c 0xa35079 0xa3469c 0xa2cad3 0xa2db65 0xa2d205 0xa824be 0xac8d85 0xa6d50b 0x4966e1
+#	0x4b2f38	syscall.Syscall6+0x38												/home/kara/sdk/go1.26.6/src/syscall/syscall_linux.go:96
+#	0x50b338	internal/syscall/unix.Waitid+0x38										/home/kara/sdk/go1.26.6/src/internal/syscall/unix/waitid_linux.go:18
+#	0x51dbc6	os.(*Process).pidfdWait.func1+0x1c6										/home/kara/sdk/go1.26.6/src/os/pidfd_linux.go:108
+#	0x51dba7	os.ignoringEINTR+0x1a7												/home/kara/sdk/go1.26.6/src/os/file_posix.go:263
+#	0x51dae5	os.(*Process).pidfdWait+0xe5											/home/kara/sdk/go1.26.6/src/os/pidfd_linux.go:107
+#	0x519039	os.(*Process).wait+0x19												/home/kara/sdk/go1.26.6/src/os/exec_unix.go:25
+#	0x5d81e4	os.(*Process).Wait+0x44												/home/kara/sdk/go1.26.6/src/os/exec.go:346
+#	0x5d81dc	os/exec.(*Cmd).Wait+0x3c											/home/kara/sdk/go1.26.6/src/os/exec/exec.go:930
+#	0x5d6ecc	os/exec.(*Cmd).Run+0x2c												/home/kara/sdk/go1.26.6/src/os/exec/exec.go:632
+#	0xa336d7	github.com/coding-hermes/scheduler/internal/scheduler.gitReachableFromHEAD+0xb7					/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_freshness.go:902
+#	0xa31a24	github.com/coding-hermes/scheduler/internal/scheduler.classifyCompleteRow+0x224					/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_freshness.go:689
+#	0xa3120b	github.com/coding-hermes/scheduler/internal/scheduler.ReadBoardFreshness+0xeeb					/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_freshness.go:613
+#	0xa35078	github.com/coding-hermes/scheduler/internal/scheduler.(*FreshnessVerdictCache).readFull+0x1f8			/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_freshness_cache.go:204
+#	0xa3469b	github.com/coding-hermes/scheduler/internal/scheduler.(*FreshnessVerdictCache).Read+0x61b			/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_freshness_cache.go:163
+#	0xa2cad2	github.com/coding-hermes/scheduler/internal/scheduler.(*PendingTaskCounter).cachedFreshnessRead+0x72		/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_awareness.go:185
+#	0xa2db64	github.com/coding-hermes/scheduler/internal/scheduler.(*PendingTaskCounter).freshnessCheckedPending+0xa4	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_awareness.go:314
+#	0xa2d204	github.com/coding-hermes/scheduler/internal/scheduler.(*PendingTaskCounter).CountPending+0x504			/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/board_awareness.go:277
+#	0xa824bd	github.com/coding-hermes/scheduler/internal/scheduler.(*Packer).Pick+0x11dd					/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/packer.go:370
+#	0xac8d84	github.com/coding-hermes/scheduler/internal/scheduler.(*Loop).evaluate+0x1344					/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/tick_process.go:317
+#	0xa6d50a	github.com/coding-hermes/scheduler/internal/scheduler.(*Loop).Run+0x98a						/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/scheduler/loop.go:885
+
+1 @ 0x4b2f39 0x630685 0x62bf52 0x711678 0x72aa94 0x78d5dd 0x78d5ba 0x786810 0x7e79b4 0x7e7990 0x7bcff3 0x76f5aa 0x81d545 0x6ad1c5 0x76844c 0x63fc0b 0x82c511 0x835a45 0x546dc2 0x546c89 0x549231 0x546bf1 0xb15eec 0xb0685f 0x9c09c9 0x9c27c7 0x9c27c7 0x9c27c7 0xc210f1 0x9c09c9 0x9dfdae 0x9bea30 0x4966e1
+#	0x4b2f38	syscall.Syscall6+0x38							/home/kara/sdk/go1.26.6/src/syscall/syscall_linux.go:96
+#	0x630684	modernc.org/libc.___syscall_cp+0xc4					/var/tmp/hermes-go-mod/modernc.org/libc@v1.77.1/syscall_musl.go:25
+#	0x62bf51	modernc.org/libc.Xpread+0x31						/var/tmp/hermes-go-mod/modernc.org/libc@v1.77.1/ccgo_linux_amd64.go:150425
+#	0x711677	modernc.org/sqlite/lib._seekAndRead+0x77				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_0000000000003e80.go:12330
+#	0x72aa93	modernc.org/sqlite/lib._unixRead+0x133					/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_0000000000003ea8.go:139
+#	0x78d5dc	modernc.org/sqlite/lib._sqlite3OsRead+0x11c				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite.go:34791
+#	0x78d5b9	modernc.org/sqlite/lib._readDbPage+0xf9					/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001fea8.go:8691
+#	0x78680f	modernc.org/sqlite/lib._getPageNormal+0x22f				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001fea8.go:6456
+#	0x7e79b3	modernc.org/sqlite/lib._sqlite3PagerGet+0xb3				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite.go:35143
+#	0x7e798f	modernc.org/sqlite/lib._getAndInitPage+0x8f				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001ffff.go:3492
+#	0x7bcff2	modernc.org/sqlite/lib._moveToChild+0xb2				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001feab.go:10018
+#	0x76f5a9	modernc.org/sqlite/lib._sqlite3BtreeTableMoveto+0x4a9			/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001dfff.go:584
+#	0x81d544	modernc.org/sqlite/lib._sqlite3VdbeFinishMoveto+0x84			/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000003feab.go:11546
+#	0x6ad1c4	modernc.org/sqlite/lib._sqlite3VdbeExec+0xfb64				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_0000000000000480.go:20695
+#	0x76844b	modernc.org/sqlite/lib._sqlite3Step+0x6b				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite_g_000000000001deab.go:3968
+#	0x63fc0a	modernc.org/sqlite/lib.Xsqlite3_step+0xaa				/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/lib/sqlite.go:12110
+#	0x82c510	modernc.org/sqlite.(*conn).step+0x30					/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/conn.go:435
+#	0x835a44	modernc.org/sqlite.(*rows).Next+0x64					/var/tmp/hermes-go-mod/modernc.org/sqlite@v1.60.1/rows.go:118
+#	0x546dc1	database/sql.(*Rows).nextLocked+0x101					/home/kara/sdk/go1.26.6/src/database/sql/sql.go:3066
+#	0x546c88	database/sql.(*Rows).Next.func1+0x28					/home/kara/sdk/go1.26.6/src/database/sql/sql.go:3041
+#	0x549230	database/sql.withLock+0x70						/home/kara/sdk/go1.26.6/src/database/sql/sql.go:3572
+#	0x546bf0	database/sql.(*Rows).Next+0x70						/home/kara/sdk/go1.26.6/src/database/sql/sql.go:3040
+#	0xb15eeb	github.com/coding-hermes/scheduler/internal/api.stallCensus+0x1cb	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/api/server_helpers.go:378
+#	0xb0685e	github.com/coding-hermes/scheduler/internal/api.(*Server).health+0xd1e	/home/kara/coding-hermes-scheduler/coding-herms-scheduler/internal/api/server.go:426
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28					/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6					/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6					/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0x9c27c6	net/http.(*ServeMux).ServeHTTP+0x1c6					/home/kara/sdk/go1.26.6/src/net/http/server.go:2826
+#	0xc210f0	main.slowRequests.func1+0x2f0						/home/kara/coding-hermes-scheduler/coding-herms-scheduler/cmd/schedulerd/slowreq.go:106
+#	0x9c09c8	net/http.HandlerFunc.ServeHTTP+0x28					/home/kara/sdk/go1.26.6/src/net/http/server.go:2284
+#	0x9dfdad	net/http.serverHandler.ServeHTTP+0x8d					/home/kara/sdk/go1.26.6/src/net/http/server.go:3309
+#	0x9bea2f	net/http.(*conn).serve+0x68f						/home/kara/sdk/go1.26.6/src/net/http/server.go:2067
+
