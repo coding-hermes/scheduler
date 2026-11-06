@@ -5710,3 +5710,18 @@ tasks:
   status: complete
   created_at: '2026-11-05T19:58:39.479316+00:00'
   completed_at: '2026-11-05T20:42:00.474128+00:00'
+- id: INT-CI-191
+  title: '[P1] race-scheduler red: DATA RACE in internal/clock SimClock.NewTicker
+    vs Ticker.Stop (sim.go:446), surfaced via TestRunBulkSim_UniqueTickIDs'
+  criteria:
+  - '1. go test -race ./internal/scheduler/ -run ''Sim|BulkSim'' -count=5 reports
+    the race on the base tree, or a focused internal/clock test does; quote the goroutine
+    pair. 2. Fix synchronization in internal/clock (sim.go NewTicker/reset closures
+    + fire() read path / clock.go Stop) with no sleeps, no race exclusions, no test-only
+    muting. 3. Prove: go test -race ./internal/clock/ ./internal/scheduler/ -run ''Sim|Ticker|BulkSim''
+    -count=10 PASS with zero ''WARNING: DATA RACE''; go build ./... && go vet ./...
+    exit 0. 4. Name the CI evidence: race-scheduler job green on the pushed branch
+    head (paste run/job id).'
+  status: complete
+  created_at: '2026-11-05T21:42:13.995352+00:00'
+  completed_at: '2026-11-06T00:28:42.436931+00:00'
