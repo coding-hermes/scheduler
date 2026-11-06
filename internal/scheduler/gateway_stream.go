@@ -153,10 +153,11 @@ type GatewayPOSTTrace struct {
 	// Events counts real SSE events observed across attempts (deltas, tool
 	// items, terminal events). Keepalive comments are excluded.
 	Events int `json:"events"`
-	// SessionID is the gateway session id from the X-Hermes-Session-Id
-	// response header when present (available at stream open — earlier and
-	// more precise than the per-request resp_* envelope id), else the
-	// envelope id.
+	// SessionID is the gateway response/session identifier carried by the
+	// X-Hermes-Session-Id response header when present, else the response
+	// envelope id. It is not the Hermes sessions.id and is not the durable
+	// tick linkage key: Hermes stores the request's X-Hermes-Session-Key
+	// (the tick ID) in sessions.session_key.
 	SessionID string `json:"session_id"`
 	// Attempts counts the POSTs covered by this trace (the GAP-080 retry
 	// loop and chain hops each re-send under the same trace).

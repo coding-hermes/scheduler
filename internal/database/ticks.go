@@ -155,7 +155,8 @@ func ListDeferrals(ctx context.Context, db *sql.DB, projectName string, limit, o
 }
 
 // UpdateTickStatus transitions a tick to the given status and records the
-// session id. When transitioning to 'running', SpawnedAt is stamped.
+// legacy gateway response/session identifier in session_id. When transitioning
+// to 'running', SpawnedAt is stamped.
 func UpdateTickStatus(ctx context.Context, db *sql.DB, id string, status TickStatus, sessionID string) error {
 	q := `UPDATE ticks SET status = ?, session_id = ?`
 	args := []any{string(status), nullableString(sessionID)}

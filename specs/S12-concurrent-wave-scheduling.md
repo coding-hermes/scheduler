@@ -75,7 +75,7 @@ Relevant code paths (read, not modified, by this spec):
 |---|---|
 | **Wave** | ≥2 worker dispatches inside ONE tick, each in its own worktree/branch. Foreman-created; never scheduler-created. |
 | **Wave depth** | Number of workers the foreman dispatched in the current tick. `1` = serial tick (no wave). |
-| **Foreman session** | The gateway session the scheduler spawned (the `ticks.session_id`). Owns the wave. |
+| **Foreman session** | The Hermes session started by the scheduler for a tick. Resolve it by joining the tick ID (`ticks.id`) to `sessions.session_key`; `ticks.session_id` is a legacy gateway response/session identifier, not the Hermes session ID. See [tick attribution](../docs/reference/tick-session-attribution.md). |
 | **Worker session** | A `hermes chat` session the foreman spawned inside its own tick. Invisible to the scheduler's spawn path. |
 | **Wave manifest** | `.coding-hermes/waves/<tick_id>.json` in the project workdir — the foreman's own record of its wave (§9.3). The scheduler's only read path into wave internals. |
 | **Slot** | A unit of scheduler admission. Counts ticks (foremen), never workers. |
@@ -236,11 +236,7 @@ worktree is *new* money and should be rolled in explicitly once row 7 lands.
 ### 5.3 Why `worker_count` defaults to 0, not 1
 
 The board row asked for "`ticks` should carry `worker_count`". `0` is the only value
-that keeps the arithmetic honest against the existing columns: `ticks.session_id`
-already *is* the foreman session, so a default of `1` would silently claim two
-sessions for every historical serial tick and make "average sessions per tick" wrong
-on the whole back catalogue. A serial tick's agent work is the foreman's own — it is
-not a worker. `1 + worker_count` reads correctly on both v26 history and v27 waves.
+that keeps the arithmetic honest against the existing columns: `ticks.session_id` is a legacy gateway response/session identifier, not the foreman session. Hermes session attribution uses `ticks.id = sessions.session_key`; a serial tick's agent work is the foreman's own — it is not a worker. `1 + worker_count` reads correctly on both v26 history and v27 waves.
 
 ### 5.4 Rationale
 
