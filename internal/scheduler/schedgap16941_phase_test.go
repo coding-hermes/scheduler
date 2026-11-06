@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -29,15 +30,18 @@ func TestSCHEDGAP16941_WallNamesGatewayPhase(t *testing.T) {
 	}
 
 	const tickID = "phase-lane-tick-1"
-	now := time.Now().UTC()
+	start := time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
+	sim := clock.NewManualSimClock(start)
 	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
 		VALUES (?, 'phase-lane', 'running', ?, ?)`,
-		tickID, now.Add(-3*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		tickID, start.Format(time.RFC3339), start.Format(time.RFC3339)); err != nil {
 		t.Fatalf("seed tick: %v", err)
 	}
 
 	sp := NewSpawner(db, 1)
-	start := time.Now().Add(-3 * time.Hour)
+	sp.SetClock(sim)
+	// Simulate the full 3h wall without waiting in real time.
+	sim.Advance(3 * time.Hour)
 	st := sp.tickDeadlineTimeout(
 		PackedProject{Name: "phase-lane", Workdir: t.TempDir()},
 		tickID,

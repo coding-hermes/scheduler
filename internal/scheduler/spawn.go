@@ -3248,15 +3248,6 @@ type SpawnedTick struct {
 	// every non-gateway path (exec spawns, spawn-site refusals, remote
 	// dispatch): the column's honest default.
 	gwAttempts int
-
-	// phases (SCHED-GAP-16941) is the tick's runner-phase trail (spawn →
-	// await → collect → finalize, the boundaries the runner already has).
-	// Spawn() arms it at entry and the wall-kill booking site freezes it
-	// into the error text (wall-phase=<name> spent=<dur>), so a tick the
-	// 3h wall kills says WHERE the hours went — readable from ticks.error
-	// or the TICK journal line. Nil on paths that never armed it (remote
-	// dispatch, test-built literals); every method is nil-safe.
-	phases *tickPhaseLog
 }
 
 // Wait blocks until the process exits and returns the outcome.
