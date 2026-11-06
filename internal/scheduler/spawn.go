@@ -1209,6 +1209,10 @@ const builtinForemanPrompt = "" +
 	"(execute_code, python3 -c, heredocs, bash -lic) are approval-gated and will hang waiting for a user " +
 	"who does not exist. Use write_file + bash /tmp/<script>.sh (background+pty) instead. " +
 	"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. " +
+	"SPECIFICATION LINK: this project's design authority is its handbook — read docs/handbook/OUTLINE.md (or docs/handbook/README.md when the outline is absent) before selecting a row. " +
+	"A row that changes behaviour must name the chapter it changes (III.<module>.<submodule>, or a flow id F1-F16). " +
+	"Where the chapter does not exist yet, writing it is part of the row, not a follow-up. " +
+	"If the handbook and the code disagree, the code is right and the disagreement is a finding to file; never adopt the document over the code. " +
 	"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. " +
 	"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. " +
 	"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: " +
