@@ -120,10 +120,12 @@ func terminalOutcome(o TickOutcome) string {
 	if o.Status != TickCompleted {
 		return o.Status.Outcome()
 	}
-	// Only a commit observed by the dispatcher is allowed to claim the
-	// committed outcome. File changes and session-reported side effects are
-	// useful evidence, but do not prove a commit landed.
-	if o.Commits > 0 {
+	// SCHED-GAP-1652/1655/1680 doctrine: artifacts outrank the transcript, so
+	// a tick that changed files or wrote memory keys IS productive work. What
+	// this row adds is the floor under that: when no artifact of any kind was
+	// observed, the completed tick may no longer be a bare 'dry_run' — see
+	// LifecycleTracker.Complete, which stamps a named reason for those rows.
+	if o.Commits > 0 || o.FilesChanged > 0 || o.MemoryKeys > 0 {
 		return "committed"
 	}
 	if o.NoTools {
@@ -365,18 +367,14 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			})
 		}
 	}
-	if outcome.Status == TickCompleted && outcome.Commits <= 0 {
-		// The reason is stored in ticks.error, alongside the schema-stable
-		// outcome vocabulary. Non-commit signals (file deltas and memory
-		// writes) cannot promote a tick to committed — only a commit the
-		// dispatcher observed can — but they are not "no changes" either:
-		// SCHED-GAP-1680 established that a sync lane whose product is
-		// DuckBrain memory keys did real work. Such rows keep their
-		// memory_keys/files_changed counts AND carry a reason that says so.
-		if outcome.Commits < 0 {
+	if outcome.Status == TickCompleted && outcome.Commits <= 0 && outcome.FilesChanged <= 0 && outcome.MemoryKeys <= 0 {
+		// No artifact of any kind. Before this row such a tick was recorded as
+		// a bare dry_run and nothing else happened (853 dry_run vs 12
+		// aborted:no_artifact in 7 days). Now it carries a named reason the
+		// board can count. Artifact-bearing ticks are untouched: commits,
+		// file deltas and memory keys still outrank (SCHED-GAP-1652/1655/1680).
+		if outcome.Commits < 0 || outcome.FilesChanged < 0 {
 			outcome.Error = "verification_not_observed"
-		} else if outcome.FilesChanged > 0 || outcome.MemoryKeys > 0 {
-			outcome.Error = "non_commit_artifacts"
 		} else if outcome.SessionID == "" {
 			outcome.Error = "result_missing"
 		} else {

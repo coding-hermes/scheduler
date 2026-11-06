@@ -34,12 +34,14 @@ func TestSCHEDGAP1680_TerminalOutcomeCountsNonCommitArtifacts(t *testing.T) {
 		in   TickOutcome
 		want string
 	}{
-		// Non-commit artifacts are recorded separately, but cannot claim a commit.
-		{"five keys without a commit is not committed", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 5}, "dry_run"},
-		{"memory writes do not outrank zero-tool no_work", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 2}, "no_work"},
+		// The row's exact scenario: a sync tick with five verified keys and
+		// commits=0 must never be derived as dry_run (SCHED-GAP-1652/1655 doctrine).
+		{"five keys, zero commits is an artifact", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 5}, "committed"},
+		// A zero-tool session that DID write memory keys is still productive.
+		{"keys outrank the zero-tool no_work verdict", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 2}, "committed"},
 		// Commits still win (unchanged behavior).
 		{"commits still map to committed", TickOutcome{Status: TickCompleted, Commits: 1}, "committed"},
-		{"files changed without an observed commit is not committed", TickOutcome{Status: TickCompleted, FilesChanged: 3}, "dry_run"},
+		{"files changed still map to committed", TickOutcome{Status: TickCompleted, FilesChanged: 3}, "committed"},
 		// No artifact of any kind keeps the pre-existing verdicts.
 		{"no artifact at all stays dry_run", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 0}, "dry_run"},
 		{"zero-tool no-artifact stays no_work", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 0}, "no_work"},
@@ -163,8 +165,9 @@ func TestSCHEDGAP1680_CountsMemoryKeysFromSessionTranscript(t *testing.T) {
 }
 
 // TestSCHEDGAP1680_LifecycleRecordsMemoryKeys drives the real completion
-// write: a keys-only completed tick records dry_run (no commit observed),
-// the no_changes reason, and its memory_keys count on the row.
+// write: a keys-only completed tick records outcome='committed' AND the
+// memory_keys column, so a sync tick is distinguishable from a zero-output
+// one on the row itself.
 func TestSCHEDGAP1680_LifecycleRecordsMemoryKeys(t *testing.T) {
 	db := newTestDB(t)
 	lt := NewLifecycleTracker(db)
@@ -203,11 +206,11 @@ func TestSCHEDGAP1680_LifecycleRecordsMemoryKeys(t *testing.T) {
 		Scan(&outcome, &reason, &memoryKeys); err != nil {
 		t.Fatalf("read tick: %v", err)
 	}
-	if outcome != "dry_run" {
-		t.Fatalf("outcome = %q, want dry_run — memory writes do not prove a commit", outcome)
+	if outcome != "committed" {
+		t.Fatalf("outcome = %q, want committed — a five-key sync tick is NOT a no-op", outcome)
 	}
-	if reason != "non_commit_artifacts" {
-		t.Fatalf("error reason = %q, want non_commit_artifacts — a five-key sync tick is NOT a no-op", reason)
+	if reason != "" {
+		t.Fatalf("error reason = %q, want empty — an artifact-bearing tick carries no no-artifact reason", reason)
 	}
 	if memoryKeys != 5 {
 		t.Fatalf("memory_keys = %d, want 5 (recorded on the row)", memoryKeys)

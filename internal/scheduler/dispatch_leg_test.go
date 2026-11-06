@@ -357,9 +357,14 @@ func TestDispatchLeg_HandsWorkToNamedAgentAndCorrelatesTheAnswer(t *testing.T) {
 		t.Errorf("receipt reply = %q, want the agent's answer", rec.Reply)
 	}
 	// 3 · The answer reached the tick's own row too (the delivered report).
+	// SCHED-GAP-16934: a completed row with no observed artifact now carries a
+	// named reason instead of a bare dry_run, so "empty" is no longer the only
+	// legal value — any no-artifact reason is, and an unexplained value is not.
 	tickErr := queryTickError(t, db, row.ID)
-	if tickErr != "" {
-		t.Errorf("completed tick carries error %q, want empty", tickErr)
+	switch tickErr {
+	case "", "result_missing", "no_changes", "verification_not_observed":
+	default:
+		t.Errorf("completed tick carries error %q, want empty or a named no-artifact reason", tickErr)
 	}
 	if len(acks) == 0 {
 		t.Error("the correlated answer was never acked — the lease would keep hiding it")
