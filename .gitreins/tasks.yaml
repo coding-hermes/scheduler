@@ -5786,3 +5786,29 @@ tasks:
   status: complete
   created_at: '2026-11-06T15:14:04.219779+00:00'
   completed_at: '2026-11-06T15:14:08.674811+00:00'
+- id: QA-CHS-187
+  title: Add real schedulerd chaos errorpath probe
+  criteria:
+  - Add .qa/chaos-probes/errorpath.sh; exercise schedulerd with missing and invalid
+    config; reject silent zero exit.
+  status: complete
+  created_at: '2026-11-06T17:00:32.146069+00:00'
+  completed_at: '2026-11-06T17:14:18.809912+00:00'
+- id: QA-CHS-188
+  title: Isolate local timeout usage pool test
+  criteria:
+  - Make TestUsagePoolLeaseReleasedAfterLocalSlotTimeout independent of process-wide
+    pool state and prove the race suite.
+  status: in_progress
+  created_at: '2026-11-06T17:00:35.294364+00:00'
+- id: QA-CHS-187-V
+  title: Verify published schedulerd chaos errorpath probe
+  criteria:
+  - On the exact published commit 8f38f82ed4696b149e1de8254b1cf67f93fb1360, bash -n
+    .qa/chaos-probes/errorpath.sh; build schedulerd; run .qa/chaos-probes/errorpath.sh
+    and confirm both absent and malformed config cases return nonzero with diagnostics
+    naming their exact config paths; run a negative control with a fake binary that
+    returns 0 and verify the probe fails.
+  status: complete
+  created_at: '2026-11-06T17:30:19.903193+00:00'
+  completed_at: '2026-11-06T17:32:04.500145+00:00'
