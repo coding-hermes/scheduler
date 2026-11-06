@@ -5777,3 +5777,12 @@ tasks:
   status: complete
   created_at: '2026-11-06T14:30:53.532619+00:00'
   completed_at: '2026-11-06T15:00:50.805636+00:00'
+- id: PERF-006-R1
+  title: 'PERF-006 lint follow-up: tagged switch on the exit-code verdict'
+  criteria:
+  - golangci-lint run ./internal/lanehook/... reports 0 issues; go build ./... rc=0;
+    go test ./internal/lanehook/ -count=1 rc=0; behaviour unchanged (exit 10 -> skipped,
+    exit 11 -> busy); the CI lint job on the landing sha concludes success
+  status: complete
+  created_at: '2026-11-06T15:14:04.219779+00:00'
+  completed_at: '2026-11-06T15:14:08.674811+00:00'
