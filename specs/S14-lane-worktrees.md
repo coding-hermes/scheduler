@@ -118,6 +118,12 @@ Contract, in order:
 2. **Repo sanity.** `<repo>` must be a git work tree and `origin/<base>` must resolve → else
    `65` (`EX_DATAERR`).
 3. **Path state:**
+   - *path is the repo's own primary worktree* → exit `10` with
+     `reason=workdir-is-primary-checkout` (runner records the step as
+     `state=skipped`, never a veto); never refresh, reset or clean the primary
+     tree. The comparison resolves symlinks on both sides (`pwd -P`) and also
+     matches the `--repo` path itself — a lane whose workdir equals the
+     primary checkout must never require it to change branch (SCHED-GAP-16991).
    - *path absent* → `git -C <repo> worktree add <path> -B <branch> origin/<base>`
    - *path present, registered worktree of `<repo>`, on `<branch>`* → refresh (step 5)
    - *path present, on another branch* → `65`, do not touch the tree

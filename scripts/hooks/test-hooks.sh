@@ -174,6 +174,30 @@ esac
 git -C "$TMP/repo" log --format=%s main | grep -qx s2 && ok "S11 the lane commit is on main, not on master" || bad "S11 lane commit missing from main"
 git -C "$TMP/repo" log --format=%s master | grep -qx s2 && bad "S11 the lane commit landed on master" || ok "S11 master untouched"
 
+# ---- STORY: a lane whose workdir IS the primary checkout is a skip, not a veto ----
+# SCHED-GAP-16991: code-factory-qa passed its workdir == the primary checkout as
+# --worktree. The primary IS listed by `git worktree list`, so ensure fell
+# through to the branch check and exited 65 (with on_failure=closed that vetoed
+# every tick). The hook must name the skip (exit 10) and touch NOTHING: no
+# reset, no clean, no branch move, no fetch-driven refresh.
+git -C "$TMP/repo" checkout -q main
+out=$("$HERE/worktree-ensure.sh" --lane code-factory-qa --repo "$TMP/repo" --worktree "$TMP/repo" 2>&1); rc=$?
+check $rc 10 "W21 primary-checkout workdir exits 10 (named skip)"
+case "$out" in *"reason=workdir-is-primary-checkout"*) ok "W21 names the skip reason" ;; *) bad "W21 skip reason missing: $out" ;; esac
+case "$(git -C "$TMP/repo" rev-parse --abbrev-ref HEAD)" in
+  main) ok "W21 the primary is still on main" ;;
+  *) bad "W21 primary moved to $(git -C "$TMP/repo" rev-parse --abbrev-ref HEAD)" ;;
+esac
+[ -f "$TMP/repo/file.txt" ] && ok "W21 the primary's tracked file is intact" || bad "W21 tracked file missing"
+[ -z "$(git -C "$TMP/repo" status --porcelain)" ] && ok "W21 the primary tree is clean (no reset/clean ran)" || bad "W21 primary tree dirty"
+
+# A REGISTERED non-primary worktree sitting on the wrong branch still fails closed.
+"$HERE/worktree-ensure.sh" --lane cf-qa --repo "$TMP/repo" --worktree "$WT" >/dev/null 2>&1 || true
+git -C "$WT" checkout -q -B other
+out=$("$HERE/worktree-ensure.sh" --lane cf-qa --repo "$TMP/repo" --worktree "$WT" 2>&1); rc=$?
+check $rc 65 "W22 a genuine branch mismatch still exits 65"
+case "$out" in *"is on 'other', expected 'lane/cf/qa'"*) ok "W22 reports the expected branch" ;; *) bad "W22 mismatch message: $out" ;; esac
+
 echo
 echo "hooks: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

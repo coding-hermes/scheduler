@@ -5725,3 +5725,14 @@ tasks:
   status: complete
   created_at: '2026-11-05T21:42:13.995352+00:00'
   completed_at: '2026-11-06T00:28:42.436931+00:00'
+- id: SCHED-GAP-16991
+  title: 'lane hook: worktree-ensure must skip a primary-checkout workdir (exit 10,
+    state=skipped) instead of vetoing the tick (exit 65)'
+  criteria:
+  - exit 10 is recorded as state=skipped and does not veto the tick; worktree-ensure
+    with --worktree equal to the repo primary checkout exits 10 with reason=workdir-is-primary-checkout
+    and never resets the primary tree; a genuine branch mismatch on a dedicated worktree
+    still exits 65; go test ./internal/lanehook/ and bash scripts/hooks/test-hooks.sh
+    green
+  status: in_progress
+  created_at: '2026-11-06T03:42:23.674908+00:00'

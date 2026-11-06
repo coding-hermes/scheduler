@@ -135,12 +135,15 @@ func (r *ExecRunner) Post(ctx context.Context, env Env, plan Plan) {
 }
 
 type stepResult struct {
-	state    string // ok | failed | timeout
+	state    string // ok | skipped | failed | timeout
 	code     int
 	attempts int
 }
 
-func (r stepResult) failed() bool { return r.state != "ok" }
+// failed reports whether the step counts against its on_failure policy. A
+// skipped step (exit 10, the contract's named "nothing to do") is never
+// fatal: no veto, no chain abort, no retry (SCHED-GAP-16991).
+func (r stepResult) failed() bool { return r.state != "ok" && r.state != "skipped" }
 
 // run executes one step with its retry policy.
 func (r *ExecRunner) run(ctx context.Context, env Env, step Step, seq int, phase Phase) stepResult {
@@ -155,7 +158,9 @@ func (r *ExecRunner) run(ctx context.Context, env Env, step Step, seq int, phase
 	var res stepResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res = r.runOnce(ctx, env, step, seq, phase, attempt)
-		if res.state == "ok" {
+		if res.state == "ok" || res.state == "skipped" {
+			// A skip (exit 10) is a terminal named outcome: retrying it
+			// would just re-derive the same answer (SCHED-GAP-16991).
 			return res
 		}
 		if attempt < maxAttempts && step.RetryDelayS > 0 {
@@ -227,6 +232,12 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 			res.code = -2 // could not start
 		}
 		res.state, reason = "failed", "exit"
+		if res.code == ExitSkip {
+			// Exit 10 is the contract's reserved "nothing to do" (merge
+			// no_commits; worktree-ensure workdir-is-primary-checkout).
+			// Record a non-fatal skip, never a failure (SCHED-GAP-16991).
+			res.state, reason = "skipped", "skip"
+		}
 	}
 
 	r.finishReceipt(ctx, runID, res, dur, buf.String())
@@ -234,6 +245,13 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 	if res.state == "ok" {
 		r.event(ctx, "INFO", "hook."+string(phase)+".ok", map[string]any{
 			"tick_id": env.TickID, "hook_id": step.ID, "duration_ms": dur.Milliseconds(),
+		})
+	} else if res.state == "skipped" {
+		// A named skip mirrors the failure event's fields but is routine,
+		// not an alarm: the receipt (state=skipped) is the operator surface.
+		r.event(ctx, "INFO", "hook."+string(phase)+".skipped", map[string]any{
+			"tick_id": env.TickID, "hook_id": step.ID, "exit_code": res.code,
+			"attempts": attempt, "reason": reason, "output_head": head(buf.String(), 400),
 		})
 	} else {
 		r.event(ctx, "HIGH", "hook."+string(phase)+"."+res.state, map[string]any{

@@ -3,6 +3,7 @@
 #
 # Exit codes (the hook contract):
 #   0  ok (created or refreshed; unchanged is also 0)
+#   10 skip / nothing to do (workdir IS the repo's primary checkout)
 #   65 blocked/quarantined (unexpected repo or worktree state)
 #   75 retryable contention (branch checked out elsewhere, stale index.lock)
 #   78 precondition unmet (disk floor, not a repo, no origin/<base>)
@@ -50,6 +51,24 @@ if awk -v a="$AVAIL" -v f="$FLOOR_GIB" 'BEGIN{exit !(a<f)}'; then
 fi
 
 # 3. path state
+# A workdir that IS the repo's primary checkout is a named skip, not a
+# mismatch (SCHED-GAP-16991): the primary tree IS listed by
+# `git worktree list`, so the registered-worktree branches below fell
+# through to the HEAD check and exited 65 on main != lane/<p>/<r> —
+# vetoing every tick of a lane with on_failure=closed. Had the primary
+# been ON the lane branch, step 5 would have reset --hard / cleaned the
+# shared checkout. Compare resolved paths (pwd -P on both sides) and the
+# --repo path itself; the runner records exit 10 as state=skipped.
+# Nothing below this guard may touch the primary tree.
+WT_P=$(cd "$WT" 2>/dev/null && pwd -P) || WT_P=""
+PRIMARY=$(git -C "$REPO" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -n 1)
+PRIMARY_P=$(cd "$PRIMARY" 2>/dev/null && pwd -P) || PRIMARY_P=""
+REPO_P=$(cd "$REPO" 2>/dev/null && pwd -P) || REPO_P=""
+if [ -n "$WT_P" ] && { [ "$WT_P" = "$PRIMARY_P" ] || [ "$WT_P" = "$REPO_P" ]; }; then
+  CUR=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  echo "worktree-ensure: skip reason=workdir-is-primary-checkout worktree=$WT expected=$BRANCH actual=$CUR" >&2
+  exit 10
+fi
 if [ -e "$WT" ] && ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $WT"; then
   if [ -d "$WT" ] && [ -z "$(ls -A "$WT" 2>/dev/null)" ]; then
     rmdir "$WT" || die 65 "cannot remove empty non-worktree dir $WT"

@@ -2,6 +2,7 @@ package lanehook
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 // script writes a small shell script and returns its path.
@@ -218,6 +221,96 @@ func TestMissingCommandFails(t *testing.T) {
 	var hf *ErrHookFailed
 	if !errors.As(err, &hf) {
 		t.Fatalf("want ErrHookFailed, got %v", err)
+	}
+}
+
+// SCHED-GAP-16991: exit 10 is the hook contract's named "nothing to do"
+// skip (worktree-ensure returns it when the lane's workdir IS the repo's
+// primary checkout). A skipped PRE step must not fail the tick (no
+// ErrHookFailed), must not stop the following PRE step, must not be
+// retried even under a retry policy, and its receipt row must carry
+// state=skipped with the child's captured output.
+func TestPreExit10SkipIsNonFatal(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "second-ran")
+	counter := filepath.Join(dir, "count")
+	skip := script(t, dir, "skip.sh", fmt.Sprintf(`
+n=$(cat %s 2>/dev/null || echo 0)
+n=$((n+1))
+echo "$n" > %s
+echo skip reason=workdir-is-primary-checkout >&2
+exit 10`, counter, counter))
+	ok := script(t, dir, "ok.sh", "touch "+marker)
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "receipts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Schema-faithful fixture for the hook_runs receipt (migration v81+v82):
+	// exactly the columns the runner writes.
+	_, err = db.Exec(`CREATE TABLE hook_runs (
+		run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+		tick_id      TEXT NOT NULL,
+		lane         TEXT NOT NULL,
+		phase        TEXT NOT NULL,
+		level        TEXT NOT NULL,
+		hook_id      TEXT NOT NULL,
+		priority     INTEGER NOT NULL,
+		seq          INTEGER NOT NULL,
+		command      TEXT NOT NULL,
+		argv         TEXT NOT NULL DEFAULT '',
+		state        TEXT NOT NULL,
+		exit_code    INTEGER NOT NULL DEFAULT 0,
+		started_at   TEXT NOT NULL,
+		finished_at  TEXT,
+		duration_ms  INTEGER NOT NULL DEFAULT 0,
+		attempts     INTEGER NOT NULL DEFAULT 1,
+		output       TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var skipEvents int
+	r := NewExecRunner(db, func(ctx context.Context, sev, msg string, d map[string]any) {
+		if msg == "hook.pre.skipped" {
+			skipEvents++
+		}
+	})
+	plan := Plan{Pre: []Step{
+		{ID: "skip", Phase: PhasePre, Level: LevelLane, Target: "l",
+			Command: skip, OnFailure: FailRetry, Retries: 3, TimeoutS: 5},
+		{ID: "second", Phase: PhasePre, Level: LevelLane, Target: "l",
+			Command: ok, OnFailure: FailClosed, TimeoutS: 5},
+	}}
+	if err := r.Pre(context.Background(), Env{TickID: "t-skip", Lane: "l"}, plan); err != nil {
+		t.Fatalf("an exit-10 skip must not fail the tick, got %v", err)
+	}
+	if !exists(marker) {
+		t.Fatal("the PRE step after a skip must still run")
+	}
+	if raw, _ := os.ReadFile(counter); strings.TrimSpace(string(raw)) != "1" {
+		t.Fatalf("a skip must not be retried, got %q attempt(s)", raw)
+	}
+	var state string
+	var code int
+	var output string
+	if err := db.QueryRow(`SELECT state, exit_code, output FROM hook_runs WHERE hook_id='skip'`).
+		Scan(&state, &code, &output); err != nil {
+		t.Fatal(err)
+	}
+	if state != "skipped" {
+		t.Fatalf("receipt state = %q, want skipped", state)
+	}
+	if code != ExitSkip {
+		t.Fatalf("receipt exit_code = %d, want %d", code, ExitSkip)
+	}
+	if !strings.Contains(output, "reason=workdir-is-primary-checkout") {
+		t.Fatalf("receipt output lost the child's stderr: %q", output)
+	}
+	if skipEvents != 1 {
+		t.Fatalf("want 1 hook.pre.skipped event, got %d", skipEvents)
 	}
 }
 

@@ -33,10 +33,19 @@ file that looks right.
 | PRE | the tick does **not** spawn; the row is `TickFailed` with `error = hook_failed:<id>`; **POST still runs** so a lease taken in PRE is released | recorded, the tick spawns |
 | POST | the remaining POST steps are skipped; the tick outcome is untouched | recorded, the rest still run |
 
-Exit codes the scripts use: `0` ok · `10` nothing to do (merge) · `65` blocked
-(conflict, dirty tree, unexpected state — work preserved) · `75` retryable
-contention (branch checked out elsewhere, stale index lock) · `78` precondition
-unmet (disk floor, not a repo, no `origin/<base>`, no `pytest`).
+Exit codes the scripts use: `0` ok · `10` skip / nothing to do (merge
+`no_commits`; `worktree-ensure` on a workdir that **is** the repo's primary
+checkout) · `65` blocked (conflict, dirty tree, unexpected state — work
+preserved) · `75` retryable contention (branch checked out elsewhere, stale
+index lock) · `78` precondition unmet (disk floor, not a repo, no
+`origin/<base>`, no `pytest`).
+
+A `10` is a named skip, not a failure: the runner records the step as
+`state=skipped` in `hook_runs` (with the child's captured output, e.g.
+`reason=workdir-is-primary-checkout`), emits a `hook.<phase>.skipped` event,
+does not retry it, and never lets it veto the tick — a lane whose workdir
+equals the primary checkout ticks without the hook demanding the shared tree
+change branch (SCHED-GAP-16991).
 
 ## The branch is `lane/<project>/<role>`
 

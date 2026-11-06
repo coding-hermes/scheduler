@@ -105,6 +105,12 @@ const (
 	MaxStepTimeoutS = 600
 	// OutputCapBytes bounds captured output per attempt (head+tail kept).
 	OutputCapBytes = 64 * 1024
+	// ExitSkip is the hook contract's reserved "nothing to do" exit code:
+	// lane-merge returns it for merge=no_commits, worktree-ensure for a
+	// workdir that IS the repo's primary checkout (SCHED-GAP-16991). The
+	// runner records the step as state=skipped — non-fatal, never retried,
+	// never a veto or a chain abort.
+	ExitSkip = 10
 )
 
 // Plan is the resolved, ordered list for one tick.
