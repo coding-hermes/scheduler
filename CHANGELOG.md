@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-06
 
+## [1.14.0] — 2026-11-06
+
 ### Performance
 - lanehook: the quiesce scan is constant-exec and can now distinguish a busy tree (PERF-006) — one in-process `/proc` cwd/fd scan with shell prefix matching replaces one `readlink` fork per entry, keeping paths with whitespace or glob characters literal and excluding the scanner itself. Warm runs at 891 pids / 14,097 fd entries measured 1.16s and 0.95s with 4 `execve` calls; `scripts/hooks/test-hooks.sh` now asserts wall time against the shipped `timeout_s`, which stays 60. Exit `11` is reserved for a busy tree and records `state=busy`, exit `10` stays the non-fatal skip contract, and migration v85 widens `hook_runs.state` while preserving existing receipts and indexes — `72bd5758`.
 
