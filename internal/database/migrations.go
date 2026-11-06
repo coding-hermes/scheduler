@@ -14,7 +14,9 @@ import (
 // SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
 // PERF-005 lands v83 (expression indexes on ticks(julianday(spawned_at)) /
 // julianday(completed_at)) for the /api/v1/metrics windowed blocks.
-const latestMigration = 83 // PERF-005: idx_ticks_spawned_jd / idx_ticks_completed_jd expression indexes
+// PERF-004 lands v84 (idx_events_component_created) for the lane_churn
+// enable-per-day count of the same endpoint.
+const latestMigration = 84 // PERF-004: idx_events_component_created on events(component, created_at)
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1851,6 +1853,38 @@ ALTER TABLE hook_runs ADD COLUMN argv TEXT NOT NULL DEFAULT '';
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_ticks_spawned_jd ON ticks(julianday(spawned_at));
 CREATE INDEX IF NOT EXISTS idx_ticks_completed_jd ON ticks(julianday(completed_at));
+`,
+	},
+	{
+		// PERF-004: the lane_churn enable-per-day count of
+		// GET /api/v1/metrics (internal/api/server_metrics.go) predicates on
+		// component = 'api' AND message LIKE 'project enabled: % (cascade
+		// resume of %)' AND julianday(created_at) >= julianday(?). The
+		// julianday() on the column defeats every created_at range, and the
+		// surviving events indexes (idx_events_severity from v5,
+		// idx_events_scheduler from v56) lead with columns this statement
+		// never predicates on, so it full-scanned the events table on every
+		// dashboard render.
+		//
+		// Measured 2026-11-05, paired A/B on a production-scale fixture
+		// (1,007,110 events / 9,896 component='api' / exactly 9 pattern
+		// matches, git-tracked schema DDL, journal=delete, NO sqlite_stat1 =
+		// the stats-less worst case for the planner): 0.286 s -> 0.003 s
+		// (n=8 vs n=8 medians, ~95x); the plan flips from `SCAN events`
+		// (+ temp b-tree for GROUP BY) to `SEARCH events USING INDEX
+		// idx_events_component_created (component=?)` — the equality alone
+		// restricts the scan to the ~1% api rows, so no ANALYZE statistics
+		// are required. Build cost on the fixture: 2.9 s (one-time, at
+		// migration/boot). Deliberately NOT a lexical-window pre-filter:
+		// that was measured too and REGRESSED ~20% without sqlite_stat1
+		// (0.500 s vs 0.415 s) — the index is the whole change; the handler
+		// statement stays byte-identical.
+		// IF NOT EXISTS matches every sibling index entry (a re-run is a
+		// no-op, never a duplicate).
+		version: 84,
+		desc:    "PERF-004: index idx_events_component_created on events(component, created_at) so the lane_churn enable-per-day count of /api/v1/metrics seeks the ~1% component='api' rows instead of scanning event history (the julianday() window predicate stays as written — the component equality does the restricting)",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_events_component_created ON events(component, created_at);
 `,
 	},
 }
