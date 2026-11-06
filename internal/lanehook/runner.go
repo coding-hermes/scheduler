@@ -233,12 +233,13 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 			res.code = -2 // could not start
 		}
 		res.state, reason = "failed", "exit"
-		if res.code == ExitSkip {
+		switch res.code {
+		case ExitSkip:
 			// Exit 10 is the contract's reserved "nothing to do" (merge
 			// no_commits; worktree-ensure workdir-is-primary-checkout).
 			// Record a non-fatal skip, never a failure (SCHED-GAP-16991).
 			res.state, reason = "skipped", "skip"
-		} else if res.code == ExitBusy {
+		case ExitBusy:
 			// Exit 11 belongs only to quiesce-check: a process holds the
 			// tree. Keep this receipt distinct from an ordinary skip and
 			// let on_failure decide whether the POST chain stops.
