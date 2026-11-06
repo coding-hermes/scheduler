@@ -413,6 +413,56 @@ func TestSimClock_SleepScalesWithScaleChange(t *testing.T) {
 	}
 }
 
+// TestSimClock_TickerStopConcurrentWithFire reproduces the INT-CI-191 race:
+// Ticker.Stop writes t.stopped under c.mu while fire() dispatched a timer
+// popped by advanceToLocked and read t.stopped/t.deadline outside c.mu. The
+// driver fires a real ticker continuously while another goroutine hammers
+// Stop/Reset on the same ticker, so the pop→dispatch window is crossed
+// thousands of times; under -race any unsynchronized pair is reported. This
+// test is a race reproducer, not a timing assertion: it pins no tick counts.
+func TestSimClock_TickerStopConcurrentWithFire(t *testing.T) {
+	c := NewSimClockAt(1000, start462())
+	defer c.Close()
+
+	tk := c.NewTicker(time.Millisecond)
+	defer tk.Stop()
+
+	// Drain ticks like a real consumer (RunBulkSim reads tick.C) so the
+	// buffered(1) drop path and the delivery path are both exercised.
+	stopDrain := make(chan struct{})
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for {
+			select {
+			case <-tk.C:
+			case <-stopDrain:
+				return
+			}
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 5000; i++ {
+			// Reset re-arms (writes stopped/period/deadline/seq under c.mu);
+			// Stop disarms (writes stopped under c.mu). fire() must observe
+			// both only under c.mu.
+			tk.Reset(time.Millisecond)
+			tk.Stop()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("stop/reset hammer did not finish (driver wedged?)")
+	}
+	close(stopDrain)
+	<-drained
+}
+
 // --------------------------------------------------------------------------
 // helpers
 // --------------------------------------------------------------------------

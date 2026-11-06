@@ -651,21 +651,34 @@ func (c *SimClock) fire(due []*simTimer) {
 	c.fireMu.Lock()
 	defer c.fireMu.Unlock()
 	for _, t := range due {
+		// Every mutable field of a simTimer is owned by c.mu: the Stop/Reset
+		// closures and advanceToLocked's re-arm all write it under c.mu, and
+		// a Stop that lands between the pop (advanceToLocked) and this
+		// dispatch must still be observed. Read the dispatch-worthy fields
+		// under c.mu, then release before delivering — a callback may read
+		// the clock (Now/Since take c.mu), so no callback ever runs while
+		// c.mu is held.
+		c.mu.Lock()
 		if t.stopped {
+			c.mu.Unlock()
 			continue
 		}
 		at := t.deadline
-		if t.fn != nil {
+		fn := t.fn
+		ch := t.ch
+		c.mu.Unlock()
+
+		if fn != nil {
 			// Synchronous, in dispatch order: a deterministic simulator must
 			// let a test observe the effects of a callback the moment Advance
 			// returns. Callbacks may READ the clock (Now/Since) but must not
 			// call Advance/AdvanceTo or Sleep on it — that would re-enter the
 			// dispatcher.
-			t.fn()
+			fn()
 			continue
 		}
 		select {
-		case t.ch <- at:
+		case ch <- at:
 		default:
 			// Buffered(1) and nobody reading: drop, exactly like stdlib.
 		}
