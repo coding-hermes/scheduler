@@ -373,7 +373,10 @@ const (
 )
 
 // Tick is a single scheduler run: one spawned agent invocation against one
-// project, tracked from queue through completion.
+// project, tracked from queue through completion. SessionID is the legacy
+// gateway response/session identifier stored in ticks.session_id; for Hermes
+// attribution, join ticks.id to sessions.session_key (see docs/reference/
+// tick-session-attribution.md), not ticks.session_id to sessions.id.
 type Tick struct {
 	ID           string      `json:"id"` // PRIMARY KEY — see NextTickID for format
 	ProjectName  string      `json:"project_name"`

@@ -478,10 +478,9 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, provide
 // SendResponseWithSessionKey is SendResponse plus the optional
 // X-Hermes-Session-Key header. A non-empty sessionKey scopes the run under
 // that stable identifier (SCHED-GAP-074): scheduler ticks pass their tick id
-// so every spawned session carries a durable, self-describing handle for
-// fleet-quality review linkage, independent of the per-request resp_* id
-// that lands in ticks.session_id. An empty sessionKey sends no header,
-// matching legacy behavior exactly.
+// so Hermes records it as sessions.session_key for durable tick attribution.
+// This is independent of the response/envelope identifier stored in
+// ticks.session_id. An empty sessionKey sends no header, matching legacy behavior exactly.
 func (g *GatewayClient) SendResponseWithSessionKey(ctx context.Context, prompt, model, provider, key, sessionKey string) (*Response, error) {
 	noApproval := false
 	reqBody := ResponseRequest{

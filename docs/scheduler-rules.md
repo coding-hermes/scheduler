@@ -285,10 +285,12 @@ prompt and the brief.
 
 ## 9. Verification surfaces — how to check a rule is actually true
 
-**R9.1 — `ticks.session_id` is NOT the hermes session id.** It holds the gateway
-response id (`resp_…`) or the tick slug (`<lane>-<date>-<time>`). Resolving it against
-`state.db.messages` returns nothing and reads exactly like "the prompt never loaded".
-Lane sessions are found by **content + time window**, never by the tick's id.
+**R9.1 — `ticks.session_id` is NOT the Hermes session id.** It is a legacy field
+that may hold a gateway response id (`resp_…`), a placeholder, or NULL. The scheduler
+sends the tick id as `X-Hermes-Session-Key`; Hermes stores that verbatim in
+`state.db.sessions.session_key`. For cross-database attribution, join
+`scheduler.db.ticks.id = state.db.sessions.session_key` (not `ticks.session_id = sessions.id`). Example query and caveats: [Tick-to-Hermes-session attribution](reference/tick-session-attribution.md).
+This is an exact-key join, not content/time-window inference.
 
 **R9.2 — `state.db.messages.timestamp` is an epoch float**, never ISO. Comparing it to
 an ISO string matches nothing and looks like an idle fleet.
