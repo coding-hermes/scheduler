@@ -761,7 +761,13 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 func (s *Spawner) tickDeadlineTimeout(project PackedProject, tickID string, gwErr error, reqStart time.Time,
 	wall time.Duration, model, provider string, rate routerRate, postTrace *GatewayPOSTTrace) *SpawnedTick {
 	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
-	reason := fmt.Sprintf("tick-timeout wall %s: %v", wall, gwErr)
+	// SCHED-GAP-16941: a 3h wall only says "the budget ran out"; it cannot say
+	// WHICH phase consumed it. This booking happens inside the gateway POST, so
+	// the phase is gateway_call — name it, its elapsed time, and the related
+	// row (SCHED-GAP-16939) that owns gateway-call cost. Appended after the
+	// existing wall text so current greps keep matching.
+	reason := fmt.Sprintf("tick-timeout wall %s: %v [phase=gateway_call phase_elapsed=%s related=SCHED-GAP-16939]",
+		wall, gwErr, s.clock().Now().Sub(reqStart).Round(time.Second))
 	log.Printf("TIMEOUT: %s tick=%s session deadline expired during gateway POST — booking timeout (NOT a gateway blip): %v",
 		project.Name, tickID, gwErr)
 	// SCHED-GAP-1707 deliverable 1: capture the partial telemetry NOW, at
@@ -3242,6 +3248,15 @@ type SpawnedTick struct {
 	// every non-gateway path (exec spawns, spawn-site refusals, remote
 	// dispatch): the column's honest default.
 	gwAttempts int
+
+	// phases (SCHED-GAP-16941) is the tick's runner-phase trail (spawn →
+	// await → collect → finalize, the boundaries the runner already has).
+	// Spawn() arms it at entry and the wall-kill booking site freezes it
+	// into the error text (wall-phase=<name> spent=<dur>), so a tick the
+	// 3h wall kills says WHERE the hours went — readable from ticks.error
+	// or the TICK journal line. Nil on paths that never armed it (remote
+	// dispatch, test-built literals); every method is nil-safe.
+	phases *tickPhaseLog
 }
 
 // Wait blocks until the process exits and returns the outcome.

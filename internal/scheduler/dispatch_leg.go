@@ -298,7 +298,12 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 			TickID: tickID, Project: proj.Name, SessionID: receipt.CorrID,
 			Started: issued, Finished: finished, Duration: finished.Sub(issued),
 			Status: TickTimeout, ExitCode: -1,
-			Error:      waitErr.Error(),
+			// SCHED-GAP-16941: the wall must say WHICH phase consumed it. The
+			// dispatch leg's wall is spent waiting on the hand-out reply, so it
+			// names that phase and its elapsed time the same way the gateway
+			// POST path (spawn.go tickDeadlineTimeout) does. Kept as an
+			// appended bracket so the existing wall text stays greppable.
+			Error:      fmt.Sprintf("%v [phase=dispatch_wait phase_elapsed=%s]", waitErr, finished.Sub(issued).Round(time.Second)),
 			CostSource: CostSourceGateway,
 			// The hand-out RAN (the relay accepted it), so the dispatch
 			// accountability pair says so; the tick merely ran out of wall.
