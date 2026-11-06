@@ -16,7 +16,8 @@ import (
 // julianday(completed_at)) for the /api/v1/metrics windowed blocks.
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
-const latestMigration = 84 // PERF-004: idx_events_component_created on events(component, created_at)
+// PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
+const latestMigration = 85 // PERF-006: hook_runs busy receipts
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1796,7 +1797,7 @@ CREATE TABLE IF NOT EXISTS hook_runs (
     priority     INTEGER NOT NULL,
     seq          INTEGER NOT NULL,
     command      TEXT NOT NULL,
-    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped')),
+    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped','busy')),
     exit_code    INTEGER NOT NULL DEFAULT 0,
     started_at   TEXT NOT NULL,
     finished_at  TEXT,
@@ -1885,6 +1886,49 @@ CREATE INDEX IF NOT EXISTS idx_ticks_completed_jd ON ticks(julianday(completed_a
 		desc:    "PERF-004: index idx_events_component_created on events(component, created_at) so the lane_churn enable-per-day count of /api/v1/metrics seeks the ~1% component='api' rows instead of scanning event history (the julianday() window predicate stays as written — the component equality does the restricting)",
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_events_component_created ON events(component, created_at);
+`,
+	},
+	{
+		// PERF-006: exit 11 is quiesce-check's named BUSY verdict. It must
+		// remain distinguishable from exit 10's named skip in hook_runs,
+		// which means widening the CHECK rather than merely relabelling a
+		// failed row in the runner. hook_runs has no foreign keys, so the
+		// ordinary migration transaction can rebuild it atomically.
+		version: 85,
+		desc:    "PERF-006: hook_runs.state='busy' distinguishes quiesce-check exit 11 (a process holds the tree) from exit 10 state='skipped' (nothing to do)",
+		stmt: `
+DROP TABLE IF EXISTS hook_runs_perf006;
+CREATE TABLE hook_runs_perf006 (
+    run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    tick_id      TEXT NOT NULL,
+    lane         TEXT NOT NULL,
+    phase        TEXT NOT NULL CHECK(phase IN ('pre','post')),
+    level        TEXT NOT NULL CHECK(level IN ('global','namespace','lane')),
+    hook_id      TEXT NOT NULL,
+    priority     INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    command      TEXT NOT NULL,
+    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped','busy')),
+    exit_code    INTEGER NOT NULL DEFAULT 0,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    duration_ms  INTEGER NOT NULL DEFAULT 0,
+    attempts     INTEGER NOT NULL DEFAULT 1,
+    output       TEXT NOT NULL DEFAULT '',
+    argv         TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO hook_runs_perf006 (
+    run_id, tick_id, lane, phase, level, hook_id, priority, seq, command,
+    state, exit_code, started_at, finished_at, duration_ms, attempts, output, argv
+)
+SELECT
+    run_id, tick_id, lane, phase, level, hook_id, priority, seq, command,
+    state, exit_code, started_at, finished_at, duration_ms, attempts, output, argv
+FROM hook_runs;
+DROP TABLE hook_runs;
+ALTER TABLE hook_runs_perf006 RENAME TO hook_runs;
+CREATE INDEX IF NOT EXISTS hook_runs_tick_idx ON hook_runs(tick_id, phase, seq);
+CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at DESC);
 `,
 	},
 }

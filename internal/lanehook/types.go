@@ -111,6 +111,11 @@ const (
 	// runner records the step as state=skipped — non-fatal, never retried,
 	// never a veto or a chain abort.
 	ExitSkip = 10
+	// ExitBusy is quiesce-check's reserved "a live process holds the tree"
+	// exit code. The runner records state=busy, distinct from an exit-10 skip;
+	// the normal on_failure policy still applies, so a closed POST gate stops
+	// merge and prune.
+	ExitBusy = 11
 )
 
 // Plan is the resolved, ordered list for one tick.

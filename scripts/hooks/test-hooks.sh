@@ -73,15 +73,28 @@ out=$("$HERE/worktree-ensure.sh" --lane df-qa --repo "$TMP/repo" --worktree "$TM
 check $rc 78 "W6 disk floor exits 78"
 
 # ---- quiesce ------------------------------------------------------------
+QUIESCE_TIMEOUT_S=$(awk '
+  /^\[\[hook\]\]$/ { quiesce=0 }
+  /^id = "quiesce-check"$/ { quiesce=1 }
+  quiesce && /^timeout_s = [0-9]+$/ { print $3; exit }
+' "$HERE/hooks.example.toml")
+case "$QUIESCE_TIMEOUT_S" in
+  ''|*[!0-9]*) bad "quiesce timeout_s is readable from hooks.example.toml"; QUIESCE_TIMEOUT_S=60 ;;
+  *) ok "quiesce timeout_s comes from its shipped definition (${QUIESCE_TIMEOUT_S}s)" ;;
+esac
 "$HERE/worktree-ensure.sh" --lane qq-qa --repo "$TMP/repo" --worktree "$TMP/wt/qq-qa" >/dev/null 2>&1
-"$HERE/quiesce-check.sh" --worktree "$TMP/wt/qq-qa" >/dev/null 2>&1; check $? 0 "quiesce on an idle tree"
-# The probe scans every /proc/<pid>/{cwd,fd} entry, so on a busy host its own
-# scan can take a couple of seconds. The fixture process must outlive the scan
-# (a 5s sleeper on a 2k-process box flaked exactly that way), and it is killed
-# rather than waited on so the battery does not pay for the extra time.
-# SCHED-GAP-16991 evidence: at loadavg ~16 (6.7k processes) the scan ran past
-# 30s and the sleeper died mid-scan — busy-check returned 0 twice in a row
-# while a 300s sleeper passed 2/2 — so the sleeper is now 120s.
+qstart=$(date +%s%N)
+"$HERE/quiesce-check.sh" --worktree "$TMP/wt/qq-qa" >/dev/null 2>&1; qrc=$?
+qend=$(date +%s%N)
+qwall_ms=$(( (qend-qstart)/1000000 ))
+check $qrc 0 "quiesce on an idle tree"
+if [ "$qwall_ms" -le $((QUIESCE_TIMEOUT_S*1000)) ]; then
+  ok "quiesce idle wall ${qwall_ms}ms is within timeout_s=${QUIESCE_TIMEOUT_S}s"
+else
+  bad "quiesce idle wall ${qwall_ms}ms exceeds timeout_s=${QUIESCE_TIMEOUT_S}s"
+fi
+# The fixture process must outlive the scan. It is killed rather than waited on
+# so the battery does not pay for the sleep duration.
 (cd "$TMP/wt/qq-qa" && sleep 120) & SLEEPER=$!
 # wait until the sleeper is actually resident in the tree (a fixed sleep races it)
 for _ in $(seq 30); do
@@ -92,7 +105,9 @@ for _ in $(seq 30); do
   [ "$found" = 1 ] && break
   sleep 0.1
 done
-"$HERE/quiesce-check.sh" --worktree "$TMP/wt/qq-qa" >/dev/null 2>&1; check $? 10 "quiesce detects a live process"
+out=$("$HERE/quiesce-check.sh" --worktree "$TMP/wt/qq-qa" 2>&1); rc=$?
+check $rc 11 "quiesce detects a live process as busy"
+case "$out" in *"busy:"*) ok "quiesce busy output names the condition" ;; *) bad "quiesce busy output: $out" ;; esac
 kill "$SLEEPER" 2>/dev/null || true
 wait "$SLEEPER" 2>/dev/null || true
 

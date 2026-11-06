@@ -35,7 +35,8 @@ file that looks right.
 
 Exit codes the scripts use: `0` ok · `10` skip / nothing to do (merge
 `no_commits`; `worktree-ensure` on a workdir that **is** the repo's primary
-checkout) · `65` blocked (conflict, dirty tree, unexpected state — work
+checkout) · `11` busy (`quiesce-check` found a live process in the tree) ·
+`65` blocked (conflict, dirty tree, unexpected state — work
 preserved) · `75` retryable contention (branch checked out elsewhere, stale
 index lock) · `78` precondition unmet (disk floor, not a repo, no
 `origin/<base>`, no `pytest`).
@@ -45,7 +46,10 @@ A `10` is a named skip, not a failure: the runner records the step as
 `reason=workdir-is-primary-checkout`), emits a `hook.<phase>.skipped` event,
 does not retry it, and never lets it veto the tick — a lane whose workdir
 equals the primary checkout ticks without the hook demanding the shared tree
-change branch (SCHED-GAP-16991).
+change branch (SCHED-GAP-16991). An `11` instead records `state=busy` and emits
+`hook.<phase>.busy`; it follows the normal failure policy, so the shipped
+closed quiesce gate stops merge and prune without disguising the tree as an
+ordinary skip.
 
 ## The branch is `lane/<project>/<role>`
 
@@ -122,7 +126,12 @@ throwaway origin + clone, never a fleet repo.
    *then* `75`; *given* disk below the floor, *then* `78` and nothing created;
    *given* a lane name containing `/`, *then* `65`. (`W5`, `W6`, `S6`)
 8. **A busy tree is never merged** — *Given* a process with its cwd inside the
-   tree, *when* `quiesce-check` runs, *then* it exits `10` naming the pid.
+   tree, *when* `quiesce-check` runs, *then* it exits `11` naming the pid and
+   the runner records `state=busy` (not `state=skipped`). The battery also
+   measures an idle scan and fails if its wall time exceeds this step's own
+   `timeout_s` from `hooks.example.toml`; the shipped budget remains 60 s
+   because the constant-exec scan measures about 1 s on the production host,
+   comfortably inside both that budget and the 5 s performance target.
 9. **A veto fails the tick but still releases** — *Given* a PRE step that exits
    `65`, *when* the tick runs, *then* the tick is `TickFailed` with
    `hook_failed:<id>` and the POST list still executed.

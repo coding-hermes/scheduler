@@ -314,6 +314,76 @@ exit 10`, counter, counter))
 	}
 }
 
+// PERF-006: quiesce-check exit 11 is a named BUSY outcome, not exit 10's
+// "nothing to do" skip. The receipt and event must say busy, and a closed
+// POST gate must still stop merge/prune.
+func TestPostExit11BusyStopsChainAndReceipt(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "merge-ran")
+	busy := script(t, dir, "busy.sh", "echo 'busy: 123:cwd' >&2; exit 11")
+	merge := script(t, dir, "merge.sh", "touch "+marker)
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "receipts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE hook_runs (
+		run_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+		tick_id      TEXT NOT NULL,
+		lane         TEXT NOT NULL,
+		phase        TEXT NOT NULL,
+		level        TEXT NOT NULL,
+		hook_id      TEXT NOT NULL,
+		priority     INTEGER NOT NULL,
+		seq          INTEGER NOT NULL,
+		command      TEXT NOT NULL,
+		argv         TEXT NOT NULL DEFAULT '',
+		state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped','busy')),
+		exit_code    INTEGER NOT NULL DEFAULT 0,
+		started_at   TEXT NOT NULL,
+		finished_at  TEXT,
+		duration_ms  INTEGER NOT NULL DEFAULT 0,
+		attempts     INTEGER NOT NULL DEFAULT 1,
+		output       TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var busyEvents int
+	r := NewExecRunner(db, func(ctx context.Context, sev, msg string, d map[string]any) {
+		if msg == "hook.post.busy" {
+			busyEvents++
+		}
+	})
+	plan := Plan{Post: []Step{
+		{ID: "quiesce-check", Phase: PhasePost, Level: LevelLane, Target: "l",
+			Command: busy, OnFailure: FailClosed, TimeoutS: 5},
+		{ID: "lane-merge", Phase: PhasePost, Level: LevelLane, Target: "l",
+			Command: merge, OnFailure: FailOpen, TimeoutS: 5},
+	}}
+	r.Post(context.Background(), Env{TickID: "t-busy", Lane: "l"}, plan)
+	if exists(marker) {
+		t.Fatal("lane-merge ran after a closed busy gate")
+	}
+	if busyEvents != 1 {
+		t.Fatalf("want 1 hook.post.busy event, got %d", busyEvents)
+	}
+	var state, output string
+	var code int
+	if err := db.QueryRow(`SELECT state, exit_code, output FROM hook_runs WHERE hook_id='quiesce-check'`).
+		Scan(&state, &code, &output); err != nil {
+		t.Fatal(err)
+	}
+	if state != "busy" || code != ExitBusy {
+		t.Fatalf("receipt = state %q exit %d, want busy/%d", state, code, ExitBusy)
+	}
+	if !strings.Contains(output, "busy: 123:cwd") {
+		t.Fatalf("receipt lost busy output: %q", output)
+	}
+}
+
 // moduleRoot walks up from the test's package dir to the go.mod that
 // anchors the module, so the cross-compile guard can build the whole
 // module the way the board-row gates do.

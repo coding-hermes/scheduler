@@ -152,17 +152,18 @@ Idempotency: running twice in a row must change nothing and print the same branc
 A tree is quiescent when **no process** has its cwd, an open file, or an execution mapping
 inside `<path>`.
 
-```bash
-# every pid whose cwd or fd resolves under the worktree
-for p in /proc/[0-9]*; do
-  [ "$p" = "/proc/$$" ] && continue
-  readlink "$p/cwd" 2>/dev/null | grep -q "^$WT" && echo "$p cwd"
-  ls -l "$p/fd" 2>/dev/null | grep -q " $WT/" && echo "$p fd"
-done
+```sh
+# One find resolves every cwd/fd symlink in-process; the shell only compares
+# the returned target with the resolved worktree path.
+find /proc/[0-9]* -maxdepth 2 \
+  \( -name cwd -o -path '*/fd/*' \) -type l -printf '%p %l\n'
 ```
 
-- Exit `0` quiescent, `10` busy (prints the offending pids), `65` unreadable `/proc`.
-- The runner's own pid, its process group, and the step's own children are excluded.
+- Exit `0` quiescent, `11` busy (prints the offending pids), `65` unreadable `/proc`.
+  The runner records busy as `state=busy`, never the exit-10 `state=skipped`.
+- The scan uses one `find(1)` process to resolve `/proc/<pid>/cwd` and
+  `/proc/<pid>/fd/*` in-process; it never forks one `readlink` per link.
+- The runner's own pid, its scan child, and pid 1 are excluded.
 - `on_failure = "closed"`: a busy tree stops the POST list, so nothing merges and nothing is
   pruned. This is the guard that keeps a killed bunker exec (CF-204) or a stray harness from
   having its directory deleted underneath it.
@@ -311,7 +312,7 @@ All tests build a throwaway repo (`git init --bare` + a working clone with two c
 | W5 | ensure when the branch is checked out elsewhere | exit 75, nothing created |
 | W6 | ensure with free space below floor | exit 78, no directory created |
 | W7 | ensure with `.gitmodules` | exit 65 with the documented message |
-| W8 | quiesce with a `sleep 60` holding the tree as cwd | exit 10, pid printed |
+| W8 | quiesce with a `sleep 60` holding the tree as cwd | exit 11, pid printed |
 | W9 | quiesce idle | exit 0 |
 | W10 | gate red | no merge, `merge=blocked`, branch preserved |
 | W11 | merge happy path (2 commits ahead) | ff-only merge, ancestry assertion passes, `landed=1` |

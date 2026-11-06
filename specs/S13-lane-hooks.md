@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS hook_runs (
     priority     INTEGER NOT NULL,
     seq          INTEGER NOT NULL,             -- position in the resolved plan, 1-based
     command      TEXT NOT NULL,
-    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped')),
+    state        TEXT NOT NULL CHECK(state IN ('running','ok','failed','timeout','skipped','busy')),
     exit_code    INTEGER NOT NULL DEFAULT 0,
     started_at   TEXT NOT NULL,
     finished_at  TEXT,
@@ -257,7 +257,9 @@ CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at D
 ```
 
 One row per attempt; `attempts` counts retries on the winning row and each failed attempt gets
-its own row with `state='failed'` so a flapping step is visible.
+its own row with `state='failed'` so a flapping step is visible. Exit `10` is the non-fatal
+`state='skipped'` outcome; quiesce-check exit `11` is `state='busy'`, which remains subject
+to the step's `on_failure` policy and therefore stops a closed POST chain.
 
 ### 3.3 Cache — resolved plans
 

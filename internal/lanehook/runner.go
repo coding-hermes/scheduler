@@ -135,14 +135,15 @@ func (r *ExecRunner) Post(ctx context.Context, env Env, plan Plan) {
 }
 
 type stepResult struct {
-	state    string // ok | skipped | failed | timeout
+	state    string // ok | skipped | busy | failed | timeout
 	code     int
 	attempts int
 }
 
 // failed reports whether the step counts against its on_failure policy. A
 // skipped step (exit 10, the contract's named "nothing to do") is never
-// fatal: no veto, no chain abort, no retry (SCHED-GAP-16991).
+// fatal. A busy step (exit 11) is a real closed-gate veto: merge and prune
+// must not run while a process holds the tree.
 func (r stepResult) failed() bool { return r.state != "ok" && r.state != "skipped" }
 
 // run executes one step with its retry policy.
@@ -237,6 +238,11 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 			// no_commits; worktree-ensure workdir-is-primary-checkout).
 			// Record a non-fatal skip, never a failure (SCHED-GAP-16991).
 			res.state, reason = "skipped", "skip"
+		} else if res.code == ExitBusy {
+			// Exit 11 belongs only to quiesce-check: a process holds the
+			// tree. Keep this receipt distinct from an ordinary skip and
+			// let on_failure decide whether the POST chain stops.
+			res.state, reason = "busy", "busy"
 		}
 	}
 
