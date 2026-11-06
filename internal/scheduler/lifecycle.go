@@ -106,22 +106,10 @@ func (s TickStatus) Outcome() string {
 //
 // SCHED-GAP-1655: a COMPLETED tick whose session ran ZERO tool calls
 // (NoTools set by the gateway success path — envelope has no tool-call
-// item and the SSE trace saw no tool event) records outcome='no_work',
-// the migration-v55 verdict for "the lane had nothing to do". Ordering
-// inside the completed branch is load-bearing: the artifact check runs
-// FIRST, so a tick that somehow landed a commit without a tool item
-// (countGitChanges measures the repo, not the transcript) still records
-// 'committed' — artifacts outrank the transcript, the SCHED-GAP-1652
-// doctrine. no_work is therefore unreachable for an artifact-bearing row
-// by construction, not by discipline.
-// SCHED-GAP-1680: a COMPLETED tick's success is derived from the artifacts
-// its lane can produce — git commits/files AND declared NON-COMMIT side
-// effects. commits=0 alone is NOT a no-op: a sync lane whose product is
-// DuckBrain memory keys records MemoryKeys > 0 and must never be derived as
-// dry_run (the fleet's 7-ticks/6-zero-commit sync shape was a measurement
-// artifact, not 85% waste). The non-commit leg sits in the SAME artifact
-// branch as the git leg, so an artifact of either kind outranks the
-// zero-tool no_work verdict by construction.
+// item and the SSE trace saw no tool event) records outcome='no_work'.
+// Inside the completed branch, only a dispatcher-observed commit can produce
+// 'committed'. File deltas and session-side effects are recorded separately;
+// none proves a commit landed. NoTools remains a distinct no_work verdict.
 func terminalOutcome(o TickOutcome) string {
 	if o.GuardAbort {
 		if o.Status == TickFailed {
@@ -132,7 +120,10 @@ func terminalOutcome(o TickOutcome) string {
 	if o.Status != TickCompleted {
 		return o.Status.Outcome()
 	}
-	if o.Commits > 0 || o.FilesChanged > 0 || o.MemoryKeys > 0 {
+	// Only a commit observed by the dispatcher is allowed to claim the
+	// committed outcome. File changes and session-reported side effects are
+	// useful evidence, but do not prove a commit landed.
+	if o.Commits > 0 {
 		return "committed"
 	}
 	if o.NoTools {
@@ -372,6 +363,24 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 				Message:   fmt.Sprintf("stand-down: tick %s (%s) completed with no landed artifact — dispatch_reason=%s", outcome.TickID, outcome.Project, dispatchReason),
 				Details:   fmt.Sprintf(`{"tick_id":%q,"project":%q,"dispatch_reason":%q}`, outcome.TickID, outcome.Project, dispatchReason),
 			})
+		}
+	}
+	if outcome.Status == TickCompleted && outcome.Commits <= 0 {
+		// The reason is stored in ticks.error, alongside the schema-stable
+		// outcome vocabulary. Non-commit signals (file deltas and memory
+		// writes) cannot promote a tick to committed — only a commit the
+		// dispatcher observed can — but they are not "no changes" either:
+		// SCHED-GAP-1680 established that a sync lane whose product is
+		// DuckBrain memory keys did real work. Such rows keep their
+		// memory_keys/files_changed counts AND carry a reason that says so.
+		if outcome.Commits < 0 {
+			outcome.Error = "verification_not_observed"
+		} else if outcome.FilesChanged > 0 || outcome.MemoryKeys > 0 {
+			outcome.Error = "non_commit_artifacts"
+		} else if outcome.SessionID == "" {
+			outcome.Error = "result_missing"
+		} else {
+			outcome.Error = "no_changes"
 		}
 	}
 	// SCHED-GAP-1707: the partial-telemetry mark rides the SAME single
