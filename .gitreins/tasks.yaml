@@ -5737,3 +5737,42 @@ tasks:
   status: complete
   created_at: '2026-11-06T03:42:23.674908+00:00'
   completed_at: '2026-11-06T04:20:25.565193+00:00'
+- id: SCHED-GAP-16932
+  title: scheduler-query documented flag shapes must parse
+  criteria:
+  - 'Every flag shape printed by scheduler-query --help works: --all <op> --daemon-url=<url>
+    and --daemon-url=<url> --all <op> both print an aggregate envelope for the target
+    URL, never a single-peer transport error; missing flag values print the flag name
+    and exit nonzero. Verified against a scratch daemon at http://127.0.0.1:19092.'
+  status: in_progress
+  created_at: '2026-11-06T05:01:25.261128+00:00'
+- id: SCHED-GAP-16990
+  title: scheduler tests isolate the operator-restart env instead of reading the ambient
+    value
+  criteria:
+  - 1. Each of TestOperatorRestartApprovalEnv, TestSCHEDGAP091_DrainTimeoutStampsOrphan
+    and TestAbortInFlightTicks_OperatorApprovedStamp pins the operator-restart env
+    it needs (t.Setenv + t.Cleanup) so the ambient value cannot leak in. 2. SCHEDULER_OPERATOR_RESTART_APPROVED=1
+    go test -short -count=1 -run 'TestOperatorRestartApprovalEnv|TestSCHEDGAP091_DrainTimeoutStampsOrphan|TestAbortInFlightTicks_OperatorApprovedStamp'
+    ./internal/scheduler/ is GREEN. 3. env -u SCHEDULER_OPERATOR_RESTART_APPROVED
+    go test -short -count=1 ./internal/scheduler/ stays green; go build ./... and
+    go vet ./internal/scheduler/ exit 0.
+  status: in_progress
+  created_at: '2026-11-06T05:01:39.417910+00:00'
+- id: SCHED-GAP-16941
+  title: '3h tick-wall timeouts: name the phase'
+  criteria:
+  - A tick killed by the wall records the phase it was in and the time spent in that
+    phase. The phase breakdown is readable from the tick detail or the journal without
+    reading code. A simulated 3h wall produces a row naming the phase, and the test
+    fails if the phase field is absent.
+  status: in_progress
+  created_at: '2026-11-06T05:03:40.315901+00:00'
+- id: SCHED-GAP-16934
+  title: No evidence gate on a tick
+  criteria:
+  - A tick that produces no commit cannot be recorded as committed; every dry tick
+    carries a named reason; the reasons are countable in one query; a test drives
+    a no-artifact tick end to end and asserts the recorded state.
+  status: in_progress
+  created_at: '2026-11-06T05:03:37.484019+00:00'
