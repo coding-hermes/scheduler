@@ -12,7 +12,9 @@ import (
 // SCHED-GAP-16922 landed v75 (fractional namespace reserved floors).
 // ACP-SCHED-001 lands v76-v78 (parent-run lifecycle, replay contract, outbox settlement).
 // SCHED-GAP-16939 lands v79 (ticks.gateway_attempts — per-hop attempt rows).
-const latestMigration = 82 // S13 lane hooks: hook_runs.argv (the resolved argv a step ran)
+// PERF-005 lands v83 (expression indexes on ticks(julianday(spawned_at)) /
+// julianday(completed_at)) for the /api/v1/metrics windowed blocks.
+const latestMigration = 83 // PERF-005: idx_ticks_spawned_jd / idx_ticks_completed_jd expression indexes
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1814,6 +1816,41 @@ CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at D
 		desc:    "lane hooks: hook_runs.argv records the resolved argv (command + expanded args) a step actually ran",
 		stmt: `
 ALTER TABLE hook_runs ADD COLUMN argv TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// PERF-005: the seven windowed `ticks` blocks of GET /api/v1/metrics
+		// (spawns total / by_namespace / by_outcome, gateway drain_503,
+		// outcomes zero-output, tick_duration_ms, stalls — all in
+		// internal/api/server_metrics.go) predicate on
+		// julianday(spawned_at) / julianday(completed_at). A function call
+		// on the column defeats every existing ticks index, so all seven
+		// full-scanned the ~101k-row production ticks table on every
+		// dashboard render. The julianday() is load-bearing and must NOT be
+		// rewritten away: spawned_at/completed_at store MIXED RFC3339
+		// formats (UTC "...Z" and local-offset "...-05:00"; 101,610/101,610
+		// non-Z rows on the 2026-11-05 fixture), so a raw string bound
+		// measurably drops 48 of 251 window rows (19%). Hence expression
+		// indexes on the EXACT expression the predicates use — the planner
+		// matches `julianday(col) >= julianday(?)` to the indexed
+		// expression and seeks.
+		//
+		// Measured 2026-11-05, paired A/B on a production-scale fixture
+		// (101,610 ticks / 879 projects, production DDL, sqlite 3.53.4):
+		// the seven blocks 190.1 ms -> 4.4 ms (43x); plans flip from
+		// `SCAN ticks` to `SEARCH ticks USING [COVERING] INDEX
+		// idx_ticks_spawned_jd (<expr>>?)` / `... idx_ticks_completed_jd`;
+		// the five other hot julianday() call sites keep identical plans
+		// (pinned by TestPerf005_NoRegressionOtherJuliandayCallSites).
+		// Build cost on the fixture: 1.14 s for both, file +3.4 MB; ticks
+		// INSERT rate ~100/day, so write amplification is negligible.
+		// IF NOT EXISTS matches every sibling index entry (a re-run is a
+		// no-op, never a duplicate).
+		version: 83,
+		desc:    "PERF-005: expression indexes idx_ticks_spawned_jd / idx_ticks_completed_jd on ticks(julianday(spawned_at)) / ticks(julianday(completed_at)) so the seven windowed /api/v1/metrics blocks seek the 24h window instead of scanning tick history (mixed-offset timestamps make the julianday() predicates load-bearing, so the expression is indexed, not the column)",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_spawned_jd ON ticks(julianday(spawned_at));
+CREATE INDEX IF NOT EXISTS idx_ticks_completed_jd ON ticks(julianday(completed_at));
 `,
 	},
 }
