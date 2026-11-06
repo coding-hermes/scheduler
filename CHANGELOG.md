@@ -33,6 +33,16 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-06
 
+### Performance
+- lanehook: the quiesce scan is constant-exec and can now distinguish a busy tree (PERF-006) — one in-process `/proc` cwd/fd scan with shell prefix matching replaces one `readlink` fork per entry, keeping paths with whitespace or glob characters literal and excluding the scanner itself. Warm runs at 891 pids / 14,097 fd entries measured 1.16s and 0.95s with 4 `execve` calls; `scripts/hooks/test-hooks.sh` now asserts wall time against the shipped `timeout_s`, which stays 60. Exit `11` is reserved for a busy tree and records `state=busy`, exit `10` stays the non-fatal skip contract, and migration v85 widens `hook_runs.state` while preserving existing receipts and indexes — `72bd5758`.
+
+### Fixes
+- lanehook: the exit-code verdict uses a tagged switch (golangci-lint QF1003), naming the two reserved exit codes explicitly; behaviour unchanged (PERF-006 follow-up) — `a7b6c7cf`.
+
+### Carried forward (open artifact gaps, not fixed by this cut)
+- RELEASE-037: `release.yaml` builds `dist/` inside the checkout and `dist/` is absent from `.gitignore`, so every asset built after the first reports `+dirty` / `vcs.modified=true`. Carried forward again here; the fix row stays open for the foreman.
+- RELEASE-038: `go.mod` pins `toolchain go1.26.6`, which carries reachable stdlib advisories. Shipped binaries are built by CI's `go-version: '1.26'`, which resolves to the newest patch, so this is a local-build floor problem; the row stays open.
+
 ## [1.13.0] — 2026-11-06
 
 ### Features
