@@ -1,7 +1,7 @@
 package scheduler
 
-// SCHED-GAP-1680 tests: a tick's success is derived from the artifacts its
-// LANE can produce — git commits/files AND non-commit side effects.
+// SCHED-GAP-1680 tests: a tick's committed outcome requires a dispatcher-
+// observed commit; non-commit side effects remain separately recorded.
 //
 // The measured problem (2026-09-30): `commits=0` was the fleet's success
 // test, and it can only see git artifacts. Every sync lane showed the same
@@ -34,14 +34,12 @@ func TestSCHEDGAP1680_TerminalOutcomeCountsNonCommitArtifacts(t *testing.T) {
 		in   TickOutcome
 		want string
 	}{
-		// The row's exact scenario: a sync tick with five verified keys and
-		// commits=0 must never be derived as dry_run.
-		{"five keys, zero commits is an artifact", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 5}, "committed"},
-		// A zero-tool session that DID write memory keys is still productive.
-		{"keys outrank the zero-tool no_work verdict", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 2}, "committed"},
+		// Non-commit artifacts are recorded separately, but cannot claim a commit.
+		{"five keys without a commit is not committed", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 5}, "dry_run"},
+		{"memory writes do not outrank zero-tool no_work", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 2}, "no_work"},
 		// Commits still win (unchanged behavior).
 		{"commits still map to committed", TickOutcome{Status: TickCompleted, Commits: 1}, "committed"},
-		{"files changed still map to committed", TickOutcome{Status: TickCompleted, FilesChanged: 3}, "committed"},
+		{"files changed without an observed commit is not committed", TickOutcome{Status: TickCompleted, FilesChanged: 3}, "dry_run"},
 		// No artifact of any kind keeps the pre-existing verdicts.
 		{"no artifact at all stays dry_run", TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 0, MemoryKeys: 0}, "dry_run"},
 		{"zero-tool no-artifact stays no_work", TickOutcome{Status: TickCompleted, NoTools: true, Commits: 0, FilesChanged: 0, MemoryKeys: 0}, "no_work"},
@@ -165,9 +163,8 @@ func TestSCHEDGAP1680_CountsMemoryKeysFromSessionTranscript(t *testing.T) {
 }
 
 // TestSCHEDGAP1680_LifecycleRecordsMemoryKeys drives the real completion
-// write: a keys-only completed tick records outcome='committed' AND the
-// memory_keys column, so a sync tick is distinguishable from a zero-output
-// one on the row itself.
+// write: a keys-only completed tick records dry_run (no commit observed),
+// the no_changes reason, and its memory_keys count on the row.
 func TestSCHEDGAP1680_LifecycleRecordsMemoryKeys(t *testing.T) {
 	db := newTestDB(t)
 	lt := NewLifecycleTracker(db)
@@ -188,6 +185,7 @@ func TestSCHEDGAP1680_LifecycleRecordsMemoryKeys(t *testing.T) {
 	}
 
 	if err := lt.Complete(TickOutcome{
+		SessionID:  "sess-sync",
 		TickID:     tickID,
 		Project:    "sync-lane",
 		Status:     TickCompleted,
@@ -199,17 +197,71 @@ func TestSCHEDGAP1680_LifecycleRecordsMemoryKeys(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 
-	var outcome string
+	var outcome, reason string
 	var memoryKeys int
-	if err := db.QueryRow(`SELECT COALESCE(outcome,''), COALESCE(memory_keys,0) FROM ticks WHERE id = ?`, tickID).
-		Scan(&outcome, &memoryKeys); err != nil {
+	if err := db.QueryRow(`SELECT COALESCE(outcome,''), COALESCE(error,''), COALESCE(memory_keys,0) FROM ticks WHERE id = ?`, tickID).
+		Scan(&outcome, &reason, &memoryKeys); err != nil {
 		t.Fatalf("read tick: %v", err)
 	}
-	if outcome != "committed" {
-		t.Fatalf("outcome = %q, want committed — a five-key sync tick is NOT a no-op", outcome)
+	if outcome != "dry_run" {
+		t.Fatalf("outcome = %q, want dry_run — memory writes do not prove a commit", outcome)
+	}
+	if reason != "non_commit_artifacts" {
+		t.Fatalf("error reason = %q, want non_commit_artifacts — a five-key sync tick is NOT a no-op", reason)
 	}
 	if memoryKeys != 5 {
 		t.Fatalf("memory_keys = %d, want 5 (recorded on the row)", memoryKeys)
+	}
+}
+
+// TestSCHEDGAP16934_NoArtifactReasonsReachTickRow drives completed ticks
+// through LifecycleTracker and verifies the board-facing outcome and reason.
+func TestSCHEDGAP16934_NoArtifactReasonsReachTickRow(t *testing.T) {
+	db := newTestDB(t)
+	lt := NewLifecycleTracker(db)
+	ctx := context.Background()
+	if err := database.CreateProject(ctx, db, &database.Project{
+		Name: "artifact-gate", RepoURL: "https://example.com/artifact-gate", Workdir: t.TempDir(),
+		Weight: 10, Priority: 5,
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		sessionID string
+		commits   int
+		want      string
+	}{
+		{name: "missing-result", commits: 0, want: "result_missing"},
+		{name: "no-changes", sessionID: "session-no-changes", commits: 0, want: "no_changes"},
+		{name: "unobserved-verification", sessionID: "session-unverified", commits: -1, want: "verification_not_observed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tickID := "artifact-gate-" + tc.name
+			now := time.Now().UTC()
+			if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+				VALUES (?, 'artifact-gate', 'running', ?, ?)`, tickID, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+				t.Fatalf("seed tick: %v", err)
+			}
+			if err := lt.Complete(TickOutcome{
+				TickID: tickID, Project: "artifact-gate", SessionID: tc.sessionID,
+				Status: TickCompleted, Commits: tc.commits, Finished: now,
+			}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			var outcome, reason string
+			if err := db.QueryRow(`SELECT outcome, error FROM ticks WHERE id = ?`, tickID).Scan(&outcome, &reason); err != nil {
+				t.Fatalf("read tick row: %v", err)
+			}
+			if outcome != "dry_run" {
+				t.Errorf("recorded outcome = %q, want dry_run", outcome)
+			}
+			if reason != tc.want {
+				t.Errorf("recorded reason = %q, want %q", reason, tc.want)
+			}
+		})
 	}
 }
 

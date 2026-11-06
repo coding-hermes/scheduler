@@ -27,9 +27,9 @@ func TestTerminalOutcomeFromArtifacts(t *testing.T) {
 			"committed",
 		},
 		{
-			"completed with changed files but no commit counts as an artifact",
+			"changed files without an observed commit are not committed",
 			TickOutcome{Status: TickCompleted, Commits: 0, FilesChanged: 3},
-			"committed",
+			"dry_run",
 		},
 		{
 			// The -1 sentinel means "could not measure". It must never be read as

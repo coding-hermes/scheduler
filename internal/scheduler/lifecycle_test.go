@@ -291,7 +291,8 @@ func TestLifecycle_CompleteNegativeExitCode(t *testing.T) {
 	}
 }
 
-// TestLifecycle_CompleteWithEmptyError verifies empty error message is stored as NULL.
+// TestLifecycle_CompleteWithEmptyError verifies a completed tick without a
+// session result gets a named result_missing reason.
 func TestLifecycle_CompleteWithEmptyError(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProject(t, db, "alpha")
@@ -317,11 +318,11 @@ func TestLifecycle_CompleteWithEmptyError(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 
-	var errStr sql.NullString
-	if err := db.QueryRow(`SELECT error FROM ticks WHERE id = ?`, tickID).Scan(&errStr); err != nil {
+	var reason sql.NullString
+	if err := db.QueryRow(`SELECT error FROM ticks WHERE id = ?`, tickID).Scan(&reason); err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if errStr.Valid {
-		t.Errorf("error = %q, want NULL (whitespace-only error should be stored as NULL)", errStr.String)
+	if !reason.Valid || reason.String != "result_missing" {
+		t.Errorf("error = %+v, want result_missing", reason)
 	}
 }
