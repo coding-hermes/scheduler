@@ -3664,6 +3664,8 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	if err != nil {
 		if strings.Contains(err.Error(), "signal: killed") || strings.Contains(err.Error(), "killed") {
 			outcome.Status = TickTimeout
+			outcome.Error = fmt.Sprintf("tick-timeout wall %s: process killed [phase=spawn phase_elapsed=%s]",
+				st.tickTimeout, finished.Sub(st.Started).Round(time.Second))
 		} else {
 			outcome.Status = TickFailed
 			outcome.Error = err.Error()

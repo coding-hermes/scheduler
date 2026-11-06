@@ -124,6 +124,9 @@ func TestSpawnTimeoutKillsProcessGroup(t *testing.T) {
 	if outcome.Status != TickTimeout {
 		t.Fatalf("status = %s, want %s", outcome.Status, TickTimeout)
 	}
+	if !strings.Contains(outcome.Error, "phase=spawn") || !strings.Contains(outcome.Error, "phase_elapsed=") {
+		t.Fatalf("timeout error = %q, want spawn phase and elapsed time", outcome.Error)
+	}
 
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
