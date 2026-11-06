@@ -44,6 +44,28 @@ func resetFailureRateQueryCountForTest() {
 	failureRateQueryCount.Store(0)
 }
 
+// failureRateScannedRowCount counts the tick rows that reached the Go walk
+// inside computeProjectFailureRates: one bump per successful rows.Scan.
+// PERF-003 test seam: TestComputeProjectFailureRates_TruncatesInSQL asserts
+// the SQL truncation by checking the scanned population equals
+// sum(min(completed_ticks, window)) across real projects — not the full
+// completed-tick count the pre-PERF-003 query materialised. Like
+// failureRateQueryCount it is NOT a feature flag — every scanned row always
+// increments it; the atomic add is ~20ns per row against a 20k-row walk.
+var failureRateScannedRowCount atomic.Int64
+
+// failureRateScannedRowCountForTest returns the current scanned-row count.
+// Exported for tests only; production callers do not need it.
+func failureRateScannedRowCountForTest() int64 {
+	return failureRateScannedRowCount.Load()
+}
+
+// resetFailureRateScannedRowCountForTest sets the scanned-row counter to
+// zero. Exported for tests only; the production path never calls it.
+func resetFailureRateScannedRowCountForTest() {
+	failureRateScannedRowCount.Store(0)
+}
+
 // -- helpers --
 
 func writeJSON(w http.ResponseWriter, code int, data interface{}) {
@@ -635,44 +657,78 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	// it is the load-bearing assertion in
 	// TestComputeProjectFailureRates_OneRoundTrip.
 	//
-	// The single-query replacement pulls every completed tick that
-	// belongs to an existing project in ONE round trip, ordered
-	// (project_name ASC, spawned_at DESC) so the Go walk below can
-	// stop counting once it has seen `window` rows for a project
-	// (per-project window truncation, TestComputeProjectFailureRates
-	// _WindowTruncation). The result-set bound is 1 × (window ×
-	// distinct-projects-with-completed-ticks) rows worst case; with
-	// window=100 and 368 active projects that is ≤36 800 rows (~3
-	// MB), scanned in a single Go pass after one DB round trip.
-	// The query plan uses the existing
-	// idx_ticks_project_spawned(project_name, spawned_at) index
-	// (verified by EXPLAIN QUERY PLAN on the production DB — no temp
-	// b-tree, no ROW_NUMBER() window function, which the prior
-	// PERF-001 comment documented as a 128-212 ms regression on
-	// modernc.org/sqlite).
+	// The SCHED-PERF-002 single-query replacement pulled EVERY completed
+	// tick of every existing project and let the Go walk below keep only
+	// the newest `window` rows per project. Measured on the live DB
+	// 2026-11-05: 84,776 rows materialised, 20,220 rows actually used
+	// (4.2x over-fetch — whale projects with months of history dominate
+	// the gap).
 	//
-	// DOGFOOD-009 still holds: only existing projects in the
-	// `projects` table are considered, via the EXISTS subquery. A
-	// hard-deleted project (purged row, e.g. eduos-e2e) leaves
-	// historical ticks behind; without the filter those ticks
-	// resurfaced as ghost failure-rate entries (failure_rate=1.0,
-	// auto_disable_armed=true) that could never be cleared. The
-	// EXISTS clause keeps the per-project windowing accurate and the
-	// output ghost-free.
+	// PERF-003 truncates the row set in SQL instead. The bounds CTE
+	// computes, per project, the spawned_at of the window-th-newest
+	// completed tick (LIMIT 1 OFFSET window-1 over
+	// idx_ticks_project_spawned(project_name, spawned_at)) and the join
+	// keeps only that project's completed ticks at or after the cutoff,
+	// newest-first. The handler now materialises exactly the rows the
+	// walk consumes (live: 20,220). The Go walk still windows
+	// defensively (TestComputeProjectFailureRates_WindowTruncation) so a
+	// timestamp tie at the cutoff cannot leak an extra row into a
+	// project's window.
+	//
+	// The COALESCE(..., '') around the cutoff is load-bearing: a project
+	// with fewer than `window` completed ticks gets a NULL from the
+	// OFFSET subquery, and a plain NULL cutoff silently returned only
+	// the >= window projects (caught by the arms-disagree gate).
+	// '' compares >= every spawned_at value, so short-history projects
+	// keep their whole window.
+	//
+	// DOGFOOD-009 still holds: bounds is built FROM the `projects`
+	// table, so only existing projects can join. A hard-deleted project
+	// (purged row, e.g. eduos-e2e) leaves historical ticks behind;
+	// without the filter those ticks resurfaced as ghost failure-rate
+	// entries (failure_rate=1.0, auto_disable_armed=true) that could
+	// never be cleared.
+	//
+	// SCHED-GAP-173 / SCHED-GAP-1608: harness-class rows and operator
+	// drain reaps stay classified in Go (below), never re-declared in
+	// SQL — the marker lists keep a single source of truth shared with
+	// the enforcer.
+	// Join-order pin — the join is written CROSS JOIN on purpose.
+	// SQLite's optimizer (documented behaviour) never reorders a CROSS
+	// JOIN, so `bounds b CROSS JOIN ticks t` pins projects as the outer
+	// loop. The plain-JOIN spelling of this exact query lets the
+	// optimizer flip the plan on databases without sqlite_stat1 rows:
+	// EXPLAIN QUERY PLAN on an unanalyzed in-memory DB showed
+	// "SCAN t USING INDEX idx_ticks_project_spawned" — every tick row
+	// became an outer-loop iteration that re-ran the correlated cutoff
+	// subquery — a measured 3.7s vs 47ms on an 83k-row fixture (21x
+	// worse than even the pre-PERF-003 query). With the pinned order
+	// each project costs one index seek for the cutoff plus one bounded
+	// range scan (project_name=? AND spawned_at>cutoff).
 	failureRateQueryCount.Add(1)
 	rows, err := db.QueryContext(ctx,
-		`SELECT t.project_name, t.status, COALESCE(t.error, ''),
+		`WITH bounds AS (
+		   SELECT p.name AS name,
+		          COALESCE((SELECT c.spawned_at FROM ticks c
+		                    WHERE c.project_name = p.name AND c.completed_at IS NOT NULL
+		                    ORDER BY c.spawned_at DESC LIMIT 1 OFFSET ?), '') AS cutoff
+		   FROM projects p)
+		 SELECT t.project_name, t.status, COALESCE(t.error, ''),
 		        COALESCE(t.orphan_reason, '')
-		 FROM ticks t
-		 WHERE t.completed_at IS NOT NULL
-		   AND EXISTS (SELECT 1 FROM projects p WHERE p.name = t.project_name)
-		 ORDER BY t.project_name ASC, t.spawned_at DESC`)
+		 FROM bounds b
+		 CROSS JOIN ticks t ON t.project_name = b.name
+		             AND t.completed_at IS NOT NULL
+		             AND t.spawned_at >= b.cutoff
+		 ORDER BY t.project_name DESC, t.spawned_at DESC`,
+		window-1)
 	if err != nil {
 		return out
 	}
 	defer rows.Close()
 
-	// Walk rows in (project_name, spawned_at DESC) order. A single
+	// Walk rows grouped per project, each project newest-first (the
+	// project-group order — DESC since PERF-003 — is irrelevant: the
+	// result is a map). A single
 	// pass counts each project's most recent `window` ticks; the
 	// harness classifier (SCHED-GAP-173 single source of truth,
 	// failureclass.go) is applied in Go — never re-declared in SQL
@@ -715,7 +771,9 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 		if err := rows.Scan(&name, &status, &errText, &orphanReason); err != nil {
 			continue
 		}
-		// Project boundary (rows are ordered by project_name ASC).
+		failureRateScannedRowCount.Add(1)
+		// Project boundary (rows arrive grouped by project_name;
+		// group order DESC since PERF-003).
 		if hasCurrent && name != curName {
 			flush()
 			curName = name
