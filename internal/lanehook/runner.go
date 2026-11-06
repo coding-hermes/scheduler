@@ -242,18 +242,19 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 
 	r.finishReceipt(ctx, runID, res, dur, buf.String())
 
-	if res.state == "ok" {
+	switch res.state {
+	case "ok":
 		r.event(ctx, "INFO", "hook."+string(phase)+".ok", map[string]any{
 			"tick_id": env.TickID, "hook_id": step.ID, "duration_ms": dur.Milliseconds(),
 		})
-	} else if res.state == "skipped" {
+	case "skipped":
 		// A named skip mirrors the failure event's fields but is routine,
 		// not an alarm: the receipt (state=skipped) is the operator surface.
 		r.event(ctx, "INFO", "hook."+string(phase)+".skipped", map[string]any{
 			"tick_id": env.TickID, "hook_id": step.ID, "exit_code": res.code,
 			"attempts": attempt, "reason": reason, "output_head": head(buf.String(), 400),
 		})
-	} else {
+	default:
 		r.event(ctx, "HIGH", "hook."+string(phase)+"."+res.state, map[string]any{
 			"tick_id": env.TickID, "hook_id": step.ID, "exit_code": res.code,
 			"attempts": attempt, "reason": reason, "output_head": head(buf.String(), 400),
