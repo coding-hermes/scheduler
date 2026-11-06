@@ -79,7 +79,10 @@ check $rc 78 "W6 disk floor exits 78"
 # scan can take a couple of seconds. The fixture process must outlive the scan
 # (a 5s sleeper on a 2k-process box flaked exactly that way), and it is killed
 # rather than waited on so the battery does not pay for the extra time.
-(cd "$TMP/wt/qq-qa" && sleep 30) & SLEEPER=$!
+# SCHED-GAP-16991 evidence: at loadavg ~16 (6.7k processes) the scan ran past
+# 30s and the sleeper died mid-scan — busy-check returned 0 twice in a row
+# while a 300s sleeper passed 2/2 — so the sleeper is now 120s.
+(cd "$TMP/wt/qq-qa" && sleep 120) & SLEEPER=$!
 # wait until the sleeper is actually resident in the tree (a fixed sleep races it)
 for _ in $(seq 30); do
   found=0
