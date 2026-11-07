@@ -5814,8 +5814,9 @@ tasks:
     direct stdlib clock offenders, and the guard allowlist and test file must be unchanged.
     go build ./... and go vet ./internal/scheduler/ must exit 0. The cooldown_pin_at
     timestamp format must remain RFC3339 UTC.
-  status: in_progress
+  status: complete
   created_at: '2026-11-07T18:40:49.880376+00:00'
+  completed_at: '2026-11-07T18:42:11.236309+00:00'
 - id: RELEASE-044
   title: Widen the board status vocabulary to admit blocked in lockstep (Go + Python),
     correct the docs, add a drift fixture
