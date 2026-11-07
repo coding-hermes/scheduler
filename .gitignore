@@ -1,5 +1,11 @@
 # Binaries
 bin/
+# RELEASE-037: release build output. The release workflow now writes to
+# $RUNNER_TEMP/dist so the checkout stays pristine (Go's VCS stamping reads
+# the tree, and untracked binaries there stamped 7 of 8 assets +dirty at
+# v1.14.0). Ignoring dist/ additionally keeps a local `mkdir -p dist` build
+# from dirtying the tree.
+dist/
 
 # Generated / accidental-at-root artifacts (CLN-1 2026-09-26: both of these were
 # committed by accident — coverage.html in b736d12b, a 0-byte scheduler.db in
