@@ -120,9 +120,14 @@ default (`--listen 127.0.0.1:9090`).
 | HTML dashboard | `/`, `/dashboard/partial`, `/projects/{name}`, `/queue`, `/ticks?page=N`, `/namespaces/{id}`, `/health` (not part of the JSON API) |
 | MCP (JSON-RPC) | `POST /mcp` (not part of the REST API) |
 
-Route index (every `/api/v1/*` path the daemon serves — 53 paths, cross-checked
-against `GET /api/v1/openapi.json`; the JSONL deploy templates/groups family is
-documented in [§1a Deploy templates](#1a-deploy-templates-jsonl-deploy-routes)):
+Route index (every `/api/v1/*` path the daemon serves — **57 paths, exactly one
+row each**. The 57 are the 35 exact-file path registrations in
+`internal/api/server.go` plus the 22 deeper paths served under its 8
+trailing-slash subtree registrations; the set is byte-identical to the 57
+paths of `GET /api/v1/openapi.json`, and the same 57 rows are indexed in
+[docs/reference/endpoints.md](reference/endpoints.md). The JSONL deploy
+templates/groups family is documented in
+[§1a Deploy templates](#1a-deploy-templates-jsonl-deploy-routes)):
 
 | Method | Path | Section |
 |--------|------|---------|

@@ -4,6 +4,14 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 
 ## Endpoints
 
+The table is the complete index: **78 rows — 20 HTML pages, 57 `/api/v1/*`
+paths and the `/mcp` endpoint — exactly one row per registration.** The 57
+`/api/v1/*` rows here are the same 57 paths indexed in the route table of
+[docs/api.md](../api.md) and the same 57 paths served by `GET
+/api/v1/openapi.json`; the 43 `mux.HandleFunc` registrations in
+`internal/api/server.go` account for them (35 exact paths + 8 trailing-slash
+subtree patterns whose deeper paths are spelled out as their own rows).
+
 | Route | Purpose |
 |-------|---------|
 | `/` | Fleet dashboard (full HTML page; `/dashboard` is an alias) |
@@ -46,9 +54,16 @@ The complete in-repo route set: the HTML pages registered in `cmd/schedulerd/mai
 | `/api/v1/cadence` | Configured vs achieved starts/day per lane over the trailing seven-day window; target source is explicit override, durable cooldown pin, disabled, or none (GET) |
 | `/api/v1/agents` | Agent registry (SCHED-GAP-1665, operator-token gated on BOTH methods): GET lists the execution targets work can be handed to — `{agents: [{name, capabilities, endpoint, registered_at, updated_at}], count}`, with optional `?capability=<token>` filtering (token-wise, case-insensitive); POST registers/refreshes an agent `{name, capabilities, endpoint}` → 201 when new, 200 when refreshed (`registered_at` preserved, `updated_at` moves). The registry is ADVISORY for routing: the relay's 404, not this table, decides whether an agent exists |
 | `/api/v1/agents/{name}` | DELETE: unregister an agent → `{status: "unregistered", name}`; unknown name → 404 (an unregister that removed nothing is never a silent success). Routing is unaffected — `dispatch-targets.jsonl`, not the registry, decides which agent runs a lane |
-| `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes) plus the `/pause`, `/resume`, `/spawn`, `/bump`, `/unbump` sub-routes. `POST …/spawn` takes an OPTIONAL body `{"agent": "<name>"}` (SCHED-GAP-1665): that tick is routed to the named agent; no body keeps the historical project-based routing |
+| `/api/v1/projects/{name}` | One project: detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true`; `&purge=true` hard-deletes). The five action sub-routes below are their own rows. `POST …/spawn` takes an OPTIONAL body `{"agent": "<name>"}` (SCHED-GAP-1665): that tick is routed to the named agent; no body keeps the historical project-based routing |
+| `/api/v1/projects/{name}/pause` | POST (operator token): disable one project — it stops being scheduled. Stamps provenance `disabled_by="api-pause"` and writes an events entry → `{"status":"paused","project":"<name>"}`. 405 on non-POST; an unknown project surfaces as **500**, not 404 (this sub-route does not map to 404) |
+| `/api/v1/projects/{name}/resume` | POST (operator token): re-enable a paused project and clear its disable provenance → `{"status":"resumed","project":"<name>"}`. 405 on non-POST; unknown project → 500 (as with pause) |
+| `/api/v1/projects/{name}/spawn` | POST (operator token): enqueue one tick synchronously for this project and return the REAL stored `tick_id` (status `queued`, immediately resolvable at `GET /api/v1/ticks/{id}`); optional body `{"agent":"<name>"}` hands THIS tick to a named agent (SCHED-GAP-1665) → 202 `{"status":"spawned","project","tick_id","agent","agent_registered"}`. 409 when the project is disabled or already has a tick in flight, 404 unknown project |
+| `/api/v1/projects/{name}/bump` | POST (operator token): temporarily accelerate a project (SCHED-GAP-107) — small cooldown for `ticks` completed ticks (1..8, default 5, `cooldown` ≥ 7200) with a two-phase auto-revert at expiry and a 12h hard cap; `reason` is REQUIRED. → 200 the updated project (`bump_active`, `bump_remaining_ticks`, `bump_saved_*`). 400 bad body, 404 unknown project, 409 disabled or a bump already active |
+| `/api/v1/projects/{name}/unbump` | POST (operator token): abort an active bump — Phase A only, restoring the saved pre-bump cooldown policy verbatim with no adaptive re-evaluation. 404 unknown project; 409 no active bump |
 | `/api/v1/namespaces` | List namespaces |
 | `/api/v1/namespaces/{id}` | Namespace detail (GET) / partial update (PUT) / delete (DELETE — `?confirm=true` soft-deletes: enabled=false, member projects unassigned, row retained; `?confirm=true&purge=true` hard-deletes the row permanently, SCHED-GAP-097) |
+| `/api/v1/namespaces/{id}/projects` | GET: the projects assigned to a namespace → `{"namespace_id": "<id>", "projects": [<Project>, ...]}`; 405 on non-GET, unknown sub-route → 404 |
+| `/api/v1/namespaces/{id}/move` | POST (operator token): assign a project to the namespace — body `{"project": "<name>"}` (required) → 200 the updated project with `namespace_id` set. 400 when `project` is missing or the JSON is invalid, 404 unknown project, 405 on non-POST |
 | `/api/v1/groups` | Deploy groups — named project lists, JSONL-backed (GET list / POST create) |
 | `/api/v1/groups/{name}` | One deploy group: GET / partial update (PUT, name immutable) / DELETE |
 | `/api/v1/groups/{name}/deploy` | POST: apply a template's task rows to every member project's board (`dry_run=true` plans without writing) |
