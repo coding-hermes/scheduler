@@ -990,3 +990,202 @@ blocker.
   cannot perform).
 - No duplicate row was filed for the not-due release, and no existing row was
   closed in this pass.
+
+## Pass 8 — eighth delivery, 49 minutes after the `v1.15.1` cut: NOT DUE, the `RELEASE-048` fix is observed mid-flight in the canonical checkout, artifact re-downloaded and re-verified from published bytes
+
+Probes began `2026-11-07T22:03Z`. Every command in this pass ran in the detached
+worktree `/var/tmp/hermes-scratch/releng-sched-p8-54z1tt`, created with
+`git worktree add --detach` at the fetched `origin/main`. Its root plus remote
+were asserted before use (`/var/tmp/hermes-scratch/releng-sched-p8-54z1tt`,
+`https://github.com/coding-hermes/scheduler.git`) and it is clean (0 porcelain
+lines).
+
+### Re-anchor — three views agree at `88e78618`
+
+```
+git rev-parse HEAD                                → 88e786186d272068cdddcf56019bca1a92daa965
+git ls-remote origin refs/heads/main              → 88e786186d272068cdddcf56019bca1a92daa965
+gh api repos/coding-hermes/scheduler/commits/main → 88e786186d272068cdddcf56019bca1a92daa965
+git ls-remote --symref origin HEAD                → ref: refs/heads/main
+```
+
+The tip moved four times inside this tick's lifetime (`c6cc9920` at pass 7 →
+`88e78618` now), which is why this pass re-derived the census from the fetched
+remote tip rather than inheriting pass 7's numbers.
+
+### Canonical checkout — an ACTIVE sibling writer, and the work it is holding is `RELEASE-048` itself
+
+`git rev-list --left-right --count origin/main...HEAD` → `10  0`: the checkout is
+still 10 commits behind, now carrying **16 modified + 4 untracked paths**. The
+mtimes are `16:34`–`16:55`, i.e. all *after* the `16:13` cut, and a session
+process is visibly polling that tree:
+
+```
+1784137  277  ... eval 'sleep 330; cd /home/kara/coding-hermes-scheduler/coding-herms-scheduler && ...
+              git log --oneline -2; git status --porcelain --untracked-files=all | wc -l'
+```
+
+So this is a live writer, not abandoned residue. The paths identify what it is
+building — the `RELEASE-048` repair itself:
+
+```
+internal/scheduler/tick_reconcile.go   "// tick_reconcile.go — RELEASE-048: late-commit reconciliation
+                                        // for failed and timeout ticks."
+internal/scheduler/tick_reconcile_test.go
+cmd/reconcile-ticks/main.go            (new CLI)
+internal/scheduler/{lifecycle,tick_process}.go, internal/database/migrations.go
+scripts/release-claim.sh, Makefile, docs/releases.md, CHANGELOG.md, .gitignore
+```
+
+No release action was attempted from that tree and no file in it was touched by
+this pass. It is **not** release content: none of it is committed, so
+`v1.15.1..origin/main` does not reach it. The stale-base hazard `RELEASE-046`
+described is guarded now (`d2b961a0`, "refuse a stale-base board commit before
+it can drop rows"), so no row is filed for the dirty tree — the work is being
+written, not abandoned.
+
+### Delta since the pass-7 tip `c6cc9920` — bookkeeping only
+
+```
+git diff --name-only c6cc9920..88e78618
+.coding-hermes/board/events.jsonl
+.coding-hermes/board/tasks.jsonl
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+```
+
+Zero code paths again.
+
+### Census `v1.15.1..88e78618` — reconciles
+
+```
+git rev-list --no-merges --count v1.15.1..HEAD                       → 13
+git log --format='%s' v1.15.1..HEAD | sed -E 's/^([a-z]+)(\(.*\))?!?:.*/\1/' | sort | uniq -c
+      9 board
+      4 chore
+git log --format='%B' v1.15.1..HEAD | grep -cE 'BREAKING CHANGE|^[a-z]+(\(.*\))?!:'   → 0
+git diff --name-only v1.15.1..HEAD
+.coding-hermes/board/board.jsonl
+.coding-hermes/board/events.jsonl
+.coding-hermes/board/tasks.jsonl
+.gitreins/tasks.yaml
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+```
+
+`9 + 4 = 13` equals `rev-list`, so the census reconciles. Every subject is a
+`board(releng)` / `chore(releng)` bookkeeping commit carrying `[ci skip]`, and the
+path list touches no shipped source. Material count: **0 feat / 0 fix / 0 perf /
+0 breaking**.
+
+### Decision 1 — NOT DUE (rule 3)
+
+`v1.15.1` published `2026-11-07T21:13:45Z`, 49 minutes before this pass's first
+probe. Zero material commits have landed since. Rule 3 fires ahead of rule 6's
+14-day cadence and ahead of every bump. No tag, Release object, or asset was
+created, moved, or deleted — and no tag can be: `v1.15.1` is the newest tag both
+locally and in `ls-remote`.
+
+### CI — the tip has no run by construction; the tree gate is carried by `f6ea23d7`
+
+```
+gh api "repos/.../actions/runs?head_sha=88e786186d272068cdddcf56019bca1a92daa965" --jq .total_count → 0
+git diff --name-only f6ea23d7..HEAD | grep -vE '^(\.coding-hermes/|\.gitreins/|docs/|CHANGELOG)'  → no output, rc=1
+```
+
+`88e78618` carries `[ci skip]` and a board/evidence-only diff, so no run exists
+for it and none can. The shipped code tree is **byte-identical** to `f6ea23d7`
+(the filter above removes only board, `.gitreins`, docs and CHANGELOG paths), so
+the release gate is the `f6ea23d7` measurement, re-read this pass:
+
+| Run | Workflow | SHA | Result |
+|---|---|---|---|
+| 42412373587 | `CI` | `f6ea23d7` | completed/success — 14 jobs, re-censused per job this pass: `lint`, `build`, `race-blocks`, `race-scheduler`, `multiarch / Verify (amd64)`, `multiarch / Verify (arm64, native)` and all six `multiarch / Build <platform>` success; `Container (multi-arch)` + `Release` `skipped` (tag-only `if:`) |
+| 42412372572 | `CI Pipeline` | `f6ea23d7` | completed/success — 7/7 |
+| 42414729229 | `Release` (tag) | `f6ea23d7` | completed/success |
+| 42414729246 | `CI Pipeline` (tag) | `f6ea23d7` | completed/success — 7/7 |
+
+### Version hygiene at the tip — PASS
+
+```
+bash scripts/check-version-authority.sh v1.15.1
+→ version-authority: PASS — .../CHANGELOG.md names v1.15.1; [Unreleased] present exactly once
+grep -nE '^## \[[0-9]' CHANGELOG.md → 36:## [1.15.1] — 2026-11-07
+                                     48:## [1.15.0] — 2026-11-07
+```
+
+The `[Unreleased]` heading sits above `[1.15.1]` and is empty — correct post-release
+rollover.
+
+### Shipped artifact `v1.15.1` — re-downloaded from the Release and re-verified
+
+Pass 7 relied on immutability; this pass re-fetched the bytes and repeated every
+check, so the receipt is fresh rather than inherited:
+
+```
+gh release view v1.15.1 --json tagName,isDraft,isPrerelease,assets
+→ tag v1.15.1, draft=false, prerelease=false, 9 assets
+gh release download v1.15.1 -D <dir>  → 9 files, 106 MB total
+(cd <dir> && sha256sum -c SHA256SUMS) → 8/8 OK
+```
+
+Provenance, all eight binaries (not a sample):
+
+```
+schedulerd-{linux,darwin}-{amd64,arm64}  vcs.modified=false  mod … v1.15.1
+migrate-{linux,darwin}-{amd64,arm64}     vcs.modified=false  mod … v1.15.1
+schedulerd-linux-amd64 / migrate-linux-amd64: go1.26.10, vcs.revision=f6ea23d757daab8eef1d04f5c6c4f798659d504b
+```
+
+### Deployed binary — still STALE, still two releases behind
+
+- pid `3347652`, started `Sat Nov 7 00:42:57 2026`, elapsed `16:20:13` at probe.
+- Executable `…/coding-herms-scheduler/bin/schedulerd`, mtime `2026-11-07 00:42:57`
+  — the unit's own `ExecStart` path, rebuilt by its `ExecStartPre` on restart.
+- `go version -m` → `mod github.com/coding-hermes/scheduler
+  v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`, `vcs.revision=d0dad6d9ede0…`,
+  `vcs.modified=true`.
+
+The live scheduler is missing **`v1.15.0` and `v1.15.1`** and runs a `+dirty`
+build — identical to passes 6 and 7, owned by `SCHED-GAP-162` (pending/P1) with
+its recurrence row `SCHED-GAP-16994` (complete). Not duplicated here; it does not
+block a cut because no cut is due.
+
+### Open-row census at `88e78618` (scope: every non-terminal row, `blocked` and `review` included)
+
+`731 complete`, `88 pending`, `4 blocked` → **92 non-terminal of 823 rows**
+(`731 + 88 + 4 = 823`, equals the line count). By priority: 6 `P0`, 31 `P1`,
+40 `P2`, 11 `P3`, 3 `P4`, 1 `P5`.
+
+Delta against pass 7 (91 of 822): **+1 row, +1 `P3`** — `RELEASE-051`, which pass 7
+filed *after* its own census was drafted and therefore could not count. No row was
+closed by a sibling in between. The six `P0`s are unchanged and none names shipped
+code: `SEC-002` (owner-gated credential rotation) plus
+`SCHED-GAP-16956` / `16960` / `16962` / `16964` / `16966` (node-provisioning
+program rows), so none is a tree or cut blocker.
+
+### `RELEASE-048` premise re-probed — still live, and now visibly being fixed
+
+```
+GET http://127.0.0.1:9090/api/v1/projects → coding-hermes-scheduler-releng
+  last_tick_status    = "failed"
+  last_tick_completed = 2026-11-07T16:22:50-05:00
+  enabled             = true, last_error = null
+```
+
+The ledger still books the releng lane as failed for the tick it is executing, and
+the timestamp has advanced from pass 7's `13:25` to `16:22:50` — every delivery of
+this tick re-writes it as a failure. The row's premise holds, and the in-flight
+`internal/scheduler/tick_reconcile.go` shown above is that row's repair being
+written. Row left untouched: different owner, different defect, work in progress.
+
+### Rows this pass
+
+- `RELEASE-049` — the canonical row for this release line; evidence entry appended
+  with this pass's artifact fingerprint and the tick id as the run leg. Not
+  retitled, not reprioritised.
+- **No new row filed.** Every candidate finding is already owned: stale deployed
+  binary → `SCHED-GAP-162`; stale `/usr/local/bin/schedulerd` shadow →
+  `RELEASE-051`; disabled secret scanning + push protection → `RELEASE-050`;
+  ledger invisibility + in-flight repair → `RELEASE-048`; dirty canonical
+  checkout → live writer, guarded by `d2b961a0`.
+- No row was closed and no existing row was modified beyond `RELEASE-049`'s
+  evidence entry.
