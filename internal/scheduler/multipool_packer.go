@@ -437,6 +437,14 @@ func (m *MultiPoolPacker) packFlat(
 						continue // post-failure cooldown not elapsed
 					}
 				}
+				// NOOP-PACING: consecutive no-artifact ticks space the next
+				// admission by the lane's cooldown floor (doubling, 8x cap).
+				// See noop_pacing.go — the 2-minute dry churn this closes.
+				if tasksNoopStreakDeferred(s.proj.NoProgressTicks, s.proj.CooldownFloorS, s.lastTick, now) {
+					noteNoopPacing(s.proj.Name, s.proj.NoProgressTicks,
+						tasksNoopCooldown(s.proj.NoProgressTicks, s.proj.CooldownFloorS))
+					continue // no-op cooldown not elapsed
+				}
 				// SCHED-GAP-133: only gate on FailureBackoff when the project
 				// has actually failed repeatedly. Normal operation (consecutive_failures ≤ 1)
 				// keeps the original tasks-mode semantics: pending work waives cooldown.

@@ -1700,7 +1700,7 @@ func (l *Loop) publishZeroSelect() {
 // the packer would skip is never counted as eligible (GAP-050).
 func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
 	rows, err := l.db.QueryContext(context.Background(),
-		`SELECT name, cooldown_s, COALESCE(cooldown_pin_s, 0), priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0), COALESCE(admission_mode, ''), COALESCE((SELECT admission_mode FROM namespaces WHERE id = projects.namespace_id), ''), COALESCE(workdir, ''), COALESCE(board_ownership, ''), COALESCE(last_tick_status, '') FROM projects WHERE enabled = 1`)
+		`SELECT name, cooldown_s, COALESCE(cooldown_pin_s, 0), priority, COALESCE(last_tick_completed, ''), COALESCE(consecutive_failures, 0), COALESCE(bump_active, 0), COALESCE(bump_cooldown_s, 0), COALESCE(admission_mode, ''), COALESCE((SELECT admission_mode FROM namespaces WHERE id = projects.namespace_id), ''), COALESCE(workdir, ''), COALESCE(board_ownership, ''), COALESCE(last_tick_status, ''), COALESCE(no_progress_ticks, 0), COALESCE(cooldown_floor_s, 0) FROM projects WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
 		return 0
@@ -1716,8 +1716,9 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		var consecFailures int
 		var bumpActive, bumpCD int
 		var projMode, nsMode, workdir, boardOwnership, lastStatus string
+		var noopStreak, cooldownFloorS int
 		if err := rows.Scan(&name, &cooldown, &pinS, &priority, &lastComp, &consecFailures, &bumpActive, &bumpCD,
-			&projMode, &nsMode, &workdir, &boardOwnership, &lastStatus); err != nil {
+			&projMode, &nsMode, &workdir, &boardOwnership, &lastStatus, &noopStreak, &cooldownFloorS); err != nil {
 			continue
 		}
 		if runningSet[name] {
@@ -1795,6 +1796,15 @@ func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) 
 		mode := admissionModeFor(projMode, name, map[string]string{name: nsMode})
 		if mode == database.AdmissionModeTasks && tasksAdmissionDue(workdir, boardOwnership) &&
 			lastTickStatusFailed(lastStatus) && now.Sub(comp) < cooldownDur {
+			continue
+		}
+		// NOOP-PACING mirror: the three packer paths defer a tasks lane
+		// inside its no-op pause (noop_pacing.go), so the eligibility count
+		// must defer it too — GAP-050: a project the packer skips is never
+		// eligible. Without this the zero-select alarm would fire over a lane
+		// the packer is deliberately pacing.
+		if mode == database.AdmissionModeTasks && tasksAdmissionDue(workdir, boardOwnership) &&
+			tasksNoopStreakDeferred(noopStreak, cooldownFloorS, &comp, now) {
 			continue
 		}
 		// SCHED-GAP-1655 mirror: a cooldown-mode BUILDER lane with no
