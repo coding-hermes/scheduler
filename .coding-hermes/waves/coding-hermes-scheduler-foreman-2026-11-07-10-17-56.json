@@ -1,0 +1,99 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-11-07-10-17-56",
+  "block": "INT-CI-4187",
+  "base_sha": "6823f8b1",
+  "slots": 6,
+  "wave_budget": 12,
+  "rows": [
+    {
+      "id": "DOC-26",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-DOC-26",
+      "branch": "wt/DOC-26",
+      "brief": "/home/kara/.hermes/cache/scratch/brief-DOC-26.txt",
+      "files": [
+        "docs/reference/cli-tools.md"
+      ],
+      "model": "deepseek-flash",
+      "provider": "deepseek"
+    },
+    {
+      "id": "DOC-27",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-DOC-27",
+      "branch": "wt/DOC-27",
+      "brief": "/home/kara/.hermes/cache/scratch/brief-DOC-27.txt",
+      "files": [
+        "docs/reference/env-vars.md"
+      ],
+      "model": "deepseek-flash",
+      "provider": "deepseek"
+    },
+    {
+      "id": "DOC-29",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-DOC-29",
+      "branch": "wt/DOC-29",
+      "brief": "/home/kara/.hermes/cache/scratch/brief-DOC-29.txt",
+      "files": [
+        "docs/api.md",
+        "docs/reference/endpoints.md"
+      ],
+      "model": "deepseek-flash",
+      "provider": "deepseek"
+    },
+    {
+      "id": "README-19",
+      "worktree": "/home/kara/worktrees/coding-herms-scheduler-README-19",
+      "branch": "wt/README-19",
+      "brief": "/home/kara/.hermes/cache/scratch/brief-README-19.txt",
+      "files": [
+        "README.md"
+      ],
+      "model": "deepseek-flash",
+      "provider": "deepseek"
+    }
+  ],
+  "independence_note": "Four rows, four disjoint primary files. README-19 may touch docs/api.md heading only if no existing anchor resolves; DOC-29 owns docs/api.md route rows. Merge order: DOC-26, DOC-27, DOC-29, then README-19 (rebase if it touched docs/api.md).",
+  "already_landed_this_tick": [
+    "INT-CI-4187 (e054fa46, board 6823f8b1, verdict 2d79ee2c)"
+  ],
+  "finished_at": "2026-11-07T18:00:34-05:00",
+  "recovery": {
+    "status": "complete",
+    "reason": "All four recorded workers were already landed in the canonical main ancestry; no worker branch carries unlanded work. Recovery verified branch tips as superseded evidence and did not re-merge or dispatch fixups.",
+    "canonical_head": "7ba9c42ed9164ac92b48219085809f53872989db",
+    "workers": {
+      "DOC-26": {
+        "branch": "wt/DOC-26",
+        "tip": "a7654e571d183d185df2b095beac09c4b75687c4",
+        "landed_commit": "a7654e571d183d185df2b095beac09c4b75687c4",
+        "row_status": "complete",
+        "action": "superseded; implementation is in main; preserved worktree/branch evidence retained"
+      },
+      "DOC-27": {
+        "branch": "wt/DOC-27",
+        "tip": "ff1ed01a8333ecda2084c852e3e4e900e71f1313",
+        "landed_commit": "ff1ed01a8333ecda2084c852e3e4e900e71f1313",
+        "row_status": "complete",
+        "action": "superseded; implementation is in main; preserved worktree/branch evidence retained"
+      },
+      "DOC-29": {
+        "branch": "wt/DOC-29",
+        "tip": "75d37f0e96d2e1b0a1dc976c01673604d3dddd2e",
+        "landed_commit": "75d37f0e96d2e1b0a1dc976c01673604d3dddd2e",
+        "row_status": "complete",
+        "action": "superseded; implementation is in main; preserved worktree/branch evidence retained"
+      },
+      "README-19": {
+        "branch": "wt/README-19",
+        "tip": "7446d2c335a6100e39f430c8420c74d8053d4e7b",
+        "landed_commit": "7446d2c335a6100e39f430c8420c74d8053d4e7b",
+        "row_status": "complete",
+        "action": "superseded; implementation is in main; preserved worktree/branch evidence retained"
+      }
+    },
+    "merge_count": 0,
+    "fixup_count": 0,
+    "board_truth": "Rows DOC-26, DOC-27, DOC-29, README-19 are complete on main; no recovery row mutation required.",
+    "worktree_cleanup": "preserved as evidence because these branches belong to the prior wave; no destructive removal performed during recovery.",
+    "manifest_sha_binding": "closeout bookkeeping is being bound to the current canonical head by the current tick."
+  }
+}
