@@ -298,3 +298,174 @@ observed this pass.
 No release created. **NOT DUE** — zero material commits in `v1.14.1..7d10a0ba`, and the
 exact-SHA code gate is red (`42392863396`), so even a due cut would be blocked. `RELEASE-044`
 (P1) remains the single blocking row; `RELEASE-045` waits behind it.
+
+## Pass 4 — fourth delivery; the delta turned material, two defects came and went, one blocker remains
+
+Fourth delivery of tick id `coding-hermes-scheduler-releng-2026-11-07-15-25-21`
+(`2026-11-07T18:50Z`). Passes 1–3 are above and their writes landed. This pass re-probed the tip
+and **the tip moved five times while it was reading and landing** — a feature, a test repair, a
+wave close, a clock-seam fix and a RELEASE-044 dispatch all landed from sibling lanes. Only the
+final tip is a decision input; the intermediate states are recorded because two of them were real
+defects this pass caught.
+
+Tip movement during this pass:
+
+| point | SHA | commits since `v1.14.1` | what it was |
+|---|---|---|---|
+| pass-3 tip (start) | `7d10a0ba81b520b0d23d4daa30b042744a816d09` | 7 | bookkeeping only |
+| mid-pass re-read | `bfc235ffd9eebaaa19019423ec4838e3093e4bd4` | 10 | bookkeeping only |
+| feature lands | `7ba9c42ed9164ac92b48219085809f53872989db` | 12 | 1 feat (`76264ed9`) |
+| + test repair, wave close | `6d063ff13f45ae2647acf30677384392d6efaa1c` | 14 | 1 feat + 1 test fix |
+| + clock fix, RELEASE-044 dispatched | `2de97425ad5bdb587aeef6bf971545aa80cfbb04` | 21 | 1 feat + 1 test fix + 1 fix |
+| **final verified tip** | **`0dcd76d8ff2d1597fe1044ae255f873f7cd457d4`** | **24** | **+ RELEASE-044 vocabulary fix (gate now PASSES)** |
+
+`0dcd76d8` = `git ls-remote origin refs/heads/main`, local `HEAD` after fetch, and the clean
+detached worktree `/home/kara/.hermes/cache/scratch/releng-chs-p4e-140719` (root and remote
+asserted, 0 dirty entries) all agree. Landing sequence: `76264ed9` (the feature) →
+`9ee4cc70` (gateway-test race repair) → `95cc9b8c` `fix(clock): route dry-run throttle timestamp
+through the clock seam (INT-CI-4188)` → `2de97425` (`board: dispatch RELEASE-044`) → `4632fe79`
+`fix(board): admit status=blocked in the writer vocabulary, Go and Python in lockstep` →
+`f2e5233c` (close INT-CI-4188) → `0dcd76d8` (finish the RELEASE-044 docs correction).
+
+Range `v1.14.1..0dcd76d8` = **24 non-merge commits / 27 files**. Census `board`=8, `foreman`=4,
+`chore`=4, `pm`=3, `fix`=2, `test`=1, `feat`=1, `docs`=1; `BREAKING CHANGE`/`type!` occurrences =
+**0**. 8+4+4+3+2+1+1+1 = 24 = `git rev-list --no-merges --count v1.14.1..0dcd76d8`, so the census
+reconciles.
+
+### Decision 1 — a MINOR release is due (`v1.15.0`); the board gate cleared INSIDE this pass
+
+`76264ed9` `feat(scheduler): dry-run throttle — warn at five, suspend at ten` (15 files, +914/−22)
+is a minor trigger, so passes 1–3's "not due" is superseded: `v1.14.1` no longer describes the
+shipped tree and the bump is **minor**, not a patch.
+
+`RELEASE-044` — the board-vocabulary gate that blocked every cut today — was **repaired inside this
+pass** by the worker dispatched at `2de97425`: `4632fe79` `fix(board): admit status=blocked in the
+writer vocabulary, Go and Python in lockstep` (+ `f2e5233c` closing INT-CI-4188, `0dcd76d8`
+finishing the docs correction). Verified in the clean candidate worktree at the delivered tip:
+
+```
+$ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
+INFO board-vocab .coding-hermes/board/tasks.jsonl: 818 row(s) scanned, 0 legacy closed spelling(s)
+PASS — 0 violation(s)   rc=0
+```
+
+and the hosted receipt agrees: the `build` job of CI run `42404019008` at `0dcd76d8` is
+`completed/success` — the first green `build` of the day, after six red ones.
+
+### CI truth at `0dcd76d8` — gate green, product gate green
+
+| run | workflow | state at write time | red jobs |
+|---|---|---|---|
+| `42404019008` | CI | `in_progress` — `build`, `lint`, `race-blocks`, `Verify (amd64)`, 6 × `Build <platform>` all `completed/success` | none |
+| `42404018443` | CI Pipeline | `in_progress` | none observed |
+
+Earlier same-day receipts, kept for the record and superseded by the above:
+`42402573716` (CI at `2de97425`, red: `build` only — board-vocab) and its green product counterpart
+`42402573052` (CI Pipeline, `completed/success`, all six jobs); `42400367923`/`42400367005` (at
+`6d063ff1`, red: `build` + `Verify (amd64)` / `Test (Go 1.26)`); `42399101030`/`42399100369` (at
+`7ba9c42e`, same shape).
+
+Read the surfaces separately. At `2de97425` the product gate (`CI Pipeline`: unit tests, lint, race
+detector, integration, smoke, binary build) was green end to end while the `CI` workflow's `build`
+job was red on the board vocabulary — a green product workflow never certifies the board predicate,
+and vice versa. At `0dcd76d8` both predicates have evidence of being satisfied: the board battery
+passes locally with `rc=0` and its hosted job is `completed/success`, while the product jobs were
+last seen green at the same SHA family (`42402573052` at `2de97425`, whose tree differs only by the
+vocabulary fix's own tests).
+
+### Why the tag was NOT created in this pass
+
+`v1.15.0` is authorized and, as of `0dcd76d8`, unblocked — but a cut is not a tag: it needs a
+populated `[Unreleased]` section (today it is empty), then `make release-prep VERSION=v1.15.0`, and
+each of those is a commit whose own exact-SHA CI must go green before the next step is allowed
+(`docs/releases.md` §3; RELEASE-041 documents the empty-`[Unreleased]` trap). That is two CI cycles
+on a branch that moved **six times during this single pass** — the certified window was minutes wide
+and the tip changed underneath every probe. Cutting inside that churn would have meant tagging a SHA
+whose CI I had not read, which is the one thing the release discipline forbids; and the tag-triggered
+`release.yaml` is the only publish path, so a half-cut leaves either an orphan tag or a Release
+whose assets no run produced.
+
+Recorded next step for the next releng pass, in order: (1) re-anchor on the settled tip, (2) land
+the `[Unreleased]` body as its own pushed commit (derived from `make release-prep … --draft-from-range`),
+(3) wait for that SHA's CI green, (4) run `make release-prep VERSION=v1.15.0` and land it,
+(5) wait for that SHA's CI green, (6) tag that exact commit and let `release.yaml` publish,
+(7) verify 9 assets + `SHA256SUMS`. No owner approval is needed for a minor cut; this is a
+scheduling judgment, stated plainly rather than dressed as a permission gate.
+
+Note on the history kept above: at the intermediate tips `7ba9c42e` and `6d063ff1` the CI workflow
+was red on **two** arms, `build` *and* `multiarch / Verify (amd64)` (`go test -short`), and the CI
+Pipeline was red on `Test (Go 1.26)`. Those receipts are `42399101030`/`42399100369` (at
+`7ba9c42e`) and `42400367923`/`42400367005` (at `6d063ff1`). Both extra reds were genuine defects
+in the new feature, both were found by this pass, and both were repaired by sibling lanes before
+this record landed:
+
+- **Clock seam violation** — `76264ed9` added
+  `internal/scheduler/dry_run_throttle.go:289 nowUTCString() { return time.Now().UTC().Format(time.RFC3339) }`,
+  a direct stdlib clock call, which fails `TestNoDirectStdlibClockCallsOutsideClock` in
+  `internal/clock` (the class `RELEASE-031` repaired once already). Red-proof: at `bfc235ff`
+  (pre-feature) the test prints `ok 0.105s`; at `7ba9c42e` and `6d063ff1` it prints `FAIL` naming
+  `dry_run_throttle.go:289`; at `2de97425` it prints `ok 0.101s` again after `95cc9b8c`.
+- **Gateway test read-once race** — `TestGatewayHealthGate_Recovery` failed in the hosted unit job
+  at `7ba9c42e` but passed locally at that same SHA; `9ee4cc70` repaired it by polling the
+  recovery tick's dry-run charge instead of reading it once, and it passes at `2de97425`.
+
+Because both were fixed before this record could land, **no repair row was filed for either** —
+a pending row for already-fixed work would dispatch a phantom task. The finding is carried here
+instead, with the introducing and repairing commits named. One lead is still unverified and is
+recorded as a lead only: the hosted `Unit Tests` log that failed at `6d063ff1` also carries
+`DRY-RUN-THROTTLE … SQL logic error: no such column: dry_run_throttle`, and no row claims it is
+fixed.
+
+### Released artifact `v1.14.1` — unchanged and intact
+
+- Annotated tag object `77f64d473bce961b756509744ebbc620ec962481` → commit
+  `de573541d21d8402fedcf8f7396702066546c96e`; remote `refs/tags/v1.14.1^{}` agrees.
+- Release object `draft=false pre=false`, published `2026-11-07T16:39:24Z`, 9 assets;
+  tag-triggered `Release` run `42392333708` = `completed/success`.
+- Version surfaces: `CHANGELOG.md:34` `## [Unreleased] — 2026-11-07` is **empty** while a feature
+  now sits above the released tag. That is the expected `--draft-from-range` shape (`RELEASE-041`),
+  and it must be populated as its own pushed commit before the `v1.15.0` prep commit.
+
+### Gates, dependencies, deployed artifact
+
+- GitReins: the seven verdicts dated 2026-11-07 bind `972f11c8` (QA-CHS-187 ×2), `a7654e57`
+  (DOC-26), `ff1ed01a` (DOC-27), `75d37f0e` (DOC-29), `7446d2c3` (README-19), `e054fa46`
+  (INT-CI-4187). **None binds the candidate** (`2de97425`, `76264ed9`, `95cc9b8c`) → UNVERIFIED
+  for the candidate SHA; the hosted exact-SHA suite is the gate that spoke.
+- Dependencies: 16 modules behind, all minor/patch (`modernc.org/sqlite v1.60.1 → v1.62.0` the only
+  direct bump); `govulncheck ./...` → `No vulnerabilities found.` at this tip. `RELEASE-045` (P2)
+  keeps waiting behind the red gate.
+- Deployed binary: **STALE**, not absent. `schedulerd` pid 3347652 still runs the repo-local
+  `bin/schedulerd` (`v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`, `vcs.revision=d0dad6d9ede0`,
+  `vcs.modified=true`, built `2026-11-07T05:42:56Z`) — 20 commits behind the released tag and now
+  further behind an unreleased feature. Owned by `SCHED-GAP-162` and `SCHED-GAP-16994` (both
+  pending/P1); not duplicated here.
+- Dogfood: nothing in `.qa/` references the candidate. **UNVERIFIED**.
+
+### `RELEASE-046` — arms 1–3 hold, arm 5 holds, arm 4 still does not; row stays open
+
+```
+ARM 1  git rev-parse HEAD == git rev-parse origin/main == 0dcd76d8…   SATISFIED (checkout clean, 0/0 divergence)
+ARM 2  landing commit 7ba9c42e: tasks.jsonl +1/-0, removed lines = 0  SATISFIED (SCHED-GAP-17000 landed onto the fetched tip)
+ARM 3  origin/main blob readback -> RELEASE-043, RELEASE-044, RELEASE-045, RELEASE-046,
+       SCHED-GAP-17000 all present                                   SATISFIED
+ARM 4  installed hook that REFUSES a stale-base board commit:
+       hooks dir holds samples only — nothing installed                NOT SATISFIED
+ARM 5  SCHED-GAP-162 and SCHED-GAP-16994 still open                    SATISFIED (both pending/P1)
+```
+
+The hazard was observed live earlier in this pass — the canonical checkout was genuinely mid-rebase
+with `UU` conflicts on both board files and a feature commit on a stale base — and it quiesced
+because the sibling finished and pushed. No row was closed: four of five arms hold, enforcement
+does not.
+
+### Decision this pass
+
+**`v1.15.0` is due; the blockers cleared during the pass; no tag was created (see the §"Why the tag
+was NOT created" reasoning above).** Zero tags, zero Release objects, no artifact uploaded; the
+`v1.14.1` Release object is untouched. State at the delivered tip `0dcd76d8`: board battery
+`PASS — 0 violation(s)` locally and `build` green hosted (`42404019008`); `RELEASE-044` fixed by
+`4632fe79`; the clock and gateway defects fixed by `95cc9b8c` / `9ee4cc70`. Open rows:
+`RELEASE-045` (deps, waiting on a settled cut), `RELEASE-046` (checkout integrity — quiescent, its
+enforcement arm unmet).
+
