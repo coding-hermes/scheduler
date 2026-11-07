@@ -59,7 +59,7 @@
   "recovery": {
     "status": "complete",
     "reason": "All four recorded workers were already landed in the canonical main ancestry; no worker branch carries unlanded work. Recovery verified branch tips as superseded evidence and did not re-merge or dispatch fixups.",
-    "canonical_head": "6d063ff13f45ae2647acf30677384392d6efaa1c",
+    "canonical_head": "pending:commit",
     "workers": {
       "DOC-26": {
         "branch": "wt/DOC-26",
@@ -94,9 +94,9 @@
     "fixup_count": 0,
     "board_truth": "Rows DOC-26, DOC-27, DOC-29, README-19 are complete on main; no recovery row mutation required.",
     "worktree_cleanup": "preserved as evidence because these branches belong to the prior wave; no destructive removal performed during recovery.",
-    "manifest_sha_binding": "verified_tree_sha=7ba9c42ed9164ac92b48219085809f53872989db; closeout_commit_sha=pending:commit; final published SHA is reported externally after push.",
+    "manifest_sha_binding": "verified_tree_sha=7ba9c42ed9164ac92b48219085809f53872989db; closeout_commit_sha=pending:commit; manifest_binding_predecessor=8a8778e1e9f5a790267d68641ede99f36852f806",
     "verified_tree_sha": "7ba9c42ed9164ac92b48219085809f53872989db",
     "closeout_commit_sha": "pending:commit",
-    "manifest_binding_predecessor": "7ba9c42ed9164ac92b48219085809f53872989db"
+    "manifest_binding_predecessor": "8a8778e1e9f5a790267d68641ede99f36852f806"
   }
 }
