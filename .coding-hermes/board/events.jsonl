@@ -1621,3 +1621,5 @@
 {"id": 1794021941135076098, "timestamp": "2026-11-07T06:50:11Z", "event_type": "task_completed", "task_id": "SCHED-GAP-16999", "actor": "foreman", "detail": "{\"status\":\"complete\"}"}
 {"id": 1794021941135076099, "timestamp": "2026-11-07T06:54:44Z", "event_type": "task_completed", "task_id": "QA-CHS-188", "actor": "foreman", "detail": "{\"status\":\"complete\"}"}
 {"id": 1794021941135076100, "timestamp": "2026-11-07T09:03:21Z", "event_type": "task_created", "task_id": "INT-CI-4187", "actor": "foreman", "detail": "{\"id\":\"INT-CI-4187\",\"status\":\"pending\"}"}
+{"id": 1794021941135076101, "timestamp": "2026-11-07T10:25:10Z", "event_type": "task_completed", "task_id": "INT-CI-4187", "actor": "foreman", "detail": "{\"status\":\"complete\"}"}
+{"id": 1794021941135076102, "timestamp": "2026-11-07T10:25:10Z", "event_type": "task_completed", "task_id": "INT-CI-4187", "actor": "foreman", "detail": "{\"commit\":\"e054fa46\",\"verdict\":\"2d79ee2c\",\"ci_runs\":[42363802947,42363802421],\"fix\":\"README 25→26 packages\"}"}
