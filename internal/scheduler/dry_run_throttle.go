@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -285,6 +286,8 @@ func emitDryRunEvent(ctx context.Context, db *sql.DB, severity, eventType, proje
 }
 
 // nowUTCString is the timestamp format the cooldown_pin_at column carries.
+// Routed through the clock seam (clock.Real() as the explicit default) so the
+// single time choke point holds — see internal/clock/stdlib_guard_test.go.
 func nowUTCString(ctx context.Context) string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return clock.Real().Now().UTC().Format(time.RFC3339)
 }
