@@ -33,6 +33,18 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-07
 
+## [1.15.1] — 2026-11-07
+
+### Fixes
+- board: the pre-commit board guard now refuses a **stale-base** board commit — one whose staged blob of a board path would drop any row id still present on `origin/main` — instead of letting it delete every row appended since the branch (the class behind REMOTE-006's 550-row rewrite, REMOTE-008 deleting SCHED-GAP-1695/1696, and the canonical checkout that sat 6 commits behind carrying a row on 2026-11-07). The guard reads the index blob (`git show :<path>`), never the working-tree file, so status edits and row appends still pass and only a disappearing id is refused; id extraction lives in `scripts/board_stale_base_check.py`, `scripts/install-hooks.sh` keeps the guard first and unconditional (fail-closed when the script is missing), and the heavy tier-1 battery now runs only for changesets that are not board-only so board-truthkeeping commits are not stalled behind its 900 s timeout. `BOARD_GUARD_ALLOW_ROW_DROP=<comma-separated ids>` admits a drop only when every dropped id is named and prints a NOTICE per admission; documented in `docs/releases.md` §2 — `d2b961a0`.
+- board: `.gitreins/tasks.yaml` is bookkeeping, not code, in the board-mixing rule — `boardctl` writes the board and gitreins writes the task record in the same tick, so classifying the task file as code refused the fleet's normal bookkeeping commits the moment the guard was installed as the shared hook. Board + `tasks.yaml` is now accepted; board + `tasks.yaml` + a Go file is still refused, pinned by a test asserting both directions — `266cebe9`.
+
+### Dependencies
+- go: 16 modules refreshed, all minor/patch, no majors; the only direct bump is `modernc.org/sqlite v1.60.1 → v1.62.0` (indirect: `golang.org/x/net`, `x/sys`, `x/tools`, `x/mod`, `modernc.org/libc`, `ccgo/v4`, `cc/v4`, `gc/v3`, `goldmark`, `regexp2`, `go-cmp`, plus pprof/telemetry/exp/demangle pseudo-versions). `govulncheck ./...` is clean, so this is hygiene rather than a security driver. The refresh was deliberately excluded from v1.15.0 (§Not in this release there) and lands here as its own lockfile-only commit so it reverts alone — `81b146b8`.
+
+### Not in this release
+- Board/harness bookkeeping commits (`board:`, `chore(releng):`, `docs(release):`) since `v1.15.0` are part of the tagged tree but are not itemised in these notes.
+
 ## [1.15.0] — 2026-11-07
 
 ### Features
