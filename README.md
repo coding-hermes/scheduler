@@ -396,7 +396,7 @@ Every `fed_*` read answers about **this** scheduler: the response envelope's `pe
 
 Every federation transport carries its OWN caller identity. The scheduler-query CLI reaches a peer over the Crier bus (`bus:transport`); the HTTP `POST /api/v1/federation/query` endpoint derives caller identity from the authenticated operator request (normally `operator:token` via `X-Operator-Token`); MCP tools (`fed_peer_status`, `fed_query`, …) use the MCP auth-mode identity (`mcp:auth-token`). The bus topic's peer id selects the destination, not the caller. Federation allow-lists are per caller identity, so an operation allowed for one transport may still be refused on another.
 
-[^1]: `fed_*` and `peers_*` tools are deny-all by default — see [Federation tools — deny-all by default](#federation-tools-deny-all-by-default) for configuration.
+[^1]: `fed_*` and `peers_*` tools are deny-all by default — see [Federation tools — deny-all by default](#federation-tools--deny-all-by-default) for configuration.
 
 ---
 
@@ -1088,7 +1088,7 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 
 ### Authentication
 
-All mutating MCP tools (the `fleet_*` write tools, `project_*`, `groups_*`, `deploy_*`) require the operator credential — the same one used for REST mutations (see [§1.1 Operator Credential](#11-operator-credential)). The read-only tools (`fleet_projects`, `fleet_namespaces`, `tick_get`, `config_get`, `queue_get`, `metrics_get`, `features_*`, `cooldown_residue`, `events_list`, `gateway_errors`, `fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`) are accessible without authentication.
+All mutating MCP tools (the `fleet_*` write tools, `project_*`, `groups_*`, `deploy_*`) require the operator credential — the same one used for REST mutations (see [docs/api.md §0 Authentication](docs/api.md#0-authentication-sched-gap-1602)). The read-only tools (`fleet_projects`, `fleet_namespaces`, `tick_get`, `config_get`, `queue_get`, `metrics_get`, `features_*`, `cooldown_residue`, `events_list`, `gateway_errors`, `fed_peer_status`, `fed_fleet_status`, `fed_projects_list`, `fed_queue_get`, `fed_ticks_list`, `fed_events_list`) are accessible without authentication.
 
 Configure the operator credential via one of:
 
