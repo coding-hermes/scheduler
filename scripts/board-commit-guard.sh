@@ -78,6 +78,12 @@ classify() {
         .coding-hermes/*)
             : # .coding-hermes/ but not board/ — not a board rewrite
             ;;
+        .gitreins/*)
+            : # gitreins lifecycle state (tasks.yaml) — bookkeeping, never code.
+              # Board truthkeeping and the gitreins task record are written by the
+              # SAME boardctl/gitreins calls in one tick; classifying this file as
+              # code would split every board closeout into two commits or refuse it.
+            ;;
         *)
             OUTSIDE=$((OUTSIDE + 1))
             OUTSIDE_LIST="$OUTSIDE_LIST  $p

@@ -246,6 +246,30 @@ func Test1699_Guard_BoardOnlyCommitAccepted(t *testing.T) {
 	}
 }
 
+// Test1699_Guard_BoardWithGitreinsStateAccepted: the gitreins task record
+// (.gitreins/tasks.yaml) is bookkeeping, never code — board truthkeeping and
+// the task lifecycle file are written by the same boardctl/gitreins calls in
+// one tick and must land in ONE commit. Classifying it as code split every
+// board closeout into two commits or refused it outright.
+func Test1699_Guard_BoardWithGitreinsStateAccepted(t *testing.T) {
+	dir := guardRepo(t)
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl", "{\"id\":1}\n")
+	stageIn(t, dir, ".coding-hermes/board/events.jsonl", "{\"id\":1}\n")
+	stageIn(t, dir, ".gitreins/tasks.yaml", "tasks: []\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc != 0 {
+		t.Fatalf("board + .gitreins/tasks.yaml changeset must be ACCEPTED; rc=%d output:\n%s", rc, out)
+	}
+
+	// The same bookkeeping class must NOT launder a real code path.
+	stageIn(t, dir, "internal/scheduler/x.go", "package scheduler\n")
+	out, rc = runGuard(t, dir, "git", nil, "")
+	if rc == 0 {
+		t.Fatalf("board + gitreins state + code must still be REFUSED; output:\n%s", out)
+	}
+}
+
 // Test1699_Guard_PureCodeCommitAccepted: no board path anywhere exits 0.
 func Test1699_Guard_PureCodeCommitAccepted(t *testing.T) {
 	dir := guardRepo(t)
