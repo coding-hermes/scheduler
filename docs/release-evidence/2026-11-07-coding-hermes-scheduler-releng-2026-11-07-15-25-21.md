@@ -1859,3 +1859,212 @@ Row untouched: different owner, work in progress.
 
 Nothing in this pass rewrote a tag, deleted an asset, created a Release object, or touched
 the `v1.15.0` / `v1.15.1` Release objects.
+
+## Pass 12 — twelfth delivery, ~1 h 22 m after the `v1.15.1` cut: NOT DUE (rule 3), standing record re-verified in full, one new schema-drift finding, and pass 11's "writer still running" is CORRECTED (same work, different process)
+
+Probes began `2026-11-07T22:35Z`. Tick `coding-hermes-scheduler-releng-2026-11-07-15-25-21`,
+delivery 12 — same tick id as passes 1-11, so this pass EXTENDS this one artifact rather than
+creating a second record of one decision.
+
+### Re-anchor — three views agree at `3c6dfabe`, unchanged from the pass-11 tip
+
+| Probe | Value |
+| --- | --- |
+| Canonical repo | `/home/kara/coding-hermes-scheduler/coding-herms-scheduler` |
+| Remote (verified alias `origin`) | `https://github.com/coding-hermes/scheduler.git` |
+| Default branch | `main` |
+| `git rev-parse origin/main` | `3c6dfabef400e13d2146bf2a2222b51870d3b0c3` |
+| `git ls-remote origin refs/heads/main` | `3c6dfabef400e13d2146bf2a2222b51870d3b0c3` |
+| Provider `commits/main` | `3c6dfabef400e13d2146bf2a2222b51870d3b0c3` |
+| Detached worktree | `/home/kara/.hermes/cache/scratch/releng-sched-wt-pass12`, HEAD = the same SHA, `git status --porcelain` = 0 lines, root + remote asserted |
+| Last release | `v1.15.1` → `f6ea23d757daab8eef1d04f5c6c4f798659d504b`; no tag above it locally or remotely |
+| Release object | `tag=v1.15.1 draft=false prerelease=false assets=9` |
+
+Pass 11 recorded its candidate as `4f85a7b1`; the tip has since advanced by exactly two commits,
+both of them pass 11's OWN carriers:
+
+```
+$ git diff --name-only 4f85a7b1..3c6dfabe
+.coding-hermes/board/tasks.jsonl
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+$ git log --oneline 4f85a7b1..3c6dfabe
+3c6dfabe board(releng): RELEASE-049 pass-11 evidence entry; SCHED-GAP-162 retitled 2 -> 3 releases … [ci skip]
+71768a79 chore(releng): pass-11 record — NOT DUE at 4f85a7b1 … [ci skip]
+```
+
+That is the re-delivery steady state, not progress: zero code paths, so the code tree is
+byte-identical to what pass 11 certified and the census below is a re-derivation, not a new
+reading.
+
+### Census `v1.15.1..3c6dfabe` — reconciles against `rev-list`, zero material
+
+```
+$ git rev-list --count v1.15.1..HEAD → 21
+$ git log --format='%s' v1.15.1..HEAD | sed -E 's/^([a-z]+)(\(.*\))?!?:.*/\1/' | sort | uniq -c
+     13 board
+      8 chore
+$ git log --format='%B' v1.15.1..HEAD | grep -cE 'BREAKING CHANGE|^[a-z]+(\(.*\))?!:'  → 0
+$ git log --format='%h|%s%n%b' v1.15.1..HEAD | grep -c -i 'ci skip\|skip ci'           → 28
+$ git diff --name-only f6ea23d7..HEAD | sed -E 's#^(\.coding-hermes/|\.gitreins/|docs/|CHANGELOG).*#BOOKKEEPING#' | sort -u
+BOOKKEEPING
+```
+
+`13 + 8 = 21` equals `rev-list`, so the classification covers the whole range. Material
+count: **0 feat / 0 fix / 0 perf / 0 deps / 0 breaking**.
+
+### Decision 1 — NOT DUE (rule 3)
+
+`v1.15.1` published `2026-11-07T21:13:45Z`, 1 h 22 m before this pass's first probe; zero
+material commits since. No tag, Release object, or asset was created, moved, or deleted.
+The six open `P0`s do not name a defect in shipped code, and the `v1.15.1` tree gate is green
+(below), so rules 1 and 2 do not fire either.
+
+### Exact-SHA CI — the tip has no run by construction; the tree gate rides on `f6ea23d7`
+
+```
+$ gh api "repos/coding-hermes/scheduler/actions/runs?head_sha=3c6dfabef400e13d2146bf2a2222b51870d3b0c3"
+  → total=0
+```
+
+Absent from the trigger surface, not from a `paths:` filter: `.github/workflows/ci.yml` and
+`ci.yaml` both trigger on `push: branches: [main]` with no path allow-list, and the range
+carries 28 `[ci skip]` directives. The newest run in the repository is still `42414729246`
+(created `21:12:13Z`), and the code-equivalent certified SHA's receipts are terminal:
+
+| Run | Workflow | Trigger | SHA | Result |
+| --- | --- | --- | --- | --- |
+| 42414729246 | `CI Pipeline` | tag `v1.15.1` | `f6ea23d7` | completed/success — 7/7 jobs (Race Detector, Test Go 1.26, Lint, Build Binaries, Simulation Smoke, Integration, CI All Clear) |
+| 42414729229 | `Release` | tag `v1.15.1` | `f6ea23d7` | completed/success |
+| 42412373587 | `CI` | push | `f6ea23d7` | completed/success |
+| 42412372572 | `CI Pipeline` | push | `f6ea23d7` | completed/success |
+
+Per-job state was re-read this pass, not inherited: every required job on the tag run is
+`completed/success`, none skipped.
+
+### Gates
+
+- Version authority: `bash scripts/check-version-authority.sh --structure-only` →
+  `PASS (structure) — exactly one [Unreleased]; newest release heading '## [1.15.1] — 2026-11-07'`
+  (rc=0). Headings `[Unreleased] 2026-11-07 / [1.15.1] / [1.15.0] / [1.14.1] / [1.14.0]` — correct
+  post-release rollover.
+- Dependencies: `go list -u -m all | grep -c '['` → **0** modules with an available update;
+  `govulncheck ./...` → `No vulnerabilities found.`
+- GitReins: **NOT RUN, by construction** — zero material commits in the range, so a
+  candidate-bound full-tree guard on a pristine tree yields `changedFileCount: 0` and a
+  DEGRADED verdict that is non-evidence. The hosted exact-SHA suite carries the tree gate.
+- Dogfood: still not a documented gate on this repo (`docs/releases.md` and
+  `scripts/release-prep.sh` carry 0 mentions) — an ABSENCE, not a skipped gate.
+
+### Published artifact `v1.15.1` — re-verified from the published bytes
+
+```
+$ scripts/verify-go-release-assets.sh coding-hermes/scheduler v1.15.1 --expected f6ea23d757da…
+assets: 9
+sha256sum -c SHA256SUMS → 8/8 OK   (migrate|schedulerd)-{darwin,linux}-{amd64,arm64}
+mod github.com/coding-hermes/scheduler v1.15.1 / vcs.revision=f6ea23d7 (all 8)
+buildinfo: ok=8 bad=0
+```
+
+### Deployed artifact — unchanged: three published releases missing (`SCHED-GAP-162`)
+
+``` 
+$ curl -s http://127.0.0.1:9090/api/v1/health | jq -r '.build_sha,.build_time,.version'
+d0dad6d9 / 2026-11-07T05:42:56Z / v1.14.0-40-gd0dad6d9-dirty   (status ok)
+$ go version -m bin/schedulerd → mod v1.14.1-0.20261107042958-d0dad6d9ede0+dirty, vcs.modified=true
+$ for t in v1.14.0 v1.14.1 v1.15.0 v1.15.1; do git merge-base --is-ancestor d0dad6d9ede0 $t; done
+  v1.14.0 rc=1   v1.14.1 rc=0   v1.15.0 rc=0   v1.15.1 rc=0
+$ systemctl --user list-timers --all | grep -c sched-deploy → 0
+```
+
+The rc values are captured per iteration, not inferred from a compound label: the three `rc=0`
+rows are the published releases whose content the running binary lacks. Binary mtime
+`2026-11-07 00:42:57.143` vs `ExecMainStartTimestamp=Sat 2026-11-07 00:42:58 -05` ⇒ stale
+artifact, not build-without-restart. Gap **not widened** since pass 11.
+
+Code gap re-measured with both filters (the row's own filter counts docs/CHANGELOG as code):
+
+```
+$ git rev-list --count d0dad6d9..HEAD -- . ':(exclude).coding-hermes'                 → 40
+   (39 at pass 11; the +1 is bookkeeping this pass did not touch — docs/release-evidence)
+$ git rev-list --count d0dad6d9..HEAD -- . ':(exclude).coding-hermes' \
+     ':(exclude).gitreins' ':(exclude)docs' ':(exclude)CHANGELOG.md'                  → 12
+```
+
+The true shipped-code gap is **12 commits, unchanged**. `SCHED-GAP-162` (P1, pending) owns it;
+title, status and acceptance contract untouched this pass (pass 11 already corrected the count
+from two releases to three).
+
+### NEW — the live DB schema is one version AHEAD of the canonical branch
+
+This is the one measurement this pass adds, and it was not in any prior record:
+
+```
+$ sqlite3 /home/kara/.hermes/coding-hermes/scheduler.db "select version, applied_at from migrations order by version desc limit 3;"
+87|2026-11-07T21:53:15Z
+86|2026-11-07T21:53:15Z
+85|2026-11-06T19:11:23Z
+$ grep -n 'const latestMigration' internal/database/migrations.go   (at 3c6dfabe)
+20:const latestMigration = 86 // SCHED-GAP-17000: projects.dry_run_throttle
+$ git show v1.14.1:internal/database/migrations.go | grep 'const latestMigration'
+20:const latestMigration = 85 // PERF-006: hook_runs busy receipts
+```
+
+So: **live DB 87 > canonical `origin/main` 86 > running binary 85.** v87 (`ticks.reconciled_at`)
+is defined only by the `RELEASE-048` commit `d46c7933`, which is unpushed. Severity, stated
+precisely rather than alarmistically: `applyMigrations` carries no "database newer than build"
+guard (`grep -iE 'newer than|downgrade' internal/database/migrations.go` → 0 hits), so
+restarting the v85 binary against a v87 DB will not fail — the risk is **durability, not
+runtime**: the live database now carries a migration the canonical tree cannot explain, and
+that state rests on a single unpushed, 18-commits-diverged commit surviving. Owner is
+`RELEASE-048` (landing that commit is the same repair), whose own worker report already
+disclosed the `bin/migrate` run, so no parallel row was filed.
+
+### `RELEASE-048` — pass 11's "writer still running" CORRECTED: same work, different process
+
+Pass 11 recorded the repair as in flight under `pid 1405215`. That process is gone and the
+work has since **committed** — but the checkout is still actively held, so the pass-11 wording
+is stale in one direction and the "abandoned commit" reading would be wrong in the other:
+
+```
+$ git -C <canonical> rev-parse HEAD → d46c7933  (author totalwindupflightsystems, 2026-11-07T17:27:17-05:00)
+$ git rev-list --left-right --count origin/main...HEAD → 18  1
+$ git branch -r --contains d46c7933 → (none; unpushed)
+$ readlink /proc/2213925/cwd → /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+$ ps -o lstart,cmd -p 2213925 → started 17:37:48, `env -u SCHEDULER_OPERATOR_RESTART_APPROVED go test …`
+```
+
+An ACTIVE closeout writer is re-running the suite in the canonical checkout right now, so the
+tree is working state, not residue: no "unpushed work at risk" row was filed and nothing was
+pushed from that tree. Its ledger premise is still live — the lane's own row still reads
+`coding-hermes-scheduler-releng  last_tick_status=failed  started 10:25:21  completed 16:22:50 -05`.
+Row untouched (different owner, work in progress).
+
+### Other blockers re-probed — all unchanged
+
+- `RELEASE-051` PATH shadow: `command -v schedulerd` → `/usr/local/bin/schedulerd`,
+  mtime `2026-07-19 09:50:33`, 20,266,468 B, `mod github.com/coding-herms/scheduler
+  v1.0.1-0.20260719145003-c56721124655+dirty`, `CGO_ENABLED=1` — pre-rename module path,
+  four months old, still shadows the canonical build. Still true, still pending.
+- `RELEASE-050` posture: **five** switches still `disabled` (`secret_scanning`,
+  `secret_scanning_push_protection`, `secret_scanning_non_provider_patterns`,
+  `secret_scanning_validity_checks`, `dependabot_security_updates`); repo `public`, licence `MIT`;
+  `main` protected (`required_linear_history=true`, `allow_force_pushes=false`,
+  `required_approving_review_count=1`) with no `required_status_checks` (that half stays on
+  `REL-GUARD-001`). No new row — one settings panel, one owner visit.
+- Open-row census (scope: every non-terminal row, `blocked` and `review` included): board at
+  `3c6dfabe` parses clean, `jq -s length` → **823** rows, **92 non-terminal = 4 blocked + 88
+  pending**, identical to passes 10 and 11. The six `P0`s are `SEC-002` (owner-gated credential
+  rotation) plus five node-provisioning program rows — none names a defect in shipped code.
+
+### Rows this pass
+
+- `RELEASE-049` — canonical survivor for the `v1.15.1` line; one evidence entry appended
+  binding the re-hashed artifact (tick id as the run leg). Status, title, priority untouched.
+- **No row created, closed, retitled or reprioritised.** Every candidate finding is already
+  owned: schema drift and the unpushed commit → `RELEASE-048` (in flight); stale deployed
+  binary → `SCHED-GAP-162`; stale `/usr/local/bin/schedulerd` → `RELEASE-051`; disabled
+  scanning switches → `RELEASE-050`. A row for an unchanged, not-due state is the duplicate
+  this pass exists to avoid.
+
+Nothing in this pass rewrote a tag, deleted an asset, or touched the `v1.15.0` / `v1.15.1`
+Release objects.
