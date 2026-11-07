@@ -25,7 +25,7 @@ Actions plus one Makefile target that prepares the CHANGELOG:
 | Release workflow | `.github/workflows/release.yaml` | Triggered by `push` with `tags: ['v*']`. Builds, smokes, checksums, and publishes. |
 | CI (on tags too) | `.github/workflows/ci.yaml` | Also has `tags: ['v*']` in its `push` trigger, so a tag push runs the full CI Pipeline as well. |
 | CI (main/PR only) | `.github/workflows/ci.yml` | `branches: [main]` on push and PR. **Does not run on tags.** |
-| Version prep | `scripts/release-prep.sh` + `make release-prep` | Promotes the CHANGELOG `[Unreleased]` section. Does **not** tag or push. |
+| Version prep | `scripts/release-prep.sh` + `make release-prep` | Promotes the CHANGELOG `[Unreleased]` section; `--draft-from-range` prints entries derived from the commit range (§3). Does **not** tag or push. |
 
 There is no `.goreleaser.yml`, no `Dockerfile`, and no `dist/` target. If you are
 looking for one, it does not exist — do not invent it.
@@ -99,6 +99,12 @@ each with a command.
    ```sh
    git status --porcelain    # expected: no output
    ```
+
+   One deliberate exception, on the empty-`[Unreleased]` path in §3: the
+   `CHANGELOG.md` edits you paste from `--draft-from-range` are still in the
+   working tree when the rollover runs, so `release-prep` allows that one file to
+   be dirty (it promotes those lines) and still refuses `DIRTY_TREE` for every
+   other path. The commit at §3 step 5 is what makes the tree clean again.
 
 2. **You are on the exact commit `origin/main` points at.**
 
@@ -198,10 +204,10 @@ grep -rn 'CHANGELOG\|git describe' .github/    # before RELEASE-006: no matches;
 ### Preconditions `release-prep` enforces for you
 
 `scripts/release-prep.sh` refuses (non-zero exit, named reason on stderr) rather
-than guessing. It covers: repo present, tree clean, `HEAD` == `origin/main`,
-`CHANGELOG.md` present, an `[Unreleased]` heading present, the requested version
-heading not already present, the requested tag not already created, and a
-non-empty `[Unreleased]` body. See §3.
+than guessing. It covers: repo present, tree clean apart from `CHANGELOG.md`
+itself (§3), `HEAD` == `origin/main`, `CHANGELOG.md` present, an `[Unreleased]`
+heading present, the requested version heading not already present, the
+requested tag not already created, and a non-empty `[Unreleased]` body. See §3.
 
 ---
 
@@ -211,39 +217,112 @@ Tags in this repository are **annotated** tags — all five existing tags are ta
 objects, not lightweight refs (`git cat-file -t v1.3.0` → `tag`). Keep it that
 way: `git describe` and the release notes range depend on the tag object.
 
-The full sequence, from a clean `main`:
+### The sequence from a repository whose `[Unreleased]` body is EMPTY
+
+That is the normal starting point: commits land without a CHANGELOG note, and
+the empty `[Unreleased]` heading is what `make release-prep` itself leaves
+behind after every cut. Promotion refuses an empty body (`EMPTY_UNRELEASED` —
+correctly: a release heading with nothing under it is the thing the tool exists
+to prevent), so the entries have to come from somewhere.
+`--draft-from-range` derives them from the commit range instead of asking you to
+reconstruct them; because it writes nothing, the entries and the rollover ship
+in **ONE commit**, gated by **ONE CI run on that exact commit**:
 
 ```sh
 # 0. start from the release commit
 git switch main
 git fetch origin && git reset --hard origin/main   # only if you are sure nothing local is wanted
 
-# 1. roll the CHANGELOG over (writes CHANGELOG.md, nothing else)
+# 1. draft the entries from the commits since the last tag (prints; writes nothing)
+./scripts/release-prep.sh --draft-from-range
+git status --porcelain     # expected: no output — the draft changed nothing on disk
+
+# 2. paste the entries you want under '## [Unreleased]' in CHANGELOG.md
+$EDITOR CHANGELOG.md
+
+# 3. roll it over in the SAME working tree (no intermediate commit)
 make release-prep VERSION=v1.4.0
-git diff CHANGELOG.md
+git diff CHANGELOG.md      # the pasted entries AND the promoted heading, one file
 
-# 2. commit the CHANGELOG rollover
-git add CHANGELOG.md
-git commit -m "chore(release): v1.4.0"
-
-# 3. gates
+# 4. gates
 make test
 
-# 4. push the commit and let CI go green on it
+# 5. ONE commit for the whole cut, then ONE CI run on that exact commit
+git add CHANGELOG.md
+git commit -m "chore(release): v1.4.0"
 git push origin main
-gh run list --branch main --limit 3
+gh run list --branch main --limit 1 \
+  --json headSha,name,conclusion \
+  --jq '.[] | [.headSha[0:8], .name, .conclusion] | @tsv'
+# the run you gate on is the one whose headSha is `git rev-parse --short=8 HEAD`
 
-# 5. tag and push the tag — this is the release action
+# 6. tag and push the tag — this is the release action
 git tag -a v1.4.0 -m 'Release v1.4.0'
 git push origin v1.4.0
 ```
 
-Step 5 is the entire release. `release-prep` deliberately does not run steps 2–5:
+Steps 2–3 are why this costs one commit and not two. `release-prep` treats
+`CHANGELOG.md` itself as an allowed dirty path (it is the file the rollover
+exists to rewrite, and the promotion carries your pasted lines into the new
+release heading), while every other dirty path still refuses `DIRTY_TREE`.
+Committing the pasted entries first — the extra `main` commit plus its full CI
+cycle that cutting over an un-noted range used to cost — is no longer required.
+Past the draft, nothing about the gates changed: the release commit is still
+what CI must have run on, and the tag is still the last step.
+
+### What the draft prints
+
+`git log --no-merges <last-tag>..HEAD` filtered to `feat`/`fix`/`perf`
+conventional subjects, grouped `### Features` → `### Fixes` → `### Performance`
+in that order; each entry is the subject in `- <scope>: <subject>` form with the
+commit's short sha in backticks after it (a subject with no scope keeps its text
+without a fabricated prefix). Non-conventional subjects
+(`chore:`, `board:`, `foreman tick`) and merge commits are not entries: a merge
+subject never summarises work of its own.
+
+⟨ran⟩ 2026-11-06 in this worktree, from `v1.14.0..HEAD`:
+
+```sh
+./scripts/release-prep.sh --draft-from-range
+```
+```
+release-prep: draft [Unreleased] entries from v1.14.0..HEAD
+              19 non-merge commits scanned, 1 feat/fix/perf subjects
+              nothing written — paste the lines you want under '## [Unreleased]'
+              in CHANGELOG.md, then run: make release-prep VERSION=vX.Y.Z
+
+### Fixes
+- board: renumber QA-CHS-187 audit event above the file max (event-id-ascending red on main) — `4c56d830`
+
+```
+
+Range and refusals: the start defaults to `git describe --tags --abbrev=0`; pass
+`--since <tag|ref>` to draft a different range. A repository with no reachable
+tag refuses `NO_PRIOR_TAG` (it cannot guess where the range starts), draft mode
+takes no version argument (`BAD_USAGE`), and it is exit 0 either way for an
+empty result — an empty draft is a report that the range holds no
+`feat`/`fix`/`perf` subjects, not a failed cut.
+
+### The short sequence, when `[Unreleased]` already has content
+
+If someone kept the section populated as work landed, the draft is unnecessary
+and the sequence is the same minus steps 1–2:
+
+```sh
+git switch main && git fetch origin && git reset --hard origin/main
+make release-prep VERSION=v1.4.0
+git diff CHANGELOG.md
+make test
+git add CHANGELOG.md && git commit -m "chore(release): v1.4.0" && git push origin main
+git tag -a v1.4.0 -m 'Release v1.4.0' && git push origin v1.4.0
+```
+
+Step 6 is the entire release. `release-prep` deliberately does not run steps 2–6:
 a command that tags and pushes when invoked is how a wrong tag gets published.
 
-> Optional: `make tag` does exist and does exactly step 5, but only when you pass
-> the version explicitly — `make tag VERSION=v1.4.0`. It is a separate, explicitly
-> typed command, never something a prep run performs for you.
+> Optional: `make tag` does exist and does exactly the tag step, but only when you
+> pass the version explicitly — `make tag VERSION=v1.4.0`. It is a separate,
+> explicitly typed command, never something a prep run performs for you.
 
 ---
 
@@ -594,6 +673,12 @@ The rule, in one line:
 3. leaves a fresh, empty `[Unreleased]` above it,
 4. prints the next commands (gates, commit, tag, push) **without running them**.
 
+It only promotes a body that exists, so step 4 of the "rule" is where an empty
+`[Unreleased]` is caught: `scripts/release-prep.sh --draft-from-range` is the
+read-only helper that fills the body from the commit range (§3), and it writes
+nothing — the entries reach the file only when you paste them, and ship in the
+same commit as the rollover.
+
 Idempotency: running it a second time for the same version **refuses**
 (`VERSION_HEADING_EXISTS`) rather than duplicating the heading — see the script's
 `--help` and the refusal table below.
@@ -602,12 +687,13 @@ Idempotency: running it a second time for the same version **refuses**
 |---|---|---|
 | no argument / several | `BAD_USAGE` | `make release-prep VERSION=v1.4.0` |
 | `1.4.0`, `v1.4`, `v1.4.0-rc1` | `BAD_VERSION_SHAPE` | annotated-tag shape is `vMAJOR.MINOR.PATCH` |
-| modified/untracked files | `DIRTY_TREE` | commit or clean them; the script lists them |
+| modified/untracked files other than `CHANGELOG.md` | `DIRTY_TREE` | commit or clean them; the script lists them |
 | `HEAD` != `origin/main` | `NOT_ON_RELEASE_COMMIT` | `git fetch origin main`, get onto that commit |
 | no `[Unreleased]` heading | `MISSING_UNRELEASED` | the CHANGELOG was hand-edited into an unrecoverable shape |
 | `## [1.4.0]` already present | `VERSION_HEADING_EXISTS` | a different version, or the rollover already happened |
 | `v1.4.0` tag already exists | `TAG_ALREADY_EXISTS` | the version is spent |
-| `[Unreleased]` has no content | `EMPTY_UNRELEASED` | write the entries first; a release heading with nothing under it is the thing this tool exists to prevent |
+| `[Unreleased]` has no content | `EMPTY_UNRELEASED` | draft the entries (`--draft-from-range`), paste them, re-run; a release heading with nothing under it is the thing this tool exists to prevent |
+| draft mode, no reachable tag | `NO_PRIOR_TAG` | pass `--since <tag>` to name where the range starts |
 | `CHANGELOG.md` missing | `MISSING_CHANGELOG` | wrong directory |
 | not a git repo | `NOT_A_REPO` | wrong directory |
 

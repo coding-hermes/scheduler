@@ -10,6 +10,18 @@
 #   4. Prints the exact next commands (gates, commit, tag, push) and runs NONE
 #      of them.
 #
+# DRAFT MODE (--draft-from-range, RELEASE-041)
+#   Nothing populates [Unreleased] on its own: commits land without a CHANGELOG
+#   note, and a release cut over them used to need a hand-written entry COMMIT
+#   (plus its CI run) purely to get past EMPTY_UNRELEASED. This mode derives the
+#   entries from the commits instead: it prints the feat/fix/perf subjects of
+#   `git log --no-merges <last-tag>..HEAD`, grouped Features -> Fixes ->
+#   Performance, ready to paste under `## [Unreleased]`. It WRITES NOTHING
+#   (`git status --porcelain` stays empty), so the operator can paste the draft
+#   and roll the section over in ONE commit, gated by ONE CI run. Promotion
+#   still refuses an EMPTY_UNRELEASED body: the draft informs the author, it
+#   never invents a release heading with nothing under it.
+#
 # WHAT IT DELIBERATELY DOES NOT DO
 #   It never creates or pushes a tag, never commits, never pushes. A script
 #   that tags and pushes when invoked is how a wrong tag gets published (see
@@ -19,20 +31,25 @@
 # REFUSALS (exit 2, one REASON= line on stderr)
 #   BAD_USAGE, BAD_VERSION_SHAPE, NOT_A_REPO, MISSING_CHANGELOG,
 #   DIRTY_TREE, NOT_ON_RELEASE_COMMIT, MISSING_UNRELEASED,
-#   VERSION_HEADING_EXISTS, TAG_ALREADY_EXISTS, EMPTY_UNRELEASED
+#   VERSION_HEADING_EXISTS, TAG_ALREADY_EXISTS, EMPTY_UNRELEASED,
+#   NO_PRIOR_TAG (draft mode: no reachable tag and no --since)
 #
-# Exit 0 = CHANGELOG.md rewritten (or, with --check, it already is correct).
+# Exit 0 = CHANGELOG.md rewritten (or, with --check, it already is correct; or,
+# with --draft-from-range, the entries were printed and nothing was written).
 #
 set -euo pipefail
 
 REPO_ROOT=""
 CHECK_ONLY=0
 DRY_RUN=0
+DRAFT_ONLY=0
+SINCE=""
 VERSION=""
 
 usage() {
   cat <<'EOF'
 usage: scripts/release-prep.sh [--check] [--dry-run] [--repo DIR] vX.Y.Z
+       scripts/release-prep.sh --draft-from-range [--repo DIR] [--since TAG]
 
   vX.Y.Z        the tag you are about to push (annotated-tag shape; the 'v' is
                 required because release.yaml matches tags as 'v*')
@@ -41,6 +58,15 @@ usage: scripts/release-prep.sh [--check] [--dry-run] [--repo DIR] vX.Y.Z
                 non-zero (and print the reason) otherwise. CI-friendly.
   --dry-run     run every precondition check, print the diff that would be
                 written, write nothing.
+  --draft-from-range
+                do not write; print paste-ready [Unreleased] entries derived
+                from `git log --no-merges <last-tag>..HEAD`, keeping only
+                feat/fix/perf conventional subjects and grouping them
+                Features -> Fixes -> Performance. `git status --porcelain`
+                stays empty afterwards. Takes no version: it only drafts the
+                body; `release-prep vX.Y.Z` still performs the rollover.
+  --since TAG   draft range start (default: the most recent reachable tag).
+                Only valid with --draft-from-range.
   --repo DIR    operate on DIR instead of the repo containing this script.
   -h, --help    this text
 
@@ -62,6 +88,9 @@ while [ $# -gt 0 ]; do
     -h|--help) usage; exit 0 ;;
     --check)   CHECK_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --draft-from-range) DRAFT_ONLY=1; shift ;;
+    --since)   [ $# -ge 2 ] || die BAD_USAGE "--since needs a tag or ref"
+               SINCE="$2"; shift 2 ;;
     --repo)    [ $# -ge 2 ] || die BAD_USAGE "--repo needs a directory"
                REPO_ROOT="$2"; shift 2 ;;
     -*)        die BAD_USAGE "unknown option '$1' (see --help)" ;;
@@ -71,6 +100,99 @@ while [ $# -gt 0 ]; do
                VERSION="$1"; shift ;;
   esac
 done
+
+# ---------- locate the repo ----------
+# Located BEFORE the version checks: --draft-from-range is a read-only mode that
+# takes no version, and still needs the repo (and its tags) to derive a range.
+if [ -z "$REPO_ROOT" ]; then
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+[ -d "$REPO_ROOT" ] || die NOT_A_REPO "no such directory: $REPO_ROOT"
+cd "$REPO_ROOT"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || die NOT_A_REPO "$REPO_ROOT is not a git work tree"
+
+CHANGELOG="CHANGELOG.md"
+
+# ---------- draft mode: derive [Unreleased] entries, write nothing ----------
+if [ "$DRAFT_ONLY" -eq 1 ]; then
+  [ -z "$VERSION" ] \
+    || die BAD_USAGE "--draft-from-range takes no version; it writes nothing (promotion is a separate call)"
+  [ "$CHECK_ONLY" -eq 0 ] \
+    || die BAD_USAGE "--draft-from-range cannot be combined with --check"
+  [ "$DRY_RUN" -eq 0 ] \
+    || die BAD_USAGE "--draft-from-range cannot be combined with --dry-run (it never writes)"
+
+  RANGE_START="$SINCE"
+  if [ -z "$RANGE_START" ]; then
+    RANGE_START="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+  fi
+  [ -n "$RANGE_START" ] \
+    || die NO_PRIOR_TAG "no reachable tag to derive the range from; pass --since <ref>"
+  git rev-parse -q --verify "$RANGE_START^{commit}" >/dev/null 2>&1 \
+    || die BAD_USAGE "'$RANGE_START' does not resolve to a commit"
+
+  RANGE="$RANGE_START..HEAD"
+  # '<short-sha> <subject>', newest first. --no-merges because a merge subject
+  # is not a changelog entry.
+  LOG_LINES="$(git log --no-merges --format='%h %s' "$RANGE")"
+  SUBJECTS="$(printf '%s\n' "$LOG_LINES" | cut -d' ' -f2-)"
+  if [ -z "$LOG_LINES" ]; then
+    SCANNED=0
+  else
+    SCANNED="$(printf '%s\n' "$LOG_LINES" | grep -c . || true)"
+  fi
+  TOTAL="$(printf '%s\n' "$SUBJECTS" | grep -cE '^(feat|fix|perf)(\([^)]*\))?!?: ' || true)"
+
+  echo "release-prep: draft [Unreleased] entries from $RANGE"
+  echo "              $SCANNED non-merge commits scanned, $TOTAL feat/fix/perf subjects"
+  echo "              nothing written — paste the lines you want under '## [Unreleased]'"
+  echo "              in $CHANGELOG, then run: make release-prep VERSION=vX.Y.Z"
+  echo
+
+  if [ "${TOTAL:-0}" -eq 0 ]; then
+    echo "release-prep: no feat/fix/perf subjects in $RANGE — [Unreleased] would stay empty," >&2
+    echo "release-prep: and promotion refuses EMPTY_UNRELEASED. Nothing to draft." >&2
+    exit 0
+  fi
+
+  draft_group() { # $1 = conventional type; prints its entries in git-log order
+    local type="$1" line sha subject scope text
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      sha="${line%% *}"
+      subject="${line#* }"
+      case "$subject" in
+        "$type":*|"$type"\(*) ;;
+        *) continue ;;
+      esac
+      # 'type(scope)!: text' carries a scope; 'type: text' does not. The type
+      # itself is dropped — the group heading already states it.
+      scope="$(printf '%s' "$subject" | sed -nE "s/^${type}\(([^)]*)\)!?: .*/\1/p")"
+      text="$(printf '%s' "$subject" | sed -E "s/^${type}(\(([^)]*)\))?!?: //")"
+      if [ -n "$scope" ]; then
+        printf -- '- %s: %s — `%s`\n' "$scope" "$text" "$sha"
+      else
+        printf -- '- %s — `%s`\n' "$text" "$sha"
+      fi
+    done < <(printf '%s\n' "$LOG_LINES")
+    return 0
+  }
+
+  FEAT_ENTRIES="$(draft_group feat)"
+  FIX_ENTRIES="$(draft_group fix)"
+  PERF_ENTRIES="$(draft_group perf)"
+
+  if [ -n "$FEAT_ENTRIES" ]; then printf '### Features\n%s\n\n' "$FEAT_ENTRIES"; fi
+  if [ -n "$FIX_ENTRIES" ]; then printf '### Fixes\n%s\n\n' "$FIX_ENTRIES"; fi
+  if [ -n "$PERF_ENTRIES" ]; then printf '### Performance\n%s\n\n' "$PERF_ENTRIES"; fi
+  exit 0
+fi
+
+if [ -n "$SINCE" ]; then
+  die BAD_USAGE "--since only applies to --draft-from-range"
+fi
 
 if [ -z "$VERSION" ]; then
   die BAD_USAGE "no version given. usage: scripts/release-prep.sh vX.Y.Z"
@@ -90,24 +212,24 @@ if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 SEMVER="${VERSION#v}"
 
-# ---------- locate the repo ----------
-if [ -z "$REPO_ROOT" ]; then
-  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fi
-[ -d "$REPO_ROOT" ] || die NOT_A_REPO "no such directory: $REPO_ROOT"
-cd "$REPO_ROOT"
-
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  || die NOT_A_REPO "$REPO_ROOT is not a git work tree"
-
-CHANGELOG="CHANGELOG.md"
 [ -f "$CHANGELOG" ] || die MISSING_CHANGELOG "no $CHANGELOG in $REPO_ROOT"
 
 # ---------- preconditions ----------
-# 1. clean tree
-if [ -n "$(git status --porcelain)" ]; then
-  die DIRTY_TREE "working tree is not clean; commit or clean these first:
-$(git status --porcelain)"
+# 1. no dirty path other than CHANGELOG.md.
+#    RELEASE-041 one-commit cut: `--draft-from-range` prints the [Unreleased]
+#    entries and the operator pastes them into CHANGELOG.md in the working tree;
+#    the rollover below is what promotes those lines. So a dirty CHANGELOG.md is
+#    the EXPECTED input on that path — demanding a separate commit for the
+#    entries first is exactly the extra main commit + CI cycle this mode exists
+#    to remove. Every other dirty path still refuses by name: the release commit
+#    must carry the rollover and nothing accidental.
+DIRTY_OTHER="$(git status --porcelain -- ':(exclude)CHANGELOG.md' || true)"
+if [ -n "$DIRTY_OTHER" ]; then
+  die DIRTY_TREE "working tree has changes outside $CHANGELOG; commit or clean these first:
+$DIRTY_OTHER"
+fi
+if [ -n "$(git status --porcelain -- "$CHANGELOG" || true)" ]; then
+  echo "release-prep: $CHANGELOG has uncommitted edits — they are promoted into this release heading and ship in the SAME commit"
 fi
 
 # 2. HEAD == origin/main (the release commit must be what CI ran on)
@@ -218,6 +340,10 @@ Next commands — run them in order; this script performs none of them:
        git commit -m "chore(release): $VERSION"
        git push origin main
        gh run list --branch main --limit 5
+
+     This is the whole cut in ONE commit: any [Unreleased] lines you pasted from
+     --draft-from-range live in the same file, so this commit carries both the
+     entries and the rollover. One exact-SHA CI run gates it.
 
   4. tag and push — THIS is the release (annotated tag, one positional message)
        git tag -a $VERSION -m 'Release $VERSION'
