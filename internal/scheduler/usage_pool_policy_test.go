@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -309,7 +310,20 @@ func TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout(t *testing.
 }
 
 func TestUsagePoolLeaseReleasedAfterLocalSlotTimeout(t *testing.T) {
+	// QA-CHS-188: this test JUDGES lease ownership, so the store it reads must
+	// be an instance the test owns. newTestDB hands every test its own byte
+	// copy of the migrated schema (GAP-060) rather than a shared handle —
+	// assert that instead of assuming it: a lease row already present here
+	// would mean the timeout assertion is grading another test's admission
+	// state, and a closed sibling handle could only ever misreport it.
 	db := newTestDB(t)
+	var preexistingLeases int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_pool_leases`).Scan(&preexistingLeases); err != nil {
+		t.Fatalf("private usage-pool store unreadable at setup: %v", err)
+	}
+	if preexistingLeases != 0 {
+		t.Fatalf("private usage-pool store started with %d lease rows; the slot-timeout assertion would judge foreign state", preexistingLeases)
+	}
 	if _, err := db.Exec(`INSERT INTO projects(name,repo_url,workdir,created_at,updated_at) VALUES('local-timeout','url','/tmp','now','now')`); err != nil {
 		t.Fatal(err)
 	}
@@ -325,23 +339,30 @@ func TestUsagePoolLeaseReleasedAfterLocalSlotTimeout(t *testing.T) {
 	if !pool.Acquire(context.Background(), "busy-other") {
 		t.Fatal("failed to occupy local slot for timeout fixture")
 	}
+	// Release is a project-scoped no-op when the name holds nothing, so this
+	// keeps the fixture's slot free on the failure paths too.
+	defer pool.Release("busy-other")
 	tickID := pool.Spawn(PackedProject{Name: "local-timeout", Workdir: "/tmp"}, time.Now(), true, db)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var event string
-		err := db.QueryRow(`SELECT message FROM events WHERE component='slot_pool' AND message LIKE 'slot wait expired%' LIMIT 1`).Scan(&event)
-		if err == nil {
-			pool.Release("busy-other")
-			assertNoActiveUsagePoolLeases(t, db)
-			return
-		}
-		if err != sql.ErrNoRows {
-			t.Fatal(err)
-		}
-		time.Sleep(time.Millisecond)
+	// The drop event is the only thing the spawn goroutine publishes BEFORE it
+	// returns; its deferred lease release runs one goroutine hop later. Waiting
+	// on the event and asserting immediately therefore read another
+	// goroutine's in-flight state ("pool local:control retained 1 active
+	// leases") whenever the spawn goroutine had not been rescheduled yet —
+	// which the whole-package -race run reproduced under load. Join on the
+	// lease row this test reserved instead.
+	if !waitForSlotDropEvent(t, db, 5*time.Second) {
+		t.Fatalf("slot timeout did not drop tick %s", tickID)
 	}
 	pool.Release("busy-other")
-	t.Fatalf("slot timeout did not release usage lease for tick %s", tickID)
+	waitForUsagePoolLeaseReleased(t, db, tickID, 10*time.Second)
+	var leaseState string
+	if err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id=? AND tick_id=? AND lane='local-timeout'`, tickID, tickID).Scan(&leaseState); err != nil {
+		t.Fatalf("own lease row for tick %s unreadable after release: %v", tickID, err)
+	}
+	if leaseState != "released" {
+		t.Fatalf("own lease %s state=%q, want released", tickID, leaseState)
+	}
+	assertNoActiveUsagePoolLeases(t, db)
 }
 
 func TestUsagePoolLeaseReleasedWhenStartFails(t *testing.T) {
@@ -494,6 +515,64 @@ func assertNoActiveUsagePoolLeases(t *testing.T, db *sql.DB) {
 		if stat.Active != 0 {
 			t.Fatalf("pool %s retained %d active leases", stat.PoolID, stat.Active)
 		}
+	}
+}
+
+// waitForSlotDropEvent waits until the slot pool publishes its drop event for
+// the fixture lane, and reports false when the window closes without one.
+func waitForSlotDropEvent(t *testing.T, db *sql.DB, within time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		var message string
+		err := db.QueryRow(`SELECT message FROM events WHERE component='slot_pool' AND message LIKE 'slot wait expired%' LIMIT 1`).Scan(&message)
+		if err == nil {
+			return true
+		}
+		if err != sql.ErrNoRows {
+			t.Fatalf("read slot-drop event: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+// waitForUsagePoolLeaseReleased joins the lease the caller RESERVED, in the
+// store the caller owns (QA-CHS-188). The slot-drop path publishes its event
+// first and releases the admission lease from the spawn goroutine's deferred
+// cleanup, so asserting right after the event observes another goroutine's
+// in-flight state; polling the lease row is the synchronization point. A
+// store that cannot be read (closed handle, corrupt DB) fails immediately
+// with that error instead of being read as "still active", so a genuine
+// release failure stays distinguishable from a teardown race.
+func waitForUsagePoolLeaseReleased(t *testing.T, db *sql.DB, leaseID string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	var state string
+	for {
+		err := db.QueryRow(`SELECT state FROM usage_pool_leases WHERE lease_id=?`, leaseID).Scan(&state)
+		if err == nil && state == "released" {
+			return
+		}
+		if err != nil && err != sql.ErrNoRows {
+			t.Fatalf("lease %s unreadable in the test's own store after %s: %v", leaseID, within, err)
+		}
+		if !time.Now().Before(deadline) {
+			// Quote the retained occupancy, not just the surprising state —
+			// with the release removed this is the assertion that fails.
+			stats, statErr := database.UsagePoolStats(context.Background(), db)
+			if statErr != nil {
+				t.Fatalf("lease %s state=%q after %s; retained occupancy unreadable: %v", leaseID, state, within, statErr)
+			}
+			retained := make([]string, 0, len(stats))
+			for _, stat := range stats {
+				if stat.Active != 0 {
+					retained = append(retained, fmt.Sprintf("%s=%d", stat.PoolID, stat.Active))
+				}
+			}
+			t.Fatalf("pool lease %s state=%q after %s; retained active leases: %s", leaseID, state, within, strings.Join(retained, ","))
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
