@@ -5846,3 +5846,14 @@ tasks:
     with its raw output quoted.
   status: in_progress
   created_at: '2026-11-07T19:23:10.993148+00:00'
+- id: RELEASE-045
+  title: 'RELEASE-045: Go dependency refresh (16 modules behind, 1 direct modernc.org/sqlite
+    v1.60.1->v1.62.0), no majors'
+  criteria:
+  - 'go list -u -m all shows 0 behind after the refresh (or held pins are named with
+    reasons); the landing commit is chore(deps): touching exactly go.mod and go.sum;
+    modernc.org/sqlite is v1.62.0; go build ./... and go test -count=1 ./... pass
+    with no FAIL; no major version moved; the refresh reverts cleanly to go.mod+go.sum
+    only; and RELEASE-044 was complete before the refresh landed.'
+  status: in_progress
+  created_at: '2026-11-07T19:34:37.601954+00:00'
