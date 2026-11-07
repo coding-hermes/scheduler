@@ -28,7 +28,17 @@ LDFLAGS    := -s -w \
 # that tagged and pushed on invocation is how a wrong tag gets published. It
 # re-checks the two preconditions that matter for a tag at the moment of the tag.
 #
+# RELEASE-048 (arm 3): the tag push is a board-releasing action, so it runs
+# under the release claim (scripts/release-claim.sh): a second writer claiming
+# the same tag is REFUSED (exit 3) instead of double-publishing. The claim is
+# released only after BOTH the tag creation and the push succeed; a failed
+# attempt leaves the claim held on purpose (the target is still mid-release —
+# inspect with `scripts/release-claim.sh status`, release with `release`).
+# The owner is the invoking user; override with RELEASE_CLAIM_OWNER=x for a
+# lane identity.
+#
 # Full operator procedure: docs/releases.md
+RELEASE_CLAIM_OWNER ?= $(shell id -un)
 release-prep:
 	@test -n "$(VERSION)" || { echo "usage: make release-prep VERSION=vX.Y.Z"; exit 2; }
 	@./scripts/release-prep.sh $(VERSION)
@@ -37,8 +47,9 @@ tag:
 	@test -n "$(VERSION)" || { echo "usage: make tag VERSION=vX.Y.Z"; exit 2; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "refusing: HEAD != origin/main"; exit 2; }
 	@test -z "$$(git status --porcelain)" || { echo "refusing: working tree is not clean"; exit 2; }
-	git tag -a $(VERSION) -m 'Release $(VERSION)'
-	git push origin $(VERSION)
+	@./scripts/release-claim.sh claim "tag:$(VERSION)" "$(RELEASE_CLAIM_OWNER)"
+	@git tag -a $(VERSION) -m 'Release $(VERSION)' && git push origin $(VERSION)
+	@./scripts/release-claim.sh release "tag:$(VERSION)" "$(RELEASE_CLAIM_OWNER)"
 
 build:
 	@test -n "$(COMMIT)" || { echo "cannot determine product checkout commit for build identity" >&2; exit 2; }

@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 86 // SCHED-GAP-17000: projects.dry_run_throttle
+const latestMigration = 87 // RELEASE-048: ticks.reconciled_at
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1943,6 +1943,24 @@ CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at D
 		desc:    "SCHED-GAP-17000: projects.dry_run_throttle — consecutive no-artifact ticks after which a lane is cooldown-pinned and suspended (NULL/0 = default 10)",
 		stmt: `
 ALTER TABLE projects ADD COLUMN dry_run_throttle INTEGER;
+`,
+	},
+	{
+		// RELEASE-048: late-commit reconciliation bookkeeping on ticks.
+		//
+		// reconciled_at is the reconciliation pass's own watermark: NULL =
+		// never reconciled, a timestamp = the LAST time the pass measured
+		// this row's window. It is written on EVERY check (annotating or
+		// not), so a failed row whose commits are still zero is re-checked
+		// only after the recheck interval — not on every eval pass — and a
+		// row whose commits were annotated (commits > 0) drops out of the
+		// candidate set by the commits=0 filter alone. The status column is
+		// NEVER touched: reconciliation is artifact accounting, not a
+		// verdict rewrite.
+		version: 87,
+		desc:    "RELEASE-048: ticks.reconciled_at — watermark of the last failed/timeout late-commit reconciliation check (NULL = never reconciled)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN reconciled_at TEXT;
 `,
 	},
 }

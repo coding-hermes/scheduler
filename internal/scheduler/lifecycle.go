@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coding-hermes/scheduler/internal/clock"
@@ -259,6 +260,12 @@ type LifecycleTracker struct {
 	// A bus failure can never fail Complete — PublishTickTerminal is
 	// contractually cannot-error (the autonomy law).
 	schedulerBus *SchedulerBus
+
+	// RELEASE-048 reconciliation pass cadence watermark. Guarded by its own
+	// mutex, never l.mu-class locks: ReconcileLateTickCommits runs on the
+	// eval path and must not contend with completion writes.
+	reconcileMu     sync.Mutex
+	lastReconcileAt time.Time
 }
 
 // NewLifecycleTracker creates a lifecycle tracker.
@@ -324,6 +331,28 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	failureReason := ""
 	if outcome.Status == TickFailed || outcome.Status == TickTimeout {
 		failureReason = failureReasonClass(outcome.Error)
+	}
+	// RELEASE-048 (fix 1): measure the git window for failed/timeout outcomes
+	// too. The completed path has always measured in Wait() (countGitChanges
+	// at spawn.go), but a terminal row booked straight from a spawn error —
+	// the SCHED-GAP-16940 drop path above all, whose error text is exactly
+	// "gateway unreachable and exec fallback disabled: … context deadline
+	// exceeded" — has no SpawnedTick and previously wrote the struct-default
+	// commits=0. The gateway-side session that POST covered is a server-side
+	// process the scheduler never kills (see tick_reconcile.go's file
+	// comment), so its turn may have committed INSIDE this row's own window
+	// before the teardown; a zero here zero-accounts real work.
+	//
+	// Sentinel rule (SCHED-GAP-1652/202): a measured window writes its real
+	// figures — 0 included; an unmeasurable one (no git workdir reachable
+	// from the project row) writes the explicit -1/-1 unmeasured marker,
+	// never a fabricated 0. An outcome that already carries a measurement
+	// (the spawn path's pre-counted gwFailCommits/gwFailFiles) is respected
+	// and left untouched. Deferred rows are deliberately NOT measured here —
+	// a deferral is not a failure and its own path already pre-counts.
+	if (outcome.Status == TickFailed || outcome.Status == TickTimeout) &&
+		outcome.Commits == 0 && outcome.FilesChanged == 0 && lt.db != nil {
+		outcome.Commits, outcome.FilesChanged = measureTerminalWindow(lt.db, outcome.Project, outcome.Started, outcome.Finished)
 	}
 	// SCHED-GAP-1653: resolve this tick's dispatch accountability pair and
 	// apply criterion 3's gate — never book 'done' without a landed

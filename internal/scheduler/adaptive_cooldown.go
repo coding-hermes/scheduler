@@ -553,6 +553,18 @@ func isBoardPath(p string) bool {
 // empty cases; otherwise the actual measurement wins so the code/board split
 // always lands on the row (SCHED-PERF-001).
 func classifyGitCommits(workdir string, since time.Time, claimed int) (code, board int, ok bool) {
+	return classifyGitCommitsBounded(workdir, since, time.Time{}, claimed)
+}
+
+// classifyGitCommitsBounded is classifyGitCommits's core with an optional
+// window CLOSE: a zero until keeps the canonical open-ended window (the
+// live stamp path — everything from since to HEAD now); a non-zero until
+// bounds the enumeration (RELEASE-048's reconciler classifies exactly the
+// capped window its commits count came from, so the split's sum can never
+// exceed the row's commits figure). The per-commit rule — all touched paths
+// board bookkeeping → board, else code — lives HERE only; callers must not
+// re-derive it.
+func classifyGitCommitsBounded(workdir string, since, until time.Time, claimed int) (code, board int, ok bool) {
 	if claimed <= 0 {
 		return 0, 0, true // nothing to classify — a valid empty measurement
 	}
@@ -562,9 +574,12 @@ func classifyGitCommits(workdir string, since time.Time, claimed int) (code, boa
 	if fi, err := os.Stat(filepath.Join(workdir, ".git")); err != nil || !fi.IsDir() {
 		return 0, 0, false
 	}
-	cmd := exec.Command("git", "-C", workdir, "log",
-		"--since="+since.Format(time.RFC3339),
-		"--pretty=format:@@%H", "--name-only")
+	args := []string{"-C", workdir, "log", "--since=" + since.Format(time.RFC3339)}
+	if !until.IsZero() {
+		args = append(args, "--until="+until.Format(time.RFC3339))
+	}
+	args = append(args, "--pretty=format:@@%H", "--name-only")
+	cmd := exec.Command("git", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, 0, false

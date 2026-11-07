@@ -71,6 +71,13 @@ tmp/
 .gitreins/logs/
 .gitreins/*.lock
 
+# RELEASE-048 arm 3: the release claim marker is RUNTIME state, not repo
+# truth — a marker present in the tree would also fail `make tag`'s
+# clean-tree precondition. The claim protocol lives in
+# scripts/release-claim.sh + docs/releases.md §8.
+.coding-hermes/board/release-claim.json
+.coding-hermes/board/release-claim.json.lock
+
 # Python bytecode / pytest caches (tests/ drives ops/check-fleet-invariants.py in-process)
 __pycache__/
 .pytest_cache/

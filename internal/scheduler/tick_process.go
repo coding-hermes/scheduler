@@ -213,6 +213,26 @@ func (l *Loop) evaluate() {
 			l.slotPool.releaseReaped(staleProjects)
 		}
 	}
+	// RELEASE-048: reconcile failed/timeout ticks whose windows landed
+	// commits AFTER the row was booked terminal — a gateway-side session the
+	// scheduler never killed keeps committing past its own row's
+	// completed_at (the releng 2026-11-07 case: stamped failed 13:25:22,
+	// release commits landed 15:38-15:42). The pass is cadence-gated inside
+	// (ReconcileCadenceDefault between passes), idempotent by the commits=0
+	// candidate filter plus the ticks.reconciled_at watermark, and never
+	// rewrites a row's status — it is artifact accounting, not a verdict
+	// rewrite. Best-effort: a pass failure is a log line, never an eval
+	// failure.
+	if rep, ran := l.lifecycle.ReconcileLateTickCommits(ReconcileOpts{
+		Now:        l.clock().Now(),
+		MinCadence: ReconcileCadenceDefault,
+		Apply:      true,
+	}); ran {
+		if rep.Annotated > 0 || rep.Unmeasurable > 0 || len(rep.Skipped) > 0 {
+			log.Printf("EVAL: tick reconcile: examined=%d annotated=%d advanced=%d still_zero=%d unmeasurable=%d skipped=%d",
+				rep.Examined, rep.Annotated, rep.Advanced, rep.StillZero, rep.Unmeasurable, len(rep.Skipped))
+		}
+	}
 	l.observeEvalStage(EvalStageCleanup, stage)
 	stage = l.clock().Now()
 

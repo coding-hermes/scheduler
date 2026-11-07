@@ -753,3 +753,69 @@ each heading cites its tag and its commit range, and the `v1.0.0..v1.1.0` entry
 (1117 commits, over 150) is summarised by category with the fleet's row ids
 named rather than listing every commit. Nothing in those entries was invented —
 every line traces to a commit subject or a range cited under its heading.
+
+---
+
+## 9. The release claim — one writer per board-releasing action (RELEASE-048)
+
+On 2026-11-07 the scheduler's own releng lane landed a full release cut
+(v1.15.0 record, v1.15.1) while a sibling foreman tick independently closed the
+same `RELEASE-047` board row — two writers performed the same board-releasing
+action, and the collision was discovered only because a duplicate commit
+showed up in `git log`. The release claim makes the second writer **refused**
+instead of discovered.
+
+### What a board-releasing action is
+
+Any action that (a) pushes a release tag, or (b) closes a `RELEASE-*` row on
+this repo's board. Both must run under a claim.
+
+### The mechanism
+
+`scripts/release-claim.sh claim|status|release <target> <owner>` maintains one
+marker file, `.coding-hermes/board/release-claim.json`:
+
+```json
+{"target": "tag:v1.15.1", "owner": "kara", "claimed_at": "2026-11-07T…"}
+```
+
+- `claim` succeeds (exit 0) when no claim is held or the same owner re-claims;
+  **refuses with exit 3** — the double-writer refusal — when a different owner
+  holds the target (or holds any other target: one release at a time).
+- `release` removes the claim; exit 3 when the caller is not the recorded
+  owner, exit 4 when there is nothing to release.
+- `status` prints the claim, always exit 0.
+
+Exit 3 is the contract: every caller must treat it as **stand down and let the
+recorded owner finish**. Check-and-set is atomic (`flock`), so two concurrent
+writers can never both observe "unclaimed". The marker is runtime state and
+gitignored — a tracked marker would fail `make tag`'s clean-tree precondition.
+
+Claims are deliberately **not auto-expired**: a crashed cutter's claim is real
+evidence someone was mid-release. The escape hatches are `release` by the
+recorded owner, or deleting the marker by hand after reading `status` — a human
+decision, not a timeout.
+
+### Where it is wired
+
+- `make tag VERSION=vX.Y.Z` claims `tag:$(VERSION)` before creating the tag and
+  releases the claim only after the push succeeds. A failed attempt leaves the
+  claim held on purpose (the target is still mid-release).
+- `make release-prep` does **not** claim: it writes nothing and runs no release
+  action.
+
+### How a board-closing lane must call it
+
+A lane or worker that is about to close a `RELEASE-*` row must claim the row id
+first and release it after the close lands:
+
+```sh
+./scripts/release-claim.sh claim "RELEASE-049" "$lane-identity" || exit 3   # stand down
+# … make the board edit and its commit …
+./scripts/release-claim.sh release "RELEASE-049" "$lane-identity"
+```
+
+A refusal (exit 3) is final for that attempt: the lane must not close the row
+anyway. This is documented here rather than enforced inside `boardctl`
+(a different repo's tool) so the fence lives with the release procedure it
+guards.
