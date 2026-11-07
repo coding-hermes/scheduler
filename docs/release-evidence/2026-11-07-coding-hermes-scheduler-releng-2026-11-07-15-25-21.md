@@ -2068,3 +2068,190 @@ Row untouched (different owner, work in progress).
 
 Nothing in this pass rewrote a tag, deleted an asset, or touched the `v1.15.0` / `v1.15.1`
 Release objects.
+
+## Pass 13 — thirteenth delivery, ~1 h 27 m after the `v1.15.1` cut: NOT DUE (rule 3), the tip is pass 12's own carriers, and the ONE carried receipt that moved is the `RELEASE-048` carrier sha (rebased `d46c7933` → `9175e588`, suite re-running)
+
+Probes began `2026-11-07T22:40Z`, 4 minutes after pass 12's evidence entry was pushed. Tick
+`coding-hermes-scheduler-releng-2026-11-07-15-25-21`, delivery 13 — same tick id as passes 1-12,
+so this pass EXTENDS this one artifact.
+
+Scope of this pass, stated up front because it is the judgment call: the tip did not move past
+pass 12's own carriers, the census is unchanged, and the decision is unchanged. Nothing was
+tagged, published, or re-scoped. The pass exists for one correction — pass 12's record cites the
+`RELEASE-048` carrier as `d46c7933`, and that sha will never reach `origin/main`: the owner
+rebased it onto the newer tip at `17:37:42 -05` and it is now `9175e588`, with a fresh suite run
+in flight. Everything else below is a re-probe that came back identical.
+
+### Re-anchor — three views agree at `b5418e5f`, which is pass 12's own carrier tip
+
+| Probe | Value |
+| --- | --- |
+| Canonical repo | `/home/kara/coding-hermes-scheduler/coding-herms-scheduler` |
+| Remote (verified alias `origin`) | `https://github.com/coding-hermes/scheduler.git` |
+| Default branch | `main` |
+| `git rev-parse origin/main` | `b5418e5f6730eb7e8eb6b833f9148e4c9836d6aa` |
+| `git ls-remote origin refs/heads/main` | `b5418e5f6730eb7e8eb6b833f9148e4c9836d6aa` |
+| Detached worktree | `/home/kara/.hermes/cache/scratch/releng-sched-wt-pass12`, HEAD = the same SHA, `git status --porcelain` = 0 lines, `## HEAD (no branch)` |
+| Artifact bytes under test | `sha256sum` = `ec7af6f2…08e04e`, identical to the remote blob and to `RELEASE-049`'s `detail.evidence[-1].tree_fp` |
+| Last release | `v1.15.1` → `f6ea23d757daab8eef1d04f5c6c4f798659d504b`; local `rev-parse` and `ls-remote --tags` agree; no tag above it |
+| Release object | `gh release view v1.15.1` → `tag=v1.15.1 draft=false pre=false assets=9` |
+
+Pass 12 recorded its tested candidate as `3c6dfabe`; the two commits above it are its own
+carriers, and they touch nothing but the board and this file:
+
+```
+$ git diff --name-only 3c6dfabe..b5418e5f
+.coding-hermes/board/tasks.jsonl
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+$ git log --oneline 3c6dfabe..b5418e5f
+b5418e5f board(releng): RELEASE-049 pass-12 evidence entry — NOT DUE at 3c6dfabe … [ci skip]
+82ef9c5f chore(releng): pass-12 record — NOT DUE at 3c6dfabe … [ci skip]
+```
+
+That is the re-delivery steady state: zero code paths between the tested candidate and the tip,
+so the code tree is byte-identical to what pass 12 certified.
+
+### Census `v1.15.1..b5418e5f` — reconciles against `rev-list`, zero material
+
+```
+$ git rev-list --count v1.15.1..HEAD → 23
+$ git log --format='%s' v1.15.1..HEAD | sed -E 's/^([a-z]+)(\(.*\))?!?:.*/\1/' | sort | uniq -c
+     14 board
+      9 chore
+$ git log --format='%B' v1.15.1..HEAD | grep -cE 'BREAKING CHANGE|^[a-z]+(\(.*\))?!:'  → 0
+$ git log --format='%h|%s%n%b' v1.15.1..HEAD | grep -c -i 'ci skip\|skip ci'           → 30
+$ git diff --name-only f6ea23d7..HEAD | sed -E 's#^(\.coding-hermes/|\.gitreins/|docs/|CHANGELOG).*#BOOKKEEPING#' | sort -u
+BOOKKEEPING
+```
+
+`14 + 9 = 23` equals `rev-list`, so the classification covers the whole range (pass 12 measured
+21 commits / 13 board / 8 chore; the +2 is pass 12's own carrier pair, re-derived here rather
+than carried forward). Material count: **0 feat / 0 fix / 0 perf / 0 deps / 0 breaking**.
+
+### Decision 1 — NOT DUE (rule 3), unchanged
+
+`v1.15.1` published `2026-11-07T21:13:45Z`, 1 h 27 m before this pass's first probe; zero material
+commits since. The six open `P0`s still name no defect in shipped code (`SEC-002` owner-gated
+credential rotation plus five node-provisioning program rows), and the `v1.15.1` tree gate is
+still green, so rules 1 and 2 do not fire.
+
+### Exact-SHA CI — the tip has no run by construction; the tree gate still rides on `f6ea23d7`
+
+```
+$ gh api "repos/coding-hermes/scheduler/actions/runs?head_sha=b5418e5f6730eb7e8eb6b833f9148e4c9836d6aa"
+  → total=0
+```
+
+Absent from the trigger surface, not from a path filter: `.github/workflows/ci.yml` and
+`ci.yaml` both trigger on `push: branches: [main]` and neither carries a `paths:` key
+(`grep -c 'paths:'` → `0` on both), while the range carries 30 `[ci skip]` directives. The
+newest run in the repository is unchanged and terminal:
+
+| Run | Workflow | Trigger | SHA | Result |
+| --- | --- | --- | --- | --- |
+| 42414729246 | `CI Pipeline` | tag `v1.15.1` | `f6ea23d7` | completed/success |
+| 42414729229 | `Release` | tag `v1.15.1` | `f6ea23d7` | completed/success |
+| 42412373587 | `CI` | push | `f6ea23d7` | completed/success |
+| 42412372572 | `CI Pipeline` | push | `f6ea23d7` | completed/success |
+
+No new run has been created since `21:12:13Z`, which is itself the evidence that every push
+above the certified SHA was `[ci skip]`.
+
+### Gates — all four reproduced, none moved
+
+- Version authority: `bash scripts/check-version-authority.sh --structure-only` →
+  `PASS (structure) — exactly one [Unreleased]; newest release heading '## [1.15.1] — 2026-11-07'`.
+- Dependencies: `go list -u -m all | grep -c '['` → **0** modules with an available update.
+- GitReins: **NOT RUN, by construction** — zero material commits, so a full-tree guard on a
+  pristine tree returns `changedFileCount: 0` and a DEGRADED verdict that is non-evidence.
+- Dogfood: still not a documented gate on this repo (`docs/releases.md`, `scripts/release-prep.sh`
+  → 0 mentions) — an ABSENCE, not a skipped gate.
+
+### Published artifact `v1.15.1` — re-verified again from the published bytes
+
+```
+$ scripts/verify-go-release-assets.sh coding-hermes/scheduler v1.15.1 --expected f6ea23d757da…
+sha256sum -c → 8/8 OK
+buildinfo: ok=8 bad=0   (mod=v1.15.1 rev=f6ea23d7 on every migrate|schedulerd asset)
+```
+
+### `RELEASE-048` — the one thing that MOVED: carrier sha rebased, suite re-running
+
+Pass 12 cited the unpushed repair as `d46c7933` with writer `pid 2213925`. Re-probed at the
+current clock, both halves of that receipt are superseded, and the work is still in flight:
+
+```
+$ git -C <canonical> reflog -4 --date=iso
+9175e588 HEAD@{2026-11-07 17:37:42 -0500}: rebase (finish): returning to refs/heads/main
+9175e588 HEAD@{2026-11-07 17:37:42 -0500}: rebase (pick): fix(accounting): reconcile commits landed by a failed tick …
+3c6dfabe HEAD@{2026-11-07 17:37:42 -0500}: rebase (start): checkout origin/main
+d46c7933 HEAD@{2026-11-07 17:27:17 -0500}: commit: fix(accounting): reconcile commits landed by a failed tick …
+$ git -C <canonical> rev-list --left-right --count HEAD...origin/main → 1  2
+$ git -C <canonical> branch -r --contains 9175e588 → (none; still unpushed)
+$ git -C <canonical> status --porcelain → 0 lines
+$ git -C <canonical> diff --stat d46c7933 9175e588
+ .coding-hermes/board/events.jsonl | 5 +
+ .coding-hermes/board/tasks.jsonl   | 5 +-
+ docs/release-evidence/…-15-25-21.md | 1366 +++++++++++++++++++
+```
+
+The code content is identical between the two shas — `d46c7933` → `9175e588` is a pure REBASE
+onto the newer tip (`3c6dfabe`), the diff being only board + this artifact, i.e. what the rebase
+carried along. So the finding is one of LABELLING, not of new behaviour: any later pass that
+greps for `d46c7933` will find a commit that can never appear on `origin/main`.
+
+An ACTIVE writer holds the tree right now, so this is working state and not residue:
+
+```
+$ readlink /proc/2228916/cwd → /home/kara/coding-hermes-scheduler/coding-herms-scheduler
+$ ps -o lstart,cmd -p 2228916 → started 17:40:26, `go test -count=1 ./...`   (32 s old at probe)
+```
+
+That is the post-rebase suite run that must go green before the push: the writer rebased at
+`17:37:42` and is now certifying the rebased tree. No row was filed and nothing was pushed from
+that checkout — a row for in-flight owner work is the phantom this rule exists to prevent. Row
+`RELEASE-048` stays `pending` and untouched.
+
+### Live DB schema — unchanged, same conclusion as pass 12
+
+```
+$ sqlite3 ~/.hermes/coding-hermes/scheduler.db "select version from migrations order by version desc limit 3;"
+87 / 86 / 85
+$ git show origin/main:internal/database/migrations.go | grep 'const latestMigration'  → 86
+$ git -C <canonical> show HEAD:internal/database/migrations.go | grep 'const latestMigration' → 87 // RELEASE-048: ticks.reconciled_at
+```
+
+Still **live DB 87 > `origin/main` 86 > running binary 85**. v87 is defined only by the
+`RELEASE-048` carrier above, which is still unpushed — the same durability exposure, owned by
+the same row, whose landing is the repair.
+
+### Other blockers re-probed — all unchanged
+
+- `SCHED-GAP-162` deployed-binary staleness: `/api/v1/health` → `build_sha=d0dad6d9`,
+  `build_time=2026-11-07T05:42:56Z`, `version=v1.14.0-40-gd0dad6d9-dirty`, `status=ok`;
+  `go version -m bin/schedulerd` → `mod v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`,
+  `vcs.modified=true`; ancestor rc probe `v1.14.0 rc=1  v1.14.1 rc=0  v1.15.0 rc=0  v1.15.1 rc=0`
+  ⇒ still three published releases absent from the running binary. The process is supervised
+  outside the (inactive) `schedulerd.service` unit — pid `3347652`, started `Sat Nov 7 00:42:57`,
+  matching the binary mtime `Nov 7 00:42` ⇒ stale artifact, not build-without-restart.
+- `RELEASE-051` PATH shadow: `command -v schedulerd` → `/usr/local/bin/schedulerd`,
+  `Jul 19 09:50`, `mod github.com/coding-herms/scheduler v1.0.1-0.20260719145003-c56721124655+dirty`,
+  `CGO_ENABLED=1`, revision `c56721124655` — still present, still pending.
+- `RELEASE-050` posture: **five** switches still `disabled` (`secret_scanning`,
+  `secret_scanning_push_protection`, `secret_scanning_non_provider_patterns`,
+  `secret_scanning_validity_checks`, `dependabot_security_updates`); repo `public`, licence `MIT`.
+- Open-row census (scope: every non-terminal row, `blocked` and `review` included): board at
+  `b5418e5f` parses clean, `jq -s length` → **823** rows, **92 non-terminal = 4 blocked + 88
+  pending**, identical to passes 10, 11 and 12.
+
+### Rows this pass
+
+- `RELEASE-049` — canonical survivor for the `v1.15.1` line; one evidence entry appended binding
+  this section's re-hash. Status, title, priority untouched.
+- **No row created, closed, retitled or reprioritised.** Every candidate finding is already
+  owned: the carrier sha churn and schema drift → `RELEASE-048` (active writer, in flight);
+  stale deployed binary → `SCHED-GAP-162`; stale `/usr/local/bin/schedulerd` → `RELEASE-051`;
+  disabled scanning switches → `RELEASE-050`.
+
+Nothing in this pass rewrote a tag, deleted an asset, or touched the `v1.15.0` / `v1.15.1`
+Release objects.
