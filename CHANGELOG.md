@@ -31,7 +31,16 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-11-06
+## [Unreleased] — 2026-11-07
+
+### Fixes
+- release: build artifacts in the runner temporary directory and reject dirty VCS stamps, preventing released binaries from reporting `vcs.modified=true` — `e47820d9`.
+
+### Tooling
+- release-prep: add `--draft-from-range` to derive editable `[Unreleased]` entries from the commit range — `54595bf2`.
+
+### QA
+- qa: add the real schedulerd error-path probe and pin its executable-bit carrier — `8f38f82e`, `972f11c8`.
 
 ## [1.14.0] — 2026-11-06
 
