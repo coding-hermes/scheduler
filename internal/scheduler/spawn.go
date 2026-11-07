@@ -1210,6 +1210,11 @@ const builtinForemanPrompt = "" +
 	"who does not exist. Use write_file + bash /tmp/<script>.sh (background+pty) instead. " +
 	"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. " +
 	"SPECIFICATION LINK: this project's design authority is its handbook — read docs/handbook/OUTLINE.md (or docs/handbook/README.md when the outline is absent) before selecting a row. " +
+	"UNBLOCK BEFORE YOU BLOCK: a dirty checkout is not automatically a block. Run `python3 scripts/ownership.py status` first. " +
+	"held-by-live-worker means something is working: report STOOD DOWN with the owner pid and do NOT write a blocked receipt. " +
+	"residue means nothing owns it: dispose it (publish anything whose sha256 exists nowhere else, delete only byte-identical duplicates, gitignore the producer's output) and then take your row. " +
+	"unowned-changes means attribute it to a live session, then commit or revert. " +
+	"Write a blocked receipt only when ownership is genuinely ambiguous AND the action is owner-only AND you can name the single command that would unblock it. See prompts/unblock.md. " +
 	"A row that changes behaviour must name the chapter it changes (III.<module>.<submodule>, or a flow id F1-F16). " +
 	"Where the chapter does not exist yet, writing it is part of the row, not a follow-up. " +
 	"If the handbook and the code disagree, the code is right and the disagreement is a finding to file; never adopt the document over the code. " +
