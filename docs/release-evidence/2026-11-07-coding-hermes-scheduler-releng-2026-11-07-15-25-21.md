@@ -155,3 +155,146 @@ That is 9 non-board commits behind `v1.14.1`, including the code change `6606f85
 rule, and the test that keeps it"). Class = STALE (not ABSENT). Tracked by open `SCHED-GAP-162` and
 `SCHED-GAP-16994`; the row premise there ("0 code commits behind") is no longer true and is noted
 rather than duplicated.
+
+## Pass 3 — same tick re-delivered again; re-probed at the newer tip, and one carried justification corrected
+
+Third delivery of tick id `coding-hermes-scheduler-releng-2026-11-07-15-25-21`
+(`2026-11-07T20:25Z`). Passes 1 and 2 are recorded above and their writes already landed
+(RELEASE-043 closed, RELEASE-044/045 filed). This pass re-probes instead of re-deriving.
+
+- Pass-1 tip: `6ae3193cc58ec3c7de4c1d98677a7d4aba5c1fe8`
+- Pass-2 tip: `dd4b0827ce586dbca358e8222fa668ad074ab8bb`
+- **Pass-3 verified tip: `7d10a0ba81b520b0d23d4daa30b042744a816d09`** — `git ls-remote origin
+  refs/heads/main`, local `HEAD` after fetch, and the detached worktree
+  `/home/kara/.hermes/cache/scratch/releng-chs-20261107-1525` (0 dirty entries, root
+  `/home/kara/.hermes/cache/scratch/releng-chs-20261107-1525`, remote
+  `https://github.com/coding-hermes/scheduler.git`) all agree.
+- The canonical checkout is **not** this tip: it sits at `517eca42` (6 behind) and is dirty —
+  see the new finding at the end.
+
+Delta pass-2 → pass-3 is **1 commit**, `7d10a0ba` (`chore(releng): re-probe release gate at
+tip dd4b0827 — still RED …`), touching only the two board JSONL files and this artifact.
+`git diff --name-only dd4b0827..7d10a0ba` lists no code path.
+
+Range `v1.14.1..7d10a0ba` = **7 non-merge commits / 4 files**, every one bookkeeping:
+
+```
+.coding-hermes/board/events.jsonl
+.coding-hermes/board/tasks.jsonl
+docs/release-evidence/2026-11-07-v1.14.1.md
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+```
+
+Census by conventional prefix: `pm`=3, `chore`=3, `board`=1 — **feat=0, fix=0, perf=0**, no
+`BREAKING CHANGE:` footer and no `type!` marker in any body. Classified counts reconcile with
+`git rev-list --no-merges --count v1.14.1..7d10a0ba` = 7. Decision unchanged: **NOT DUE**
+(zero material commits).
+
+### Gate re-probe at `7d10a0ba` — still RED, same four violations
+
+```
+$ python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only
+VIOLATION board-vocab SCHED-GAP-128: status=blocked
+VIOLATION board-vocab REL-GUARD-001: status=blocked
+VIOLATION board-vocab SCHED-GAP-16934: status=blocked
+VIOLATION board-vocab SCHED-GAP-16937: status=blocked
+INFO board-vocab …: 815 row(s) scanned, 0 legacy closed spelling(s)
+FAIL — 4 violation(s) (board-only mode: fleet checks 1-7 not run — no local DB/TOML)
+$ echo $?   -> 1
+$ bash scripts/check-invariants.sh >/dev/null 2>&1; echo $?   -> 1
+```
+
+`7d10a0ba` itself has **no run by construction** (`[ci skip]` + board-only diff); the newest
+run in the repository is still `42392863396` (`CI`, headSha `517eca42`,
+completed/failure). Per-job state of that deciding run, read this pass:
+
+```
+build: completed/failure            <- the only red job
+lint: completed/success             race-blocks: completed/success
+race-scheduler: completed/success   multiarch: 9 builds/verifies completed/success
+multiarch / Container (multi-arch): completed/skipped   (tag-only)
+multiarch / Release: completed/skipped                  (tag-only)
+```
+
+Board census at the tip: 723 complete / 88 pending / **4 blocked** — the four blocked rows
+are exactly the four violations, so the red is fully explained by that one class.
+
+### CORRECTION to a carried claim: the docs do NOT describe this as an oversight
+
+RELEASE-044's reasoning advances an ordering argument — the reader class (`9d05dcfa`,
+2026-09-15, ADV-R06) predates the writer gate (`ab6e3a64`, 2026-09-18, SCHED-GAP-164),
+therefore "the allowlist omission reads as an oversight of that closure, not a policy
+decision". It cites `docs/troubleshooting-scheduling-errors.md:698` only as "sides with the
+gate".
+
+That inference is **refuted by the repository**. The sentence immediately following the
+quoted one, at the same line, reads:
+
+> parked spellings (`todo`, `open`, …) are writer bugs and must be re-filed as `pending` or
+> deliberately closed. **`blocked` and `retired` are outside the vocabulary on purpose and
+> will keep failing the gate until re-filed.**
+
+`git log -S'are outside the vocabulary on purpose'` binds it to `a08202ab` (2026-09-20,
+SCHED-GAP-153 troubleshooting taxonomy) — i.e. it was written **after both** the reader class
+and the writer gate, and it names `blocked` specifically. The exclusion is a recorded
+decision, not a closure oversight, so RELEASE-044 as written would have a foreman reverse a
+deliberate policy while describing the change as a bug fix.
+
+What still argues for widening the vocabulary is a different, stronger surface — the fleet
+harness doctrine this repo's rows are operated under:
+
+- `owner-gated-foreman-ticks`: "**A genuine external gate must be `status: blocked`, never
+  `pending`.** … a *pending* row is precisely what waives that lane's cooldown … Persisting it
+  as pending is not caution; it is the idle-spin generator." and "**`blocked` and `pending`
+  are admission controls, not cosmetic labels.**"
+- `coding-hermes-docs-audit`: prescribes `--status blocked --blocked-reason "DUPLICATE of …"`
+  as the parking mechanism, because the writer's vocabulary has no `duplicate` value it uses.
+- `boardctl` accepts the state (probed by pass 1: `created task PROBE-1`; `validate` OK).
+
+So the four parked rows are spelled the way the fleet's own operating doctrine mandates, and
+the gate's allowlist is the surface that must move — but the change is a **policy reversal to
+be recorded as one**, not an oversight repair. RELEASE-044's reasoning has been rewritten to
+carry that correction (the repair contract itself is unchanged: lockstep Go+Python widening,
+the parity pin in `internal/scheduler/board_vocab_test.go:227`, a regression fixture, and the
+docs sentence corrected in the same change). The prohibition on re-spelling the four
+owner-gated rows to `pending` stands and is now doubly supported.
+
+### Released artifact — unchanged, still intact
+
+- Annotated tag `v1.14.1` → commit `de573541d21d8402fedcf8f7396702066546c96e`; Release object
+  non-draft, non-prerelease, 9 assets; tag-triggered Release run `42392333708`
+  completed/success. No re-verification delta this pass beyond the tag→commit binding.
+- Version surfaces agree with the released tag: `CHANGELOG.md:36` = `## [1.14.1] — 2026-11-07`
+  with `## [Unreleased] — 2026-11-07` above it, `internal/version/version.go` `Version = "dev"`
+  (ldflags-injected at build, as designed).
+
+### Deployed binary — STALE, number superseded
+
+`schedulerd` pid 3347652 still runs `/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd`,
+`go version -m` = `v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`, `vcs.revision=d0dad6d9ede0`,
+`vcs.modified=true`, built `2026-11-07T00:42Z`. `git rev-list --count d0dad6d9..v1.14.1`
+= **20 commits** behind the released tag (RELEASE-044's "9 non-board commits behind" is
+superseded). Class = STALE, not ABSENT. Still owned by open `SCHED-GAP-162` and
+`SCHED-GAP-16994`; not duplicated.
+
+### NEW finding filed this pass — RELEASE-046
+
+The canonical checkout `/home/kara/coding-hermes-scheduler/coding-herms-scheduler` is at
+`517eca42` (6 commits behind `origin/main`) **and** carries an uncommitted row
+`SCHED-GAP-17000` on that stale board base (813 rows on disk vs 815 at the tip). Any commit
+made from that tree on its current base rewrites `tasks.jsonl` back over the releng rows that
+landed in `176e2e30`, `b720bcee`, `dd4b0827` and `7d10a0ba` — including RELEASE-044/045 and
+this record. Filed as `RELEASE-046` (P2) because it is a release-record integrity hazard, not
+a scheduler defect.
+
+### Dependencies
+
+Unchanged from pass 2: 16 modules behind, all minor/patch, `govulncheck ./...` clean,
+monthly window open 32 days, blocked behind RELEASE-044 (`RELEASE-045`, P2). No new advisory
+observed this pass.
+
+### Decision this pass
+
+No release created. **NOT DUE** — zero material commits in `v1.14.1..7d10a0ba`, and the
+exact-SHA code gate is red (`42392863396`), so even a due cut would be blocked. `RELEASE-044`
+(P1) remains the single blocking row; `RELEASE-045` waits behind it.
