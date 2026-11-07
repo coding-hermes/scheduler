@@ -1642,3 +1642,4 @@
 {"id": 1794021941135076119, "timestamp": "2026-11-07T16:44:40Z", "event_type": "task_updated", "task_id": "SCHED-GAP-128", "actor": "foreman", "detail": "{\"status\":\"blocked\"}"}
 {"id": 1794021941135076120, "timestamp": "2026-11-07T16:44:40Z", "event_type": "task_updated", "task_id": "REL-GUARD-001", "actor": "foreman", "detail": "{\"status\":\"blocked\"}"}
 {"id": 1794021941135076121, "timestamp": "2026-11-07T16:44:40Z", "event_type": "task_updated", "task_id": "SCHED-GAP-16937", "actor": "foreman", "detail": "{\"status\":\"blocked\"}"}
+{"id": 1794021941135076122, "timestamp": "2026-11-07T17:06:01Z", "event_type": "task_created", "task_id": "RELEASE-043", "actor": "foreman", "detail": "{\"id\":\"RELEASE-043\",\"status\":\"pending\"}"}
