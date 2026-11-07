@@ -104,3 +104,54 @@ Verification scratch dir for arm 4: `/home/kara/.hermes/cache/scratch/releng-arm
 ## Release URL / not created
 
 No release created this tick (zero material commits). Last release: https://github.com/coding-hermes/scheduler/releases/tag/v1.14.1
+
+## Pass 2 — this tick was re-delivered; state re-probed at the newer tip
+
+Same tick id `coding-hermes-scheduler-releng-2026-11-07-15-25-21` was delivered again at
+`2026-11-07T17:31Z`. Pass 1's record above already landed (this artifact + `RELEASE-044`), so this
+pass re-probed instead of re-deriving, per the re-gating rule.
+
+- Pass-1 tip: `6ae3193cc58ec3c7de4c1d98677a7d4aba5c1fe8`.
+- Pass-2 verified tip (`git ls-remote origin refs/heads/main`, local `HEAD`, detached worktree `/tmp/releng-sched-E2LoeT` at that SHA, 0 dirty entries): `dd4b0827ce586dbca358e8222fa668ad074ab8bb`.
+- Delta between the two: 2 commits, both bookkeeping — `176e2e30` (`chore(releng): readiness sweep`) and `dd4b0827` (`board(releng): close RELEASE-043, file RELEASE-044`). `git diff --name-only 6ae3193c..dd4b0827` = the two board JSONL files only. **Zero code files.**
+- Range `v1.14.1..dd4b0827` = 6 commits / 4 files: `.coding-hermes/board/events.jsonl`, `.coding-hermes/board/tasks.jsonl`, `docs/release-evidence/2026-11-07-v1.14.1.md`, this artifact. Census `pm`=3, `chore`=2, `board`=1, **feat=0 fix=0 perf=0**, no `BREAKING CHANGE` / `type!` in any body. Decision unchanged: **NOT DUE** (rule: zero material commits).
+
+### Gate re-probe at the newer tip — still RED, one violation wider
+
+`python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only` in the
+detached worktree at `dd4b0827`:
+
+```
+VIOLATION board-vocab SCHED-GAP-128: status=blocked
+VIOLATION board-vocab REL-GUARD-001: status=blocked
+VIOLATION board-vocab SCHED-GAP-16934: status=blocked
+VIOLATION board-vocab SCHED-GAP-16937: status=blocked
+INFO board-vocab .coding-hermes/board/tasks.jsonl: 814 row(s) scanned, 0 legacy closed spelling(s)
+FAIL — 4 violation(s) (board-only mode: fleet checks 1-7 not run — no local DB/TOML)
+rc=1
+```
+
+CI on the newer tip: `dd4b0827` carries `[ci skip]` and a board-only diff, so it has **no run by
+construction** (`gh run list --limit 6` newest entry is still `42392863396`, `CI`,
+`completed/failure`, headSha `517eca42`). The deciding receipt for the gate is therefore unchanged and
+still red — `RELEASE-044` stands as the repair contract, not re-filed.
+
+### Released artifact re-verified (unchanged)
+
+- Annotated tag `v1.14.1` → object `77f64d47…` → commit `de573541d21d8402fedcf8f7396702066546c96e` (remote `refs/tags/v1.14.1^{}` agrees).
+- Release object: `draft=false pre=false`, published `2026-11-07T16:39:24Z`, **9 assets** (`schedulerd-{linux,darwin}-{amd64,arm64}`, `migrate-{linux,darwin}-{amd64,arm64}`, `SHA256SUMS`).
+
+### Dependencies — and why a row was filed
+
+- `govulncheck ./...` → `No vulnerabilities found.` (rc=0), so no advisory fires the release-now rule.
+- `go list -u -m all` → **16 modules** with updates, all minor/patch, no majors: direct `modernc.org/sqlite v1.60.1 → v1.62.0`; indirect `golang.org/x/net v0.59.0 → v0.62.0`, `golang.org/x/sys v0.48.0 → v0.49.0`, `golang.org/x/tools v0.51.0 → v0.52.0`, `modernc.org/libc v1.77.1 → v1.80.1`, `goldmark v1.4.13 → v1.8.7`, plus pprof/telemetry/exp/mod/gc/cc/ccgo/regexp2/go-cmp/demangle.
+- Last full module refresh: `c2922ea6` (2026-10-06, DEPS-2, 12 modules) — **32 days ago**, so the monthly minor window is open. It cannot be exercised while exact-SHA CI is red (no gate can certify the refresh), so it is filed as `RELEASE-045`, `--depends-on RELEASE-044`.
+
+### Deployed binary — stale, already tracked, not duplicated
+
+Live `schedulerd` pid 3347652 (uptime 11h48m) runs the repo-local `bin/schedulerd`, whose `go version -m`
+reads `v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`, `vcs.revision=d0dad6d9ede0`, `vcs.modified=true`.
+That is 9 non-board commits behind `v1.14.1`, including the code change `6606f856` ("spawn: one board
+rule, and the test that keeps it"). Class = STALE (not ABSENT). Tracked by open `SCHED-GAP-162` and
+`SCHED-GAP-16994`; the row premise there ("0 code commits behind") is no longer true and is noted
+rather than duplicated.
