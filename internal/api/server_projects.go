@@ -467,6 +467,15 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 400, "decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)")
 		return
 	}
+	// SCHED-GAP-17000: a dry_run_throttle below the warn streak would suspend
+	// a lane with no warning at all — refuse it at the socket rather than let
+	// the scheduler silently clamp a policy the operator believes it wrote.
+	if updates.DryRunThrottle != nil {
+		if err := scheduler.DryRunThrottleSettingError(*updates.DryRunThrottle); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	// SCHED-GAP-150: two ways a retired driver can reach an ENABLED project
 	// through PUT — (a) the update itself installs the command, (b) the update
 	// re-enables a row whose stored command already drives one (a disabled

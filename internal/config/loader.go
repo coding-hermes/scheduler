@@ -448,6 +448,12 @@ func (r *RootConfig) Validate() error {
 		if err := validateAdmissionMode(p.Name, p.AdmissionMode, true); err != nil {
 			errs = append(errs, err)
 		}
+		// SCHED-GAP-17000: the dry-run throttle has a floor (the warn streak).
+		if p.DryRunThrottle != nil {
+			if err := database.DryRunThrottleSettingError(*p.DryRunThrottle); err != nil {
+				errs = append(errs, fmt.Errorf("project %q: %w", p.Name, err))
+			}
+		}
 	}
 	for i, n := range r.Namespaces {
 		if n.ID == "" {
@@ -587,6 +593,12 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 		}
 		if err := validateAdmissionMode(p.Name, p.AdmissionMode, true); err != nil {
 			errs = append(errs, err)
+		}
+		// SCHED-GAP-17000: the dry-run throttle has a floor (the warn streak).
+		if p.DryRunThrottle != nil {
+			if err := database.DryRunThrottleSettingError(*p.DryRunThrottle); err != nil {
+				errs = append(errs, fmt.Errorf("project %q: %w", p.Name, err))
+			}
 		}
 	}
 	for i, n := range cfg.Namespaces {
@@ -960,6 +972,12 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 			if pd.NoopAllowed != nil {
 				updates.NoopAllowed = pd.NoopAllowed
 			}
+			// SCHED-GAP-17000: the dry-run throttle pins only when the key is
+			// present, so an API-set value survives a keyless restart (the
+			// GatewayKey/SCHED-GAP-219 convention).
+			if pd.DryRunThrottle != nil {
+				updates.DryRunThrottle = pd.DryRunThrottle
+			}
 			// SCHED-GAP-150: a retired dagger-era driver must never be
 			// re-armed through the loader. The enabled re-pin is retired
 			// (SCHED-GAP-219: the DB owns enabled), but the guard still
@@ -1081,6 +1099,7 @@ func projectFromDef(pd ProjectDef) *database.Project {
 		AdmissionMode:    pd.AdmissionMode,
 		BoardOwnership:   pd.BoardOwnership,
 		NoopAllowed:      pd.NoopAllowed,
+		DryRunThrottle:   pd.DryRunThrottle,
 	}
 	// Normalize the adaptive policy for enabled projects so the stored row
 	// carries EFFECTIVE values: floor = the fleet cooldown, ceiling and

@@ -135,8 +135,14 @@ func gitCommitFiles(t *testing.T, workdir string, files []string, msg string) ti
 }
 
 // =============================================================================
-// Feature is opt-in: adaptive_cooldown = 0 must leave everything untouched and
+// Feature is opt-in: adaptive_cooldown = 0 must leave the COOLDOWN untouched and
 // return false so the caller falls back to the legacy autoSlowdown path.
+//
+// The no-progress streak is the one thing that DOES move on an unarmed lane since
+// SCHED-GAP-17000: it is the dry-run throttle's input, and an unarmed satellite
+// lane (no-ops allowed by class, noop_guard never fires) was the exact class that
+// could be spawned forever producing nothing while every counter said zero. The
+// ratchet is what stays opt-in — one dry tick must not change cooldown or pin.
 // =============================================================================
 
 func TestAdaptiveCooldown_FeatureOffByDefault(t *testing.T) {
@@ -149,8 +155,14 @@ func TestAdaptiveCooldown_FeatureOffByDefault(t *testing.T) {
 		t.Error("adaptiveCooldown returned true for a project with adaptive_cooldown = 0 (must fall through to autoSlowdown)")
 	}
 	cd, _, _, _, streak, _ := readAdaptiveState(t, db, "legacy-proj")
-	if cd != 600 || streak != 0 {
-		t.Errorf("state changed with feature off: cooldown=%d streak=%d, want 600/0", cd, streak)
+	if cd != 600 {
+		t.Errorf("cooldown changed with the ratchet off: cooldown=%d, want 600", cd)
+	}
+	if streak != 1 {
+		t.Errorf("no_progress_ticks = %d after one dry tick, want 1 (SCHED-GAP-17000: the streak feeds the dry-run throttle on unarmed lanes too)", streak)
+	}
+	if pin, by := dryRunRow(t, db, "legacy-proj"); pin.Valid && pin.Int64 != 0 {
+		t.Errorf("lane pinned (%v by %q) after a single dry tick — the throttle must wait for its threshold", pin, by)
 	}
 }
 
@@ -672,14 +684,23 @@ func TestAdaptiveCooldown_OptInIsolation(t *testing.T) {
 		t.Errorf("armed no_progress_ticks = %d, want 3", armedStreak)
 	}
 
-	// Legacy sibling: identical tick history, untouched cooldown and streak.
+	// Legacy sibling: identical tick history, untouched COOLDOWN. The streak,
+	// however, IS counted since SCHED-GAP-17000 — that is the dry-run
+	// throttle's input, and an unarmed satellite lane was precisely the class
+	// that could dry-run forever with no counter (its no-ops are allowed by
+	// lane class, so the noop_guard never fired either). What must still not
+	// leak is the adaptive RATCHET: the legacy lane's cooldown stays at its
+	// base until the throttle's own suspension, which needs 10 dry ticks.
 	legacyCD := getSlowdownCooldown(t, db, "optin-legacy")
 	if legacyCD != 60 {
 		t.Errorf("legacy cooldown = %d, want 60 (adaptive escalation must not leak across projects)", legacyCD)
 	}
 	_, _, _, _, legacyStreak, _ := readAdaptiveState(t, db, "optin-legacy")
-	if legacyStreak != 0 {
-		t.Errorf("legacy no_progress_ticks = %d, want 0 (streak tracking is armed-project-only)", legacyStreak)
+	if legacyStreak != 3 {
+		t.Errorf("legacy no_progress_ticks = %d, want 3 (SCHED-GAP-17000 counts the streak on unarmed lanes so the dry-run throttle can act on it)", legacyStreak)
+	}
+	if pin, by := dryRunRow(t, db, "optin-legacy"); pin.Valid && pin.Int64 != 0 {
+		t.Errorf("legacy lane pinned at %v (by %q) after only 3 dry ticks — suspension must wait for the throttle", pin, by)
 	}
 }
 

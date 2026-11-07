@@ -128,10 +128,7 @@ func recordTasksNoopStreak(db *sql.DB, outcome TickOutcome, codeCommits int, mea
 	if db == nil {
 		return
 	}
-	progress := codeCommits > 0 || outcome.MemoryKeys > 0
-	if !measured {
-		progress = outcome.Commits > 0 || outcome.FilesChanged > 0 || outcome.MemoryKeys > 0
-	}
+	progress := tickProducedWork(outcome, codeCommits, measured)
 	if progress {
 		// Guarded so a productive lane pays no write: the streak is already 0.
 		if _, err := db.Exec(
@@ -146,4 +143,40 @@ func recordTasksNoopStreak(db *sql.DB, outcome TickOutcome, codeCommits int, mea
 		outcome.Project); err != nil {
 		log.Printf("NOOP-PACING: %s streak write failed: %v", outcome.Project, err)
 	}
+}
+
+// tickProducedWork is the ONE definition of "this tick produced an artifact of
+// the lane's own work" (SCHED-GAP-104): a CODE commit or a DuckBrain memory key.
+// Board bookkeeping is not work. An unmeasurable commit window fails OPEN — any
+// commit, file delta or memory key counts — because a measurement gap must never
+// charge a lane a pause.
+//
+// Shared by the streak writer and the dry-run throttle so the two can never
+// disagree about what a dry tick is (a lane that resets its streak while the
+// throttle counts it as dry is a permanent suspension bug).
+func tickProducedWork(outcome TickOutcome, codeCommits int, measured bool) bool {
+	if !measured {
+		return outcome.Commits > 0 || outcome.FilesChanged > 0 || outcome.MemoryKeys > 0
+	}
+	return codeCommits > 0 || outcome.MemoryKeys > 0
+}
+
+// tickProducedWorkForThrottle is the DRY-RUN THROTTLE's definition, and it is
+// deliberately one leg WIDER than the pacing streak: a board commit counts.
+//
+// Why the asymmetry: the streak feeds a pacing decision that only spaces a
+// lane, so a board-churning lane self-reporting as productive is a cost, not a
+// stop. The throttle SUSPENDS, and a suspension must be liftable by the lane's
+// own output or it is permanent. A docs/PM lane's product IS the board — its
+// rows, its events — so judging it dry on code commits alone would suspend the
+// one lane class that never writes code and then never let it back: the pin
+// could only be cleared by work it is not supposed to do.
+//
+// A formatter/lint lane that has nothing to format commits nothing at all (no
+// diff, no board write), so it is still exactly what this feature targets.
+func tickProducedWorkForThrottle(outcome TickOutcome, codeCommits, boardCommits int, measured bool) bool {
+	if !measured {
+		return outcome.Commits > 0 || outcome.FilesChanged > 0 || outcome.MemoryKeys > 0
+	}
+	return codeCommits > 0 || boardCommits > 0 || outcome.MemoryKeys > 0
 }

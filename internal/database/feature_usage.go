@@ -41,6 +41,10 @@ const (
 	// FeatureNoopGuard (SCHED-GAP-1682): the no-op-by-lane-class guard
 	// re-entered (or attempted to re-enter) at least one no-op tick.
 	FeatureNoopGuard = "noop_guard"
+
+	// FeatureDryRunThrottle (SCHED-GAP-17000): the dry-run throttle warned
+	// or suspended a lane (or lifted a suspension) on its no-artifact streak.
+	FeatureDryRunThrottle = "dry_run_throttle"
 )
 
 // FeatureDefinition names one tracked mechanism and what "use" means for it.
@@ -60,6 +64,7 @@ var FeatureDefinitions = []FeatureDefinition{
 	{FeatureDedupeSuppress, "a duplicate spawn suppressed (SCHED-GAP-030/103)"},
 	{FeatureBuilderGuard, "the SCHED-GAP-1674 builder no-artifact guard nudged or aborted a running tick"},
 	{FeatureNoopGuard, "the SCHED-GAP-1682 no-op guard re-entered (or attempted) a no-op tick's session"},
+	{FeatureDryRunThrottle, "the SCHED-GAP-17000 dry-run throttle warned, suspended, or recovered a lane on its no-artifact streak"},
 }
 
 // FeatureUsage is one feature-usage row as served to the API. FirstUsedAt and

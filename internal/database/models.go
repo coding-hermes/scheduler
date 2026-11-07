@@ -228,6 +228,14 @@ type Project struct {
 	// The nullable pointer is what makes "unset" and "explicitly set"
 	// distinguishable on the wire — the same shape cooldown_pin_s uses.
 	NoopAllowed *bool `json:"noop_allowed"`
+
+	// SCHED-GAP-17000: the dry-run throttle. no_progress_ticks counts the
+	// lane's CONSECUTIVE no-artifact ticks; this is how many it may accumulate
+	// before the scheduler suspends it (cooldown pin at the ceiling) instead of
+	// spending another spawn. NULL/0 = DefaultDryRunThrottle (10). A stored
+	// value is validated >= DryRunWarnStreak (5): a throttle below the warning
+	// line would suspend a lane with no warning at all.
+	DryRunThrottle *int `json:"dry_run_throttle"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are

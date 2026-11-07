@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 85 // PERF-006: hook_runs busy receipts
+const latestMigration = 86 // SCHED-GAP-17000: projects.dry_run_throttle
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1929,6 +1929,20 @@ DROP TABLE hook_runs;
 ALTER TABLE hook_runs_perf006 RENAME TO hook_runs;
 CREATE INDEX IF NOT EXISTS hook_runs_tick_idx ON hook_runs(tick_id, phase, seq);
 CREATE INDEX IF NOT EXISTS hook_runs_hook_idx ON hook_runs(hook_id, started_at DESC);
+`,
+	},
+	{
+		// SCHED-GAP-17000: dry-run throttle. projects.no_progress_ticks already
+		// counts CONSECUTIVE no-artifact ticks (the streak), but the schema had
+		// nowhere to say how long a lane may keep that up before the scheduler
+		// stops spending spawns on it. NULL/0 = the documented default
+		// (DefaultDryRunThrottle); a stored value is validated to be >=
+		// DryRunWarnStreak so a suspension can never land before the warning
+		// line it is meant to follow.
+		version: 86,
+		desc:    "SCHED-GAP-17000: projects.dry_run_throttle — consecutive no-artifact ticks after which a lane is cooldown-pinned and suspended (NULL/0 = default 10)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN dry_run_throttle INTEGER;
 `,
 	},
 }

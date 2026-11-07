@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -111,8 +112,35 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// satisfies. A DEFERRED tick is excluded by the caller-side guard below
 	// (SCHED-GAP-203: a gateway blip must not charge the project).
 	admMode := admissionModeForProject(db, project)
-	if admMode == database.AdmissionModeTasks && outcome.Status != TickDeferred {
+	// SCHED-GAP-17000: the streak is no longer tasks-only. A SATELLITE lane
+	// (cooldown admission — the docs/lint/format flavour) has its no-ops
+	// ALLOWED by class (SCHED-GAP-1682), so nothing else ever counted them:
+	// it could be spawned for months producing nothing and no surface knew.
+	// "Allowed to no-op" is not "allowed to no-op indefinitely" — the streak
+	// is the evidence the dry-run throttle suspends on.
+	// The streak has TWO writers by design: this one (for lanes the adaptive
+	// machinery does not manage) and the adaptive branch below (for
+	// adaptive_cooldown=1 lanes, whose whole point is its own ratchet). Running
+	// both would double-charge every tick — measured as no_progress_ticks 20
+	// where 10 was expected, which then crossed the adaptive threshold early and
+	// ratcheted cooldown_s to 8x. So: record here only when the adaptive branch
+	// will not, i.e. tasks-admitted lanes (the adaptive branch returns before the
+	// ratchet) and lanes with adaptive cooldown switched off (the satellite lane
+	// class this feature exists for).
+	if outcome.Status != TickDeferred && (admMode == database.AdmissionModeTasks || !adaptiveCooldownOn(db, project)) {
 		recordTasksNoopStreak(db, outcome, codeCommits, measured)
+		// NOTE: the throttle uses the WIDER definition (a board commit counts) —
+		// see tickProducedWorkForThrottle for why a suspension must be liftable
+		// by the lane's own product.
+		progress := tickProducedWorkForThrottle(outcome, codeCommits, boardCommits, measured)
+		action, terr := applyDryRunThrottle(context.Background(), db, outcome.Project, progress)
+		if terr != nil {
+			// Best-effort: the tick already completed; a policy write that
+			// failed is a log line, never a changed outcome.
+			log.Printf("DRY-RUN-THROTTLE: %s: %v", outcome.Project, terr)
+		} else if action == dryRunWarned || action == dryRunSuspended || action == dryRunRecovered {
+			database.RecordFeatureUse(database.FeatureDryRunThrottle)
+		}
 	}
 
 	// SCHED-GAP-203: a DEFERRED tick is a harness-side gateway blip, not a
@@ -610,4 +638,19 @@ func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (c
 		}
 	}
 	return code, board, measured
+}
+
+// adaptiveCooldownOn reports whether the project's adaptive-cooldown ratchet is
+// armed. The dry-run throttle needs it only to decide WHICH writer owns the
+// no-progress streak this tick (see the call site) — an extra single-column read
+// per tick is cheaper than a double-charged streak, which silently halves the
+// allowance every lane gets.
+func adaptiveCooldownOn(db *sql.DB, project string) bool {
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(adaptive_cooldown, 0) FROM projects WHERE name = ?`, project).Scan(&v); err != nil {
+		// Unreadable row: assume the adaptive branch will run (it re-reads and
+		// bails on its own), so this writer stays out of the way.
+		return true
+	}
+	return v != 0
 }

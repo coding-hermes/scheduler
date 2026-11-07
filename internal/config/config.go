@@ -489,6 +489,12 @@ type ProjectDef struct {
 	// override that wins in both directions and pins GatewayKey-conditionally
 	// at boot (a keyless entry never rewrites an API-set value).
 	NoopAllowed *bool `toml:"noop_allowed"`
+
+	// SCHED-GAP-17000: how many CONSECUTIVE no-artifact ticks a lane may
+	// accumulate before the scheduler suspends it. Absent (nil) = the
+	// documented default; a present value must be >= the warn streak, or the
+	// suspension would land before the warning it is meant to follow.
+	DryRunThrottle *int `toml:"dry_run_throttle"`
 }
 
 // NamespaceDef mirrors the subset of database.Namespace fields that are

@@ -562,9 +562,22 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	// resets — still fails at the deadline with the last-observed value.
 	gap170PollCounterReset(t, db, name)
 	after := gap146ReadState(t, db, name)
-	if after.cooldownS != want.cooldownS || after.noProgressTicks != want.noProgressTicks {
-		t.Errorf("after the recovery tick cooldown/streak = %d/%d, want %d/%d — the outage must not escalate the lane",
-			after.cooldownS, after.noProgressTicks, want.cooldownS, want.noProgressTicks)
+	// The COOLDOWN is the outage-sensitive number: the outage pass must not
+	// escalate the lane, and it does not.
+	if after.cooldownS != want.cooldownS {
+		t.Errorf("after the recovery tick cooldown = %d, want %d — the outage must not escalate the lane",
+			after.cooldownS, want.cooldownS)
+	}
+	// The STREAK, however, moves by exactly one — and that one is NOT the
+	// outage. The recovery tick spawned a session against a stub gateway that
+	// produced nothing, which since SCHED-GAP-17000 is a dry tick on every lane
+	// class (the streak is the dry-run throttle's input, so an unarmed lane can
+	// no longer sit at zero forever). The charge for the OUTAGE is what must be
+	// absent, and it is: the deferral-event count and the untouched failure
+	// counter above are the evidence for that, not this column.
+	if after.noProgressTicks != want.noProgressTicks+1 {
+		t.Errorf("after the recovery tick no_progress_ticks = %d, want %d (baseline %d + the recovery tick's own dry run; the outage itself must add nothing)",
+			after.noProgressTicks, want.noProgressTicks+1, want.noProgressTicks)
 	}
 	if after.consecutiveFailures != 0 {
 		t.Errorf("consecutive_failures after a successful recovery tick = %d, want 0 (SCHED-GAP-137a reset)", after.consecutiveFailures)
