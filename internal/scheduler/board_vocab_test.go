@@ -219,11 +219,60 @@ func TestBoardVocabValidator_CleanSingleObjectLineNotGlued(t *testing.T) {
 	}
 }
 
+// TestBoardVocabValidator_BlockedWithReasonIsAllowed pins the RELEASE-044
+// policy reversal: status=blocked is the owner-gate parking spelling, so a row
+// carrying a blocked_reason must produce ZERO violations. Before the reversal
+// this exact shape red the CI battery on every push (SCHED-GAP-128,
+// REL-GUARD-001, SCHED-GAP-16934, SCHED-GAP-16937).
+func TestBoardVocabValidator_BlockedWithReasonIsAllowed(t *testing.T) {
+	path := writeVocabBoard(t,
+		`{"id": "X", "status": "blocked", "blocked_reason": "owner gate"}`,
+	)
+
+	got, err := ValidateBoardVocab(path)
+	if err != nil {
+		t.Fatalf("ValidateBoardVocab: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("blocked row with blocked_reason must produce zero violations, got %v", got)
+	}
+}
+
+// TestBoardVocabValidator_ParkedSpellingsStillFail is the RELEASE-044 negative
+// control: admitting "blocked" must not loosen the gate — every genuinely
+// parked spelling (and the empty status) still yields exactly one violation.
+func TestBoardVocabValidator_ParkedSpellingsStillFail(t *testing.T) {
+	for _, status := range []string{"todo", "open", "rework", "new", "claimed", "ready", ""} {
+		name := status
+		if name == "" {
+			name = "(empty)"
+		}
+		t.Run(name, func(t *testing.T) {
+			path := writeVocabBoard(t, `{"id": "OFF-1", "status": "`+status+`"}`)
+
+			got, err := ValidateBoardVocab(path)
+			if err != nil {
+				t.Fatalf("ValidateBoardVocab: %v", err)
+			}
+			want := "OFF-1: status=" + status
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("status=%q: got %v, want exactly [%q]", status, got, want)
+			}
+		})
+	}
+}
+
 // TestBoardVocabValidator_AllowedSetMatchesPythonGate pins the Go/Python parity
 // the row requires: ops/check-fleet-invariants.py's BOARD_ALLOWED_STATUSES tuple
 // and BOARD_LEGACY_CLOSED_STATUSES tuple must name exactly the same statuses as
 // BoardAllowedStatuses / BoardLegacyClosedStatuses here. Without this, the CI
 // gate and the in-process rule can drift apart and both read green.
+//
+// RELEASE-044 additionally pins "blocked" membership on BOTH sides by name: it
+// is the owner-gate parking spelling, and an allowlist that later drops it
+// re-reds every owner-gated row (SCHED-GAP-128, REL-GUARD-001, SCHED-GAP-16934,
+// SCHED-GAP-16937) on every push. The drop must fail THIS test by name, not
+// merely by tuple length.
 func TestBoardVocabValidator_AllowedSetMatchesPythonGate(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "ops", "check-fleet-invariants.py"))
 	if err != nil {
@@ -246,6 +295,22 @@ func TestBoardVocabValidator_AllowedSetMatchesPythonGate(t *testing.T) {
 			}
 		}
 	}
+	if !stringSliceHas(pythonTuple(t, string(src), "BOARD_ALLOWED_STATUSES"), "blocked") {
+		t.Fatal(`Python BOARD_ALLOWED_STATUSES dropped "blocked" — every owner-gated row re-reds the CI battery`)
+	}
+	if !stringSliceHas(BoardAllowedStatuses, "blocked") {
+		t.Fatal(`BoardAllowedStatuses dropped "blocked" — every owner-gated row re-reds the CI battery`)
+	}
+}
+
+// stringSliceHas reports whether want is an element of ss.
+func stringSliceHas(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // pythonTuple extracts a module-level `NAME = ("a", "b")` tuple literal from the

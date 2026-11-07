@@ -697,9 +697,13 @@ PASS — 0 violation(s) (board-only mode: fleet checks 1-7 not run — no local 
   groups precisely so the closure is a decision, not a cleanup.
 - **Off-vocabulary statuses:** re-spell to `pending`/`in_progress`/`complete`. The legacy closed
   spellings (`done`, `completed`, `closed`) are reported in their own class because they mark
-  *finished* work and can be swept to `complete`; parked spellings (`todo`, `open`, …) are
-  writer bugs and must be re-filed as `pending` or deliberately closed. `blocked` and `retired`
-  are outside the vocabulary on purpose and will keep failing the gate until re-filed.
+  *finished* work and can be swept to `complete`; parked spellings (`todo`, `open`, `rework`,
+  `new`, `claimed`, `ready`) are writer bugs and must be re-filed as `pending` or deliberately
+  closed. `blocked` is IN the vocabulary since RELEASE-044: it is the user-gated parked state —
+  carry a `blocked_reason` (plus `blocked_on` where an owner decision is named) — and is not
+  dispatchable, so an owner-gated row parked as `blocked` must NOT be re-spelled to `pending`
+  (that would make it dispatchable and turn the owner gate into an idle-spin generator). Only
+  `retired` remains outside the vocabulary on purpose and keeps failing the gate until re-filed.
 - Run the gate on the board after any board edit; it is read-only and cheap.
 
 ---

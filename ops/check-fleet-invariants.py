@@ -42,15 +42,19 @@ Checks
                      REPORTED (INFO cooldown-legacy-floor) rather than failed.
   6. targets       — every satellite's target project exists and is enabled
   7. store parity  — DB and fleet.toml agree on the operator's pins
-  8. board vocab   — every JSONL board row carries a dispatchable status.
-                     The board's writers are gated to
-                     BOARD_ALLOWED_STATUSES; rows still carrying a legacy
-                     closed spelling (done/completed/closed) are reported
-                     under the separate 'board-legacy-status' class so the PM
-                     cycle can sweep them in the same tick. Without this, a row
-                     minted as e.g. 'todo' is visible to the fleet but picked by
-                     nobody — the foreman prompt and the pending-boost counter
-                     both read status=="pending" only. Skipped silently when no
+  8. board vocab   — every JSONL board row carries a status from the writer
+                     vocabulary. The board's writers are gated to
+                     BOARD_ALLOWED_STATUSES; "blocked" is the owner-gate
+                     parking spelling (in-vocabulary since RELEASE-044, but
+                     NOT dispatchable — only status=="pending" is picked, so
+                     owner-gated rows park there instead of pending); rows
+                     still carrying a legacy closed spelling
+                     (done/completed/closed) are reported under the separate
+                     'board-legacy-status' class so the PM cycle can sweep
+                     them in the same tick. Without this, a row minted as
+                     e.g. 'todo' is visible to the fleet but picked by nobody
+                     — the foreman prompt and the pending-boost counter both
+                     read status=="pending" only. Skipped silently when no
                      board file is found (test rigs, old-style workdirs).
   9. board content dup — two rows with DIFFERENT ids whose non-volatile
                      content is identical (sha256 over the row minus the
@@ -367,9 +371,17 @@ RETIRED_DRIVERS = ("pm-standin-tick.sh", "qa-scheduler-tick.sh",
 # states the PM cycle writes. "in_progress" is the live-lane claim the foreman
 # wave writes at dispatch (RELEASE-007) — a legitimate writer status, already
 # treated as open by the readers (board_freshness.go openStatuses,
-# adaptive_cooldown.go boardOpenRows). The gate's remaining purpose is to catch
-# PARKED spellings ("todo", "open", "rework", ...) and missing/empty statuses.
-BOARD_ALLOWED_STATUSES = ("pending", "in_progress", "complete", "duplicate")
+# adaptive_cooldown.go boardOpenRows). "blocked" is the owner-gate parking
+# spelling (RELEASE-044 policy reversal): owner-gated rows are parked as
+# status=blocked carrying a blocked_reason (plus blocked_on where an owner
+# decision is named), because parking them as "pending" would make them
+# dispatchable and turn the owner gate into an idle-spin generator — so
+# "blocked" is in-vocabulary for writers while NOT dispatchable (the foreman
+# prompt and the pending-boost counter read status=="pending" only). The
+# gate's remaining purpose is to catch PARKED spellings ("todo", "open",
+# "rework", "new", "claimed", "ready", ...) and missing/empty statuses;
+# "retired" stays off-vocabulary unless separately decided.
+BOARD_ALLOWED_STATUSES = ("pending", "in_progress", "blocked", "complete", "duplicate")
 BOARD_LEGACY_CLOSED_STATUSES = ("done", "completed", "closed")
 # The canonical closed spelling (mirror of Go's closedBoardStatus,
 # internal/blocks/board.go:70) — the only terminal state a refile may follow.

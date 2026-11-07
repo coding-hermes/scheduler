@@ -34,11 +34,21 @@ import (
 // it dispatches a row (RELEASE-007), so it is a legitimate writer status and
 // must not fail the gate. The scheduler's READERS already treat it as open —
 // openStatuses in internal/scheduler/board_freshness.go and boardOpenRows in
-// internal/scheduler/adaptive_cooldown.go both include it. The gate's remaining
-// purpose is to catch PARKED spellings ("todo", "open", "rework", "new",
-// "claimed", "ready", ...) and missing/empty statuses: those stay off-vocabulary
-// and keep failing the gate.
-var BoardAllowedStatuses = []string{"pending", "in_progress", "complete", "duplicate"}
+// internal/scheduler/adaptive_cooldown.go both include it.
+//
+// "blocked" is the owner-gate parking spelling (RELEASE-044 policy reversal):
+// owner-gated rows are parked as status=blocked carrying a blocked_reason
+// (plus blocked_on where an owner decision is named). Parking such a row as
+// "pending" would make it dispatchable and turn the owner gate into an
+// idle-spin generator, so "blocked" is in-vocabulary for writers while NOT
+// dispatchable — CountPending (board_awareness.go) counts only
+// status=="pending" and never blocked rows, and the freshness reader classifies
+// blocked as user-gated (not work-to-spawn, not idle-proof). The gate's
+// remaining purpose is to catch PARKED spellings ("todo", "open", "rework",
+// "new", "claimed", "ready", ...) and missing/empty statuses: those stay
+// off-vocabulary and keep failing the gate, and "retired" also remains
+// off-vocabulary unless separately decided.
+var BoardAllowedStatuses = []string{"pending", "in_progress", "blocked", "complete", "duplicate"}
 
 // BoardLegacyClosedStatuses are the closed-state spellings the board carried
 // before the vocabulary was closed (4 rows still carried them on 2026-09-18).

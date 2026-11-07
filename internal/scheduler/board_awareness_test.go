@@ -30,6 +30,30 @@ func TestCountPending_JSONL(t *testing.T) {
 	}
 }
 
+// TestCountPending_BlockedExcluded pins RELEASE-044 dispatch semantics: the
+// writer vocabulary now admits status=blocked (owner-gate parking, with a
+// blocked_reason), but CountPending must still count ONLY status=="pending" —
+// a blocked row is parked work no lane may pick up until an operator
+// unblocks it (board_awareness.go GAP-036 (d)).
+func TestCountPending_BlockedExcluded(t *testing.T) {
+	dir := t.TempDir()
+	boardDir := filepath.Join(dir, ".coding-hermes", "board")
+	if err := os.MkdirAll(boardDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	content := `{"id":"TASK-100","status":"pending","title":"dispatchable"}` + "\n" +
+		`{"id":"TASK-101","status":"blocked","blocked_reason":"owner gate"}` + "\n" +
+		`{"id":"TASK-102","status":"pending","title":"dispatchable too"}` + "\n"
+	path := filepath.Join(boardDir, "tasks.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	c := NewPendingTaskCounter(60 * time.Second)
+	if got := c.CountPending(dir); got != 2 {
+		t.Errorf("CountPending = %d, want 2 (2 pending; the blocked row must NOT count)", got)
+	}
+}
+
 func TestCountPending_MD_Fallback(t *testing.T) {
 	dir := t.TempDir()
 	boardDir := filepath.Join(dir, ".coding-hermes")

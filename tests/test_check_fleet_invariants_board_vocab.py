@@ -6,6 +6,11 @@ in-process, pinning both halves of the vocabulary decision:
   * ``in_progress`` is a LEGITIMATE writer status — the live-lane claim the
     foreman wave writes when it dispatches a row — so a fixture carrying an
     ``in_progress`` row must exit 0 with no ``board-vocab`` violation;
+  * ``blocked`` is the owner-gate parking spelling (RELEASE-044 policy
+    reversal): a row carrying ``status=blocked`` with a ``blocked_reason``
+    must exit 0 with no violation — before the reversal this exact shape red
+    the CI battery on every push (SCHED-GAP-128, REL-GUARD-001,
+    SCHED-GAP-16934, SCHED-GAP-16937);
   * genuinely PARKED spellings stay off-vocabulary: a ``todo`` row must exit 1
     with the row named on a ``VIOLATION board-vocab`` line.
 
@@ -54,6 +59,24 @@ def _run_gate(tmp_path: Path, lines: list[str]) -> tuple[int, str]:
             "--board-only",
         ])
     return rc, buf.getvalue()
+
+
+def test_board_vocab_blocked_with_reason_is_allowed(tmp_path):
+    """RELEASE-044 positive pin: status=blocked is the owner-gate parking
+    spelling — a seeded row {"id": "X", "status": "blocked", "blocked_reason":
+    "owner gate"} exits 0 with no board-vocab violation. Before the reversal
+    this exact row shape red the CI battery on every push (SCHED-GAP-128,
+    REL-GUARD-001, SCHED-GAP-16934, SCHED-GAP-16937)."""
+    rows = [
+        '{"id": "X", "status": "blocked", "blocked_reason": "owner gate"}',
+    ]
+
+    rc, out = _run_gate(tmp_path, rows)
+
+    assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"
+    assert "VIOLATION" not in out, out
+    assert "X: status=blocked" not in out, out
+    assert "PASS" in out, out
 
 
 def test_board_vocab_in_progress_is_allowed(tmp_path):
