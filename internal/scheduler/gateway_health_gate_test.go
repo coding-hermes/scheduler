@@ -575,6 +575,12 @@ func TestGatewayHealthGate_Recovery(t *testing.T) {
 	// no longer sit at zero forever). The charge for the OUTAGE is what must be
 	// absent, and it is: the deferral-event count and the untouched failure
 	// counter above are the evidence for that, not this column.
+	//
+	// POLLED, not read once: the streak write rides the same completion
+	// goroutine as the failure reset above, so a synchronous read races it
+	// (measured: 3 on one run, 4 on the next, same tree).
+	gap170PollStreak(t, db, name, want.noProgressTicks+1)
+	after = gap146ReadState(t, db, name)
 	if after.noProgressTicks != want.noProgressTicks+1 {
 		t.Errorf("after the recovery tick no_progress_ticks = %d, want %d (baseline %d + the recovery tick's own dry run; the outage itself must add nothing)",
 			after.noProgressTicks, want.noProgressTicks+1, want.noProgressTicks)
@@ -595,6 +601,24 @@ func gap170PollCounterReset(t *testing.T, db *sql.DB, name string) {
 	deadline := time.Now().Add(4 * time.Second)
 	for {
 		if gap146ReadState(t, db, name).consecutiveFailures == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// gap170PollStreak waits for the recovery tick's own dry-run charge to land.
+// The streak is written by the completion goroutine, so the value observed by a
+// synchronous read is a race, not a fact (the same reason gap170PollCounterReset
+// exists above).
+func gap170PollStreak(t *testing.T, db *sql.DB, name string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		if gap146ReadState(t, db, name).noProgressTicks >= want {
 			return
 		}
 		if time.Now().After(deadline) {
