@@ -636,8 +636,11 @@ yet the same findings keep coming back. A gate run reports
 **Means** — Two separate board conditions, and only one of them is "the scheduler is confused":
 
 - **Writer vocabulary.** Four spellings are dispatchable/closed: `pending`, `in_progress`,
-  `complete`, `duplicate`. `in_progress` is the live-lane claim and is legitimate. Spellings
-  outside that set (`todo`, `open`, `blocked`, `retired`, `done`, `completed`, `closed`, …) are
+  `complete`, `duplicate`. `in_progress` is the live-lane claim and is legitimate. `blocked` is
+  also IN the vocabulary but only as the OWNER-GATE parking state (RELEASE-044): it must carry a
+  `blocked_reason` (plus `blocked_on` where an owner decision is named) and it is deliberately
+  **not** dispatchable — never re-spell an owner-gated row to `pending`. Spellings still outside
+  that set (`todo`, `open`, `retired`, `done`, `completed`, `closed`, …) are
   *visible to the fleet and scheduled by nobody* — visible work no lane will pick up.
 - **Content duplicates.** Two rows with the same content (ignoring id, timestamps and audit
   prose), where at least one is still open, inflate the pending-boost counter and keep the board
@@ -676,6 +679,11 @@ VIOLATION board-vocab GAP-067: status=blocked
 VIOLATION board-vocab QA-BUNKER-5: status=retired
 VIOLATION board-vocab QA-BUNKER-1: status=retired
 ```
+
+> **Since RELEASE-044** the `status=blocked` line above is no longer a violation — `blocked` is
+> the owner-gate parking spelling and is in the writer vocabulary. Only the `status=retired`
+> spellings (and other genuinely off-vocabulary ones) still print `board-vocab`. The transcript
+> is kept as the 2026-09-20 record of what the gate printed at the time.
 
 Own board clean, for contrast:
 
