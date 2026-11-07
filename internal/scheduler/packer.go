@@ -178,6 +178,12 @@ type scored struct {
 	// deferred). True-prefixed helper on the struct: after a FAILED tick the
 	// tasks-mode waiver stands down (see the Pick gate below).
 	lastTickStatusFailed bool
+	// NOOP-PACING: projects.no_progress_ticks (consecutive no-artifact ticks)
+	// and projects.cooldown_floor_s — the pacing base the no-op streak is
+	// spaced on (see noop_pacing.go). Read here because this legacy Pick path
+	// builds its own row scan rather than reusing database.Project.
+	noopStreak     int
+	cooldownFloorS int
 	// SCHED-GAP-1678: the raw last_tick_status. The board-stasis gate only
 	// applies when the previous tick COMPLETED — a failed/timeout/deferred
 	// tick may have died before reading its board, so stasis proves nothing
@@ -248,6 +254,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		       COALESCE(p.prompt, ''), COALESCE(p.prompt_mode, 'append'), COALESCE(ns.default_prompt, ''), COALESCE(ns.id, ''), COALESCE(ns.max_concurrent, 0), COALESCE(ns.model_chain, ''), COALESCE(p.routing_mode, ''), COALESCE(ns.routing_mode, ''),
 		       COALESCE(p.bump_active, 0), COALESCE(p.bump_cooldown_s, 0), COALESCE(p.bump_remaining_ticks, 0),
 		       p.consecutive_failures, COALESCE(p.last_tick_status, ''),
+		       COALESCE(p.no_progress_ticks, 0), COALESCE(p.cooldown_floor_s, 0),
 		       COALESCE(ns.admission_mode, ''), COALESCE(p.admission_mode, ''), COALESCE(p.board_ownership, ''),
 		       COALESCE(p.idle_intervention, -1), COALESCE(ns.idle_intervention, -1),
 		       p.target_runs_per_day
@@ -285,6 +292,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			&s.prompt, &s.promptMode, &s.namespaceDefaultPmt, &s.namespaceID, &s.namespaceMaxConc, &s.namespaceChain, &s.routingMode, &s.namespaceRoutingMode,
 			&s.bumpActive, &s.bumpCooldownS, &s.bumpRemaining,
 			&s.consecutiveFailures, &lastStatus,
+			&s.noopStreak, &s.cooldownFloorS,
 			&s.admissionNsMode, &s.admissionMode, &s.boardOwnership,
 			&s.idleIntervention, &s.nsIdleIntervention,
 			&targetRunsPerDay); err != nil {
@@ -569,6 +577,16 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 					totalSkippedCooldown++
 					continue
 				}
+			}
+			// NOOP-PACING: consecutive no-artifact ticks space the next
+			// admission by the lane's cooldown floor (doubling per tick, 8x
+			// cap). See noop_pacing.go for the measured 2-minute dry churn
+			// this closes; any artifact resets the streak and restores the
+			// plain waiver.
+			if tasksNoopStreakDeferred(s.noopStreak, s.cooldownFloorS, s.lastTickAt, now) {
+				noteNoopPacing(s.name, s.noopStreak, tasksNoopCooldown(s.noopStreak, s.cooldownFloorS))
+				totalSkippedCooldown++
+				continue
 			}
 			// SCHED-GAP-133: tasks-mode admission still respects FailureBackoff.
 			// Without this, a project that has been failing repeatedly (e.g.

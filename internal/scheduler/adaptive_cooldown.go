@@ -100,6 +100,21 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// marker (-1/-1) instead of silently looking like a zero-commit tick.
 	codeCommits, boardCommits, measured := persistGitCommitSignals(db, outcome, workdir)
 
+	// NOOP-PACING: a tasks-admitted lane's no-op streak is ADMISSION INPUT,
+	// not an adaptive-cooldown decision, so it is recorded HERE — ahead of the
+	// `adaptive == 0` opt-out below and ahead of the tasks-mode early return
+	// further down. That ordering is the whole fix: measured 2026-11-06,
+	// task-router-foreman (admission_mode='tasks', adaptive_cooldown=0, 21600s
+	// cooldown/pin/floor) was spawned 76 times in one day and
+	// projects.no_progress_ticks stayed 0 the entire time, because the only
+	// writer of that column sat behind an opt-in check the lane never
+	// satisfies. A DEFERRED tick is excluded by the caller-side guard below
+	// (SCHED-GAP-203: a gateway blip must not charge the project).
+	admMode := admissionModeForProject(db, project)
+	if admMode == database.AdmissionModeTasks && outcome.Status != TickDeferred {
+		recordTasksNoopStreak(db, outcome, codeCommits, measured)
+	}
+
 	// SCHED-GAP-203: a DEFERRED tick is a harness-side gateway blip, not a
 	// project-side no-progress tick, so it must not extend the no-progress
 	// streak or ratchet cooldown_s. Timeouts DO reach the escalation below
@@ -145,7 +160,7 @@ func adaptiveCooldown(db *sql.DB, project, workdir string, outcome TickOutcome) 
 	// ratchet their cooldown_s (it would linger after the board drains).
 	// The speed-up reset below still runs — it restores the floor pin
 	// after progress, which is exactly the "auto kicks back in" baseline.
-	if mode := admissionModeForProject(db, project); mode == database.AdmissionModeTasks {
+	if admMode == database.AdmissionModeTasks {
 		// The commit-anatomy split was already classified and persisted
 		// above (SCHED-GAP-202) — tick reporting stays complete for every
 		// mode without a duplicate classification.

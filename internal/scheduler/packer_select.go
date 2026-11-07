@@ -385,6 +385,18 @@ func (m *MultiPoolPacker) Pack(
 							continue // post-failure cooldown not elapsed
 						}
 					}
+					// NOOP-PACING: a lane that keeps completing with no
+					// artifact of its own work is not "work-driven" — it is
+					// spinning. N consecutive no-op ticks space the next
+					// admission by cooldown_floor_s (doubling per tick, 8x cap),
+					// so the 2-minute dry churn measured on task-router-foreman
+					// (76 spawns/day, 63 dry_run) cannot continue. Any artifact
+					// resets the streak to 0 and restores the plain waiver.
+					if tasksNoopStreakDeferred(pu.Project.NoProgressTicks, pu.Project.CooldownFloorS, &lt, now) {
+						noteNoopPacing(pu.Project.Name, pu.Project.NoProgressTicks,
+							tasksNoopCooldown(pu.Project.NoProgressTicks, pu.Project.CooldownFloorS))
+						continue // no-op cooldown not elapsed
+					}
 					// SCHED-GAP-133: only gate on FailureBackoff when the project
 					// has actually failed repeatedly.
 					if pu.Project.ConsecutiveFailures > 1 {
