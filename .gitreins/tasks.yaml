@@ -5901,7 +5901,7 @@ tasks:
     returns HTTP 200 with a quoted count. ARM3: the enabling action is attributed
     (timestamp/actor) or the exact refusal text and exit code are quoted and the row
     handed to the owner.'
-  status: complete
+  status: in_progress
   created_at: '2026-11-07T23:14:34.040688+00:00'
   completed_at: '2026-11-07T23:22:50.215929+00:00'
 - id: RELEASE-051
