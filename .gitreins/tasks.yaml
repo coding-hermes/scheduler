@@ -5892,3 +5892,27 @@ tasks:
   status: complete
   created_at: '2026-11-07T21:17:25.662111+00:00'
   completed_at: '2026-11-07T22:45:32.230472+00:00'
+- id: RELEASE-050
+  title: Enable GitHub secret scanning + push protection (all five security switches)
+    on public coding-hermes/scheduler
+  criteria:
+  - 'ARM1: gh api repos/coding-hermes/scheduler --jq .security_and_analysis shows
+    secret_scanning and secret_scanning_push_protection enabled. ARM2: secret-scanning/alerts
+    returns HTTP 200 with a quoted count. ARM3: the enabling action is attributed
+    (timestamp/actor) or the exact refusal text and exit code are quoted and the row
+    handed to the owner.'
+  status: complete
+  created_at: '2026-11-07T23:14:34.040688+00:00'
+  completed_at: '2026-11-07T23:22:50.215929+00:00'
+- id: RELEASE-051
+  title: Remove the stale Jul-19 /usr/local/bin/schedulerd that shadows the canonical
+    build on PATH
+  criteria:
+  - 'ARM1: command -v schedulerd exits non-zero or resolves to buildinfo whose module
+    version equals the newest tag. ARM2: if any binary remains it is a static release-class
+    build (vcs.revision + vcs.modified=false) or a symlink to the unit ExecStart path.
+    ARM3: every scheduler binary on the host is enumerated and classified with go
+    version -m, and the removal is proven with ls -la plus exit code after a reference
+    sweep.'
+  status: in_progress
+  created_at: '2026-11-07T23:14:35.877124+00:00'
