@@ -469,3 +469,27 @@ was NOT created" reasoning above).** Zero tags, zero Release objects, no artifac
 `RELEASE-045` (deps, waiting on a settled cut), `RELEASE-046` (checkout integrity — quiescent, its
 enforcement arm unmet).
 
+### Pass-4 addendum — CI terminalized green after the record was first written
+
+Two claims above were written mid-run and are corrected here with the terminal receipts:
+
+- **`42404019008` (`CI` at `0dcd76d8`) is now `completed/success`** — not merely in progress. Every
+  job is green: `build` (the invariant battery that had been red all day), `lint`, `race-blocks`,
+  `race-scheduler`, `multiarch / Verify (amd64)`, `Verify (arm64, native)` and all six
+  `Build <platform>` jobs. `Container (multi-arch)` and `Release` are skipped by the tag-only
+  filter. This is the **first fully green `CI` workflow on a code-bearing SHA today**, and it is
+  the certified candidate SHA for the `v1.15.0` cut.
+- `42404018443` (`CI Pipeline` at `0dcd76d8`) was still `in_progress` when this addendum was written
+  (`Lint` success; `Test (Go 1.26)` and `Race Detector (internal/api)` running). Recorded as
+  PENDING, not as green — the product-line receipt for this SHA is not yet in hand.
+- Tips landed after this record's first landing — `a748c11e`, `eff904b2`, `66f4fc7a` — are
+  **board/harness only** (`git diff --name-only 1c0cb890..origin/main` lists
+  `.coding-hermes/board/{events,tasks}.jsonl` and `.gitreins/tasks.yaml`), so the code tree and its
+  census are unchanged and the candidate SHA for a cut remains `0dcd76d8`.
+- Board rows: `RELEASE-044` is now `in_progress` on its CI-Pipeline arm (per `eff904b2`), and the
+  serial foreman close-out is deliberately blocked on that arm rather than closed early — which is
+  the correct shape, and it means the release remains gated on that row's completion even though
+  the board battery itself passes.
+
+Nothing else in this pass changes: no tag, no Release object, no artifact.
+
