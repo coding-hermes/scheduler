@@ -5857,3 +5857,20 @@ tasks:
     only; and RELEASE-044 was complete before the refresh landed.'
   status: in_progress
   created_at: '2026-11-07T19:34:37.601954+00:00'
+- id: RELEASE-045-V
+  title: 'RELEASE-045 bounded verification: Go module refresh 81b146b8 is complete,
+    surgical and major-free'
+  criteria:
+  - 'Verify the Go dependency refresh commit 81b146b8 with these bounded checks only,
+    quoting each command and its output: (1) go list -u -m all piped to grep -c ''[''
+    prints 0, so no module is behind; (2) go list -m modernc.org/sqlite prints modernc.org/sqlite
+    v1.62.0; (3) git show --stat --format=%s 81b146b8 prints a subject starting with
+    chore(deps): and lists exactly go.mod and go.sum as the changed files; (4) go
+    build ./... exits 0; (5) every version move in git show 81b146b8 -- go.mod is
+    a minor or patch bump with no major. Do NOT run the full go test suite: it exceeds
+    the evaluator command timeout, and its evidence lives in hosted CI Pipeline run
+    42410158874 which ran Test (Go 1.26), Race Detector (internal/api) and Integration
+    Test green at 81b146b8.'
+  status: complete
+  created_at: '2026-11-07T21:08:25.081628+00:00'
+  completed_at: '2026-11-07T21:11:16.602875+00:00'
