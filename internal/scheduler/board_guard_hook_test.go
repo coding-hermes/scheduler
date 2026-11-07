@@ -8,6 +8,11 @@ package scheduler
 // arg/stdin/git-fallback input modes, the fail-closed no-source case, the
 // githooks/pre-commit chaining (including the tier-1 hand-off), and the
 // dispatcher-side Go check on real branches.
+//
+// RELEASE-046 (stale-base row drop): the board-only branch additionally
+// refuses a staged index blob that would drop any row id the same path
+// carries on origin/main. The TestBoardGuard_StaleBase* cases below fail if
+// that rule is removed or weakened.
 
 import (
 	"errors"
@@ -20,32 +25,129 @@ import (
 	"testing"
 )
 
+// fixtureGit runs one git command in repo with a pinned identity (throwaway
+// fixtures must not depend on ambient git config).
+func fixtureGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git -C %s %v: %v\n%s", repo, args, err, out)
+	}
+	return string(out)
+}
+
+// fixtureCommit stages everything in repo and commits it.
+func fixtureCommit(t *testing.T, repo, msg string) {
+	t.Helper()
+	fixtureGit(t, repo, "add", "-A")
+	fixtureGit(t, repo, "commit", "-q", "-m", msg)
+}
+
+// fixtureClone clones src into dst and pins identity in the clone.
+func fixtureClone(t *testing.T, src, dst string) {
+	t.Helper()
+	cmd := exec.Command("git", "clone", "-q", src, dst)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git clone %s %s: %v\n%s", src, dst, err, out)
+	}
+	fixtureGit(t, dst, "config", "user.email", "test@example.com")
+	fixtureGit(t, dst, "config", "user.name", "Test")
+}
+
 // guardRepo builds a throwaway git repo (own object store, no worktree
-// interference) with identity configured and one seed commit on main.
+// interference) with identity configured and one seed commit on main. The
+// repo is cloned from a local origin so origin/main exists — the
+// RELEASE-046 stale-base rule compares staged board blobs against it (a
+// repo WITHOUT an origin ref is fail-closed by design and has its own
+// test).
 func guardRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	git := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return string(out)
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin")
+	dir := filepath.Join(root, "work")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	git("init", "-q")
-	git("config", "user.email", "test@example.com")
-	git("config", "user.name", "Test")
-	git("checkout", "-q", "-b", "main")
+	fixtureGit(t, origin, "init", "-q")
+	fixtureGit(t, origin, "config", "user.email", "test@example.com")
+	fixtureGit(t, origin, "config", "user.name", "Test")
+	fixtureGit(t, origin, "checkout", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(origin, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixtureCommit(t, origin, "seed")
+	fixtureClone(t, origin, dir)
+	return dir
+}
+
+// guardRepoNoOrigin is the origin-less variant: plain init + seed commit, no
+// remote. The stale-base rule cannot verify a base here and must fail
+// closed.
+func guardRepoNoOrigin(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	fixtureGit(t, dir, "init", "-q")
+	fixtureGit(t, dir, "config", "user.email", "test@example.com")
+	fixtureGit(t, dir, "config", "user.name", "Test")
+	fixtureGit(t, dir, "checkout", "-q", "-b", "main")
 	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git("add", "seed.txt")
-	git("commit", "-q", "-m", "seed")
+	fixtureCommit(t, dir, "seed")
+	return dir
+}
+
+// writeBoardFixture writes the board file (without staging) in repo.
+func writeBoardFixture(t *testing.T, repo, content string) {
+	t.Helper()
+	p := filepath.Join(repo, ".coding-hermes", "board", "tasks.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// boardFixtureRepo builds the RELEASE-046 stale-base fixture: origin/main's
+// board carries rows alpha and beta. With stale=true the local checkout is
+// cloned after the alpha-only commit (one behind origin/main); with
+// stale=false the clone carries both rows.
+func boardFixtureRepo(t *testing.T, stale bool) string {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin")
+	dir := filepath.Join(root, "work")
+	alpha := `{"id": "alpha", "status": "open"}` + "\n"
+	both := alpha + `{"id": "beta", "status": "open"}` + "\n"
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, origin, "init", "-q")
+	fixtureGit(t, origin, "config", "user.email", "test@example.com")
+	fixtureGit(t, origin, "config", "user.name", "Test")
+	fixtureGit(t, origin, "checkout", "-q", "-b", "main")
+	writeBoardFixture(t, origin, alpha)
+	fixtureCommit(t, origin, "board: alpha")
+	if stale {
+		fixtureClone(t, origin, dir)
+		writeBoardFixture(t, origin, both)
+		fixtureCommit(t, origin, "board: append beta")
+		// The clone's origin/main moves only on fetch: after the fetch it
+		// carries alpha+beta while the local branch sits at alpha — the
+		// post-fetch, pre-rebase stale-base state (the guard compares
+		// against the locally-fetched origin/main; no network I/O).
+		fixtureGit(t, dir, "fetch", "-q", "origin")
+	} else {
+		writeBoardFixture(t, origin, both)
+		fixtureCommit(t, origin, "board: append beta")
+		fixtureClone(t, origin, dir)
+	}
 	return dir
 }
 
@@ -78,8 +180,9 @@ func repoScript(t *testing.T, rel string) string {
 	return abs
 }
 
-// runGuard runs scripts/board-commit-guard.sh with the given input mode.
-func runGuard(t *testing.T, dir, mode string, args []string, stdin string) (string, int) {
+// runGuardEnv runs scripts/board-commit-guard.sh with the given input mode
+// and extra environment entries (KEY=VALUE).
+func runGuardEnv(t *testing.T, dir, mode string, args []string, stdin string, env []string) (string, int) {
 	t.Helper()
 	script := repoScript(t, "scripts/board-commit-guard.sh")
 	var cmd *exec.Cmd
@@ -92,6 +195,7 @@ func runGuard(t *testing.T, dir, mode string, args []string, stdin string) (stri
 	default: // "git"
 		cmd = exec.Command("sh", script)
 	}
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	rc := 0
@@ -103,6 +207,12 @@ func runGuard(t *testing.T, dir, mode string, args []string, stdin string) (stri
 		rc = ee.ExitCode()
 	}
 	return string(out), rc
+}
+
+// runGuard runs scripts/board-commit-guard.sh with the given input mode.
+func runGuard(t *testing.T, dir, mode string, args []string, stdin string) (string, int) {
+	t.Helper()
+	return runGuardEnv(t, dir, mode, args, stdin, nil)
 }
 
 // Test1699_Guard_MixedCommitRejected: a changeset mixing a board path with
@@ -224,6 +334,132 @@ func Test1699_Hook_ChainsGuard(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "TIER1-RAN") {
 		t.Errorf("tier-1 hook must run after the guard passes; got:\n%s", out)
+	}
+}
+
+// TestBoardGuard_StaleBase_DropRefused (RELEASE-046 case a): a board-only
+// commit staged from a base one commit behind origin/main, whose index blob
+// drops row beta, is REFUSED with exit 1; the refusal names the dropped id,
+// the file, and the remedy. Fails if the stale-base rule is removed.
+func TestBoardGuard_StaleBase_DropRefused(t *testing.T) {
+	dir := boardFixtureRepo(t, true)
+	// The writer's own edit on a stale snapshot: flip alpha's status and
+	// append gamma — the staged blob still lacks beta, which origin/main has.
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl",
+		`{"id": "alpha", "status": "done"}`+"\n"+`{"id": "gamma", "status": "open"}`+"\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc != 1 {
+		t.Fatalf("stale-base row drop must be REFUSED with rc=1; got rc=%d output:\n%s", rc, out)
+	}
+	for _, want := range []string{
+		"RELEASE-046", "REFUSED", "beta", ".coding-hermes/board/tasks.jsonl",
+		"git fetch origin && git rebase origin/main", "BOARD_GUARD_ALLOW_ROW_DROP",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("refusal must contain %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestBoardGuard_StaleBase_StatusEditAccepted (RELEASE-046 case b): a
+// board-only edit that keeps every id the base carries (status flip on
+// alpha, beta untouched) is ACCEPTED — the rule is "no id may disappear",
+// not "the file may not change". Fails if the rule refuses any edit.
+func TestBoardGuard_StaleBase_StatusEditAccepted(t *testing.T) {
+	dir := boardFixtureRepo(t, false)
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl",
+		`{"id": "alpha", "status": "done"}`+"\n"+`{"id": "beta", "status": "pending"}`+"\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc != 0 {
+		t.Fatalf("id-preserving board edit must be ACCEPTED; rc=%d output:\n%s", rc, out)
+	}
+}
+
+// TestBoardGuard_StaleBase_RowDropEscapeHatch (RELEASE-046 case c):
+// BOARD_GUARD_ALLOW_ROW_DROP naming the dropped id admits it — loudly, via
+// a NOTICE line; naming a different id still refuses. Fails if the escape
+// hatch is removed or if it admits unlisted ids.
+func TestBoardGuard_StaleBase_RowDropEscapeHatch(t *testing.T) {
+	dir := boardFixtureRepo(t, true)
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl",
+		`{"id": "alpha", "status": "done"}`+"\n"+`{"id": "gamma", "status": "open"}`+"\n")
+
+	out, rc := runGuardEnv(t, dir, "git", nil, "", []string{"BOARD_GUARD_ALLOW_ROW_DROP=beta"})
+	if rc != 0 {
+		t.Fatalf("named drop must be ADMITTED; rc=%d output:\n%s", rc, out)
+	}
+	for _, want := range []string{"NOTICE", "BOARD_GUARD_ALLOW_ROW_DROP", "beta"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("admission must be non-silent and name %q; got:\n%s", want, out)
+		}
+	}
+
+	out, rc = runGuardEnv(t, dir, "git", nil, "", []string{"BOARD_GUARD_ALLOW_ROW_DROP=some-other-row"})
+	if rc != 1 {
+		t.Fatalf("a drop the allowlist does not name must still REFUSE; rc=%d output:\n%s", rc, out)
+	}
+	if !strings.Contains(out, "beta") {
+		t.Errorf("refusal must still name the unallowed dropped id beta; got:\n%s", out)
+	}
+}
+
+// TestBoardGuard_StaleBase_MixingAndPureCodePreserved (RELEASE-046 case d):
+// in a stale-base repo the pre-existing contract still holds — a mixed
+// board+code changeset refuses on the MIXING rule (not the stale-base
+// rule), and a pure code changeset passes. Fails if the new rule broke the
+// old contract.
+func TestBoardGuard_StaleBase_MixingAndPureCodePreserved(t *testing.T) {
+	dir := boardFixtureRepo(t, true)
+	stageIn(t, dir, "feature.go", "package main\n")
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl",
+		`{"id": "alpha", "status": "done"}`+"\n"+`{"id": "gamma", "status": "open"}`+"\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc == 0 {
+		t.Fatalf("mixed changeset must still be REJECTED; output:\n%s", out)
+	}
+	if !strings.Contains(out, "SCHED-GAP-1699") {
+		t.Errorf("mixed refusal must come from the mixing rule (SCHED-GAP-1699); got:\n%s", out)
+	}
+
+	dir2 := boardFixtureRepo(t, true)
+	stageIn(t, dir2, "feature.go", "package main\n")
+	if out, rc := runGuard(t, dir2, "git", nil, ""); rc != 0 {
+		t.Fatalf("pure code changeset must still be ACCEPTED; rc=%d output:\n%s", rc, out)
+	}
+}
+
+// TestBoardGuard_StaleBase_AppendOnlyAccepted (RELEASE-046 case e): an
+// append-only board commit (alpha+beta plus the new gamma, no id dropped)
+// is ACCEPTED. Fails if the rule refuses appends.
+func TestBoardGuard_StaleBase_AppendOnlyAccepted(t *testing.T) {
+	dir := boardFixtureRepo(t, false)
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl",
+		`{"id": "alpha", "status": "open"}`+"\n"+
+			`{"id": "beta", "status": "open"}`+"\n"+
+			`{"id": "gamma", "status": "open"}`+"\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc != 0 {
+		t.Fatalf("append-only board commit must be ACCEPTED; rc=%d output:\n%s", rc, out)
+	}
+}
+
+// TestBoardGuard_StaleBase_FailClosedWithoutOrigin (RELEASE-046): a repo
+// with no origin/main or origin/master cannot verify the base — exit 2,
+// never a silent pass. Fails if the fail-closed path was weakened.
+func TestBoardGuard_StaleBase_FailClosedWithoutOrigin(t *testing.T) {
+	dir := guardRepoNoOrigin(t)
+	stageIn(t, dir, ".coding-hermes/board/tasks.jsonl", `{"id": "alpha"}`+"\n")
+
+	out, rc := runGuard(t, dir, "git", nil, "")
+	if rc != 2 {
+		t.Fatalf("stale-base check without an origin ref must FAIL CLOSED with rc=2; got rc=%d output:\n%s", rc, out)
+	}
+	if !strings.Contains(out, "origin") {
+		t.Errorf("fail-closed message must name the missing condition (origin ref); got:\n%s", out)
 	}
 }
 

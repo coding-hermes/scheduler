@@ -156,6 +156,55 @@ each with a command.
    git rev-parse -q --verify refs/tags/v1.4.0 || echo "free"
    ```
 
+### Board commits from a stale base: the row-drop guard (RELEASE-046)
+
+The board file is shared: the canonical checkout and every linked worktree
+carry `.coding-hermes/board/tasks.jsonl`, and a board commit made from a base
+behind `origin/main` stages the whole file from that base — silently deleting
+every row appended since the branch (REMOTE-006's 550-row rewrite; REMOTE-008
+deleting SCHED-GAP-1695/1696; on 2026-11-07 the canonical checkout sat 6
+commits behind carrying a row, which would have deleted RELEASE-043/044/045).
+The pre-commit board guard (`scripts/board-commit-guard.sh`) refuses exactly
+this shape.
+
+- **Prevent it.** For any board write, fetch and rebase first, then re-apply
+  your row on top of the fetched board:
+
+  ```sh
+  git fetch origin
+  git rebase origin/main
+  # re-apply your row on top of the fetched board
+  git add .coding-hermes/board/tasks.jsonl
+  git commit && git push
+  ```
+
+  When a rebase is not possible, replay the single row onto the fetched blob
+  and commit that. The guard compares against your locally-fetched
+  `origin/main` ref (falling back to `origin/master`) and does no network
+  I/O — a fetch that never ran means a divergence it cannot see, so fetch
+  is step one, not optional.
+
+- **Refusal signature (exit 1).** The guard prints
+  `board-commit-guard (RELEASE-046 stale-base): REFUSED — the staged blob of <path> drops <N> row id(s) still present on origin/main.`
+  followed by the dropped ids (up to 10) and the remedy line above. A
+  legitimate edit keeps every id and passes: status flips and row appends
+  are fine, a dropped id is not.
+
+- **Fail-closed (exit 2).** A board path is staged but the check cannot run
+  (no origin ref, git failure, helper failure) — the refusal names the
+  condition. Fix the environment; never wave it through.
+
+- **Escape hatch.** `BOARD_GUARD_ALLOW_ROW_DROP=<comma-separated ids>` admits
+  a drop only when EVERY dropped id is named, and prints a NOTICE line per
+  admission. Nothing is ever admitted silently.
+
+- **Install.** `bash scripts/install-hooks.sh` writes the hook into the git
+  common dir (covers the main checkout and every linked worktree);
+  `bash scripts/install-hooks.sh --check` verifies. The board guard runs
+  first and unconditionally; the heavy tier-1 battery (900 s class) runs
+  only for changesets that are not board-only, so board-truthkeeping
+  commits are not stalled behind it.
+
 ### The version-authority rule (read this before tagging)
 
 **A tag pushed over a tree whose CHANGELOG still says `[Unreleased]` now fails
