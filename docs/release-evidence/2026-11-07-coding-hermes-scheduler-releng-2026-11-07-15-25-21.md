@@ -762,3 +762,30 @@ blocker; they are recorded here so the next pass does not re-derive the census.
 
 Nothing in this pass rewrote a tag, deleted an asset, created a Release object,
 or touched the `v1.15.0` / `v1.15.1` Release objects.
+
+### Pass-6 addendum — one posture row WAS filed after the record above was drafted
+
+The section "Rows this pass" above says no new `RELEASE-*` row was filed. That
+was true when it was written and is corrected here: the posture sweep in §6 of
+the release skill ran after that draft, found an unclaimed gap, and `RELEASE-050`
+was created (P2, pending).
+
+- **`RELEASE-050` — public repo carries no server-side secret scanning.**
+  `gh api repos/coding-hermes/scheduler --jq '.security_and_analysis'` →
+  `{"secret_scanning":{"status":"disabled"},"secret_scanning_push_protection":{"status":"disabled"}}`
+  on a `visibility=public` repo that publishes 8 binaries plus `SHA256SUMS` per
+  Release. Both switches are free for public repositories; enabling them needs
+  repository admin, which this lane does not hold, so the row is an owner action
+  with three verifiable arms.
+- It is **not** a duplicate: the committed board carries no task whose title
+  matches `secret scanning` or `push protection`, and the only `/posture/i` hits
+  (`SCHED-GAP-1739` MCP deny-all, `DOGFOOD-029` fed/read auth) are unrelated.
+- The governance half of the same probe — `required_status_checks=null`,
+  `enforce_admins=false` on `main` — is deliberately left on `REL-GUARD-001`
+  rather than folded in here, because forge/tag policy is an owner decision
+  already parked there.
+- It does not change Decision 1: posture is not a cut gate, and nothing was due
+  in this pass either way.
+
+No other row was created, and no existing row was closed, retitled or
+reprioritised in this pass.
