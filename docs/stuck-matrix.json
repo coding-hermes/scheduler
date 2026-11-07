@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "owner_directive": "2026-11-07 — when boards are stuck, lanes must know which agent resolves it, and reversible blockers (release cut, dirty branch, stale lock) are resolved by the fleet, never queued behind a human. Waiting for a human is the worst possible option.",
+  "rule": "reversible => resolve now, with the command named here. Irreversible => escalate to the owner with the measured condition and the default action you will take if no answer arrives.",
+  "classes": [
+    {
+      "symptom": "git mutation dies: 'could not write index' / 'stash failed', or a lock nobody explains",
+      "signature": "`fuser -v .git/index.lock` names a PID; `ps -o pid,stat,etime,args -p <pid>`",
+      "reversible": true,
+      "resolver": "the lane that owns the tick",
+      "commands": [
+        "fuser -v .git/index.lock",
+        "ps -o pid,stat,etime,args -p <PID>",
+        "rm .git/index.lock   # ONLY when the holder is a READER (status/ls-files) and D-state for minutes"
+      ],
+      "escalate_when": "the holder is a MUTATING command (commit/merge/rebase) — kill or wait for that holder instead of removing the lock"
+    },
+    {
+      "symptom": "worktree dirty with paths the tick did not write",
+      "signature": "`git status --porcelain` + `git diff --cached --text`",
+      "reversible": true,
+      "resolver": "foreman (attribute), then the lane that owns the producer",
+      "commands": [
+        "git status --porcelain",
+        "git diff --cached --text",
+        "git checkout HEAD -- .gitreins/tasks.yaml   # harness state only, after a quiet process census"
+      ],
+      "escalate_when": "the paths are a live sibling's real edits (modified tracked files with fresh mtimes and an owning process) — never adopt or discard those"
+    },
+    {
+      "symptom": "branch diverged or commits unpushed",
+      "signature": "`git rev-list --left-right --count origin/main...HEAD` (first column = behind)",
+      "reversible": true,
+      "resolver": "foreman",
+      "commands": [
+        "git fetch origin",
+        "git rebase origin/main",
+        "git push origin main",
+        "git ls-remote origin refs/heads/main   # must equal git rev-parse HEAD"
+      ],
+      "escalate_when": "never for a landable divergence; only when the push target itself is being retargeted by policy"
+    },
+    {
+      "symptom": "guard FAIL whose finding was already true at the base commit",
+      "signature": "run the same gate on `origin/main` or on the pre-fix tree; identical finding = pre-existing",
+      "reversible": true,
+      "resolver": "foreman",
+      "commands": [
+        "git stash --include-untracked && <gate> ; git stash pop   # prove the finding exists without your diff",
+        "git -c core.hooksPath=/dev/null commit   # only with the pre-existing proof quoted in the message"
+      ],
+      "escalate_when": "the gate fails identically on a CLEAN checkout of origin/main and blocks every lane — then the gate itself is the defect and gets a row"
+    },
+    {
+      "symptom": "gitreins judge FAIL or INCOMPLETE",
+      "signature": "`.gitreins/history/<date>/<id>/verdict.json`; `gitreins judge --status <job>`",
+      "reversible": true,
+      "resolver": "foreman",
+      "commands": [
+        "gitreins judge --status <job-id>",
+        "cat .gitreins/history/<date>/<id>/verdict.json",
+        "# fix the cited criterion, then rerun the judge SEQUENTIALLY (never two judges in one checkout)"
+      ],
+      "escalate_when": "the verdict cites an acceptance criterion that cannot be satisfied without an owner decision — then the ROW is the escalation, not the judge"
+    },
+    {
+      "symptom": "merge conflict",
+      "signature": "`git status` shows unmerged paths",
+      "reversible": true,
+      "resolver": "merge-reconciler pattern (third-party resolution) or the foreman",
+      "commands": [
+        "git merge-tree --write-tree origin/main HEAD   # clean tree hash = merge is mechanical",
+        "# resolve, then re-run the repo's gates on the MERGED tree before committing"
+      ],
+      "escalate_when": "both sides changed the same semantic contract and neither side's tests express the intended behaviour"
+    },
+    {
+      "symptom": "lane never spawns / ticks starve",
+      "signature": "scheduler shows the lane enabled with no tick in N cycles; cooldown pin in config",
+      "reversible": true,
+      "resolver": "scheduler operator lane",
+      "commands": [
+        "curl -s localhost:9090/api/v1/projects/<lane> | jq '.enabled,.cooldown,.admission_mode'",
+        "# fix the pin (fleet.toml AND DB outrank the router), then force one tick and verify the tick row"
+      ],
+      "escalate_when": "the fix needs a spend or policy decision (raising max_concurrent above the load gate)"
+    },
+    {
+      "symptom": "model/provider refusal (402, 429, circuit open, wrong seat served)",
+      "signature": "circuit state + post-dispatch `session_model_usage` (labels lie; the seat is what was billed)",
+      "reversible": true,
+      "resolver": "foreman",
+      "commands": [
+        "router circuit clear --all",
+        "# dispatch, then verify the SERVED model in state.db session_model_usage, not the requested label"
+      ],
+      "escalate_when": "the account itself is exhausted or a provider account must be added (spend/credentials)"
+    },
+    {
+      "symptom": "dead model pin (retired model id)",
+      "signature": "dispatch resolves to a fallback or errors 'model not found'; pin predates the current generation",
+      "reversible": true,
+      "resolver": "foreman",
+      "commands": [
+        "grep -n '<model-id>' fleet.toml   # fix BOTH the project pin and the DB row",
+        "# re-dispatch and verify the served model"
+      ],
+      "escalate_when": "the replacement changes the cost tier the owner chose"
+    },
+    {
+      "symptom": "row blocked on a row that is already complete",
+      "signature": "the referenced id's status in the board",
+      "reversible": true,
+      "resolver": "foreman or PM",
+      "commands": [
+        "boardctl show <blocker-id> --json",
+        "boardctl update <id> --status pending --note 'blocker <id> complete; prerequisite re-probed live at <ts>'",
+        "# or REPLACE the blocker with the newly measured gate when the prerequisite is still dead"
+      ],
+      "escalate_when": "never — a satisfied pointer is bookkeeping, and a dead prerequisite is a new measurement"
+    },
+    {
+      "symptom": "environment down: service, container or host",
+      "signature": "`docker inspect` (restart policy + exit code + finished_at) or `systemctl --user show <u> -p ActiveEnterTimestamp,ExecMainStatus`",
+      "reversible": true,
+      "resolver": "foreman, on a host it can reach",
+      "commands": [
+        "docker inspect <c> --format 'restart={{.HostConfig.RestartPolicy.Name}} exitcode={{.State.ExitCode}}'",
+        "systemctl --user show <u> -p ActiveEnterTimestamp,ExecMainStatus",
+        "# a clean exit under restart=unless-stopped, or an inactive unit with no failure, is STOPPABLE: restore it and re-run the row's original arms"
+      ],
+      "escalate_when": "the component is genuinely retired (renamed/migrated/replaced) — then re-scope the row instead of escalating"
+    },
+    {
+      "symptom": "duplicate rows / reused ids inflating the board",
+      "signature": "same content fingerprint under two ids; `dedupe-board --dry-run`",
+      "reversible": true,
+      "resolver": "PM",
+      "commands": [
+        "dedupe-board --dry-run",
+        "# keep the row carrying evidence, close the twin with a note naming the survivor"
+      ],
+      "escalate_when": "never — duplicates are provable by fingerprint"
+    },
+    {
+      "symptom": "release cut requested and ready",
+      "signature": "release readiness gates green on the exact commit; tag absent",
+      "reversible": true,
+      "resolver": "release-engineer lane",
+      "commands": [
+        "# cut the tag on the verified commit; a tag is reversible until it is published to consumers",
+        "git tag -a v<X.Y.Z> <sha> && git push origin v<X.Y.Z>"
+      ],
+      "escalate_when": "the release contains a breaking change or a version policy decision — not for a routine tagged build"
+    },
+    {
+      "symptom": "IRREVERSIBLE: deletion of live data, secrets/credentials, spend, policy change, doctrine conflict",
+      "signature": "the action cannot be undone by a later commit (data gone, money spent, tag protection changed, two owner rulings conflict)",
+      "reversible": false,
+      "resolver": "OWNER",
+      "commands": [],
+      "escalate_when": "always — escalate once, naming the exact question, the options, and the default you will take if no answer arrives; a repeat ask is a signal the escalation path is broken"
+    }
+  ]
+}
