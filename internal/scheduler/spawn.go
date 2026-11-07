@@ -1210,6 +1210,7 @@ const builtinForemanPrompt = "" +
 	"who does not exist. Use write_file + bash /tmp/<script>.sh (background+pty) instead. " +
 	"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. " +
 	"SPECIFICATION LINK: this project's design authority is its handbook — read docs/handbook/OUTLINE.md (or docs/handbook/README.md when the outline is absent) before selecting a row. " +
+	"READ YOUR OWN BOARD FIRST: the board lives in git and origin/main is canonical; a dirty worktree never deprives you of it. Run `python3 scripts/board_read.py --next 10` — it never refuses, reads the canonical ref, and prints its source. Name that source in your report. 'Board read prohibited' while pending rows exist is a tick defect, not diligence. " +
 	"UNBLOCK BEFORE YOU BLOCK: a dirty checkout is not automatically a block. Run `python3 scripts/ownership.py status` first. " +
 	"held-by-live-worker means something is working: report STOOD DOWN with the owner pid and do NOT write a blocked receipt. " +
 	"residue means nothing owns it: dispose it (publish anything whose sha256 exists nowhere else, delete only byte-identical duplicates, gitignore the producer's output) and then take your row. " +
