@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-07
 
+## [1.14.1] — 2026-11-07
+
 ### Fixes
 - release: build artifacts in the runner temporary directory and reject dirty VCS stamps, preventing released binaries from reporting `vcs.modified=true` — `e47820d9`.
 
