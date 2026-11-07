@@ -493,3 +493,122 @@ Two claims above were written mid-run and are corrected here with the terminal r
 
 Nothing else in this pass changes: no tag, no Release object, no artifact.
 
+
+## Pass 5 — fifth delivery, after the release landed: `v1.15.1` cut and verified in this pass
+
+Fifth delivery of tick id `coding-hermes-scheduler-releng-2026-11-07-15-25-21`
+(`2026-11-07T20:25Z`). Passes 2–4 are above. Between pass 4 and this pass the
+`v1.15.0` cut that pass 4 deferred was **completed by this lane**: prep commit
+`9623fbaf` (14:36), Release object published `2026-11-07T20:12:29Z`, 9 assets,
+both workflows green on the tag. `RELEASE-047` is `complete`. This pass therefore
+re-gated at the post-release tip and cut the follow-on **patch**.
+
+Tip movement during this pass:
+
+| point | SHA | what it was |
+|---|---|---|
+| start of pass (delivered tip) | `4c9ef809` | `board(releng): close RELEASE-047` — `[ci skip]`, no run |
+| **cut commit (tagged)** | **`f6ea23d7`** | `chore(release): v1.15.1` — CHANGELOG body + rollover, 1 file, +12 |
+| sibling, after the tag | `c746b77c` | `board: file RELEASE-048` — board only, `[ci skip]` |
+| sibling, after the tag | `57a5ae4f` | `board: stamp completed_at on RELEASE-045/047` — board only, `[ci skip]` |
+
+`f6ea23d7` is an ancestor of `origin/main` (`git merge-base --is-ancestor v1.15.1
+origin/main` → `rc=0`), so the tag is on the released line and the two later
+commits ship in the next cut by design.
+
+### Census `v1.15.0..4c9ef809` — 10 non-merge commits, reconciles
+
+`board`=6, `fix`=2, `chore`=1 (`chore(deps)`), `docs`=1. 6+2+1+1 = 10 =
+`git rev-list --no-merges --count v1.15.0..4c9ef809`. `BREAKING CHANGE` /
+`type!` occurrences = **0**. Material: the two `fix(board)` commits and the
+lockfile-only dependency refresh — the latter is the work `v1.15.0`'s notes
+explicitly deferred ("belongs in its own commit and its own gate").
+
+### Decision 1 — a PATCH release is due (`v1.15.1`), rule 5
+
+Not rule 4 (no `feat`), not rule 7 (`v1.15.0` was cut 62 minutes earlier, so no
+cadence floor applies). Rule 5 fires: at least one material `fix` since the last
+tag with the exact-SHA gates green, and the cut is the gate `v1.15.0` reserved
+for the dependency refresh. No owner decision is involved at patch level
+(standing releng authority); nothing here is breaking, so no escalation clause
+applies.
+
+Carried content: `d2b961a0` (stale-base board-commit refusal), `266cebe9`
+(`.gitreins/tasks.yaml` classified as bookkeeping), `81b146b8` (16 Go modules,
+1 direct `modernc.org/sqlite v1.60.1 → v1.62.0`, no majors, `govulncheck`
+clean).
+
+### Exact-SHA gates at the cut commit `f6ea23d7`
+
+| run | workflow | conclusion | jobs |
+|---|---|---|---|
+| `42412373587` | CI | **success** | 14 jobs: 12 `success` (incl. `build`, `lint`, `race-scheduler`, `race-blocks`, `multiarch / Verify (amd64)`, `Verify (arm64, native)`, 6 × `Build <platform>`), 2 `skipped` (`Container (multi-arch)`, `Release` — tag-only `if:`) |
+| `42412372572` | CI Pipeline | **success** | 7 jobs all `success` (`Test (Go 1.26)`, `Race Detector (internal/api)`, `Lint`, `Simulation Smoke Test`, `Integration Test`, `Build Binaries`, `CI All Clear`) |
+
+The delivered tip `4c9ef809` has **no run by construction** (`[ci skip]`,
+board+docs-only), so the gate that decides the tree is the last code-bearing
+SHA: `git diff --name-only 81b146b8..4c9ef80` lists only
+`.coding-hermes/board/{events,tasks}.jsonl` and
+`docs/release-evidence/2026-11-07-v1.15.0.md`, and `81b146b8` carries both
+workflows green (`42410159639` CI, `42410158874` CI Pipeline). The cut commit
+`f6ea23d7` is CHANGELOG-only (`git show --stat` → `CHANGELOG.md | 12 ++++++++++++`),
+so its own two runs above gate a tree byte-identical to `81b146b8` in every
+compiled path.
+
+### Local gate — one DEGRADED receipt and one environmental FAIL, both attributed
+
+- The commit hook's `gitreins guard` returned **`Tier 1: DEGRADED PASS`** with
+  `go_build/go_lint/go_tests = skipped (No Go files staged)`; by the lane's own
+  rule that is **non-evidence** for a tree gate, because a CHANGELOG-only
+  changeset selects no Go scope. The hook also warned
+  `hook_timeout=300s <= test_timeout=900s` and self-raised its budget to 1020 s
+  — a driver finding, not a cut blocker.
+- A first local `go test -short -p 1 -count=1 ./...` **FAILED** in
+  `internal/scheduler` (153 s) while the box ran at loadavg 11.7. Root cause is
+  the known environment trap, not the tree: this shell carries
+  `SCHEDULER_OPERATOR_RESTART_APPROVED=1`, which flips the scheduler package's
+  fail-closed restart tests. Re-run with the variable unset:
+  `env -u SCHEDULER_OPERATOR_RESTART_APPROVED go test -short -count=1
+  ./internal/scheduler` → `ok … 214.404s`, `RC=0`. The hosted equivalent
+  (`multiarch / Verify (amd64)`, which runs `go test -short`) is `success` at
+  the same SHA, so the tree gate is green on both the fixed local run and CI.
+
+### Shipped artifact `v1.15.1` — verified layer by layer
+
+- Annotated tag object `e8ae6455…` → commit `f6ea23d7`; remote
+  `refs/tags/v1.15.1` = `e8ae6455…`, `refs/tags/v1.15.1^{}` = `f6ea23d7…`.
+  The tag was created on the committed SHA, not on the moving tip.
+- `Release` workflow run `42414729229` → `completed/success`; Release object
+  `isDraft=false isPrerelease=false`, published `2026-11-07T21:13:45Z`.
+- **9 assets** downloaded and `sha256sum -c SHA256SUMS` → `OK` for all 8
+  binaries (+ `SHA256SUMS` itself).
+- Provenance read from every asset with `go version -m` (no execution):
+  `vcs.revision=f6ea23d7` and **`vcs.modified=false` on all 8** — the
+  `+dirty`/`vcs.modified=true` defect class that `RELEASE-037` opened is not
+  present in this cut.
+- The refresh is really inside the bytes: `go version -m
+  schedulerd-linux-amd64` reports `mod github.com/coding-hermes/scheduler
+  v1.15.1`, `dep modernc.org/sqlite v1.62.0`, `dep modernc.org/libc v1.80.1`,
+  `dep golang.org/x/sys v0.49.0`, toolchain `go1.26.10`.
+- Tag-triggered `CI Pipeline` (`42414729246`) was still running when this record
+  was written; its terminal state is reported in the delivery message, and per
+  the lane rule it is not recorded here as green until it concludes.
+
+### Rides forward, not cut-blocking
+
+- **Deployed binary is STALE, not absent**: pid 3347652 runs
+  `…/bin/schedulerd` = `v1.14.0-40-gd0dad6d9-dirty`, `build_sha=d0dad6d9`,
+  built `2026-11-07T05:42:56Z`, `vcs.modified=true`; `/api/v1/health` agrees
+  (`build_sha d0dad6d9`). Now three releases behind. Owned by `SCHED-GAP-162`
+  (pending/P1) — not duplicated here.
+- **Dogfood: UNVERIFIED** for this candidate — `.qa/` holds only the
+  `chaos-probes` script and no result references `f6ea23d7`.
+- `RELEASE-045` remains `in_progress` on its tier-2 verdict arm even though its
+  hosted CI arm (arm 6) is satisfied by `42410159639` / `42410158874`; the
+  refresh is in this release, so the row's remaining arm does not gate the cut.
+- `RELEASE-048` (filed by a foreman tick about this lane's ledger accounting) is
+  **left untouched** — it is a scheduler-accounting finding, not a release
+  finding. This pass's own decision record is filed as `RELEASE-049`.
+
+Nothing in this pass rewrote an existing tag, deleted an asset, or touched the
+`v1.15.0` Release object.
