@@ -884,6 +884,25 @@ go build -tags schedgap1589probe -o /tmp/queueprobe ./cmd/queueprobe/
 the live database — the probe is not written for concurrent access with the
 running daemon.)
 
+**`scheduler-query`** and **`scheduler-dispatch`** are the two operator surfaces
+that ship as sources only. Their complete contracts — every positional, flag,
+environment variable, exit code, wire body, and the places the help text and the
+code disagree — live in
+[docs/reference/cli-tools.md](docs/reference/cli-tools.md#cmdscheduler-query):
+
+```bash
+go run ./cmd/scheduler-query --help       # prints to stderr, exits 0
+go run ./cmd/scheduler-dispatch --help    # prints to stderr, exits 2 (help is a usage outcome there)
+
+go build -o /tmp/scheduler-query ./cmd/scheduler-query/
+/tmp/scheduler-query peer-a peer.status                 # ask ONE peer over the relay bus
+/tmp/scheduler-query --all fleet.status                 # the daemon's authoritative aggregate
+
+go build -o /tmp/scheduler-dispatch ./cmd/scheduler-dispatch/
+/tmp/scheduler-dispatch auger --lane docs --board /srv/fleet/tasks.jsonl \
+  --text-file /tmp/directive.txt --dry-run              # render the exact body, send nothing
+```
+
 ### Project Structure
 
 Full tracked layout — every top-level entry, verified against `git ls-files`
