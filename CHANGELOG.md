@@ -33,6 +33,8 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-07
 
+## [1.15.2] — 2026-11-07
+
 ### Fixes
 - accounting: a tick whose gateway turn was torn down without a terminal event is no longer booked with fabricated zero work. `lifecycle.Complete` now measures the git window for failed/timeout outcomes (the completed path already measured in `Wait()`; the drop path had no `SpawnedTick` and wrote the struct-default `commits=0`), writing the real figures or the explicit `-1/-1` unmeasured marker for an unmeasurable repo — never a measured-looking 0. Deferred rows are untouched — `internal/scheduler/lifecycle.go`.
 - accounting: a reconciliation pass walks recently failed/timeout ticks whose `commits` are still 0, re-measures their window extended by at most one extra tick-wall of grace, and annotates the row (`commits`, `files_changed`, the SCHED-GAP-104 `code_commits`/`board_commits` split) when the work actually landed — the gateway-side session keeps committing past its row's `completed_at` because the scheduler never signals the server-side session on any terminal path. Status is never rewritten; `completed_at` advances to the newest commit in the window (never backward) and the project's `last_tick_completed` follows while it still points at the reconciled tick. Idempotent by the `commits=0` candidate filter plus the `ticks.reconciled_at` watermark (migration 87); cadence-gated on the daemon's eval path and available one-shot as `cmd/reconcile-ticks` (dry-run default, `--apply` to write). Measured driver: `coding-hermes-scheduler-releng-2026-11-07-15-25-21` was stamped failed 13:25:22 while its session's release commits landed 15:38:11–15:42:38 — `internal/scheduler/tick_reconcile.go`.
