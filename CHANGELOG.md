@@ -33,6 +33,21 @@ range cited under its heading. The rollover itself is done by
 
 ## [Unreleased] — 2026-11-07
 
+## [1.15.0] — 2026-11-07
+
+### Features
+- scheduler: dry-run throttle — a lane that keeps being spawned and keeps producing nothing is warned once at five consecutive dry ticks and suspended at ten by pinning its cooldown to the ceiling (8× the floor when the lane has no ceiling), so it stops being admitted without being disabled and the pin is lifted by the lane's own next real work. The measurement now covers every non-deferred tick rather than only `admission_mode = "tasks"` lanes, which is what made satellite lanes — whose no-ops are allowed by class — invisible to it. `dry_run_throttle` (migration 86, NULL/0 = default 10, values below 5 refused) is wired through `fleet.toml`, the config loader and `PUT /api/v1/projects/<name>`; an operator's own pin is never raised or cleared by the feature, and a lane with no cooldown policy at all is recorded as `dry_run_suspend_unavailable` instead of being given an invented number — `76264ed9`.
+
+### Fixes
+- board: the writer vocabulary admits `status=blocked` in Go and Python in lockstep, so the owner-gated rows the fleet's parking doctrine requires are no longer counted as vocabulary violations by `boardctl`, the invariant battery or the CI board check. The reader classes and the writer now agree on the spelling that `board_freshness.go` has treated as first-class since ADV-R06, and the vocabulary-parity pin keeps the two lists equal — `4632fe79`.
+- clock: the dry-run throttle's attempt timestamp routes through the clock seam instead of a direct stdlib `time.Now()` call, restoring the single-choke-point invariant that `TestNoDirectStdlibClockCallsOutsideClock` enforces — `95cc9b8c`.
+
+### QA
+- gateway: the health-gate recovery test polls the recovery tick's dry-run charge instead of reading it once, removing the read-once race that failed the hosted unit job while passing locally — `9ee4cc70`.
+
+### Not in this release
+- Dependency refresh (RELEASE-045) is deliberately not part of this cut: 16 modules are behind, all minor/patch (`modernc.org/sqlite v1.60.1 → v1.62.0` the only direct bump), `govulncheck` is clean, and a 16-module lockfile move belongs in its own commit and its own gate rather than inside a feature release.
+
 ## [1.14.1] — 2026-11-07
 
 ### Fixes
