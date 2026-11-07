@@ -5874,3 +5874,21 @@ tasks:
   status: complete
   created_at: '2026-11-07T21:08:25.081628+00:00'
   completed_at: '2026-11-07T21:11:16.602875+00:00'
+- id: RELEASE-048
+  title: Releng lane landed a full v1.15.0 cut plus v1.15.1 rollover while scheduler.db
+    still records its last tick as failed - real work invisible to the ledger and
+    a sibling foreman tick duplicated its RELEASE-047 close
+  criteria:
+  - 'Four arms, each with quoted command output: (1) the ticks ledger reconciles -
+    the releng failed tick row is annotated with the commits it landed (40ece2bf,
+    4c9ef809, f6ea23d7) OR a tick row owns them with commits>0; (2) the mechanism
+    is named with file:line references showing how a tick stamped failed kept committing
+    for 2h plus the code path that fails to reap it; (3) no double writer - a board-releasing
+    action records an owner marker or is refused when a second writer claimed it,
+    demonstrated by an observed refusal with exit code; (4) GET http://127.0.0.1:9090/api/v1/projects
+    reports last_tick_status and last_tick_completed for coding-hermes-scheduler-releng
+    consistent with the newest landed commit. Forbidden: deleting or rewriting the
+    failed tick row, force-push, prose-only closure.'
+  status: complete
+  created_at: '2026-11-07T21:17:25.662111+00:00'
+  completed_at: '2026-11-07T22:45:32.230472+00:00'
