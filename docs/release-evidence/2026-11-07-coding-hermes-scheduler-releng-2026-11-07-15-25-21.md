@@ -612,3 +612,153 @@ compiled path.
 
 Nothing in this pass rewrote an existing tag, deleted an asset, or touched the
 `v1.15.0` Release object.
+
+## Pass 6 — sixth delivery, 31 minutes after the `v1.15.1` cut: NOT DUE, and the one leg pass 5 left pending is now green
+
+Sixth delivery of tick id `coding-hermes-scheduler-releng-2026-11-07-15-25-21`
+(`2026-11-07T21:44Z`). Pass 5 (above) cut `v1.15.1`. This pass re-anchored on
+the newer tip and re-probed every claim the earlier passes carried forward.
+
+### Re-anchor — three views agree
+
+| point | SHA | what it was |
+|---|---|---|
+| delivered tip | `f499c55b` | `board(releng): RELEASE-049 addendum` — `[ci skip]`, no run |
+| **cut commit (tagged)** | **`f6ea23d7`** | `chore(release): v1.15.1` — unchanged, still the tag target |
+| tag object | `e8ae6455…` | remote `refs/tags/v1.15.1` agrees with the local object |
+
+`git ls-remote origin refs/heads/main` = `f499c55b74bf635ffb460174375669e0832c88c3`,
+the detached worktree's `HEAD` = the same, and provider `pushed_at` =
+`2026-11-07T21:41:44Z`. All three views agree, so no divergence re-probe was
+needed and no earlier count had to be discarded.
+
+### Delta since the cut commit — bookkeeping only
+
+```
+$ git diff --name-only f6ea23d7..origin/main
+.coding-hermes/board/board.jsonl
+.coding-hermes/board/events.jsonl
+.coding-hermes/board/tasks.jsonl
+.gitreins/tasks.yaml
+docs/release-evidence/2026-11-07-coding-hermes-scheduler-releng-2026-11-07-15-25-21.md
+```
+
+No path under `internal/`, `cmd/`, `ops/`, `scripts/` or `Makefile`. The code
+tree is byte-identical to the tagged commit.
+
+### Census `v1.15.1..origin/main` — reconciles
+
+```
+      5 board
+      1 chore
+```
+
+5 + 1 = 6 = `git rev-list --no-merges --count v1.15.1..origin/main`. Material:
+0 feat, 0 fix, 0 perf, 0 `BREAKING CHANGE`, 0 `type!`. Every commit in the range
+carries `[ci skip]`.
+
+### Decision 1 — NOT DUE (rule 3)
+
+Zero material commits since `v1.15.1`, which shipped 31 minutes before this pass
+(`2026-11-07T21:13:45Z`). Rule 3 fires before rules 4–7 are reachable, and the
+14-day cadence floor of rule 6 cannot apply to a release line this fresh. No tag,
+no Release object and no artifact was touched in this pass.
+
+### CI — the leg pass 5 recorded as PENDING is terminal green
+
+Pass 5 wrote: "Tag-triggered `CI Pipeline` (`42414729246`) was still running when
+this record was written". Re-probed this pass:
+
+| run | workflow | conclusion | jobs |
+|---|---|---|---|
+| `42414729246` | CI Pipeline | **completed/success** | 7/7 `success`: `Test (Go 1.26)`, `Race Detector (internal/api)`, `Lint`, `Build Binaries`, `Simulation Smoke Test`, `Integration Test`, `CI All Clear` |
+| `42414729229` | Release | **completed/success** | `Release` `success` |
+
+The delivered tip `f499c55b` has **no run by construction** — `[ci skip]` plus a
+board/evidence-only diff, so the missing run is a property of the tip. The tree
+gate is carried by `f6ea23d7`'s two runs above, and the diff quoted one section
+up proves the shipped bytes are unchanged between them.
+
+### Shipped artifact `v1.15.1` — re-verified from freshly downloaded bytes
+
+Re-downloaded into a clean directory this pass, independently of pass 5:
+
+```
+sha256sum -c SHA256SUMS   →  OK ×8
+   migrate-{darwin,linux}-{amd64,arm64}, schedulerd-{darwin,linux}-{amd64,arm64}
+go version -m <each asset> →  mod github.com/coding-hermes/scheduler v1.15.1
+                              vcs.revision=f6ea23d757daab8eef1d04f5c6c4f798659d504b
+                              vcs.modified=false        (all 8)
+```
+
+`git rev-parse 'v1.15.1^{commit}'` = `f6ea23d757daab8eef1d04f5c6c4f798659d504b`
+— the revision stamped in the published bytes equals the tagged commit, and the
+`+dirty` / `vcs.modified=true` class that `RELEASE-037` opened is absent from all
+eight. Release object still `isDraft=false isPrerelease=false` with 9 assets.
+
+### Canonical checkout — a new in-flight writer, and why this pass ran detached
+
+At pass 1 the canonical checkout carried an uncommitted DRY-RUN THROTTLE worker.
+It now carries a **different** uncommitted changeset, and it was being written
+while this pass ran:
+
+```
+ M .gitignore, Makefile, CHANGELOG.md, docs/releases.md,
+ M internal/database/migrations.go, internal/scheduler/lifecycle.go,
+ M internal/scheduler/tick_process.go,
+ M .coding-hermes/board/{tasks,events}.jsonl, .gitreins/tasks.yaml
+?? cmd/reconcile-ticks/  internal/scheduler/tick_reconcile.go
+?? internal/scheduler/tick_reconcile_test.go  scripts/release-claim.sh
+```
+
+MTimes cluster at `16:34:38`–`16:39:55 -0500` against a clock of
+`16:42:53 -0500`, and an active session process is polling `git status` in that
+tree; `.git/index.lock` is absent. This is the implementation of `RELEASE-048`'s
+arms (`reconcile-ticks` → arms 1–2, `release-claim.sh` → arm 3). It is **not**
+release content: it is uncommitted, and `CHANGELOG.md` + `docs/releases.md` +
+`Makefile` being dirty on the release line is precisely the state in which a cut
+must not be attempted. No file in that tree was touched by this pass; every
+probe above ran in `/home/kara/.hermes/cache/scratch/releng-pass6-f499c55` at
+`f499c55b`, with 0 dirty entries and its root plus remote asserted before use.
+
+### Deployed binary — still STALE, now two releases behind
+
+- pid `3347652`, started `2026-11-07 00:42:57 -0500`, elapsed `16h00m`.
+- Executable `…/bin/schedulerd`, mtime `2026-11-07T00:42:57-05:00`.
+- `go version -m` → `mod github.com/coding-hermes/scheduler
+  v1.14.1-0.20261107042958-d0dad6d9ede0+dirty`,
+  `vcs.revision=d0dad6d9ede03d15927ec5d249aee9c9ee41f73c`, `vcs.modified=true`.
+- `d0dad6d9` **is** an ancestor of `origin/main` (`git merge-base --is-ancestor`
+  → `rc=0`), so this is STALE, not a foreign or forked build.
+
+The live scheduler is therefore missing **`v1.15.0` and `v1.15.1`** (two
+releases) and runs a binary stamped `+dirty`. Owned by `SCHED-GAP-162`
+(pending/P1) and `SCHED-GAP-16994` — not duplicated here, the same rule pass 5
+applied. `SCHED-GAP-162`'s title still quotes an older live build
+(`v1.12.0-684-gc1f2f033`); the measurement above supersedes that number, and the
+row was last updated by a PM lane at `2026-11-07T19:14:26Z`, before the daemon's
+current build existed.
+
+### Open-row census (scope: every non-terminal row, `blocked` and `review` included)
+
+`731 complete`, `4 blocked`, `86 pending` → **90 non-terminal**. Six are `P0`:
+`SEC-002` (owner-gated credential rotation) plus
+`SCHED-GAP-16956` / `16960` / `16962` / `16964` / `16966` (node-provisioning
+program rows). None names a defect in shipped code, so none is a tree or cut
+blocker; they are recorded here so the next pass does not re-derive the census.
+
+### Rows this pass
+
+- `RELEASE-048` — **unchanged and still pending**, and its premise still holds
+  live: `GET /api/v1/projects` reports `coding-hermes-scheduler-releng`
+  `last_tick_status=failed`, `last_tick_completed=2026-11-07T13:25:22-05:00`.
+  Its implementation is the uncommitted changeset described above. Not touched.
+- `RELEASE-049` — the canonical row for this release line; extended with this
+  pass's delta and the new artifact fingerprint rather than filing a parallel row
+  for an unchanged range.
+- **No new `RELEASE-*` row is filed.** Zero material commits since the last tag
+  means there is nothing for a foreman to execute, and a pending row for a
+  not-due release would dispatch a phantom task.
+
+Nothing in this pass rewrote a tag, deleted an asset, created a Release object,
+or touched the `v1.15.0` / `v1.15.1` Release objects.
