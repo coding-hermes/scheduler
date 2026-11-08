@@ -217,6 +217,14 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 	stepEnv.Phase = phase
 	stepEnv.HookID = step.ID
 
+	// SCHED-GAP-16987: a {repo} step on a lane with no local repo path would
+	// exec `git -C https://…` and fail for a reason no retry fixes. Refuse
+	// to shell out and record the named skip instead: one receipt in the
+	// same state vocabulary as the exit-10 skip, never state=failed.
+	if consumesRepoArg(step) && !env.hasLocalRepoPath() {
+		return r.skipRepoNotLocal(ctx, env, stepEnv, step, seq, phase)
+	}
+
 	cctx, cancel := context.WithTimeout(ctx, step.Timeout())
 	defer cancel()
 
@@ -323,6 +331,20 @@ func (r *ExecRunner) markSkipped(ctx context.Context, env Env, steps []Step, fir
 	for i, s := range steps {
 		r.insertSkippedReceipt(ctx, env, s, firstSeq+i, reason)
 	}
+}
+
+// skipRepoNotLocal records the named SCHED-GAP-16987 skip for a {repo} step
+// with no local path to run against: one skipped receipt (the same state
+// vocabulary as the exit-10 skip) plus a routine INFO event — the receipt is
+// the operator surface, never state=failed, never a veto.
+func (r *ExecRunner) skipRepoNotLocal(ctx context.Context, env, stepEnv Env, step Step, seq int, phase Phase) stepResult {
+	r.insertSkippedReceipt(ctx, env, step, seq, RepoNotLocalReason)
+	r.event(ctx, "INFO", "hook."+string(phase)+".skipped", map[string]any{
+		"tick_id": env.TickID, "hook_id": step.ID,
+		"reason": RepoNotLocalReason,
+		"argv":   RenderArgv(step, stepEnv),
+	})
+	return stepResult{state: "skipped", reason: RepoNotLocalReason}
 }
 
 func (r *ExecRunner) event(ctx context.Context, severity, msg string, details map[string]any) {
