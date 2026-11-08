@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -106,7 +107,7 @@ func (r *ExecRunner) Pre(ctx context.Context, env Env, plan Plan) error {
 				"tick_id": env.TickID, "lane": env.Lane, "hook_id": step.ID,
 				"exit_code": res.code, "attempts": res.attempts,
 			})
-			return &ErrHookFailed{HookID: step.ID, Code: res.code, Reason: res.state}
+			return &ErrHookFailed{HookID: step.ID, Code: res.code, Reason: res.reason}
 		}
 	}
 	return nil
@@ -138,6 +139,7 @@ type stepResult struct {
 	state    string // ok | skipped | busy | failed | timeout
 	code     int
 	attempts int
+	reason   string
 }
 
 // failed reports whether the step counts against its on_failure policy. A
@@ -175,6 +177,40 @@ func (r *ExecRunner) run(ctx context.Context, env Env, step Step, seq int, phase
 	return res
 }
 
+// hookCWD picks a directory that exists when the hook starts. A not-yet-created
+// worktree must not prevent worktree-ensure from creating it; in that case run
+// from the repository checkout, falling back to the nearest existing parent.
+func hookCWD(env Env) (string, error) {
+	isDir := func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && info.IsDir()
+	}
+	if isDir(env.Workdir) {
+		return env.Workdir, nil
+	}
+	if isDir(env.Repo) {
+		return env.Repo, nil
+	}
+	for path := env.Workdir; path != ""; {
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+		if isDir(parent) {
+			return parent, nil
+		}
+		path = parent
+	}
+	if cwd, err := os.Getwd(); err == nil && isDir(cwd) {
+		return cwd, nil
+	}
+	missing := env.Workdir
+	if missing == "" {
+		missing = env.Repo
+	}
+	return "", fmt.Errorf("cwd_missing: %s", missing)
+}
+
 // runOnce executes one attempt and records its receipt.
 func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, phase Phase, attempt int) stepResult {
 	stepEnv := env
@@ -185,7 +221,8 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, step.Command, Expand(step.Args, stepEnv)...)
-	cmd.Dir = env.Workdir
+	cwd, cwdErr := hookCWD(env)
+	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), envVars(stepEnv)...)
 	// Own process group: a timeout must kill the children too (S13 §2.3.2).
 	// The syscall level is platform-specific (INT-CI-4184): runner_unix.go
@@ -214,7 +251,12 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 
 	started := r.now()
 	runID := r.insertReceipt(ctx, env, step, seq, phase, attempt, started, RenderArgv(step, stepEnv))
-	err := cmd.Run()
+	var err error
+	if cwdErr != nil {
+		err = cwdErr
+	} else {
+		err = cmd.Run()
+	}
 	dur := r.since(started)
 
 	res := stepResult{state: "ok", attempts: attempt}
@@ -225,14 +267,19 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 		res.state, res.code, reason = "timeout", -1, "timeout"
 	case ctx.Err() != nil:
 		res.state, res.code, reason = "failed", -1, "canceled"
+	case cwdErr != nil:
+		res.state, res.code, reason = "failed", -2, cwdErr.Error()
+		_, _ = buf.Write([]byte(reason))
 	default:
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			res.code = ee.ExitCode()
+			res.state, reason = "failed", "exit"
 		} else {
 			res.code = -2 // could not start
+			res.state, reason = "failed", "start_failed: "+err.Error()
+			_, _ = buf.Write([]byte(reason))
 		}
-		res.state, reason = "failed", "exit"
 		switch res.code {
 		case ExitSkip:
 			// Exit 10 is the contract's reserved "nothing to do" (merge
@@ -247,6 +294,7 @@ func (r *ExecRunner) runOnce(ctx context.Context, env Env, step Step, seq int, p
 		}
 	}
 
+	res.reason = reason
 	r.finishReceipt(ctx, runID, res, dur, buf.String())
 
 	switch res.state {
