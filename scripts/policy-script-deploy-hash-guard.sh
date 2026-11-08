@@ -85,6 +85,18 @@ verdict() {
     echo "[SCHED-PERF-006] $1" >&2
 }
 
+# SCHED-GAP-16951 ONE VERDICT LAW, part 2: the inner --verify's own
+# "N pin mismatch(es) — drift detected" summary line is NEVER forwarded on
+# ANY path (hash-mismatch, verifier contradiction, or fail-closed), because
+# that line is itself a second, differently-derived verdict and it
+# miscounts parity drift as pin mismatches. Everything else the inner
+# verify printed is forwarded verbatim so no evidence is lost.
+emit_verify_out() {
+    printf '%s\n' "$VERIFY_OUT" \
+        | grep -vE '^[[:space:]]*[0-9]+ pin mismatch\(es\)[[:space:]]*([-—:]+[[:space:]]*)?drift detected[[:space:]]*$' \
+        || true
+}
+
 sha_of() {
     python3 - "$1" <<'PY' 2>/dev/null
 import hashlib, sys
@@ -137,7 +149,7 @@ if [ "$hash_mismatch" -eq 1 ]; then
     echo "  canonical: $CANON_HASH  ($SIDECAR)" >&2
     echo "[SCHED-PERF-006] refusing: a consumer deploy/restart would CLOBBER the operator's live fix" >&2
     if [ "$VERIFY_RC" -ne 0 ]; then
-        echo "$VERIFY_OUT" >&2
+        emit_verify_out >&2
     fi
     exit 1
 fi
@@ -153,7 +165,7 @@ if [ "$VERIFY_RC" -ne 0 ]; then
         # The script disagrees with our direct check (its sidecar view differs).
         # A verifier contradiction is itself fail-closed territory.
         loud "the policy script's own --verify reports a hash mismatch that the sidecar next to the deployed file does not"
-        echo "$VERIFY_OUT" >&2
+        emit_verify_out >&2
         exit 1
     fi
     DRIFT_EVIDENCE="$(echo "$VERIFY_OUT" | grep -E '^(MISMATCH |PARITY MISMATCH:)' || true)"
@@ -169,7 +181,7 @@ if [ "$VERIFY_RC" -ne 0 ]; then
     # broke (traceback, crash, unknown output). An unverifiable live is
     # not a clean live — fail closed instead of blessing it with rc=0.
     verdict "--verify exited $VERIFY_RC with no drift verdict and no hash mismatch — unverifiable, refusing (fail-closed):"
-    echo "$VERIFY_OUT" >&2
+    emit_verify_out >&2
     exit 5
 fi
 

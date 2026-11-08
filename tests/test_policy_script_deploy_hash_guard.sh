@@ -101,6 +101,12 @@ if mode == 'parity_drift':
     sys.exit(1)
 if mode == 'crash':
     raise RuntimeError('stub verify crash')
+if mode == 'contradiction':
+    print('DEPLOY HASH MISMATCH: live stub-hash-a != canonical stub-hash-b')
+    print('PARITY OK: db lanes=2 file blocks=2')
+    print('')
+    print('0 pin mismatch(es) - drift detected')
+    sys.exit(1)
 sys.exit(9)
 PY
     sha256sum "$DEPLOY_STUB/fleet-cooldown-policy.py" | cut -d' ' -f1 \
@@ -354,6 +360,53 @@ if [ "$RC" -ne 5 ]; then
     exit 1
 fi
 
+# ──────────────────────────────────────────────────────────────────────
+# Case 10 (SCHED-GAP-16951 ONE VERDICT LAW, part 2): the inner --verify's
+# own "N pin mismatch(es) — drift detected" summary is forwarded on NO
+# path. Two arms: the verifier-contradiction path (verify claims a hash
+# mismatch the sidecar does not) and the direct hash-mismatch path.
+# ──────────────────────────────────────────────────────────────────────
+OUT="$(run_stub_guard contradiction)"
+RC=$?
+echo "CONTRADICTION case (stub --verify reports hash mismatch + inner summary): exit=$RC"
+if [ "$RC" -ne 1 ]; then
+    echo "FAIL: guard should exit 1 on a verifier contradiction, got $RC"
+    echo "--- output ---"; echo "$OUT"
+    exit 1
+fi
+if grep -q 'pin mismatch(es)' <<<"$OUT" || grep -q 'drift detected' <<<"$OUT"; then
+    echo "FAIL: the inner --verify summary line must never be forwarded (ONE VERDICT LAW)"
+    echo "--- output ---"; echo "$OUT"
+    exit 1
+fi
+
+# Direct hash mismatch: the sidecar next to the deployed copy is deliberately
+# wrong, so the guard's own check fails first — it must STILL suppress the
+# inner summary while keeping the hash-mismatch evidence.
+sha256sum "$DEPLOY_STUB/fleet-cooldown-policy.py" | cut -d' ' -f1 > "$DEPLOY_STUB/.orig.sha"
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' \
+    > "$DEPLOY_STUB/.fleet-cooldown-policy.canonical.sha256"
+OUT="$(run_stub_guard contradiction)"
+RC=$?
+echo "DIRECT-HASH-MISMATCH case (sidecar wrong + inner summary): exit=$RC"
+if [ "$RC" -ne 1 ]; then
+    echo "FAIL: guard should exit 1 on a direct deploy-hash mismatch, got $RC"
+    echo "--- output ---"; echo "$OUT"
+    exit 1
+fi
+if ! grep -q 'MISMATCH' <<<"$OUT"; then
+    echo "FAIL: hash-mismatch evidence must still be printed"
+    echo "--- output ---"; echo "$OUT"
+    exit 1
+fi
+if grep -q 'pin mismatch(es)' <<<"$OUT" || grep -q 'drift detected' <<<"$OUT"; then
+    echo "FAIL: the inner --verify summary line must never be forwarded on the hash-mismatch path"
+    echo "--- output ---"; echo "$OUT"
+    exit 1
+fi
+# Restore the positive-control sidecar for any later case.
+mv "$DEPLOY_STUB/.orig.sha" "$DEPLOY_STUB/.fleet-cooldown-policy.canonical.sha256" 2>/dev/null || true
+
 echo
-echo "OK: policy-script-deploy-hash-guard.sh — GREEN/PIN-DRIFT/PARITY-DRIFT/CRASH/REAL-FILE/HASH-RED/NOSIDECAR/MISSING/NOPYPATH all behave as specified (SCHED-PERF-006 + SCHED-GAP-16951 ONE VERDICT LAW)"
+echo "OK: policy-script-deploy-hash-guard.sh — GREEN/PIN-DRIFT/PARITY-DRIFT/CRASH/REAL-FILE/HASH-RED/NOSIDECAR/MISSING/NOPYPATH/CONTRADICTION/DIRECT-HASH-MISMATCH all behave as specified (SCHED-PERF-006 + SCHED-GAP-16951 ONE VERDICT LAW)"
 exit 0
