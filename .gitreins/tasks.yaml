@@ -5964,3 +5964,17 @@ tasks:
   status: complete
   created_at: '2026-11-08T08:12:27.903657+00:00'
   completed_at: '2026-11-08T08:12:29.611078+00:00'
+- id: SCHED-GAP-17003-V
+  title: 'verification: live pin drift cleared, guard green, code commit accepted
+    without bypass'
+  criteria:
+  - 'Run bash scripts/policy-script-deploy-hash-guard.sh and show rc=0 with exactly
+    ONE verdict line containing no drift; run python3 ~/.hermes/scripts/fleet-cooldown-policy.py
+    --verify and show PARITY OK: db lanes=880 file blocks=880 plus OK: 9 canonical
+    pin(s) agree; show commit f94b372a19586948cb2d01a51e5c12e939ad2f0e is a real code
+    commit (git show --stat) present in origin/main, created through the shared pre-commit
+    hook with no bypass flag; show ELEVATED_PINS contains no bare h3/warpfs/hermes-canopy/hermes-dagger
+    key'
+  status: complete
+  created_at: '2026-11-08T09:24:49.881989+00:00'
+  completed_at: '2026-11-08T09:24:53.974189+00:00'
