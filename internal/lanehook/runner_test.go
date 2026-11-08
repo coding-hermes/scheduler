@@ -211,16 +211,129 @@ func TestHookEnvReachesChild(t *testing.T) {
 	}
 }
 
+// SCHED-GAP-16993: a missing lane workdir must not prevent worktree-ensure
+// from creating it. Exercise the runner directly so cmd.Dir selection is covered.
+func TestPreCreatesMissingWorkdir(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-b", "main")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "README")
+	git("commit", "-m", "initial")
+	bare := filepath.Join(dir, "origin.git")
+	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+	git("remote", "add", "origin", bare)
+	git("push", "-u", "origin", "main")
+
+	workdir := filepath.Join(dir, "not", "created", "yet")
+	ensure := filepath.Join(moduleRoot(t), "scripts", "hooks", "worktree-ensure.sh")
+	db, err := sql.Open("sqlite", filepath.Join(dir, "receipts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE hook_runs (
+		run_id INTEGER PRIMARY KEY AUTOINCREMENT, tick_id TEXT NOT NULL, lane TEXT NOT NULL,
+		phase TEXT NOT NULL, level TEXT NOT NULL, hook_id TEXT NOT NULL, priority INTEGER NOT NULL,
+		seq INTEGER NOT NULL, command TEXT NOT NULL, argv TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+		exit_code INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT,
+		duration_ms INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 1,
+		output TEXT NOT NULL DEFAULT '')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := Step{ID: "worktree-ensure", Phase: PhasePre, Level: LevelLane, Target: "task-qa",
+		Command: "/bin/sh", Args: []string{ensure, "--lane", "task-qa", "--project", "task", "--role", "qa",
+			"--repo", repo, "--worktree", workdir, "--base", "main", "--floor-gib", "0"},
+		OnFailure: FailClosed, TimeoutS: 30}
+	plan := Plan{Pre: []Step{step}}
+	env := Env{TickID: "t-missing-workdir", Lane: "task-qa", Project: "task", Role: "qa",
+		Repo: repo, Workdir: workdir}
+	if err := NewExecRunner(db, nil).Pre(context.Background(), env, plan); err != nil {
+		t.Fatalf("PRE failed: %v", err)
+	}
+	var state string
+	var code int
+	if err := db.QueryRow(`SELECT state, exit_code FROM hook_runs WHERE hook_id='worktree-ensure'`).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ok" || code != 0 {
+		t.Fatalf("receipt = state %q exit %d, want ok/0", state, code)
+	}
+	if !exists(workdir) {
+		t.Fatalf("worktree-ensure did not create %s", workdir)
+	}
+	cmd := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedWorkdir, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "worktree "+listedWorkdir+"\n") {
+		t.Fatalf("git worktree list lacks %s:\n%s", listedWorkdir, out)
+	}
+	t.Logf("state=%s exit=%d; git worktree list contains %s", state, code, listedWorkdir)
+}
+
 // A missing command fails the step instead of hanging the runner.
 func TestMissingCommandFails(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "receipts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE hook_runs (
+		run_id INTEGER PRIMARY KEY AUTOINCREMENT, tick_id TEXT NOT NULL, lane TEXT NOT NULL,
+		phase TEXT NOT NULL, level TEXT NOT NULL, hook_id TEXT NOT NULL, priority INTEGER NOT NULL,
+		seq INTEGER NOT NULL, command TEXT NOT NULL, argv TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+		exit_code INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT,
+		duration_ms INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 1,
+		output TEXT NOT NULL DEFAULT '')`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan := Plan{Pre: []Step{{
 		ID: "gone", Phase: PhasePre, Level: LevelLane, Target: "l",
-		Command: filepath.Join(t.TempDir(), "nope"), OnFailure: FailClosed, TimeoutS: 2,
+		Command: filepath.Join(dir, "nope"), OnFailure: FailClosed, TimeoutS: 2,
 	}}}
-	err := NewExecRunner(nil, nil).Pre(context.Background(), Env{TickID: "t8", Lane: "l"}, plan)
+	err = NewExecRunner(db, nil).Pre(context.Background(), Env{TickID: "t8", Lane: "l", Workdir: dir}, plan)
 	var hf *ErrHookFailed
 	if !errors.As(err, &hf) {
 		t.Fatalf("want ErrHookFailed, got %v", err)
+	}
+	var state, output string
+	var code int
+	if err := db.QueryRow(`SELECT state, exit_code, output FROM hook_runs WHERE hook_id='gone'`).
+		Scan(&state, &code, &output); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != -2 {
+		t.Fatalf("receipt = state %q exit %d, want failed/-2", state, code)
+	}
+	if !strings.Contains(output, "start_failed:") || !strings.Contains(err.Error(), output) {
+		t.Fatalf("receipt output %q must name the same start failure returned to ticks.error: %v", output, err)
 	}
 }
 
