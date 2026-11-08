@@ -99,6 +99,10 @@ not from a deployed copy, so the watchdog and this document are the same file an
 there is no copy to drift. Moving the checkout means editing the unit — a
 deliberate, visible act.
 
+The consumer (`deploy/hop-alert-consume.{service,timer}`) follows the same
+pattern and reads the alerts file this watcher writes — install it right
+after this timer (see "The consumer" above).
+
 ## Falsifier (both directions)
 
 The row's gate is that stopping a hop **with a clean exit** produces an alert
@@ -124,10 +128,99 @@ Measured on 2026-10-29 (see the closed board row SCHED-GAP-16946 for the exact
 output): pre-change window = 0 alerts; post-change window = 1 alert naming
 `hop=crier unit=crier-fleet.service exit=… down=…`, then 1 recovery record.
 
-The hermetic half lives in `ops/hop-liveness-watch-selftest.sh` (32 checks): it
+The hermetic half lives in `ops/hop-liveness-watch-selftest.sh` (55 checks): it
 drives the real watcher against a stub `systemctl` and separately proves the
 selftest itself can fail (a mutated copy of the classifier is caught by the
-"silent when clean" claim).
+"silent when clean" claim). Section 6 of the same selftest is the consumer
+falsifier below.
+
+## The consumer (SCHED-GAP-16967)
+
+An alert that lands only in a log is the same "green but did nothing" failure
+class one layer down. `ops/hop-alert-consume.py` reads
+`~/.hermes/logs/hop-liveness-alerts.jsonl` and turns each alert into an
+**observable effect an agent actually reads**: a **pending row in the foreman
+board** (`.coding-hermes/board/tasks.jsonl` of the checkout it ships in).
+
+Who reads that surface:
+
+* the scheduler's board-awareness reader
+  (`internal/scheduler/board_awareness.go`, `countPendingBoard`) counts
+  pending rows and feeds the pending-boost tier every tick;
+* the foreman prompt picks pending rows as dispatchable work — a filed hop
+  outage becomes an investigation task with acceptance criteria naming the
+  hop, the exit status and how long it has been down;
+* `ops/check-fleet-invariants.py` audits every row's vocabulary, id-slot and
+  content-dup invariants (the consumer's rows are pinned green against that
+  gate by `tests/test_hop_alert_consume.py`);
+* closure is audited by `schedulerd --verify-board`: a recovery closes the
+  row as `status=complete` + `worker_status=complete` + non-empty
+  `completed_at` + a `worker_summary` naming the recovery — exactly the
+  closed-with-evidence shape (`internal/scheduler/board_closure.go`).
+
+### Idempotence
+
+A record's identity is `hop|event|at`. The row id is derived from it
+(`HOPDOWN-crier-2026-10-29T044400Z`), so replaying the same alert record —
+same hop, same event, same `at` — finds its row already filed and changes
+nothing, **even if the consumer's state file is lost** (the board scan alone
+is a sufficient dedup). A processed-identity ledger in the state file is the
+fast path; when it evicts at the retention cap (`--ledger`, default 5000,
+oldest first), the board scan is the guard that remains. A replayed
+`recovered` record is a no-op: recovery is never undone by replay, and a
+second `down` record for a hop that already has an OPEN incident row does
+not open a second row — one incident, one row.
+
+### Rotation and retention
+
+The consumer tail-reads the alerts file from the byte offset stored in
+`~/.hermes/logs/hop-alert-consumer-state.json`; only complete
+(newline-terminated) lines are consumed, so a torn trailing write is picked
+up on the next run. Before reading it stats the file:
+
+* stored offset past EOF (truncation or a shorter replacement), or
+* the file's inode changed (rotation by rename/replace)
+
+⇒ the offset resets to 0 and the whole file is re-read. That replay is safe
+by construction: already-consumed records find their rows (any status) and
+no-op, and recovery already applied stays applied. One shape has no signal:
+a same-length truncate-and-regrow that completes entirely between two runs
+is indistinguishable from an appended file — harmless, because the replayed
+prefix sits below the offset and the ledger holds the identities anyway.
+Records an external rotator deletes *before* a consumer run sees them are
+lost; the watcher's hourly re-alert (`repeat=true`) is the backstop that
+still files the open incident under the open-incident dedup rule.
+
+### Consumer falsifier (both directions)
+
+Section 6 of `ops/hop-liveness-watch-selftest.sh` injects the exact
+crier-fleet clean-exit record as a FIXTURE file (never by stopping a live
+hop) and proves both directions:
+
+* consumer **stopped** → the injected `{"event":"down"}` record produces NO
+  effect (no board file exists, so no row);
+* consumer **running** → the same record produces exactly ONE pending row
+  naming the hop (`Hop crier DOWN`), the exit status (`exited 0`) and how
+  long it has been down (`down for 41m`); replaying it opens nothing; a
+  `recovered` record closes the row it opened; a rotated file's replay
+  neither re-opens nor un-closes anything; `--strict` exits 2 only when a
+  fresh effect is opened.
+
+`tests/test_hop_alert_consume.py` pins the same contract in-process (16
+tests) and runs the consumer's rows through the repo's own invariant gate.
+
+### Install
+
+```
+install -m 0644 deploy/hop-alert-consume.service deploy/hop-alert-consume.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now hop-alert-consume.timer
+systemctl --user list-timers hop-alert-consume.timer
+```
+
+The consumer runs on the same one-minute cadence as the watcher, so a hop
+that dies is not just named in a log within a minute but filed as
+dispatchable board work within two.
 
 ## What this does NOT cover
 
@@ -141,8 +234,11 @@ selftest itself can fail (a mutated copy of the classifier is caught by the
 * **This host only.** The timer runs on this control box. Nothing outside it
   watches this box, so a whole-host outage is invisible to this watchdog (the
   same limitation the box watcher has for boxes).
-* **Delivery of the alert is a log write**, to
-  `~/.hermes/logs/hop-liveness-watch.log` + `hop-liveness-alerts.jsonl`. No
-  automated consumer reads those files yet — see SCHED-GAP-16967.
+* **Delivery of the alert used to be a log write**, to
+  `~/.hermes/logs/hop-liveness-watch.log` + `hop-liveness-alerts.jsonl`.
+  Since SCHED-GAP-16967 the JSONL has an automated consumer
+  (`ops/hop-alert-consume.py`, "The consumer" above) that files each down
+  alert as a pending foreman-board row; the human-readable log remains the
+  operator's tail target.
 * **The connector hop** is report-only in the chain probe and is not a unit on
   this box, so it is not watched here.

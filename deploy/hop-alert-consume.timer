@@ -1,0 +1,14 @@
+[Unit]
+Description=Consume hop-liveness alerts every minute, right after the watcher polls (SCHED-GAP-16967)
+
+[Timer]
+# Same cadence as the watcher (1min) so a hop that dies is not just named in
+# a log within a minute but filed as dispatchable board work within two.
+# The consumer is silent and a no-op when there are no new alert records.
+OnBootSec=90s
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=hop-alert-consume.service
+
+[Install]
+WantedBy=timers.target

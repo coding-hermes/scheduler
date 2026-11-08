@@ -1,0 +1,20 @@
+[Unit]
+Description=Coding Hermes hop-liveness alert consumer — turns each down alert into a pending foreman-board row an agent reads (SCHED-GAP-16967)
+Documentation=file:%h/coding-hermes-scheduler/coding-herms-scheduler/docs/hop-liveness-watchdog.md
+After=hop-liveness-watch.service
+
+[Service]
+Type=oneshot
+# The consumer reads the watcher's alert JSONL and files/closes rows in the
+# checkout's foreman board (.coding-hermes/board/tasks.jsonl) — the surface
+# the scheduler's board-awareness reader counts and the foreman prompt picks.
+# It is idempotent (replaying the same alert record changes nothing; a
+# recovered record closes the row) and rotation-safe (offset + processed-id
+# ledger in ~/.hermes/logs/hop-alert-consumer-state.json).
+#
+# Like the watcher, the script is executed from the checkout on purpose: the
+# default board path resolves to the checkout's own .coding-hermes/board.
+ExecStart=/usr/bin/env python3 %h/coding-hermes-scheduler/coding-herms-scheduler/ops/hop-alert-consume.py
+Nice=5
+StandardOutput=append:%h/.hermes/logs/hop-alert-consumer.log
+StandardError=append:%h/.hermes/logs/hop-alert-consumer.log

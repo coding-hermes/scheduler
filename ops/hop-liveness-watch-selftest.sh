@@ -27,6 +27,15 @@
 #        branch reclassified as down) is caught by claim 1. If this check ever
 #        passes while the mutation is applied, the selftest is decoration.
 #
+#     6. THE ALERT IS CONSUMED (SCHED-GAP-16967) — the falsifier for
+#        ops/hop-alert-consume.py, both directions: with the consumer
+#        STOPPED, an injected {"event":"down"} fixture record produces NO
+#        effect (no board, no row); with it RUNNING, the same record produces
+#        exactly ONE pending board row naming the hop, the exit status and
+#        how long the hop has been down; replaying it dedupes; a recovered
+#        record closes the row it opened; a rotated file's replay neither
+#        re-opens nor un-closes anything.
+#
 #   Nothing here touches the live fleet: the stub replaces `systemctl` on PATH
 #   and every path (state, alerts, fixtures) lives under a mktemp directory.
 #
@@ -60,7 +69,7 @@ expect_rc()      { if [ "$2" = "$3" ]; then pass "$1 (rc=$3)"; else fail "$1: ex
 expect_has()     { if printf '%s' "$2" | grep -qF -- "$3"; then pass "$1"; else fail "$1: '$3' not found in: $2"; fi; }
 expect_absent()  { if printf '%s' "$2" | grep -qF -- "$3"; then fail "$1: '$3' unexpectedly present in: $2"; else pass "$1"; fi; }
 
-for t in bash date awk sed grep mktemp; do
+for t in bash date awk sed grep mktemp python3; do
   command -v "$t" >/dev/null 2>&1 || { printf 'missing required tool: %s\n' "$t" >&2; exit 2; }
 done
 
@@ -236,6 +245,71 @@ else
     fail "the mutated watcher stayed silent: the selftest cannot distinguish up from down"
   fi
 fi
+
+# ============================================================================
+hdr "6. the alert is consumed (SCHED-GAP-16967): stopped = no effect, running = exactly one"
+CONSUME="$HERE/hop-alert-consume.py"
+if [ -r "$CONSUME" ]; then pass "consumer script exists beside the watcher"; else fail "consumer script missing: $CONSUME"; fi
+
+CB="$TMP/board/tasks.jsonl"
+CS="$TMP/consumer-state.json"
+FIX="$TMP/alerts-fixture.jsonl"
+# The exact record the watcher emits for the crier-fleet 11h clean-exit shape
+# (docs/hop-liveness-watchdog.md), injected as a FIXTURE — no live hop stopped.
+printf '%s\n' '{"schema":"hop-liveness/1","event":"down","hop":"crier","unit":"crier-fleet.service","state":"down","reason":"HOP_DOWN_CLEAN_EXIT","exit_code":"0","exit_kind":"exited","result":"success","down_s":2460,"down_for":"41m","since":"2026-10-29T04:03:00Z","at":"2026-10-29T04:44:00Z","repeat":false,"watchdog":"ops/hop-liveness-watch.sh"}' > "$FIX"
+consume() { # consume [extra args...] -> rc, $TMP/out/consume.out
+  python3 "$CONSUME" --alerts "$FIX" --board "$CB" --state "$CS" --json "$@" > "$TMP/out/consume.out" 2> "$TMP/out/consume.err"
+  RC=$?
+}
+
+# ---- falsifier direction A: consumer STOPPED -> NO effect -------------------
+if [ -e "$CB" ]; then
+  fail "consumer stopped: board exists without a consumer run"
+else
+  pass "consumer stopped: the injected down record produced NO effect (no board)"
+fi
+
+# ---- falsifier direction B: consumer RUNNING -> exactly ONE effect ----------
+consume
+expect_rc "consumer run exits 0" "$RC" 0
+expect_has "summary reports one effect opened" "$(cat "$TMP/out/consume.out")" '"rows_opened": 1'
+if [ -f "$CB" ]; then pass "consumer run created the board"; else fail "consumer run created no board"; fi
+expect_eq "exactly ONE row for the injected record" "$(grep -c . "$CB")" "1"
+ROW="$(cat "$CB")"
+expect_has "the row is a pending effect"        "$ROW" '"status": "pending"'
+expect_has "the row names the hop"              "$ROW" 'Hop crier DOWN'
+expect_has "the row names the exit status"      "$ROW" 'exited 0'
+expect_has "the row names how long it is down"  "$ROW" 'down for 41m'
+expect_has "the row names the reason code"      "$ROW" 'HOP_DOWN_CLEAN_EXIT'
+
+# ---- idempotent replay ------------------------------------------------------
+consume
+expect_has "a replay opens no new effect" "$(cat "$TMP/out/consume.out")" '"rows_opened": 0'
+expect_eq "a replay leaves exactly one row" "$(grep -c . "$CB")" "1"
+
+# ---- recovery closes the effect it opened -----------------------------------
+printf '%s\n' '{"schema":"hop-liveness/1","event":"recovered","hop":"crier","unit":"crier-fleet.service","state":"up","reason":"HOP_UP","exit_code":"0","exit_kind":"exited","result":"success","down_s":null,"down_for":"","since":null,"at":"2026-10-29T05:20:00Z","repeat":false,"watchdog":"ops/hop-liveness-watch.sh"}' >> "$FIX"
+consume
+expect_has "the recovery closes the effect" "$(cat "$TMP/out/consume.out")" '"rows_closed": 1'
+ROW="$(cat "$CB")"
+expect_has "the closed row uses the canonical closed spelling" "$ROW" '"status": "complete"'
+expect_has "the closed row carries worker_status=complete"     "$ROW" '"worker_status": "complete"'
+expect_has "the closed row is stamped completed_at"            "$ROW" '"completed_at": "'
+expect_has "the closure evidence names the recovery"           "$ROW" '"worker_summary": "recovered: hop crier'
+
+# ---- rotation: truncated file, replay dedupes, closure sticks ---------------
+printf '%s\n' '{"schema":"hop-liveness/1","event":"down","hop":"crier","unit":"crier-fleet.service","state":"down","reason":"HOP_DOWN_CLEAN_EXIT","exit_code":"0","exit_kind":"exited","result":"success","down_s":2460,"down_for":"41m","since":"2026-10-29T04:03:00Z","at":"2026-10-29T04:44:00Z","repeat":false,"watchdog":"ops/hop-liveness-watch.sh"}' > "$FIX"
+consume
+expect_has "a rotation is detected and reported" "$(cat "$TMP/out/consume.out")" '"rotation_resets": 1'
+expect_has "the rotated replay opens nothing"    "$(cat "$TMP/out/consume.out")" '"rows_opened": 0'
+ROW="$(cat "$CB")"
+expect_eq "the rotation re-opens nothing: still one row" "$(grep -c . "$CB")" "1"
+expect_has "recovery sticks across rotation"     "$ROW" '"status": "complete"'
+
+# ---- --strict exits 2 for a fresh effect ------------------------------------
+CSR="$TMP/strict-state.json"; CBR="$TMP/strict-board/tasks.jsonl"
+python3 "$CONSUME" --alerts "$FIX" --board "$CBR" --state "$CSR" --strict > "$TMP/out/strict.out" 2>/dev/null
+expect_rc "--strict exits 2 when a fresh effect is opened" "$?" 2
 
 # ============================================================================
 printf '\n%s\n' "== summary"
