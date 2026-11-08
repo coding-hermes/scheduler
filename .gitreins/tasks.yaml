@@ -5935,3 +5935,32 @@ tasks:
   status: complete
   created_at: '2026-11-08T06:47:04.877271+00:00'
   completed_at: '2026-11-08T07:17:02.175831+00:00'
+- id: SCHED-GAP-16951
+  title: policy-script verify prints one verdict consistent with its exit code
+  criteria:
+  - scripts/verify-policy-script-deploy-hash.sh prints exactly one drift verdict consistent
+    with exit code; clean tree => no drift rc=0; seeded drift => names drifted lane
+    and rc!=0; no coexistence of '0 mismatches' and 'drift detected'
+  status: complete
+  created_at: '2026-11-08T07:34:37.271813+00:00'
+  completed_at: '2026-11-08T08:05:04.941685+00:00'
+- id: SCHED-GAP-16981
+  title: board-driven lane logs BOARD-STALE at pick time when checkout board differs
+    from origin/main
+  criteria:
+  - pick path emits one BOARD-STALE line naming workdir sha, origin sha and ids whose
+    status disagrees; test with fixture board drift asserts the line; no BOARD-STALE
+    when boards match; go build/vet/test green
+  status: complete
+  created_at: '2026-11-08T07:40:32.795492+00:00'
+  completed_at: '2026-11-08T08:23:08.149745+00:00'
+- id: SCHED-GAP-16951-R1
+  title: 'policy-guard rework: inner verify summary forwarded on no path'
+  criteria:
+  - scripts/policy-script-deploy-hash-guard.sh suppresses the inner 'N pin mismatch(es)
+    - drift detected' summary on the hash-mismatch, verifier-contradiction and fail-closed
+    paths; guard test CONTRADICTION and DIRECT-HASH-MISMATCH arms pass; wrapper test
+    passes; live real-file run prints exactly one DRIFT verdict
+  status: complete
+  created_at: '2026-11-08T08:12:27.903657+00:00'
+  completed_at: '2026-11-08T08:12:29.611078+00:00'
