@@ -5932,5 +5932,6 @@ tasks:
     fire, claim race, API round-trip; (8) docs/wake-tables.md with curl examples and
     admission semantics. PASS: go build ./... && go vet ./... && go test -short -p
     1 -count=1 ./... all exit 0 in the committed tree.'
-  status: in_progress
+  status: complete
   created_at: '2026-11-08T06:47:04.877271+00:00'
+  completed_at: '2026-11-08T07:17:02.175831+00:00'
