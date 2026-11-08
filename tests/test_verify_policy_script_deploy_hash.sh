@@ -10,7 +10,11 @@
 # fixture "live" (clean, then corrupted), asserting the wrapper's exit-code
 # contract AND its stream discipline:
 #
-#   clean fixture    -> exit 0, "deploy hash OK" text, abort markers OFF stdout
+#   clean fixture    -> exit 0, "deploy hash OK" + "no drift" text, abort
+#                       markers OFF stdout
+#   seeded pin drift -> exit 4 (documented ABORT), "VERIFY ABORT" AND the
+#                       guard's drift verdict naming the drifted lane on
+#                       STDERR, not stdout (SCHED-GAP-16951 ONE VERDICT LAW)
 #   corrupted fixture-> exit 4 (documented ABORT), "VERIFY ABORT" AND the
 #                       guard's "[SCHED-PERF-006]" marker on STDERR (not
 #                       stdout — a verify block must be able to log the two
@@ -22,9 +26,17 @@
 # state (the real live file and sidecar are only ever READ to bootstrap the
 # fixture).
 #
-# Note on the exit contract: this test itself exits 0 when BOTH wrapper
-# branches (OK and ABORT) behave as documented — an ABORT inside a fixture
-# is the expected outcome, not a failure of the test.
+# SCHED-GAP-16951: the clean and drift arms use a STUB policy script whose
+# --verify emits the documented output shapes — the live fleet's pin state
+# cannot be seeded hermetically, and the old real-file OK case asserted
+# live-fleet cleanliness (it passed while the wrapper blessed real drift
+# with rc=0). The real file keeps ONE case: hash-corruption ABORT, which
+# fires on the direct hash check before any verify classification and is
+# drift-state independent.
+#
+# Note on the exit contract: this test itself exits 0 when ALL wrapper
+# branches (OK and both ABORTs) behave as documented — an ABORT inside a
+# fixture is the expected outcome, not a failure of the test.
 #
 # Requires: bash, python3, coreutils.
 
@@ -77,21 +89,58 @@ run_wrapper() {
         bash "$WRAPPER" >"$STDOUT" 2>"$STDERR"
 }
 
+# ── SCHED-GAP-16951 stub fixture (same shape as the guard test) ──────────
+DEPLOY_STUB="$TMP_ROOT/deploy_stub"
+mkdir -p "$DEPLOY_STUB"
+write_stub() {
+    cat > "$DEPLOY_STUB/fleet-cooldown-policy.py" <<'PY'
+import os, sys
+mode = os.environ.get('FALSIFIER_MODE', 'clean')
+if mode == 'clean':
+    print('DEPLOY HASH: stub-hash matches canonical')
+    print('PARITY OK: db lanes=2 file blocks=2')
+    print('OK: 2 canonical pin(s) agree across fleet.toml and the live DB; no tasks-admission lane armed')
+    sys.exit(0)
+if mode == 'pin_drift':
+    print('DEPLOY HASH: stub-hash matches canonical')
+    print('MISMATCH seeded-lane cooldown_s: db=7200 toml=21600 (canonical pin=21600)')
+    print('PARITY OK: db lanes=2 file blocks=2')
+    print('')
+    print('1 pin mismatch(es) - drift detected')
+    sys.exit(1)
+sys.exit(9)
+PY
+    sha256sum "$DEPLOY_STUB/fleet-cooldown-policy.py" | cut -d' ' -f1 \
+        > "$DEPLOY_STUB/.fleet-cooldown-policy.canonical.sha256"
+}
+
+run_stub_wrapper() {
+    FALSIFIER_MODE="$1" \
+    POLICY_GUARD_SCRIPT="$DEPLOY_STUB/fleet-cooldown-policy.py" \
+        bash "$WRAPPER" >"$STDOUT" 2>"$STDERR"
+}
+
 # ──────────────────────────────────────────────────────────────────────────
-# Case 1 (OK): clean fixture → wrapper exits 0, hash-OK text on stdout,
-# no ABORT markers anywhere.
+# Case 1 (OK, stub): verify clean → wrapper exits 0, hash-OK + "no drift"
+# text on stdout, no ABORT markers anywhere.
 # ──────────────────────────────────────────────────────────────────────────
-run_wrapper
+write_stub
+run_stub_wrapper clean
 RC=$?
-echo "WRAP-OK case (clean fixture): exit=$RC"
+echo "WRAP-OK case (stub, verify clean): exit=$RC"
 if [ "$RC" -ne 0 ]; then
-    echo "FAIL: wrapper should exit 0 on a clean fixture, got $RC"
+    echo "FAIL: wrapper should exit 0 on a clean verify, got $RC"
     echo "--- stdout ---"; cat "$STDOUT"
     echo "--- stderr ---"; cat "$STDERR"
     exit 1
 fi
 if ! grep -q 'deploy hash OK' "$STDOUT"; then
     echo "FAIL: expected 'deploy hash OK' on the wrapper's stdout"
+    echo "--- stdout ---"; cat "$STDOUT"
+    exit 1
+fi
+if ! grep -q 'no drift' "$STDOUT"; then
+    echo "FAIL: rc=0 must carry the 'no drift' verdict on stdout (ONE VERDICT LAW)"
     echo "--- stdout ---"; cat "$STDOUT"
     exit 1
 fi
@@ -103,10 +152,58 @@ if grep -q 'VERIFY ABORT' "$STDOUT" "$STDERR"; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
-# Case 2 (ABORT): corrupted fixture → wrapper exits 4 (its documented ABORT),
-# with the "VERIFY ABORT" marker AND the guard's "[SCHED-PERF-006]" marker on
-# STDERR — and ,(deploy-restart streams are separated) NOT both on stdout.
-# Mutates the FIXTURE only; the real live file is never touched.
+# Case 2 (DRIFT ABORT, stub): seeded pin drift → wrapper exits 4 with the
+# "VERIFY ABORT" marker AND the guard's drift verdict naming the drifted
+# lane on STDERR — NOT stdout. Sidecar untouched (no laundering).
+# ──────────────────────────────────────────────────────────────────────────
+run_stub_wrapper pin_drift
+RC=$?
+echo "WRAP-DRIFT case (stub, seeded pin drift): exit=$RC"
+if [ "$RC" -eq 0 ]; then
+    echo "FAIL: wrapper must NOT exit 0 on seeded drift (0 = no drift — the old lie)"
+    echo "--- stdout ---"; cat "$STDOUT"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if [ "$RC" -ne 4 ]; then
+    echo "FAIL: wrapper should exit 4 (documented ABORT) on seeded drift, got $RC"
+    echo "--- stdout ---"; cat "$STDOUT"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if ! grep -q 'VERIFY ABORT' "$STDERR"; then
+    echo "FAIL: expected the 'VERIFY ABORT' marker on the wrapper's STDERR"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if ! grep -qF '[SCHED-PERF-006]' "$STDERR"; then
+    echo "FAIL: expected the guard's [SCHED-PERF-006] drift verdict on STDERR"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if ! grep -q 'seeded-lane' "$STDERR"; then
+    echo "FAIL: the drift verdict must name the drifted lane (seeded-lane)"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if grep -q 'drift detected' "$STDOUT" "$STDERR"; then
+    echo "FAIL: the inner summary 'N pin mismatch(es) — drift detected' must not surface"
+    echo "--- stdout ---"; cat "$STDOUT"
+    echo "--- stderr ---"; cat "$STDERR"
+    exit 1
+fi
+if grep -q 'VERIFY ABORT' "$STDOUT"; then
+    echo "FAIL: 'VERIFY ABORT' leaked onto stdout (verify block cannot stream-split)"
+    echo "--- stdout ---"; cat "$STDOUT"
+    exit 1
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
+# Case 3 (ABORT, real file): corrupted fixture → wrapper exits 4, with the
+# "VERIFY ABORT" marker AND the guard's "[SCHED-PERF-006]" marker on
+# STDERR. Mutates the FIXTURE only; the real live file is never touched.
+# Fires on the direct hash check (before any verify classification), so it
+# is drift-state independent.
 # ──────────────────────────────────────────────────────────────────────────
 printf '\nprint("STALE_VARIANT_%s")\n' "$(date +%s)" \
     >> "$DEPLOY/fleet-cooldown-policy.py"
@@ -156,7 +253,7 @@ if [ "$DEPLOY_HASH" = "$CANON_AFTER" ]; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
-# Case 3 (fail-closed install shape): a wrapper with NO guard next to it
+# Case 4 (fail-closed install shape): a wrapper with NO guard next to it
 # (relocated copy, guard not deployed yet) must still refuse with exit 4 and
 # "guard not found" on stderr — the wiring must be loud, never silent.
 # ──────────────────────────────────────────────────────────────────────────
@@ -179,5 +276,5 @@ if ! grep -q 'VERIFY ABORT: guard not found' <<<"$OUT"; then
 fi
 
 echo
-echo "OK: verify-policy-script-deploy-hash.sh — WRAP-OK/WRAP-ABORT/WRAP-NOGUARD all behave as specified (SCHED-PERF-006 restart-shape integration)"
+echo "OK: verify-policy-script-deploy-hash.sh — WRAP-OK/WRAP-DRIFT/WRAP-ABORT/WRAP-NOGUARD all behave as specified (SCHED-PERF-006 restart-shape integration + SCHED-GAP-16951 ONE VERDICT LAW)"
 exit 0

@@ -28,8 +28,10 @@
 #   fi
 #
 # EXIT CODES
-#   0  policy script verified clean (hash matches the canonical sidecar)
-#   4  ABORT — deploy-hash mismatch / missing / unreadable (propagated and
+#   0  policy script verified clean (hash matches the canonical sidecar
+#      AND --verify reported no drift — SCHED-GAP-16951 ONE VERDICT LAW)
+#   4  ABORT — deploy-hash mismatch, pin or parity drift, missing,
+#      unreadable, or a crashed/unclassifiable verify (propagated and
 #      logged); the caller must abort the deploy
 #
 # STREAM CONTRACT (proven by tests/test_verify_policy_script_deploy_hash.sh)
