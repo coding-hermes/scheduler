@@ -107,7 +107,9 @@ def _seed_db(path: Path, lanes: list[dict], ns_defaults: dict[str, int] | None =
     """Mint a scheduler DB with the MODERN schema (prompt columns present).
 
     *lanes* are dicts: name, namespace_id, prompt, prompt_mode (optional),
-    enabled (default 1), cooldown_s (default 43200 — above the 6h floor).
+    command (optional — a non-empty value makes it a COMMAND lane, which
+    dispatches a shell command instead of a prompt), enabled (default 1),
+    cooldown_s (default 43200 — above the 6h floor).
     Every lane gets a real workdir directory so the workdirs check stays
     quiet. The namespace roster is complete (coding-hermes + the six
     satellites at their policy caps) so caps/admission stay quiet; namespace
@@ -135,7 +137,8 @@ def _seed_db(path: Path, lanes: list[dict], ns_defaults: dict[str, int] | None =
         con.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (ln["name"], ln.get("enabled", 1),
                      ln.get("cooldown_s", _fixture_cooldown(ln["name"])),
-                     "", ln.get("prompt", ""), ln.get("prompt_mode", "append"),
+                     ln.get("command", ""), ln.get("prompt", ""),
+                     ln.get("prompt_mode", "append"),
                      str(wd), ln.get("namespace_id", "auger")))
     con.commit()
     con.close()
@@ -337,6 +340,63 @@ def test_disabled_incident_lane_is_exempt(tmp_path):
 
     assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"
     assert "VIOLATION" not in out, out
+
+
+# ── command lanes are NOT judged by this class ───────────────────────────
+
+def test_enabled_command_lane_is_exempt(tmp_path):
+    """A COMMAND lane dispatches `bash <script>` — spawn.go takes the
+    ``if project.Command != ""`` branch and never calls buildForemanPrompt —
+    so an empty prompt pair there is the lane's design, not an instructions
+    gap. Measured live 2026-11-08: this class's only two fleet-wide
+    violations were `lane-repair` and `lane-cadence-check`, both enabled
+    ``bash <script>.sh`` command lanes; both were phantoms.
+
+    The scanned count excludes command lanes (they are counted on their own
+    INFO line) so the meter describes the population the class judges."""
+    rc, out = _run_gate(tmp_path, [
+        {"name": "fixture-cmd-lane", "namespace_id": "auger", "prompt": "",
+         "command": "bash /tmp/lane-repair.sh"},
+    ], ns_defaults={"auger": 0})
+
+    assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"
+    assert "VIOLATION" not in out, out
+    assert ("INFO lane-instructions prompts: 0 enabled lane(s) scanned, "
+            "0 lacking instructions") in out, out
+    assert "1 enabled command lane(s) skipped" in out, out
+
+
+def test_command_lane_skip_keeps_the_prompt_lane_violation(tmp_path):
+    """NEGATIVE CONTROL for the command-lane exemption: the SAME shape on a
+    prompt lane (``command`` empty) must still fire in the SAME run, so the
+    skip cannot silence the very incident the class was built for."""
+    rc, out = _run_gate(tmp_path, [
+        {"name": "fixture-cmd-lane", "namespace_id": "auger", "prompt": "",
+         "command": "bash /tmp/lane-repair.sh"},
+        {"name": "fixture-prompt-lane", "namespace_id": "auger", "prompt": ""},
+    ], ns_defaults={"auger": 0})
+
+    assert rc == 1, f"gate exited {rc}, expected 1 (stdout:\n{out})"
+    lines = _violations(out, "lane-instructions")
+    assert lines == [_violation_line("fixture-prompt-lane", "auger", 0, 0)], lines
+    assert _other_violations(out, "lane-instructions") == [], \
+        f"unexpected extra violations:\n{out}"
+    assert ("INFO lane-instructions prompts: 1 enabled lane(s) scanned, "
+            "1 lacking instructions") in out, out
+    assert "1 enabled command lane(s) skipped" in out, out
+
+
+def test_disabled_command_lane_is_not_counted_as_skipped(tmp_path):
+    """The skip counter is an ENABLED-lane meter: a disabled command lane is
+    outside the population entirely (no INFO line, nothing to excuse)."""
+    rc, out = _run_gate(tmp_path, [
+        {"name": "fixture-cmd-off", "namespace_id": "auger", "prompt": "",
+         "command": "bash /tmp/lane-repair.sh", "enabled": 0},
+    ], ns_defaults={"auger": 0})
+
+    assert rc == 0, f"gate exited {rc}, expected 0 (stdout:\n{out})"
+    assert "VIOLATION" not in out, out
+    assert "command lane(s) skipped" not in out, out
 
 
 # ── the documented schema skip ────────────────────────────────────────────

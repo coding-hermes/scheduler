@@ -170,7 +170,13 @@ Checks
                      prompt (1060) and fallback (python-audit 777); the
                      justification lives with the PROMPT_SHORT_CHARS constant.
                      A prompt_mode=replace lane is judged on its own prompt
-                     alone (it IS the whole base). The owner fixed both
+                     alone (it IS the whole base). Enabled COMMAND lanes
+                     (projects.command non-empty) are SKIPPED and counted
+                     separately: spawn.go takes the command branch
+                     (`if project.Command != ""`) and never calls
+                     buildForemanPrompt, so their empty prompt pair is the
+                     lane's design, not an instructions gap.
+                     The owner fixed both
                      incident lanes live (auger 0 -> 2678); the expected live
                      result is an EMPTY list. Skips silently when the DB
                      schema predates the prompt columns (fixture DBs), the
@@ -1607,9 +1613,24 @@ def main(argv: list[str] | None = None) -> int:
                          "detail": "skipped — projects.prompt / namespaces.default_prompt absent from this schema"})
         else:
             short = 0
+            cmd_lanes = 0
+            prompt_lanes = 0
             for name, p in projects.items():
                 if not p.get("enabled"):
                     continue
+                # A COMMAND lane dispatches a shell command, not a prompt:
+                # spawn.go takes the `if project.Command != ""` branch and
+                # never calls buildForemanPrompt, so an empty prompt pair is
+                # not an instructions gap there — it is the lane's design.
+                # Proven live 2026-11-08: the two violations this class
+                # reported fleet-wide were lane-repair and lane-cadence-check,
+                # both `bash <script>.sh` command lanes. Counting them here
+                # (and the scanned count below) keeps the INFO line honest:
+                # it reports the PROMPT lanes the class actually judges.
+                if "command" in pcols and (p.get("command") or "").strip():
+                    cmd_lanes += 1
+                    continue
+                prompt_lanes += 1
                 own = len((p.get("prompt") or "").strip())
                 mode = (p.get("prompt_mode") or "append").strip() if "prompt_mode" in pcols else "append"
                 ns_row = namespaces.get(p.get("namespace_id") or "")
@@ -1624,9 +1645,13 @@ def main(argv: list[str] | None = None) -> int:
                         f"(both under {PROMPT_SHORT_CHARS}; the lane would dispatch on the "
                         f"generic built-in prompt and improvise, cf. auger 2026-09-27)")
             info.append({"class": LANE_INSTRUCTIONS_CLASS, "subject": "prompts",
-                         "detail": (f"{sum(1 for p in projects.values() if p.get('enabled'))} enabled lane(s) scanned, "
+                         "detail": (f"{prompt_lanes} enabled lane(s) scanned, "
                                     f"{short} lacking instructions "
                                     f"(conjunction: own prompt AND namespace fallback under {PROMPT_SHORT_CHARS} chars)")})
+            if cmd_lanes:
+                info.append({"class": LANE_INSTRUCTIONS_CLASS, "subject": "command-lanes",
+                             "detail": (f"{cmd_lanes} enabled command lane(s) skipped — a "
+                                        f"command lane dispatches a shell command, not a prompt")})
 
     # 13. cooldown-pin pacing ------------------------------------------------
     # SCHED-GAP-1661. cooldown_pin_s is a promise: the lane must not re-tick
