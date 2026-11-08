@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -162,6 +163,14 @@ func TestOperatorAcknowledgedReap_Vocabulary(t *testing.T) {
 // is FALSE (fail closed — no approval, legacy behaviour); truthy spellings
 // are TRUE.
 func TestOperatorRestartApprovalEnv(t *testing.T) {
+	// Pin the UNSET arm explicitly: some worker shells carry an ambient
+	// SCHEDULER_OPERATOR_RESTART_APPROVED=1, and the fail-closed baseline
+	// below must not depend on who launched the test. t.Setenv cannot
+	// express "unset", so unset by hand and restore via t.Cleanup.
+	if prev, had := os.LookupEnv(EnvOperatorRestartApproved); had {
+		os.Unsetenv(EnvOperatorRestartApproved)
+		t.Cleanup(func() { os.Setenv(EnvOperatorRestartApproved, prev) })
+	}
 	if OperatorRestartApproved() {
 		t.Fatal("OperatorRestartApproved with no env set = true, want false (fail closed)")
 	}
@@ -195,6 +204,11 @@ func TestAbortInFlightTicks_OperatorApprovedStamp(t *testing.T) {
 		t.Run(fmt.Sprintf("approved=%v", tc.approved), func(t *testing.T) {
 			if tc.approved {
 				t.Setenv(EnvOperatorRestartApproved, "1")
+			} else {
+				// Pin the fail-closed arm: an ambient worker-shell
+				// approval (SCHEDULER_OPERATOR_RESTART_APPROVED=1)
+				// must not leak into the legacy drain_timeout stamp.
+				t.Setenv(EnvOperatorRestartApproved, "0")
 			}
 			db := newTestDB(t)
 			const proj = "sgap1608-abort"
