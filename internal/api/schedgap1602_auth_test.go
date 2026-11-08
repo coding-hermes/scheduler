@@ -465,8 +465,10 @@ func TestAuthOpenAPIDeclaresSecurity(t *testing.T) {
 	// DELETE /api/v1/agents/{name}); S13 added the three lane-hook writes
 	// (POST /api/v1/hooks/reload, PUT and DELETE /api/v1/hooks/{id} — all
 	// operator-token gated in the handler).
-	if mutating != 32 {
-		t.Errorf("mutating operations in spec = %d, want 32 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query + POST/DELETE /api/v1/links + POST/DELETE /api/v1/agents + POST /api/v1/hooks/reload + PUT/DELETE /api/v1/hooks/{id})", mutating)
+	// SCHED-GAP-17002 added the three wake-table writes (POST /api/v1/wakes,
+	// DELETE /api/v1/wakes/{id}, POST /api/v1/wakes/{id}/fire).
+	if mutating != 35 {
+		t.Errorf("mutating operations in spec = %d, want 35 (22 pre-REMOTE-003 + the two peers POSTs + POST /api/v1/federation/query + POST/DELETE /api/v1/links + POST/DELETE /api/v1/agents + POST /api/v1/hooks/reload + PUT/DELETE /api/v1/hooks/{id} + the three SCHED-GAP-17002 wake writes)", mutating)
 	}
 	if len(missing) > 0 {
 		t.Errorf("mutating operations without security: %v", missing)

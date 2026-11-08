@@ -34,6 +34,10 @@ type Server struct {
 	// path via SetHooks. nil = the hooks tools answer an explicit
 	// configuration error (fail-closed), never an empty list.
 	hooks *lanehook.Set
+	// wakeFirer (SCHED-GAP-17002) is the wake-table runner's external-fire
+	// entry, installed by main.go via SetWakeFirer. nil = wakes_fire answers
+	// an explicit configuration error instead of pretending to fire.
+	wakeFirer func(ctx context.Context, id string) (any, bool, error)
 	// observatoryCollector (SCHED-GAP-1592) is the dashboard-side snapshot
 	// collector behind the observatory_snapshot tool. An interface so the
 	// MCP package does not import the dashboard; nil = the tool answers an
@@ -870,6 +874,9 @@ var _ = func() struct{} { tools = append(tools, federationTools()...); return st
 // S13 lane hooks (CTL-003 parity with /api/v1/hooks*).
 var _ = func() struct{} { tools = append(tools, hooksTools()...); return struct{}{} }()
 
+// SCHED-GAP-17002 — wake tables (CTL-003 parity with /api/v1/wakes*).
+var _ = func() struct{} { tools = append(tools, wakeTools()...); return struct{}{} }()
+
 // handleMCP routes MCP protocol requests.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1039,6 +1046,17 @@ func (s *Server) invokeTool(ctx context.Context, name string, args map[string]in
 		return s.toolPeersEvents(ctx, args)
 	case "cadence":
 		return s.toolCadence(ctx)
+	// SCHED-GAP-17002 — wake tables (CTL-003 parity with /api/v1/wakes*).
+	case "wakes_list":
+		return s.toolWakesList(ctx, args)
+	case "wakes_get":
+		return s.toolWakesGet(ctx, args)
+	case "wakes_create":
+		return s.toolWakesCreate(ctx, args)
+	case "wakes_cancel":
+		return s.toolWakesCancel(ctx, args)
+	case "wakes_fire":
+		return s.toolWakesFire(ctx, args)
 	// S13 — lane hooks (CTL-003 parity with /api/v1/hooks*).
 	case "hooks_list":
 		return s.toolHooksList(ctx, args)

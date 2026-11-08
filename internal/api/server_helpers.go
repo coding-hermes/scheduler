@@ -1736,6 +1736,79 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/wakes": {
+      "get": {
+        "operationId": "getApiV1Wakes",
+        "summary": "SCHED-GAP-17002 wake tables: list wakes newest-first",
+        "parameters": [
+          {"name": "state", "in": "query", "schema": {"type": "string"}, "description": "pending | firing | fired | cancelled | skipped"}
+        ],
+        "responses": {
+          "200": {"description": "wakes[] + count"}
+        }
+      },
+      "post": {
+        "operationId": "postApiV1Wakes",
+        "security": [{"operatorToken": []}],
+        "summary": "Create a wake: run this lane at a future time (at / in_minutes / daily) or mark it external (fired via /fire)",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"type": "object", "required": ["project"], "properties": {
+            "project": {"type": "string"},
+            "at": {"type": "string", "description": "RFC3339 one-shot instant"},
+            "in_minutes": {"type": "integer"},
+            "daily": {"type": "string", "description": "local HH:MM, recurring"},
+            "external": {"type": "boolean"},
+            "payload": {"type": "string"},
+            "note": {"type": "string"},
+            "created_by": {"type": "string"}
+          }}}}
+        },
+        "responses": {
+          "201": {"description": "status=scheduled with the id and the stored wake"},
+          "400": {"description": "not exactly one of at|in_minutes|daily|external; past at; bad HH:MM"},
+          "404": {"description": "Unknown project"},
+          "409": {"description": "Project disabled"}
+        }
+      }
+    },
+    "/api/v1/wakes/{id}": {
+      "get": {
+        "operationId": "getApiV1WakesId",
+        "summary": "One wake row (state, payload, fired_at, fired_tick_id)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "The wake"},
+          "404": {"description": "Unknown wake"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteApiV1WakesId",
+        "security": [{"operatorToken": []}],
+        "summary": "Cancel a PENDING wake (a state change — rows are never deleted)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "status=cancelled"},
+          "409": {"description": "Wake is not pending"}
+        }
+      }
+    },
+    "/api/v1/wakes/{id}/fire": {
+      "post": {
+        "operationId": "postApiV1WakesIdFire",
+        "security": [{"operatorToken": []}],
+        "summary": "Fire an EXTERNAL wake now (the external-system entry)",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmptyBody"}}}
+        },
+        "responses": {
+          "202": {"description": "status=fired with the wake"},
+          "400": {"description": "Wake kind is not external"},
+          "409": {"description": "Wake is not pending"},
+          "503": {"description": "Wake-table runner not wired"}
+        }
+      }
+    },
     "/api/v1/hooks": {
       "get": {
         "operationId": "getApiV1Hooks",

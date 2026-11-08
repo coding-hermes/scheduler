@@ -38,6 +38,12 @@ type Server struct {
 	// the sync package (no dependency cycle; nil = feature off).
 	duckbrainHealth func() map[string]interface{}
 
+	// wakeFirerFn (SCHED-GAP-17002) is the wake-table runner's external-fire
+	// entry, wired by the daemon (SetWakeFirer). A func field, not a type:
+	// the API package must not import a runner concrete. Nil = the fire
+	// endpoint answers 503 (never a silent fake fire).
+	wakeFirerFn func(ctx context.Context, id string) (any, bool, error)
+
 	// observatorySnapshot (SCHED-GAP-1592) is the dashboard-side collector
 	// behind /api/v1/observatory and /api/v1/observatory/stream. An
 	// interface, not a concrete type, so neither package imports the other;
@@ -295,6 +301,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	// S13 lane hooks: file is the source of truth, these are the read plan and
 	// the validated writer.
+	// SCHED-GAP-17002: wake tables.
+	mux.HandleFunc("/api/v1/wakes", s.wakeRoute)
+	mux.HandleFunc("/api/v1/wakes/", s.wakeRoute)
+
 	mux.HandleFunc("/api/v1/hooks", s.handleHooks)
 	mux.HandleFunc("/api/v1/hooks/plan", s.handleHookPlan)
 	mux.HandleFunc("/api/v1/hooks/reload", s.handleHookReload)

@@ -63,6 +63,12 @@ type OperatorAuth interface {
 // scheduler pause/resume, groups/templates CRUD + deploy, namespace CRUD +
 // move, project delete/spawn/bump/unbump — is a mutation.
 var mutatingTools = map[string]bool{
+	// SCHED-GAP-17002 wake tables: creating a wake is scheduling work,
+	// cancelling one retracts it, firing one triggers the spawn — all three
+	// are operator-class control operations behind the credential gate.
+	"wakes_create": true,
+	"wakes_cancel": true,
+	"wakes_fire":   true,
 	// S13 lane hooks: reload re-reads the file into the armed set,
 	// upsert/delete rewrite it — all three change what every future tick
 	// executes, so they belong behind the credential gate.
@@ -118,6 +124,8 @@ var mutatingTools = map[string]bool{
 // surface — cron probes, the ops watchdog, Observatory-style pullers — are
 // read-only, and the mutation is the danger, not the observation.
 var readOnlyTools = map[string]bool{
+	"wakes_list":           true,
+	"wakes_get":            true,
 	"hooks_list":           true,
 	"hooks_plan":           true,
 	"fleet_status":         true,

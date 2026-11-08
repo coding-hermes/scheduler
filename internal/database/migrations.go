@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 87 // RELEASE-048: ticks.reconciled_at
+const latestMigration = 88 // SCHED-GAP-17002: wakes (wake tables)
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1961,6 +1961,33 @@ ALTER TABLE projects ADD COLUMN dry_run_throttle INTEGER;
 		desc:    "RELEASE-048: ticks.reconciled_at — watermark of the last failed/timeout late-commit reconciliation check (NULL = never reconciled)",
 		stmt: `
 ALTER TABLE ticks ADD COLUMN reconciled_at TEXT;
+`,
+	},
+	{
+		// SCHED-GAP-17002: wake tables. A persisted promise to run a lane at a
+		// future time or on an external event, created via the API. Runtime
+		// scheduling state (the ticks class), so it lives in scheduler.db —
+		// NOT the git-backed JSONL tier, which is for config and append-only
+		// ledgers. Rows are never deleted: cancel/skip are states, and the
+		// table is the audit of who asked for what and what came of it.
+		version: 88,
+		desc:    "SCHED-GAP-17002: wakes table — persisted future wake-ups (at|daily|external) that run a lane",
+		stmt: `
+CREATE TABLE IF NOT EXISTS wakes (
+	id             TEXT PRIMARY KEY,
+	project        TEXT NOT NULL,
+	kind           TEXT NOT NULL,
+	at_time        TEXT,
+	daily_hhmm     TEXT,
+	payload        TEXT,
+	state          TEXT NOT NULL,
+	created_by     TEXT,
+	created_at     TEXT NOT NULL,
+	fired_at       TEXT,
+	fired_tick_id  TEXT,
+	note           TEXT
+);
+CREATE INDEX IF NOT EXISTS wakes_state_idx ON wakes(state, at_time);
 `,
 	},
 }

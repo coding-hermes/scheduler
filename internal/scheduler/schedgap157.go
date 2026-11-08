@@ -67,6 +67,11 @@ const (
 	// NudgeSourceBoardWake: a tick enqueued by the ADV-R07 board-wake path —
 	// a board write forced a re-evaluation that selected the project.
 	NudgeSourceBoardWake = "board_wake"
+	// NudgeSourceWakeTable (SCHED-GAP-17002): a tick enqueued because a
+	// wake-table entry came due — the operator (or an external system) pre-
+	// authorized this lane to run at that time. It rides the manual bypass
+	// but never wears its name: the stamp says exactly which promise fired.
+	NudgeSourceWakeTable = "wake_table"
 )
 
 // boardWakeNudgeSource is the package-level hook the board watcher consumes

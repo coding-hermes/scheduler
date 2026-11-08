@@ -1186,6 +1186,10 @@ var documentedPaths = []string{
 	"/api/v1/hooks/reload",
 	"/api/v1/hooks/{id}",
 	"/api/v1/openapi.json",
+	// SCHED-GAP-17002: wake tables.
+	"/api/v1/wakes",
+	"/api/v1/wakes/{id}",
+	"/api/v1/wakes/{id}/fire",
 }
 
 func TestAPI_OpenAPI_Success(t *testing.T) {

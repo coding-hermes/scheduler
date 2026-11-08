@@ -53,6 +53,13 @@ func (op parityOp) String() string { return op.Method + " " + op.Path }
 // in server.go; a renamed tool fails the coverage_map_tools_exist subtest
 // instead of silently un-covering its route.
 var apiToolCoverage = map[string][]string{
+	// SCHED-GAP-17002: wake tables — five operations, five tools. Scheduling
+	// a wake is a control operation, so none of them is skip-eligible.
+	"GET /api/v1/wakes":            {"wakes_list"},
+	"POST /api/v1/wakes":           {"wakes_create"},
+	"GET /api/v1/wakes/{id}":       {"wakes_get"},
+	"DELETE /api/v1/wakes/{id}":    {"wakes_cancel"},
+	"POST /api/v1/wakes/{id}/fire": {"wakes_fire"},
 	// S13 lane hooks: five operations, five tools — a hook edit is a
 	// control operation, so none of them is skip-eligible.
 	"GET /api/v1/hooks":         {"hooks_list"},

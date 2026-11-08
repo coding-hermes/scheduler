@@ -1123,6 +1123,12 @@ func (l *Loop) evalDrain() {
 // a 409 rather than enqueue a second tick for the same project.
 var ErrProjectRunning = errors.New("project already has a tick in flight")
 
+// ErrWakeBlackout (SCHED-GAP-17002) is the wake-table runner's "not now": the
+// wake came due inside a blackout window. The wake STAYS PENDING and the
+// runner retries after the window — operator time-of-day intent defers, it
+// does not override the fleet's do-not-spawn windows.
+var ErrWakeBlackout = errors.New("wake deferred: inside a blackout window")
+
 // SpawnNow synchronously enqueues a tick for the project and fires the spawn
 // session into the slot pool, returning the REAL stored tick id (DOGFOOD-015).
 //
@@ -1155,6 +1161,32 @@ func (l *Loop) SpawnNow(project database.Project) (string, error) {
 // the same dedup the evaluation loop applies, so the manual spawn endpoint
 // can never double-spawn a project that is mid-tick.
 func (l *Loop) SpawnNowTargeted(project database.Project, agent string) (string, error) {
+	return l.spawnNowTargetedWithSource(project, agent, NudgeSourceManual)
+}
+
+// SpawnForWakeTable is the wake-table runner's entry (SCHED-GAP-17002). A
+// fired wake is a PRE-AUTHORIZED operator instruction — the operator created
+// it on purpose — so it rides the manual bypass (e), but it never WEARS the
+// manual name: the tick row records nudge_source=wake_table so provenance
+// survives (a wake-driven admission must not be able to hide behind an
+// on-schedule "ok", and an operator's "who spawned this at 2am" must answer
+// with the wake, not a generic manual).
+//
+// ONE refusal: a blackout window. Operator time-of-day intent ("run it at
+// 2am") does not suspend the fleet's do-not-spawn windows — the wake stays
+// pending and the runner retries after the window. Everything else (cooldown,
+// failure backoff, load gate, gateway gate) behaves exactly like the
+// operator's own spawn button, because that is what it is.
+func (l *Loop) SpawnForWakeTable(project database.Project, wakeID string) (string, error) {
+	if dec, ok := l.effectiveCooldownGate(cooldownGateCall{Project: project.Name, Bypass: CooldownBypassNone}); ok && dec.SkipMode {
+		log.Printf("WAKE-TABLE: wake %s for %s deferred — inside a blackout window (wake stays pending)", wakeID, project.Name)
+		return "", ErrWakeBlackout
+	}
+	log.Printf("WAKE-TABLE: wake %s firing for %s — pre-authorized operator spawn (manual bypass (e), provenance wake_table)", wakeID, project.Name)
+	return l.spawnNowTargetedWithSource(project, "", NudgeSourceWakeTable)
+}
+
+func (l *Loop) spawnNowTargetedWithSource(project database.Project, agent, nudgeSource string) (string, error) {
 	l.mu.RLock()
 	simulate := l.simulate
 	noDeliver := l.noDeliver
@@ -1305,7 +1337,7 @@ func (l *Loop) SpawnNowTargeted(project database.Project, agent string) (string,
 	// load-gate / gateway deferral below returns before SpawnEnqueued, and
 	// nothing clears the stamp except a spawn, so a deferred manual spawn
 	// stamps nothing (an honest empty).
-	l.SetNudgeSource(NudgeSourceManual)
+	l.SetNudgeSource(nudgeSource)
 	l.slotPool.SpawnEnqueued(proj, tickID, l.clock().Now(), noDeliver, l.db)
 	// SCHED-GAP-1678: baseline the board for the manual spawn (same contract
 	// as the evaluation path — a spawned tick arms the gate).

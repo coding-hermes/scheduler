@@ -5916,3 +5916,21 @@ tasks:
     sweep.'
   status: in_progress
   created_at: '2026-11-07T23:14:35.877124+00:00'
+- id: SCHED-GAP-17002
+  title: 'WAKE TABLES: persisted future wake-ups (at|daily|external) programmable
+    via API, with a runner, admission provenance and docs'
+  criteria:
+  - 'AC from board row SCHED-GAP-17002: (1) wakes table (migration 88) with id/project/kind/at_time/daily_hhmm/payload/state/created_by/created_at/fired_at/fired_tick_id/note
+    + index on (state, at_time); (2) POST /api/v1/wakes, GET /api/v1/wakes[?state=],
+    DELETE /api/v1/wakes/{id} cancels (state=cancelled, never deleted), POST /api/v1/wakes/{id}/fire
+    fires external wakes only; (3) WakeTableRunner with clock seam polls pending wakes,
+    claims via conditional UPDATE pending->firing, emits wake_fired, daily re-arms
+    forward; (4) fired wake spawns through the operator/manual-bypass path with nudge
+    stamp wake_table and a log line naming the wake id; (5) busy lane records wake_skipped
+    instead of erroring; (6) a wake inside a blackout window is deferred (stays pending);
+    (7) tests cover due-fires-once, cancelled-never-fires, daily re-arm, external
+    fire, claim race, API round-trip; (8) docs/wake-tables.md with curl examples and
+    admission semantics. PASS: go build ./... && go vet ./... && go test -short -p
+    1 -count=1 ./... all exit 0 in the committed tree.'
+  status: in_progress
+  created_at: '2026-11-08T06:47:04.877271+00:00'

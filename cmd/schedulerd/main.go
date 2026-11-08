@@ -1856,6 +1856,25 @@ func main() {
 	boardWatcher.SetClock(clk)
 	boardWatcher.Start()
 
+	// SCHED-GAP-17002: wake tables. The runner fires persisted promises to
+	// run a lane at a set time (or on an external POST). A fired wake spawns
+	// through the operator path (manual bypass (e)) with wake_table
+	// provenance; a blackout window defers it. Same fail-open family as the
+	// board watcher: a DB error leaves wakes pending, cadence unaffected.
+	wakeRunner := scheduler.NewWakeTableRunner(db, loop.SpawnForWakeTable)
+	wakeRunner.SetClock(clk)
+	wakeRunner.Start()
+	defer wakeRunner.Stop()
+	// The API's /fire endpoint routes through the runner (nil-wired = 503).
+	apiServer.SetWakeFirer(func(ctx context.Context, id string) (any, bool, error) {
+		return wakeRunner.FireExternal(ctx, id)
+	})
+	// CTL-003: the MCP wake tools fire through the SAME runner — one copy of
+	// the truth, no second fire path.
+	mcpServer.SetWakeFirer(func(ctx context.Context, id string) (any, bool, error) {
+		return wakeRunner.FireExternal(ctx, id)
+	})
+
 	// Start DuckBrain sync in background.
 	go func() {
 		duckbrain.Run(context.Background())

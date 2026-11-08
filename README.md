@@ -262,7 +262,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
 │  /api/v1/  → REST API (docs/api.md)           │
-│  /mcp      → MCP server (76 tools)            │
+│  /mcp      → MCP server (81 tools)            │
 │                                               │
 │  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
@@ -303,7 +303,7 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 ## MCP Tools
 
-All 76 tools served by `POST /mcp` (`tools/list` is the live source — the
+All 81 tools served by `POST /mcp` (`tools/list` is the live source — the
 [docs parity test](internal/mcp/readme_tools_parity_test.go) fails when this
 table drifts from the registry). Verify the running daemon's surface (older
 deployed builds report fewer tools):
@@ -391,6 +391,11 @@ curl -s http://127.0.0.1:9090/mcp -H 'Content-Type: application/json' \
 | `hooks_reload` | Re-read the hooks file now (operator credential required). A rejected edit reports the error and leaves the PREVIOUS set armed |
 | `hooks_upsert` | Create or replace one hook step by id (operator credential required); writes through to the file and reloads. Validation refuses an unknown `{placeholder}` or a relative command before anything is written |
 | `hooks_delete` | Delete one hook step by id (operator credential required); an unknown id is a not-found error, never a silent success |
+| `wakes_list` | Wake tables (SCHED-GAP-17002): list persisted wake-ups — promises to run a lane at a future time or on an external event — newest-first; optional `state` filter (pending/firing/fired/cancelled/skipped). Rows are never deleted; the table is the audit |
+| `wakes_get` | One wake row: project, kind, when, payload, state, created_by/at, `fired_at` and the tick id it produced |
+| `wakes_create` | Schedule a wake — EXACTLY ONE clause: `at` (RFC3339 one-shot), `in_minutes`, `daily` (local HH:MM, re-arms daily) or `external` (fires via `wakes_fire`). Spawn rides the operator path with `wake_table` provenance; a blackout window defers it; a busy lane skips it (recorded) |
+| `wakes_cancel` | Cancel a PENDING wake (a state change — the record stays); 409-equivalent when already fired/cancelled |
+| `wakes_fire` | Fire an EXTERNAL wake now — the external-system entry ("deploy finished, run QA"); only pending external wakes fire |
 
 Every `fed_*` read answers about **this** scheduler: the response envelope's `peer` member names it. `fed_peer_status` (op `peer.status`) **requires** `args.peer` — the identity the read is about — and the other reads default to this scheduler while accepting `args.peer` only as an assertion of that same id. A peer naming a *different* scheduler is refused (SCHED-GAP-1741) instead of silently being answered from the local read; to read a remote peer use the CLI (`scheduler-query <peer> <op>`), the crier bus topic `fed.query.<peer>`, or `POST /api/v1/federation/query` on that peer.
 
@@ -1098,7 +1103,7 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 76 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, the `agents_*` execution-target registry (SCHED-GAP-1665), the `lane_*` lane-relationship map tools (SCHED-GAP-1700), and the S13 lane-hook tools (`hooks_list`/`hooks_plan` reads, `hooks_reload`/`hooks_upsert`/`hooks_delete` writes), and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 81 tools listed in [MCP Tools](#mcp-tools) — the 19 `fleet_*` tools (the read/control set plus the write tools for weight, priority, cooldown, decay, model/provider, budgets, prompt and enable/disable, plus `fleet_lane_tree` SCHED-GAP-1587) plus the groups/templates/deploy surface, `events_list`, the `gateway_errors` availability counts (SCHED-GAP-1654), the `namespaces_*` pool controls, the project lifecycle tools (`project_delete/spawn/bump/unbump`), the `tick_get`/`config_get`/`queue_get`/`metrics_get`/`features_get`/`features_prune_candidates`/`cooldown_residue` introspection reads, the `agents_*` execution-target registry (SCHED-GAP-1665), the `lane_*` lane-relationship map tools (SCHED-GAP-1700), and the S13 lane-hook tools (`hooks_list`/`hooks_plan` reads, `hooks_reload`/`hooks_upsert`/`hooks_delete` writes), the wake-table tools (`wakes_list`/`wakes_get`/`wakes_create`/`wakes_cancel`/`wakes_fire` — SCHED-GAP-17002), and the REMOTE-010 federation query tools (`fed_query` + one `fed_<op>` tool per read-catalogue op — `docs/federation-query-spec.md` §3):
 
 ```json
 // Example: List all projects via MCP
