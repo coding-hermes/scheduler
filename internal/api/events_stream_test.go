@@ -466,6 +466,41 @@ func TestCTL002_EventsStream_MethodNotAllowed(t *testing.T) {
 func TestCTL002_EventsStream_SlowClientDoesNotBlockWritersOrLoseEvents(t *testing.T) {
 	_, db, ts := newStreamTestServer(t)
 
+	// Measure the same database write burst in this process before any client
+	// subscribes; the stalled burst may take at most 4x this control plus 250ms.
+	// Fourfold slack accommodates scheduler/SQLite variance while still making
+	// a blocked publish (which cannot finish the burst) fail independently of
+	// an arbitrary host-specific one-second cutoff.
+	pad := strings.Repeat("x", 64*1024)
+	const burst = 512
+	writeBurst := func(writeDB *sql.DB, prefix string) (int64, error) {
+		lastID := int64(0)
+		for i := 1; i <= burst; i++ {
+			ev := database.Event{
+				Severity:  database.SeverityInfo,
+				Component: "ctltest",
+				Message:   fmt.Sprintf("%s-%d", prefix, i),
+				Details:   fmt.Sprintf(`{"pad":%q}`, pad),
+			}
+			if err := database.LogEvent(context.Background(), writeDB, &ev); err != nil {
+				return lastID, fmt.Errorf("LogEvent %d: %w", i, err)
+			}
+			lastID = ev.ID
+		}
+		return lastID, nil
+	}
+	controlDB, err := database.InitDB(filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatalf("control InitDB: %v", err)
+	}
+	defer controlDB.Close()
+	controlStart := time.Now()
+	if _, err := writeBurst(controlDB, "control"); err != nil {
+		t.Fatalf("control burst: %v", err)
+	}
+	controlDuration := time.Since(controlStart)
+	writeBudget := 4*controlDuration + 250*time.Millisecond
+
 	// Stalled client: connected, never reads its body.
 	stalled, stalledCancel := openStream(t, ts, "")
 	_ = stalled
@@ -476,30 +511,31 @@ func TestCTL002_EventsStream_SlowClientDoesNotBlockWritersOrLoseEvents(t *testin
 
 	waitForSubscribers(t, db, 2, 2*time.Second)
 
-	// Byte-heavy payloads so the stalled client's socket genuinely backs up
-	// and the handler has to stop writing to it.
-	pad := strings.Repeat("x", 16*1024)
-	const burst = 200
-	lastID := int64(0)
-	var maxLatency time.Duration
-	for i := 1; i <= burst; i++ {
-		ev := database.Event{
-			Severity:  database.SeverityInfo,
-			Component: "ctltest",
-			Message:   fmt.Sprintf("burst-%d", i),
-			Details:   fmt.Sprintf(`{"pad":%q}`, pad),
-		}
-		start := time.Now()
-		if err := database.LogEvent(context.Background(), db, &ev); err != nil {
-			t.Fatalf("burst LogEvent %d: %v", i, err)
-		}
-		if d := time.Since(start); d > maxLatency {
-			maxLatency = d
-		}
-		lastID = ev.ID
+	// Run asynchronously so the measured relative budget detects a genuinely
+	// blocking publish rather than hanging the test forever.
+	type burstResult struct {
+		lastID int64
+		err    error
 	}
-	if maxLatency > time.Second {
-		t.Errorf("slowest LogEvent with a stalled subscriber took %s, want < 1s", maxLatency)
+	result := make(chan burstResult, 1)
+	stalledStart := time.Now()
+	go func() {
+		lastID, err := writeBurst(db, "burst")
+		result <- burstResult{lastID: lastID, err: err}
+	}()
+	var lastID int64
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("stalled burst: %v", got.err)
+		}
+		lastID = got.lastID
+		if elapsed := time.Since(stalledStart); elapsed > writeBudget {
+			t.Errorf("stalled burst took %s; control %s, budget 4x control + 250ms = %s", elapsed, controlDuration, writeBudget)
+		}
+	case <-time.After(writeBudget):
+		stalledCancel()
+		t.Fatalf("stalled burst exceeded measured budget %s (4x control %s + 250ms)", writeBudget, controlDuration)
 	}
 
 	// The healthy client must converge on a gap-free sequence covering the
