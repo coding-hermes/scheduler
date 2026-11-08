@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -839,12 +840,21 @@ func readMarkdownBoardFreshness(rep *FreshnessReport, boardPath string) {
 // returned error is a scanner failure (truncated read); an unopenable
 // file is reported by the caller's os.Stat.
 func parseBoardRowsFreshness(path string) (objs []map[string]json.RawMessage, malformed int, err error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
+	return parseBoardRowsBytes(data)
+}
+
+// parseBoardRowsBytes is parseBoardRowsFreshness's parser over in-memory
+// board bytes — the exact same tolerant contract (one JSON object per
+// line, malformed lines counted and skipped, 1MB line cap), shared with
+// SCHED-GAP-16981's BOARD-STALE drift comparison so the pick-time
+// checker parses origin/main's board copy with the identical reader
+// instead of a second parser.
+func parseBoardRowsBytes(data []byte) (objs []map[string]json.RawMessage, malformed int, err error) {
+	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())

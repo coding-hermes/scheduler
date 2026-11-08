@@ -345,6 +345,17 @@ func (l *Loop) evaluate() {
 	l.observeEvalStage(EvalStagePick, stage)
 	stage = l.clock().Now()
 
+	// SCHED-GAP-16981: pick-time BOARD-STALE evidence. The selection is
+	// final (both packer paths above have run) and nothing has been
+	// spawned yet — the same moment the ADMIT pass below speaks for, so a
+	// BOARD-STALE line always belongs to the exact tick that picked the
+	// lane. Each packed BOARD-DRIVEN (tasks-mode) lane whose checkout's
+	// board bytes differ from origin/main gets ONE line naming workdir
+	// sha, origin sha and the ids whose status disagrees. Logging only:
+	// which board is picked from and every admission gate above are
+	// untouched — no veto, no canonical-board enforcement.
+	logBoardStaleAtPick(l.db, packed)
+
 	// SCHED-GAP-155: emit one grep-stable ADMIT line per candidate project
 	// for THIS pass — the selection is now final (both packer paths have
 	// run) and nothing has been spawned yet, so these lines are exactly the
