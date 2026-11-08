@@ -32,7 +32,9 @@ Checks
                      path rejects the same 5 — internal/api/retired_drivers.go)
   5. workdirs      — every enabled lane's workdir exists. The same project pass
                      also carries coverage (every coding-hermes primary needs
-                     its four satellite lanes) and family-floor — every enabled
+                     its four satellite lanes — a `<base>-foreman` primary
+                     resolves them against the stripped family base,
+                     SCHED-GAP-16996) and family-floor — every enabled
                      satellite sits on its family's CANONICAL cooldown_s (nine
                      suffixes; see SATELLITE_FAMILY_PINS, the matrix Bane
                      ratified 2026-09-29 in SCHED-GAP-1675). family-floor
@@ -41,6 +43,8 @@ Checks
                      REDUCE rules, so a legacy cooldown_floor_s is inert and is
                      REPORTED (INFO cooldown-legacy-floor) rather than failed.
   6. targets       — every satellite's target project exists and is enabled
+                     (a `<base>` target also resolves to a `<base>-foreman`
+                     primary row, SCHED-GAP-16996)
   7. store parity  — DB and fleet.toml agree on the operator's pins
   8. board vocab   — every JSONL board row carries a status from the writer
                      vocabulary. The board's writers are gated to
@@ -840,6 +844,25 @@ def sync_readme_declares_namespace(text: str, base: str) -> bool:
     return False
 
 
+def foreman_family_base(name: str) -> str:
+    """Strip a TRAILING ``-foreman`` stem from a coding-hermes primary name.
+
+    The fleet's foreman families name their PRIMARY lane ``<base>-foreman``
+    (gitreins-foreman, task-router-foreman, coding-hermes-scheduler-foreman,
+    …) while the family's satellites stay named ``<base>-<suffix>``.
+    Resolving satellites or targets against the raw lane name hunts for
+    ``<base>-foreman-qa`` children and a ``<base>`` row that do not exist
+    (SCHED-GAP-16996: 49 live coverage/targets violations were exactly these
+    misses), so both resolutions go through this strip first.
+
+    Only a trailing stem is stripped: ``h3-sdk-go-foreman`` (a primary) →
+    ``h3-sdk-go``, but ``h3-sdk-go-foreman-sync`` (a satellite whose base
+    merely CONTAINS ``foreman``) is untouched — the same multi-token
+    discipline ``sync_readme_declares_namespace`` documents for lane bases.
+    """
+    return name[:-len("-foreman")] if name.endswith("-foreman") else name
+
+
 def parse_toml_blocks(text: str, header: str) -> dict[str, str]:
     """Split a flat TOML file into {id/name: block text} for ``[[header]]``."""
     out, cur, key = {}, None, None
@@ -1175,6 +1198,16 @@ def main(argv: list[str] | None = None) -> int:
     # legitimately have no satellite set of their own (e.g. qa-audit, the
     # scheduler self-tick, the supervisor) are reported as INFO — they are
     # children, not primaries, of the foreman family.
+    # SCHED-GAP-16996: foreman families name the PRIMARY `<base>-foreman`
+    # while the satellites stay `<base>-<suffix>`, so the children are
+    # resolved — and named — against the stripped family base, not the raw
+    # lane name (foreman_family_base). A PARKED family — primary enabled but
+    # every satellite present and disabled (warpfs-foreman,
+    # hermes-dagger-foreman, 2026-11-08) — is an operator decision, not a
+    # naming defect: one INFO keeps the parked state visible instead of four
+    # "missing or disabled" lines for lanes that exist. The exemption is
+    # narrow: any satellite ABSENT (or any mix of absent + disabled) still
+    # violates, per suffix.
     for name, p in projects.items():
         if not p.get("enabled"):
             continue
@@ -1183,12 +1216,26 @@ def main(argv: list[str] | None = None) -> int:
         ns = p.get("namespace_id") or ""
         if ns != CODING_HERMES_PRIMARY_NS:
             continue
+        family = foreman_family_base(name)
+        absent: list[str] = []    # suffixes with no project row at all
+        disabled: list[str] = []  # suffixes whose row exists but is disabled
         for suffix in ("qa", "pm", "sync", "dogfood"):
-            child = projects.get(f"{name}-{suffix}")
-            if not child or not child.get("enabled"):
-                bad("coverage", f"{name}-{suffix}",
-                    f"missing or disabled — every coding-hermes primary needs an enabled {suffix} lane "
-                    f"(primary {name!r} lives in the {ns!r} namespace)")
+            child = projects.get(f"{family}-{suffix}")
+            if child is None:
+                absent.append(suffix)
+            elif not child.get("enabled"):
+                disabled.append(suffix)
+        if not absent and len(disabled) == 4:
+            info.append({"class": "coverage", "subject": name,
+                         "detail": ("family parked — primary enabled but all four "
+                                    "satellites (qa, pm, sync, dogfood) exist and are "
+                                    "disabled; reported as INFO, not a coverage violation "
+                                    "(SCHED-GAP-16996)")})
+            continue
+        for suffix in absent + disabled:
+            bad("coverage", f"{family}-{suffix}",
+                f"missing or disabled — every coding-hermes primary needs an enabled {suffix} lane "
+                f"(primary {name!r} lives in the {ns!r} namespace)")
 
     # 5e. family-floor --------------------------------------------------------
     # Every enabled satellite sits on its family's CANONICAL cadence — the
@@ -1267,6 +1314,12 @@ def main(argv: list[str] | None = None) -> int:
             continue
         base = m.group(1)
         t = projects.get(base)
+        if t is None:
+            # SCHED-GAP-16996: foreman families name the PRIMARY
+            # `<base>-foreman` while the satellite's logical target is the
+            # bare base — resolve through that row before declaring the
+            # target missing (the inverse of foreman_family_base).
+            t = projects.get(f"{base}-foreman")
         if t is not None and not t.get("enabled"):
             bad("targets", name, f"target {base!r} is DISABLED — the lane would burn a clean-machine battery on nothing")
             continue
