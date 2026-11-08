@@ -204,6 +204,11 @@ func TestSCHEDGAP091_OrphansToResumeSelection(t *testing.T) {
 }
 
 func TestSCHEDGAP091_DrainTimeoutStampsOrphan(t *testing.T) {
+	// Pin the legacy (non-approved) stamp: this box's worker shells carry an
+	// ambient SCHEDULER_OPERATOR_RESTART_APPROVED=1, which would re-stamp the
+	// abort as operator_restart and make the test launcher-dependent.
+	t.Setenv(EnvOperatorRestartApproved, "0")
+
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "drain-proj")
 	insertRunningTick(t, db, "drain-tick", "drain-proj", 0)
