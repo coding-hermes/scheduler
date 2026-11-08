@@ -1,0 +1,14 @@
+{
+  "tick": "coding-hermes-scheduler-foreman-2026-11-08-00-06-02",
+  "block": "RELEASE-052",
+  "selection": "RESUME FIRST / top DRIVE block; one pending ready row",
+  "wave_budget": 5,
+  "slots": 5,
+  "eligible_independent": 0,
+  "workers": [],
+  "path": "foreman-direct",
+  "reason": "The sole row is an external GitHub repository-security measurement and owner/platform disposition task, not an implementation task; worker waves are reserved for implementation rows.",
+  "row": "RELEASE-052",
+  "status": "pending",
+  "next_owner_action": "GitHub/org owner must identify or purchase the feature entitlement, or confirm the documented platform limitation, before closure."
+}
