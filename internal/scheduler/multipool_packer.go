@@ -559,6 +559,11 @@ func (m *MultiPoolPacker) packFlat(
 			// SCHED-GAP-111: thread the namespace id (may be nil for
 			// unassigned projects) for effectiveTickTimeout.
 			NamespaceID: nsIDOf(s.proj),
+			// SCHED-GAP (2026-11-09): the packer path must carry the lane's
+			// routing policy like the manual spawn path does — without it a
+			// packer-driven tick silently downgrades a routing_mode=fixed
+			// lane to router mode and the project's model pin is ignored.
+			RoutingMode: s.proj.RoutingMode,
 		})
 		used += s.proj.Weight
 		budgetRemaining -= s.proj.Weight
