@@ -51,7 +51,7 @@ range cited under its heading. The rollover itself is done by
 - policy-guard: the inner `--verify` summary is suppressed on every forwarding path. The guard's own ONE VERDICT LAW header says that line is never forwarded, but two paths still echoed the whole `VERIFY_OUT` verbatim — the verifier-contradiction branch (a DEPLOY HASH MISMATCH the sidecar does not show) and the direct deploy-hash-mismatch branch — so a reader saw both the guard's verdict and the inner summary's differently derived, miscounted one. A single `emit_verify_out` helper now drops exactly that line and forwards everything else (MISMATCH evidence, tracebacks, informational lines) on all three paths including the fail-closed case; falsifier arms for CONTRADICTION and DIRECT-HASH-MISMATCH were added to `tests/test_policy_script_deploy_hash_guard.sh` (11/11 arms) — `ed05e7c7`.
 
 ### Not in this release
-- Board/harness bookkeeping commits (`board:`, `qa:`, `pm:`, `dogfood:`, `chore(releng):`, `chore(gitreins):`, `foreman tick`) since `v1.15.2` are part of the tagged tree — 63 non-merge commits in the range, 27 of them board traffic — but are not itemised in these notes.
+- Board/harness bookkeeping commits (`board:`, `qa:`, `pm:`, `dogfood:`, `chore(releng):`, `chore(gitreins):`, `foreman tick`) since `v1.15.2` are part of the tagged tree — 64 non-merge commits in the tagged range (70 with merges), 42 of them bookkeeping — but are not itemised in these notes. (Corrected after the tag: this line first read 63 and 27; `v1.16.0`'s tree keeps that original wording.)
 
 ## [1.15.2] — 2026-11-07
 
