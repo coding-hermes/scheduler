@@ -492,6 +492,11 @@ func (l *Loop) packedProjectFrom(p database.Project) (PackedProject, error) {
 		// SCHED-GAP-111: thread the namespace id so resume spawns also
 		// resolve the wave deadline (S12 §4.3 applies to every spawn).
 		NamespaceID: nsIDOf(p),
+		// SCHED-GAP (2026-11-09): the recovery path must carry the lane's
+		// routing policy like the manual spawn path does — without it a
+		// wave-recovery tick silently downgrades a routing_mode=fixed lane
+		// to router mode and the project's model pin is ignored.
+		RoutingMode: p.RoutingMode,
 	}, nil
 }
 
