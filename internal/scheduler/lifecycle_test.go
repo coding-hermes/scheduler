@@ -2,6 +2,7 @@ package scheduler_test
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -324,5 +325,90 @@ func TestLifecycle_CompleteWithEmptyError(t *testing.T) {
 	}
 	if !reason.Valid || reason.String != "result_missing" {
 		t.Errorf("error = %+v, want result_missing", reason)
+	}
+}
+
+// DRYRUN-LEDGER: a completed tick classified dry_run emits a lifecycle event
+// carrying the tick id, project and token spend — the feed the unblock agent
+// targets. A productive (committed) tick emits NO such event.
+func TestLifecycle_DryRunEmitsLedgerEvent(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProject(t, db, "alpha")
+	lt := scheduler.NewLifecycleTracker(db)
+
+	dryTick := "alpha-2026-01-01-00-00-01"
+	if err := lt.Enqueue("alpha", dryTick); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := lt.StartRunning(dryTick); err != nil {
+		t.Fatalf("StartRunning: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := lt.Complete(scheduler.TickOutcome{
+		TickID:   dryTick,
+		Project:  "alpha",
+		Started:  now.Add(-time.Minute),
+		Finished: now,
+		Status:   scheduler.TickCompleted,
+		ExitCode: 0,
+		TokensIn: 3_500_000,
+		Duration: time.Minute,
+		Error:    "no_changes",
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE component='lifecycle' AND message LIKE 'dry_run: tick ' || ? || ' %'`,
+		dryTick).Scan(&n); err != nil {
+		t.Fatalf("count dry_run events: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("dry_run close emitted %d lifecycle events, want exactly 1", n)
+	}
+
+	var msg string
+	if err := db.QueryRow(
+		`SELECT message FROM events WHERE component='lifecycle' AND message LIKE 'dry_run: tick ' || ? || ' %'`,
+		dryTick).Scan(&msg); err != nil {
+		t.Fatalf("read dry_run event: %v", err)
+	}
+	if !strings.Contains(msg, "tokens_in=3500000") {
+		t.Errorf("dry_run event message %q does not carry tokens_in", msg)
+	}
+	// Complete stamps the classified no-artifact reason (result_missing when
+	// no session row was observed) BEFORE the ledger event fires — the event
+	// must carry the FINAL verdict, not the caller's raw error.
+	if !strings.Contains(msg, "error=") {
+		t.Errorf("dry_run event message %q does not carry a classified reason", msg)
+	}
+
+	// A productive tick (commit > 0) must NOT emit the dry_run event.
+	goodTick := "alpha-2026-01-01-00-00-02"
+	if err := lt.Enqueue("alpha", goodTick); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := lt.StartRunning(goodTick); err != nil {
+		t.Fatalf("StartRunning: %v", err)
+	}
+	if err := lt.Complete(scheduler.TickOutcome{
+		TickID:   goodTick,
+		Project:  "alpha",
+		Started:  now.Add(-time.Minute),
+		Finished: now.Add(time.Second),
+		Status:   scheduler.TickCompleted,
+		ExitCode: 0,
+		Commits:  3,
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE component='lifecycle' AND message LIKE 'dry_run: tick ' || ? || ' %'`,
+		goodTick).Scan(&n); err != nil {
+		t.Fatalf("count events for committed tick: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("committed tick emitted %d dry_run events, want 0", n)
 	}
 }

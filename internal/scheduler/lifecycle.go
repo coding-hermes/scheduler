@@ -460,6 +460,27 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
 	}
 
+	// DRYRUN-LEDGER (Bane, 2026-11-09): a dry_run that just spent money gets an
+	// EVENT, not only a quiet tick row. The unblock agent's 48h scan keyed on
+	// the ticks table alone, so a healthy-but-wasteful lane (verification ticks
+	// against an in-flight worker, 2-4M tokens each, dozens per day) never
+	// surfaced as a targetable finding — crier burned ~260M tokens in ~30h as
+	// 114 "healthy" dry ticks. This event is the hook-lane feed the unblock
+	// agent targets exactly: one row per dry close, carrying what the scan
+	// would otherwise have to re-derive. BEST-EFFORT by construction, same as
+	// the stand-down event above: a failed insert costs a log line, never the
+	// completion.
+	if terminalOutcome(outcome) == "dry_run" {
+		_ = database.LogEvent(context.Background(), lt.db, &database.Event{
+			Severity:  database.SeverityLow,
+			Component: "lifecycle",
+			Message: fmt.Sprintf("dry_run: tick %s (%s) spent tokens_in=%d error=%q",
+				outcome.TickID, outcome.Project, outcome.TokensIn, outcome.Error),
+			Details: fmt.Sprintf(`{"tick_id":%q,"project":%q,"tokens_in":%d,"tokens_out":%d,"error":%q,"duration_s":%.1f}`,
+				outcome.TickID, outcome.Project, outcome.TokensIn, outcome.TokensOut, outcome.Error, outcome.Duration.Seconds()),
+		})
+	}
+
 	// REMOTE-004 (§3 visibility flow): the tick just reached a TERMINAL
 	// state — publish the transition to the federation bus. The event's
 	// status is the row's lifecycle verdict (completed / failed / deferred

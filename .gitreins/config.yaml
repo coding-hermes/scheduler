@@ -5,10 +5,11 @@ guards:
   tests: false
   test_mode: full
   # The full suite is the whole module (the scheduler package alone runs ~115s at
-  # idle). 180s was below that under fleet load — with judge jobs running, the
-  # suite exceeds it and the hook blocks EVERY commit, code or not. 900s covers
-  # the suite at load ~46 with room to spare.
-  test_timeout: 900
+  # idle). 180s was below that under fleet load, and 900s itself was measured
+  # exceeded at load ~35 (2026-11-09: module battery 634s wall clean at load 28,
+  # but two guard runs hit the 900s cap at load 30-36 while the fleet ran worker
+  # batteries). 1800s = ~3x the measured wall at current fleet load.
+  test_timeout: 1800
   go:
     build: true
     lint: true
