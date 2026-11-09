@@ -6038,3 +6038,11 @@ tasks:
   status: complete
   created_at: '2026-11-08T10:54:14.176798+00:00'
   completed_at: '2026-11-08T10:54:28.119238+00:00'
+- id: SCHED-FAILCNT-001
+  title: Fix harness transport consecutive failure accounting
+  criteria:
+  - 'FAILIF: a gateway_transport/429 failure changes consecutive_failures or a successful
+    tick fails to reset it; PROOF: unit and integration tests plus repair script dry-run
+    output'
+  status: in_progress
+  created_at: '2026-11-09T07:47:56.141003+00:00'
