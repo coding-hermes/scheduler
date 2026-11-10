@@ -19,6 +19,14 @@
 #     3. the entry's mtime is older than MIN_AGE_H (default 6h).
 #   The lock file is never removed. When in doubt: skip, log, exit 0.
 #
+# Live-run detection is by producer PID + open fd + mtime age, NOT by taking the
+# flock on $STAGE_ROOT/.backup.lock. backup-tiered-v3.sh:76-77 does
+# `exec 9>lock; flock -n 9 || { log "SKIP: previous backup run still active"; exit 0; }`
+# — so a reaper that grabbed that lock for even a millisecond could make the next
+# real backup run SKIP its whole cycle. A missed backup is worse than debris that
+# the producer's own start-of-run wipe (backup-tiered-v3.sh:83) reclaims anyway;
+# this reaper only covers the window between a SIGKILL and the next run.
+#
 # Usage: staging-reaper.sh [--dry-run]
 # Exit: 0 = success (reaped, or deliberately skipped); 1 = stage root unusable.
 set -uo pipefail
