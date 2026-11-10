@@ -6071,3 +6071,17 @@ tasks:
   status: complete
   created_at: '2026-11-10T11:50:13.798309+00:00'
   completed_at: '2026-11-10T13:14:16.425615+00:00'
+- id: SCHED-429-001
+  title: Defer gateway HTTP 429 self-saturation instead of failing
+  criteria:
+  - 'AC1: HTTP 429 gateway self-saturation is classified as a deferral with bounded
+    Retry-After-aware backoff and does not increment consecutive_failures. FAILIF:
+    a 429 fixture returns a failed/drop outcome or increments consecutive_failures.
+    PROOF: focused scheduler tests show deferred/gateway_rate_limited and counter
+    unchanged. AC2: 503 behavior remains unchanged, 500 remains failure, and 401 remains
+    terminal. FAILIF: any regression in those controls. PROOF: focused tests for all
+    controls pass. AC3: the gateway availability event exposes the rate-limited class
+    and status exposes the production concurrency gate. FAILIF: 429 is invisible or
+    the status field is absent. PROOF: event/status tests and exact field readback.'
+  status: in_progress
+  created_at: '2026-11-10T20:45:48.392602+00:00'
