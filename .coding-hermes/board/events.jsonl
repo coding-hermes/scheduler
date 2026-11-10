@@ -1762,3 +1762,5 @@
 {"id": 1794267359952719794, "timestamp": "2026-11-10T15:04:03.727696Z", "event_type": "task_created", "task_id": "README-27", "actor": "foreman", "detail": "{\"id\":\"README-27\",\"status\":\"pending\"}"}
 {"id": 1794267359952719795, "timestamp": "2026-11-10T15:04:03.805151Z", "event_type": "task_created", "task_id": "README-28", "actor": "foreman", "detail": "{\"id\":\"README-28\",\"status\":\"pending\"}"}
 {"id": 1794267359952719796, "timestamp": "2026-11-10T15:04:03.881748Z", "event_type": "task_created", "task_id": "README-29", "actor": "foreman", "detail": "{\"id\":\"README-29\",\"status\":\"pending\"}"}
+{"id": 1794267359952719797, "timestamp": "2026-11-10T15:35:17.028461Z", "event_type": "task_updated", "task_id": "README-11", "actor": "foreman", "detail": "{\"title\":\"P4 — README release-freshness claim is stale: v1.16.0 was cut 2026-11-09 and README.md is byte-identical to the tag (supersedes 'no release since v1.12.0')\"}"}
+{"id": 1794267359952719798, "timestamp": "2026-11-10T15:35:17.109641Z", "event_type": "task_created", "task_id": "README-30", "actor": "foreman", "detail": "{\"id\":\"README-30\",\"status\":\"pending\"}"}
