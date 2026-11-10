@@ -2028,14 +2028,15 @@ func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
 // Admission reason vocabulary (SCHED-GAP-155). These are literal, grep-stable
 // strings shared with the admission_counters keys on /api/v1/status.
 const (
-	AdmissionReasonOK            = "ok"
-	AdmissionReasonCap           = "cap"
-	AdmissionReasonLoadGate      = "load_gate"
-	AdmissionReasonCooldown      = "cooldown"
-	AdmissionReasonTasksNoWork   = "tasks_no_work"
-	AdmissionReasonBoardUnowned  = "board_unowned"
-	AdmissionReasonBudget        = "budget"
-	AdmissionReasonTasksDeferred = "tasks_deferred"
+	AdmissionReasonOK                = "ok"
+	AdmissionReasonCap               = "cap"
+	AdmissionReasonLoadGate          = "load_gate"
+	AdmissionReasonCooldown          = "cooldown"
+	AdmissionReasonTasksNoWork       = "tasks_no_work"
+	AdmissionReasonTasksNoActionable = "tasks_no_actionable"
+	AdmissionReasonBoardUnowned      = "board_unowned"
+	AdmissionReasonBudget            = "budget"
+	AdmissionReasonTasksDeferred     = "tasks_deferred"
 	// SCHED-GAP-1655: a COOLDOWN-mode BUILDER lane whose board holds no
 	// dispatchable row (no pending/in_progress row unblocked by depends_on
 	// — the boardOpenRows open vocabulary) was deferred BEFORE its pin was
@@ -2065,6 +2066,7 @@ var admissionReasonVocabulary = []string{
 	AdmissionReasonLoadGate,
 	AdmissionReasonCooldown,
 	AdmissionReasonTasksNoWork,
+	AdmissionReasonTasksNoActionable,
 	AdmissionReasonBoardUnowned,
 	AdmissionReasonBudget,
 	AdmissionReasonTasksDeferred,

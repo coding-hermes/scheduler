@@ -252,6 +252,13 @@ func tasksBuilderAdmissionBlocked(projectName, workdir, admissionMode, boardOwne
 	if !boardOwnedByLane(workdir, boardOwnership) {
 		return false // foreign/unowned board: time-based lane (SCHED-GAP-141)
 	}
+	if counts, ok := tasksAdmissionPreflight(workdir); ok {
+		if counts.Actionable > 0 {
+			return false
+		}
+		noteTasksCheapSkip(projectName, workdir, counts)
+		return true
+	}
 	return !builderBoardHasWork(workdir)
 }
 
