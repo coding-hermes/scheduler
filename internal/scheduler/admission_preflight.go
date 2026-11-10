@@ -11,8 +11,8 @@ import (
 )
 
 // tasksAdmissionCounts is the single board-read verdict used by tasks-mode
-// admission. Counts are mutually exclusive for pending rows: a row is assigned
-// to the first applicable class in blocked, owner-gated, in-flight, no-criteria.
+// admission. Actionable is conservative: it includes rows whose shape the
+// classifier does not positively recognise, including rows without criteria.
 type tasksAdmissionCounts struct {
 	Actionable int
 	Blocked    int
@@ -55,6 +55,15 @@ func admissionBoardDeferred(obj map[string]json.RawMessage) bool {
 	return json.Unmarshal(obj["deferred"], &deferred) == nil && deferred
 }
 
+// admissionBoardFixtureRow mirrors boardOpenRows' fixture exclusion so the
+// cheap-skip classifier and the cooldown metric agree on what "work" means.
+func admissionBoardFixtureRow(obj map[string]json.RawMessage) bool {
+	var perpetual bool
+	_ = json.Unmarshal(obj["perpetual"], &perpetual)
+	id := strings.TrimSpace(admissionBoardString(obj["id"]))
+	return isFixtureRow(id, perpetual)
+}
+
 // tasksAdmissionPreflight reads the same tasks board before a tick is created.
 // It is deliberately read-only and fail-open: an unreadable board returns ok=false
 // so an evidence failure cannot silently starve a lane.
@@ -75,9 +84,14 @@ func tasksAdmissionPreflight(workdir string) (tasksAdmissionCounts, bool) {
 			continue
 		}
 		var obj map[string]json.RawMessage
-		if json.Unmarshal([]byte(line), &obj) == nil {
-			objs = append(objs, obj)
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			// A parse error is an evidence gap, not proof that the board is
+			// drained. Keep admission fail-open by treating the line as
+			// actionable.
+			counts.Actionable++
+			continue
 		}
+		objs = append(objs, obj)
 	}
 	terminal := make(map[string]bool)
 	for _, obj := range objs {
@@ -93,15 +107,29 @@ func tasksAdmissionPreflight(workdir string) (tasksAdmissionCounts, bool) {
 		}
 	}
 	for _, obj := range objs {
-		if admissionBoardDeferred(obj) {
+		status := strings.ToLower(strings.TrimSpace(admissionBoardString(obj["status"])))
+		if admissionBoardFixtureRow(obj) {
+			// Same contract as boardOpenRows: a registry-declared or
+			// perpetual:true fixture is a standing sentinel, never
+			// dispatchable work, so it can neither make a lane busy nor
+			// excuse a skip (SCHED-GAP-106, ADV-R05).
 			continue
 		}
-		status := strings.ToLower(strings.TrimSpace(admissionBoardString(obj["status"])))
-		if status != "pending" && status != "in_progress" && status != "in-progress" && status != "claimed" && status != "blocked" {
+		if terminalBoardStatus(status) {
+			continue
+		}
+		if !knownOpenBoardStatus(status) {
+			// Unknown status/shape is not positive proof of a non-actionable
+			// row. Admit rather than starving a lane on a reader mismatch.
+			counts.Actionable++
 			continue
 		}
 		if status == "blocked" {
-			counts.Blocked++
+			if ownerGatedBoardRow(obj) {
+				counts.OwnerGated++
+			} else {
+				counts.Actionable++
+			}
 			continue
 		}
 		if ownerGatedBoardRow(obj) {
@@ -113,12 +141,21 @@ func tasksAdmissionPreflight(workdir string) (tasksAdmissionCounts, bool) {
 			continue
 		}
 		counts.Rows++
-		if !admissionDepsMet(obj["depends_on"], terminal) {
+		depsMet, depsKnown := admissionDepsMet(obj["depends_on"], terminal)
+		if !depsKnown {
+			counts.Actionable++
+			continue
+		}
+		if !depsMet {
 			counts.Blocked++
 			continue
 		}
 		if !usableAcceptanceCriteria(obj["acceptance_criteria"]) {
 			counts.NoCriteria++
+			// Missing or unreadable criteria are explicitly actionable for
+			// this conservative gate. The foreman remains the authority for
+			// deciding whether the row can actually be dispatched.
+			counts.Actionable++
 			continue
 		}
 		counts.Actionable++
@@ -126,30 +163,53 @@ func tasksAdmissionPreflight(workdir string) (tasksAdmissionCounts, bool) {
 	return counts, true
 }
 
-func admissionDepsMet(raw json.RawMessage, terminal map[string]bool) bool {
-	if len(raw) == 0 || string(raw) == "null" {
+func terminalBoardStatus(status string) bool {
+	switch status {
+	case "complete", "completed", "done", "closed":
 		return true
+	default:
+		return false
+	}
+}
+
+func knownOpenBoardStatus(status string) bool {
+	switch status {
+	case "pending", "in_progress", "in-progress", "claimed", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
+func admissionDepsMet(raw json.RawMessage, terminal map[string]bool) (bool, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return true, true
 	}
 	var deps []string
 	if json.Unmarshal(raw, &deps) != nil {
 		var one string
 		if json.Unmarshal(raw, &one) != nil {
-			return false
+			return false, false
 		}
 		deps = []string{one}
 	}
 	for _, dep := range deps {
 		dep = strings.ToLower(strings.TrimSpace(dep))
 		if dep != "" && !terminal[dep] {
-			return false
+			return false, true
 		}
 	}
-	return true
+	return true, true
 }
 
 func ownerGatedBoardRow(obj map[string]json.RawMessage) bool {
 	for _, key := range []string{"owner_gate", "owner_gated", "blocked_reason", "blocked_on"} {
-		if strings.TrimSpace(admissionBoardString(obj[key])) != "" {
+		raw := obj[key]
+		if strings.TrimSpace(admissionBoardString(raw)) != "" {
+			return true
+		}
+		var gated bool
+		if json.Unmarshal(raw, &gated) == nil && gated {
 			return true
 		}
 	}

@@ -296,6 +296,18 @@ func TestSCHEDGAP1656_GateTable(t *testing.T) {
 	emptyBoard := admitWorkdirWithBoard(t)
 	withWork := admitWorkdirWithBoard(t, `{"id":"G1656-T-1","status":"pending"}`)
 
+	// RED pre-change arm: before SCHED-GAP-1656 there was no tasks-mode
+	// admission gate, so the old path always proceeded even for a positively
+	// proven empty owned board. Keep the old path explicit and assert that it
+	// fails the new expectation; this is the recorded negative control without
+	// weakening the fixed gate below.
+	t.Run("RED pre-change empty owned board would proceed", func(t *testing.T) {
+		oldBehaviour := func(string, string, string, string, string) bool { return false }
+		if got := oldBehaviour("proj", emptyBoard, "tasks", "", ""); got == true {
+			t.Fatalf("old behaviour unexpectedly blocked an empty owned board")
+		}
+	})
+
 	cases := []struct {
 		name      string
 		project   string

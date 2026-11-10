@@ -249,6 +249,13 @@ func tasksBuilderAdmissionBlocked(projectName, workdir, admissionMode, boardOwne
 	if !laneIsBuilder(projectName, reporterConfig) {
 		return false // reporter lane: timer cadence BY DESIGN, untouched
 	}
+	if strings.TrimSpace(boardOwnership) == "" {
+		// Auto ownership cannot be established without a readable board path.
+		// Missing ownership evidence must fall through to today's admission.
+		if _, ok := admissionBoardFile(workdir); !ok {
+			return false
+		}
+	}
 	if !boardOwnedByLane(workdir, boardOwnership) {
 		return false // foreign/unowned board: time-based lane (SCHED-GAP-141)
 	}
@@ -259,7 +266,10 @@ func tasksBuilderAdmissionBlocked(projectName, workdir, admissionMode, boardOwne
 		noteTasksCheapSkip(projectName, workdir, counts)
 		return true
 	}
-	return !builderBoardHasWork(workdir)
+	// The conservative preflight is the only authority for this new skip.
+	// Missing/unreadable/unsupported board evidence must fall through to the
+	// existing admission path, never to a second parser that could skip it.
+	return false
 }
 
 // noWorkTickLine is the grep-stable completion line for a tick recorded

@@ -42,9 +42,15 @@ func TestSCHEDGAP17007TasksAdmissionPreflight(t *testing.T) {
 		actionable bool
 	}{
 		{"actionable", []string{`{"id":"A","status":"pending","acceptance_criteria":["run tests"]}`}, true},
-		{"blocked", []string{`{"id":"A","status":"pending","depends_on":["B"],"acceptance_criteria":["run tests"]}`, `{"id":"B","status":"pending"}`}, false},
-		{"no-criteria", []string{`{"id":"A","status":"pending"}`}, false},
+		{"blocked", []string{`{"id":"A","status":"pending","depends_on":["B"],"acceptance_criteria":["run tests"]}`, `{"id":"B","status":"in_progress","acceptance_criteria":["run tests"]}`}, false},
+		// Missing criteria is deliberately actionable: this gate may skip only
+		// rows it positively recognises as blocked, owner-gated, or in-flight.
+		{"no-criteria", []string{`{"id":"A","status":"pending"}`}, true},
 		{"owner-gated", []string{`{"id":"A","status":"blocked","blocked_reason":"owner"}`}, false},
+		// A perpetual fixture is a standing sentinel, not work: it must not
+		// make the lane look busy even though it carries no criteria either.
+		{"perpetual-fixture", []string{`{"id":"NEVER-DONE","status":"pending","perpetual":true}`}, false},
+		{"perpetual-with-criteria", []string{`{"id":"A","status":"pending","perpetual":true,"acceptance_criteria":["run tests"]}`}, false},
 		{"in-flight", []string{`{"id":"A","status":"pending","worker_status":"claimed","acceptance_criteria":["run tests"]}`}, false},
 	}
 	for _, tc := range cases {
@@ -62,7 +68,7 @@ func TestSCHEDGAP17007TasksAdmissionPreflight(t *testing.T) {
 }
 
 func TestSCHEDGAP17007CheapSkipCounterAndLog(t *testing.T) {
-	wd := admitWorkdirWithBoard(t, `{"id":"A","status":"pending"}`)
+	wd := admitWorkdirWithBoard(t, `{"id":"A","status":"blocked","blocked_reason":"owner"}`)
 	var buf bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&buf)
