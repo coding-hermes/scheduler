@@ -90,7 +90,7 @@ func TestServeDashboardTLSAndCleartext(t *testing.T) {
 		addr := freeLoopbackAddr(t)
 		srv := &http.Server{Addr: addr, Handler: handler}
 		errCh := make(chan error, 1)
-		go func() { errCh <- serveDashboard(srv, certFile, keyFile) }()
+		go func() { errCh <- serveDashboard(srv, mustListen(t, addr), certFile, keyFile) }()
 		t.Cleanup(func() { _ = srv.Close() })
 
 		pool := x509.NewCertPool()
@@ -117,7 +117,7 @@ func TestServeDashboardTLSAndCleartext(t *testing.T) {
 		addr := freeLoopbackAddr(t)
 		srv := &http.Server{Addr: addr, Handler: handler}
 		errCh := make(chan error, 1)
-		go func() { errCh <- serveDashboard(srv, "", "") }()
+		go func() { errCh <- serveDashboard(srv, mustListen(t, addr), "", "") }()
 		t.Cleanup(func() { _ = srv.Close() })
 
 		client := &http.Client{Timeout: 5 * time.Second}
@@ -141,7 +141,7 @@ func TestServeDashboardTLSAndCleartext(t *testing.T) {
 		// hang under `go test -timeout` would be a failure too, but an explicit
 		// 3s bound names the defect instead of looking like a stuck suite.
 		errCh := make(chan error, 1)
-		go func() { errCh <- serveDashboard(srv, certFile, "") }()
+		go func() { errCh <- serveDashboard(srv, mustListen(t, addr), certFile, "") }()
 		select {
 		case err := <-errCh:
 			if err == nil {
@@ -205,6 +205,19 @@ func writeTestCert(t *testing.T) (certFile, keyFile string, cert *x509.Certifica
 		t.Fatalf("write key: %v", err)
 	}
 	return certFile, keyFile, parsed
+}
+
+// mustListen binds addr for a serveDashboard test and fails the test if the
+// socket cannot be opened. QA-CHS-194: the listener is created by the caller
+// synchronously, exactly as main() does, so "no announcement before a bound
+// listener" is the tested contract rather than a property of the internals.
+func mustListen(t *testing.T, addr string) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	return ln
 }
 
 // freeLoopbackAddr reserves an ephemeral loopback port and releases it.

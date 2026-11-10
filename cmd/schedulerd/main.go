@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // registers handlers on DefaultServeMux
 	"os"
@@ -73,14 +74,18 @@ func tlsPairValid(certFile, keyFile string) error {
 // the cleartext listener — this function changes the transport, never the
 // authorization. With an empty pair it serves the historical plain HTTP
 // listener, so existing deployments are untouched.
-func serveDashboard(srv *http.Server, certFile, keyFile string) error {
+func serveDashboard(srv *http.Server, ln net.Listener, certFile, keyFile string) error {
 	if certFile == "" && keyFile == "" {
-		return srv.ListenAndServe()
+		return srv.Serve(ln)
 	}
 	if err := tlsPairValid(certFile, keyFile); err != nil {
 		return err
 	}
-	return srv.ListenAndServeTLS(certFile, keyFile)
+	// ServeTLS over an already-bound listener: the TLS config, certificate
+	// load and h2 ALPN advertisement are identical to ListenAndServeTLS, but
+	// the socket is opened by the caller first so a bind failure can never be
+	// mistaken for a successful start (QA-CHS-194).
+	return srv.ServeTLS(ln, certFile, keyFile)
 }
 
 func main() {
@@ -1817,6 +1822,20 @@ func main() {
 		// the 79.7s cold GET / left NO record in the log at all.
 		Handler: slowRequests(pprofMux),
 	}
+	// QA-CHS-194: the listener is created SYNCHRONOUSLY, before a single
+	// announcement line. A restart onto an occupied port used to log
+	// "HTTP: listening on ..." (plus Dashboard/API/MCP/Auth) and then die
+	// with "bind: address already in use", so the restart log of a failed
+	// start was indistinguishable from a good one — and /api/v1/health kept
+	// answering from the OLD process. Now a bind failure exits non-zero with
+	// the address and errno, and no readiness line anywhere in that log.
+	if err := tlsPairValid(*tlsCert, *tlsKey); err != nil {
+		log.Fatalf("%s: %v", strings.ToUpper(scheme), err)
+	}
+	ln, bindErr := net.Listen("tcp", *listen)
+	if bindErr != nil {
+		log.Fatalf("%s: bind failed on %s: %v — no listener bound, no readiness line emitted, not serving", strings.ToUpper(scheme), *listen, bindErr)
+	}
 	go func() {
 		log.Printf("%s: listening on %s", strings.ToUpper(scheme), *listen)
 		log.Printf("  Dashboard: %s://%s/", scheme, *listen)
@@ -1838,7 +1857,7 @@ func main() {
 		default:
 			log.Printf("  Auth:      FAIL-CLOSED — no operator credential configured; every mutating route answers 503 until SCHEDULER_OPERATOR_TOKEN/[api] operator_token is set")
 		}
-		if err := serveDashboard(server, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+		if err := serveDashboard(server, ln, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("%s: %v", strings.ToUpper(scheme), err)
 		}
 	}()
