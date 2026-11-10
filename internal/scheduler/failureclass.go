@@ -59,6 +59,13 @@ func HarnessFailure(errText string) bool {
 		// ErrGatewayTransient text and the SSE reader's own terminal phrase.
 		"gateway transient error",
 		"sse stream ended without a terminal event",
+		// SCHED-FAILCNT-001: the gateway's admission limiter refuses the
+		// request before a lane session exists. The live response is HTTP 429
+		// with this detail, and the raw GatewayStatusError is what the spawn
+		// accounting path receives (the persisted wrapper adds other markers
+		// only later). Keep the exact phrase here so both surfaces classify
+		// the same refusal as gateway_transport.
+		"too many concurrent runs",
 		// SCHED-GAP-1684: a tick whose OWN session deadline tore down the
 		// gateway POST carries "tick-timeout wall <d>: … tick deadline
 		// exceeded: …" (Spawner.tickDeadlineTimeout, status=timeout). The
