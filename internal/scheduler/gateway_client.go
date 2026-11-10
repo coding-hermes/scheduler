@@ -115,11 +115,12 @@ func isRouterRefusal(err error) bool {
 }
 
 // IsTransientGatewayErr reports whether err is a transient gateway failure
-// worth a bounded same-pair retry (SCHED-GAP-080): HTTP 5xx responses,
-// network/timeout errors from client.Do (*url.Error), and read/unmarshal
-// failures (ErrGatewayTransient). 401/403 are NEVER transient — they classify
-// as ErrGatewayKeyRejected (terminal, GAP-035) and the retry path must not
-// touch them. nil is never transient.
+// worth a bounded same-pair retry (SCHED-GAP-080): HTTP 5xx responses, the
+// gateway's HTTP 429 self-saturation response, network/timeout errors from
+// client.Do (*url.Error), and read/unmarshal failures (ErrGatewayTransient).
+// 401/403 are NEVER transient — they classify as ErrGatewayKeyRejected
+// (terminal, GAP-035) and the retry path must not touch them. nil is never
+// transient.
 func IsTransientGatewayErr(err error) bool {
 	if err == nil {
 		return false
@@ -141,7 +142,7 @@ func IsTransientGatewayErr(err error) bool {
 	}
 	var gse *GatewayStatusError
 	if errors.As(err, &gse) {
-		return gse.StatusCode >= http.StatusInternalServerError
+		return gse.StatusCode >= http.StatusInternalServerError || gse.StatusCode == http.StatusTooManyRequests
 	}
 	// client.Do wraps network failures, timeouts and context cancellation in
 	// *url.Error — all transient (the tick context bounds the retry window).
@@ -193,10 +194,16 @@ func gatewayTransientBlip(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
-	// Everything left is a blip EXCEPT *GatewayStatusError (HTTP 5xx / drain),
-	// which keeps its own failure class — see the doc above.
+	// Everything left is a blip EXCEPT *GatewayStatusError (HTTP 5xx / drain).
+	// The gateway's own HTTP 429 self-saturation is also a deferrable
+	// availability refusal; it is retried by the bounded loop and, once the
+	// budget is exhausted, booked as gateway_rate_limited rather than a lane
+	// failure.
 	var gse *GatewayStatusError
-	return !errors.As(err, &gse)
+	if errors.As(err, &gse) {
+		return gse.StatusCode == http.StatusTooManyRequests
+	}
+	return true
 }
 
 // Gateway availability error classes (SCHED-GAP-1654). These name the three

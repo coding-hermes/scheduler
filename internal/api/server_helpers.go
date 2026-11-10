@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -964,8 +965,14 @@ func getLastEvalTime(ctx context.Context, db *sql.DB) string {
 // Style follows its neighbours: probed_at is RFC3339 UTC with the zero time
 // rendered as "" (the health handler's convention — never "0001-01-01"), and
 // ttl_s is seconds so the block stays JSON-stable if the TTL ever changes.
-func gatewayHealthGateStatusBlock() map[string]interface{} {
+func gatewayHealthGateStatusBlock(loop *scheduler.Loop) map[string]interface{} {
 	armed, healthy, probedAt, lastErr, ttl, deferrals := scheduler.GatewayHealthGateStatus()
+	productionGate := "unavailable: loop source of truth not wired"
+	if loop != nil {
+		// The loop's immutable max_concurrent value is the production admission
+		// gate. Keep this phrase in status so self-saturation is observable.
+		productionGate = fmt.Sprintf("production gate: %d concurrent", loop.MaxConcur())
+	}
 	probed := ""
 	if !probedAt.IsZero() {
 		probed = probedAt.UTC().Format(time.RFC3339)
@@ -977,6 +984,7 @@ func gatewayHealthGateStatusBlock() map[string]interface{} {
 		"last_error":      lastErr,
 		"ttl_s":           int(ttl.Seconds()),
 		"deferrals_total": deferrals,
+		"production_gate": productionGate,
 	}
 }
 

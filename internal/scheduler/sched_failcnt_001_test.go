@@ -64,8 +64,12 @@ func TestSCHEDFAILCNT001_ThreeGateway429TicksThenCommittedTickResetsCounter(t *t
 	for i := 0; i < 3; i++ {
 		tickID := "sched-failcnt-429-transport-" + string(rune('a'+i))
 		insertRunningTick(t, db, tickID, project, 0)
-		if _, err := spawner.Spawn(PackedProject{Name: project, Workdir: t.TempDir()}, tickID); err == nil {
-			t.Fatalf("transport tick %s returned nil error", tickID)
+		tick, err := spawner.Spawn(PackedProject{Name: project, Workdir: t.TempDir()}, tickID)
+		if err != nil || tick == nil {
+			t.Fatalf("transport tick %s = tick %v, err %v; want a deferred tick", tickID, tick, err)
+		}
+		if outcome := tick.Wait(); outcome.Status != TickDeferred {
+			t.Fatalf("transport tick %s status = %s, want %s", tickID, outcome.Status, TickDeferred)
 		}
 	}
 	if got := schedFAILCNT001Counter(t, project, db); got != 4 {
