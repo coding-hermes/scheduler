@@ -6056,8 +6056,9 @@ tasks:
     created. A lane with at least one actionable row admits exactly as today. Table-driven
     test covers actionable/blocked/no-criteria/in-flight with pre-change RED evidence.
     go build, go vet and go test ./internal/scheduler pass.'
-  status: in_progress
+  status: complete
   created_at: '2026-11-10T11:50:09.263828+00:00'
+  completed_at: '2026-11-10T13:44:14.835331+00:00'
 - id: SCHED-GAP-16983-A
   title: scheduler-dispatch emits reply_to and text from config
   criteria:
@@ -6067,5 +6068,6 @@ tasks:
     with pre-change RED evidence quoted. A reply with an absent or wrong correlation
     key does not complete a tick and is reported by name. go build ./..., go vet ./...
     and go test ./cmd/scheduler-dispatch ./internal/bus pass.
-  status: in_progress
+  status: complete
   created_at: '2026-11-10T11:50:13.798309+00:00'
+  completed_at: '2026-11-10T13:14:16.425615+00:00'
