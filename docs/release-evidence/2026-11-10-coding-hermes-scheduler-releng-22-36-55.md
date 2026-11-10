@@ -1,0 +1,13 @@
+# Scheduler release readiness — 2026-11-10
+
+Certified candidate: f9c377b60e5ba54ff7c13ea486d4db6a65f4fde9 (coding-hermes/scheduler main; GitHub API, fetched ref and ls-remote agree). Baseline: v1.16.0, annotated tag peeled to 28a676686e1f93db901c53b3e1408729574ea7e1.
+
+Decision: v1.17.0 minor is due but NOT CUT. Two material feat commits (0197ef25 and b8fd3c42) and three fix commits (8d3be7f6, 80e8361a, 384fafec) exist in the 43-commit range, including 41 non-merges. Repository draft command confirms five feat/fix/perf subjects. No breaking declaration found. CHANGELOG has an empty Unreleased section and its latest version is 1.16.0. On the clean candidate, scripts/check-version-authority.sh --structure-only passed, but scripts/check-version-authority.sh v1.17.0 failed with exit 2, CHANGELOG_DOES_NOT_NAME_VERSION. The version-prep commit and its exact-SHA CI are required before tagging. This lane verifies; it does not prepare the changelog.
+
+CI on candidate: CI run 42903879035 and CI Pipeline run 42903878146 both completed successfully; required build, tests, races, lint, integration, simulation, and platform jobs succeeded. Container and Release jobs in CI are skipped on the non-tag push, not claimed as passes. A future prep SHA must have its own green runs. The release.yaml tag workflow publishes the Release and builds eight static Go assets plus checksums; do not race it with manual publication.
+
+GitReins: no candidate-bound, non-degraded verdict verified; RELEASE-055 tracks the clean-tree scope problem. The latest committed historical verdict located is dated 2026-09-19, not candidate coverage. Dogfood: the Nov 9 install battery was run on 2ca34321, with 23 rows, a failed load-sensitive ci-pass cell, an unverified UI probe and missing lint; candidate has since changed scheduler and command source paths, so it is not candidate-exact evidence. No fresh battery claimed.
+
+Previous release: v1.16.0 published, non-draft, with eight binaries and SHA256SUMS; this pass checked asset metadata, not downloaded checksums. Live /api/v1/health returned status ok, version v1.14.0-40-gd0dad6d9-dirty, build_sha d0dad6d9; this is stale versus candidate and v1.16.0. SCHED-GAP-162 tracks deployment; RELEASE-051 tracks the shadowing PATH binary. RELEASE-052 tracks security-switch limitations. Dependencies were not audited in this pass.
+
+Unblock: foreman prepares a reviewed v1.17.0 changelog from the range using scripts/release-prep.sh / make release-prep, commits and pushes it; releng rechecks exact-tip CI, relevant dogfood and GitReins evidence, release claim and tag availability before the repository-owned tag workflow. No tag, release, deployment or product-code change was made by this sweep.
