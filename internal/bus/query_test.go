@@ -324,6 +324,27 @@ func TestREMOTE009_MissingReplyFailsFast(t *testing.T) {
 // reply whose payload corr_id does not match is dropped (one log line) and
 // never returned to the caller — the real (matching) reply arriving after
 // it still completes the round trip.
+func TestREMOTE009_MismatchedReplyIsNamedAndDoesNotComplete(t *testing.T) {
+	relay := newQueryStubRelay(t)
+	c := NewClient(true, relay.srv.URL, "", "test-self")
+	budget := 150
+	resCh := make(chan error, 1)
+	go func() {
+		_, err := c.Query(context.Background(), "peer-x", QueryEnvelope{Op: "queue.get", CorrID: "corr-mine", BudgetMS: &budget})
+		resCh <- err
+	}()
+	conn := relay.subscribedConn(t, "fed.reply.corr-mine", 2*time.Second)
+	writeReplyFrame(t, conn, ResponseEnvelope{CorrID: "", Op: "queue.get", Status: "ok"})
+	select {
+	case err := <-resCh:
+		if err == nil || !errors.Is(err, ErrQueryTimeout) {
+			t.Fatalf("mismatched-only reply error = %v, want timeout without completion", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mismatched reply did not reach the bounded timeout")
+	}
+}
+
 func TestREMOTE009_ForeignCorrIDNeverDelivered(t *testing.T) {
 	relay := newQueryStubRelay(t)
 	c := NewClient(true, relay.srv.URL, "", "test-self")

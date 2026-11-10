@@ -59,6 +59,8 @@ Content-Type:  application/json
     "workdir":      "<reference the agent resolves>",   // optional if board present
     "corr_id":      "<correlation id>",
     "scheduler_id": "<sender identity>",
+    "reply_to":     "<scheduler inbox identity>",
+    "text_b64":     "<base64-encoded lane directive prose>",
     "issued_at":    "<RFC3339Nano>"
   },
   "sender":          "scheduler-<scheduler_id>",

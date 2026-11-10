@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSplitPositionalsKeepsFlagValuesOutOfThePositionals(t *testing.T) {
@@ -74,7 +76,7 @@ func TestRunDryRunRendersTheWireBodyWithoutSending(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"agent-7", "--lane", "auger", "--board", "/b/tasks.jsonl", "--workdir", "/w",
-		"--corr-id", "q-cli-1", "--url", srv.URL, "--scheduler-id", "sched-cli", "--dry-run",
+		"--corr-id", "q-cli-1", "--url", srv.URL, "--scheduler-id", "sched-cli", "--reply-to", "sched-inbox", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0\nstderr=%s", code, stderr.String())
@@ -128,7 +130,7 @@ func TestRunAcceptedDispatchPrintsReceipt(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"agent-7", "--lane", "auger", "--workdir", "/w",
-		"--url", srv.URL, "--scheduler-id", "sched-cli",
+		"--url", srv.URL, "--scheduler-id", "sched-cli", "--reply-to", "sched-inbox",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0\nstderr=%s", code, stderr.String())
@@ -151,7 +153,7 @@ func TestRunRefusedDispatchExitsOne(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"agent-7", "--lane", "auger", "--workdir", "/w",
-		"--url", srv.URL, "--scheduler-id", "sched-cli",
+		"--url", srv.URL, "--scheduler-id", "sched-cli", "--reply-to", "sched-inbox",
 	}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1 (not accepted)", code)
@@ -170,7 +172,7 @@ func TestRunDirectiveReachesTheWireAsTextB64(t *testing.T) {
 	const directive = "read the board, pick the top open row, work it"
 	code := run([]string{
 		"agent-7", "--lane", "code-factory", "--board", "/b/tasks.jsonl",
-		"--corr-id", "q-cli-text", "--scheduler-id", "sched-cli",
+		"--corr-id", "q-cli-text", "--scheduler-id", "sched-cli", "--reply-to", "sched-inbox",
 		"--text", directive, "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
@@ -253,11 +255,11 @@ func TestRunTextFileIsTheDocumentedCarrierForALongPrompt(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"agent-7", "--lane", "code-factory", "--board", "/b/tasks.jsonl",
-		"--corr-id", "q-cli-file", "--scheduler-id", "sched-cli",
+		"--corr-id", "q-cli-file", "--scheduler-id", "sched-cli", "--reply-to", "sched-inbox",
 		"--text-file", p, "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("exit %d, want 0\nstderr=%s", code, stderr.String())
+		t.Fatalf("exit %d, want 0\\nstderr=%s", code, stderr.String())
 	}
 	body := strings.TrimSpace(stdout.String()[strings.Index(stdout.String(), "body: ")+len("body: "):])
 	var req struct {
@@ -272,5 +274,105 @@ func TestRunTextFileIsTheDocumentedCarrierForALongPrompt(t *testing.T) {
 	}
 	if string(dec) != directive {
 		t.Errorf("decoded directive = %q, want the file's bytes %q", string(dec), directive)
+	}
+}
+
+func TestMakeWorkItemCarriesReplyToAndText(t *testing.T) {
+	item := makeWorkItem("auger", "/b", "/w", "corr-1", "scheduler-inbox", "carry this directive")
+	if item.ReplyTo != "scheduler-inbox" || item.Text != "carry this directive" {
+		t.Fatalf("work item fields = reply_to=%q text=%q", item.ReplyTo, item.Text)
+	}
+}
+
+func TestRunReplyTargetUsesFlagThenEnvThenConfig(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "schedulerd.toml")
+	if err := os.WriteFile(config, []byte("[crier]\nreply_to = \"config-inbox\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"agent-7", "--lane", "auger", "--board", "/b", "--config", config, "--dry-run"}
+	for _, tc := range []struct {
+		name  string
+		extra []string
+		want  string
+	}{
+		{name: "config", want: "config-inbox"},
+		{name: "env", extra: []string{"--scheduler-id", "sched-cli"}, want: "env-inbox"},
+		{name: "flag", extra: []string{"--reply-to", "flag-inbox"}, want: "flag-inbox"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "env" || tc.name == "flag" {
+				t.Setenv("CRIER_REPLY_TO", "env-inbox")
+			} else {
+				t.Setenv("CRIER_REPLY_TO", "")
+			}
+			args := append(append([]string(nil), base...), tc.extra...)
+			var stdout, stderr bytes.Buffer
+			if code := runAt(args, &stdout, &stderr, func() time.Time { return time.Unix(0, 0) }); code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr.String())
+			}
+			body := strings.TrimSpace(stdout.String()[strings.Index(stdout.String(), "body: ")+len("body: "):])
+			var req struct {
+				Payload map[string]any `json:"payload"`
+			}
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatalf("body is not JSON: %v", err)
+			}
+			if got := req.Payload["reply_to"]; got != tc.want {
+				t.Fatalf("reply_to = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunBuildsCorrelatableDispatchWithRenderedDirective(t *testing.T) {
+	var wireBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wireBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"msg-fields-1","transport":"inbox"}`))
+	}))
+	defer srv.Close()
+	args := make([]string, 0, 16)
+	args = append(args,
+		"agent-7", "--lane", "auger", "--board", "/b/tasks.jsonl",
+		"--workdir", "/w", "--corr-id", "q-fields-1", "--reply-to", "scheduler-inbox",
+		"--scheduler-id", "sched-cli", "--url", srv.URL,
+	)
+	now := func() time.Time { return time.Unix(0, 0) }
+	var sentOut, sentErr bytes.Buffer
+	if code := runAt(args, &sentOut, &sentErr, now); code != 0 {
+		t.Fatalf("wire dispatch exit %d: %s", code, sentErr.String())
+	}
+	var dryOut, dryErr bytes.Buffer
+	if code := runAt(append(args, "--dry-run"), &dryOut, &dryErr, now); code != 0 {
+		t.Fatalf("dry run exit %d: %s", code, dryErr.String())
+	}
+	dryBody := strings.TrimSpace(dryOut.String()[strings.Index(dryOut.String(), "body: ")+len("body: "):])
+	t.Logf("rendered body: %s", dryBody)
+	if string(wireBody) != dryBody {
+		t.Fatalf("dry-run body differs from wire body:\nwire=%s\ndry=%s", wireBody, dryBody)
+	}
+	var req struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(wireBody, &req); err != nil {
+		t.Fatalf("wire body is not JSON: %v", err)
+	}
+	if got := req.Payload["reply_to"]; got != "scheduler-inbox" {
+		t.Fatalf("payload.reply_to = %v, want scheduler-inbox", got)
+	}
+	enc, ok := req.Payload["text_b64"].(string)
+	if !ok || enc == "" {
+		t.Fatalf("payload.text_b64 = %v, want a non-empty rendered directive", req.Payload["text_b64"])
+	}
+	decoded, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("decode text_b64: %v", err)
+	}
+	for _, want := range []string{"auger", "/b/tasks.jsonl", "/w"} {
+		if !strings.Contains(string(decoded), want) {
+			t.Errorf("rendered directive %q does not contain %q", decoded, want)
+		}
 	}
 }

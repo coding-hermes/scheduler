@@ -10,7 +10,8 @@
 // belong to the scheduler; an adapter that invents them is a bug.
 //
 // The work item carries the LANE the scheduler picked, a board/workdir
-// REFERENCE the agent resolves to its own checkout, and a correlation id.
+// REFERENCE the agent resolves to its own checkout, a correlation id, the
+// configured reply target, and the rendered directive.
 // It never carries a task id: the scheduler picks the LANE, the foreman
 // picks the TASK.
 //
@@ -38,9 +39,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/coding-hermes/scheduler/internal/bus"
 	"github.com/coding-hermes/scheduler/internal/clock"
+
+	"github.com/BurntSushi/toml"
 )
 
 // defaultRelayURL matches the daemon's [crier] default and
@@ -96,12 +100,14 @@ flags:
   --text-file <path>     read the directive from a file (same member; mutually
                          exclusive with --text — quoting a long prompt in argv
                          is how a shell mangles it)
-  --url <url>            Crier relay base URL (env CRIER_URL; default %s)
+  --url <url>            Crier relay base URL (env CRIER_URL; config [crier].url; default %s)
   --scheduler-id <id>    sender identity (env SCHEDULER_ID; default %s)
+  --reply-to <id>        reply inbox identity (env CRIER_REPLY_TO; config [crier].reply_to)
+  --config <path>        TOML config file (env SCHEDULER_CONFIG)
   --dry-run              print the endpoint + exact body, send nothing
   --json                 print the receipt as JSON
 
-env: CRIER_URL, CRIER_AUTH_TOKEN (the credential — never a flag), SCHEDULER_ID
+env: CRIER_URL, CRIER_AUTH_TOKEN (the credential — never a flag), SCHEDULER_ID, CRIER_REPLY_TO, SCHEDULER_CONFIG
 
 exit: 0 accepted; 1 not accepted (refused / unknown target / unreachable); 2 usage
 `, defaultRelayURL, defaultSchedulerID())
@@ -114,6 +120,10 @@ func main() {
 // run is main without the process exit, so tests can drive the whole surface
 // (usage, dry run, dry-run-vs-wire identity) without spawning a process.
 func run(argv []string, stdout, stderr io.Writer) int {
+	return runAt(argv, stdout, stderr, clock.Real().Now)
+}
+
+func runAt(argv []string, stdout, stderr io.Writer, now func() time.Time) int {
 	fs := flag.NewFlagSet("scheduler-dispatch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	lane := fs.String("lane", "", "lane whose work this is (required)")
@@ -121,9 +131,11 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	workdir := fs.String("workdir", "", "workdir reference the agent resolves")
 	corrID := fs.String("corr-id", "", "correlation id (default minted)")
 	text := fs.String("text", "", "directive the node's harness is asked to carry (inline)")
-	textFile := fs.String("text-file", "", "read the directive from this file (mutually exclusive with --text)")
-	relayURL := fs.String("url", "", "Crier relay base URL (env CRIER_URL)")
+	textFile := fs.String("text-file", "", "read the directive from a file (mutually exclusive with --text)")
+	relayURL := fs.String("url", "", "Crier relay base URL (env CRIER_URL; config [crier].url)")
 	schedulerID := fs.String("scheduler-id", "", "sender scheduler identity (env SCHEDULER_ID)")
+	replyTo := fs.String("reply-to", "", "reply inbox identity (env CRIER_REPLY_TO; config [crier].reply_to)")
+	configPath := fs.String("config", "", "TOML config file (env SCHEDULER_CONFIG)")
 	dryRun := fs.Bool("dry-run", false, "print the endpoint + exact body, send nothing")
 	jsonOut := fs.Bool("json", false, "print the receipt as JSON")
 	fs.Usage = func() { usage(stderr) }
@@ -139,28 +151,44 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	}
 	agent := strings.TrimSpace(args[0])
 
-	url := firstNonEmpty(*relayURL, envOr("CRIER_URL"), defaultRelayURL)
+	configFile := firstNonEmpty(*configPath, envOr("SCHEDULER_CONFIG"))
+	var fileConfig struct {
+		Crier struct {
+			URL     string `toml:"url"`
+			ReplyTo string `toml:"reply_to"`
+		} `toml:"crier"`
+	}
+	if configFile != "" {
+		if _, err := toml.DecodeFile(configFile, &fileConfig); err != nil {
+			_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: config %s: %v\n", configFile, err)
+			return 2
+		}
+	}
+	url := firstNonEmpty(*relayURL, envOr("CRIER_URL"), fileConfig.Crier.URL, defaultRelayURL)
 	sfid := firstNonEmpty(*schedulerID, defaultSchedulerID())
+	reply := firstNonEmpty(*replyTo, envOr("CRIER_REPLY_TO"), fileConfig.Crier.ReplyTo)
 	token := envOr("CRIER_AUTH_TOKEN")
 
 	directive, code := resolveText(*text, *textFile, stderr)
 	if code != 0 {
 		return code
 	}
-
-	item := bus.WorkItem{
-		Lane:    *lane,
-		Board:   *board,
-		Workdir: *workdir,
-		CorrID:  *corrID,
-		Text:    directive,
+	if reply == "" {
+		_, _ = fmt.Fprintln(stderr, "scheduler-dispatch: reply target is required (--reply-to, CRIER_REPLY_TO, or [crier].reply_to)")
+		return 2
 	}
+
+	if strings.TrimSpace(directive) == "" {
+		directive = renderDirective(*lane, *board, *workdir)
+	}
+	item := makeWorkItem(*lane, *board, *workdir, *corrID, reply, directive)
 
 	// Render (and validate) ONCE. An incomplete work item is a usage error —
 	// nothing was attempted (exit 2) — and the correlation id minted here is
 	// the one the real request carries, so the dry run is byte-identical to
 	// the wire body.
-	endpoint, body, corr, err := bus.BuildDispatch(url, sfid, agent, item, clock.Real().Now())
+	dispatchNow := now()
+	endpoint, body, corr, err := bus.BuildDispatch(url, sfid, agent, item, dispatchNow)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: %v\n", err)
 		return 2
@@ -173,7 +201,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	// the SAME idempotency key (one key, one message).
 	item.CorrID = corr
 
-	client := bus.NewClient(true, url, token, sfid)
+	client := bus.NewClient(true, url, token, sfid, bus.WithClock(func() time.Time { return dispatchNow }))
 	receipt, err := client.Dispatch(context.Background(), agent, item)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "scheduler-dispatch: NOT dispatched: %v\n", err)
@@ -194,12 +222,21 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func makeWorkItem(lane, board, workdir, corrID, replyTo, text string) bus.WorkItem {
+	return bus.WorkItem{Lane: lane, Board: board, Workdir: workdir, CorrID: corrID, ReplyTo: replyTo, Text: text}
+}
+
+// renderDirective supplies the same compact lane/reference prose used when
+// the operator does not provide an explicit prompt.
+func renderDirective(lane, board, workdir string) string {
+	return fmt.Sprintf("[Scheduler dispatch] Carry out lane %q using board %q and workdir %q.", lane, board, workdir)
+}
+
 // resolveText turns the directive flags into the string the work item carries.
 // Both flags at once is a usage error: a caller that sets two directives has
 // not decided which one the node should run, and a silently-preferred one is
-// how an operator ships the wrong prompt. An empty result is legal (the node's
-// harness falls back to the lane's own prompt), so this refuses only genuine
-// conflicts and unreadable files.
+// how an operator ships the wrong prompt. An empty result is replaced by the
+// rendered lane/reference directive before dispatch.
 func resolveText(inline, path string, stderr io.Writer) (string, int) {
 	if strings.TrimSpace(inline) != "" && strings.TrimSpace(path) != "" {
 		_, _ = fmt.Fprintln(stderr, "scheduler-dispatch: --text and --text-file are mutually exclusive")
@@ -247,6 +284,7 @@ func splitPositionals(argv []string) (positional, flags []string) {
 	valueFlags := map[string]bool{
 		"lane": true, "board": true, "workdir": true,
 		"corr-id": true, "url": true, "scheduler-id": true,
+		"reply-to": true, "config": true,
 		// The directive flags take a value too. Omitting them here is not a
 		// cosmetic slip: their argument is hoisted into the positional list,
 		// the flag package then reports "flag needs an argument", and the

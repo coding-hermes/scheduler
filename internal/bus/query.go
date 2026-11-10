@@ -80,6 +80,11 @@ var ErrQueryTimeout = errors.New("bus: query reply timeout")
 // came back in time".
 var ErrReplyClosed = errors.New("bus: reply stream closed by peer")
 
+// ErrReplyCorrelationMismatch names a reply that was present but could not
+// complete the outstanding request because its correlation key was absent or
+// different. The query continues waiting; callers never receive that reply.
+var ErrReplyCorrelationMismatch = errors.New("bus: reply correlation key mismatch")
+
 // QueryEnvelope is the spec §2.1 Query envelope, VERBATIM — the same JSON
 // object every transport carries (the HTTP surface's queryEnvelope in
 // internal/api is the same contract member-for-member; the type lives twice
@@ -346,9 +351,9 @@ func (c *Client) Query(ctx context.Context, peerID string, q QueryEnvelope) (Res
 			}
 			if resp.CorrID != q.CorrID {
 				// THE CORRELATION LAW: never deliver by arrival order. A
-				// foreign corr_id on this topic (sanitized collision,
-				// stale subscriber) is dropped with one log line.
-				log.Printf("CRIER: query reply corr mismatch dropped: got %q want %q", resp.CorrID, q.CorrID)
+				// foreign or absent corr_id on this topic is reported by
+				// name, then dropped without completing the request.
+				log.Printf("CRIER: query reply corr mismatch dropped: got %q want %q: %v", resp.CorrID, q.CorrID, ErrReplyCorrelationMismatch)
 				continue
 			}
 			return resp, nil
