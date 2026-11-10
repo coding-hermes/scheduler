@@ -6047,3 +6047,25 @@ tasks:
   status: complete
   created_at: '2026-11-09T07:47:56.141003+00:00'
   completed_at: '2026-11-10T11:21:44.402860+00:00'
+- id: SCHED-GAP-17007-M1
+  title: admission-time cheap skip for tasks-mode lanes with no actionable rows
+  criteria:
+  - 'A tasks-mode lane whose pending rows are all blocked, criteria-less, owner-gated
+    or in-flight is admitted as a cheap skip: new AdmissionReason value, one grep-stable
+    log line naming reason plus row-class counts, a status counter, and NO tick row
+    created. A lane with at least one actionable row admits exactly as today. Table-driven
+    test covers actionable/blocked/no-criteria/in-flight with pre-change RED evidence.
+    go build, go vet and go test ./internal/scheduler pass.'
+  status: in_progress
+  created_at: '2026-11-10T11:50:09.263828+00:00'
+- id: SCHED-GAP-16983-A
+  title: scheduler-dispatch emits reply_to and text from config
+  criteria:
+  - cmd/scheduler-dispatch sets bus.WorkItem.ReplyTo and Text on every hand-out; reply
+    target comes from configuration not a source literal; Text is non-empty. Tests
+    assert both fields and that the --dry-run body is byte-identical to the wire body,
+    with pre-change RED evidence quoted. A reply with an absent or wrong correlation
+    key does not complete a tick and is reported by name. go build ./..., go vet ./...
+    and go test ./cmd/scheduler-dispatch ./internal/bus pass.
+  status: in_progress
+  created_at: '2026-11-10T11:50:13.798309+00:00'
