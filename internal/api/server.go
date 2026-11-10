@@ -801,7 +801,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	// even armed?" — must be answerable on a daemon whose loop never got a
 	// gateway client, which is exactly the shape that was silently ungated
 	// before.
-	status["gateway_health_gate"] = gatewayHealthGateStatusBlock()
+	status["gateway_health_gate"] = gatewayHealthGateStatusBlock(s.loop)
 	// SCHED-GAP-219: the config-drift tripwire (formerly the ops script's
 	// --verify) as an API surface — DB operator pins vs the seed fleet.toml.
 	softSection("configDriftBlock", func(sctx context.Context) {

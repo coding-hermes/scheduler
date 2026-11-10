@@ -698,9 +698,16 @@ func (s *Spawner) noteGatewayAvailabilityError(project, tickID string, gwErr err
 func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string, gwErr error, reqStart time.Time,
 	model, provider string, rate routerRate) *SpawnedTick {
 	commits, files := countGitChanges(project.Workdir, reqStart, s.clock().Now())
-	log.Printf("DEFERRED: %s tick=%s gateway transient blip — deferring (NOT a lane failure): %v",
-		project.Name, tickID, gwErr)
-	s.noteTransientGatewayDeferral(project.Name, gwErr.Error())
+	reason := gwErr.Error()
+	if ClassifyGatewayError(gwErr) == GatewayErrClassRateLimited429 {
+		reason = "gateway_rate_limited: " + reason
+		log.Printf("DEFERRED: %s tick=%s gateway rate limited — deferring (NOT a lane failure): %v",
+			project.Name, tickID, gwErr)
+	} else {
+		log.Printf("DEFERRED: %s tick=%s gateway transient blip — deferring (NOT a lane failure): %v",
+			project.Name, tickID, gwErr)
+	}
+	s.noteTransientGatewayDeferral(project.Name, reason)
 	return &SpawnedTick{
 		TickID:      tickID,
 		Project:     project.Name,
@@ -715,7 +722,7 @@ func (s *Spawner) transientGatewayDeferral(project PackedProject, tickID string,
 		// The gateway's own error text is carried through to ticks.error: the
 		// deferral must be auditable, not silent (the row's acceptance asks
 		// for "the gateway reason recorded").
-		gwDeferReason: gwErr.Error(),
+		gwDeferReason: reason,
 		model:         model,
 		provider:      provider,
 		rate:          rate,
@@ -2695,7 +2702,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			// across ticks. The 401/403 path already recorded the primary
 			// pair before its retry hop, so skip it here (a double
 			// record-failure would double the cooldown).
-			if !circuitFailureRecorded {
+			if !circuitFailureRecorded && ClassifyGatewayError(gwErr) != GatewayErrClassRateLimited429 {
 				s.recordCircuitFailure(provider, model, "gateway failure: "+gwErr.Error())
 			}
 			// SCHED-GAP-079: when the gateway wraps a session failure in the

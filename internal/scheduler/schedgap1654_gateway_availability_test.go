@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// ch:trace row=SCHED-429-001 spec=board:tasks.jsonl#SCHED-429-001 wave=coding-hermes-scheduler-foreman-2026-11-10-20-23-05 test=internal/scheduler/*test.go doc=none:reason evidence=local-gates witness=git-show verdict=none:foreman-completes-after-merge commit=worker-commit memory=none:foreman-writes
+// STATUS: complete | partial | blocked
+// TIER: T1 | T2
+// EVIDENCE: commit and test output
+//
 // Regression tests for SCHED-GAP-1654: the gateway availability path.
 //
 // Before this row the scheduler could not answer "how many ticks did the
@@ -86,12 +91,12 @@ func TestSCHEDGAP1654_SpawnPathClassifiesAndEmits(t *testing.T) {
 		wantClass string
 		// wantDropped: true = the tick is dropped (Spawn returns an error),
 		// false = the tick is DEFERRED (Spawn returns a tick whose Wait()
-		// yields TickDeferred) — the refused-dial shape is a transient blip
-		// and keeps its SCHED-GAP-203 deferral semantics.
+		// yields TickDeferred). HTTP 429 self-saturation is a deferral just
+		// like the refused-dial transport blip, while 503 remains a drop.
 		wantDropped bool
 	}{
 		{name: "503_service_unavailable", status: http.StatusServiceUnavailable, wantClass: GatewayErrClassUnavailable503, wantDropped: true},
-		{name: "429_rate_limited", status: http.StatusTooManyRequests, wantClass: GatewayErrClassRateLimited429, wantDropped: true},
+		{name: "429_rate_limited", status: http.StatusTooManyRequests, wantClass: GatewayErrClassRateLimited429, wantDropped: false},
 		{name: "connection_refused", status: 0, wantClass: GatewayErrClassConnRefused, wantDropped: false},
 	}
 
@@ -133,8 +138,21 @@ func TestSCHEDGAP1654_SpawnPathClassifiesAndEmits(t *testing.T) {
 				if tick == nil {
 					t.Fatal("Spawn returned nil tick — the refused-dial shape must defer, not drop")
 				}
-				if got := tick.Wait().Status; got != TickDeferred {
-					t.Errorf("Wait() status = %s, want %s (a refused dial is a SCHED-GAP-203 blip)", got, TickDeferred)
+				outcome := tick.Wait()
+				if outcome.Status != TickDeferred {
+					t.Errorf("Wait() status = %s, want %s (a gateway refusal is not a lane failure)", outcome.Status, TickDeferred)
+				}
+				if tc.status == http.StatusTooManyRequests {
+					if !strings.Contains(outcome.Error, "gateway_rate_limited") {
+						t.Errorf("429 deferred error = %q, want gateway_rate_limited vocabulary", outcome.Error)
+					}
+					var failures int
+					if err := db.QueryRow(`SELECT consecutive_failures FROM projects WHERE name = ?`, projectName).Scan(&failures); err != nil {
+						t.Fatalf("read consecutive_failures: %v", err)
+					}
+					if failures != 0 {
+						t.Errorf("429 consecutive_failures = %d, want 0 (self-saturation is not a lane failure)", failures)
+					}
 				}
 			}
 

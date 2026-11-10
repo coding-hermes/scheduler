@@ -229,7 +229,15 @@ func TestSCHEDGAP1654_GatewayErrorsEndpoint_CountsRealSpawnLosses(t *testing.T) 
 			spawner.SetGatewayTransientRetries(0)
 			spawner.SetEventLogger(scheduler.NewEventLogger(db))
 
-			if _, err := spawner.Spawn(scheduler.PackedProject{Name: tc.project, Workdir: t.TempDir()}, tickID); err == nil {
+			tick, err := spawner.Spawn(scheduler.PackedProject{Name: tc.project, Workdir: t.TempDir()}, tickID)
+			if tc.status == http.StatusTooManyRequests {
+				if err != nil || tick == nil {
+					t.Fatalf("HTTP 429 Spawn = tick %v, err %v; want a deferred tick", tick, err)
+				}
+				if outcome := tick.Wait(); outcome.Status != scheduler.TickDeferred {
+					t.Fatalf("HTTP 429 outcome = %s, want %s", outcome.Status, scheduler.TickDeferred)
+				}
+			} else if err == nil {
 				t.Fatalf("Spawn err = nil on HTTP %d, want the tick to be dropped", tc.status)
 			}
 
