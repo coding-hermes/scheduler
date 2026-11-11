@@ -31,7 +31,24 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-11-09
+## [Unreleased] — 2026-11-11
+
+## [1.17.0] — 2026-11-11
+
+### Features
+- scheduler: tasks-mode admission now performs a cheap preflight and defers lanes with no actionable board rows, while remaining fail-open for unknown or unreadable board state; perpetual fixture rows are excluded so they cannot make a lane appear busy — `0197ef25aa92a9f6f7d8286b42e635685fcf39e0`, `80e8361abf5e67793399a93497b8bf26425f4bd8`.
+- dispatch: `scheduler-dispatch` now emits configured `reply_to` and `text` values and names the correlation keys carried through the dispatch query — `b8fd3c42c32dd6e46b5e9ca2ce1195bd43a35f49`.
+
+### Fixes
+- scheduler: gateway HTTP 429 self-saturation is deferred as a rate-limited tick rather than recorded as a lane failure, while availability visibility and the existing 503/500/401 behavior remain intact — `8d3be7f6945705e3c030d3c642877a5c041001eb`.
+- scheduler: harness failure accounting now records the observed failure class instead of treating gateway/session failures as ordinary successful-looking zero-count outcomes — `384fafec03cff6cee78f8322a841554c5a1de4e6`.
+- ops: schedulerd binds its listener before announcing readiness, so an occupied port produces no misleading listening, dashboard, API, MCP, or ready lines — `13494e7b826e7b91bea0ea4a100e3342d4b516e5`.
+- ops: restore the staging reaper executable and document why the backup lock is not a valid liveness probe, preserving its fail-closed reclaim contract — `b6e69547ed90036586009cc75954cd4c94dbff6c`, `fee8c87576eeb5c398811aff896c155cd807416`.
+
+### Not in this release
+- The frozen `v1.16.0..04ec8f88bf9756d3662337fca3fcfbeb92841b4e` range contains 48 commits (46 non-merge and 2 merge); the 8 material source commits above are itemised. The remaining 38 non-merge commits are board, harness, QA, releng, documentation, and other bookkeeping or operational records and are not itemised as product changes.
+
+<!-- ch:trace row=RELEASE-056 spec=board:RELEASE-056 wave=coding-hermes-scheduler-foreman-2026-11-11-10-13-04#RELEASE-056 test=bash -n scripts/release-prep.sh scripts/check-version-authority.sh; python3 -m pytest tests/test_release_prep_draft.py tests/test_check_version_authority.py -q doc=CHANGELOG.md prompt=/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-11-10-13-04/brief-RELEASE-056.txt evidence=CHANGELOG.md witness=CHANGELOG.md#1.17.0 verdict=none:foreman-will-run-post-merge commit=worker-sha-not-written-in-body memory=none:foreman-closeout STATUS: complete TIER: T1 EVIDENCE: CHANGELOG.md plus release-prep/version-authority output -->
 
 ## [1.16.0] — 2026-11-09
 
