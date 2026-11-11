@@ -1,0 +1,32 @@
+# Scheduler release readiness — 2026-11-11
+
+Certified candidate: 9b1fdd227da01122d3e162ca80c3c53aead9229a (`origin/main`, GitHub repository `coding-hermes/scheduler`). Canonical remote: `https://github.com/coding-hermes/scheduler.git`; default branch: `main`; fetched branch, local HEAD, and `git ls-remote` agree at this SHA. The releng carrier checkout had an unrelated dirty board line, so this evidence was produced in a clean detached worktree at the certified SHA.
+
+Baseline: `v1.16.0`, annotated tag object `9049119de442ea15043dc1b46fa891a2cbd49393`, peeled commit `28a676686e1f93db901c53b3e1408729574ea7e1`. Remote tag and Release object agree; the v1.16.0 Release is published, non-draft, non-prerelease, with 8 binaries plus `SHA256SUMS`.
+
+Decision: v1.17.0 minor is due but NOT CUT. The range `v1.16.0..9b1fdd227da01122d3e162ca80c3c53aead9229a` contains 58 commits, 56 non-merge and 2 merges. Conventional census: 2 `feat`, 3 `fix`, 0 `perf`, 53 other; no `BREAKING CHANGE` footer or type-`!` declaration was found. The material features are `0197ef25` and `b8fd3c42`; material fixes include `8d3be7f6`, `80e8361a`, and `384fafec`, with additional operational fixes represented in the prepared changelog. Semver therefore remains MINOR: v1.17.0.
+
+Version surface: the repository-owned prep has already landed at `b37a1f690c0995a2d4f1e2f94f35536233c691a9` (`chore(release): prepare v1.17.0 changelog for RELEASE-056`). `CHANGELOG.md` names v1.17.0 and contains exactly one `[Unreleased]` heading. `scripts/check-version-authority.sh v1.17.0` passes on the certified tree. Re-running `scripts/release-prep.sh --dry-run v1.17.0` correctly refuses with `VERSION_HEADING_EXISTS`; no version-prep mutation was made.
+
+CI evidence: the prep SHA `b37a1f690c0995a2d4f1e2f94f35536233c691a9` has exact-SHA terminal green runs `43014634750` (`CI`) and `43014633887` (`CI Pipeline`). The recorded jobs include lint, build, vet, full tests, race detectors, integration, simulation, end-to-end scheduler verify, and platform builds; tag-only Container and Release jobs were skipped on this non-tag push. The certified current SHA `9b1fdd227da01122d3e162ca80c3c53aead9229a` has runs `43097719178` (`CI`) and `43097718378` (`CI Pipeline`) still queued with zero jobs, and the commit check-runs API returns `total_count: 0`. These runs are more than a minutes-old queue stall and are UNPROVEN, not green. The exact-head CI gate blocks the cut. The current delta from the prep SHA is 8 commits touching only board files, `.gitreins/tasks.yaml`, and `docs/lane-authority.md`; this does not convert the current exact-SHA gate into green.
+
+Repository release tooling: `Makefile` provides `release-prep` and `tag`; `scripts/release-prep.sh` promotes the changelog without tagging; `scripts/release-claim.sh` is the single-writer claim; `docs/releases.md` documents the mechanism. `.github/workflows/release.yaml` owns publication on `push` tags `v*`, builds 8 static cross-platform Go assets and `SHA256SUMS`, and must not be raced by a manual Release. No Dockerfile or GoReleaser configuration exists.
+
+Build evidence at the certified tree: a clean local `go test -short -count=1 ./...` passed across all packages. A local `make BINDIR=<scratch> build` passed, but the Makefile's build path produced dynamically linked Linux binaries because it is a development build; the release workflow's `CGO_ENABLED=0` cross-build was separately reproduced for 8 binaries. The reproduced assets comprise 8 binaries plus `SHA256SUMS` (9 files), all checksum-verifying; Linux assets are statically linked; `schedulerd-linux-amd64 --version` and `migrate-linux-amd64 --version` report `v1.17.0` with the certified short commit. These are strategy evidence only, not published assets.
+
+GitReins: no verdict file is bound to the certified SHA. The latest relevant historical record is the RELEASE-055 repair, which is now complete on the GitReins repository; no candidate-bound non-degraded scheduler verdict was found. This leg is UNVERIFIED for the current candidate and is not substituted with the prior candidate's evidence.
+
+Dogfood/QA: no current exact-SHA dogfood record was found for `9b1fdd227da01122d3e162ca80c3c53aead9229a`. The latest repository dogfood material is historical and predates current scheduler/dispatch changes; it is not a waiver. QA rows `QA-CHS-190`, `QA-CHS-196`, and `QA-CHS-197` remain open, including unavailable lint/setup and bunker launch/watchdog infrastructure. Dogfood is UNVERIFIED for this candidate.
+
+Dependencies/security: `go.mod` uses Go 1.26.10. `govulncheck ./...` exits 3 and reports reachable standard-library vulnerability `GO-2026-6859` in `net/http@go1.26.10`, fixed in Go 1.26.11; it reports no other vulnerabilities. This is a release blocker until the toolchain is updated and re-gated, or an explicit security disposition is recorded. `go list -u -m` also reports available updates for pprof, x/exp, x/mod, x/sync, x/sys, x/text, and modernc components; no dependency mutation was made.
+
+Deployed staleness: `GET http://127.0.0.1:9090/api/v1/health` is HTTP 200 and reports build SHA `9b1fdd22`, but the running `bin/schedulerd` is a dirty development build (`v1.16.0-58-g9b1fdd22-dirty`) rather than a release artifact. The host also contains `/usr/local/bin/schedulerd`, a stale root-owned binary from the prior RELEASE-051 finding. The live deployment gap remains owned by `SCHED-GAP-162`; the root-owned shadow binary remains `RELEASE-051`. No daemon restart or root-owned mutation was attempted.
+
+Open blockers and unblock path:
+
+1. Exact-head CI runs `43097719178` and `43097718378` are queued with zero jobs; obtain terminal green conclusions on the certified SHA, or re-run after the queue defect is resolved.
+2. `govulncheck` finds `GO-2026-6859`, fixed in Go 1.26.11; update the toolchain and re-run the full hosted gates, or record an owner-approved security disposition.
+3. No candidate-bound GitReins verdict or dogfood result is available; run and bind both to the exact release candidate.
+4. Deployment remains stale under `SCHED-GAP-162`; this is carried forward and does not authorize a release.
+
+No tag, GitHub Release, deployment, product-code change, or board mutation was made by this sweep.
