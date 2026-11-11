@@ -1,5 +1,9 @@
 # Lane Authority — what a lane may decide alone
 
+> **OWNER RATIFIED 2026-11-11** — Bane, verbatim: "yes i agree with that rule being added"
+> (reply to the decision card carrying this exact draft). Standing fleet policy from
+> this date; lanes cite this file, not their own judgement, when they decide alone.
+
 Standing classification for every fleet lane (foreman, worker, sync, QA, PM).
 Written per SCHED-GAP-16937's acceptance criteria; derived from the
 `board-dispatchability-repair` and `owner-decision-briefing` skills and the
