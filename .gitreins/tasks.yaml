@@ -6086,3 +6086,11 @@ tasks:
   status: complete
   created_at: '2026-11-10T20:45:48.392602+00:00'
   completed_at: '2026-11-11T09:50:20.167681+00:00'
+- id: RELEASE-056
+  title: Prepare v1.17.0 release changelog
+  criteria:
+  - 'FAILIF: CHANGELOG.md is not promoted from [Unreleased] to v1.17.0 with source-grounded
+    entries from v1.16.0..origin/main. PROOF: scripts/release-prep.sh --check, release-prep
+    validation, and repository release-prep tests pass at the committed tree.'
+  status: in_progress
+  created_at: '2026-11-11T10:27:29.294692+00:00'
