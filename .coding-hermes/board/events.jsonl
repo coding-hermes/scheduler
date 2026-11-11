@@ -1783,3 +1783,4 @@
 {"id": 1794267359952719814, "timestamp": "2026-11-11T20:22:58.225188Z", "event_type": "task_created", "task_id": "TRIAGE-005", "actor": "foreman", "detail": "{\"id\":\"TRIAGE-005\",\"status\":\"pending\"}"}
 {"id": 1794267359952719815, "timestamp": "2026-11-11T20:22:58.326222Z", "event_type": "task_created", "task_id": "TRIAGE-006", "actor": "foreman", "detail": "{\"id\":\"TRIAGE-006\",\"status\":\"pending\"}"}
 {"id": 1794267359952719816, "timestamp": "2026-11-11T20:38:11.086261Z", "event_type": "task_created", "task_id": "SCHED-WAIVER-ABORT", "actor": "foreman", "detail": "{\"id\":\"SCHED-WAIVER-ABORT\",\"status\":\"pending\"}"}
+{"id": 1794267359952719817, "timestamp": "2026-11-11T20:43:14.153879Z", "event_type": "task_created", "task_id": "SCHED-SHUTDOWN-001", "actor": "foreman", "detail": "{\"id\":\"SCHED-SHUTDOWN-001\",\"status\":\"pending\"}"}
