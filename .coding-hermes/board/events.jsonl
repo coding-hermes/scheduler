@@ -1802,3 +1802,5 @@
 {"id": 1794267359952719833, "timestamp": "2026-11-12T15:38:40.789088Z", "event_type": "task_created", "task_id": "PERF-001-R3-R4", "actor": "dogfood", "detail": "{\"id\":\"PERF-001-R3-R4\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 1794267359952719834, "timestamp": "2026-11-12T15:53:01.000000Z", "event_type": "task_created", "task_id": "SCHED-GAP-1702-R3", "actor": "dogfood", "detail": "{\"id\":\"SCHED-GAP-1702-R3\",\"status\":\"pending\"}", "tick_number": null}
 {"id":1794501113761293264,"timestamp":"2026-11-12T16:31:53.000000Z","event_type":"task_created","task_id":"INT-CI-4191","actor":"dogfood","detail":"{\"id\":\"INT-CI-4191\",\"status\":\"pending\"}","tick_number":null}
+{"id":1794501113761293265,"timestamp":"2026-11-12T19:29:55.898290Z","event_type":"task_created","task_id":"QA-CHS-199","actor":"foreman","detail":"{\"id\":\"QA-CHS-199\",\"status\":\"pending\"}","tick_number":null}
+{"id":1794501113761293266,"timestamp":"2026-11-12T19:30:04.263696Z","event_type":"task_created","task_id":"QA-CHS-200","actor":"foreman","detail":"{\"id\":\"QA-CHS-200\",\"status\":\"pending\"}","tick_number":null}
