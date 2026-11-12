@@ -6094,3 +6094,13 @@ tasks:
     validation, and repository release-prep tests pass at the committed tree.'
   status: in_progress
   created_at: '2026-11-11T10:27:29.294692+00:00'
+- id: RELEASE-058
+  title: Bump Go toolchain 1.26.10 -> 1.26.11 to clear GO-2026-6859
+  criteria:
+  - Bump go.mod toolchain to go1.26.11; bump go-version pins in .github/workflows/*.yml
+    and any Dockerfile/Makefile Go base images; go build ./... && go vet ./... green;
+    go test ./... -count=1 passes; govulncheck ./... exits 0 with zero reachable vulnerabilities;
+    record govulncheck + Go versions in close-out; no behaviour change, no tag/Release/deployment
+  status: in_progress
+  created_at: '2026-11-12T09:44:17.473096+00:00'
+  completed_at: '2026-11-12T10:02:38.143366+00:00'
