@@ -547,11 +547,14 @@ func DispatchReasonIsValid(reason string) bool {
 // "" = the project has never completed a tick. The tasks-mode cooldown
 // waiver (admission_mode.go + the three packer paths) reads this field: a
 // FAILED last tick stands the waiver down for one full effective cooldown.
+// An operator-approved restart is a terminal, non-lane-attributable outcome;
+// it has its own status so it cannot poison that waiver.
 const (
-	LastStatusCompleted = "completed"
-	LastStatusFailed    = "failed"
-	LastStatusTimeout   = "timeout"
-	LastStatusDeferred  = "deferred"
+	LastStatusCompleted       = "completed"
+	LastStatusFailed          = "failed"
+	LastStatusTimeout         = "timeout"
+	LastStatusDeferred        = "deferred"
+	LastStatusOperatorRestart = "operator_restart"
 )
 
 // EventSeverity enumerates the severity tiers for event log entries.

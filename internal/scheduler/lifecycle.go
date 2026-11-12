@@ -169,6 +169,11 @@ type TickOutcome struct {
 	// status/outcome pair therefore records the guard's verdict on every
 	// surface without any second marker column.
 	GuardAbort bool
+	// OperatorRestart marks a failed in-flight tick aborted during an
+	// operator-approved restart. The tick row remains failed for its lifecycle
+	// and orphan-resume vocabulary, while the project admission stamp uses the
+	// non-lane-attributable operator_restart status (SCHED-WAIVER-ABORT).
+	OperatorRestart bool
 	// NoTools (SCHED-GAP-1655): the completed gateway session ran ZERO
 	// tool calls — the response envelope carried no tool-call output item
 	// and the SSE trace never observed a tool event. terminalOutcome maps
@@ -510,6 +515,9 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		lastStatus = database.LastStatusCompleted
 	case TickFailed:
 		lastStatus = database.LastStatusFailed
+		if outcome.OperatorRestart {
+			lastStatus = database.LastStatusOperatorRestart
+		}
 	case TickTimeout:
 		lastStatus = database.LastStatusTimeout
 	case TickDeferred:

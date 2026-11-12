@@ -263,6 +263,13 @@ func tasksAdmissionDue(workdir, ownership string) bool {
 //
 // A legacy row (pre-v38) reads "" — treated as NOT failed, preserving the
 // pre-214 waiver behavior until the project's next terminal tick stamps it.
+// Operator-approved restart reaps are terminal but non-lane-attributable; their
+// distinct status must keep the tasks waiver open after the restart.
+//
+// ch:trace row=SCHED-WAIVER-ABORT spec=internal/scheduler/admission_mode.go#lastTickStatusFailed wave=.coding-herms/waves/coding-herms-scheduler-foreman-2026-11-12-18-16-42.json test=TestSchedGap214_OperatorRestartAbortKeepsWaiver doc=none:reason prompt=/home/kara/.hermes/cache/scratch/coding-herms-scheduler-foreman-2026-11-12-18-16-42/attempt-1/SCHED-WAIVER-ABORT-brief.txt evidence=go_test_internal_scheduler_run_TestSchedGap214_OperatorRestartAbortKeepsWaiver_ok_1.593s witness=focused-test:TestSchedGap214_OperatorRestartAbortKeepsWaiver verdict=none:foreman-owned memory=none:foreman-owned
+// STATUS: complete
+// TIER: T1
+// EVIDENCE: go test ./internal/scheduler -count=1 -run TestSchedGap214_OperatorRestartAbortKeepsWaiver => ok github.com/coding-hermes/scheduler/internal/scheduler 1.593s
 func lastTickStatusFailed(lastStatus string) bool {
 	return lastStatus == database.LastStatusFailed
 }

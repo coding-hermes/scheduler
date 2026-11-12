@@ -386,3 +386,52 @@ func TestSchedGap214_EligibilityMirror(t *testing.T) {
 		t.Errorf("countEligibleProjects = %d, want 0 — the storm lane is deferred by the post-failure cooldown, the mirror must agree (GAP-050)", got)
 	}
 }
+
+// TestSchedGap214_OperatorRestartAbortKeepsWaiver proves the live restart
+// abort path and the post-restart admission decision together. The tick row
+// remains failed/orphaned for lifecycle and resume accounting, but the project
+// stamp is operator_restart, so pending tasks re-admit immediately after the
+// restart instead of requiring operator cooldown surgery.
+func TestSchedGap214_OperatorRestartAbortKeepsWaiver(t *testing.T) {
+	const (
+		project = "gap214-operator-restart"
+		nsID    = "gap214-operator-restart-ns"
+	)
+	now := fixedEvalNow()
+	db := newTestDB(t)
+	admitInsertNamespace(t, db, nsID, 0, database.AdmissionModeTasks)
+	wd := gap214BoardWithWork(t)
+	admitInsertProject(t, db, admitProjectSpec{
+		Name: project, NS: nsID, CooldownS: 21600, Workdir: wd,
+	})
+	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES (?, ?, 'running', ?, ?)`, project+"-in-flight", project, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatalf("insert in-flight tick: %v", err)
+	}
+
+	t.Setenv(EnvOperatorRestartApproved, "1")
+	aborter := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4, true)
+	aborter.SetClock(clock.NewFixed(now))
+	aborter.abortInFlightTicks()
+
+	var status, orphan string
+	if err := db.QueryRow(`SELECT p.last_tick_status, t.orphan_reason
+		FROM projects p JOIN ticks t ON t.project_name = p.name
+		WHERE p.name = ?`, project).Scan(&status, &orphan); err != nil {
+		t.Fatalf("read restart-abort state: %v", err)
+	}
+	if status != database.LastStatusOperatorRestart {
+		t.Fatalf("last_tick_status = %q, want %q", status, database.LastStatusOperatorRestart)
+	}
+	if orphan != OrphanReasonOperatorRestart {
+		t.Fatalf("orphan_reason = %q, want %q", orphan, OrphanReasonOperatorRestart)
+	}
+
+	admitter := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4, true)
+	admitter.SetSimulation(1.0)
+	admitter.SetClock(clock.NewFixed(now.Add(9 * time.Second)))
+	admitter.evaluate()
+	if got := gap214CountTicks(t, db, project); got != 1 {
+		t.Fatalf("post-restart tasks waiver selected %d tick(s), want 1 — operator_restart must not consume SCHED-GAP-214 cooldown", got)
+	}
+}
