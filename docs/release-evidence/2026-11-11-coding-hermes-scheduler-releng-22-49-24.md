@@ -1,6 +1,6 @@
 # Scheduler release readiness — 2026-11-11
 
-Certified candidate: 7ee83d1106146540a2e752f70f2052f94554ba4e (`origin/main`, GitHub repository `coding-hermes/scheduler`) — this header line was rewritten in place by pass 2, which supersedes the pass-1 candidate 9b1fdd227da01122d3e162ca80c3c53aead9229a; the pass-1 body below is preserved unedited. Canonical remote: `https://github.com/coding-hermes/scheduler.git`; default branch: `main`; fetched branch, local HEAD, and `git ls-remote` agree at this SHA. The releng carrier checkout had an unrelated dirty board line, so this evidence was produced in a clean detached worktree at the certified SHA.
+Certified candidate (code-certified): 7ee83d1106146540a2e752f70f2052f94554ba4e (`origin/main` code tree, GitHub repository `coding-hermes/scheduler`); carrier tip at pass 3: 4324a58004bf7b4d28a0c25c6be1d8c6cb47252e. This header line has been rewritten in place by pass 2, which supersedes the pass-1 candidate 9b1fdd227da01122d3e162ca80c3c53aead9229a, and again by pass 3, which re-anchored only the CARRIER (every commit after 7ee83d11 touches bookkeeping paths only); the pass-1 and pass-2 bodies below are preserved unedited. Canonical remote: `https://github.com/coding-hermes/scheduler.git`; default branch: `main`; fetched branch, local HEAD, and `git ls-remote` agree at this SHA. The releng carrier checkout had an unrelated dirty board line, so this evidence was produced in a clean detached worktree at the certified SHA.
 
 Baseline: `v1.16.0`, annotated tag object `9049119de442ea15043dc1b46fa891a2cbd49393`, peeled commit `28a676686e1f93db901c53b3e1408729574ea7e1`. Remote tag and Release object agree; the v1.16.0 Release is published, non-draft, non-prerelease, with 8 binaries plus `SHA256SUMS`.
 
@@ -77,3 +77,73 @@ No verdict file is bound to `9b1fdd22` or `7ee83d11`. The only recent verdict in
 v1.17.0 minor remains **DUE and NOT CUT**. One hard blocker (`GO-2026-6859` on toolchain go1.26.10) plus two unverified evidence legs (candidate-bound GitReins verdict, exact-SHA dogfood). Once RELEASE-058 lands and the resulting SHA is green with both evidence legs bound to it, the repository-owned path owns publication: `make release-prep VERSION=v1.17.0` then an annotated tag, with `.github/workflows/release.yaml` publishing on `push` of tags matching `v*` — a manual `gh release create` must not race it.
 
 This pass mutated exactly two durable things: this evidence file and one `audit` event on `RELEASE-057`. No second readiness row was filed, no tag, Release, deployment, or product-code change was made.
+
+## Pass 3 — verification-only delta at carrier tip `4324a580` (decision unchanged: NO-CUT)
+
+The releng lane fired again on the same tick id after pass 2 was pushed. `origin/main` moved three
+commits since pass 2's certified `7ee83d11`: `9375950f` (this lane's pass-2 evidence doc), `a7af6b56`
+(board: `RELEASE-058` + `RELEASE-057` audit event) and `4324a580` (board: `SCHED-GAP-17012`, filed by a
+sibling lane). The path set `7ee83d11..4324a580` is three files — `.coding-hermes/board/events.jsonl`,
+`.coding-hermes/board/tasks.jsonl`, `docs/release-evidence/<this file>` — and the **material
+(non-bookkeeping) path count is 0**. The product tree is byte-identical to the pass-2 certified tree, so
+the pass-1/pass-2 census and build evidence CARRY rather than being re-derived; only the gates a new tip
+invalidates were re-measured.
+
+- Code-certified candidate: `7ee83d1106146540a2e752f70f2052f94554ba4e` (unchanged).
+- Carrier tip: `4324a58004bf7b4d28a0c25c6be1d8c6cb47252e` (`git rev-parse origin/main` after `git fetch`).
+- Range `v1.16.0..4324a580` = **65 commits** (`git rev-list --count`; 62 at pass 2 — the delta is this
+  lane's own bookkeeping plus one sibling board row).
+- Conventional census unchanged: 2 `feat`, 3 `fix`, 0 `perf`, no `BREAKING CHANGE` footer, no type-`!`
+  declaration → **v1.17.0 MINOR is still the correct bump**.
+- Tag/Release surface: `git ls-remote --tags origin 'refs/tags/v1.17*'` is empty; the newest Release
+  object is still `v1.16.0` (`2026-11-09T22:57:35Z`). No pass created, moved or deleted a tag or Release.
+
+### Blocker 1 — `GO-2026-6859` STILL LIVE (re-measured at the carrier)
+
+`govulncheck ./...` at `4324a580` exits **3**:
+
+```
+Vulnerability #1: GO-2026-6859
+  Found in: net/http@go1.26.10
+  Fixed in: net/http@go1.26.11
+```
+
+`go.mod` still declares `toolchain go1.26.10` and the lane's host toolchain is `go1.26.10`. The unblock
+work item **`RELEASE-058`** (bump to Go 1.26.11, re-run the hosted gates, re-probe `govulncheck`) is
+still `pending`; nothing has landed for it. A reachable stdlib vulnerability in the HTTP stack of an
+HTTP control plane is a hard release blocker, so this pass does not authorize a cut.
+
+### Blocker 2 — exact-SHA CI at the carrier: IN PROGRESS / UNPROVEN
+
+Runs `43123331819` (`CI`) and `43123330353` (`CI Pipeline`) for carrier `4324a580` are `in_progress`
+(created `2026-11-11T23:54Z`) — neither terminal, therefore neither green nor red, and not evidence.
+The code-certified candidate keeps its own terminal green receipt from pass 2 — run `43118765966`
+(`CI`) and run `43118764312` (`CI Pipeline`) at `7ee83d11`, with all required jobs started and
+successful (`Container`/`Release` skipped = tag-only path). That receipt is **not** transferred to the
+carrier; candidate CI and carrier CI are separate receipts.
+
+### Blocker 3 — candidate-bound GitReins verdict and dogfood: UNVERIFIED (unchanged)
+
+No verdict file is bound to `7ee83d11` or to `4324a580`; the only recent verdict in the repository is
+the task verdict `SCHED-429-001` against worktree `bc2b5ebe`. No exact-SHA dogfood record exists
+(`docs/dogfood/*` stops at 2026-10-27 and predates the 1.17.0 material changes). Both legs stay
+UNVERIFIED for this candidate and are not substituted with the prior candidate's evidence.
+
+### Blocker 4 — deployed-binary staleness: UNCHANGED
+
+`GET http://127.0.0.1:9090/api/v1/health` → HTTP 200, `build_sha` `9b1fdd22`, i.e. a development build
+roughly two code commits behind the code-certified candidate and behind the un-cut release. The live
+deployment gap remains `SCHED-GAP-162`; the root-owned shadow binary remains `RELEASE-051`. No daemon
+restart or root-owned mutation was attempted.
+
+### Decision
+
+v1.17.0 remains **DUE and NOT CUT**, for the same single hard blocker as pass 2 plus the same two
+unverified evidence legs. The cut becomes possible only when `RELEASE-058` lands (`go.mod` toolchain
+≥ `go1.26.11`), the resulting SHA carries terminal green exact-SHA CI, and candidate-bound GitReins and
+dogfood evidence exist. Publication is owned by the repository's own path — `make release-prep
+VERSION=v1.17.0`, then `make tag VERSION=v1.17.0` — with `.github/workflows/release.yaml` publishing on
+`refs/tags/v1.*` push; a manual `gh release create` must not race it.
+
+Mutations this pass: this evidence file, a note/evidence refresh on `RELEASE-057`, and one `audit` event
+on `RELEASE-057`. No new readiness row, no tag, no Release, no deployment, no product-code change.
