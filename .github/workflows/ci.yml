@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.11"
 
       - name: Build
         run: go build ./...
@@ -113,7 +113,7 @@ jobs:
     with:
       binary: schedulerd
       main: ./cmd/schedulerd
-      go-version: "1.26"
+      go-version: "1.26.11"
       version-var: github.com/coding-hermes/scheduler/internal/version.Version
       run-arm64-tests: true
     permissions:
@@ -129,7 +129,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.11"
 
       - name: golangci-lint
         # Whole-repo run — intentionally covers internal/blocks/... and
@@ -157,7 +157,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.11"
 
       - name: Race detector — blocks
         run: go test -short -race -count=1 -p 1 -timeout=300s ./internal/blocks/...
@@ -190,7 +190,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.11"
 
       - name: Race detector — scheduler
         run: go test -short -race -count=1 -p 1 -timeout=1800s ./internal/scheduler/...
