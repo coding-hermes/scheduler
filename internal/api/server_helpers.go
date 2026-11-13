@@ -888,7 +888,7 @@ func listTicks(ctx context.Context, db *sql.DB, project, status string, limit in
 		q += " AND status = ?"
 		args = append(args, status)
 	}
-	q += " ORDER BY spawned_at DESC LIMIT ?"
+	q += " ORDER BY ticks.spawned_at DESC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := db.QueryContext(ctx, q, args...)

@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 88 // SCHED-GAP-17002: wakes (wake tables)
+const latestMigration = 89 // PERF-009: index ticks.spawned_at for listTicks ordering
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1988,6 +1988,16 @@ CREATE TABLE IF NOT EXISTS wakes (
 	note           TEXT
 );
 CREATE INDEX IF NOT EXISTS wakes_state_idx ON wakes(state, at_time);
+`,
+	},
+	{
+		// PERF-009: listTicks orders by the base ticks.spawned_at column,
+		// rather than the COALESCE projection alias, so SQLite can satisfy the
+		// request directly from this index without a temporary sort.
+		version: 89,
+		desc:    "PERF-009: index ticks.spawned_at for /api/v1/ticks ordering",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_spawned ON ticks(spawned_at);
 `,
 	},
 }
