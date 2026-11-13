@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 88 // SCHED-GAP-17002: wakes (wake tables)
+const latestMigration = 89 // PERF-008: ticks.created_at window index
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -1988,6 +1988,16 @@ CREATE TABLE IF NOT EXISTS wakes (
 	note           TEXT
 );
 CREATE INDEX IF NOT EXISTS wakes_state_idx ON wakes(state, at_time);
+`,
+	},
+	{
+		// PERF-008: the Observatory collector bounds its tick pass by created_at.
+		// Keep this append-only so existing databases receive the same index
+		// without changing any result rows or API behavior.
+		version: 89,
+		desc:    "PERF-008: index ticks.created_at for Observatory window predicates",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_created ON ticks(created_at);
 `,
 	},
 }
