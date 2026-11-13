@@ -353,10 +353,9 @@ func (w *BoardWakeWatcher) pollOnce(now time.Time) {
 
 // wake handles one fired debounce: read the board through the R06
 // git-verified freshness reader, emit the board_wake event (row id +
-// freshness verdict per row — the AC3 contract), and force evaluation.
-// The freshness read itself is fail-safe by construction (an unreadable
-// board yields a zero report; the event still fires, evaluate still
-// runs).
+// freshness verdict per row — the AC3 contract), and force evaluation when
+// workable rows exist. An unreadable board fails open and still evaluates;
+// a readable board with no workable rows does not trigger evaluation.
 func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 	opts := w.freshnessO
 	rep := ReadBoardFreshness(t.workdir, t.boardPath, opts)
@@ -365,7 +364,7 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 		rows = append(rows, map[string]string{"row_id": v.ID, "verdict": string(v.Status)})
 	}
 	w.events.Emit(context.Background(), SeverityInfo, "board_wake",
-		fmt.Sprintf("board write on %s — forced re-evaluation", t.project),
+		fmt.Sprintf("board write on %s", t.project),
 		map[string]any{
 			"project":         t.project,
 			"board":           t.boardPath,
@@ -376,6 +375,11 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 			"malformed_lines": rep.MalformedLines,
 			"rows":            rows,
 		})
+	workable, ok := boardWorkableRows(t.workdir)
+	if ok && workable == 0 {
+		log.Printf("BOARD-WAKE: %s no-op — board has no workable rows", t.project)
+		return
+	}
 	log.Printf("BOARD-WAKE: %s wake — forced re-evaluation (work_to_spawn=%t, rows=%d, can_verify=%t)",
 		t.project, rep.WorkToSpawn, rep.TotalRows, rep.CanVerify)
 	// SCHED-GAP-157: stamp the board_wake nudge source BEFORE forcing the
