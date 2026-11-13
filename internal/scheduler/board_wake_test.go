@@ -123,6 +123,90 @@ func wakeEvents(t *testing.T, db *sql.DB) []map[string]any {
 	return out
 }
 
+// TestBoardWake_WorkableBoardInvokesCallbacks proves a readable board with
+// dispatchable work keeps the existing wake callbacks intact.
+// TRACE row=SCHED-BOARDWAKE-001 exact_test=TestBoardWake_WorkableBoardInvokesCallbacks STATUS: complete TIER: T1 EVIDENCE: direct wake seam callback counts.
+func TestBoardWake_WorkableBoardInvokesCallbacks(t *testing.T) {
+	fx := newWakeFix(t)
+	var onWake int
+	fx.w.SetWakeListener(func() { onWake++ })
+
+	fx.w.wake(boardWakeTarget{project: "wakeproj", workdir: fx.workdir, boardPath: fx.boardPath})
+
+	if got := fx.evals(); got != 1 {
+		t.Fatalf("ForceEvaluate calls = %d, want 1 for workable board", got)
+	}
+	if onWake != 1 {
+		t.Fatalf("onWake calls = %d, want 1 for workable board", onWake)
+	}
+}
+
+// TestBoardWake_ReadableNonWorkableBoardSkipsCallbacks proves deferred and
+// unmet-dependency-only boards emit their wake event but do not invoke either
+// callback.
+func TestBoardWake_ReadableNonWorkableBoardSkipsCallbacks(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+	}{
+		{
+			name:  "deferred",
+			lines: []string{`{"id":"W-1","status":"pending","deferred":true}`},
+		},
+		{
+			name:  "unmet dependency",
+			lines: []string{`{"id":"W-1","status":"pending","depends_on":["W-2"]}`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newWakeFix(t)
+			var onWake int
+			fx.w.SetWakeListener(func() { onWake++ })
+			rewriteBoard(t, fx.boardPath, tt.lines...)
+
+			fx.w.wake(boardWakeTarget{project: "wakeproj", workdir: fx.workdir, boardPath: fx.boardPath})
+
+			if events := wakeEvents(t, fx.db); len(events) != 1 {
+				t.Fatalf("wake events = %d, want 1", len(events))
+			}
+			var message string
+			if err := fx.db.QueryRow(`SELECT message FROM events WHERE component = 'board_wake'`).Scan(&message); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(message, "forced re-evaluation") {
+				t.Fatalf("no-op event claims forced evaluation: %q", message)
+			}
+			if got := fx.evals(); got != 0 {
+				t.Fatalf("ForceEvaluate calls = %d, want 0 for %s-only board", got, tt.name)
+			}
+			if onWake != 0 {
+				t.Fatalf("onWake calls = %d, want 0 for %s-only board", onWake, tt.name)
+			}
+		})
+	}
+}
+
+// TestBoardWake_UnreadableBoardInvokesCallbacks proves the wake remains
+// fail-open when the workable-row scanner cannot read the board.
+func TestBoardWake_UnreadableBoardInvokesCallbacks(t *testing.T) {
+	fx := newWakeFix(t)
+	var onWake int
+	fx.w.SetWakeListener(func() { onWake++ })
+	if err := os.Remove(fx.boardPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fx.w.wake(boardWakeTarget{project: "wakeproj", workdir: fx.workdir, boardPath: fx.boardPath})
+
+	if got := fx.evals(); got != 1 {
+		t.Fatalf("ForceEvaluate calls = %d, want 1 for unreadable board", got)
+	}
+	if onWake != 1 {
+		t.Fatalf("onWake calls = %d, want 1 for unreadable board", onWake)
+	}
+}
+
 // TestBoardWake_BoardWriteWakesEvaluate is AC1 first half, watcher-side:
 // a board write arms a wake and the wake calls ForceEvaluate within the
 // debounce window — the FIRST observed change starts the window and
