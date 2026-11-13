@@ -6104,3 +6104,14 @@ tasks:
   status: in_progress
   created_at: '2026-11-12T09:44:17.473096+00:00'
   completed_at: '2026-11-12T10:02:38.143366+00:00'
+- id: SCHED-BOARDWAKE-001
+  title: Board wake pre-spawn dispatchability gate
+  criteria:
+  - 'PROOF: go test ./internal/scheduler -run TestBoardWake -count=1 demonstrates
+    board_wake only forces a foreman session when the fresh board still contains at
+    least one workable pending row, and the full scheduler gate passes; FAILIF: a
+    board_wake wake with zero workable rows calls ForceEvaluate or produces a dispatched
+    tick, or the required test/gate fails.'
+  status: complete
+  created_at: '2026-11-13T09:12:54.691623+00:00'
+  completed_at: '2026-11-13T10:08:19.463763+00:00'
