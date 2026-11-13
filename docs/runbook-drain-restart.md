@@ -424,6 +424,28 @@ systemctl --user start coding-hermes-scheduler.service
 This page documents the contract; the busy-fleet path was rehearsed only against a hermetic
 fixture, not by pausing or restarting the live fleet.
 
+### 4c. Shutdown-path column effects
+
+The five shutdown paths below are the authoritative persistence matrix. `ticks.status` is the
+terminal lifecycle state of the individual tick. `ticks.orphan_reason` is only written when the
+scheduler can attribute the interruption to a known reap path. `projects.last_tick_status` is the
+status used by the SCHED-GAP-124 tasks waiver; only `failed` stands the waiver down under
+SCHED-GAP-214.
+
+| Shutdown path | `ticks.status` | `ticks.orphan_reason` | `projects.last_tick_status` | Waiver / accounting effect |
+|---|---|---|---|---|
+| Graceful `SIGTERM`, drain completes | Existing tick reaches its real terminal result (`completed`, `failed`, `timeout`, or `deferred`) | Unchanged/empty; this is not an orphan reap | The real terminal result (`completed`, `failed`, `timeout`, or `deferred`) | A genuine `failed` result stands down the waiver and is counted according to its normal failure class; a successful result does not |
+| Graceful `SIGTERM`, drain timeout | `failed` for every row still `running` when `Stop` gives up | `drain_timeout` | `failed` | The reap is excluded from failure-rate/auto-disable accounting, but the failed project stamp still stands down the tasks waiver |
+| Operator-approved restart | `failed` for every row still `running` when `Stop` gives up | `operator_restart` | `operator_restart` (distinct non-failed status) | The reap is excluded from failure-rate/auto-disable accounting and does not stand down the SCHED-GAP-124 waiver; no operator cooldown surgery is required |
+| `SIGKILL` / crash with no drain | No shutdown-time stamp is possible. On the next boot, dead-pid or stale-gateway rows are reaped as `timeout` | `startup_reap` on the next boot | `last_tick_status` is not rewritten by the startup reaper; it remains the prior value (or empty) because the process that died could not complete the project stamp | The startup reap is an orphan/recovery event, not a live proof of a project failure; verify the prior project status and the next terminal tick separately |
+| systemd unit restart | Usually the graceful `SIGTERM` path above (`systemctl --user restart` sends the unit's stop signal, then starts it again); apply the graceful-complete, drain-timeout, or approved-restart row according to what happened before exit | The reason from the selected graceful path; no additional systemd-only reason is written | The status from the selected graceful path; no systemd-only overwrite | `ExecStartPre` rebuild/readiness proves the new process started, not the old tick outcome. A crash during restart falls into the `SIGKILL`/crash row instead |
+
+The first three rows are written synchronously by the old process. The crash row is necessarily
+split across processes: the dead process cannot stamp `last_tick_status`, and only the new process
+can perform the `startup_reap` tick cleanup. The matrix is the shipped behavior exercised by the
+scheduler lifecycle/restart regression tests; the live systemd restart leg remains an operator
+verification step, not a test fixture.
+
 EXPECTED OUTPUT **shape** — `systemctl` prints **nothing** on success (a failure prints
 `Job for coding-hermes-scheduler.service failed` plus a reason to stderr and exits non-zero). This
 command runs `ExecStartPre` first: `make build` rebuilds `bin/schedulerd` from source, and **only then**

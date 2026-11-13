@@ -386,3 +386,57 @@ func TestSchedGap214_EligibilityMirror(t *testing.T) {
 		t.Errorf("countEligibleProjects = %d, want 0 — the storm lane is deferred by the post-failure cooldown, the mirror must agree (GAP-050)", got)
 	}
 }
+
+// TestSchedGap214_OperatorRestartAbortKeepsWaiver drives the real shutdown
+// abort and admission paths together. The tick remains failed and orphaned for
+// lifecycle/resume accounting, while the project stamp is non-failed so an
+// approved restart does not consume the tasks-mode waiver's cooldown.
+func TestSchedGap214_OperatorRestartAbortKeepsWaiver(t *testing.T) {
+	const (
+		project = "gap214-operator-restart"
+		nsID    = "gap214-operator-restart-ns"
+	)
+	now := fixedEvalNow()
+	db := newTestDB(t)
+	admitInsertNamespace(t, db, nsID, 0, database.AdmissionModeTasks)
+	wd := gap214BoardWithWork(t)
+	admitInsertProject(t, db, admitProjectSpec{
+		Name: project, NS: nsID, CooldownS: 21600, Workdir: wd,
+	})
+	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, spawned_at, created_at)
+		VALUES (?, ?, 'running', ?, ?)`, project+"-in-flight", project, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatalf("insert in-flight tick: %v", err)
+	}
+
+	t.Setenv(EnvOperatorRestartApproved, "1")
+	aborter := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4, true)
+	aborter.SetClock(clock.NewFixed(now))
+	aborter.abortInFlightTicks()
+
+	var tickStatus, projectStatus, orphan string
+	if err := db.QueryRow(`SELECT p.last_tick_status, t.status, t.orphan_reason
+		FROM projects p JOIN ticks t ON t.project_name = p.name
+		WHERE p.name = ?`, project).Scan(&projectStatus, &tickStatus, &orphan); err != nil {
+		t.Fatalf("read restart-abort state: %v", err)
+	}
+	if tickStatus != string(TickFailed) {
+		t.Fatalf("ticks.status = %q, want %q", tickStatus, TickFailed)
+	}
+	if projectStatus != database.LastStatusOperatorRestart {
+		t.Fatalf("projects.last_tick_status = %q, want %q", projectStatus, database.LastStatusOperatorRestart)
+	}
+	if lastTickStatusFailed(projectStatus) {
+		t.Fatalf("operator restart status %q must not be classified as failed", projectStatus)
+	}
+	if orphan != OrphanReasonOperatorRestart {
+		t.Fatalf("ticks.orphan_reason = %q, want %q", orphan, OrphanReasonOperatorRestart)
+	}
+
+	admitter := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4, true)
+	admitter.SetSimulation(1.0)
+	admitter.SetClock(clock.NewFixed(now.Add(9 * time.Second)))
+	admitter.evaluate()
+	if got := gap214CountTicks(t, db, project); got != 1 {
+		t.Fatalf("post-restart tasks waiver selected %d tick(s), want 1 — operator restart must not consume SCHED-GAP-214 cooldown", got)
+	}
+}

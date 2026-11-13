@@ -968,14 +968,16 @@ func (l *Loop) abortInFlightTicks() {
 		log.Printf("LOOP: shutdown drain: iterate running ticks: %v", err)
 	}
 
+	operatorRestart := OperatorRestartApproved()
 	for _, t := range stuck {
 		finished := l.clock().Now()
 		err := l.lifecycle.Complete(TickOutcome{
-			TickID:   t.id,
-			Project:  t.project,
-			Started:  finished,
-			Finished: finished,
-			Status:   TickFailed,
+			TickID:          t.id,
+			Project:         t.project,
+			Started:         finished,
+			Finished:        finished,
+			Status:          TickFailed,
+			OperatorRestart: operatorRestart,
 			// SCHED-GAP-1597: -1 → exit_code NULL. No process was
 			// reaped — the drain reaped the row, not the child — so
 			// the struct-default 0 would be a fabricated "exited
@@ -998,7 +1000,7 @@ func (l *Loop) abortInFlightTicks() {
 		// Both spellings — this one and the legacy drain_timeout — are
 		// excluded from lane accounting by the same shared predicate.
 		reason := OrphanReasonDrainTimeout
-		if OperatorRestartApproved() {
+		if operatorRestart {
 			reason = OrphanReasonOperatorRestart
 		}
 		l.stampOrphaned(t.id, reason)
