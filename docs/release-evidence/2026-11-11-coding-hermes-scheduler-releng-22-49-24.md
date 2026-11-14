@@ -1,6 +1,6 @@
 # Scheduler release readiness — 2026-11-11
 
-Certified candidate (code-certified): b01954ad612b4a740bf8db184691fbac1109880e (`origin/main` code tree, GitHub repository `coding-hermes/scheduler`); carrier tip for pass 4: pending evidence commit and final board carrier. This header line has been rewritten in place by pass 2, which supersedes the pass-1 candidate 9b1fdd227da01122d3e162ca80c3c53aead9229a, and again by pass 3, which re-anchored only the CARRIER (every commit after 7ee83d11 touches bookkeeping paths only); the pass-1 and pass-2 bodies below are preserved unedited. Canonical remote: `https://github.com/coding-hermes/scheduler.git`; default branch: `main`; fetched branch, local HEAD, and `git ls-remote` agree at this SHA. The releng carrier checkout had an unrelated dirty board line, so this evidence was produced in a clean detached worktree at the certified SHA.
+Certified candidate (code-certified): edd679a4ef87f26ebc6e8549671828e70376059c (`origin/main`, GitHub repository `coding-hermes/scheduler`); carrier tip: evidence and board carriers are being prepared from a clean detached worktree. This header supersedes the prior b01954ad pass; historical pass bodies remain preserved below. Canonical remote: `https://github.com/coding-hermes/scheduler.git`; default branch: `main`; fetched branch, local HEAD, and `git ls-remote` agree at this SHA.
 
 Baseline: `v1.16.0`, annotated tag object `9049119de442ea15043dc1b46fa891a2cbd49393`, peeled commit `28a676686e1f93db901c53b3e1408729574ea7e1`. Remote tag and Release object agree; the v1.16.0 Release is published, non-draft, non-prerelease, with 8 binaries plus `SHA256SUMS`.
 
@@ -163,3 +163,22 @@ The remote default branch advanced materially from the prior code-certified tree
 - Deployed staleness: `GET http://127.0.0.1:9090/api/v1/health` returned HTTP 200 with `build_sha=9b1fdd22`, `version=v1.16.0-58-g9b1fdd22-dirty`; the running daemon is not the candidate or a release artifact. No restart or root-owned mutation was attempted.
 
 Decision: v1.17.0 remains DUE and NOT CUT. The exact-head `CI Pipeline` run is still in progress, and candidate-bound GitReins and dogfood evidence are absent. The required next gates are terminal success for run `43366180350`, a GitReins verdict bound to `b01954ad612b4a740bf8db184691fbac1109880e`, and a candidate-exact dogfood/QA receipt. Nothing was tagged, published, deployed, or developed by this sweep.
+
+## Pass 5 — daily readiness at candidate edd679a4 (NO-CUT)
+
+Identity and baseline: `origin/main`, local HEAD, and `git ls-remote origin refs/heads/main` all resolve to `edd679a4ef87f26ebc6e8549671828e70376059c`. Baseline is `v1.16.0` (peeled commit `28a676686e1f93db901c53b3e1408729574ea7e1`). Remote `refs/tags/v1.17*` is empty and `gh release view v1.17.0` reports `release not found`.
+
+- Range `v1.16.0..edd679a4` contains 132 commits / 125 non-merge commits. Census reconciles: `feat=2`, `fix=8`, `perf=7`, `nonmaterial=106`, `other=2`, total `125`; no breaking marker. Proposed bump remains `v1.17.0` MINOR.
+- Changelog coverage is incomplete for newly landed material changes: the v1.17.0 section cites the earlier feature/fix SHAs but not post-prep material work including `c8fac45`, `ffff7175`, `233fcf28`, `97d0b822`, `4018dbd2`, and the `05253993` retention tool path. No changelog mutation was made.
+- Version authority passes for v1.17.0; the repository-owned path remains `make release-prep`, then `make tag`, with tag publication owned by `.github/workflows/release.yaml`. It builds eight static Go binaries plus `SHA256SUMS`; no Dockerfile or GoReleaser configuration exists.
+- Exact candidate CI is unproven: `gh run list --repo coding-hermes/scheduler --commit edd679a4...` returns no runs; check-runs and check-suites both return `total_count=0`. The two head commits carry `[ci skip]`. Product paths are byte-identical to the last fully executed green SHA `8b21658d099f8f8aa99aa39657855c328ded8d6d`, whose CI runs `43546150329` and `43546149704` were terminal success with required jobs green. This conditional identity evidence does not become current-SHA green CI.
+- Security is clear at the candidate: Go `1.26.11`, `go.mod` toolchain `1.26.11`, and `govulncheck ./...` exits 0 with `No vulnerabilities found.` GO-2026-6859 is discharged.
+- GitReins is not release-grade: no verdict is bound to `edd679a4`; latest relevant verdicts are `PERF-007` at `a3369593` passed=false and `PERF-009` at `f7ab1f0b` degraded/failed. Both remain unresolved.
+- Dogfood/QA is unverified: no receipt names `edd679a4`; latest QA includes harness disk-starvation findings QA-CHS-201/202. Historical evidence is not substituted.
+- Deployment is stale: live health reports `build_sha=9b1fdd22`, `version=v1.16.0-58-g9b1fdd22-dirty`; no restart or deployment mutation was attempted. Ownership remains SCHED-GAP-162 / RELEASE-051.
+
+### Known issues
+
+PERF-007 remains GitReins FAIL with live-copy/dashboard/metrics/latency acceptance unverified. PERF-009 remains degraded/failed with no candidate-bound verdict. QA-CHS-201/202 remain pending harness disk-starvation findings. SCHED-GAP-162 and RELEASE-051 remain stale deployment findings.
+
+Decision: v1.17.0 remains DUE and NOT CUT. Current-SHA CI is unproven, changelog coverage is incomplete, candidate-bound GitReins is not passing, and candidate-exact dogfood/QA is absent. No tag, Release, deployment, changelog, or product-code mutation was made by this sweep.
