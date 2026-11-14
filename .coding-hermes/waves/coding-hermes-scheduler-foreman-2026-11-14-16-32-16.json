@@ -1,0 +1,18 @@
+{
+  "tick_id":"coding-hermes-scheduler-foreman-2026-11-14-16-32-16",
+  "wave_id":"coding-hermes-scheduler-foreman-2026-11-14-16-32-16",
+  "block":"RELEASE-060",
+  "selection":"block-drive",
+  "wave_budget":12,
+  "wave_size":2,
+  "wave_size_reason":"nproc=16, loadavg=2.68, slots=6; two independent ready rows with disjoint owned surfaces.",
+  "base_sha":"e301e18e412b91635f5438b454919a60745e9993",
+  "rows":[
+    {"task_id":"RELEASE-059","branch":"wt/RELEASE-059","worker_commit":"ec79d63860be6ac9278176028d02c3a70f27c8e4","merged_tree":"d3257e86c662acf5007e041197f42d66946eb7b8","status":"pending","reason":"local gates pass; exact-head CI and commit-bound verdict pending"},
+    {"task_id":"RELEASE-060","branch":"wt/RELEASE-060","worker_commit":"0b34679140a6f5736f4c58b5fd19c4adec5d0b6d","rebased_commit":"10ed8367cbdc2247a5afa298e93550c0a54213bb","merged_tree":"d3257e86c662acf5007e041197f42d66946eb7b8","status":"pending","reason":"local gates pass; exact-head CI and commit-bound verdict pending"}
+  ],
+  "status":"implementation_merged_closeout_pending",
+  "closeout_commit_sha":"pending:publication",
+  "manifest_binding_predecessor":"d3257e86c662acf5007e041197f42d66946eb7b8",
+  "finished_at":null
+}
