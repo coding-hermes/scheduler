@@ -12,7 +12,7 @@
     {"task_id":"RELEASE-060","branch":"wt/RELEASE-060","worker_commit":"0b34679140a6f5736f4c58b5fd19c4adec5d0b6d","rebased_commit":"10ed8367cbdc2247a5afa298e93550c0a54213bb","merged_tree":"d3257e86c662acf5007e041197f42d66946eb7b8","status":"pending","reason":"local gates pass; exact-head CI and commit-bound verdict pending"}
   ],
   "status":"implementation_merged_closeout_pending",
-  "closeout_commit_sha":"c2b533703c6946d22795b03ab40abe589560b99b",
+  "closeout_commit_sha":"bf907aab0ec0a232708a8cb09a186f80dda2ee31",
   "manifest_binding_predecessor":"c2b533703c6946d22795b03ab40abe589560b99b",
   "finished_at":"2026-11-14T17:34:45Z"
 }
