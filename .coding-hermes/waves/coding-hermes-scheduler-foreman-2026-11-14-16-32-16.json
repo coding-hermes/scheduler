@@ -11,8 +11,8 @@
     {"task_id":"RELEASE-059","branch":"wt/RELEASE-059","worker_commit":"ec79d63860be6ac9278176028d02c3a70f27c8e4","merged_tree":"d3257e86c662acf5007e041197f42d66946eb7b8","status":"pending","reason":"local gates pass; exact-head CI and commit-bound verdict pending"},
     {"task_id":"RELEASE-060","branch":"wt/RELEASE-060","worker_commit":"0b34679140a6f5736f4c58b5fd19c4adec5d0b6d","rebased_commit":"10ed8367cbdc2247a5afa298e93550c0a54213bb","merged_tree":"d3257e86c662acf5007e041197f42d66946eb7b8","status":"pending","reason":"local gates pass; exact-head CI and commit-bound verdict pending"}
   ],
-  "status":"implementation_merged_closeout_pending",
-  "closeout_commit_sha":"6a001559c4afa39801a0389cb5bfef8950be3778",
-  "manifest_binding_predecessor":"94e396f2c34335863c93b892ac2f0665a6d563f0",
+  "status":"completed_with_open_acceptance",
+  "closeout_commit_sha":"pending:status-correction",
+  "manifest_binding_predecessor":"1bb94e467076ffdd27f7f1fd95076cf36d77c5bc",
   "finished_at":"2026-11-14T17:34:45Z"
 }
