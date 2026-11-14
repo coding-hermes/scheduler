@@ -7,7 +7,7 @@
   "path": "wave-recovery-before-dispatch",
   "wave_size": 2,
   "wave_size_reason": "The injected recovery envelope named zero workers, but the published manifest was non-empty. Both preserved PERF implementation commits were already ancestors of current origin/main, so no merge, fixup worker, or new wave dispatch was justified.",
-  "published_tip": "72a09914ac8645177c9c54834d02d1ff429cb233",
+  "published_tip": "81df2690732b802779dbc515aa32edd7db0b2d6d",
   "recovery_status": "recovered_with_open_acceptance",
   "recovery_manifest_finished_at": "2026-11-14T02:42:09Z",
   "rows": [
@@ -42,11 +42,14 @@
   },
   "block_drive_after_recovery": {
     "top_block": "PERF-009",
-    "ready_rows": ["PERF-008", "PERF-009"],
+    "ready_rows": [
+      "PERF-008",
+      "PERF-009"
+    ],
     "normal_work": "not dispatched: the same rows remain blocked and no new task was selected"
   },
   "remote_ci": "Latest listed green runs 43641826361 and 43641825494 are for e95cbb81, not current 72a09914. Earlier run 43606024798 failed on prior 8925975a and is owned by INT-CI-4192; exact current-head CI is not listed.",
   "manifest_binding_predecessor": "72a09914ac8645177c9c54834d02d1ff429cb233",
-  "closeout_commit_sha": "pending:commit",
+  "closeout_commit_sha": "81df2690732b802779dbc515aa32edd7db0b2d6d",
   "finished_at": "2026-11-14T22:48:12Z"
 }
