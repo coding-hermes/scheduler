@@ -1,0 +1,38 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-11-14-01-08-56",
+  "project": "coding-hermes-scheduler",
+  "repo": "/home/kara/coding-hermes-scheduler/coding-herms-scheduler",
+  "block": "PERF-009",
+  "base_sha": "d6c9f4530f02261aa7b4e1d0651a0ad1bdf55071",
+  "wave_budget": 9,
+  "computed_slots": 6,
+  "loadavg_1m": 7.74,
+  "nproc": 16,
+  "selection_note": "The ranked block is PERF-009. PERF-008 and PERF-009 were already merged; PERF-001-R3-R4 and PERF-007 are the remaining executable independent pending rows in the wider performance cluster. PERF-001-R3-R4 has a dependency edge only to completed rows; PERF-007 has no dependencies. Existing PERF-001-R3-R4 worktree was stale bookkeeping residue and was not reused; a fresh r2 worktree was provisioned.",
+  "rows": [
+    {
+      "task_id": "PERF-001-R3-R4",
+      "status_at_selection": "pending",
+      "depends_on": ["PERF-001-R3", "PERF-001-R3-R2", "PERF-001-R3-R3"],
+      "worktree": "/home/kara/worktrees/coding-hermes-scheduler-PERF-001-R3-R4-r2",
+      "branch": "wt/PERF-001-R3-R4-r2",
+      "base_sha": "d6c9f4530f02261aa7b4e1d0651a0ad1bdf55071",
+      "brief": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-01-08-56/perf001-brief.txt",
+      "model": "openai/gpt-6.1-terra",
+      "provider": "xkiro",
+      "independence": "different acceptance surface from PERF-007; no dependency edge between these wave rows"
+    },
+    {
+      "task_id": "PERF-007",
+      "status_at_selection": "pending",
+      "depends_on": [],
+      "worktree": "/home/kara/worktrees/coding-hermes-scheduler-PERF-007",
+      "branch": "wt/PERF-007",
+      "base_sha": "d6c9f4530f02261aa7b4e1d0651a0ad1bdf55071",
+      "brief": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-01-08-56/perf007-brief.txt",
+      "model": "openai/gpt-6.1-terra",
+      "provider": "xkiro",
+      "independence": "different acceptance surface from PERF-001-R3-R4; no dependency edge between these wave rows"
+    }
+  ]
+}
