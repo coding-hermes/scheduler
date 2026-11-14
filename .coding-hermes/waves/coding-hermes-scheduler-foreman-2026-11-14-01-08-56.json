@@ -7,8 +7,9 @@
   "wave_budget": 9,
   "computed_slots": 6,
   "loadavg_1m": 7.74,
-  "nproc": 16,
-  "selection_note": "The ranked block is PERF-009. PERF-008 and PERF-009 were already merged; PERF-001-R3-R4 and PERF-007 are the remaining executable independent pending rows in the wider performance cluster. PERF-001-R3-R4 has a dependency edge only to completed rows; PERF-007 has no dependencies. Existing PERF-001-R3-R4 worktree was stale bookkeeping residue and was not reused; a fresh r2 worktree was provisioned.",
+  "status": "recovered_with_failures",
+  "finished_at": "2026-11-14T02:42:09Z",
+  "selection_note": "Recovered before any new dispatch. The preserved wave contained PERF-001-R3-R4 and PERF-007. Both branches were independently re-gated. PERF-001-R3-R4 was stale relative to current main and its implementation was already present on main as 00430d6bf7b9f5abba96e31145267ec2957139c9; PERF-007 was already an ancestor of main as a86b16bf99a54aa3ab86375e6e188de803f55b10, later carried by 05253993f4ebc4003274eb7d8b40994d2dc84fbe. No duplicate merge was performed.",
   "rows": [
     {
       "task_id": "PERF-001-R3-R4",
@@ -17,10 +18,13 @@
       "worktree": "/home/kara/worktrees/coding-hermes-scheduler-PERF-001-R3-R4-r2",
       "branch": "wt/PERF-001-R3-R4-r2",
       "base_sha": "d6c9f4530f02261aa7b4e1d0651a0ad1bdf55071",
-      "brief": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-01-08-56/perf001-brief.txt",
-      "model": "openai/gpt-6.1-terra",
-      "provider": "xkiro",
-      "independence": "different acceptance surface from PERF-007; no dependency edge between these wave rows"
+      "tip": "83e986137f569e4b3b154e1936ce1dd2bd2b77b9",
+      "implementation_commit": "00430d6bf7b9f5abba96e31145267ec2957139c9",
+      "merge": "not_needed_already_landed",
+      "result": "failed_missing_commit_bound_gitreins_verdict",
+      "local_gate": "PASS: env -u SCHEDULER_OPERATOR_RESTART_APPROVED go build ./... && go vet ./... && go test -short -count=1 ./...",
+      "remote_branch_parity": "PASS",
+      "board_status": "failed"
     },
     {
       "task_id": "PERF-007",
@@ -29,10 +33,32 @@
       "worktree": "/home/kara/worktrees/coding-hermes-scheduler-PERF-007",
       "branch": "wt/PERF-007",
       "base_sha": "d6c9f4530f02261aa7b4e1d0651a0ad1bdf55071",
-      "brief": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-01-08-56/perf007-brief.txt",
-      "model": "openai/gpt-6.1-terra",
-      "provider": "xkiro",
-      "independence": "different acceptance surface from PERF-001-R3-R4; no dependency edge between these wave rows"
+      "tip": "a86b16bf99a54aa3ab86375e6e188de803f55b10",
+      "implementation_commit": "05253993f4ebc4003274eb7d8b40994d2dc84fbe",
+      "merge": "not_needed_already_landed",
+      "result": "failed_existing_verdict_passed_false_and_acceptance_unverified",
+      "existing_verdict": ".gitreins/history/2026-11-14/130d86c3/verdict.json",
+      "local_gate": "PASS: env -u SCHEDULER_OPERATOR_RESTART_APPROVED go build ./... && go vet ./... && go test -short -count=1 ./...",
+      "remote_branch_parity": "PASS",
+      "board_status": "failed"
     }
-  ]
+  ],
+  "merge_order": [],
+  "recovery": {
+    "recovered_tick": "coding-hermes-scheduler-foreman-2026-11-14-01-08-56",
+    "workers": 2,
+    "branches_rebased": 0,
+    "branches_merged": 0,
+    "branches_already_landed": 2,
+    "fixup_workers": 0,
+    "board_rows_reconciled": ["PERF-001-R3-R4", "PERF-007"],
+    "worktrees_removed": 0,
+    "branches_deleted": 0,
+    "preserved_as_evidence": true,
+    "reason_worktrees_preserved": "Scheduler project policy preserves merged worker worktrees and branches as evidence; both are clean and their exact tips remain inspectable."
+  },
+  "verified_tree_sha": "8b21658d099f8f8aa99aa39657855c328ded8d6d",
+  "closeout_commit_sha": "pending:commit",
+  "manifest_binding_predecessor": "8b21658d099f8f8aa99aa39657855c328ded8d6d",
+  "remote_ci": "pending_on_current_main: CI run 43546150329 completed success; CI Pipeline run 43546149704 was in_progress at observation; earlier exact implementation runs were not both terminal green for the recovery closeout."
 }
