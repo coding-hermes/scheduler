@@ -5,33 +5,37 @@
   "selection": "resume-first-after-recovery",
   "status": "verification_only_open_acceptance",
   "wave_size": 0,
-  "wave_size_reason": "Recovery completed before normal selection. RELEASE-059 and RELEASE-060 are the two independent ready rows in the selected block, but their implementation commits are already published in prior history; no replacement worker is justified. Their remaining acceptance is exact-head hosted CI and commit-bound GitReins evidence, not new implementation.",
+  "wave_size_reason": "Recovery completed before normal selection. RELEASE-059 and RELEASE-060 were already published; no replacement worker was justified. Exact-head CI and commit-bound GitReins evidence remain open.",
   "rows": [
     {
       "task_id": "RELEASE-059",
       "implementation_commit": "ec79d63860be6ac9278176028d02c3a70f27c8e4",
       "published_ancestor": "2a7ef0ce8bba90af13187f190407b280b8728d83",
       "local_acceptance": "PASS: failed-status count 0; board invariant PASS 0 violations; TestBoardVocabValidator PASS",
-      "guard": "DEGRADED: full guard reports go_lint 0 issues because cmd/queueprobe has no buildable Go files; direct gates pass",
+      "guard": "DEGRADED: go_lint 0 issues because cmd/queueprobe has no buildable Go files; direct gates pass",
       "open": "exact-head non-skipped CI and commit-bound GitReins verdict"
     },
     {
       "task_id": "RELEASE-060",
       "implementation_commit": "d3257e86c662acf5007e041197f42d66946eb7b8",
       "published_ancestor": "2a7ef0ce8bba90af13187f190407b280b8728d83",
-      "local_acceptance": "PASS: version authority v1.17.0; [Unreleased] count 1; CHANGELOG-only implementation; merged build/vet/short suite previously passed",
+      "local_acceptance": "PASS: version authority v1.17.0; Unreleased count 1; CHANGELOG-only implementation; merged build/vet/short suite previously passed",
       "guard": "DEGRADED: docs-only scope skips Go arms; no commit-bound verdict artifact read",
       "open": "exact-head non-skipped CI and commit-bound GitReins verdict"
     }
   ],
   "verified_tree_sha": "2a7ef0ce8bba90af13187f190407b280b8728d83",
-  "closeout_commit_sha": "pending:bookkeeping",
-  "remote_ci": "latest published main e95cbb81 has CI and CI Pipeline success; current origin/main 2a7ef0ce has no exact-head runs yet; prior unrelated CI failure 43606024798 is owned by INT-CI-4192",
-  "gitreins": "none:new implementation task not justified; prior lifecycle verdict artifacts are missing or degraded and no duplicate judge was launched",
+  "first_published_bookkeeping_sha": "73fbe8f5f9221c3580ea75d49cd4f8cc337a9028",
+  "manifest_binding_predecessor": "2a7ef0ce8bba90af13187f190407b280b8728d83",
+  "closeout_commit_sha": "73fbe8f5f9221c3580ea75d49cd4f8cc337a9028",
+  "reconciliation_commit": "73fbe8f5f9221c3580ea75d49cd4f8cc337a9028",
+  "finished_at": "2026-11-14T22:43:57-05:00",
+  "remote_ci": "pending: push queued CI; latest prior main e95cbb81 had CI and CI Pipeline success; prior unrelated failure 43606024798 is owned by INT-CI-4192",
+  "gitreins": "none:new implementation task not justified; prior lifecycle verdict artifacts are missing or degraded; no duplicate judge launched",
   "open": [
-    "RELEASE-059 remains pending until exact-head CI and a matching commit-bound verdict are read back",
-    "RELEASE-060 remains pending until exact-head CI and a matching commit-bound verdict are read back",
-    "No worker wave dispatched; preserved implementation branches/worktrees remain evidence"
+    "RELEASE-059 exact-head CI and commit-bound verdict",
+    "RELEASE-060 exact-head CI and commit-bound verdict",
+    "no new worker wave"
   ],
-  "memory": "pending:transport-not-verified"
+  "memory": "none:transport-not-verified"
 }
