@@ -50,6 +50,17 @@
   },
   "remote_ci": "Latest listed green runs 43641826361 and 43641825494 are for e95cbb81, not current 72a09914. Earlier run 43606024798 failed on prior 8925975a and is owned by INT-CI-4192; exact current-head CI is not listed.",
   "manifest_binding_predecessor": "78c97a994820bdf9a1b0293d19c0bb8ec583ca38",
-  "closeout_commit_sha": "a1a69ffefa4a1dd19c03c80ff33c26f12c78b8e3",
-  "finished_at": "2026-11-14T22:48:12Z"
+  "closeout_commit_sha": "pending:this-tick-board-commit",
+  "finished_at": "2026-11-15T06:08:30Z",
+  "status": "closed",
+  "recovery": {
+    "closed_by_tick": "coding-hermes-scheduler-qa-2026-11-15-04-24-23",
+    "closed_at": "2026-11-15T06:08:30Z",
+    "workers_recovered": 0,
+    "branch_tips_merged": 0,
+    "why": "manifest carries wave_size 2 but both rows dispatched as skipped_already_landed; no worker branches were cut for this wave",
+    "verified_tree_sha_in_main": "ff7c3072 confirmed ancestor of origin/main 74236091 by git merge-base --is-ancestor at close",
+    "worktrees": "preserved as evidence - PERF-008/PERF-009 rows remain in_progress with live acceptance open",
+    "remote_ci": "unchanged red, owned by INT-CI-4192 (annotated with this tick recurrence)"
+  }
 }
