@@ -1884,3 +1884,4 @@
 {"id":1794501113761293344,"timestamp":"2026-11-15 06:08:06.567113","event_type":"task_updated","task_id":"QA-CHS-200","actor":"foreman","detail":"{\"status\":\"pending\"}","tick_number":null}
 {"id":1794501113761293345,"timestamp":"2026-11-15 06:08:06.649508","event_type":"task_updated","task_id":"QA-CHS-199","actor":"foreman","detail":"{\"status\":\"pending\"}","tick_number":null}
 {"id":1794501113761293346,"timestamp":"2026-11-15 06:08:06.732327","event_type":"task_updated","task_id":"INT-CI-4192","actor":"foreman","detail":"{\"status\":\"pending\"}","tick_number":null}
+{"id":1794501113761293347,"timestamp":"2026-11-15 06:40:34.105505","event_type":"task_updated","task_id":"RELEASE-057","actor":"foreman","detail":"{\"title\":\"Daily release readiness 2026-11-15: v1.17.0 minor due but NO-CUT — exact candidate 9135fadca has no hosted CI, candidate-bound GitReins, or candidate-exact dogfood/QA evidence\"}","tick_number":null}
