@@ -50,7 +50,7 @@
   },
   "remote_ci": "Latest listed green runs 43641826361 and 43641825494 are for e95cbb81, not current 72a09914. Earlier run 43606024798 failed on prior 8925975a and is owned by INT-CI-4192; exact current-head CI is not listed.",
   "manifest_binding_predecessor": "78c97a994820bdf9a1b0293d19c0bb8ec583ca38",
-  "closeout_commit_sha": "pending:this-tick-board-commit",
+  "closeout_commit_sha": "7402ad07fb36539528c9f215b835289269991d12",
   "finished_at": "2026-11-15T06:08:30Z",
   "status": "closed",
   "recovery": {
