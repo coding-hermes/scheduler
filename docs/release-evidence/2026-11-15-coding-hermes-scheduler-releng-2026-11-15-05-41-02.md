@@ -147,3 +147,88 @@ Unblock path, in order: (1) foreman reconciles `[1.17.0]` for the five commits a
 ## Mutation record (this pass)
 
 No tag created, no GitHub Release, no ref force-moved, no version surface or changelog edited, no deploy or restart, no product code touched. Workers dispatched: 0 of a wave budget of 2 — the findings this pass are verification and reconciliation, not fan-out work. The only intended mutations are this artifact and the rolling RELEASE-057 carrier.
+
+## Pass 4 — refire (tick `coding-hermes-scheduler-releng-2026-11-15-05-41-02`)
+
+Verified 2026-11-15 after `git fetch origin --tags`; `origin/main` confirmed at the candidate below.
+
+### Candidate
+
+| field | value |
+| --- | --- |
+| origin/main tip | `291b1cea9be5797b453601754506fdf6811ee2fa` |
+| tip tree | `9eacf958b10ab91f7507df44d5d5deb1fc789a3e` |
+| prior pass-3 candidate | `4eebeeb70ca86ac53cfdab6de2ce8e2a7a9d84e1` (tree `3040b4379c84b29633709e1886bb6ef0264185a2`) |
+| baseline tag | `v1.16.0` (2026-11-09) |
+| proposed version | `v1.17.0` (minor) |
+
+`git diff --stat 4eebeeb7..291b1cea -- . ':(exclude).coding-hermes/board'` = **1 file, +88 lines — this evidence document only**. The two intervening commits (`f2597692` docs: record refire, `291b1cea` board: bind refire pass 3) are bookkeeping; no product code changed since the pass-3 certification.
+
+Census `v1.16.0..291b1cea`: **177 non-merge commits** — feat 2, fix 8, perf 7, docs 26, qa 8, chore 38, build 1, board 51; breaking markers (`!:` subjects + `BREAKING CHANGE:` footers) **0**. Minor bump confirmed; no major proposal.
+
+### Arms vs RELEASE-057 acceptance
+
+| # | arm | result |
+| --- | --- | --- |
+| 1 | census + semver, no unreviewed breaking marker | **PASS** (177 commits, 0 breaking → minor) |
+| 2 | complete changelog coverage for every material commit | **FAIL** — 17 material commits uncited, two distinct gaps below |
+| 3 | terminal green hosted CI for the exact candidate SHA | **PASS** — run `43689003590` (CI) success, run `43689003105` (CI Pipeline) success, both `headSha=291b1cea` |
+| 4 | non-degraded GitReins verdict + candidate-exact dogfood/QA bound to the same SHA | **ABSENT** — no verdict under `.gitreins/history/` names `291b1cea` (newest run tree is `2026-11-14`); newest QA battery is 2026-11-12 and names no candidate SHA |
+| 5 | govulncheck zero reachable | **PASS** with scanner caveat (below) |
+| 6 | `v1.17.0` absent before cut | **PASS** — `git ls-remote --tags origin 'refs/tags/v1.17*'` empty; `gh release list` tops out at `v1.16.0` |
+
+### Arm 2 — the gap is two gaps, not one
+
+**(a) post-prep gap** — 12 material commits in `b37a1f69..origin/main`, none cited: `05253993 a86b16bf 00430d6b c8fac45c ffff7175 233fcf28 97d0b822 405ba9c4 4018dbd2 4854241e 45a1b4cf b01954ad`. This is exactly the list RELEASE-060 was written against.
+
+**(b) in-range gap** — 5 material commits that are **ancestors of `04ec8f88`**, i.e. inside the `v1.16.0..04ec8f88` range the `[1.17.0]` section claims to describe, yet absent from it:
+
+| sha | subject |
+| --- | --- |
+| `8d3be7f6` | fix(scheduler): defer gateway 429 self-saturation (SCHED-429-001) |
+| `80e8361a` | fix(scheduler): conservative admission skip classification; perpetual fixtures excluded (SCHED-GAP-17007-M1) |
+| `0197ef25` | feat(scheduler): admission-time cheap skip for tasks-mode lanes with no actionable rows (SCHED-GAP-17007-M1) |
+| `b8fd3c42` | feat(dispatch): scheduler-dispatch emits reply_to and text from config; correlation keys named (SCHED-GAP-16983-A) |
+| `384fafec` | fix(scheduler): repair harness failure accounting (SCHED-FAILCNT-001) |
+
+Evidence: `git merge-base --is-ancestor <sha> 04ec8f88` returns true for all five, and `grep -c` of each commit's row id (`SCHED-429-001`, `SCHED-GAP-17007`, `SCHED-GAP-16983`, `SCHED-FAILCNT-001`) in the extracted section returns 0.
+
+Consequence: RELEASE-060's acceptance enumerated only the twelve, so completing it **to the letter still ships notes that omit two features and three fixes**. Pass 3 recorded "scope widened" in its artifact but the board row was never amended. Pass 4 applies the amendment: RELEASE-060 goes P2 → **P1** and its acceptance now names both ranges (17 SHAs).
+
+### Arm 5 — govulncheck scanner divergence (not a waiver)
+
+- The repo runs **no govulncheck anywhere**: grep of `.github/workflows/` and `Makefile` for `govulncheck|vuln` returns no matches. The toolchain security gate is unenforced in CI → **RELEASE-061** filed.
+- Pinned scanner `~/go/bin/govulncheck` **v1.7.0**, built with go1.26.11: `govulncheck ./...` → "No vulnerabilities found.", rc 0.
+- `govulncheck@latest` (**v1.9.0**) source mode over `./...` reports stdlib as **go1.26.5** with 19 affected stdlib entries, rc 1. Its stdlib resolution is not the repo toolchain, so that result says nothing about the artifact — this is the source of the earlier "toolchain vulnerable" red.
+- v1.9.0 **binary** mode against the artifact built from this tree (`go version -m` → go1.26.11): "No vulnerabilities found.", rc 0.
+- Disposition: artifact-level clean under both pinned-source and binary scanning; the source-mode red is a scanner-version artifact and is recorded here rather than waived.
+
+### Gate re-run at the candidate (clean detached worktree `291b1cea`)
+
+| gate | command | result |
+| --- | --- | --- |
+| version authority | `bash scripts/check-version-authority.sh v1.17.0` | PASS rc 0 |
+| release prep | `bash scripts/release-prep.sh --check v1.17.0` | PASS rc 0 |
+| build | `go build ./...` | PASS rc 0 |
+| vet | `go vet ./...` | PASS rc 0 |
+| short suite | `go test -short -count=1 ./...` | PASS rc 0 — 26 packages ok, 0 FAIL |
+| board-only invariant | `python3 ops/check-fleet-invariants.py --board-only --board .coding-hermes/board/tasks.jsonl` | PASS rc 0, 0 violations |
+| vulnerabilities | pinned `govulncheck ./...` + v1.9.0 `-mode=binary` | PASS rc 0, 0 findings |
+
+Toolchain `go1.26.11 linux/amd64`.
+
+### Gate inventory correction
+
+- **`REL-GUARD-003` does not exist.** `grep -rn "REL-GUARD-003"` across `*.md`, `*.jsonl`, `*.yaml` in the repo → no matches; the board's only `REL-*` row is `REL-GUARD-001`. Earlier passes and the DuckBrain guard record attributed the NO-CUT to "publication owner-gated by REL-GUARD-003". That premise is unverifiable and is **retired** here: the NO-CUT follows from RELEASE-057 arms 2 and 4, not from an owner gate, and no owner approval is outstanding to cut v1.17.0 once those arms are green.
+- `REL-GUARD-001` (blocked, P2) is a forge tag-protection policy question; it does not gate this cut.
+- **Deployment staleness:** running `schedulerd` reports `build_sha 9b1fdd22`, `build_time 2026-11-11T22:20:06Z`, health on `127.0.0.1:9090`. `git rev-list --count 9b1fdd22..291b1cea` = **128 behind, 0 ahead**. `/usr/local/bin/schedulerd` is older still (mtime Jul 19) and is not the running binary. Owned by RELEASE-051 / SCHED-GAP-162; not a cut gate.
+
+### Decision
+
+**NO-CUT for v1.17.0** — arms 2 and 4 of RELEASE-057 are unmet. Arm 3 turned green this pass at higher confidence (fresh exact-SHA runs at the current tip, not a carried-forward receipt), and arm 5 is clean with its caveat recorded.
+
+Unblock path: (1) foreman reconciles `[1.17.0]` for all 17 material commits (RELEASE-060, now P1); (2) a GitReins verdict and a dogfood/QA battery are bound to the then-current candidate SHA; (3) releng re-runs this sweep and, if every arm is green, cuts through the repository-owned path — `make release-prep VERSION=v1.17.0` → `make tag VERSION=v1.17.0` (+ release workflow) — never a bare `gh release create`.
+
+### Mutation record (this pass)
+
+No tag created, no GitHub Release, no ref force-moved, no version surface or `CHANGELOG.md` edited, no deploy or restart, no product code touched. Workers dispatched: **0 of a budget of 2** — this pass is verification and board reconciliation, not fan-out. Intended mutations: this artifact, the rolling RELEASE-057 carrier, RELEASE-060 scope + priority, new RELEASE-061, and matching `task_updated` events.
