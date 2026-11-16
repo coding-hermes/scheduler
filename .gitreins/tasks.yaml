@@ -6124,3 +6124,90 @@ tasks:
   status: complete
   created_at: '2026-11-13T17:29:47.594460+00:00'
   completed_at: '2026-11-13T18:08:33.214295+00:00'
+- id: PERF-007
+  title: 'scheduler.db deferral retention: live-copy prune proof'
+  criteria:
+  - Prove reclaim on a COPY of the live DB with numbers (rows deleted, size after
+    DELETE and after VACUUM, dashboard subquery ms, metrics shape), bounded non-blocking
+    prune documented
+  status: complete
+  created_at: '2026-11-16T11:01:48.137721+00:00'
+  completed_at: '2026-11-16T13:16:24.914316+00:00'
+- id: PERF-001-R3-R4
+  title: 'api status p99 bar at scale: measure and decide'
+  criteria:
+  - Re-measure live /api/v1/status p99; either under 100ms with named change, or committed
+    restatement of the bar with tick-count calibration and hot path file:line
+  status: complete
+  created_at: '2026-11-16T11:01:50.565801+00:00'
+  completed_at: '2026-11-16T12:32:45.572492+00:00'
+- id: INT-CI-4193
+  title: 'CI red at tip from 837005ef: aborted-semantics test updates'
+  criteria:
+  - go build/vet/test -short green; golangci-lint clean; tests assert intended aborted
+    vocabulary/semantics
+  status: complete
+  created_at: '2026-11-16T11:06:32.044577+00:00'
+  completed_at: '2026-11-16T13:25:36.566686+00:00'
+- id: SCHED-430
+  title: "failure_reason vocabulary \u2014 ticks must record WHY they were dry"
+  criteria:
+  - Dry ticks write a closed-vocabulary token (EMPTY_BOARD|OWNERSHIP_BARRIER|GATE_WITHHELD|DUPLICATE_PREVENTION|DEFERRED|WAVE_PERSISTED)
+    into ticks.failure_reason in the same write as the outcome; no backfill of legacy
+    rows; forensics docs gate on the new-reason window; go build/vet/test green
+  status: complete
+  created_at: '2026-11-16T13:48:20.140559+00:00'
+  completed_at: '2026-11-16T14:56:25.776166+00:00'
+- id: SCHED-431
+  title: "lanehook {session} placeholder \u2014 POST hooks need the tick's Hermes\
+    \ session id"
+  criteria:
+  - knownPlaceholders carries 'session' resolved from ticks.session_id with gateway_trace
+    $.session_id fallback; runner test expands {session} against a fixture tick row;
+    docs/lane-hooks.md documents it; go build/vet/test green
+  status: complete
+  created_at: '2026-11-16T13:48:21.578062+00:00'
+  completed_at: '2026-11-16T16:31:07.527731+00:00'
+- id: SCHED-GAP-17023-FIXTURES
+  title: Disable 10 residual fixture lanes and record evidence on SCHED-GAP-17023
+  criteria:
+  - Commit 48740afd appends one audit event to .coding-hermes/board/events.jsonl whose
+    detail.kind is fixture-lane-disable-evidence, whose detail.verification.enabled_fixtures_after
+    is 0, and whose detail.verification.mirror_project_blocks equals detail.verification.db_enabled_total
+    (628); no scheduler source, test, or binary file is modified by the commit.
+  status: complete
+  created_at: '2026-11-16T17:17:05.300922+00:00'
+  completed_at: '2026-11-16T17:17:25.612334+00:00'
+- id: SCHED-GAP-17024-RESIDUAL
+  title: Cut the residual workdir=/tmp fixture lanes named in SCHED-GAP-17024 (AC1)
+  criteria:
+  - 'AC1 of SCHED-GAP-17024 is met for the 4 lanes left enabled after 48740afd: dogfood-20260815,
+    dogfood-20260815-dup, dogfood-20260815-guard, dogfood-probe-0925. Evidence must
+    exist in the repo at HEAD: an audit event appended to .coding-hermes/board/events.jsonl
+    with task_id SCHED-GAP-17024 naming all four lanes, stating they are disabled,
+    and giving the two reasons (workdir /tmp/dogfood-sched/* and /tmp/dogfood-probe-0925
+    do not exist so they are not git repos; driver dogfood-scheduler-tick.sh is a
+    retired driver per internal/config/retired_drivers.go). The event must also record
+    the verification that zero enabled projects remain with a workdir under /tmp.
+    No scheduler code, test or binary may be modified by this change.'
+  status: complete
+  created_at: '2026-11-16T17:28:16.631681+00:00'
+  completed_at: '2026-11-16T17:28:25.267974+00:00'
+- id: SCHED-GAP-17023
+  title: 'SCHED-GAP-17023 filed: ch-* fixture lanes re-admitted by starvation boost
+    (evidence + residual code leg)'
+  criteria:
+  - 'Board row SCHED-GAP-17023 is filed, annotated, committed and pushed on the coding-hermes/scheduler
+    board. PROOF: in /home/kara/coding-hermes-scheduler/coding-herms-scheduler run
+    `jq -r ''select(.id=="SCHED-GAP-17023")|.status'' .coding-hermes/board/tasks.jsonl`
+    -> pending; `jq -r ''select(.id=="SCHED-GAP-17023")|.priority'' .coding-hermes/board/tasks.jsonl`
+    -> P2; the same row has a non-empty acceptance_criteria and a foreman_note that
+    names the sibling tick disable and the residual fairness-boost code leg; `git
+    rev-list --count origin/main..HEAD` -> 0; `git show origin/main:.coding-hermes/board/tasks.jsonl
+    | grep -c SCHED-GAP-17023` -> 1. FAILIF: the id is absent from the working tree
+    or from origin/main, the status is not pending, the priority is not P2, acceptance_criteria
+    is empty, the foreman_note does not mention the fairness-boost residual, or either
+    count is not 0/1.'
+  status: complete
+  created_at: '2026-11-16T17:29:15.514793+00:00'
+  completed_at: '2026-11-16T17:29:17.959143+00:00'

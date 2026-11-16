@@ -84,3 +84,6 @@ __pycache__/
 
 # Live config file, not repo truth (SCHED-GAP-213)
 fleet.toml
+
+# gitreins rescue snapshots (ephemeral worktree backups; never authoritative)
+.gitreins/rescued-*/
