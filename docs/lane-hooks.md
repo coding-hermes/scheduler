@@ -67,7 +67,16 @@ the damage was a fabricated path segment that nothing looked for.
 
 A definition's `command` + `args` are templated over:
 
-`{lane} {project} {role} {namespace} {workdir} {repo} {tick} {phase} {hook}`
+`{lane} {project} {role} {namespace} {workdir} {repo} {tick} {session} {phase} {hook}`
+
+`{session}` is the Hermes session id of the tick, so a hook can correlate what it
+audits with the session that produced it (resolution order: the tick row's
+`session_id`, then the POST `gateway_trace`'s `$.session_id`). The scheduler
+stamps `session_id` with the tick id as a spawn placeholder, so a tick that never
+reported a real session resolves `{session}` to the trace value or to empty —
+never to that placeholder. `{session}` is empty in PRE hooks (the id does not
+exist until the tick runs) and meaningful in POST hooks, which is where a
+handoff-record audit belongs.
 
 An unknown placeholder is a **load error** (it used to reach the command as
 literal text). To see the exact argv a lane will run, without running it and

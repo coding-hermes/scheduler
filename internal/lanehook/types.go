@@ -136,6 +136,7 @@ func (p Plan) Empty() bool { return len(p.Pre) == 0 && len(p.Post) == 0 }
 // Env is the placeholder and environment set available to every step.
 type Env struct {
 	TickID    string
+	SessionID string
 	Lane      string
 	Project   string
 	Role      string

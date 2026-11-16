@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/database"
 	"github.com/coding-hermes/scheduler/internal/lanehook"
 )
 
@@ -55,7 +56,7 @@ level = "lane"
 target = "` + lane + `"
 priority = 20
 command = "` + preScript + `"
-args = ["--worktree", "{workdir}", "--lane", "{lane}", "--project", "{project}"]
+args = ["--worktree", "{workdir}", "--lane", "{lane}", "--project", "{project}", "--session", "{session}"]
 timeout_s = 30
 on_failure = "closed"
 
@@ -96,7 +97,7 @@ func laneHookFixture(t *testing.T, db *sql.DB, lane, preBody, postBody string) (
 	post := writeLaneHookScript(t, dir, "post.sh", postBody)
 	hooksPath := writeHooksToml(t, dir, lane, pre, post)
 
-	p := NewSlotPool(1, nil, nil)
+	p := NewSlotPool(1, nil, NewLifecycleTracker(db))
 	set, err := lanehook.Open(hooksPath)
 	if err != nil {
 		t.Fatalf("arm hooks: %v", err)
@@ -307,6 +308,54 @@ func TestLaneHooks_PreBudgetIsBounded(t *testing.T) {
 	rec := hookReceipts(t, db, tickID)
 	if len(rec) == 0 || rec[0].State != "timeout" {
 		t.Errorf("receipts = %+v, want a timeout state on the first", rec)
+	}
+}
+
+func TestLaneHooks_SessionPlaceholderUsesTickAndTraceFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, session, trace, want string
+	}{
+		{name: "tick-session", session: "hermes-tick-session", want: "hermes-tick-session"},
+		{name: "gateway-trace-fallback", trace: `{"session_id":"hermes-trace-session"}`, want: "hermes-trace-session"},
+		{name: "spawn-placeholder-skipped", session: "TICKID", trace: `{"session_id":"hermes-trace-session"}`, want: "hermes-trace-session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			const lane = "lh-session-qa"
+			const tickID = "lh-session-qa-2026-11-05-00-30-00"
+			// The scheduler stamps session_id with the tick id as a spawn
+			// placeholder (S-GAP-003); "TICKID" means "plant that placeholder",
+			// so the case asserts the placeholder never reaches the hook.
+			session := strings.ReplaceAll(tc.session, "TICKID", tickID)
+			if err := database.CreateProject(context.Background(), db, &database.Project{
+				Name: lane, RepoURL: "local:/tmp/repo", Workdir: t.TempDir(), Weight: 1, Priority: 1, CooldownS: 60, DecayRate: 1, Enabled: true,
+			}); err != nil {
+				t.Fatalf("create project: %v", err)
+			}
+			if _, err := db.Exec(`INSERT INTO ticks (id, project_name, session_id, status, created_at) VALUES (?, ?, ?, 'completed', datetime('now'))`, tickID, lane, session); err != nil {
+				t.Fatalf("insert tick: %v", err)
+			}
+			if tc.trace != "" {
+				if _, err := db.Exec(`UPDATE ticks SET gateway_trace = ? WHERE id = ?`, tc.trace, tickID); err != nil {
+					t.Fatalf("set gateway trace: %v", err)
+				}
+			}
+			pool, proj, _ := laneHookFixture(t, db, lane, `exit 0`, `exit 0`)
+			plan, have := pool.hookPlan(proj)
+			if !have {
+				t.Fatal("no hook plan")
+			}
+			if err := pool.runPreHooks(proj, tickID, time.Now(), plan); err != nil {
+				t.Fatalf("runPreHooks: %v", err)
+			}
+			rec := hookReceipts(t, db, tickID)
+			if len(rec) != 1 {
+				t.Fatalf("receipts = %d, want 1", len(rec))
+			}
+			if !strings.Contains(rec[0].Argv, "--session "+tc.want) {
+				t.Fatalf("argv = %q, want session %q", rec[0].Argv, tc.want)
+			}
+		})
 	}
 }
 
