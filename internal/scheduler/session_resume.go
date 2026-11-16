@@ -59,6 +59,7 @@ var inFlightOrphanReasons = []string{
 	OrphanReasonStartupReap,
 	OrphanReasonDrainTimeout,
 	OrphanReasonZombieReap,
+	OrphanReasonOperatorRestart,
 }
 
 // isInFlightInterruption reports whether an orphan row's drop reason is part
@@ -93,12 +94,13 @@ func inFlightOrphanReasonSQL() string {
 
 // orphanedTick is one resumable tick row selected by orphansToResume.
 type orphanedTick struct {
-	id         string
-	project    string
-	sessionID  string
-	nudgeCount int
-	prompt     string
-	reason     string
+	id             string
+	project        string
+	sessionID      string
+	nudgeCount     int
+	prompt         string
+	reason         string
+	selectedRowIDs string
 }
 
 // stampOrphaned marks one tick row as orphaned at its terminal transition.
@@ -129,11 +131,11 @@ func (l *Loop) orphansToResume(ctx context.Context) []orphanedTick {
 	// sanctioned.
 	rows, err := l.db.QueryContext(ctx, `
 SELECT t.id, t.project_name, COALESCE(t.session_id, ''), t.nudge_count,
-       COALESCE(t.orphan_reason, ''), COALESCE(p.prompt, '')
+       COALESCE(t.orphan_reason, ''), COALESCE(t.selected_row_ids, ''), COALESCE(p.prompt, '')
 FROM ticks t
 JOIN projects p ON p.name = t.project_name
 WHERE t.orphaned_at IS NOT NULL
-  AND t.status IN ('failed','timeout')
+  AND t.status IN ('failed','timeout','aborted')
   AND t.nudge_count < ?
   AND COALESCE(t.orphan_reason, '') IN (`+inFlightOrphanReasonSQL()+`)
   AND p.enabled = 1
@@ -149,7 +151,7 @@ WHERE t.orphaned_at IS NOT NULL
 	var out []orphanedTick
 	for rows.Next() {
 		var o orphanedTick
-		if err := rows.Scan(&o.id, &o.project, &o.sessionID, &o.nudgeCount, &o.reason, &o.prompt); err != nil {
+		if err := rows.Scan(&o.id, &o.project, &o.sessionID, &o.nudgeCount, &o.reason, &o.selectedRowIDs, &o.prompt); err != nil {
 			continue
 		}
 		out = append(out, o)
@@ -333,12 +335,18 @@ func (l *Loop) resumeOrphans(trigger string) {
 			continue
 		}
 
-		// Append semantics: the builtin base prompt (skill-loading etc.)
-		// stays, the continuation preamble + original project prompt ride
-		// on top — a resumed session loads the foreman skill AND knows it
-		// is continuing, not starting cold.
+		// Operator-aborted ticks are fresh attempts, not in-place session
+		// replays. Preserve the worker worktree and let duplicate-dispatch
+		// checks re-check it before spawning; only the board selection is
+		// carried forward as a deterministic note.
 		packed.Prompt = buildContinuationPrompt(o.prompt, o.id, o.sessionID, o.reason)
 		packed.PromptMode = "append"
+		if o.reason == OrphanReasonOperatorRestart {
+			packed.Prompt += "\nRESUME: resumed_after_abort; this is a fresh attempt. Re-select the persisted dispatched rows first, re-check existing worker worktrees, and do not duplicate a live worker."
+			if o.selectedRowIDs != "" {
+				packed.Prompt += " Persisted selected row ids: " + o.selectedRowIDs + "."
+			}
+		}
 		// SCHED-GAP-157: the orphan-resume entry point stamps the startup
 		// nudge source, so the re-queued row records that it exists
 		// because of the boot/reconnect resume scan — and its admit_reason

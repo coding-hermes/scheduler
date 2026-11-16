@@ -419,11 +419,11 @@ func TestSchedGap214_OperatorRestartAbortKeepsWaiver(t *testing.T) {
 		WHERE p.name = ?`, project).Scan(&projectStatus, &tickStatus, &orphan); err != nil {
 		t.Fatalf("read restart-abort state: %v", err)
 	}
-	if tickStatus != string(TickFailed) {
-		t.Fatalf("ticks.status = %q, want %q", tickStatus, TickFailed)
+	if tickStatus != string(TickAborted) {
+		t.Fatalf("ticks.status = %q, want %q", tickStatus, TickAborted)
 	}
-	if projectStatus != database.LastStatusOperatorRestart {
-		t.Fatalf("projects.last_tick_status = %q, want %q", projectStatus, database.LastStatusOperatorRestart)
+	if projectStatus != database.LastStatusAborted {
+		t.Fatalf("projects.last_tick_status = %q, want %q", projectStatus, database.LastStatusAborted)
 	}
 	if lastTickStatusFailed(projectStatus) {
 		t.Fatalf("operator restart status %q must not be classified as failed", projectStatus)

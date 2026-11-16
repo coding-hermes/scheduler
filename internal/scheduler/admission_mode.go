@@ -266,3 +266,10 @@ func tasksAdmissionDue(workdir, ownership string) bool {
 func lastTickStatusFailed(lastStatus string) bool {
 	return lastStatus == database.LastStatusFailed
 }
+
+// lastTickStatusAborted is intentionally not part of the failed predicate:
+// an operator restart did not fail the lane and must not stand down the
+// SCHED-GAP-214 tasks waiver.
+func lastTickStatusAborted(lastStatus string) bool {
+	return lastStatus == database.LastStatusAborted
+}

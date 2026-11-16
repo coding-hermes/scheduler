@@ -349,6 +349,8 @@ const (
 	StatusCompleted TickStatus = "completed"
 	StatusFailed    TickStatus = "failed"
 	StatusTimeout   TickStatus = "timeout"
+	StatusAborted   TickStatus = "aborted"
+	StatusDeferred  TickStatus = "deferred"
 )
 
 // TickOutcome records the terminal result of a tick.
@@ -544,15 +546,17 @@ func DispatchReasonIsValid(reason string) bool {
 
 // Terminal tick statuses for projects.last_tick_status (SCHED-GAP-214,
 // migration v38). Stamped by lifecycle.Complete on every terminal outcome;
-// "" = the project has never completed a tick. The tasks-mode cooldown
-// waiver (admission_mode.go + the three packer paths) reads this field: a
-// FAILED last tick stands the waiver down for one full effective cooldown.
+// "" = the project has never completed a tick. An operator shutdown is a
+// distinct aborted outcome, not a lane failure, so the tasks waiver remains
+// eligible and failure-rate accounting can exclude it.
 const (
-	LastStatusCompleted       = "completed"
-	LastStatusFailed          = "failed"
-	LastStatusTimeout         = "timeout"
-	LastStatusDeferred        = "deferred"
-	LastStatusOperatorRestart = "operator_restart"
+	LastStatusCompleted = "completed"
+	LastStatusFailed    = "failed"
+	LastStatusTimeout   = "timeout"
+	LastStatusDeferred  = "deferred"
+	LastStatusAborted   = "aborted"
+	// Deprecated compatibility name. The persisted value is always "aborted".
+	LastStatusOperatorRestart = LastStatusAborted
 )
 
 // EventSeverity enumerates the severity tiers for event log entries.
