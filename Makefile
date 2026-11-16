@@ -57,6 +57,7 @@ build:
 	mkdir -p "$(BINDIR)"
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/schedulerd" ./cmd/schedulerd/
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/migrate" ./cmd/migrate/
+	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/retention-deferrals" ./cmd/retention-deferrals/
 
 test:
 	go test -short -count=1 ./...

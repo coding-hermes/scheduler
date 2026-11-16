@@ -122,6 +122,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	} else {
 		_, _ = fmt.Fprintf(stdout, "dashboard_last_deferral unavailable=%v\n", err)
 	}
-	_, _ = fmt.Fprintln(stdout, "metrics_shapes=unchanged; admission_counters=daemon-memory-only")
+	_, _ = fmt.Fprintln(stdout, "metrics_shapes=unchecked; admission_counters=daemon-memory-only")
 	return 0
 }
