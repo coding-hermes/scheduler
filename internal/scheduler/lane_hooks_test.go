@@ -67,7 +67,7 @@ level = "lane"
 target = "` + lane + `"
 priority = 80
 command = "` + postScript + `"
-args = ["--worktree", "{workdir}", "--lane", "{lane}"]
+args = ["--worktree", "{workdir}", "--lane", "{lane}", "--session", "{session}"]
 timeout_s = 30
 on_failure = "closed"
 `
@@ -354,6 +354,31 @@ func TestLaneHooks_SessionPlaceholderUsesTickAndTraceFallback(t *testing.T) {
 			}
 			if !strings.Contains(rec[0].Argv, "--session "+tc.want) {
 				t.Fatalf("argv = %q, want session %q", rec[0].Argv, tc.want)
+			}
+			// POST arm: the handoff-audit phase. POST hooks run after the tick
+			// row is terminal (slot_pool.go success/failure paths), which in the
+			// fixture mirrors runtime ordering: the row already carries the real
+			// session (or the trace fallback it would have reported). {session}
+			// must expand identically here — a POST hook that audits a DuckBrain
+			// handoff record correlates it with the tick's session through this
+			// argv. SCHED-431 judge eacb9065: the PRE-only test left the POST
+			// path unexercised.
+			pool.runPostHooks(proj, tickID, plan)
+			rec = hookReceipts(t, db, tickID)
+			if len(rec) != 2 {
+				t.Fatalf("receipts after POST = %d, want 2", len(rec))
+			}
+			var postArgv string
+			for _, r := range rec {
+				if r.Phase == "post" {
+					postArgv = r.Argv
+				}
+			}
+			if postArgv == "" {
+				t.Fatal("no POST receipt recorded")
+			}
+			if !strings.Contains(postArgv, "--session "+tc.want) {
+				t.Fatalf("POST argv = %q, want session %q", postArgv, tc.want)
 			}
 		})
 	}
