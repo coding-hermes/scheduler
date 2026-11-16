@@ -158,7 +158,7 @@ project closed:
 
 | | PERF-001 closure bar | measured 2026-10-20 (n=10, warm) |
 |---|---|---|
-| `/api/v1/status` | "p99 < 100 ms at production row count (57k+)" | min 317 / **p50 326** / p90 339 / max 350 ms |
+| `/api/v1/status` | historical "p99 < 100 ms at production row count (57k+)"; current calibrated bar p99 <= 700 ms | min 317 / **p50 326** / p90 339 / max 350 ms |
 | scale | 57k+ ticks, 44 projects | 89,933 ticks, 608 projects |
 | payload | 5.2 KB | 59,975 B |
 

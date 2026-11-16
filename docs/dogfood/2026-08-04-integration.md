@@ -40,7 +40,7 @@ Everything after that: sub-50ms.
 | Wrong methods | 405 with JSON error envelope |
 | MCP `POST /mcp` | initialize, tools/list, tools/call (fleet_status, fleet_projects, fleet_project_detail, fleet_set_weight, fleet_set_priority, …), unknown tool → JSON-RPC error |
 | Dashboard `/`, `/projects/{name}`, `/queue`, `/ticks?page=1`, `/namespaces/{id}`, `/health`, `/dashboard/partial` | all 200 HTML |
-| Latency | p50 38ms, p90 42ms on /status (spec <100ms p99: PASS when warm) |
+| Latency | historical p50 38ms, p90 42ms on /status (the current PERF-001-R3-R4 calibration is p99 <= 700ms at 105,061 ticks; see the decision record) |
 
 ## What's BROKEN / traps for integrators
 

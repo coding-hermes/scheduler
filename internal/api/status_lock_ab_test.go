@@ -5,7 +5,9 @@ package api
 // The row's driver is /api/v1/status sampled while the scheduler is idle vs
 // while an evaluate() pass is running:
 //
-//	p50 326 ms / p99 ~350 ms against PERF-001's bar (p99 < 100 ms)
+//	p50 326 ms / p99 ~350 ms against PERF-001's historical calibration bar
+//	(p99 < 100 ms at approximately 57k ticks; current scale is calibrated in
+//	docs/perf-001-r3-r4-decision.md)
 //	CPU:wall = 47 ms : 326 ms — the request was WAITING for ~86 % of its life
 //
 // PERF-001-R2 attributed that wait; PERF-001-R3 removed it (the pass no longer

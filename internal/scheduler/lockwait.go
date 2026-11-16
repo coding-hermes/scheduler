@@ -11,7 +11,9 @@ import (
 // The history is the whole point of this file:
 //
 //   - PERF-001-R2 measured /api/v1/status at p50 326 ms / p99 ~350 ms against
-//     PERF-001's recorded bar (p99 < 100 ms) with CPU:wall = 47 ms : 326 ms,
+//     PERF-001's historical calibration bar (p99 < 100 ms at approximately
+//     57k ticks) with CPU:wall = 47 ms : 326 ms; the current-scale calibration
+//     is recorded in docs/perf-001-r3-r4-decision.md.
 //     and the goroutine dump taken at the stall showed the handler parked in
 //     sync.RWMutex.RLock inside Loop.ZeroSelectStats while evaluate() held the
 //     write lock across its whole pass. The row asks for the A/B and the block
