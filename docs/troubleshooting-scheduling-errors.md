@@ -1136,6 +1136,81 @@ what protects the fleet is rule 1, the classifier.
 
 ---
 
+## 13. A tick ran and did nothing — read `failure_reason`, not the transcript
+
+**Symptom** — Lane after lane reports `completed` with nothing to show for it: `commits = 0`,
+`files_changed = 0`, no memory keys. The board is not obviously broken; the ticks look healthy in
+`/api/v1/status`. Measured 2026-11-15: **344 dry ticks/week**, and the only way to explain any
+single one of them was to open the tick's transcript and read what the foreman did or did not do.
+86.9% of that sample was one cause (an ownership barrier) that no column recorded.
+
+**Means** — `ticks.outcome` is a verdict about the *result* (`dry_run`, `no_work`); it has never
+carried the *cause*. Since **SCHED-430** a dry tick also writes `ticks.failure_reason` with one
+token from a closed vocabulary, in the same finalization UPDATE as the outcome — so a row never
+carries one without the other:
+
+| token | what happened |
+|---|---|
+| `EMPTY_BOARD` | Nothing dispatchable was observed: the board was read and held zero open rows, or the lane has no readable board at all (the no-work gates fail open on an unreadable board, so the tick ran) |
+| `OWNERSHIP_BARRIER` | The board HAS open rows, but not one is dispatchable: every open row is `claimed` / `in_progress` / `rework` — owned by another in-flight tick or worker, so this tick had nothing it was allowed to take |
+| `GATE_WITHHELD` | Work was available and the tick still dispatched nothing: the scheduler completed the row without ever invoking a foreman (the SCHED-GAP-1653 reasoned stand-down), or the board's `pending` rows were withheld by the lane's own gates (owner-gated, dependency-blocked, acceptance pending) |
+| `DUPLICATE_PREVENTION` | The row was closed because a duplicate spawn was refused for the lane (SCHED-GAP-030). Declared only: the packer/pre-spawn dedup arms run **before** any tick row exists, so this token is written by a caller that already owns a row, never derived |
+| `DEFERRED` | Every row still open on the board is `deferred:true` — visible to its owner, deliberately not actionable (excluded from open-work counts since SCHED-GAP-1727) |
+| `WAVE_PERSISTED` | The tick's product is a wave: a manifest with ≥ 1 worker exists at `.coding-hermes/waves/<tick_id>.json`, so the work lives in `tick_workers` rows and per-worker worktrees, not in a commit attributed to the tick itself |
+
+These tokens sit **alongside** the transport-class markers, they do not replace them. A
+failed/timeout row still carries `gateway_drain`, `gateway_transport`, `session_silent`,
+`sleep_poll`, `instant_turn`, `operator_restart` or `hook_failed:<id>` from the same classifier as
+before; a `deferred`-status row still carries an empty column (its status already names that class,
+SCHED-GAP-203); and a completed tick that landed an artifact keeps an empty column — it was not dry.
+
+**Confirm** *(read-only)*
+
+```sh
+sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" "
+-- THE NEW-REASON WINDOW: rows written since SCHED-430 carry a cause.
+-- Pre-change rows keep NULL/'' — there is no backfill, by design.
+SELECT COALESCE(NULLIF(failure_reason,''),'(empty — pre-SCHED-430)') AS failure_reason,
+       COUNT(*) AS n
+FROM ticks
+WHERE outcome IN ('dry_run','no_work')
+  AND created_at >= datetime('now','-7 days')
+GROUP BY 1 ORDER BY n DESC;
+
+-- Narrow to the window whose cause is recorded, per lane.
+SELECT project_name,
+       SUM(CASE WHEN failure_reason IS NOT NULL AND failure_reason <> '' THEN 1 ELSE 0 END) AS explained,
+       SUM(CASE WHEN failure_reason IS NULL OR  failure_reason =  '' THEN 1 ELSE 0 END) AS unexplained
+FROM ticks
+WHERE outcome IN ('dry_run','no_work') AND created_at >= datetime('now','-24 hours')
+GROUP BY 1 ORDER BY unexplained DESC;"
+```
+
+The second query is the one that tells you whether this build is live: a lane whose dry ticks are
+**all** `unexplained` is either pre-change or running a binary older than SCHED-430 (see §8).
+
+**Fix** — by token, and the token names the owner of the problem:
+
+- `OWNERSHIP_BARRIER` — the scheduling question, not a code question: the lane keeps ticking while
+  its whole board is owned by in-flight work. Long-running workers on one board are the usual cause;
+  lengthen the lane's cooldown / admission pacing, or land the in-flight wave before re-arming it.
+- `EMPTY_BOARD` — the lane is ticking against nothing. For a builder lane that is pure waste: the
+  no-work gates (SCHED-GAP-1655/1656) should be parking it — check `admit_reason` and the
+  `NO-WORK:` lines in `scheduler.log` to see whether the gate is armed for that lane's class.
+- `GATE_WITHHELD` — read the board: `pending` rows that the tick never picked are either owner-gated
+  (waiting on Bane) or dependency-blocked. That is board state to fix, not scheduler state.
+- `DEFERRED` — expected: someone marked the work `deferred:true`. Nothing is wrong.
+- `WAVE_PERSISTED` — expected for a wave tick; check `ticks.worker_count` and `tick_workers` rather
+  than the tick's own commit count.
+- `DUPLICATE_PREVENTION` — expected; the duplicate-spawn protection (SCHED-GAP-030) refused a second
+  concurrent tick for a lane that was already running.
+
+`DRY-REASON:` lines in `scheduler.log` carry the same verdict live, with the evidence behind it
+(`source=declared|wave_manifest|no_dispatch|board` and, for the board arms, `read/open/pending/deferred`),
+so a tick can be explained without querying the DB at all.
+
+---
+
 ## Appendix — evidence log
 
 Read-only, executed 2026-09-20 while authoring this page, on the live fleet host (daemon uptime

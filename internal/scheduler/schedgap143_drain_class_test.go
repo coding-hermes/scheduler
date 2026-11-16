@@ -533,8 +533,15 @@ func TestSCHEDGAP143_DrainWindowDoesNotParkEscalatedCooldown(t *testing.T) {
 	if status, _, _ := gap143TickRow(t, db, okTick); status != string(TickCompleted) {
 		t.Fatalf("recovery tick %s status = %s, want completed", okTick, status)
 	}
-	if _, _, reason := gap143TickRow(t, db, okTick); reason != "" {
-		t.Errorf("recovery tick %s failure_reason = %q, want empty (a successful tick is not transport-class)", okTick, reason)
+	// SCHED-430 supersedes the old "want empty" spelling of this assertion. The
+	// property under test is unchanged — a successful tick is NOT
+	// transport-class — but a completed tick that lands no artifact (this
+	// fixture's gateway returns no commit, no file delta, no memory key) is DRY,
+	// and a dry tick now records its CAUSE in the same column. So the assertion
+	// is the property, not the emptiness: a transport-class marker here would
+	// still be the regression this line exists to catch.
+	if _, _, reason := gap143TickRow(t, db, okTick); reason != "" && !DryReasonIsValid(reason) {
+		t.Errorf("recovery tick %s failure_reason = %q, want empty or a SCHED-430 dry-reason token (a successful tick is not transport-class)", okTick, reason)
 	}
 	// The adaptive-cooldown persist is async relative to the ticks row's
 	// terminal state — poll until it lands instead of racing it (FND-002,
