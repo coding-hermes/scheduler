@@ -5,7 +5,7 @@ package scheduler
 // The task: a drain-restart deploy cannot converge on a busy fleet — pausing
 // stops admission, but a fleet holding 10-12 live heartbeating ticks never
 // reaches active_ticks=0, so a controlled restart eventually drains-times-out
-// and reaps the in-flight ticks as failed(drain_timeout). The fix is the
+// and reaps the in-flight ticks as aborted(drain_timeout). The fix is the
 // smallest coherent in-repo contract change:
 //
 //  1. the abort classifier (orphan_exclusion.go) treats an operator-induced
@@ -191,7 +191,7 @@ func TestOperatorRestartApprovalEnv(t *testing.T) {
 // TestAbortInFlightTicks_OperatorApprovedStamp is the REAL abort path driven
 // against a busy Loop: 12 in-flight ticks, approved operator stop, every
 // reaped row must carry the DISTINCT 'operator_restart' reason (and the
-// failed status the schema requires). Without the approval the legacy stamp
+// aborted status the schema requires). Without the approval the legacy stamp
 // must stay 'drain_timeout'.
 func TestAbortInFlightTicks_OperatorApprovedStamp(t *testing.T) {
 	for _, tc := range []struct {
@@ -370,7 +370,7 @@ func gap1608RehearsalEnabled(t *testing.T, db *sql.DB, name string) bool {
 //     runbook §4b carries via systemctl --user set-environment);
 //  3. the restart's shutdown drain times out (grace 500ms) and reaps the
 //     12 ticks via the REAL Stop() path;
-//  4. every reaped row reads status=failed + orphan_reason=operator_restart;
+//  4. every reaped row reads status=aborted + orphan_reason=operator_restart;
 //  5. the REAL enforcer on the REAL DB leaves all four lanes enabled and —
 //     against the same policy — turns a control lane with genuine failures
 //     OFF: the reaps are transport-class, real failures are not;
@@ -444,7 +444,7 @@ func TestOperatorRestart_BusyFleetRehearsal(t *testing.T) {
 			t.Errorf("lane %s: %d rows in window, want 3", lane, n)
 		}
 		if bad > 0 {
-			t.Errorf("lane %s: %d/%d reaped rows are not failed+operator_restart", lane, bad, n)
+			t.Errorf("lane %s: %d/%d reaped rows are not aborted+operator_restart", lane, bad, n)
 		}
 	}
 

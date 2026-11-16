@@ -25,12 +25,11 @@ import (
 //  1. drain-waits-for-gateway-tick: Stop() must NOT return while a gateway
 //     request is in flight, and the row must land 'completed' after the tick
 //     finishes (the 17:33:55 scenario — without the manual UPDATE workaround).
-//  2. drain-timeout-marks-failed: when the drain grace expires with a tick
-//     still blocking, Stop() marks every 'running' row 'failed' (schema-legal
-//     status; CHECK in internal/database/migrations.go allows
-//     queued/running/completed/failed/timeout — no 'orphaned' without a
-//     migration), emits a HIGH event, and releases all slots so the process
-//     can exit. No row survives shutdown as 'running'.
+//  2. drain-timeout-marks-aborted: when the drain grace expires with a tick
+//     still blocking, Stop() marks every 'running' row 'aborted'. A graceful
+//     shutdown is an infrastructure abort, not a lane failure, so it must not
+//     stand down the SCHED-GAP-124 waiver. It emits a HIGH event and releases
+//     all slots so the process can exit. No row survives shutdown as 'running'.
 
 // blockingGatewayHandler is a stub /v1/responses gateway whose handler blocks
 // until release is closed (or forever), then replies with a minimal valid
@@ -140,13 +139,13 @@ func TestStop_DrainsInFlightGatewayTick(t *testing.T) {
 	}
 }
 
-// TestStop_DrainTimeoutMarksRunningTicksFailed is the abort path: when a
+// TestStop_DrainTimeoutMarksRunningTicksAborted is the abort path: when a
 // gateway request blocks past the drain grace period, Stop() must mark every
-// still-'running' row 'failed' (schema-legal status — no new 'orphaned' value,
-// no migration), log per tick, emit a HIGH event, and release all slots so the
-// process can exit. No row may survive shutdown as 'running' with a stale
-// heartbeat (the 17:33:55 scenario is impossible without the manual UPDATE).
-func TestStop_DrainTimeoutMarksRunningTicksFailed(t *testing.T) {
+// still-'running' row 'aborted'. The shutdown path is not a lane failure;
+// it logs per tick, emits a HIGH event, and releases all slots so the process
+// can exit. No row may survive shutdown as 'running' with a stale heartbeat
+// (the 17:33:55 scenario is impossible without the manual UPDATE).
+func TestStop_DrainTimeoutMarksRunningTicksAborted(t *testing.T) {
 	db := newTestDB(t)
 	const projectName = "sgap077-drain-timeout"
 	mustCreateProjectINFRA012(t, db, projectName)
@@ -174,7 +173,7 @@ func TestStop_DrainTimeoutMarksRunningTicksFailed(t *testing.T) {
 
 	go loop.Run()
 
-	// Stop() must block for the grace period, then mark the stuck row failed
+	// Stop() must block for the grace period, then mark the stuck row aborted
 	// and return.
 	start := time.Now()
 	loop.Stop()
@@ -182,8 +181,8 @@ func TestStop_DrainTimeoutMarksRunningTicksFailed(t *testing.T) {
 		t.Errorf("Stop() returned after %v — drain grace (%v) was not honored", elapsed, loop.stopGrace)
 	}
 
-	if got := tickStatusOf(t, db, tickID); got != "failed" {
-		t.Errorf("tick status after drain timeout = %q, want failed", got)
+	if got := tickStatusOf(t, db, tickID); got != "aborted" {
+		t.Errorf("tick status after drain timeout = %q, want aborted", got)
 	}
 	var running int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE status = 'running'`).Scan(&running); err != nil {

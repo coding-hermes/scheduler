@@ -204,7 +204,7 @@ func TestSCHEDGAP091_OrphansToResumeSelection(t *testing.T) {
 }
 
 func TestSCHEDGAP091_DrainTimeoutStampsOrphan(t *testing.T) {
-	// Pin the legacy (non-approved) stamp: this box's worker shells carry an
+	// Pin the legacy (non-approved) audit reason: this box's worker shells carry an
 	// ambient SCHEDULER_OPERATOR_RESTART_APPROVED=1, which would re-stamp the
 	// abort as operator_restart and make the test launcher-dependent.
 	t.Setenv(EnvOperatorRestartApproved, "0")
@@ -216,8 +216,8 @@ func TestSCHEDGAP091_DrainTimeoutStampsOrphan(t *testing.T) {
 	l := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
 	l.abortInFlightTicks()
 
-	if got := tickStatusOf(t, db, "drain-tick"); got != "failed" {
-		t.Fatalf("status = %q, want failed", got)
+	if got := tickStatusOf(t, db, "drain-tick"); got != "aborted" {
+		t.Fatalf("status = %q, want aborted", got)
 	}
 	var reason string
 	if err := db.QueryRow(`SELECT orphan_reason FROM ticks WHERE id = ?`, "drain-tick").Scan(&reason); err != nil {

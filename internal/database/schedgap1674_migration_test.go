@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -151,11 +152,33 @@ func TestSCHEDGAP1674_UpgradeV49_AdmitsAbortOutcomeWithoutLosingRows(t *testing.
 		t.Errorf("row after guard write = (%q,%q), want (failed,aborted:no_artifact)", gotStatus, gotOutcome)
 	}
 
-	// The old rejections still hold — the vocabulary widened by ONE token.
-	for _, bogus := range []string{"aborted", "no_artifact", "bogus"} {
-		if _, err := db.ExecContext(ctx,
-			`UPDATE ticks SET outcome = ? WHERE id = 'alpha-2026-09-29-00-00-01'`, bogus); err == nil {
-			t.Errorf("the rebuilt ticks.outcome CHECK accepted %q — the vocabulary widened into a free-for-all", bogus)
+	// The rebuilt CHECKs remain closed sets. Assert the complete intended
+	// vocabularies, rather than merely checking that the new token is present;
+	// this catches accidental free-form widening in either column.
+	row := db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='ticks'`)
+	var schema string
+	if err := row.Scan(&schema); err != nil {
+		t.Fatalf("read rebuilt ticks schema: %v", err)
+	}
+	checks := []struct {
+		name string
+		want []string
+	}{
+		{name: "status", want: []string{"queued", "running", "completed", "failed", "timeout", "aborted", "deferred"}},
+		{name: "outcome", want: []string{"committed", "dry_run", "failed", "timeout", "aborted", "deferred", "aborted:no_artifact", "no_work"}},
+	}
+	for _, check := range checks {
+		pattern := regexp.MustCompile(check.name + ` IN \(([^)]*)\)`)
+		match := pattern.FindStringSubmatch(schema)
+		if len(match) != 2 {
+			t.Fatalf("rebuilt ticks schema has no %s vocabulary: %s", check.name, schema)
+		}
+		got := make([]string, 0)
+		for _, value := range strings.Split(match[1], ",") {
+			got = append(got, strings.Trim(strings.TrimSpace(value), "'"))
+		}
+		if strings.Join(got, "\\x00") != strings.Join(check.want, "\\x00") {
+			t.Errorf("rebuilt ticks.%s vocabulary = %v, want exactly %v", check.name, got, check.want)
 		}
 	}
 	// And the data survived the rebuild: the seed row's other columns read
