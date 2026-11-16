@@ -383,59 +383,13 @@ const boardPrefix = ".coding-hermes/"
 // fixture. Exclusion is counting-only: result/report APIs still surface
 // deferred rows.
 func boardOpenRows(workdir string) (int, bool) {
-	boardPath, hasBoard := findBoardFile(workdir)
-	if !hasBoard {
-		return 0, false
-	}
-	f, err := os.Open(boardPath)
-	if err != nil {
-		return 0, false
-	}
-	defer f.Close()
-
-	fixtureIDs := loadFixtureRegistry(boardPath)
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	count := 0
-	isJSONL := strings.HasSuffix(boardPath, ".jsonl")
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if !isJSONL {
-			// Markdown boards: unchecked headers are open, checked are done.
-			// Fixture rows (registry-declared, NEVER-DONE) are excluded here too.
-			if strings.HasPrefix(line, "## [ ] ") && !isFixtureLine(line) &&
-				!registryDeclares(markdownTaskID(line), fixtureIDs) {
-				count++
-			}
-			continue
-		}
-		var row struct {
-			ID        string `json:"id"`
-			Status    string `json:"status"`
-			Perpetual bool   `json:"perpetual"`
-			Deferred  bool   `json:"deferred"`
-		}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			count++ // malformed row — count as open, never hide work
-			continue
-		}
-		if isFixtureRow(row.ID, row.Perpetual) || registryDeclares(row.ID, fixtureIDs) {
-			continue // declared/perpetual fixture — not work (SCHED-GAP-106, ADV-R05)
-		}
-		if row.Deferred {
-			continue // deferred:true — visible but not actionable (SCHED-GAP-1727)
-		}
-		s := strings.ToLower(row.Status)
-		switch s {
-		case "", "pending", "open", "in_progress", "in-progress", "claimed", "ready", "todo", "new", "rework":
-			count++
-		}
-	}
-	return count, true
+	// SCHED-430: the scan lives in one place (scanBoardDryEvidence) and this
+	// function is a view onto it — the dry-reason resolver needs the same counts
+	// split into pending/owned, and a second copy of this parser is exactly the
+	// drift the fleet has paid for before. The counting rules are byte-identical
+	// to what this function did before the split.
+	ev := boardDryEvidence(workdir)
+	return ev.open, ev.read
 }
 
 // boardOpenUniqueIDs is the SCHED-GAP-207 metric half: the open-work signal

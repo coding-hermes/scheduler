@@ -437,6 +437,41 @@ Higher urgency projects get picked first.
 
 Default 900s between successive ticks for the same project.
 
+### Dry ticks — why a tick that ran produced nothing (`ticks.failure_reason`)
+
+A tick that COMPLETES with no artifact (no commit, no file delta, no DuckBrain
+key) records `outcome='dry_run'` (or `no_work` for a zero-tool session). The
+outcome names the *result*; `ticks.failure_reason` names the *cause*. Since
+SCHED-430 a dry tick writes exactly one token from a closed vocabulary, in the
+same finalization UPDATE as the outcome:
+
+| token | meaning |
+|---|---|
+| `EMPTY_BOARD` | nothing dispatchable was observed — the board was read and held zero open rows, or the lane has no readable board |
+| `OWNERSHIP_BARRIER` | the board has open rows but every one is claimed / in progress / in rework — owned by another in-flight tick or worker |
+| `GATE_WITHHELD` | work existed and the tick still dispatched nothing: the scheduler stood the lane down without a dispatch, or the board's pending rows were withheld by the lane's own gates |
+| `DUPLICATE_PREVENTION` | the row was closed because a duplicate spawn was refused for the lane (declared by the caller that owns the row — the pre-spawn dedup arms run before any row exists) |
+| `DEFERRED` | the only remaining rows on the board are `deferred:true` — visible, deliberately not actionable |
+| `WAVE_PERSISTED` | the tick's product is its worker wave (a manifest with ≥ 1 worker exists); the work lives in `tick_workers`, not in a commit of the tick's own |
+
+Failed and timeout rows keep the transport-class markers they always had
+(`gateway_drain`, `gateway_transport`, `session_silent`, `sleep_poll`,
+`instant_turn`, …), and `deferred`-status rows keep an empty column — that
+status already names its class.
+
+Forensics window: `failure_reason <> ''` selects the rows whose cause is
+recorded. Rows written before SCHED-430 keep `''` — there is no backfill, by
+design (the data needed to classify them was never written).
+
+```sh
+sqlite3 -header -column -readonly "$HOME/.hermes/coding-hermes/scheduler.db" "
+SELECT COALESCE(NULLIF(failure_reason,''),'(empty — pre-SCHED-430)') AS failure_reason,
+       COUNT(*) AS n
+FROM ticks
+WHERE outcome IN ('dry_run','no_work') AND created_at >= datetime('now','-7 days')
+GROUP BY 1 ORDER BY n DESC;"
+```
+
 ### Fleet Config Mirror (fleet-sync.py)
 
 `~/.hermes/fleet.toml` — the durable pin layer re-applied by the loader at every

@@ -203,6 +203,16 @@ type TickOutcome struct {
 	// 0). A measurement failure can only leave it 0 — it can never
 	// manufacture a no-op.
 	MemoryKeys int
+	// DryReason (SCHED-430) is the DECLARED dry-ticks cause: a member of the
+	// closed vocabulary in dryreason.go (DryReasons), set only by a caller that
+	// can prove why a completed, artifact-less tick produced nothing. Empty
+	// leaves the derivation to lifecycle.Complete's own arms (wave manifest ->
+	// no dispatched session -> board read), which is the normal path; the
+	// declared field exists for the classes no row-side evidence can prove
+	// (DUPLICATE_PREVENTION: the dedup arms run before any row exists). An
+	// invalid value is IGNORED, never written — the column carries the closed
+	// vocabulary or nothing.
+	DryReason string
 	// PriceAsOf (SCHED-GAP-1651): the price map's as-of stamp carried onto
 	// the row and into the sync cost footer, so a reader of the reported
 	// sticker knows WHICH price list produced it. Read once at completion
@@ -353,6 +363,16 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	failureReason := ""
 	if outcome.Status == TickFailed || outcome.Status == TickTimeout {
 		failureReason = failureReasonClass(outcome.Error)
+	} else {
+		// SCHED-430: a COMPLETED tick that landed no artifact is DRY, and a dry
+		// tick must say WHY (344 dry ticks/week on the 2026-11-15 drill, 86.9%
+		// ownership-barrier, previously recoverable only by transcript
+		// archaeology). The token comes from the closed vocabulary in
+		// dryreason.go and rides this SAME finalization UPDATE — never a second
+		// write that could miss a row. Failed/timeout rows keep the
+		// transport-class classifier above; deferred rows keep their empty
+		// column (the status already names that class, SCHED-GAP-203).
+		failureReason = resolveDryReason(lt.db, outcome)
 	}
 	// RELEASE-048 (fix 1): measure the git window for failed/timeout outcomes
 	// too. The completed path has always measured in Wait() (countGitChanges
