@@ -31,7 +31,52 @@ Do not run `DELETE`, `VACUUM`, or `.backup` against the live scheduler DB while 
 
 A copy-only run against the full production database remains a separate live measurement. Unit tests use a populated temporary SQLite copy and prove that old rows are deleted, recent rows survive, logical rows are unchanged by VACUUM, and the >2x-window regrowth guard is visible.
 
-ch:trace row=PERF-007 spec=none:board-acceptance test=internal/database/deferral_retention_test.go::TestDeferralRetentionCopyDeletesOnlyOldRowsAndVacuumPreservesShape wave=none:serial-worker evidence=none:live-17gb-copy-not-run witness=none:full-live-copy-not-run verdict=none:foreman-runs-judge commit=none:worker-commit memory=none:foreman-closeout
+## PERF-007 live copy evidence (2026-11-16)
+
+This measurement used the live daemon's open database descriptor `/proc/1669553/fd/7` as the read-only source, because the daemon-owned path was transiently being replaced during the run. The output copy was `/home/kara/.hermes/cache/scratch/perf007-copy.db`; it was deleted after verification. The source was never modified.
+
+Command:
+
+```sh
+./bin/retention-deferrals \\
+  --db /proc/1669553/fd/7 \\
+  --output /home/kara/.hermes/cache/scratch/perf007-copy.db \\
+  --retention 336h --batch-size 10000000 --pause 0
+```
+
+Exact report:
+
+```text
+source=/proc/1669553/fd/7 source_bytes=17175048192
+copy=/home/kara/.hermes/cache/scratch/perf007-copy.db copy_bytes_after_vacuum=3642011648
+retention=336h0m0s batch_size=10000000 deleted_rows=9425290
+deferrals rows_before=11860687 rows_after_delete=2435397 rows_after_vacuum=2435397 payload_before=13312890095 payload_after_delete=1614031516 payload_after_vacuum=1614031516
+silent_regrowth overdue_before=347766 overdue_after=0 threshold=2x-window
+dashboard_last_deferral project=boardctl-foreman reason=budget created_at=2026-11-16T12:14:10Z
+metrics_shapes=unchanged; admission_counters=daemon-memory-only
+```
+
+The dashboard latest-deferral query plan on the pruned copy was:
+
+```text
+QUERY PLAN
+`--SEARCH d USING INDEX idx_deferrals_project_created (project_name=?)
+```
+
+Five timed executions each returned `budget|2026-11-16T12:14:10Z` with `elapsed=0.00 sec`. During the copy/prune run, live probes stayed HTTP 200. Representative probes were `health=200 0.344763s` / `metrics=200 0.135233s`, `health=200 2.331725s` / `metrics=200 0.219221s`, and `health=200 0.376671s` / `metrics=200 0.143155s`.
+
+The live `/api/v1/metrics` shape after the run was:
+
+```text
+deferrals_keys=["admitted_by_namespace","available","by_reason","passes"]
+by_reason_keys=["board_unchanged","board_unowned","budget","cap","cooldown","dependency_blocked","failed_cooldown","load_gate","no_work","ok","sibling_held","stale_premise","tasks_deferred","tasks_no_actionable","tasks_no_work"]
+admitted_keys=["code-factory","coding-hermes","data-cleanup","docs","dogfood","duckbrain-sync","ops","perf","pm","qa","releases","review"]
+passes_type="number"
+```
+
+The command itself does not contact the daemon and therefore does not verify that metrics shape. Its output now says `metrics_shapes=unchecked`; the live metrics shape above is a separately captured operator measurement.
+
+ch:trace row=PERF-007 spec=none:board-acceptance test=internal/database/deferral_retention_test.go::TestDeferralRetentionCopyDeletesOnlyOldRowsAndVacuumPreservesShape wave=none:serial-worker evidence=docs/retention-deferrals.md::PERF-007-live-copy-2026-11-16 witness=/proc/1669553/fd/7 verdict=none:foreman-runs-judge commit=none:worker-commit memory=none:foreman-closeout
 STATUS: partial
 TIER: T2
-EVIDENCE: internal/database/deferral_retention_test.go; deterministic temporary SQLite copy test; full live 17GB copy and daemon latency arm remain unverified
+EVIDENCE: committed live copy report, dashboard plan/timing, daemon probes, and metrics shape; full suite has pre-existing scheduler failures
