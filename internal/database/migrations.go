@@ -17,7 +17,7 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 89 // PERF-008/PERF-009: observatory and listTicks indexes
+const latestMigration = 90 // SCHED-SHUTDOWN-001: aborted tick audit and resume selection
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -78,8 +78,8 @@ CREATE TABLE IF NOT EXISTS ticks (
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact')),
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','aborted','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','aborted','deferred','aborted:no_artifact')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS ticks (
     urgency       REAL DEFAULT 0.0,
     weight_used   INTEGER DEFAULT 0,
     error         TEXT,
+    abort_reason  TEXT NOT NULL DEFAULT '',
+    drain_succeeded INTEGER NOT NULL DEFAULT 0,
+    selected_row_ids TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL
 );
 
@@ -535,8 +538,8 @@ CREATE TABLE ticks_203b (
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred')),
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','aborted','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','aborted','deferred')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -829,8 +832,8 @@ CREATE TABLE ticks_1674 (
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact')),
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','aborted','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','aborted','deferred','aborted:no_artifact')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -972,7 +975,7 @@ WHERE status = 'completed';
 		// tick_workers child rows survive, full column copy, rename, index
 		// restoration). latestMigration is bumped to 55 with this entry.
 		version: 55,
-		desc:    "SCHED-GAP-1655: no_work outcome vocabulary — rebuild the ticks table (v50's procedure) widening the outcome CHECK so a zero-tool-call tick records its own terminal verdict instead of collapsing into 'dry_run'",
+		desc:    "SCHED-GAP-1655: no_work and aborted outcome vocabulary — rebuild the ticks table (v50's procedure) widening the outcome CHECK so a zero-tool-call tick records its own terminal verdict instead of collapsing into 'dry_run'",
 		ownTx:   true,
 		stmt: `
 PRAGMA foreign_keys=OFF;
@@ -983,8 +986,8 @@ CREATE TABLE ticks_1655 (
     project_name  TEXT NOT NULL REFERENCES projects(name),
     session_id    TEXT,
     pid           INTEGER DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','deferred')),
-    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','deferred','aborted:no_artifact','no_work')),
+    status        TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed','timeout','aborted','deferred')),
+    outcome       TEXT CHECK(outcome IN ('committed','dry_run','failed','timeout','aborted','deferred','aborted:no_artifact','no_work')),
     spawned_at    TEXT,
     completed_at  TEXT,
     exit_code     INTEGER,
@@ -1999,6 +2002,16 @@ CREATE INDEX IF NOT EXISTS wakes_state_idx ON wakes(state, at_time);
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_ticks_created ON ticks(created_at);
 CREATE INDEX IF NOT EXISTS idx_ticks_spawned ON ticks(spawned_at);
+`,
+	},
+	{
+		// SCHED-SHUTDOWN-001: operator abort is a distinct lifecycle outcome.
+		version: 90,
+		desc:    "SCHED-SHUTDOWN-001: aborted tick audit and persisted resume selection",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN abort_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN drain_succeeded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ticks ADD COLUMN selected_row_ids TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

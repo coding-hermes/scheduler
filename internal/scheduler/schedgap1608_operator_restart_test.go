@@ -231,8 +231,8 @@ func TestAbortInFlightTicks_OperatorApprovedStamp(t *testing.T) {
 				if err := rows.Scan(&status, &orphan); err != nil {
 					t.Fatalf("scan aborted tick: %v", err)
 				}
-				if status != "failed" {
-					t.Errorf("aborted tick status = %q, want failed", status)
+				if status != "aborted" {
+					t.Errorf("aborted tick status = %q, want aborted", status)
 				}
 				if orphan != tc.wantOrphan {
 					t.Errorf("aborted tick orphan_reason = %q, want %q", orphan, tc.wantOrphan)
@@ -434,7 +434,7 @@ func TestOperatorRestart_BusyFleetRehearsal(t *testing.T) {
 			if err := rows.Scan(&status, &orphan); err != nil {
 				t.Fatalf("scan reaped tick: %v", err)
 			}
-			if status != "failed" || orphan != OrphanReasonOperatorRestart {
+			if status != "aborted" || orphan != OrphanReasonOperatorRestart {
 				bad++
 			}
 			n++

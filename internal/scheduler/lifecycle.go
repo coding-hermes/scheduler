@@ -22,6 +22,9 @@ const (
 	TickCompleted TickStatus = "completed"
 	TickFailed    TickStatus = "failed"
 	TickTimeout   TickStatus = "timeout"
+	// TickAborted is an operator-induced shutdown/restart terminal status.
+	// It is deliberately distinct from TickFailed: the lane did not fail.
+	TickAborted TickStatus = "aborted"
 	// TickDeferred is the terminal status for a tick the harness DEFERRED
 	// instead of failing (SCHED-GAP-203). It exists because the gateway-health
 	// gate (SCHED-GAP-170) guards only the PRE-SPAWN admission point: a blip
@@ -63,6 +66,8 @@ func (s TickStatus) Outcome() string {
 		return "failed"
 	case TickTimeout:
 		return "timeout"
+	case TickAborted:
+		return "aborted"
 	case TickDeferred:
 		// The outcome column must carry the deferral too: an audit reads BOTH
 		// columns (status for the lifecycle state, outcome for the terminal
@@ -169,11 +174,16 @@ type TickOutcome struct {
 	// status/outcome pair therefore records the guard's verdict on every
 	// surface without any second marker column.
 	GuardAbort bool
-	// OperatorRestart marks a failed in-flight tick aborted during an
-	// operator-approved restart. The tick row remains failed for lifecycle
-	// and orphan-resume accounting, while the project admission stamp uses
-	// a non-lane-attributable status that does not stand down the tasks waiver.
+	// OperatorRestart marks an in-flight tick aborted during operator shutdown.
+	// The persisted tick status is TickAborted, never TickFailed.
 	OperatorRestart bool
+	// AbortReason and DrainSucceeded make operator_restart events auditable.
+	AbortReason    string
+	DrainSucceeded bool
+	// SelectedRowIDs is the board selection captured for a fresh resume attempt.
+	SelectedRowIDs string
+	// ResumeNote is persisted in error for the fresh-attempt resume marker.
+	ResumeNote string
 	// NoTools (SCHED-GAP-1655): the completed gateway session ran ZERO
 	// tool calls — the response envelope carried no tool-call output item
 	// and the SSE trace never observed a tool event. terminalOutcome maps
@@ -299,6 +309,13 @@ func (lt *LifecycleTracker) Enqueue(project, tickID string) error {
 		return fmt.Errorf("enqueue tick %s: %w", tickID, err)
 	}
 	return nil
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // StartRunning transitions a tick from queued to running.
@@ -445,8 +462,12 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if workersTerminal == 0 {
 		workersTerminal = -1
 	}
+	if outcome.ResumeNote != "" {
+		outcome.Error = outcome.ResumeNote
+	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
+			abort_reason = ?, drain_succeeded = ?, selected_row_ids = ?,
 			tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?,
 			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
 			dispatch_outcome = ?, dispatch_reason = ?,
@@ -455,6 +476,7 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		WHERE id = ?
 	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
+		outcome.AbortReason, boolInt(outcome.DrainSucceeded), outcome.SelectedRowIDs,
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
@@ -515,9 +537,8 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		lastStatus = database.LastStatusCompleted
 	case TickFailed:
 		lastStatus = database.LastStatusFailed
-		if outcome.OperatorRestart {
-			lastStatus = database.LastStatusOperatorRestart
-		}
+	case TickAborted:
+		lastStatus = database.LastStatusAborted
 	case TickTimeout:
 		lastStatus = database.LastStatusTimeout
 	case TickDeferred:

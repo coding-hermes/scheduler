@@ -929,8 +929,8 @@ func (l *Loop) Stop() {
 		log.Println("LOOP: all in-flight ticks completed")
 		return
 	}
-	log.Printf("LOOP: shutdown drain timed out after %v — marking in-flight ticks failed", grace)
-	l.abortInFlightTicks()
+	log.Printf("LOOP: shutdown drain timed out after %v — aborting in-flight ticks", grace)
+	l.abortInFlightTicks(false)
 	l.slotPool.ReleaseAll()
 }
 
@@ -940,7 +940,8 @@ func (l *Loop) Stop() {
 // tick id and project, and emits a HIGH event listing the affected tick ids.
 // Called by Stop() when the drain grace expires with gateway requests still
 // blocking.
-func (l *Loop) abortInFlightTicks() {
+func (l *Loop) abortInFlightTicks(drainSucceededArg ...bool) {
+	drainSucceeded := len(drainSucceededArg) > 0 && drainSucceededArg[0]
 	rows, err := l.db.Query(`SELECT id, project_name FROM ticks WHERE status = ?`, string(TickRunning))
 	if err != nil {
 		log.Printf("LOOP: shutdown drain: query running ticks: %v", err)
@@ -971,19 +972,26 @@ func (l *Loop) abortInFlightTicks() {
 	operatorRestart := OperatorRestartApproved()
 	for _, t := range stuck {
 		finished := l.clock().Now()
+		reason := OrphanReasonDrainTimeout
+		if operatorRestart {
+			reason = OrphanReasonOperatorRestart
+		}
 		err := l.lifecycle.Complete(TickOutcome{
 			TickID:          t.id,
 			Project:         t.project,
 			Started:         finished,
 			Finished:        finished,
-			Status:          TickFailed,
-			OperatorRestart: operatorRestart,
+			Status:          TickAborted,
+			OperatorRestart: true,
+			AbortReason:     reason,
+			DrainSucceeded:  drainSucceeded,
 			// SCHED-GAP-1597: -1 → exit_code NULL. No process was
 			// reaped — the drain reaped the row, not the child — so
 			// the struct-default 0 would be a fabricated "exited
 			// cleanly".
-			ExitCode: -1,
-			Error:    OrphanAbortMarker + " — drain timed out with tick in flight",
+			ExitCode:       -1,
+			Error:          OrphanAbortMarker + " — drain timed out with tick in flight",
+			SelectedRowIDs: l.persistedSelectionForTick(t.id, t.project),
 		})
 		if err != nil {
 			log.Printf("LOOP: shutdown drain: mark tick %s (project %s) failed: %v", t.id, t.project, err)
@@ -999,16 +1007,41 @@ func (l *Loop) abortInFlightTicks() {
 		// accounting (orphan_exclusion.go) can exclude it structurally.
 		// Both spellings — this one and the legacy drain_timeout — are
 		// excluded from lane accounting by the same shared predicate.
-		reason := OrphanReasonDrainTimeout
-		if operatorRestart {
-			reason = OrphanReasonOperatorRestart
-		}
 		l.stampOrphaned(t.id, reason)
-		log.Printf("LOOP: shutdown drain timed out — marked tick %s (project %s) failed (orphan=%s)", t.id, t.project, reason)
+		l.emitAbortEvent(t.id, t.project, reason, drainSucceeded)
+		log.Printf("LOOP: shutdown drain — marked tick %s (project %s) aborted (orphan=%s)", t.id, t.project, reason)
 	}
 	if len(stuck) > 0 {
-		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain timed out — marking %d in-flight ticks failed", len(stuck)), map[string]any{"tick_ids": ids})
+		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain — aborted %d in-flight ticks", len(stuck)), map[string]any{"tick_ids": ids, "abort_reason": "operator_restart", "drain_succeeded": drainSucceeded})
 	}
+}
+
+func (l *Loop) emitAbortEvent(tickID, project, reason string, drainSucceeded bool) {
+	l.events.Emit(context.Background(), SeverityHigh, "operator_restart", "operator_restart", map[string]any{
+		"tick_id": tickID, "project": project, "abort_reason": reason, "drain_succeeded": drainSucceeded,
+	})
+}
+
+// persistedSelectionForTick returns the board ids selected/dispatched for a
+// tick. Selection receipts are persisted in tick_dispatch; local ticks have
+// no receipt and return an empty marker.
+func (l *Loop) persistedSelectionForTick(tickID, project string) string {
+	rows, err := l.db.Query(`SELECT lane FROM tick_dispatch WHERE tick_id = ?`, tickID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var lane string
+		if rows.Scan(&lane) == nil && lane != "" {
+			ids = append(ids, lane)
+		}
+	}
+	if len(ids) == 0 {
+		return project
+	}
+	return strings.Join(ids, ",")
 }
 
 // PublishLaneState is the loop-level lane-state hook (REMOTE-004, §3):
