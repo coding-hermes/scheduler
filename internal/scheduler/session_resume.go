@@ -424,7 +424,7 @@ func (l *Loop) resumeNeedsHuman(trigger string) {
 SELECT t.id, t.project_name, t.nudge_count, COALESCE(t.orphan_reason, ''), p.enabled
 FROM ticks t
 JOIN projects p ON p.name = t.project_name
-WHERE t.orphaned_at IS NOT NULL AND t.status IN ('failed','timeout')
+WHERE t.orphaned_at IS NOT NULL AND t.status IN ('failed','timeout','aborted')
   AND (t.nudge_count >= ? OR p.enabled = 0)
   AND NOT EXISTS (
       SELECT 1 FROM ticks r
