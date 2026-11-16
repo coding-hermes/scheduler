@@ -12,8 +12,10 @@ import (
 
 // PERF-001-R2 — block-profile arming for the evaluate() path.
 //
-// The row: /api/v1/status answers p50 326ms / p99 ~350ms against PERF-001's
-// recorded PASS bar (p99 < 100ms), while the handler's profile is
+// The row: /api/v1/status answered p50 326ms / p99 ~350ms against PERF-001's
+// historical calibration bar (p99 < 100ms at approximately 57k ticks); the
+// current-scale calibration is recorded in docs/perf-001-r3-r4-decision.md.
+// The handler's profile is
 // CPU:wall = 47ms:326ms — the request spends ~86% of its life NOT computing,
 // so a query rewrite cannot close the gap. The two surfaces that would name
 // the WAIT were both dark: GET /debug/pprof/block and /debug/pprof/mutex each

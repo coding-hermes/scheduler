@@ -7,8 +7,10 @@ measurement was in flight), `PERF-002-R2` (the board-freshness scan's CPU half).
 
 ## 1. The question
 
-`/api/v1/status` answered **p50 326 ms / p99 ~350 ms** against PERF-001's recorded PASS bar
-(`p99 < 100 ms`). The handler profile showed **CPU:wall = 47 ms : 326 ms** — the request
+`/api/v1/status` answered **p50 326 ms / p99 ~350 ms** against PERF-001's historical
+calibration bar (`p99 < 100 ms` at approximately 57k ticks). The current-scale
+calibration is recorded in `docs/perf-001-r3-r4-decision.md`; this profile showed
+**CPU:wall = 47 ms : 326 ms** — the request
 spent ~86 % of its life *not computing* — and the goroutine dump taken at the stall showed
 the handler parked in `sync.RWMutex.RLock` inside `Loop.ZeroSelectStats` while
 `evaluate()` held the write lock across its whole pass. Both attribution surfaces were
