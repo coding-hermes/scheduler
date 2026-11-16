@@ -357,6 +357,19 @@ func TestSCHEDGAP091_NudgeCapEmitsNeedsHuman(t *testing.T) {
 	}
 }
 
+func TestSCHEDGAP091_AbortedNudgeCapNeedsHuman(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectINFRA012(t, db, "aborted-capped-proj")
+	orphanTickRow(t, db, "aborted-capped-tick", "aborted-capped-proj", "aborted", OrphanReasonOperatorRestart, MaxNudgesPerTick)
+
+	l := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	l.resumeNeedsHuman("test")
+
+	if n := resumeHighEventCount(t, db, "aborted-capped-tick"); n != 1 {
+		t.Fatalf("aborted needs-human HIGH events = %d, want 1", n)
+	}
+}
+
 func TestSCHEDGAP091_DisabledProjectNeedsHuman(t *testing.T) {
 	db := newTestDB(t)
 	mustCreateProjectINFRA012(t, db, "disabled-proj")
