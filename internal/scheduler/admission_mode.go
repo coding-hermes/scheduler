@@ -264,6 +264,11 @@ func tasksAdmissionDue(workdir, ownership string) bool {
 // A legacy row (pre-v38) reads "" — treated as NOT failed, preserving the
 // pre-214 waiver behavior until the project's next terminal tick stamps it.
 func lastTickStatusFailed(lastStatus string) bool {
+	// Keep the abort exclusion explicit: operator shutdown is not a lane
+	// failure, and must not stand down the SCHED-GAP-124 waiver.
+	if lastTickStatusAborted(lastStatus) {
+		return false
+	}
 	return lastStatus == database.LastStatusFailed
 }
 

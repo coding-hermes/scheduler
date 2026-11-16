@@ -899,11 +899,11 @@ func (l *Loop) Run() {
 // incident, recovered only by a manual UPDATE).
 //
 // Stop waits up to stopGrace (default 15s) for in-flight ticks to finish. On
-// drain timeout, every tick row still status='running' is marked 'failed'
-// (schema-legal status; the ticks CHECK at internal/database/migrations.go
-// allows queued/running/completed/failed/timeout) with a HIGH event, and all
-// slots are released so the process can exit. No row survives shutdown as
-// 'running' with a stale heartbeat. The startup reaper (tick_process.go
+// drain timeout, every tick row still status='running' is marked 'aborted':
+// graceful shutdown is an infrastructure abort, not a lane failure, so it must
+// not stand down the SCHED-GAP-124 waiver. A HIGH event records the timeout,
+// and all slots are released so the process can exit. No row survives shutdown
+// as 'running' with a stale heartbeat. The startup reaper (tick_process.go
 // reapZombies, S-GAP-003/SCHED-GAP-030) stays untouched as the backstop for
 // rows orphaned by a hard crash.
 func (l *Loop) Stop() {
@@ -934,12 +934,13 @@ func (l *Loop) Stop() {
 	l.slotPool.ReleaseAll()
 }
 
-// abortInFlightTicks marks every tick row still status='running' as 'failed'
-// (schema-legal status — the ticks CHECK allows queued/running/completed/
-// failed/timeout; no new status without a migration), logs each row with its
-// tick id and project, and emits a HIGH event listing the affected tick ids.
+// abortInFlightTicks marks every tick row still status='running' as 'aborted'
+// (schema-legal status — the ticks CHECK includes aborted), logs each row with
+// its tick id and project, and emits a HIGH event listing the affected tick ids.
 // Called by Stop() when the drain grace expires with gateway requests still
-// blocking.
+// blocking. A drain timeout is an infrastructure abort, regardless of whether
+// the operator approval flag is present; approval only selects the audit reason.
+
 func (l *Loop) abortInFlightTicks(drainSucceededArg ...bool) {
 	drainSucceeded := len(drainSucceededArg) > 0 && drainSucceededArg[0]
 	rows, err := l.db.Query(`SELECT id, project_name FROM ticks WHERE status = ?`, string(TickRunning))
@@ -970,19 +971,20 @@ func (l *Loop) abortInFlightTicks(drainSucceededArg ...bool) {
 	}
 
 	operatorRestart := OperatorRestartApproved()
+	abortReason := OrphanReasonDrainTimeout
+	if operatorRestart {
+		abortReason = OrphanReasonOperatorRestart
+	}
 	for _, t := range stuck {
 		finished := l.clock().Now()
-		reason := OrphanReasonDrainTimeout
-		if operatorRestart {
-			reason = OrphanReasonOperatorRestart
-		}
+		reason := abortReason
 		err := l.lifecycle.Complete(TickOutcome{
 			TickID:          t.id,
 			Project:         t.project,
 			Started:         finished,
 			Finished:        finished,
 			Status:          TickAborted,
-			OperatorRestart: true,
+			OperatorRestart: operatorRestart,
 			AbortReason:     reason,
 			DrainSucceeded:  drainSucceeded,
 			// SCHED-GAP-1597: -1 → exit_code NULL. No process was
@@ -1012,7 +1014,11 @@ func (l *Loop) abortInFlightTicks(drainSucceededArg ...bool) {
 		log.Printf("LOOP: shutdown drain — marked tick %s (project %s) aborted (orphan=%s)", t.id, t.project, reason)
 	}
 	if len(stuck) > 0 {
-		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain — aborted %d in-flight ticks", len(stuck)), map[string]any{"tick_ids": ids, "abort_reason": "operator_restart", "drain_succeeded": drainSucceeded})
+		// Keep the timeout event on the loop component: operators and the
+		// shutdown-drain regression both use it as the infrastructure-abort
+		// signal. The per-tick operator_restart events below carry the detailed
+		// audit reason separately.
+		l.EmitHighEvent("loop", fmt.Sprintf("shutdown drain timed out — aborted %d in-flight ticks", len(stuck)), map[string]any{"tick_ids": ids, "abort_reason": abortReason, "drain_succeeded": drainSucceeded})
 	}
 }
 
