@@ -194,6 +194,7 @@ func Expand(args []string, env Env) []string {
 			"{workdir}", env.Workdir,
 			"{repo}", env.RepoArg(),
 			"{tick}", env.TickID,
+			"{session}", env.SessionID,
 			"{phase}", string(env.Phase),
 			"{hook}", env.HookID,
 		)

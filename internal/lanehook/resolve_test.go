@@ -159,9 +159,9 @@ func TestRoleFor(t *testing.T) {
 
 // Placeholder expansion never quotes and passes values through verbatim.
 func TestExpand(t *testing.T) {
-	env := Env{TickID: "t1", Lane: "cf-qa", Role: "qa", Workdir: "/w", Repo: "/r", Phase: PhasePre}
-	got := Expand([]string{"--lane", "{lane}", "--tick", "{tick}"}, env)
-	if len(got) != 4 || got[1] != "cf-qa" || got[3] != "t1" {
+	env := Env{TickID: "t1", SessionID: "s1", Lane: "cf-qa", Role: "qa", Workdir: "/w", Repo: "/r", Phase: PhasePre}
+	got := Expand([]string{"--lane", "{lane}", "--tick", "{tick}", "--session", "{session}"}, env)
+	if len(got) != 6 || got[1] != "cf-qa" || got[3] != "t1" || got[5] != "s1" {
 		t.Fatalf("unexpected expansion: %v", got)
 	}
 }

@@ -6,7 +6,7 @@ import "strings"
 // the single source of truth for "what a hook command may say"; the validator
 // and the CLI preview both read it from here.
 var knownPlaceholders = []string{
-	"lane", "project", "role", "namespace", "workdir", "repo", "tick", "phase", "hook",
+	"lane", "project", "role", "namespace", "workdir", "repo", "tick", "session", "phase", "hook",
 }
 
 // KnownPlaceholderList renders the vocabulary for an error message.

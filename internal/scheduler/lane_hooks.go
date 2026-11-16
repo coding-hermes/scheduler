@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -53,10 +54,11 @@ func repoPath(u string) string {
 // This used to set Project = the LANE name while deriving only the role, so
 // `{project}` expanded to `code-factory-qa` — a lane name where a project was
 // asked for — and any hook building a path from {project} got one level wrong.
-func hookEnv(proj PackedProject, tickID string, deadline time.Time) lanehook.Env {
+func hookEnv(proj PackedProject, tickID, sessionID string, deadline time.Time) lanehook.Env {
 	project, role := lanehook.RoleFor(proj.Name)
 	return lanehook.Env{
 		TickID:    tickID,
+		SessionID: sessionID,
 		Lane:      proj.Name,
 		Project:   project,
 		Role:      role,
@@ -65,6 +67,40 @@ func hookEnv(proj PackedProject, tickID string, deadline time.Time) lanehook.Env
 		Repo:      repoPath(proj.RepoURL),
 		Deadline:  deadline,
 	}
+}
+
+// hookSessionID returns the Hermes session associated with a tick. The durable
+// ticks.session_id value is authoritative; older rows carry it in the POST
+// trace instead.
+//
+// The scheduler stamps session_id with the TICK ID as a placeholder at spawn
+// (S-GAP-003, so a running row is never NULL) and replaces it with the real
+// gateway session once the tick reports one. That placeholder must never reach
+// a hook: {session} expands it to a value that looks like a session id but is
+// not one, and the whole point of the placeholder is auditing a handoff record
+// against the tick's session. A tick still holding the placeholder therefore
+// falls through to the gateway trace, and to empty when that is absent too.
+func (p *SlotPool) hookSessionID(tickID string) string {
+	if p == nil || p.lifecycle == nil || p.lifecycle.db == nil || tickID == "" {
+		return ""
+	}
+	var sessionID, trace string
+	if err := p.lifecycle.db.QueryRow(`SELECT COALESCE(session_id,''), COALESCE(gateway_trace,'') FROM ticks WHERE id = ?`, tickID).Scan(&sessionID, &trace); err != nil {
+		return ""
+	}
+	if sessionID != "" && sessionID != tickID {
+		return sessionID
+	}
+	var envelope struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal([]byte(trace), &envelope) != nil {
+		return ""
+	}
+	if envelope.SessionID == tickID {
+		return ""
+	}
+	return envelope.SessionID
 }
 
 // hookPlan resolves the lane's plan. The second return is false when hooks are
@@ -102,7 +138,7 @@ func (p *SlotPool) runPreHooks(proj PackedProject, tickID string, now time.Time,
 		return nil
 	}
 	deadline := now.Add(p.hookDeadlineHint())
-	env := hookEnv(proj, tickID, deadline)
+	env := hookEnv(proj, tickID, p.hookSessionID(tickID), deadline)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	return p.hookRunner.Pre(ctx, env, plan)
@@ -113,7 +149,7 @@ func (p *SlotPool) runPostHooks(proj PackedProject, tickID string, plan lanehook
 	if len(plan.Post) == 0 || p.hookRunner == nil {
 		return
 	}
-	env := hookEnv(proj, tickID, p.clock().Now().Add(p.hookDeadlineHint()))
+	env := hookEnv(proj, tickID, p.hookSessionID(tickID), p.clock().Now().Add(p.hookDeadlineHint()))
 	ctx, cancel := context.WithTimeout(context.Background(), p.hookDeadlineHint())
 	defer cancel()
 	p.hookRunner.Post(ctx, env, plan)

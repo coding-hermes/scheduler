@@ -357,6 +357,7 @@ func (r *ExecRunner) event(ctx context.Context, severity, msg string, details ma
 func envVars(env Env) []string {
 	out := []string{
 		"CODING_HERMES_TICK=" + env.TickID,
+		"CODING_HERMES_SESSION=" + env.SessionID,
 		"CODING_HERMES_PROJECT=" + env.Project,
 		"CODING_HERMES_LANE=" + env.Lane,
 		"CODING_HERMES_ROLE=" + env.Role,
