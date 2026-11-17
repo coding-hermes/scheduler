@@ -38,6 +38,12 @@ import (
 //   - every watcher/reader error fails OPEN — a board-list failure logs
 //     and keeps the clock cadence; an unreadable board in the freshness
 //     filter keeps the raw pending count (freshnessCheckedPending);
+//   - SCHED-GAP-1764 wake coalescing is the one thing that can drop a
+//     trigger, and its scope is the watcher's own: a lane whose last
+//     CONCLUDED tick was dry_run/no_changes is not woken for its coalesce
+//     window (default 1x cooldown_s). No spawn is vetoed — the clock cadence
+//     and every admission gate are untouched — and each skipped wake emits
+//     a WAKE-COALESCE line (see board_wake_coalesce.go);
 //   - any future admission gate must live in SlotPool.spawn (slot_pool.go)
 //     with a declared override (G7 ruling) — see AGENTS.md.
 //
@@ -116,6 +122,17 @@ type BoardWakeWatcher struct {
 	// listBoardsFromDB.
 	listBoards func(context.Context) (map[string]boardWakeTarget, error)
 
+	// lastTick reads the lane's last concluded tick for the SCHED-GAP-1764
+	// coalesce predicate. A field so fault-injection tests can replace it
+	// (same seam shape as listBoards); production is boardWakeLastTickFromDB.
+	lastTick func(context.Context, *sql.DB, string) (boardWakeLastTick, error)
+
+	// coalesce holds the per-lane wake-coalescing state (SCHED-GAP-1764):
+	// a lane whose last concluded tick was dry_run/no_changes has its
+	// board-wake-triggered re-ticks suppressed for a window. In-memory by
+	// design — see board_wake_coalesce.go.
+	coalesce boardWakeCoalescer
+
 	mu           sync.Mutex
 	baselined    bool                 // first successful enumeration recorded
 	mtimes       map[string]time.Time // project → last-seen board mtime (zero = no board)
@@ -141,6 +158,7 @@ func NewBoardWakeWatcher(db *sql.DB, forceEvaluate func()) *BoardWakeWatcher {
 		pendingWake: make(map[string]time.Time),
 	}
 	w.listBoards = w.listBoardsFromDB
+	w.lastTick = boardWakeLastTickFromDB
 	// SCHED-GAP-157: consume the package-level nudge-source hook installed
 	// by NewLoop — one fired wake stamps board_wake on the owning loop
 	// before its forced evaluation runs.
@@ -378,6 +396,24 @@ func (w *BoardWakeWatcher) wake(t boardWakeTarget) {
 	workable, ok := boardWorkableRows(t.workdir)
 	if ok && workable == 0 {
 		log.Printf("BOARD-WAKE: %s no-op — board has no workable rows", t.project)
+		return
+	}
+	// SCHED-GAP-1764 wake coalescing: a lane that just concluded it has
+	// nothing to do (outcome=dry_run, error=no_changes) is not re-ticked by
+	// a board write for its coalesce window (default 1x cooldown_s). This
+	// drops the watcher's OWN trigger only — never a spawn: the clock
+	// cadence and every admission gate are untouched, and the read is
+	// fail-open. Manual/API triggers do not pass through here at all.
+	if skip, suppressed := w.coalesceSkip(t.project); suppressed {
+		line := skip.line(t.project)
+		log.Print(line)
+		w.events.Emit(context.Background(), SeverityInfo, boardWakeCoalesceComponent, line,
+			map[string]any{
+				"project":           t.project,
+				"last_dry_run_tick": skip.LastTickID,
+				"window_s":          skip.Window.Round(time.Second).Seconds(),
+				"remaining_s":       skip.Remaining.Round(time.Second).Seconds(),
+			})
 		return
 	}
 	log.Printf("BOARD-WAKE: %s wake — forced re-evaluation (work_to_spawn=%t, rows=%d, can_verify=%t)",

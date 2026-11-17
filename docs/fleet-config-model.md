@@ -336,6 +336,8 @@ These do not touch `cooldown_s`, but an operator asking "how often does it run" 
 
 The board wake itself: a watcher polls enabled lanes' board files every **60 s** and arms a per-project wake that fires about **5 minutes** later (bounded — later writes never extend an armed wake), then forces an evaluation. It **orders** and **triggers**; it never admits. Wall-clock cooldown remains the sole admission authority.
 
+**One qualified exception (SCHED-GAP-1764) — the watcher may drop its OWN trigger.** When a lane's last concluded tick is `outcome='dry_run'` with `error='no_changes'`, a board write no longer forces an evaluation of that lane for its coalesce window: default **1× that lane's `cooldown_s`** (so coalescing never reaches past the lane's own scheduled cadence), fleet-wide override `[scheduler] wake_coalesce_s` in the root TOML, per-lane override in memory (`BoardWakeWatcher.SetWakeCoalesceWindowFor`, pending a `projects` column). Nothing is vetoed: the clock cadence, `tasks_pacing`, the load gate and every admission gate are untouched, manual/API spawns and owner actions never pass through the watcher, the last-tick read is fail-open (unreadable ⇒ no suppression), and each skipped wake writes one `WAKE-COALESCE` line (events component `wake_coalesce`) naming the lane, the dry_run tick id, the window and the remaining seconds.
+
 ```bash
 # G1 — the wake's two timing constants
 grep -n 'boardWakeDebounce = \|boardWakePollInterval = ' internal/scheduler/board_wake.go
@@ -345,9 +347,11 @@ grep -n 'pendingBoostUrgency = \|bumpBoostUrgency = \|pendingBoostMaxCount = ' i
 curl -s 127.0.0.1:9090/api/v1/config | jq '{tasks_pacing, load_gate_threshold}'
 # G4 — the starvation tier, in the fairness file
 grep -n 'starvationBoostUrgency = 1e12' internal/scheduler/fairness.go
+# G5 — the coalesce window's default factor and the reason string it keys on
+grep -n 'boardWakeCoalesceDefaultFactor = \|boardWakeNoChangesError = ' internal/scheduler/board_wake_coalesce.go
 ```
 
-G1 → `57: boardWakePollInterval = 60 * time.Second`, `64: boardWakeDebounce = 5 * time.Minute`. G2 → `99: pendingBoostUrgency = 5e11`, `103: pendingBoostMaxCount = 1000`, `111: bumpBoostUrgency = pendingBoostUrgency + 1e6`. G3 → `{"tasks_pacing":"1m0s","load_gate_threshold":12}`. G4 → `42: starvationBoostUrgency = 1e12`.
+G1 → `64: boardWakePollInterval = 60 * time.Second`, `71: boardWakeDebounce = 5 * time.Minute`. G2 → `99: pendingBoostUrgency = 5e11`, `103: pendingBoostMaxCount = 1000`, `111: bumpBoostUrgency = pendingBoostUrgency + 1e6`. G3 → `{"tasks_pacing":"1m0s","load_gate_threshold":12}`. G4 → `42: starvationBoostUrgency = 1e12`. G5 → `57: boardWakeCoalesceDefaultFactor = 1`, `65: boardWakeNoChangesError = "no_changes"`.
 
 ---
 
@@ -527,6 +531,7 @@ Every command in this page, with what it establishes. All were run on 2026-09-20
 | S3 | `python3 ~/.hermes/scripts/fleet-sync.py 2>/dev/null \| grep -A6 'name = "hermes-canopy"' \| grep cooldown_s` | What the decision-free mirror would write |
 | S4 | `python3 ~/.hermes/scripts/fleet-sync.py 2>&1 >/dev/null \| tail -1` | Whether the mirror was given `--write` |
 | G4 | `grep -n 'starvationBoostUrgency = 1e12' internal/scheduler/fairness.go` | The starvation tier value |
+| G5 | `grep -n 'boardWakeCoalesceDefaultFactor = \|boardWakeNoChangesError = ' internal/scheduler/board_wake_coalesce.go` | The wake-coalesce window factor and its dry_run reason (SCHED-GAP-1764) |
 | T1 | `curl -s 127.0.0.1:9090/api/v1/config \| jq .tasks_pacing` | The tasks post-tick pacing floor |
 | T2 | `curl -s 127.0.0.1:9090/api/v1/config \| jq '{weight_budget, budget_source}'` | The weight budget and where its value came from |
 | T3 | `uptime` | The live 1-minute loadavg the gate samples |

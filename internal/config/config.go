@@ -121,6 +121,17 @@ type SchedulerConfig struct {
 	// the S-GAP-001 failure backoff.
 	TasksPacing string `toml:"tasks_pacing"`
 
+	// WakeCoalesceS (SCHED-GAP-1764) is the fleet-wide board-wake coalesce
+	// window in seconds: after a lane concludes dry_run/no_changes, its
+	// board-wake-triggered re-ticks are suppressed for this long. 0 = the
+	// built-in default, which is 1x the LANE's own cooldown_s (so coalescing
+	// never delays a lane past its scheduled cadence). No env var and no CLI
+	// flag: root TOML is the operator layer for this knob. A PER-LANE
+	// persisted override needs a projects column (schema follow-up); until
+	// then the per-lane surface is the watcher's in-memory
+	// SetWakeCoalesceWindowFor.
+	WakeCoalesceS int `toml:"wake_coalesce_s"`
+
 	// LoadGateThreshold (SCHED-GAP-125) defers new spawns while the 1-minute
 	// load average is at or above this value (e.g. 12.0 on a 16-core box).
 	// 0 = the gate is off (flag default). Applies only when the operator
