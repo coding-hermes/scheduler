@@ -306,10 +306,16 @@ Typical invocations:
 /tmp/scheduler-query --all fleet.status --want partial --budget-ms 2500 --json
 ```
 
-Flags may precede or follow the positionals: `splitPositionals`
-(`main.go:86,198-227`) hoists non-flag tokens out of argv before `flag.Parse`,
+Flags may precede, fall between, or follow the positionals: `splitPositionals`
+(`main.go:294-323`) hoists non-flag tokens out of argv before `flag.Parse`,
 because Go's `flag` stops at the first non-flag token and the spec's CLI row puts
-flags after the positionals. `--` ends flag parsing; everything after it is
+flags after the positionals. The value-taking set it consults is DERIVED from the
+registered flags (`valueFlagNames`, `main.go:267-276`) rather than hand-listed,
+so `--flag V` and `--flag=V` parse for every flag in every order — both
+`--all <op> --daemon-url URL` and `--daemon-url URL --all <op>` are the same
+invocation (SCHED-GAP-16932). A value-taking flag whose value is missing, or
+whose next token is another flag, is refused with `flag needs an argument:
+-<name>` — never bound silently. `--` ends flag parsing; everything after it is
 positional.
 
 ### Positionals
@@ -319,7 +325,7 @@ positional.
 | `<peer>` | the answering scheduler's id, as registered in the local peer registry |
 | `<op>` | the read-catalogue op (table below) |
 
-Arity is mode-dependent (`main.go:101-119`):
+Arity is mode-dependent (`resolveMode`, `main.go:158-187`):
 
 | Mode | Positionals | Wrong count |
 |------|-------------|-------------|
@@ -327,7 +333,7 @@ Arity is mode-dependent (`main.go:101-119`):
 | `--all` | exactly 1 — `<op>` | `scheduler-query: --all takes exactly one positional: <op>` + usage, exit 2 |
 | `--legacy-all` | exactly 1 — `<op>` | `scheduler-query: --legacy-all takes exactly one positional: <op>` + usage, exit 2 |
 
-An empty `<op>` is refused separately (`main.go:120-122`). `<op>` is **not**
+An empty `<op>` is refused separately (`main.go:177-179`). `<op>` is **not**
 validated against the catalogue: the surface only rejects emptiness, so a typo
 travels to the peer (which refuses it and the run degrades to exit 1) rather
 than failing as a usage error. `help.go:14-17` states the catalogue must stay in
@@ -345,7 +351,7 @@ shared entry point names the authoritative catalogue if the three ever drift.
 | `ticks.list` | `since=<RFC3339>` `limit=<int>` |
 | `events.list` | `since=<RFC3339>` `limit=<int>` `severity=<string>` |
 
-`--arg` values are carried as **strings** (`main.go:57-78`): `--arg limit=5`
+`--arg` values are carried as **strings** (`main.go:70-85`): `--arg limit=5`
 sends `"limit":"5"`, not `5`. The shared entry point parses numeric and
 RFC3339 forms itself (`argInt`, `argSince` —
 `internal/api/server_federation.go:684-713`). An `--arg` without a `=` is a flag
@@ -355,36 +361,39 @@ parse error (exit 2), never a silently dropped argument.
 
 | Flag | Type | Default | Effect | Source |
 |------|------|---------|--------|--------|
-| `--arg k=v` | string, repeatable | none | op argument; must contain `=` | `main.go:71-78,97` |
-| `--want MODE` | string | `""` (peer default `answer`) | `answer` (all-or-error) or `partial` (best effort with named gaps); anything else is exit 2 | `main.go:90,126-128` |
-| `--budget-ms N` | int | `0` | per-peer read budget; `>0` arms the envelope's `budget_ms` and sizes the local waits; `≤0` means peer default (10 000 ms locally) | `main.go:91`, `query.go:86,196-200,299-302` |
-| `--corr-id ID` | string | `""` → minted | correlation/idempotency id; minted ids look like `q-<scheduler-id>-<unixnano>-<016 counter>` | `main.go:92`, `internal/bus/query.go:171-174` |
-| `--all` | bool | `false` | the authoritative aggregate via the daemon's `/api/v1/federation/query` | `main.go:88` |
-| `--legacy-all` | bool | `false` | the interim local fan-out over the registered peers (no merge) | `main.go:89` |
-| `--daemon-url URL` | string | `""` → `SCHEDULER_URL` → `http://127.0.0.1:9090` | daemon base URL for `--all`. **Pass it as `--daemon-url=URL`** — the space-separated form is refused (discrepancy 1) | `main.go:94,149-155` |
-| `--json` | bool | `false` | print the envelope(s) only, one compact JSON object per line (NDJSON) | `main.go:93` |
-| `--url URL` | string | `""` → `CRIER_URL` → `http://127.0.0.1:8767` | Crier relay base URL | `main.go:95,133-139` |
-| `--db PATH` | string | `$HOME/.hermes/coding-hermes/scheduler.db` | scheduler database holding the peer registry; used by `--legacy-all` and for `last_contact` rendering | `main.go:96,145-148,53-55` |
-| `-h`, `--help` | — (built-in) | — | print the block on **stderr** and exit **0** | `main.go:98`, `help.go:83-85` |
+| `--arg k=v` | string, repeatable | none | op argument; must contain `=` | `main.go:70-85,130` |
+| `--want MODE` | string | `""` (peer default `answer`) | `answer` (all-or-error) or `partial` (best effort with named gaps); anything else is exit 2 | `main.go:123,183-185` |
+| `--budget-ms N` | int | `0` | per-peer read budget; `>0` arms the envelope's `budget_ms` and sizes the local waits; `≤0` means peer default (10 000 ms locally) | `main.go:124`, `query.go:86,196-200,299-302` |
+| `--corr-id ID` | string | `""` → minted | correlation/idempotency id; minted ids look like `q-<scheduler-id>-<unixnano>-<016 counter>` | `main.go:125`, `internal/bus/query.go:171-174` |
+| `--all` | bool | `false` | the authoritative aggregate via the daemon's `/api/v1/federation/query` | `main.go:121` |
+| `--legacy-all` | bool | `false` | the interim local fan-out over the registered peers (no merge) | `main.go:122` |
+| `--daemon-url URL` | string | `""` → `SCHEDULER_URL` → `http://127.0.0.1:9090` | daemon base URL for `--all`; both `--daemon-url URL` and `--daemon-url=URL` are accepted, in either position relative to `--all` and the `<op>` (SCHED-GAP-16932) | `main.go:127,221-227` |
+| `--json` | bool | `false` | print the envelope(s) only, one compact JSON object per line (NDJSON) | `main.go:126` |
+| `--url URL` | string | `""` → `CRIER_URL` → `http://127.0.0.1:8767` | Crier relay base URL | `main.go:128,205-211` |
+| `--db PATH` | string | `$HOME/.hermes/coding-hermes/scheduler.db` | scheduler database holding the peer registry; used by `--legacy-all` and for `last_contact` rendering | `main.go:129,217-220,62-64` |
+| `-h`, `--help` | — (built-in) | — | print the block on **stderr** and exit **0** | `main.go:192-197`, `help.go:83-85` |
 
 Precedence everywhere is flag → environment → default. With both `--all` and
-`--legacy-all` set, `--all` wins silently (`main.go:104-113`).
+`--legacy-all` set, `--all` wins silently (`main.go:160-170`).
 
-Parsing is the standard `flag` package, so `-flag V`, `-flag=V`, `--flag V` and
-`--flag=V` all work **except** for `--daemon-url V` (discrepancy 1). An unknown
-flag, a missing value or a malformed `--arg` prints the flag error plus the usage
-block and exits 2.
+Parsing is the standard `flag` package for `-flag V`, `-flag=V`, `--flag V` and
+`--flag=V`, with the positional hoist in front. Every flag accepts all four
+forms and every order — `--daemon-url` included; the space-separated form used
+to be refused, and the accepted orders are pinned by the table tests in
+`cmd/scheduler-query/flags_interspersed_test.go` (SCHED-GAP-16932). An unknown
+flag, a missing value or a malformed `--arg` prints `scheduler-query: <flag
+error>` plus the usage block and exits 2.
 
 ### Environment
 
 | Variable | Read at | Effect | Overridden by |
 |----------|---------|--------|---------------|
-| `CRIER_URL` | `main.go:135` | relay base URL for single-peer and `--legacy-all` queries | `--url` |
-| `CRIER_AUTH_TOKEN` | `main.go:140` | relay bearer credential, sent as `Authorization: Bearer …` | — (no flag, by design) |
-| `SCHEDULER_ID` | `main.go:141-144` | caller identity: prefix of minted correlation ids and the relay's `X-Agent-ID`; unset falls back to the short hostname (`database.ResolveDefaultSchedulerID`, `"unknown"` if the hostname is unavailable) | — |
-| `SCHEDULER_URL` | `main.go:151` | daemon base URL for `--all` | `--daemon-url` |
+| `CRIER_URL` | `main.go:207` | relay base URL for single-peer and `--legacy-all` queries | `--url` |
+| `CRIER_AUTH_TOKEN` | `main.go:212` | relay bearer credential, sent as `Authorization: Bearer …` | — (no flag, by design) |
+| `SCHEDULER_ID` | `main.go:213-215` | caller identity: prefix of minted correlation ids and the relay's `X-Agent-ID`; unset falls back to the short hostname (`database.ResolveDefaultSchedulerID`, `"unknown"` if the hostname is unavailable) | — |
+| `SCHEDULER_URL` | `main.go:223` | daemon base URL for `--all` | `--daemon-url` |
 | `SCHEDULER_OPERATOR_TOKEN` | `query.go:362` | operator credential for the daemon's gate, sent as `X-Operator-Token` on `--all` **only** | — |
-| `HOME` | `main.go:53-55` | expanded into the default `--db` path once at startup | `--db` |
+| `HOME` | `main.go:62-64` | expanded into the default `--db` path once at startup | `--db` |
 
 Those five are the complete set: `grep os.Getenv cmd/scheduler-query/*.go` returns
 exactly these reads. The `X-Operator-Token` header is set on every `--all`
@@ -509,6 +518,10 @@ $ /tmp/scheduler-query peer-a peer.status --url http://127.0.0.1:1
       → status=error code=transport_error last_contact=unknown, rc=1
 $ /tmp/scheduler-query --all fleet.status --daemon-url=http://127.0.0.1:1
       → "aggregate at … unreachable: … connection refused — start the daemon or pass --daemon-url", rc=2
+$ /tmp/scheduler-query --all fleet.status --daemon-url http://127.0.0.1:1
+      → the same refusal, rc=2 (space-separated; SCHED-GAP-16932)
+$ /tmp/scheduler-query --daemon-url http://127.0.0.1:1 --all fleet.status
+      → the same refusal, rc=2 (reverse order; used to swallow --all)
 $ /tmp/scheduler-query --legacy-all fleet.status --db /tmp/absent.db
       → "no peer registry at /tmp/absent.db — --all reads the local registry; register peers or target one peer", rc=2, file NOT created
 ```
@@ -519,21 +532,23 @@ rendered envelope (or `--json`'s `status`), not the exit code alone, to learn
 
 ### Where the help text and the code disagree
 
-1. **`--daemon-url URL` only works with `=`.** The positional hoister mirrors
-   the flag package's value consumption from a hand-kept map
-   (`main.go:199-202`) that lists `want`, `budget-ms`, `corr-id`, `url`, `db`
-   and `arg` — but **not** `daemon-url`. With the space-separated form the URL
-   is hoisted into the positional list and the flag is left value-less.
-   Measured: `--all fleet.status --daemon-url http://127.0.0.1:1` →
-   `flag needs an argument: -daemon-url`, rc=2; with `--db` also present →
-   `--all takes exactly one positional: <op>`, rc=2. Use `--daemon-url=URL`.
-   Every other value-taking flag accepts both forms.
+1. **RESOLVED (SCHED-GAP-16932) — `--daemon-url URL` without `=`.** The
+   positional hoister used to mirror the flag package's value consumption from a
+   hand-kept map that listed `want`, `budget-ms`, `corr-id`, `url`, `db` and
+   `arg` — but **not** `daemon-url` — so the space-separated form hoisted the
+   URL into the positional list (leaving the flag value-less, rc=2) and the
+   reverse order bound `--all` as the flag's value (silent single-peer mode).
+   The hoister now DERIVES the value-taking set from the registered flags
+   (`valueFlagNames`, `main.go:267-276`), so both orders parse as documented.
+   Measured after the fix: `--all fleet.status --daemon-url http://127.0.0.1:1`
+   and `--daemon-url http://127.0.0.1:1 --all fleet.status` both reach the
+   aggregate and print the same `unreachable … connection refused`, rc=2.
 2. **`-h`/`--help` is not a registered flag**; it is the `flag` package's
    built-in help path. Here that path exits **0**, while a usage error exits 2,
-   and the block goes to **stderr** (`main.go:98`, `help.go:83-85`) — capture
+   and the block goes to **stderr** (`main.go:192-197`, `help.go:83-85`) — capture
    with `2>&1` before grepping it.
 3. **The "no relay URL" hard-error branch is unreachable**
-   (`main.go:156-159`): `--url`, then `CRIER_URL`, then
+   (`main.go:228-231`): `--url`, then `CRIER_URL`, then
    `http://127.0.0.1:8767` always leave a non-empty value, so the help's
    exit-2 case "no relay URL" cannot be produced.
 4. The help's exit-code note says `1` means "at least one peer answered
@@ -552,7 +567,7 @@ rendered envelope (or `--json`'s `status`), not the exit code alone, to learn
    `…-0000000000000001` for the first query of each run
    (`internal/bus/query.go:171-174`).
 9. With both `--all` and `--legacy-all`, `--all` silently wins — no error and no
-   warning (`main.go:104-113`).
+   warning (`main.go:160-170`).
 10. The `--legacy-all` "no peer registry" message says "`--all` reads the local
     registry" (`query.go:508`); it is printed for `--legacy-all`, which is the
     mode that actually reads the local registry.

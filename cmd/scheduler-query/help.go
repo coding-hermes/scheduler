@@ -43,6 +43,8 @@ Positionals:
             (--all fans the chosen op out over every registered peer)
 
 Flags:
+  (flags may appear before, between, or after the positionals; --flag=value and
+   --flag value are both accepted, in any order)
   --arg k=v        op argument, repeatable (e.g. --arg filter=alpha --arg limit=5)
   --want MODE      "answer" (default, all-or-error) or "partial" (best-effort with named gaps)
   --budget-ms N    per-peer read budget in ms (0 = peer default; the CLI never waits past the budget)

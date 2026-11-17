@@ -141,7 +141,7 @@ The sweep quoted at the top covers `cmd/` as well as the daemon, so this CLI-onl
 
 | Env var | Effect | Default when unset | Precedence |
 |---------|--------|--------------------|------------|
-| `SCHEDULER_URL` | Daemon base URL the `scheduler-query` CLI delegates `--all` to (the REMOTE-012 federation aggregate at `/api/v1/federation/query`). CLI-only — `cmd/scheduler-query/main.go:151`, `runAggregate` in `query.go`; never consulted by the daemon. | `http://127.0.0.1:9090` (`cliDefaultDaemonURL`, matching the daemon's `--listen` default) | `--daemon-url` > this var > default; no TOML layer |
+| `SCHEDULER_URL` | Daemon base URL the `scheduler-query` CLI delegates `--all` to (the REMOTE-012 federation aggregate at `/api/v1/federation/query`). CLI-only — `cmd/scheduler-query/main.go:221-227`, `runAggregate` in `query.go`; never consulted by the daemon. | `http://127.0.0.1:9090` (`cliDefaultDaemonURL`, matching the daemon's `--listen` default) | `--daemon-url` > this var > default; no TOML layer |
 
 ## Clock (sim mode)
 

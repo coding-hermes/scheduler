@@ -724,7 +724,16 @@ func TestREMOTE011_EnvelopeArgParsing(t *testing.T) {
 // is part of the contract. Value-taking flags keep space-separated values
 // out of the positional list; `--` terminates flag parsing.
 func TestREMOTE011_PositionalHoisting(t *testing.T) {
-	pos, rest := splitPositionals([]string{"peer-a", "queue.get", "--want", "partial", "--json"})
+	// The value-taking set is derived from the real flag definitions
+	// (valueFlagNames), so this test exercises the production set, not a
+	// copy (SCHED-GAP-16932: the copy had drifted).
+	var probe cliParse
+	valueFlags := valueFlagNames(newQueryFlagSet(&probe))
+
+	pos, rest, err := splitPositionals([]string{"peer-a", "queue.get", "--want", "partial", "--json"}, valueFlags)
+	if err != nil {
+		t.Fatalf("splitPositionals: %v", err)
+	}
 	if got := strings.Join(pos, ","); got != "peer-a,queue.get" {
 		t.Errorf("positionals = %q, want peer-a,queue.get", got)
 	}
@@ -732,12 +741,18 @@ func TestREMOTE011_PositionalHoisting(t *testing.T) {
 		t.Errorf("flags = %q, want --want,partial,--json", got)
 	}
 	// Value-taking flags with = do not swallow the next token.
-	pos, rest = splitPositionals([]string{"--want=partial", "peer-a", "queue.get"})
+	pos, rest, err = splitPositionals([]string{"--want=partial", "peer-a", "queue.get"}, valueFlags)
+	if err != nil {
+		t.Fatalf("splitPositionals(= form): %v", err)
+	}
 	if got := strings.Join(pos, ","); got != "peer-a,queue.get" || strings.Join(rest, ",") != "--want=partial" {
 		t.Errorf("= form drifted: pos=%q rest=%q", pos, rest)
 	}
 	// --db PATH with a space stays attached; -- terminates parsing.
-	pos, rest = splitPositionals([]string{"--db", "/tmp/x.db", "--", "peer-a", "queue.get"})
+	pos, rest, err = splitPositionals([]string{"--db", "/tmp/x.db", "--", "peer-a", "queue.get"}, valueFlags)
+	if err != nil {
+		t.Fatalf("splitPositionals(-- terminator): %v", err)
+	}
 	if got := strings.Join(rest, ","); got != "--db,/tmp/x.db" {
 		t.Errorf("--db value drifted: %q", rest)
 	}
@@ -746,7 +761,10 @@ func TestREMOTE011_PositionalHoisting(t *testing.T) {
 	}
 	// A bare value-looking token after a NON-value flag is a positional
 	// (only the known value flags consume a following token).
-	pos, _ = splitPositionals([]string{"--json", "not-a-flag-value"})
+	pos, _, err = splitPositionals([]string{"--json", "not-a-flag-value"}, valueFlags)
+	if err != nil {
+		t.Fatalf("splitPositionals(after bool flag): %v", err)
+	}
 	if len(pos) != 1 || pos[0] != "not-a-flag-value" {
 		t.Errorf("token after --json must stay positional: %q", pos)
 	}
@@ -763,7 +781,7 @@ func TestREMOTE011_HelpNamesCatalogue(t *testing.T) {
 			t.Errorf("help missing catalogue op %s", op)
 		}
 	}
-	for _, fl := range []string{"--arg", "--want", "--budget-ms", "--corr-id", "--all", "--json", "--url", "--db"} {
+	for _, fl := range []string{"--arg", "--want", "--budget-ms", "--corr-id", "--all", "--legacy-all", "--json", "--url", "--db", "--daemon-url"} {
 		if !strings.Contains(out, fl) {
 			t.Errorf("help missing flag %s", fl)
 		}
