@@ -32,7 +32,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 > **Note:** releases are published on the
 > [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
-> checkout of `main` passes `make test` (all 28 packages) and `make build`,
+> checkout of `main` passes `make test` (all 29 packages) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
 > run both on a fresh checkout before trusting any step here. Past flaky-CI
 > episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
@@ -909,6 +909,37 @@ Safety notes, per source:
 - A 0-byte (truncated) database file is detected and refused before the open
   (`main.go:218, 309`).
 
+**`reason-code-repair`** (`cmd/reason-code-repair/main.go`) reclassifies the
+dry ticks of one historical window from the evidence still present on their rows
+(SCHED-GAP-16947). Ticks concluded before migration v91 carry no
+`ticks.reason_code`, so a three-day lane blackout (2026-10-10..12: 2,701
+zero-token dry ticks while sibling lanes committed) reads as ordinary idleness.
+The pass writes the closed-vocabulary code plus a `ticks.reason_code_derivation`
+annotation naming the evidence and the derivation it used; it never deletes
+rows, never touches status/outcome/error/tokens/commits, and never overwrites a
+code that is already set (`WHERE id = ? AND reason_code = ''`), so a re-run is a
+no-op.
+
+```bash
+go build -o bin/reason-code-repair ./cmd/reason-code-repair/
+# 1. Dry run (default): same report, zero writes
+bin/reason-code-repair --db ~/.hermes/coding-hermes/scheduler.db \
+  --from 2026-10-10 --to 2026-10-13
+# 2. Apply: stamp the codes + the derivation annotation
+bin/reason-code-repair --db ~/.hermes/coding-hermes/scheduler.db \
+  --from 2026-10-10 --to 2026-10-13 --apply
+```
+
+Flags: `--db` (default `~/.hermes/coding-hermes/scheduler.db`), `--from` /
+`--to` (inclusive start, exclusive end; `YYYY-MM-DD` or RFC3339, UTC; defaults
+are the measured blackout block), `--apply` (write; omit for a dry run),
+`--json` (machine report), `--verbosity-limit` (per-row lines in text mode).
+The derivation classes are `three_day_lane_blackout` (lane dark all window while
+the fleet committed), `session_produced_no_output`, `spent_tokens_landed_nothing`,
+and `fleet_wide_silence_unattributable` (kept as `unknown:<raw>`, because a
+fleet-wide silence cannot be blamed on one lane). Rows whose artifact delta is
+the `-1` unmeasured sentinel are reported and left alone.
+
 **`queueprobe`** (`cmd/queueprobe/main.go`) is a one-shot render probe for
 SCHED-GAP-1589: it renders the `/queue` dashboard page against a DB path given
 as `os.Args[1]` and prints the HTML to stdout, proving acceptance against real
@@ -950,7 +981,8 @@ Full tracked layout — every top-level entry, verified against `git ls-files`
 
 ```
 cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe,
-                # scheduler-query (federation read), scheduler-dispatch (work dispatch)
+                # scheduler-query (federation read), scheduler-dispatch (work dispatch),
+                # reason-code-repair (tick reason-code repair pass)
 internal/       # api, dashboard, database, blocks, clock, config, mcp, scheduler,
                 # sync, version, agentlog
 ops/            # fleet invariant checker (check-fleet-invariants.py) + testdata,

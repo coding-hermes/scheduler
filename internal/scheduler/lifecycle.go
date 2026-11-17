@@ -248,6 +248,26 @@ type TickOutcome struct {
 	// (exec spawns, spawn-site refusals, remote dispatch) — the column's
 	// honest default, never a fabricated count.
 	Attempts int
+	// Deadline (SCHED-GAP-16947) is this tick's EFFECTIVE session wall — the
+	// same duration the spawn paths resolve (effectiveTickTimeout) and enforce
+	// with the kill timer / session ctx. Complete applies the LIVENESS RULE
+	// with it: a COMPLETED verdict whose elapsed time is at-or-past the wall is
+	// forced to status=timeout with reason code deadline_exceeded — never left
+	// completed (the 2026-10-29 measurement found 96/473 instrumented dry ticks
+	// past their own deadline, one at 2,380s against an 1,800s wall, every one
+	// recorded completed). 0 = no known wall (slot-pool reaps, the drain path,
+	// simulated ticks) and the rule stays inert — a forced timeout must never
+	// fire on a fabricated duration.
+	Deadline time.Duration
+	// TokensOutUnavailable (SCHED-GAP-16947) is the raw reason this tick's
+	// tokens_out is NOT a measurement ("" = it is — a genuine 0 included). Set
+	// by the paths that know better than the cost source: a gateway terminal
+	// envelope that carried no usage object, a deferred/aborted tick that never
+	// opened a session, the remote dispatch legs whose agent usage never reaches
+	// this process. Complete persists it on ticks.tokens_out_unavailable,
+	// extending the value with the cost-source-derived cases (simulated ticks,
+	// exec estimates) — see resolveTokensOutUnavailable.
+	TokensOutUnavailable string
 }
 
 // resolveDispatch resolves the dispatch accountability pair for one
@@ -343,6 +363,33 @@ func (lt *LifecycleTracker) StartRunning(tickID string) error {
 // SCHED-GAP-029: also persists commits/files_changed (previously only
 // tokens_in/tokens_out/cost_usd were written, leaving commits/files zero).
 func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
+	// SCHED-GAP-16947 LIVENESS RULE (AC2): a tick that ran at-or-past its own
+	// session wall is recorded timeout/deadline_exceeded, NEVER completed. The
+	// kill timer and the session ctx fire AT the wall, but a gateway response
+	// can arrive after it (a gateway POST is not bounded by the exec path's
+	// kill timer) or a completed verdict can slip past the classification race
+	// — the measured block found 96/473 instrumented dry ticks past their own
+	// deadline, one at 2,380s against an 1,800s wall, every one recorded
+	// completed. Complete is the single finalization choke point, so the rule
+	// fires here, before any completed-only branch can see the row: the status
+	// flips, the error column names the overrun, and the reason-code derivation
+	// below stamps deadline_exceeded. The rule needs a KNOWN wall (Deadline>0 —
+	// carried by the spawn paths that resolved one) so fabricated durations on
+	// hand-built outcomes can never trigger it. Downstream consequences are the
+	// SCHED-GAP-1705 timeout doctrine: the overrun text is not transport-class
+	// (deliberately NOT the "tick deadline exceeded" marker — that wording
+	// classifies a gateway-POST teardown, a harness verdict; a tick that
+	// COMPLETED past its wall genuinely overran, the lane's fault), so
+	// consecutive_failures moves by one, exactly like any other unclassified
+	// timeout.
+	if outcome.Status == TickCompleted && tickOverranDeadline(outcome) {
+		log.Printf("LIVENESS: %s tick=%s completed verdict overran its own wall (%s >= %s) — recorded timeout/deadline_exceeded (SCHED-GAP-16947)",
+			outcome.Project, outcome.TickID,
+			outcome.Finished.Sub(outcome.Started).Round(time.Second), outcome.Deadline)
+		outcome.Status = TickTimeout
+		outcome.Error = fmt.Sprintf("overran its session wall: elapsed %s >= deadline %s (SCHED-GAP-16947 liveness)",
+			outcome.Finished.Sub(outcome.Started).Round(time.Second), outcome.Deadline)
+	}
 	var exitCode interface{}
 	if outcome.ExitCode >= 0 {
 		exitCode = outcome.ExitCode
@@ -485,6 +532,20 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	if outcome.ResumeNote != "" {
 		outcome.Error = outcome.ResumeNote
 	}
+	// SCHED-GAP-16947: the reason-code derivation, in the SAME single
+	// finalization UPDATE (the coverage convention again — no second write that
+	// could silently miss a row). terminalOutcome is computed ONCE and the
+	// UPDATE below consumes the same verdict the derivation saw, so the two can
+	// never disagree; the row's no-op verdict is read best-effort
+	// (closeNoopVerdict stamped it before this finalization ran; a read failure
+	// can only degrade to 0, never fail the completion), and
+	// CoerceTickReasonCode is the write-site guard: a derivation bug degrades to
+	// a well-formed unknown instead of tripping the v91 CHECK and stranding the
+	// tick in 'running'.
+	terminal := terminalOutcome(outcome)
+	reasonCode := database.CoerceTickReasonCode(resolveTickReasonCode(
+		outcome, terminal, failureReason, lt.tickNoopFlag(outcome.TickID)))
+	tokensOutUnavailable := resolveTokensOutUnavailable(outcome)
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
 			abort_reason = ?, drain_succeeded = ?, selected_row_ids = ?,
@@ -492,16 +553,16 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
 			dispatch_outcome = ?, dispatch_reason = ?,
 			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?,
-			attempts = ?
+			attempts = ?, reason_code = ?, tokens_out_unavailable = ?
 		WHERE id = ?
-	`, string(outcome.Status), terminalOutcome(outcome), outcome.Finished.Format(time.RFC3339), exitCode,
+	`, string(outcome.Status), terminal, outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.AbortReason, boolInt(outcome.DrainSucceeded), outcome.SelectedRowIDs,
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource,
 		outcome.Commits, outcome.FilesChanged, outcome.MemoryKeys, failureReason,
 		dispatchOutcome, dispatchReason,
 		telemetryPartial, telemetryReason, telemetrySilence, workersTerminal,
-		outcome.Attempts,
+		outcome.Attempts, reasonCode, tokensOutUnavailable,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
@@ -680,12 +741,22 @@ func (lt *LifecycleTracker) CleanupStaleProjects(maxAge time.Duration) ([]string
 	// ever ran for these rows, so the telemetry legs stay whatever they were
 	// (0/0/0 for gateway rows: the mark is the honest statement that the
 	// session was killed unobserved, named stale_reap).
+	// SCHED-GAP-16947: the reap is also a CONCLUDED tick, so the same UPDATE
+	// stamps the reason code. lane_unavailable, not deadline_exceeded: the
+	// window the row crossed is the stale backstop, but the CAUSE is the
+	// tick's owner (gateway/daemon) vanishing mid-tick — the lane's execution
+	// surface died, exactly the class the code names. The owner-gone doctrine
+	// is shared with the dead-pid/zombie reap (timeoutReapSQL) and the expired
+	// usage-pool lease, so all three reaps answer "why did this tick produce
+	// nothing?" identically.
 	res, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, completed_at = ?, error = ?,
-			telemetry_partial = 1, telemetry_partial_reason = ?
+			telemetry_partial = 1, telemetry_partial_reason = ?,
+			reason_code = ?
 		WHERE status = ? AND spawned_at < ?
 	`, TickTimeout, lt.clock().Now().Format(time.RFC3339), "stale — timeout at "+maxAge.String(),
-		TelemetryPartialStaleReap, TickRunning, cutoff.Format(time.RFC3339))
+		TelemetryPartialStaleReap, database.TickReasonCodeLaneUnavailable,
+		TickRunning, cutoff.Format(time.RFC3339))
 	if err != nil {
 		return nil, 0, err
 	}
