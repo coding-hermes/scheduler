@@ -48,6 +48,76 @@ func LaneRoleSuffixes() []string {
 	return out
 }
 
+// SCHED-GAP-1765 — the DEFAULT FAMILY TEMPLATE.
+//
+// Onboarding a project creates a FOUR-lane family: the foreman (the project
+// row itself) plus three satellites — -qa, -sync, -docs. Every other role
+// suffix in laneRoleSuffixes is minted ON DEMAND, when the owner or the
+// foreman decides that project needs it; none of them is part of onboarding.
+//
+// The measured cost of the old every-role-every-time template (2026-11-16
+// census): 704 lanes across 118 families, 445 enabled support lanes against
+// 49 enabled foremen — 9:1 support, against the 10% support-capacity
+// doctrine. Most of those lanes were structural (one more role per family),
+// not requested by any work: a family that never relit a release still got a
+// -releng, one with no docs still got a -docs and a -readme.
+//
+// The default set is deliberately NOT a second vocabulary: every entry must be
+// a member of laneRoleSuffixes, and OnDemandFamilyRoles is derived as the
+// table's order-preserving complement, so a suffix added to the table can
+// never fall outside BOTH sets (pinned by
+// TestLaneClass_DefaultFamilyTemplatePartitionsSuffixTable).
+var defaultFamilyRoles = []string{"-qa", "-sync", "-docs"}
+
+// DefaultFamilyRoles returns the satellites an onboarding family carries
+// (a copy — callers must not mutate the shared table). The FOREMAN lane is the
+// project row itself, so a default family is len(DefaultFamilyRoles()) + 1
+// lanes: scheduler.DefaultFamilyLaneNames(primary) spells the whole set.
+func DefaultFamilyRoles() []string {
+	out := make([]string, len(defaultFamilyRoles))
+	copy(out, defaultFamilyRoles)
+	return out
+}
+
+// IsDefaultFamilyRole reports whether suffix is part of the default family
+// template (i.e. minted at onboarding rather than on demand). The comparison
+// is exact: a suffix is either declared or it is not.
+func IsDefaultFamilyRole(suffix string) bool {
+	for _, s := range defaultFamilyRoles {
+		if s == suffix {
+			return true
+		}
+	}
+	return false
+}
+
+// OnDemandFamilyRoles returns every canonical role suffix that is NOT part of
+// the default template, in laneRoleSuffixes order. These are mintable at any
+// time through the single-lane create path (and mutable afterwards) — they are
+// just not part of an onboarding request.
+func OnDemandFamilyRoles() []string {
+	out := make([]string, 0, len(laneRoleSuffixes))
+	for _, s := range laneRoleSuffixes {
+		if !IsDefaultFamilyRole(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// DefaultFamilyLaneNames returns the lane names an onboarding request mints for
+// primary: the foreman first (the primary itself, which is not created by this
+// list — it is the request's own row) followed by one lane per default role.
+// The foreman leads so a caller can create the family in order.
+func DefaultFamilyLaneNames(primary string) []string {
+	out := make([]string, 0, len(defaultFamilyRoles)+1)
+	out = append(out, primary)
+	for _, s := range defaultFamilyRoles {
+		out = append(out, primary+s)
+	}
+	return out
+}
+
 // IsRoleSuffixLane reports whether the name ends in a satellite role suffix.
 func IsRoleSuffixLane(name string) bool {
 	for _, s := range laneRoleSuffixes {

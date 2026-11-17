@@ -558,9 +558,11 @@ auto-arm (SCHED-GAP-138) and the admission law (SCHED-GAP-1696) both run.
 | `decay_rate` | no | 1.0 |
 | `enabled` | no | **false** (creating never auto-enables) |
 | `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command`, `namespace_id`, `deliver` | no | zero value / null |
+| `family` | no | `false` — a create-only request flag, never stored (see **Family onboarding** below) |
 
 **Response 201:** the created project object (flat, with `created_at`/`updated_at`
-stamped).
+stamped). A body that sets `family: true` answers with the wrapper documented
+under **Family onboarding** instead.
 
 **Errors:**
 
@@ -586,6 +588,43 @@ the family pin is 43200 for `-qa`/`-sync`, 86400 for `-pm`, 259200 for
 `-dogfood`). A disabled lane may be registered unarmed. Primary/root lanes are
 unconstrained. The live backstop for the same invariants is
 `ops/check-fleet-invariants.py` (checks 5/5b/5e).
+
+**Family onboarding (SCHED-GAP-1765):** `{"family": true}` on the create turns
+the request into a FAMILY onboarding: the foreman row (the body itself) plus the
+DEFAULT satellites — `-qa`, `-sync`, `-docs` — are minted in one call, all born
+disabled, each one validated by the SCHED-GAP-138 shape gate above. The other
+role suffixes (`-pm`, `-dogfood`, `-perf`, `-releng`, `-review`, `-readme`) are
+**on demand**: mint one with an ordinary single-lane `POST` naming that lane, then
+enable it. Onboarding never mints them, which is what keeps a new project four
+lanes instead of eleven.
+
+The default set is `scheduler.DefaultFamilyRoles()` (`internal/scheduler/lane_class.go`)
+and its complement is `scheduler.OnDemandFamilyRoles()`; the two partition the
+canonical suffix table, so no role can become unmintable. Cadence, workdir,
+namespace and parent link for each minted lane are the live family shape
+(`-qa` 43200, `-sync` 21600, `-docs` 604800; `stand-in/pm`, `sync-workdirs`,
+`stand-in/docs`). The mint is additive and idempotent: a satellite that already
+exists is reported under `existing` and left byte-identical, so re-running an
+onboarding request over a provisioned family changes nothing.
+
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
+  -H 'Authorization: Bearer <SCHED...KEN>' -H 'Content-Type: application/json' \
+  -d '{"name":"my-project","repo_url":"local:/home/kara/my-project",
+       "workdir":"/home/kara/my-project","family":true}'
+# 201 {"project":{...foreman row...},
+#      "family":{"default_roles":["-qa","-sync","-docs"],
+#                "on_demand_roles":["-pm","-dogfood","-perf","-releng","-review","-readme"],
+#                "created":["my-project-qa","my-project-sync","my-project-docs"],
+#                "existing":[],"notes":[],"errors":[]}}
+```
+
+`notes` names a lane minted with a null `namespace_id` because this scheduler
+does not define that family namespace (the lane exists; assign a namespace
+before enabling it). Any other per-lane failure leaves the foreman row in place
+and answers **500** with `"error":"family onboarding incomplete: <lane>: <reason>"`
+plus the partial `family` report — a one-lane family must never look like a
+four-lane one.
 
 ```bash
 curl -s -X POST http://127.0.0.1:9090/api/v1/projects \
