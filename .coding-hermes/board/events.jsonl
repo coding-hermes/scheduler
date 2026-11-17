@@ -1938,3 +1938,4 @@
 {"id":1794849899552600011,"timestamp":"2026-11-17 16:38:23.714686","event_type":"task_created","task_id":"DOC-43","actor":"foreman","detail":"{\"id\":\"DOC-43\",\"status\":\"pending\"}","tick_number":null}
 {"id":1794849899552600012,"timestamp":"2026-11-17 16:38:23.830666","event_type":"task_created","task_id":"DOC-44","actor":"foreman","detail":"{\"id\":\"DOC-44\",\"status\":\"pending\"}","tick_number":null}
 {"id":1794849899552600013,"timestamp":"2026-11-17 16:38:23.943056","event_type":"task_created","task_id":"README-17-R2","actor":"foreman","detail":"{\"id\":\"README-17-R2\",\"status\":\"pending\"}","tick_number":null}
+{"id":1794849899552600014,"timestamp":"2026-11-17 17:26:17.930939","event_type":"task_created","task_id":"SCHED-GAP-17029","actor":"foreman","detail":"{\"id\":\"SCHED-GAP-17029\",\"status\":\"pending\"}","tick_number":null}
