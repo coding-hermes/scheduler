@@ -71,12 +71,18 @@ A definition's `command` + `args` are templated over:
 
 `{session}` is the Hermes session id of the tick, so a hook can correlate what it
 audits with the session that produced it (resolution order: the tick row's
-`session_id`, then the POST `gateway_trace`'s `$.session_id`). The scheduler
+`session_id`, then the tick row's `gateway_trace`'s `$.session_id` when the
+tick has already reported one). The scheduler
 stamps `session_id` with the tick id as a spawn placeholder, so a tick that never
 reported a real session resolves `{session}` to the trace value or to empty —
-never to that placeholder. `{session}` is empty in PRE hooks (the id does not
-exist until the tick runs) and meaningful in POST hooks, which is where a
-handoff-record audit belongs.
+never to that placeholder. Resolution is **phase-independent**: the same
+`hookSessionID` query runs for PRE and POST hooks alike, so the code does not
+enforce an empty `{session}` in PRE. In practice PRE hooks see empty because
+the tick has not run yet — `session_id` still holds the tick-id placeholder,
+which the guard rejects, and no gateway trace exists yet — but a tick row that
+already carries a real session id would surface it in PRE too. Handoff-record
+audits belong in POST hooks, which is where a completed tick's session is
+authoritative.
 
 An unknown placeholder is a **load error** (it used to reach the command as
 literal text). To see the exact argv a lane will run, without running it and
