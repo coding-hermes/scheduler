@@ -5979,14 +5979,19 @@ tasks:
   created_at: '2026-11-08T09:24:49.881989+00:00'
   completed_at: '2026-11-08T09:24:53.974189+00:00'
 - id: SCHED-GAP-16947
-  title: 'dry_run reason codes: a closed vocabulary persisted on every concluded tick'
+  title: 'dry_run reason-code vocabulary: every concluded tick carries a closed-vocabulary
+    reason code'
   criteria:
-  - go build ./... and go vet ./internal/database/ ./internal/scheduler/ and go test
-    -count=1 -short ./internal/database/ ./internal/scheduler/ exit 0; a test asserts
-    a concluded dry tick persists a non-empty reason from the closed vocabulary; a
-    falsifier test fails if the reason is dropped
+  - The ticks journal records a reason code from the closed vocabulary {no_work, model_noop,
+    no_artifact, malformed_tool_call, deadline_exceeded, not_spawned, lane_unavailable,
+    unknown} (unknown carries the raw signal) on every concluded tick; a tick exceeding
+    its own deadline is recorded timeout or deadline_exceeded, never completed; tokens_out
+    is an explicit unavailable rather than an absent key; the 2026-10-10..12 zero-token
+    block is reclassified from evidence still present with the derivation annotated
+    (no silent history rewrite); go build ./... and go vet ./... exit 0 and the full
+    -race suite PASS.
   status: in_progress
-  created_at: '2026-11-08T10:49:42.741186+00:00'
+  created_at: '2026-11-17T01:21:39.306051+00:00'
 - id: SCHED-GAP-16978
   title: 'exec fallback policy: gateway POST failure falls through to local exec honouring
     the lane model/provider'
@@ -6225,3 +6230,45 @@ tasks:
   status: complete
   created_at: '2026-11-17T00:07:00.339385+00:00'
   completed_at: '2026-11-17T00:11:33.875086+00:00'
+- id: SCHED-GAP-1764
+  title: 'Wake coalescing: a dry_run/no_changes lane skips board-wake re-ticks for
+    a coalesce window'
+  criteria:
+  - 'When a tick completes with outcome=dry_run and error=no_changes, board_wake-triggered
+    spawns for that lane are suppressed for a coalesce window (default 1x cooldown_s,
+    config-overridable per lane, e.g. wake_coalesce_s); manual/API-triggered spawns
+    and owner actions bypass the suppression; a tick/events line is emitted when suppression
+    skips a spawn; unit test: dry_run tick then board write within window produces
+    no second spawn, and after the window a spawn occurs; full -race suite PASS.'
+  status: in_progress
+  created_at: '2026-11-17T01:21:44.708256+00:00'
+- id: SCHED-GAP-1765
+  title: 'Smaller default family template: onboarding mints foreman+qa+sync+docs by
+    default, other satellites on demand'
+  criteria:
+  - Project onboarding creates foreman + qa + sync + docs by default; -pm/-dogfood/-review/-readme/-releng/-perf/-ops
+    mint on demand through the existing per-lane path; existing 704 lanes untouched
+    (no migration of live rows); onboarding unit test asserts the smaller default
+    set; full -race suite PASS; projected lane count for a like-for-like fleet reported.
+  status: in_progress
+  created_at: '2026-11-17T01:21:49.606884+00:00'
+- id: INT-CI-191-V
+  title: 'Verification: SimClock TickerStop race fix (8ed3e3db) holds on current tree'
+  criteria:
+  - 'The data-race fix for internal/clock SimClock.NewTicker vs Ticker.Stop (commit
+    8ed3e3db, landed 2026-11-06) is present in the current tree and still holds: commit
+    8ed3e3db is an ancestor of origin/main; go test -race ./internal/clock/ ./internal/scheduler/
+    -run ''Sim|Ticker|BulkSim'' -count=10 PASSes with zero WARNING: DATA RACE lines;
+    go build ./... and go vet ./... exit 0.'
+  status: complete
+  created_at: '2026-11-17T02:02:31.332207+00:00'
+  completed_at: '2026-11-17T02:06:18.233501+00:00'
+- id: SCHED-GAP-16932
+  title: scheduler-query breaks its own documented flag shape (interspersed flags)
+  criteria:
+  - 'Both documented flag orders work: --all <op> --daemon-url URL and --daemon-url
+    URL --all <op>; table tests assert parsed op/daemon-url for each; unknown flag
+    and missing value still error; help.go agrees with behavior; go build ./... ,
+    go vet, go test ./cmd/scheduler-query/ -count=1 and full -race suite green'
+  status: in_progress
+  created_at: '2026-11-17T08:50:56.678786+00:00'
