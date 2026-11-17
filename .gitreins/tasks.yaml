@@ -6211,3 +6211,16 @@ tasks:
   status: complete
   created_at: '2026-11-16T17:29:15.514793+00:00'
   completed_at: '2026-11-16T17:29:17.959143+00:00'
+- id: SCHED-432
+  title: 'lane-hooks doc: reconcile {session} PRE/POST claim with phase-independent
+    hookSessionID (AC-3 of SCHED-432; AC-1/AC-2 owner-ruling legs NOT in scope)'
+  criteria:
+  - 'docs/lane-hooks.md''s claim that {session} is empty in PRE hooks and meaningful
+    in POST hooks matches the code: hookSessionID (internal/scheduler/lane_hooks.go)
+    is phase-independent and is called identically by runPreHooks and runPostHooks;
+    either the doc is corrected to state the phase-independent resolution (with the
+    runtime-typical PRE-emptiness explained via the tick-id placeholder guard), or
+    the code enforces the phase distinction. Chosen: fix the doc to match code. No
+    scheduler code changes.'
+  status: in_progress
+  created_at: '2026-11-17T00:07:00.339385+00:00'
