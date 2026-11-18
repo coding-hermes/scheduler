@@ -239,3 +239,47 @@ func TestSCHEDGAP16932_NegativeNumericValue(t *testing.T) {
 		t.Errorf("budgetMS = %d, want -1", got.budgetMS)
 	}
 }
+
+// TestSCHEDGAP16932_MissingValueHasNoHelpDump pins the second half of the
+// acceptance: a flag missing its value must fail "with a message naming that
+// flag and NO help dump". The message is the whole answer; 60 lines of usage
+// bury it. Every OTHER usage mistake still carries the usage block, which is
+// where a caller learns the surface.
+func TestSCHEDGAP16932_MissingValueHasNoHelpDump(t *testing.T) {
+	for _, argv := range [][]string{
+		{"--all", "peer.status", "--daemon-url"},
+		{"--daemon-url", "--all", "peer.status"},
+		{"peer-a", "queue.get", "--want"},
+	} {
+		_, err := parseArgs(argv)
+		if err == nil {
+			t.Fatalf("parseArgs(%q) succeeded, want a missing-value error", argv)
+		}
+		if !errors.Is(err, errMissingValue) {
+			t.Fatalf("parseArgs(%q) error = %v, want it to wrap errMissingValue", argv, err)
+		}
+		var buf strings.Builder
+		writeUsageError(err, &buf)
+		out := buf.String()
+		if !strings.Contains(out, "flag needs an argument: -") {
+			t.Errorf("parseArgs(%q) rendered %q, want it to name the flag", argv, out)
+		}
+		if strings.Contains(out, "Usage:") {
+			t.Errorf("parseArgs(%q) rendered a help dump for a missing value:\n%s", argv, out)
+		}
+	}
+
+	// The contrast arm: a non-missing-value usage mistake keeps the block.
+	_, otherErr := parseArgs([]string{"queue.get"}) // no peer, no --all
+	if otherErr == nil {
+		t.Fatal("parseArgs(queue.get) succeeded, want a usage error")
+	}
+	if errors.Is(otherErr, errMissingValue) {
+		t.Fatalf("a missing peer must not be classified as a missing flag value: %v", otherErr)
+	}
+	var buf strings.Builder
+	writeUsageError(otherErr, &buf)
+	if !strings.Contains(buf.String(), "Usage:") {
+		t.Errorf("a non-missing-value usage mistake must keep the usage block, got %q", buf.String())
+	}
+}

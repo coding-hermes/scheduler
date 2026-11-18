@@ -196,7 +196,8 @@ func main() {
 			printUsage(os.Stderr)
 			os.Exit(exitOK)
 		}
-		usageExit(err.Error())
+		writeUsageError(err, os.Stderr)
+		os.Exit(exitHard)
 	}
 
 	// Env layers mirror the daemon's bus resolution (main.go): CRIER_URL /
@@ -259,6 +260,27 @@ func usageExit(msg string) {
 	os.Exit(exitHard)
 }
 
+// errMissingValue tags a flag that was given no value: the message names the
+// flag and stands on its own. Split out so the renderer can suppress the
+// usage block for this one class (SCHED-GAP-16932 acceptance: "a flag that
+// is missing its value must fail with a message naming that flag and no
+// help dump") — 60 lines of usage bury the single line that matters, and the
+// message already says which flag and how to write it.
+var errMissingValue = errors.New("flag needs an argument")
+
+// writeUsageError renders a usage mistake to w. A missing flag value prints
+// one line and stops; every other usage mistake keeps the full usage block,
+// which is where the caller learns the surface.
+func writeUsageError(err error, w io.Writer) {
+	if _, writeErr := fmt.Fprintln(w, "scheduler-query: "+err.Error()); writeErr != nil {
+		return // the writer is gone; the process is about to exit hard anyway
+	}
+	if errors.Is(err, errMissingValue) {
+		return
+	}
+	printUsage(w)
+}
+
 // valueFlagNames reports which REGISTERED flags take a value — everything
 // that is not a bool. Derived from the set (flag.Value's IsBoolFlag, the
 // same test the flag package itself uses) so a new flag can never be
@@ -307,11 +329,11 @@ func splitPositionals(argv []string, valueFlags map[string]bool) (positional, re
 				continue
 			}
 			if i+1 >= len(argv) {
-				return nil, nil, fmt.Errorf("flag needs an argument: -%s", name)
+				return nil, nil, fmt.Errorf("%w: -%s", errMissingValue, name)
 			}
 			next := argv[i+1]
 			if strings.HasPrefix(next, "-") && next != "-" && !numericToken(next) {
-				return nil, nil, fmt.Errorf("flag needs an argument: -%s (next token %q is another flag; write -%s=%s for a value that starts with '-')", name, next, name, next)
+				return nil, nil, fmt.Errorf("%w: -%s (next token %q is another flag; write -%s=%s for a value that starts with '-')", errMissingValue, name, next, name, next)
 			}
 			i++
 			rest = append(rest, next)
