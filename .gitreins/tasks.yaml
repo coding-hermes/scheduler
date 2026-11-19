@@ -6270,5 +6270,6 @@ tasks:
     URL --all <op>; table tests assert parsed op/daemon-url for each; unknown flag
     and missing value still error; help.go agrees with behavior; go build ./... ,
     go vet, go test ./cmd/scheduler-query/ -count=1 and full -race suite green'
-  status: in_progress
+  status: complete
   created_at: '2026-11-17T08:50:56.678786+00:00'
+  completed_at: '2026-11-18T13:49:45.082832+00:00'
