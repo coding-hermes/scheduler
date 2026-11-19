@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -217,11 +218,25 @@ func toProjectListItems(projects []database.Project, spends map[string]scheduler
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	// SCHED-GAP-1765: the body is buffered so it can be decoded twice — once
+	// into the Project (which owns the S06/PascalCase unmarshal) and once into
+	// the family probe. Decoding the flag any other way is unsafe: see
+	// familyCreateProbe for the embedded-Unmarshaler trap this avoids.
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, 400, "read body: "+err.Error())
+		return
+	}
 	var p database.Project
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&p); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
+	// A body that fails this probe simply is not a family request (the flag is
+	// optional and never validated on its own — a malformed body was already
+	// refused by the Project decode above).
+	var family familyCreateProbe
+	_ = json.Unmarshal(raw, &family)
 	if p.Name == "" || p.RepoURL == "" || p.Workdir == "" {
 		writeError(w, 400, "name, repo_url, workdir are required")
 		return
@@ -288,6 +303,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, 500, err.Error())
+		return
+	}
+	// SCHED-GAP-1765: a family onboarding request mints the DEFAULT family
+	// template (the foreman above + -qa, -sync, -docs) instead of stopping at
+	// one lane. Every other suffix stays on demand: a plain create body mints
+	// exactly the one row it always did, and the six non-default role suffixes
+	// are still one deliberate POST away.
+	if family.Family {
+		s.writeFamilyCreated(w, &p, mintDefaultFamily(context.Background(), s.db, &p))
 		return
 	}
 	writeJSON(w, 201, p)
