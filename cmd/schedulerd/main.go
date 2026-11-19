@@ -1873,6 +1873,17 @@ func main() {
 	// only adds evaluation triggers.
 	boardWatcher := scheduler.NewBoardWakeWatcher(db, loop.ForceEvaluate)
 	boardWatcher.SetClock(clk)
+	// SCHED-GAP-1764 wake coalescing: after a lane concludes dry_run/
+	// no_changes, board-wake-triggered re-ticks are suppressed for 1x its
+	// cooldown_s. `[scheduler] wake_coalesce_s` is the fleet-wide override
+	// (0 = keep the built-in 1x cooldown_s); a per-lane persisted window is a
+	// schema follow-up — the per-lane in-memory seam is
+	// SetWakeCoalesceWindowFor. Read-only knob: nothing here changes a
+	// cooldown or admits/skips a spawn.
+	if rootCfg, cfgErr := config.LoadRootConfig(*configFile); cfgErr == nil && rootCfg.Scheduler.WakeCoalesceS > 0 {
+		boardWatcher.SetWakeCoalesceWindow(time.Duration(rootCfg.Scheduler.WakeCoalesceS) * time.Second)
+		log.Printf("Board wake coalescing: window %ds (scheduler.wake_coalesce_s)", rootCfg.Scheduler.WakeCoalesceS)
+	}
 	boardWatcher.Start()
 
 	// SCHED-GAP-17002: wake tables. The runner fires persisted promises to

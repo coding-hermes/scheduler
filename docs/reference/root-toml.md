@@ -30,8 +30,8 @@ CLI and env on top. Two consequences:
 2. A TOML value equal to "off"/"keep default" for that key is a no-op. For
    keys where `0` is meaningful (e.g. `tasks_pacing = "0s"` disables pacing),
    TOML *can* express off; for strictly-positive keys (`slot_patience`,
-   `load_gate_threshold`, `spawn_mem_limit_mb`, the auto-disable knobs) a TOML
-   `0` just leaves the default in place.
+   `load_gate_threshold`, `spawn_mem_limit_mb`, `wake_coalesce_s`, the
+   auto-disable knobs) a TOML `0` just leaves the default in place.
 
 TR-162: the loader enforces the middle of this chain itself —
 `config.LoadRootConfig` (the daemon boot path) applies the `SCHEDULER_*` env
@@ -65,6 +65,7 @@ Keys outside this pattern:
 | `slot_patience` | Yes | Default-guard (flag default 5m) | Strictly positive only; TOML `0` = keep default. |
 | `load_gate_threshold` | Yes | Default-guard (flag default 0) | Positive value arms the gate and the wave-load ceiling. |
 | `tasks_pacing` | Yes | Default-guard (flag default 60s) | `0s` disables pacing explicitly. |
+| `wake_coalesce_s` | Yes | Direct set at boot (no flag/env layer exists) | Positive sets the fleet-wide board-wake coalesce window; `0` = keep the built-in 1x the lane's `cooldown_s`. Only the watcher's forced-evaluation trigger is suppressed — cooldowns, manual/API spawns and owner actions are untouched. Per-lane persisted override is a schema follow-up. |
 | `spawn_mem_limit_mb` | Yes | Default-guard (flag default 0) | Positive arms the RLIMIT_AS cap. |
 | `session_silence_grace` | Yes | Default-guard (flag default 0) | Positive arms the watchdog. |
 | `session_poll_loop_min_ticks` | Yes | Default-guard (flag default 0) | Value >= 6 arms the poll-loop guard at that (stricter) threshold; 1-5 rejected in TOML (the flag layer clamps them up). |
@@ -138,6 +139,10 @@ All claims in the table were re-derived from the code in this tree
   (session_silence_grace).
 - `blackout_windows`: `cmd/schedulerd/main.go:659-666` — `rootCfg.Scheduler.BlackoutWindows`
   → `loop.SetBlackoutWindows` (direct set, no flag/env layer).
+- `wake_coalesce_s`: `cmd/schedulerd/main.go:1876-1886` —
+  `rootCfg.Scheduler.WakeCoalesceS` → `boardWatcher.SetWakeCoalesceWindow`
+  (direct set at boot, no flag/env layer; the seam itself is
+  `internal/scheduler/board_wake_coalesce.go`).
 - `id`: `cmd/schedulerd/main.go:483-492` — `SCHEDULER_ID` env > TOML > hostname.
 - Ignored keys: `internal/config/config.go:51-62` defines
   `MinInterval`/`MaxInterval`/`NumLevels`/`MaxConcurrent`/`TickTimeout`/`NamespaceMode`
