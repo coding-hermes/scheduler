@@ -113,8 +113,8 @@ type cliParse struct {
 // the documented aggregate shape.
 func newQueryFlagSet(p *cliParse) *flag.FlagSet {
 	fs := flag.NewFlagSet("scheduler-query", flag.ContinueOnError)
-	// Errors are rendered by the caller (usageExit prints the message plus
-	// the usage block); the set itself stays silent.
+	// Errors are rendered by the caller (writeUsageError prints the message
+	// plus the usage block); the set itself stays silent.
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	p.args = argMap{}
@@ -250,14 +250,6 @@ func main() {
 	// the same library entry the REMOTE-012 aggregate consumes.
 	client := bus.NewClient(true, effectiveURL, token, caller)
 	os.Exit(runQuery(context.Background(), cfg, client))
-}
-
-// usageExit prints the usage text and exits with the hard-error code. A
-// usage mistake is a hard error: the query was never attempted.
-func usageExit(msg string) {
-	fmt.Fprintln(os.Stderr, "scheduler-query: "+msg)
-	printUsage(os.Stderr)
-	os.Exit(exitHard)
 }
 
 // errMissingValue tags a flag that was given no value: the message names the
