@@ -130,15 +130,30 @@ func (s *SimSpawner) Spawn(project PackedProject, tickID string) (*SimSpawned, e
 		// NOT mirrored: a dry-run's outcome is inherently stand-down-shaped
 		// (nothing lands in a real repo), and the sim event log would flood
 		// with rows no operator reads — the persisted pair is the record.
+		//
+		// SCHED-GAP-16947: the sim row is a CONCLUDED tick, so it carries the
+		// reason code too. A simulated tick never opens a real session BY
+		// DESIGN — its no-artifact verdict is not_spawned, the exact class the
+		// vocabulary names for "no session by design"; an artifact-shaped sim
+		// tick (fabricated commits) reads '' (productive — nothing owed), the
+		// column's honest-empty convention. And the token figures are
+		// fabricated, never measured: tokens_out_unavailable=simulated says so
+		// explicitly instead of leaving a plausible-looking 500-3500.
+		simReason := ""
+		if outcome.Commits <= 0 && outcome.FilesChanged <= 0 {
+			simReason = database.TickReasonCodeNotSpawned
+		}
 		dispatchOutcome, dispatchReason := outcome.resolveDispatch()
 		s.db.Exec(`
 			UPDATE ticks SET status = ?, completed_at = ?, exit_code = ?, error = ?,
 				tokens_in = ?, tokens_out = ?, cost_usd = ?, cost_source = ?, commits = ?, files_changed = ?,
-				dispatch_outcome = ?, dispatch_reason = ?
+				dispatch_outcome = ?, dispatch_reason = ?,
+				reason_code = ?, tokens_out_unavailable = ?
 			WHERE id = ?
 		`, string(outcome.Status), finish, outcome.ExitCode, outcome.Error,
 			outcome.TokensIn, outcome.TokensOut, outcome.CostUSD, outcome.CostSource, outcome.Commits, outcome.FilesChanged,
 			dispatchOutcome, dispatchReason,
+			simReason, database.TokensOutUnavailableSimulated,
 			outcome.TickID)
 		// Update last_tick_completed for ALL outcomes so cooldown check catches failed projects.
 		// SCHED-GAP-214: last_tick_status rides the same write — the sim path

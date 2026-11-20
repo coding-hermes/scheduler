@@ -21,6 +21,7 @@ import (
 
 	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/config"
+	"github.com/coding-hermes/scheduler/internal/database"
 )
 
 // Cost estimation constants for real ticks where session export is unavailable
@@ -2594,6 +2595,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					// "lane had nothing to do" signature; Wait()'s
 					// completed branch turns this into outcome='no_work'.
 					zeroTools: zeroToolSession(resp, postTrace),
+					// SCHED-GAP-16947: the effective session wall, so Wait's
+					// completed outcome carries TickOutcome.Deadline and
+					// lifecycle.Complete's liveness rule can catch a verdict
+					// that arrived past the wall (a gateway response is NOT
+					// bounded by the exec path's kill timer — the measured
+					// 96/473 overruns landed exactly here).
+					tickTimeout: effectiveTimeout,
+					// SCHED-GAP-16947: no `usage` object in the terminal
+					// envelope means the token figures are ABSENT, not zero —
+					// carry the explicit-unavailable mark instead of letting
+					// 0/0 read as a measured silent session.
+					usageUnavailable: usageUnavailableMark(resp),
 				}, nil
 			}
 			// SCHED-GAP-1687: the pre-classification "GATEWAY FAIL … falling
@@ -3228,6 +3241,16 @@ type SpawnedTick struct {
 	// and every non-completed path leave it false (no signal, no claim).
 	zeroTools bool
 
+	// usageUnavailable (SCHED-GAP-16947) is the raw reason this tick's token
+	// figures are NOT a measurement ("" = they are). Set at the gateway
+	// success-return site when the terminal envelope carried no `usage` object
+	// at all (Response.UsagePresent false — the 22.5% shape measured 2026-10-29
+	// where a silent session's absent tokens_out was booked as a measured 0);
+	// Wait() carries it onto TickOutcome.TokensOutUnavailable so
+	// lifecycle.Complete stamps ticks.tokens_out_unavailable in the same
+	// finalization UPDATE.
+	usageUnavailable string
+
 	// Trigger records how this tick was launched: "command" for custom
 	// command/script spawns (project.Command), "prompt" for LLM prompt
 	// spawns (gateway or hermes-chat exec fallback). Carried into the
@@ -3379,6 +3402,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			ExitCode:  -1,
 			Error:     st.gwFailErr,
 			Duration:  dur,
+			// SCHED-GAP-16947: the wall this timeout IS — the liveness
+			// predicate reads it even if the partial-telemetry mark below
+			// never landed, so the row can only ever derive
+			// deadline_exceeded, never an unknown timeout.
+			Deadline: st.tickTimeout,
 			// No gateway usage exists (no terminal event arrived); the
 			// source is still stamped gateway-sourced, matching the deferral.
 			CostSource: CostSourceGateway,
@@ -3428,6 +3456,10 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			// event arrived), so its cost is ~0 rather than a fabricated
 			// estimate — but the source is still stamped gateway-sourced.
 			CostSource: CostSourceGateway,
+			// SCHED-GAP-16947: the tick never opened a session, so its 0/0
+			// token legs are EXPLICITLY unavailable (a deferral measured
+			// nothing) — never a fabricated zero.
+			TokensOutUnavailable: database.TokensOutUnavailableNoSession,
 			// SCHED-GAP-119 payload, pre-counted at the deferral site: an SSE
 			// drop can abort a turn that already committed.
 			Commits:      st.gwFailCommits,
@@ -3481,6 +3513,9 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			PriceAsOf: priceAsOf,
 			// ADV-R09/G8: gateway response usage = gateway-sourced figures.
 			CostSource: CostSourceGateway,
+			// SCHED-GAP-16947: an envelope with no `usage` object is an
+			// explicit unavailable, never a measured 0.
+			TokensOutUnavailable: st.usageUnavailable,
 			// SCHED-GAP-119: keep real work on failed rows (stalled ticks
 			// that landed commits mid-window — see 2026-09-15 evidence).
 			Commits:      st.gwFailCommits,
@@ -3584,6 +3619,18 @@ func (st *SpawnedTick) Wait() TickOutcome {
 			Started:   st.Started,
 			Finished:  st.completeAt,
 			Status:    TickCompleted,
+			// SCHED-GAP-16947: the effective session wall. lifecycle.Complete's
+			// liveness rule reads it: a completed verdict at-or-past the wall is
+			// forced to timeout/deadline_exceeded — a gateway response is NOT
+			// bounded by the exec path's kill timer, so the completed branch is
+			// exactly where an overrun verdict can arrive (the 2026-10-29 block
+			// measured 96/473 instrumented dry ticks past their own deadline).
+			Deadline: st.tickTimeout,
+			// SCHED-GAP-16947: an envelope with no `usage` object carries the
+			// explicit-unavailable mark, so the row's 0/0 can never be read as
+			// a measured silent session (and the reason-code derivation sees
+			// mechanism (c) instead of a fabricated "spent output").
+			TokensOutUnavailable: st.usageUnavailable,
 			// SCHED-GAP-1681: the committed row carries its POST count —
 			// attempts=2 on the tick this row's acceptance names (one
 			// dropped stream + one completed retry).
@@ -3667,6 +3714,12 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		SessionID: st.SessionID,
 		Started:   st.Started,
 		Finished:  finished,
+		// SCHED-GAP-16947: the exec kill timer fires on this same wall, so a
+		// completed exec verdict is normally inside it — the liveness rule
+		// stays inert. It is still carried: the timer and the wall are
+		// resolved from the same effectiveTickTimeout, and if a verdict ever
+		// slips past the kill, Complete must see the wall to catch it.
+		Deadline: st.tickTimeout,
 	}
 	// SCHED-GAP-1707: an exec tick killed by the scanner ctx (the effective
 	// session deadline) is a PARTIAL row — mark it now, before the status

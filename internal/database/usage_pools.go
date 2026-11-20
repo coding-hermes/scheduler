@@ -395,7 +395,12 @@ func RecoverUsagePoolLeases(ctx context.Context, db *sql.DB) (int64, error) {
 			// has elapsed, the attempt is no longer authorized to occupy
 			// capacity. Terminalize any still-live tick and expire an
 			// outstanding hand-out in this same serialized transaction.
-			if _, err := tx.ExecContext(ctx, `UPDATE ticks SET status='failed',outcome='failed',error='usage-pool lease expired after owner exit',completed_at=? WHERE id=? AND status IN ('queued','running')`, now, item.tickID); err != nil {
+			// SCHED-GAP-16947: this write CONCLUDES the tick, so it stamps
+			// the reason code in the same statement — the owner exited and the
+			// lease expired: the lane's execution surface is gone,
+			// lane_unavailable (the same owner-gone class the stale and
+			// dead-pid reaps stamp).
+			if _, err := tx.ExecContext(ctx, `UPDATE ticks SET status='failed',outcome='failed',error='usage-pool lease expired after owner exit',completed_at=?,reason_code='lane_unavailable' WHERE id=? AND status IN ('queued','running')`, now, item.tickID); err != nil {
 				return 0, err
 			}
 			if item.dispatchState == "dispatched" {

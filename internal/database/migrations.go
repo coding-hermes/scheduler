@@ -17,7 +17,10 @@ import (
 // PERF-004 lands v84 (idx_events_component_created) for the lane_churn
 // enable-per-day count of the same endpoint.
 // PERF-006 lands v85 (hook_runs.state='busy') for quiesce-check receipts.
-const latestMigration = 90 // SCHED-SHUTDOWN-001: aborted tick audit and resume selection
+// SCHED-GAP-16947 lands v91 (ticks.reason_code — the closed-vocabulary why on
+// every concluded tick — plus ticks.tokens_out_unavailable and
+// ticks.reason_code_derivation).
+const latestMigration = 91 // SCHED-GAP-16947: tick reason-code vocabulary
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -2012,6 +2015,62 @@ CREATE INDEX IF NOT EXISTS idx_ticks_spawned ON ticks(spawned_at);
 ALTER TABLE ticks ADD COLUMN abort_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN drain_succeeded INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ticks ADD COLUMN selected_row_ids TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SCHED-GAP-16947: the closed-vocabulary reason code on every
+		// concluded tick, the explicit tokens_out-unavailable mark, and the
+		// derivation annotation the Oct 10-12 repair pass writes.
+		//
+		// MEASURED (2026-10-29, 7 days of ticks): failure_reason was empty on
+		// 100% of dry ticks and the classification read 'completed' for every
+		// instrumented row — the schema could not say WHY a tick produced
+		// nothing. Five mechanisms collapsed into one `dry_run` bucket: a
+		// model-declared no-op (noop_flag=1 on 93% of foreman dry ticks),
+		// real work with no landed artifact (pre==post on 1,154/1,155 dry
+		// ticks), a session with no output at all (22.5% of dry traces carry
+		// no tokens_out; 96/473 instrumented dry ticks overran their own
+		// deadline), ticks that never opened a session by design, and a
+		// 2026-10-10..12 lane blackout booked as idle (2,701 zero-token dry
+		// ticks). This migration is the SCHEMA half; the codes are stamped by
+		// every conclusion path from here on, and the historical block is
+		// reclassified by the reason-code repair pass
+		// (internal/database/reason_code_repair.go, cmd/reason-code-repair),
+		// which annotates its derivation instead of rewriting history.
+		//
+		// ADDITIVE ALTER, NO REBUILD: SQLite allows ADD COLUMN with a CHECK
+		// whose constant expression every existing row satisfies — and it
+		// does: the DEFAULT '' passes (empty = productive tick / legacy row,
+		// the same honest-empty convention failure_reason uses on successful
+		// rows). The CHECK enforces the closed vocabulary plus the
+		// `unknown:<raw>` escape hatch; BARE unknown forms are deliberately
+		// REJECTED — 'unknown' is not in the IN list and has no colon, and
+		// 'unknown:' fails length(reason_code) > 8 (the prefix alone must
+		// carry at least one character of raw signal). The vocabulary itself
+		// lives in internal/database/reason_code.go; TickReasonCodeIsValid is
+		// the Go twin of this constraint, and
+		// TestSCHEDGAP16947_ClosedVocabularyRejectedAtSchema proves a bogus
+		// value is rejected by the DB, not just by Go.
+		//
+		// tokens_out_unavailable is the explicit-unavailable mark (AC3):
+		// '' = tokens_out is a real measurement (a genuine 0 included);
+		// non-empty = the raw reason it is NOT (no session telemetry, a
+		// simulated tick, a remote dispatch whose usage never reached this
+		// scheduler, a gateway envelope that carried no usage object). The
+		// value column stays an INTEGER — readers scan it into int64
+		// everywhere — so "unavailable" rides the companion reason, never an
+		// absent key or a lying 0.
+		//
+		// reason_code_derivation annotates a code written by the REPAIR pass
+		// (a derivation plus the evidence it read), so a repaired row can
+		// never be mistaken for a first-hand finalization stamp. '' = stamped
+		// by a live conclusion path (or never stamped: legacy rows).
+		version: 91,
+		desc:    "SCHED-GAP-16947: ticks.reason_code (closed vocabulary {no_work,model_noop,no_artifact,malformed_tool_call,deadline_exceeded,not_spawned,lane_unavailable} + unknown:<raw>) on every concluded tick, ticks.tokens_out_unavailable (explicit unavailable-with-reason mark), ticks.reason_code_derivation (repair-pass annotation)",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN reason_code TEXT NOT NULL DEFAULT '' CHECK(reason_code = '' OR reason_code IN ('no_work', 'model_noop', 'no_artifact', 'malformed_tool_call', 'deadline_exceeded', 'not_spawned', 'lane_unavailable') OR (reason_code GLOB 'unknown:*' AND length(reason_code) > 8));
+ALTER TABLE ticks ADD COLUMN tokens_out_unavailable TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN reason_code_derivation TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

@@ -350,6 +350,36 @@ type Response struct {
 	Output []OutputItem   `json:"output"`
 	Usage  Usage          `json:"usage"`
 	Error  *ResponseError `json:"error,omitempty"`
+	// UsagePresent (SCHED-GAP-16947) records whether the terminal envelope
+	// carried a `usage` object AT ALL — the distinction between an absent key
+	// and a measured zero, which the plain Usage struct cannot express (both
+	// decode to 0). Measured 2026-10-29: 22.5% of dry tick traces carry no
+	// tokens_out field, and booking that absence as a measured 0 is exactly
+	// how a silent session reads as an idle one. Populated by UnmarshalJSON on
+	// every decode path (JSON body and the SSE terminal envelope); a struct
+	// literal in a test leaves it false, which is the correct "no envelope"
+	// default.
+	UsagePresent bool `json:"-"`
+}
+
+// UnmarshalJSON decodes the envelope and records usage-key PRESENCE. The
+// alias type drops the method set (so there is no recursion) but keeps every
+// JSON tag; the second decode reads only the raw `usage` value to distinguish
+// "the gateway sent no usage object" from "the gateway measured 0 tokens".
+func (r *Response) UnmarshalJSON(data []byte) error {
+	type responseAlias Response
+	var alias responseAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	var probe struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil {
+		alias.UsagePresent = len(probe.Usage) > 0 && !bytes.Equal(bytes.TrimSpace(probe.Usage), []byte("null"))
+	}
+	*r = Response(alias)
+	return nil
 }
 
 // OutputItem is a message or tool call in the response output.

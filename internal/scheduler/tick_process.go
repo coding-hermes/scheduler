@@ -892,7 +892,7 @@ func (l *Loop) adoptLiveGatewayTicksAtStartup() int {
 // p99-latency math instead of reading as in-flight forever. outcome stays
 // unset — the CHECK constraint only allows ('committed','dry_run','failed',
 // 'timeout'); 'zombie_reaped' violates it (see cleanDanglingOnStartup).
-const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=? WHERE id=?`
+const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=?, reason_code='lane_unavailable' WHERE id=?`
 
 // cleanDanglingOnStartup reaps ticks whose recorded pid no longer exists
 // (exec-fallback children die with the daemon), plus pid=0 gateway rows whose

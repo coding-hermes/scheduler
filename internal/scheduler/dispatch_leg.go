@@ -305,6 +305,13 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 			// appended bracket so the existing wall text stays greppable.
 			Error:      fmt.Sprintf("%v [phase=dispatch_wait phase_elapsed=%s]", waitErr, finished.Sub(issued).Round(time.Second)),
 			CostSource: CostSourceGateway,
+			// SCHED-GAP-16947: the wall this timeout ran into — the liveness
+			// predicate reads it directly, agreeing with the dispatch_deadline
+			// partial mark below.
+			Deadline: timeout,
+			// The agent's usage never reaches this process, so the row's 0/0
+			// legs are EXPLICITLY unavailable, never a measured zero.
+			TokensOutUnavailable: database.TokensOutUnavailableRemoteDispatch,
 			// The hand-out RAN (the relay accepted it), so the dispatch
 			// accountability pair says so; the tick merely ran out of wall.
 			DispatchDispatched: true, DispatchReason: database.DispatchReasonDispatched,
@@ -320,17 +327,28 @@ func (p *SlotPool) dispatchRemote(ctx context.Context, proj PackedProject, tickI
 			TickID: tickID, Project: proj.Name, SessionID: receipt.CorrID,
 			Started: issued, Finished: finished, Duration: finished.Sub(issued),
 			Status: TickFailed, ExitCode: -1, Error: reply,
-			CostSource:         CostSourceGateway,
-			DispatchDispatched: true, DispatchReason: database.DispatchReasonDispatched,
+			CostSource: CostSourceGateway,
+			// SCHED-GAP-16947: the reply was a failure verdict, but the agent's
+			// usage still never reached this process — the 0/0 legs are
+			// explicitly unavailable, never a measured zero.
+			TokensOutUnavailable: database.TokensOutUnavailableRemoteDispatch,
+			DispatchDispatched:   true, DispatchReason: database.DispatchReasonDispatched,
 		}
 	default:
 		rec.State = database.DispatchStateReplied
 		st.remoteOutcome = &TickOutcome{
 			TickID: tickID, Project: proj.Name, SessionID: receipt.CorrID,
 			Started: issued, Finished: finished, Duration: finished.Sub(issued),
-			Status:             TickCompleted,
-			CostSource:         CostSourceGateway,
-			DispatchDispatched: true, DispatchReason: database.DispatchReasonDispatched,
+			Status:     TickCompleted,
+			CostSource: CostSourceGateway,
+			// SCHED-GAP-16947: the wall this tick ran under (the same duration
+			// carried to the node as limits.wall_s), so the liveness rule can
+			// catch a replied verdict past it; and the usage legs are
+			// EXPLICITLY unavailable (the agent's tokens never reached this
+			// process), so the row's 0/0 must never read as a measured zero.
+			Deadline:             timeout,
+			TokensOutUnavailable: database.TokensOutUnavailableRemoteDispatch,
+			DispatchDispatched:   true, DispatchReason: database.DispatchReasonDispatched,
 		}
 	}
 	p.recordDispatchReceipt(db, rec)
