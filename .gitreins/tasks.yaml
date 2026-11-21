@@ -6274,3 +6274,33 @@ tasks:
   status: complete
   created_at: '2026-11-17T08:50:56.678786+00:00'
   completed_at: '2026-11-18T13:49:45.082832+00:00'
+- id: SCHED-GAP-16936
+  title: Dispatch write-scope safety + recovery probe + capped repair re-dispatch
+  criteria:
+  - (1) pre-dispatch overlap check across a wave's declared file scopes - refuse with
+    both lanes named; (2) recovery probe on dry ticks reporting whether the worktree
+    has uncommitted content, distinguishing no_changes from recovery_available; (3)
+    capped repair re-dispatch (max 2) for a tick that failed a runnable check, cause
+    recorded. go build ./... && go vet ./... && full -race suite green.
+  status: in_progress
+  created_at: '2026-11-21T02:10:32.571698+00:00'
+- id: PM-20261121-01
+  title: 'PM tick 2026-11-21: RELEASE-062 lint-red verification'
+  criteria:
+  - 'The full-repo golangci-lint run is clean at HEAD 9e77e3bb.
+
+    FAILIF: golangci-lint run ./... exits non-zero or reports any issue.
+
+    PROOF: golangci-lint run ./... exits 0 printing ''0 issues.'''
+  - 'The orphaned usageExit symbol is gone from the whole tree.
+
+    FAILIF: grep -rn usageExit --include=*.go . returns at least one match.
+
+    PROOF: grep -rn usageExit --include=*.go . prints 0 matches (exit 1).'
+  - 'The fix commit is on the canonical branch.
+
+    FAILIF: git merge-base --is-ancestor a02c786f origin/main exits non-zero.
+
+    PROOF: git merge-base --is-ancestor a02c786f origin/main exits 0.'
+  status: in_progress
+  created_at: '2026-11-21T03:31:12.135030+00:00'
