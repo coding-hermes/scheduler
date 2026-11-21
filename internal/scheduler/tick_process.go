@@ -490,6 +490,10 @@ func (l *Loop) evaluate() {
 	// Dedup: skip projects already occupying a slot to prevent
 	// the timeout→re-spawn→duplicate processes problem.
 	alreadyRunning := l.slotPool.RunningSet()
+	// SCHED-GAP-16936 piece 1: one gate per pass — it carries the lanes this
+	// pass has already admitted so each candidate is checked against the wave
+	// being composed (see the gate call inside the loop).
+	scopeGate := newWaveScopeGate()
 	for _, proj := range packed {
 		if alreadyRunning[proj.Name] {
 			log.Printf("DEDUP: skipping %s — already running", proj.Name)
@@ -582,6 +586,24 @@ func (l *Loop) evaluate() {
 				}
 			}
 		}
+		// SCHED-GAP-16936 piece 1: the PRE-DISPATCH WRITE-SCOPE GATE. Two lanes
+		// dispatched in the SAME pass whose declared write scopes (the
+		// dispatch-target row's `scope` paths/globs) overlap with no
+		// depends_on edge between them would run concurrently against the same
+		// files, and the later writer silently destroys the earlier one's
+		// work — a lost update nothing in the tick record can attribute
+		// afterwards. The gate therefore runs BEFORE the spawn: a refused lane
+		// gets no tick row, no reservation, no slot and no cooldown charge
+		// (exactly the load-gate contract above), and the refusal names BOTH
+		// lanes plus the two overlapping paths in the log and in an event.
+		//
+		// Inert by default: a lane that declares no scope is never compared
+		// (wave_scope.go's additive default), so a fleet that has not opted
+		// into scope declarations behaves exactly as before.
+		if err := scopeGate.admit(proj.Name); err != nil {
+			l.emitWaveScopeRefused(proj.Name, proj.NamespaceID, err)
+			continue
+		}
 		spawnedTickID := l.slotPool.Spawn(proj, now, noDeliver, l.db)
 		// SCHED-GAP-1678: baseline the lane's board fingerprint at spawn
 		// time, carrying the id the pool actually stored (Spawn returns it).
@@ -618,6 +640,35 @@ func (l *Loop) evaluate() {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}
 	}
+}
+
+// emitWaveScopeRefused records a wave write-scope refusal (SCHED-GAP-16936
+// piece 1): the grep-stable WAVE-SCOPE line plus one WARNING event, both naming
+// the LANE that was not dispatched and the two lanes whose declared scopes
+// collided. Nothing is spawned and no row exists, so the event is the only
+// durable record — it has to carry enough for an operator to fix the
+// declaration without re-deriving the wave by hand.
+//
+// `kind=wave_scope_refused` is the machine marker (queryable via
+// json_extract(details,'$.kind')), mirroring the load-gate/gateway-defer
+// convention this file already uses.
+func (l *Loop) emitWaveScopeRefused(project, nsID string, cause error) {
+	log.Printf("WAVE-SCOPE: refusing %s — %v (no row enqueued; re-scoped next pass)", project, cause)
+	if l.events == nil {
+		return
+	}
+	l.events.Emit(context.Background(), SeverityHigh, "wave_scope",
+		"wave write-scope refusal for "+project,
+		map[string]any{
+			"kind":      "wave_scope_refused",
+			"project":   project,
+			"namespace": nsID,
+			// reason is the full refusal text: it names BOTH lanes and both
+			// overlapping paths, so the event alone is actionable.
+			"reason":    cause.Error(),
+			"deferred":  true,
+			"retryable": true,
+		})
 }
 
 // emitLoadGateDeferred records a load-gate deferral (SCHED-GAP-125 predicate,

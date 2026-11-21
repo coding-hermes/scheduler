@@ -447,6 +447,22 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 	}
 
 	go func() {
+		// SCHED-GAP-16936 piece 3: a repair re-dispatch decided at the failure
+		// completion below must fire only AFTER this goroutine has released
+		// BOTH its slot refcount and its dedup reservation — otherwise the
+		// pool's own tryReserve sees this tick still holding the lane and
+		// drops the repair as a duplicate ("DEDUP: skipping … already running
+		// or reserved"). Deferred FIRST ⇒ returned LAST (defers run LIFO), so
+		// it runs after p.clearReserve and after the p.Release defer below.
+		var repair *repairRequest
+		defer func() {
+			if repair == nil {
+				return
+			}
+			log.Printf("REPAIR: %s re-dispatching tick after failed tick for repair attempt %d/%d (SCHED-GAP-16936)",
+				repair.proj.Name, repair.attempt, MaxRepairRedispatch)
+			p.Spawn(repair.proj, p.clock().Now(), repair.noDeliver, db)
+		}()
 		// Clear the reservation on EVERY exit path. Deferred at goroutine
 		// entry so it survives panics too; LIFO ordering means the
 		// p.Release below runs FIRST on normal completion (dropping the
@@ -836,7 +852,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 			// completed_at, and the packer's cooldown/backoff/starvation logic
 			// keys off that timestamp. Leaving it zero ("0001-01-01") froze the
 			// last-attempt clock and let spawn failures storm (S-GAP-001).
-			_ = p.lifecycle.Complete(TickOutcome{
+			repair = p.completeTick(proj, TickOutcome{
 				TickID:   tickID,
 				Project:  proj.Name,
 				Started:  now,
@@ -855,7 +871,7 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 				// harness-side transport blip, which defers instead).
 				DispatchDispatched: false,
 				DispatchReason:     database.DispatchReasonUnavailable,
-			})
+			}, noDeliver)
 			return
 		}
 
@@ -875,9 +891,12 @@ func (p *SlotPool) spawn(proj PackedProject, tickID string, now time.Time, noDel
 		// as the backstop for exits that never reach this point.
 		releaseUsagePoolLeaseAfterSpawn(db, usageLeaseID, proj.Name)
 		usageLeaseID = ""
-		if err := p.lifecycle.Complete(outcome); err != nil {
-			log.Printf("SPAWN: complete %s: %v", tickID, err)
-		}
+		// SCHED-GAP-16936 pieces 2+3: the repair-aware finalization probes the
+		// worktree (dry or failed) and books a capped repair re-dispatch when
+		// the failure left runnable content. The launch itself is deferred to
+		// the top of this goroutine so it fires after this tick releases the
+		// lane.
+		repair = p.completeTick(proj, outcome, noDeliver)
 
 		// S13: POST hook list, after the tick row is durable. A POST failure
 		// raises events and can stop the remaining chain, but never changes

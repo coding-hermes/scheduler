@@ -248,6 +248,25 @@ type TickOutcome struct {
 	// (exec spawns, spawn-site refusals, remote dispatch) — the column's
 	// honest default, never a fabricated count.
 	Attempts int
+	// RecoveryState / RecoveryDetail (SCHED-GAP-16936 piece 2) are the dry
+	// tick's WORKTREE verdict, on the closed vocabulary in recovery_probe.go
+	// ('' = not owed, no_changes, recovery_available, not_probed) plus the
+	// bounded evidence string it was derived from. lifecycle.Complete probes
+	// when the field is empty and the row owes a verdict (a dry completed
+	// tick, or a failed one); a caller that already probed (the slot pool,
+	// which needs the same evidence for the repair decision) sets them and
+	// Complete respects them, so the row and the decision can never disagree.
+	RecoveryState  string
+	RecoveryDetail string
+	// RepairAttempt (SCHED-GAP-16936 piece 3) is the repair re-dispatch this
+	// FAILED tick CAUSED — 1 or 2, 0 when none was booked (not recoverable,
+	// cap reached, or the feature unarmed). RepairCause records why, in both
+	// directions: the recovery evidence that justified the attempt, or the
+	// refusal (nothing_runnable / cap_reached). A refused attempt therefore
+	// reads attempt=0 + a cap_reached cause, which is what keeps
+	// "re-dispatches caused" a clean counter.
+	RepairAttempt int
+	RepairCause   string
 	// Deadline (SCHED-GAP-16947) is this tick's EFFECTIVE session wall — the
 	// same duration the spawn paths resolve (effectiveTickTimeout) and enforce
 	// with the kill timer / session ctx. Complete applies the LIVENESS RULE
@@ -341,6 +360,23 @@ func (lt *LifecycleTracker) Enqueue(project, tickID string) error {
 	return nil
 }
 
+// recoveryProbeOwed reports whether a concluded tick owes a worktree verdict
+// (SCHED-GAP-16936 piece 2): a DRY completed tick (no commit, no file delta, no
+// memory key) or a FAILED one. Every other terminal status is deliberately not
+// owed — a deferred tick never opened a session, an operator-aborted tick's
+// leftovers were the previous tick's, and a timeout is a liveness verdict whose
+// repair is the lane's next ordinary run.
+//
+// Commits/FilesChanged use the package's <=0 test so the -1 unmeasured sentinel
+// counts as "no artifact" (an unmeasured dry tick is still dry).
+func recoveryProbeOwed(o TickOutcome) bool {
+	if o.Status == TickFailed {
+		return true
+	}
+	return o.Status == TickCompleted &&
+		o.Commits <= 0 && o.FilesChanged <= 0 && o.MemoryKeys <= 0
+}
+
 func boolInt(v bool) int {
 	if v {
 		return 1
@@ -363,6 +399,26 @@ func (lt *LifecycleTracker) StartRunning(tickID string) error {
 // SCHED-GAP-029: also persists commits/files_changed (previously only
 // tokens_in/tokens_out/cost_usd were written, leaving commits/files zero).
 func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
+	_, err := lt.complete(outcome, false)
+	return err
+}
+
+// CompleteWithRepair is Complete plus the SCHED-GAP-16936 piece-3 verdict: it
+// computes the repair re-dispatch decision, BOOKS it on the row
+// (ticks.repair_attempt / repair_cause), and RETURNS it so a caller that can
+// actually launch a spawn (the slot pool) can act on it.
+//
+// Only this entry point books an attempt. A legacy Complete caller — a
+// reconciliation write, a resume path, a hook veto — leaves the repair ledger
+// EMPTY (no attempt, no cause) instead of claiming a re-dispatch nobody
+// performed: the column records an action, and an action that was never
+// launched is a lie a later reader would act on.
+func (lt *LifecycleTracker) CompleteWithRepair(outcome TickOutcome) (RepairRedispatchDecision, error) {
+	return lt.complete(outcome, true)
+}
+
+// complete is the single finalization body both entry points share.
+func (lt *LifecycleTracker) complete(outcome TickOutcome, repairAware bool) (RepairRedispatchDecision, error) {
 	// SCHED-GAP-16947 LIVENESS RULE (AC2): a tick that ran at-or-past its own
 	// session wall is recorded timeout/deadline_exceeded, NEVER completed. The
 	// kill timer and the session ctx fire AT the wall, but a gateway response
@@ -485,6 +541,65 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			})
 		}
 	}
+	// SCHED-GAP-16936 piece 2 (RECOVERY PROBE): a tick that concludes dry — or
+	// FAILS — gets one question asked of its own worktree: does it hold
+	// uncommitted CONTENT a later tick could harvest? The verdict rides the
+	// SAME finalization UPDATE below (the coverage convention: no second write
+	// that can silently miss a row), so it can never be absent from a row that
+	// owed it. Probed once, here, BEFORE the dry-sentinel and the reason-code
+	// derivation, because both refine themselves with it:
+	//
+	//   - the dry sentinel distinguishes "genuinely no_changes" from
+	//     "recovery_available" (the two states the row previously spelled the
+	//     same way), and
+	//   - the reason code refuses to call a dirty worktree no_work (see
+	//     reason_code.go).
+	//
+	// Deliberately narrow: a productive tick, a deferred tick and an
+	// operator-aborted tick owe no verdict ('' — the honest empty), and an
+	// outcome that already carries one (the spawn path probes BEFORE calling
+	// in, so it and the repair decision see the same evidence) is respected.
+	if outcome.RecoveryState == "" && recoveryProbeOwed(outcome) {
+		probe := probeProjectRecovery(context.Background(), lt.db, outcome.Project)
+		outcome.RecoveryState, outcome.RecoveryDetail = probe.State, probe.Detail
+		log.Printf("RECOVERY: %s tick=%s state=%s %s", outcome.Project, outcome.TickID, probe.State, probe.Detail)
+	}
+	// SCHED-GAP-16936 piece 3 (CAPPED REPAIR RE-DISPATCH): a FAILED tick whose
+	// worktree holds runnable content is repair-eligible, at most twice per
+	// failure chain. The decision is taken here — where the probe evidence and
+	// the chain length are both in hand — booked on the row by the UPDATE
+	// below (repair_attempt = the attempt this row CAUSED, repair_cause = the
+	// evidence or the refusal), and returned to the caller so the slot pool can
+	// launch it. A failure with nothing runnable books attempt 0 and the cause
+	// says so: the row still records the verdict, which is what makes "this
+	// failure was not retried" auditable instead of looking like a bug.
+	//
+	// Scoped to repairAware (CompleteWithRepair): the ledger records a
+	// re-dispatch ACTION, so only the caller that can perform one may write it.
+	decision := RepairRedispatchDecision{}
+	if repairAware && outcome.Status == TickFailed {
+		probe := RecoveryProbe{State: outcome.RecoveryState, Detail: outcome.RecoveryDetail}
+		prior := priorRepairAttempts(context.Background(), lt.db, outcome.Project, outcome.TickID)
+		decision = decideRepairRedispatch(outcome.Status, probe, prior)
+		if decision.Dispatch && !repairRedispatchArmed() {
+			// The kill switch fired. Nothing is launched AND nothing is
+			// booked as caused: repair_attempt is the counter
+			// priorRepairAttempts reads back for the cap, so booking an
+			// attempt the fleet never ran would spend the chain's two
+			// attempts on no-ops and then report cap_reached for a lane
+			// that was never actually repaired. The cause keeps the
+			// decision visible (the evidence + the not-launched marker).
+			decision.Dispatch = false
+			decision.Cause += repairCauseNotLaunched
+		}
+		recordRepairDecision(outcome.Project, outcome.TickID, decision)
+		if decision.Cause != "" {
+			outcome.RepairCause = decision.Cause
+			if decision.Dispatch {
+				outcome.RepairAttempt = decision.Attempt
+			}
+		}
+	}
 	if outcome.Status == TickCompleted && outcome.Commits <= 0 && outcome.FilesChanged <= 0 && outcome.MemoryKeys <= 0 {
 		// No artifact of any kind. Before this row such a tick was recorded as
 		// a bare dry_run and nothing else happened (853 dry_run vs 12
@@ -495,6 +610,12 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			outcome.Error = "verification_not_observed"
 		} else if outcome.SessionID == "" {
 			outcome.Error = "result_missing"
+		} else if outcome.RecoveryState == RecoveryStateAvailable {
+			// SCHED-GAP-16936 piece 2: the tick landed nothing AND its
+			// worktree holds uncommitted content. "no_changes" would be a
+			// false claim about the tree — the honest sentinel names the
+			// state a harvesting tick can act on.
+			outcome.Error = "recovery_available"
 		} else {
 			outcome.Error = "no_changes"
 		}
@@ -553,7 +674,8 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 			commits = ?, files_changed = ?, memory_keys = ?, failure_reason = ?,
 			dispatch_outcome = ?, dispatch_reason = ?,
 			telemetry_partial = ?, telemetry_partial_reason = ?, session_silence_s = ?, workers_terminal = ?,
-			attempts = ?, reason_code = ?, tokens_out_unavailable = ?
+			attempts = ?, reason_code = ?, tokens_out_unavailable = ?,
+			recovery_state = ?, recovery_detail = ?, repair_attempt = ?, repair_cause = ?
 		WHERE id = ?
 	`, string(outcome.Status), terminal, outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
@@ -563,9 +685,10 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		dispatchOutcome, dispatchReason,
 		telemetryPartial, telemetryReason, telemetrySilence, workersTerminal,
 		outcome.Attempts, reasonCode, tokensOutUnavailable,
+		outcome.RecoveryState, outcome.RecoveryDetail, outcome.RepairAttempt, outcome.RepairCause,
 		outcome.TickID)
 	if err != nil {
-		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
+		return decision, fmt.Errorf("complete tick %s: %w", outcome.TickID, err)
 	}
 
 	// DRYRUN-LEDGER (Bane, 2026-11-09): a dry_run that just spent money gets an
@@ -694,7 +817,7 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 		}
 	}
 
-	return nil
+	return decision, nil
 }
 
 // SCHED-GAP-1652 removed ExportSession. It was a stub that returned a zero-valued

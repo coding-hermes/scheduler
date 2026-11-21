@@ -151,7 +151,19 @@ func resolveTickReasonCode(o TickOutcome, terminal string, failureReason string,
 			}
 			if terminal == string(database.OutcomeNoWork) {
 				// A MEASURED zero-tool transcript: the strongest
-				// nothing-to-do proof there is.
+				// nothing-to-do proof there is — UNLESS the worktree probe
+				// (SCHED-GAP-16936 piece 2) found uncommitted content.
+				// "the lane had nothing to do" is a claim about the lane's
+				// state, and a dirty worktree refutes it: there IS work
+				// sitting there, it just was not landed by this tick. The
+				// vocabulary is closed (v91 CHECK) and holds no member for
+				// the I-did-nothing-but-content-exists case, so the honest
+				// code is no_artifact (the artifact question is open, not
+				// answered by "nothing to do") while recovery_state carries
+				// the precise evidence.
+				if o.RecoveryState == RecoveryStateAvailable {
+					return database.TickReasonCodeNoArtifact
+				}
 				return database.TickReasonCodeNoWork
 			}
 			if o.TokensOut <= 0 {

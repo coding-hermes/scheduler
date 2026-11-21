@@ -20,7 +20,10 @@ import (
 // SCHED-GAP-16947 lands v91 (ticks.reason_code — the closed-vocabulary why on
 // every concluded tick — plus ticks.tokens_out_unavailable and
 // ticks.reason_code_derivation).
-const latestMigration = 91 // SCHED-GAP-16947: tick reason-code vocabulary
+// SCHED-GAP-16936 lands v92 (ticks.recovery_state / recovery_detail — the
+// dry-tick worktree probe — plus the capped repair re-dispatch ledger,
+// ticks.repair_attempt / repair_cause).
+const latestMigration = 92 // SCHED-GAP-16936: recovery probe + repair re-dispatch ledger
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -2071,6 +2074,39 @@ ALTER TABLE ticks ADD COLUMN selected_row_ids TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN reason_code TEXT NOT NULL DEFAULT '' CHECK(reason_code = '' OR reason_code IN ('no_work', 'model_noop', 'no_artifact', 'malformed_tool_call', 'deadline_exceeded', 'not_spawned', 'lane_unavailable') OR (reason_code GLOB 'unknown:*' AND length(reason_code) > 8));
 ALTER TABLE ticks ADD COLUMN tokens_out_unavailable TEXT NOT NULL DEFAULT '';
 ALTER TABLE ticks ADD COLUMN reason_code_derivation TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		// SCHED-GAP-16936: the recovery probe + the capped repair re-dispatch
+		// ledger. Two measurements the platform could not express before:
+		//
+		//  1. A tick that ended dry and a tick that never got started read
+		//     IDENTICALLY: "nothing happened". The probe distinguishes the two
+		//     states of the WORKTREE at finalization — genuinely clean
+		//     (no_changes) versus holding uncommitted content a later tick
+		//     could harvest (recovery_available). recovery_state is a closed
+		//     vocabulary and recovery_detail carries the counts + the paths
+		//     the verdict was derived from, so the verdict is auditable
+		//     without re-running git.
+		//  2. A failed tick with runnable leftovers may be re-dispatched for
+		//     REPAIR at most twice. repair_attempt records the attempt number
+		//     the row CAUSED (0 = none), repair_cause records why — either the
+		//     recovery evidence that justified it or the reason it was
+		//     refused (cap reached, nothing runnable). The cap is enforced in
+		//     Go (decideRepairRedispatch) rather than by a CHECK: a rejected
+		//     write would strand a tick mid-finalization, and the row must
+		//     always be able to record the refusal itself.
+		//
+		// ADDITIVE ALTERs, no rebuild. '' is the honest "not owed" for
+		// recovery_state (a productive tick, or a legacy row) — the same
+		// empty-string convention failure_reason and reason_code use.
+		version: 92,
+		desc:    "SCHED-GAP-16936: ticks.recovery_state (closed vocabulary {'', no_changes, recovery_available, not_probed}) + recovery_detail on dry ticks, ticks.repair_attempt + repair_cause for the capped (max 2) repair re-dispatch ledger",
+		stmt: `
+ALTER TABLE ticks ADD COLUMN recovery_state TEXT NOT NULL DEFAULT '' CHECK(recovery_state = '' OR recovery_state IN ('no_changes', 'recovery_available', 'not_probed'));
+ALTER TABLE ticks ADD COLUMN recovery_detail TEXT NOT NULL DEFAULT '';
+ALTER TABLE ticks ADD COLUMN repair_attempt INTEGER NOT NULL DEFAULT 0 CHECK(repair_attempt >= 0);
+ALTER TABLE ticks ADD COLUMN repair_cause TEXT NOT NULL DEFAULT '';
 `,
 	},
 }

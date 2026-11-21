@@ -69,6 +69,16 @@ type DispatchTarget struct {
 	// Enabled defaults to true when absent (a row exists to say "this lane is
 	// remote"); an explicit false parks the target without deleting it.
 	Enabled *bool `json:"enabled"`
+	// Scope declares the paths/globs this lane's work writes, relative to its
+	// checkout (SCHED-GAP-16936 piece 1). Two lanes in one wave with an
+	// overlapping scope and no depends_on edge between them are refused BEFORE
+	// either spawns. Absent/empty = the lane declares nothing and is never
+	// compared — the additive default that keeps the gate inert for a fleet
+	// that has not opted in (see wave_scope.go).
+	Scope []string `json:"scope"`
+	// DependsOn names the lanes (dispatch-target keys) whose work must land
+	// before this lane's. An edge legalises an overlapping scope.
+	DependsOn []string `json:"depends_on"`
 }
 
 // IsEnabled reads the tri-state enabled flag (absent = enabled).
