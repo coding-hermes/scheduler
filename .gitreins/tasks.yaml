@@ -6320,3 +6320,50 @@ tasks:
   status: complete
   created_at: '2026-11-21T05:46:53.629186+00:00'
   completed_at: '2026-11-21T05:53:22.631804+00:00'
+- id: INT-CI-4195
+  title: Perf A/B load-tolerant baseline
+  criteria:
+  - TestPERF001R2StatusPassAB asserts arm-B in-window max against the run's own idle-arm
+    baseline (p99A-scaled with documented factor and floor) instead of the absolute
+    window/2 bound; structural checks (sawWindow, single window, fixture floor, surface
+    pins) retained; local green normal + under synthetic load; go build+vet green
+  status: in_progress
+  created_at: '2026-11-21T16:34:09.287177+00:00'
+- id: INT-CI-4191
+  title: Pin go 1.26.11 in ci.yaml + release.yaml, harden lint install
+  criteria:
+  - All go-version references in .github/workflows/ci.yaml (env GO_VERSION + matrix)
+    and release.yaml equal go.mod toolchain go1.26.11; golangci-lint install hardened
+    against download 504 with lint teeth preserved; yaml parses; go build green; hosted-run
+    download-count evidence collected by foreman post-merge
+  status: in_progress
+  created_at: '2026-11-21T16:34:10.993056+00:00'
+- id: INT-CI-4190
+  title: Readiness test determinism under CI load
+  criteria:
+  - TestReadyLineOnlyAfterSocketAccepts uses bounded polling instead of fixed sleep;
+    test-only change, no product behaviour change; teeth preserved (pre-accept ready
+    line still fails); go test -count=20 green locally incl. under synthetic load;
+    package green
+  status: in_progress
+  created_at: '2026-11-21T16:34:17.263664+00:00'
+- id: INT-CI-4196
+  title: Make TestPERF001R2StatusPassAB load-tolerant after CI run 44933115101 failed
+    on main
+  criteria:
+  - The perf A/B oracle must pass on a loaded CI runner for a healthy lock-free endpoint
+    (in-window max 935.7ms vs idle max 77.9ms must not be a violation) while still
+    failing a read that tracks the pass; TestPERF001R2LatencyContract covers both
+    directions with the measured CI shape.
+  status: in_progress
+  created_at: '2026-11-21T18:34:07.022048+00:00'
+- id: INT-CI-4191-V
+  title: Verify the CI toolchain pin landed on main (INT-CI-4191)
+  criteria:
+  - "All three pin sites satisfy go.mod toolchain go1.26.11: .github/workflows/ci.yaml\
+    \ env GO_VERSION and the test matrix entry, plus .github/workflows/release.yaml\
+    \ go-version \u2014 file:line quoted. golangci-lint is pinned to an explicit version\
+    \ and its retry keeps the second attempt blocking so genuine lint failures still\
+    \ fail; the CI All Clear gate still requires build and test legs."
+  status: in_progress
+  created_at: '2026-11-21T18:37:04.880616+00:00'
