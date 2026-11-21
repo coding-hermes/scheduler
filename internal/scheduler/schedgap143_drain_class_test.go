@@ -92,6 +92,30 @@ func gap143SetLastCompleted(t *testing.T, db *sql.DB, name string, age time.Dura
 	}
 }
 
+// gap143AwaitCompletionClock waits for the lifecycle's project-clock write,
+// which follows the terminal tick row and can otherwise overwrite a re-arm.
+func gap143AwaitCompletionClock(t *testing.T, db *sql.DB, project, tickID string) {
+	t.Helper()
+	deadline := time.Now().Add(gap143TerminalTickWait)
+	for {
+		var settled bool
+		err := db.QueryRow(`SELECT EXISTS (
+			SELECT 1 FROM projects p JOIN ticks t ON t.project_name = p.name
+			WHERE p.name = ? AND t.id = ? AND p.last_tick_completed = t.completed_at
+			AND p.last_tick_status = t.status)`, project, tickID).Scan(&settled)
+		if err != nil {
+			t.Fatalf("query completion clock for %s: %v", tickID, err)
+		}
+		if settled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("project %s completion clock did not settle for tick %s within %v", project, tickID, gap143TerminalTickWait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // gap143RunEvalTick runs one evaluation cycle and waits for the tick it
 // spawned to reach a terminal state, returning its id. want is the number of
 // terminal rows expected for the project AFTER this cycle. The wait budget is
@@ -345,28 +369,13 @@ func TestSCHEDGAP143_DrainTickRecordedAsTransportClass(t *testing.T) {
 // captured text, because each real drain tick costs 1 + gatewayRetryDefaultMax
 // POSTs with backoff.
 //
-// KNOWN FLAKE — see INT-CI-158 (2026-09-23, tick #670 follow-up). The CI race-detector
-// run 35848734429 on chore(board) 809b352d (2026-09-23 10:25Z) reported a
-// 33.58s timeout here with a companion "SLOT: timeout waiting for free slot --
-// dropping advr08-dropped" line. Local re-run with the same race-detector at
-// -count=5: 0 fails in 37.3s; plain -count=10: 0 fails in 71.2s. The shape
-// matches the FND-002 load-only class already documented on gap143PollCooldown
-// (lines ~186-191 above): a CI-runner-load artifact, NOT a deterministic
-// production-code race. The test assertion is unchanged; if the failure shape
-// changes (different companion log line, or a non-33s timeout) re-classify
-// before treating it as a regression.
-//
-// RESOLVED — INT-CI-190 (2026-11-05): the terminal-tick wait was decoupled
-// from the wall clock. The assertion no longer bounds the second drain tick
-// by a fixed 30s (below the fixture cooldown of 60s and the slot pool's 5m
-// patience); gap143RunEvalTick now polls the ACTUAL condition — the terminal
-// tick rows themselves — for gap143TerminalTickWait (2× the fixture
-// cooldown), and on expiry fails naming the last observed tick count,
-// cooldown_s and enabled state. TestINTCI190_TerminalTickWaitBudgetCoversCooldown
-// fails the build if the budget is ever reverted to the old 30s deadline or
-// the predicate stops observing real second ticks. The positive control
-// (laneProj must still auto-disable on 10 project-side failures) is preserved
-// untouched: same window, same 0.5 threshold, same min_ticks.
+// INT-CI-190: the terminal row is persisted before the lifecycle stamps the
+// project cooldown clock. Re-arming immediately after observing the row can
+// therefore be overwritten by that later stamp: the single second evaluate
+// legitimately defers on cooldown and waiting longer cannot produce a tick.
+// Wait for the first tick's clock write, then backdate it before evaluating
+// again. Both real rows must be drain-class; the bounded terminal-row wait
+// remains in place, as does the project-side auto-disable positive control.
 func TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain(t *testing.T) {
 	db := newTestDB(t)
 	const (
@@ -382,7 +391,11 @@ func TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain(t *testing.T) {
 	gw.setGatewayDraining(true)
 
 	// Two real drain-killed ticks.
-	gap143RunEvalTick(t, l, db, drainProj, 1)
+	firstTickID := gap143RunEvalTick(t, l, db, drainProj, 1)
+	if status, _, reason := gap143TickRow(t, db, firstTickID); status != string(TickFailed) || reason != FailureReasonGatewayDrain {
+		t.Fatalf("first drain tick %s = (%s, %s), want (failed, %s)", firstTickID, status, reason, FailureReasonGatewayDrain)
+	}
+	gap143AwaitCompletionClock(t, db, drainProj, firstTickID)
 	gap143SetEligible(t, db, drainProj)
 	tickID := gap143RunEvalTick(t, l, db, drainProj, 2)
 
@@ -462,6 +475,7 @@ func TestSCHEDGAP143_SuccessfulTickResetsConsecutiveFailures(t *testing.T) {
 	}
 
 	// Drain over: one successful tick end to end.
+	gap143AwaitCompletionClock(t, db, project, drainTick)
 	gw.setGatewayDraining(false)
 	gap143SetEligible(t, db, project)
 	okTick := gap143RunEvalTick(t, l, db, project, 2)
@@ -527,6 +541,7 @@ func TestSCHEDGAP143_DrainWindowDoesNotParkEscalatedCooldown(t *testing.T) {
 	}
 
 	// Recovery: a successful tick that closed net board work → floor restore.
+	gap143AwaitCompletionClock(t, db, project, drainTick)
 	gw.setGatewayDraining(false)
 	gap143SetLastCompleted(t, db, project, 3*time.Hour)
 	okTick := gap143RunEvalTick(t, l, db, project, 2)
@@ -600,6 +615,7 @@ func TestFND002_DrainCooldownReadIsBounded(t *testing.T) {
 	}
 
 	// …then recovery: the bounded poll must observe floor 900 / streak 0.
+	gap143AwaitCompletionClock(t, db, project, drainTick)
 	gw.setGatewayDraining(false)
 	gap143SetLastCompleted(t, db, project, 3*time.Hour)
 	okTick := gap143RunEvalTick(t, l, db, project, 2)
