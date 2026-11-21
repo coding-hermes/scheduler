@@ -5685,15 +5685,21 @@ tasks:
   created_at: '2026-11-05T17:26:19.716312+00:00'
   completed_at: '2026-11-05T17:26:34.099401+00:00'
 - id: INT-CI-190
-  title: Decouple SCHEDGAP143 auto-disable test from fixed wall clock
+  title: 'Race detector red on TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain: the
+    2m terminal-tick wait still expires because the lane is in cooldown'
   criteria:
-  - Decouple TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain from the fixed 30-second
-    wall-clock assertion by waiting on the actual terminal-tick condition with a bound
-    above the fixture cooldown, preserving the project-side positive control; run
-    the named focused and race tests plus build and vet.
+  - 'Single assertion: the second tick is admitted instead of deferred. PROOF: (a)
+    run `go test -race -run "^TestSCHEDGAP143_AutoDisableDoesNotFireOnDrain$" -count=1
+    ./internal/scheduler/` and quote its final ok/FAIL line (this is the only test
+    you may run; do not run the whole package); (b) run `grep -n "TerminalTick\|backdat\|Add(-"
+    internal/scheduler/schedgap143_drain_class_test.go` and quote the lines showing
+    the fixture waits for the first terminal tick''s completion clock to match its
+    row and then backdates that clock by an hour before the second evaluate(). FAILIF:
+    the only change is a larger poll wait/constant, a skipped or shortened cooldown,
+    or the test being made to pass by ignoring the second tick.'
   status: complete
-  created_at: '2026-11-05T18:03:46.514498+00:00'
-  completed_at: '2026-11-05T19:30:13.286228+00:00'
+  created_at: '2026-11-21T14:18:14.525638+00:00'
+  completed_at: '2026-11-21T15:30:36.961449+00:00'
 - id: SCHED-GAP-16928
   title: Cooldown satellites must not be admitted on board-wake (WAKE LAW recurrence)
   criteria:
@@ -6304,3 +6310,13 @@ tasks:
     PROOF: git merge-base --is-ancestor a02c786f origin/main exits 0.'
   status: in_progress
   created_at: '2026-11-21T03:31:12.135030+00:00'
+- id: INT-CI-4194-V
+  title: Verify CI lint green on main for INT-CI-4194
+  criteria:
+  - Full-repo golangci-lint run ./... at HEAD 826979cd exits 0 with 0 issues (measured
+    2026-11-21T05:4xZ rc=0), closing the d2d8eef0 dead-usageExit lint red fixed by
+    a02c786f; hosted CI on main green since (runs 44718204612, 44718203856, plus the
+    2026-11-21 tip runs).
+  status: complete
+  created_at: '2026-11-21T05:46:53.629186+00:00'
+  completed_at: '2026-11-21T05:53:22.631804+00:00'
