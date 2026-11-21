@@ -8,7 +8,9 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: '1.26'
+  # ubuntu-latest currently caches Go 1.26.10, so setup-go downloads 1.26.11;
+  # its go.sum cache is for modules, not the Go toolchain.
+  GO_VERSION: '1.26.11'
 
 jobs:
   # ── Fast checks first ──
@@ -32,10 +34,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: golangci-lint
+      - name: golangci-lint (first attempt)
+        uses: golangci/golangci-lint-action@v7
+        id: lint_first
+        continue-on-error: true
+        with:
+          version: v2.15.0
+          args: --timeout=5m
+      # Retry once for transient installer/download failures (including 504s).
+      # A real lint finding fails again here and remains a failed lint job.
+      - name: golangci-lint (retry)
+        if: steps.lint_first.outcome == 'failure'
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.15.0
           args: --timeout=5m
 
   # ── Matrix: multiple Go versions ──
@@ -45,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.26']
+        go-version: ['1.26.11']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
