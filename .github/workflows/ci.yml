@@ -157,6 +157,68 @@ jobs:
           install-mode: none
           args: --timeout=5m
 
+  govulncheck:
+    # RELEASE-061: toolchain/stdlib vulnerability gate (required check for
+    # main).
+    #
+    # Why the scanner is PINNED: the verdict is scanner-version sensitive.
+    # On trees built with go1.26.11, govulncheck v1.7.0 source mode and
+    # v1.9.0 binary mode both report clean, while v1.9.0 source mode
+    # resolves the stdlib as go1.26.5 and reports 19 affected entries. An
+    # @latest install would silently change the verdict between runs; a
+    # version bump must be a deliberate commit and re-baseline the gate
+    # (update this step, the cache key, and the `make vuln` pin together).
+    #
+    # Pinning matches the lint job's pinned-binary convention (cache by
+    # version, install on miss, invoke the pinned copy — never whatever an
+    # older govulncheck sits in $(HOME)/go/bin).
+    #
+    # REQUIRED CHECK: this job's GitHub check name is "govulncheck"; the
+    # main-branch protection lists it as a required check (documented in
+    # the closing PR/commit message of the RELEASE-061 landing).
+    #
+    # Evidence in the run log: the "Toolchain + scanner identity" step
+    # prints `go version` and the pinned govulncheck's `go version -m`
+    # module record, and govulncheck's own output resolves the stdlib
+    # version it scanned — so a go1.26.5-vs-go1.26.11 style divergence is
+    # visible in the log instead of silently changing the verdict.
+    #
+    # govulncheck exits non-zero on any finding in either mode and fails the job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/govulncheck-bin/v1.7.0
+          key: govulncheck-bin-v1.7.0-${{ runner.os }}-${{ runner.arch }}-go1.26.11
+      - name: Install pinned govulncheck v1.7.0 on cache miss
+        run: |
+          export GOBIN="$HOME/.cache/govulncheck-bin/v1.7.0"
+          if [ ! -x "$GOBIN/govulncheck" ]; then
+            mkdir -p "$GOBIN"
+            go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          fi
+          echo "$GOBIN" >> "$GITHUB_PATH"
+
+      - name: Toolchain + scanner identity (verdict evidence)
+        run: |
+          go version
+          go version -m "$HOME/.cache/govulncheck-bin/v1.7.0/govulncheck"
+
+      - name: govulncheck — source mode ./...
+        run: govulncheck ./...
+
+      - name: Build schedulerd artifact (same job, same toolchain)
+        run: make build
+
+      - name: govulncheck — binary mode bin/schedulerd
+        run: govulncheck -mode=binary bin/schedulerd
+
   race-blocks:
     # CI-004 (split from the single race job by QA-CHS-178): the build job's
     # Test steps run without -race, so internal/blocks had no data-race
