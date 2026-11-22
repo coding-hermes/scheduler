@@ -6441,3 +6441,12 @@ tasks:
   status: complete
   created_at: '2026-11-22T13:51:27.023493+00:00'
   completed_at: '2026-11-22T14:13:25.615929+00:00'
+- id: REV-003
+  title: Wake runner busy-lane retry backoff + event throttle
+  criteria:
+  - On the busy-lane skip path push the wake retry +5m (mirroring the blackout PushWakeRetry),
+    throttle the skip/fired event pair via recentlyEmitted (30m window), and add a
+    Go test asserting exactly 1 retry and at most 2 events per 60s window with a manual
+    clock. go test ./internal/scheduler/... ./internal/database/... green.
+  status: in_progress
+  created_at: '2026-11-22T14:42:12.799938+00:00'

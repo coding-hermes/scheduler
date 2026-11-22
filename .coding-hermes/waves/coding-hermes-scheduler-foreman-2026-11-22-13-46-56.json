@@ -16,5 +16,15 @@
       "brief_file": "/tmp/brief-REV-005-schedf-20261122.txt",
       "gitreins_task": "REV-005 (created + started this tick)"
     }
-  ]
+  ],
+  "finished_at": "2026-11-22T14:16:08Z",
+  "recovery": {
+    "status": "complete",
+    "merged": [
+      "REV-005:98f8cb97"
+    ],
+    "final_main": "7f28c49e66d781dc77252a6c2a40b9b28af9f6fa",
+    "gates": "merged-tree gates re-run post-recovery",
+    "unmerged": []
+  }
 }
