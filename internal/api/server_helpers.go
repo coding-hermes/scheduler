@@ -1170,7 +1170,7 @@ var openapiSpec = []byte(`{
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
         },
         "responses": {
-          "201": {"description": "Created"},
+          "201": {"description": "Created — the row is ALWAYS stored with enabled=false regardless of the request body (born-disarmed clamp, SCHED-GAP-1729): an explicit \"enabled\": true in the body is clamped to false. Arming requires a later PUT /api/v1/projects/{name} with {\"enabled\": true} (the satellite auto-arm and admission law run at that PUT)"},
           "409": {"description": "Project already exists"}
         }
       }
@@ -2197,7 +2197,7 @@ var openapiSpec = []byte(`{
           "prompt_mode": {"type": "string", "enum": ["append", "replace"], "description": "\"append\" (default): project prompt appends to the namespace default; \"replace\": project prompt replaces it entirely"},
           "namespace_id": {"type": "string", "nullable": true},
           "deliver": {"type": "string"},
-          "enabled": {"type": "boolean"},
+          "enabled": {"type": "boolean", "description": "Born-disarmed (SCHED-GAP-1729): create ALWAYS stores enabled=false regardless of the request body — an explicit true on POST /api/v1/projects is clamped to false; arming requires a later PUT /api/v1/projects/{name}"},
           "created_at": {"type": "string"},
           "updated_at": {"type": "string"},
           "last_tick_started": {"type": "string"},
