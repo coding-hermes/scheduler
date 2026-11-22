@@ -6414,3 +6414,16 @@ tasks:
   status: complete
   created_at: '2026-11-22T10:15:44.918002+00:00'
   completed_at: '2026-11-22T10:20:53.585398+00:00'
+- id: RELEASE-061
+  title: Add pinned govulncheck gate to CI + make vuln target
+  criteria:
+  - 'CI workflow ci.yml contains a govulncheck job pinned to govulncheck@v1.7.0 that
+    scans source ./... and binary mode on the job-built schedulerd artifact, and fails
+    the job on any finding. Makefile gains a named vuln target replicating the same
+    scan locally. The job log prints the go version and govulncheck version so stdlib
+    toolchain divergence stays visible. Failure condition: a reachable vulnerability
+    reported by the pinned scanner, or missing/unc pinned job. Proof: merged-tree
+    green gates plus hosted CI run with the job present and started.'
+  status: complete
+  created_at: '2026-11-22T11:48:08.411299+00:00'
+  completed_at: '2026-11-22T12:31:30.759784+00:00'
