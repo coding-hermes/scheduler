@@ -1,0 +1,20 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-11-22-13-46-56",
+  "block": "REV-006",
+  "mode": "serial",
+  "serial_reason": "load 46.01 on 16 cores at tick start -> slots = max(1, min(6, 16-46)) = 1; REV-003 and REV-004 also share the wake seam so at most REV-005 was wave-eligible anyway; WAVE_BUDGET=2 not reached",
+  "wave_budget": 2,
+  "selected_block_reason": "top two DRIVE blocks (CFG-SITREP-1, CFG-LIVESVC-1) are owner-gated (defer_review_by 2026-11-24, only the owner may move scheduler/lane config); next dispatchable block is REV-006 (50% done); picking REV-005 as the independent row - REV-003/004 share the wake runner seam and must be sequential",
+  "workers": [
+    {
+      "task_id": "REV-005",
+      "worktree": "/home/kara/worktrees/coding-hermes-scheduler/coding-herms-scheduler-REV-005",
+      "branch": "wt/REV-005",
+      "base_sha": "5adf7889",
+      "model": "glm-5.3-flash",
+      "provider": "ollama-cloud",
+      "brief_file": "/tmp/brief-REV-005-schedf-20261122.txt",
+      "gitreins_task": "REV-005 (created + started this tick)"
+    }
+  ]
+}
