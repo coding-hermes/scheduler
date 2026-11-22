@@ -131,6 +131,19 @@ jobs:
         with:
           go-version: "1.26.11"
 
+      # Cache the pinned tool itself, not just lint results, to avoid download 504s.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint-bin/v2.15.0
+          key: golangci-lint-bin-v2.15.0-${{ runner.os }}-${{ runner.arch }}-go1.26.11
+      - name: Install pinned golangci-lint on cache miss
+        run: |
+          export GOBIN="$HOME/.cache/golangci-lint-bin/v2.15.0"
+          if [ ! -x "$GOBIN/golangci-lint" ]; then
+            mkdir -p "$GOBIN"
+            go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          fi
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - name: golangci-lint
         # Whole-repo run — intentionally covers internal/blocks/... and
         # internal/scheduler/... (including adaptive_cooldown.go; note that is
@@ -140,7 +153,8 @@ jobs:
         # job — both are whole-repo and cover those two packages.
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.15.0
+          install-mode: none
           args: --timeout=5m
 
   race-blocks:
