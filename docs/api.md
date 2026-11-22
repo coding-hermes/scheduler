@@ -533,14 +533,17 @@ break.
 
 ### POST /api/v1/projects
 
-**Purpose:** Create a project. **New projects are created DISABLED —
-resume them explicitly before expecting ticks.** An explicit `enabled: true`
-in the body is stored as `false`: the row is provisioned exactly as the body
-configured it (pacing, namespace, admission mode all ride along) but born
-parked, so the create -> configure -> enable order can never leave an armed,
-empty-prompt row one evaluation away from admission (SCHED-GAP-1729). The
-enable step is the later `PUT {"enabled": true}`, where the satellite
-auto-arm (SCHED-GAP-138) and the admission law (SCHED-GAP-1696) both run.
+**Purpose:** Create a project. **New projects are born-disarmed: create
+ALWAYS stores `enabled=false` regardless of the request body — resume them
+explicitly before expecting ticks, because arming requires a later `PUT
+{"enabled": true}` on `/api/v1/projects/{name}`.** An explicit `enabled:
+true` in the body is clamped to `enabled=false` (born-disarmed,
+SCHED-GAP-1729): the row is provisioned exactly as the body configured it
+(pacing, namespace, admission mode all ride along) but born parked, so the
+create -> configure -> enable order can never leave an armed, empty-prompt
+row one evaluation away from admission. That later PUT is the arming step,
+where the satellite auto-arm (SCHED-GAP-138) and the admission law
+(SCHED-GAP-1696) both run.
 
 **Request body** (canonical snake_case; PascalCase legacy accepted):
 
