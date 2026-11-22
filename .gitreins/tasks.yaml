@@ -6402,3 +6402,15 @@ tasks:
   status: complete
   created_at: '2026-11-22T07:06:47.862377+00:00'
   completed_at: '2026-11-22T10:08:38.003147+00:00'
+- id: RELEASE-060
+  title: Reconcile the [1.17.0] CHANGELOG section with all seventeen uncited material
+    commits
+  criteria:
+  - Reconcile CHANGELOG.md [1.17.0] for all 17 uncited material commits (12 post-prep
+    + 5 set-B); every SHA or owning row id cited >=1 in the section; set-B row ids
+    SCHED-429-001/SCHED-GAP-17007/SCHED-GAP-16983/SCHED-FAILCNT-001 appear; 'Not in
+    this release' sentence corrected; duplicate clusters collapsed; check-version-authority
+    v1.17.0 PASS; diff touches CHANGELOG.md only
+  status: complete
+  created_at: '2026-11-22T10:15:44.918002+00:00'
+  completed_at: '2026-11-22T10:20:53.585398+00:00'
