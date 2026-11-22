@@ -242,8 +242,10 @@ UPDATE wakes SET state = ?, note = COALESCE(NULLIF(?,''), note)
 
 // SettleFiredWake finalizes a claimed wake after its spawn attempt:
 // state=fired with the produced tick id, or — for a daily — re-armed to its
-// next occurrence (state back to pending). A lane-busy skip leaves the row
-// SKIPPED for one-shots (the attempt is visible) and re-pends dailies.
+// next occurrence (state back to pending). Lane-busy refusals never reach
+// here (the runner pushes a retry via PushWakeRetry before settle); the
+// runner-side skips that do — lane unreadable, lane disabled, no spawn
+// hook — leave one-shots SKIPPED for the visible attempt and re-pend dailies.
 func SettleFiredWake(ctx context.Context, db *sql.DB, w *Wake, outcome WakeSettlement, now time.Time) error {
 	stamped := now.UTC().Format(time.RFC3339)
 	switch {

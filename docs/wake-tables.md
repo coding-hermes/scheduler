@@ -46,7 +46,7 @@ Exactly **one** scheduling clause per wake (`at` | `in_minutes` | `daily` | `ext
 | Condition | Behaviour |
 |---|---|
 | **Blackout window** | The wake **stays pending** and retries (pushed 5 minutes out per attempt, events throttled to one per 30 min). Operator time-of-day intent defers — it does not override the fleet's do-not-spawn windows. |
-| **Lane busy / spawn refused** (`ErrProjectRunning` dedup) | The wake is settled `skipped` with a `wake_skipped` event — the attempt is visible, nothing is hidden. A skipped **daily** re-arms at its same occurrence and retries after the lane frees. |
+| **Lane busy / spawn refused** (`ErrProjectRunning` dedup) | The wake **stays pending** and retries, pushed 5 minutes out per attempt (same deferral as the blackout path). The lane is mid-tick, so hammering the gate every poll buys nothing; the skip/fired event pair is throttled to one per 30 min. |
 
 A wake whose lane is disabled or unreadable also settles `skipped` with an event: a wake that dies silently is a lie the operator eventually pays for.
 
@@ -58,6 +58,6 @@ A wake whose lane is disabled or unreadable also settles `skipped` with an event
 
 ## Verification
 
-- `internal/scheduler/wake_table_test.go` — due fires exactly once; cancelled never fires; daily re-arms forward (never into the past); external wakes never fire from the scheduled pass; a refused external fire leaves the schedule standing; busy → skipped; blackout → re-pend with a pushed retry; spawn-hook errors settle skipped; validation table.
+- `internal/scheduler/wake_table_test.go` — due fires exactly once; cancelled never fires; daily re-arms forward (never into the past); external wakes never fire from the scheduled pass; a refused external fire leaves the schedule standing; busy → pending retry +5m (throttled); blackout → re-pend with a pushed retry; spawn-hook errors settle skipped; validation table.
 - `internal/api/wakes_api_test.go` — real-handler round-trips: create/list/cancel/fire over a real SQLite, the exactly-one-clause law, past-`at` 400, unknown-lane 404, unwired-runner 503, wired-fire 202 then 409.
 - Run: `go test ./internal/scheduler/ -run TestWake -count=1` and `go test ./internal/api/ -run TestWake -count=1`
