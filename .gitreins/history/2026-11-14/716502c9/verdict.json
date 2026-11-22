@@ -1,0 +1,343 @@
+{
+  "task_id": "RELEASE-059-MERGED",
+  "task_title": "Judge merged RELEASE-059",
+  "task_criteria": [
+    "Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt",
+  "branch": "",
+  "commit": "84c7124f8c3efb0c4dd71239aff7af254cb00485",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "d1f4600ae3cc4f6ffffced6598acf64591c8db06ecc6f599ba2c20ab8a3ce48b",
+  "working_tree_dirty_path_count": 1,
+  "items": [
+    {
+      "criterion": "Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree.",
+      "status": "PASS",
+      "detail": "HEAD = 84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). (a) No failed statuses: parsing the HEAD blob (`git show HEAD:.coding-hermes/board/tasks.jsonl`) yields Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \u2014 zero 'failed'; `grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl` = 0. (b) Board-only invariant: `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` (blob extracted from HEAD) prints 'INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)' and 'PASS \u2014 0 violation(s) (board-only mode: fleet checks 1-7 not run)', exit 0; same command against the working-tree board also exits 0. (c) `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> every test PASS (FlagsOffVocabulary, InProgressIsAllowed, VocabularyCoverage, MissingBoardIsNotAnError, IsReadOnly, FlagsGluedTail, CleanSingleObjectLineNotGlued, BlockedWithReasonIsAllowed, ParkedSpellingsStillFail + 7 subtests, AllowedSetMatchesPythonGate), final line 'ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s', exit 0. The merge diff is board-only: `git diff e301e18e 84c7124f --stat` = .coding-hermes/board/tasks.jsonl, 2 insertions/2 deletions."
+    },
+    {
+      "criterion": "The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.",
+      "status": "PASS",
+      "detail": "Board lines 891 (PERF-007) and 892 (PERF-001-R3-R4) both now carry status=pending while retaining the failure record: each row's JSON contains c1a71bbf (1x), a3369593, f7ab1f0b (1x), 'passed=false', 'degraded' and 'failed' text; PERF-007 keeps worker_status=complete, guard_result=PASS, ci_result=SKIP and a foreman_note describing the failed recovery. This matches RELEASE-059's acceptance criterion (5) that the failure history not be silently erased.",
+      "derived": true
+    },
+    {
+      "criterion": "The fix normalises the board rows only \u2014 the vocabulary itself (internal/scheduler/board_vocab.go allowed set and check 8 of ops/check-fleet-invariants.py) is unchanged, so the gate was not loosened to pass.",
+      "status": "PASS",
+      "detail": "`git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py` produces no output (untouched). BoardAllowedStatuses (internal/scheduler/board_vocab.go:51) and BoardLegacyClosedStatuses (:60) still equal the Python tuples at ops/check-fleet-invariants.py:394-395, and TestBoardVocabValidator_AllowedSetMatchesPythonGate passes, pinning that parity.",
+      "derived": true
+    },
+    {
+      "criterion": "The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.",
+      "status": "PASS",
+      "detail": "On HEAD 84c7124f: `go build ./...` exit 0 with no output; `go vet ./internal/scheduler/` exit 0 with no output.",
+      "derived": true
+    },
+    {
+      "criterion": "The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.",
+      "status": "PASS",
+      "detail": "HEAD blob statuses are complete 753, pending 142, blocked 8, in_progress 1 \u2014 every value is a member of BOARD_ALLOWED_STATUSES (internal/scheduler/board_vocab.go:51). Running the gate on the extracted HEAD blob (/tmp/head_board.jsonl) gives 'PASS \u2014 0 violation(s)' exit 0, so the green result is not an artefact of the working tree (whose only delta vs HEAD is the .gitreins/tasks.yaml bookkeeping row).",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 guard: WARN: hook_timeout=300s <= test_timeout=1800s in /home/kara/.hermes/cache/scratch/coding-hermes-sche",
+      "steps": [
+        {
+          "id": "guard",
+          "type": "script",
+          "passed": true,
+          "output": "WARN: hook_timeout=300s <= test_timeout=1800s in /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt: the guard would be cut off mid-run and report a fail-open PASS. Raising this run's budget to 1920s \u2014 set guards.hook_timeout above guards.test_timeout to fix it at the source.\nTier 1: DEGRADED PASS (skips: go_build=No Go files staged, go_lint=No Go files staged, go_tests=No Go files staged)  (test mode: full)\n  \u2713 secrets \u2014 clean (gitleaks + builtin cross-check); scanners: nice=nice -n 10\n  ~ go_build \u2014 skipped (No Go files staged)\n  ~ go_lint \u2014 skipped (No Go files staged)\n  ~ go_tests \u2014 skipped (No Go files staged)\n  guard log: /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt/.gitreins/logs/guard-20261114T170305.476088Z.log\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt/.gitreins/logs/guard-20261114T170305.476088Z.log"
+          }
+        }
+      ]
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree.: HEAD = 84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). (a) No failed statuses: parsing the HEAD blob (`git show HEAD:.coding-hermes/board/tasks.jsonl`) yields Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \u2014 zero 'failed'; `grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl` = 0. (b) Board-only invariant: `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` (blob extracted from HEAD) prints 'INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)' and 'PASS \u2014 0 violation(s) (board-only mode: fleet checks 1-7 not run)', exit 0; same command against the working-tree board also exits 0. (c) `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> every test PASS (FlagsOffVocabulary, InProgressIsAllowed, VocabularyCoverage, MissingBoardIsNotAnError, IsReadOnly, FlagsGluedTail, CleanSingleObjectLineNotGlued, BlockedWithReasonIsAllowed, ParkedSpellingsStillFail + 7 subtests, AllowedSetMatchesPythonGate), final line 'ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s', exit 0. The merge diff is board-only: `git diff e301e18e 84c7124f --stat` = .coding-hermes/board/tasks.jsonl, 2 insertions/2 deletions.\n  \u2713 The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.: Board lines 891 (PERF-007) and 892 (PERF-001-R3-R4) both now carry status=pending while retaining the failure record: each row's JSON contains c1a71bbf (1x), a3369593, f7ab1f0b (1x), 'passed=false', 'degraded' and 'failed' text; PERF-007 keeps worker_status=complete, guard_result=PASS, ci_result=SKIP and a foreman_note describing the failed recovery. This matches RELEASE-059's acceptance criterion (5) that the failure history not be silently erased.\n  \u2713 The fix normalises the board rows only \u2014 the vocabulary itself (internal/scheduler/board_vocab.go allowed set and check 8 of ops/check-fleet-invariants.py) is unchanged, so the gate was not loosened to pass.: `git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py` produces no output (untouched). BoardAllowedStatuses (internal/scheduler/board_vocab.go:51) and BoardLegacyClosedStatuses (:60) still equal the Python tuples at ops/check-fleet-invariants.py:394-395, and TestBoardVocabValidator_AllowedSetMatchesPythonGate passes, pinning that parity.\n  \u2713 The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.: On HEAD 84c7124f: `go build ./...` exit 0 with no output; `go vet ./internal/scheduler/` exit 0 with no output.\n  \u2713 The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.: HEAD blob statuses are complete 753, pending 142, blocked 8, in_progress 1 \u2014 every value is a member of BOARD_ALLOWED_STATUSES (internal/scheduler/board_vocab.go:51). Running the gate on the extracted HEAD blob (/tmp/head_board.jsonl) gives 'PASS \u2014 0 violation(s)' exit 0, so the green result is not an artefact of the working tree (whose only delta vs HEAD is the .gitreins/tasks.yaml bookkeeping row).\nThe merged tree 84c7124f is clean on all three named checks \u2014 no failed board statuses, board-only invariant PASS with 0 violations on the HEAD blob, and all TestBoardVocabValidator tests pass \u2014 with the vocabulary untouched and the failure history preserved; only the hosted-CI confirmation of RELEASE-059 remains outstanding. [uncovered failure paths: failure mode 0 (RELEASE-059's own acceptance criterion (4) \u2014 a non-[ci skip] push whose hosted CI run supersedes the RED baseline 43560452603 \u2014 is not evidenced in the merged tree; the commit body itself says 'Hosted CI remains pending'.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree.: HEAD = 84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). (a) No failed statuses: parsing the HEAD blob (`git show HEAD:.coding-hermes/board/tasks.jsonl`) yields Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \u2014 zero 'failed'; `grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl` = 0. (b) Board-only invariant: `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` (blob extracted from HEAD) prints 'INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)' and 'PASS \u2014 0 violation(s) (board-only mode: fleet checks 1-7 not run)', exit 0; same command against the working-tree board also exits 0. (c) `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> every test PASS (FlagsOffVocabulary, InProgressIsAllowed, VocabularyCoverage, MissingBoardIsNotAnError, IsReadOnly, FlagsGluedTail, CleanSingleObjectLineNotGlued, BlockedWithReasonIsAllowed, ParkedSpellingsStillFail + 7 subtests, AllowedSetMatchesPythonGate), final line 'ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s', exit 0. The merge diff is board-only: `git diff e301e18e 84c7124f --stat` = .coding-hermes/board/tasks.jsonl, 2 insertions/2 deletions.\n  \u2713 The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.: Board lines 891 (PERF-007) and 892 (PERF-001-R3-R4) both now carry status=pending while retaining the failure record: each row's JSON contains c1a71bbf (1x), a3369593, f7ab1f0b (1x), 'passed=false', 'degraded' and 'failed' text; PERF-007 keeps worker_status=complete, guard_result=PASS, ci_result=SKIP and a foreman_note describing the failed recovery. This matches RELEASE-059's acceptance criterion (5) that the failure history not be silently erased.\n\n\u2026 [594 chars omitted \u2014 1 line(s)] \u2026\n  \u2713 The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.: On HEAD 84c7124f: `go build ./...` exit 0 with no output; `go vet ./internal/scheduler/` exit 0 with no output.\n  \u2713 The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.: HEAD blob statuses are complete 753, pending 142, blocked 8, in_progress 1 \u2014 every value is a member of BOARD_ALLOWED_STATUSES (internal/scheduler/board_vocab.go:51). Running the gate on the extracted HEAD blob (/tmp/head_board.jsonl) gives 'PASS \u2014 0 violation(s)' exit 0, so the green result is not an artefact of the working tree (whose only delta vs HEAD is the .gitreins/tasks.yaml bookkeeping row).\nThe merged tree 84c7124f is clean on all three named checks \u2014 no failed board statuses, board-only invariant PASS with 0 violations on the HEAD blob, and all TestBoardVocabValidator tests pass \u2014 with the vocabulary untouched and the failure history preserved; only the hosted-CI confirmation of RELEASE-059 remains outstanding. [uncovered failure paths: failure mode 0 (RELEASE-059's own acceptance criterion (4) \u2014 a non-[ci skip] push whose hosted CI run supersedes the RED baseline 43560452603 \u2014 is not evidenced in the merged tree; the commit body itself says 'Hosted CI remains pending'.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree.",
+                "status": "PASS",
+                "detail": "HEAD = 84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). (a) No failed statuses: parsing the HEAD blob (`git show HEAD:.coding-hermes/board/tasks.jsonl`) yields Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \u2014 zero 'failed'; `grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl` = 0. (b) Board-only invariant: `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` (blob extracted from HEAD) prints 'INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)' and 'PASS \u2014 0 violation(s) (board-only mode: fleet checks 1-7 not run)', exit 0; same command against the working-tree board also exits 0. (c) `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> every test PASS (FlagsOffVocabulary, InProgressIsAllowed, VocabularyCoverage, MissingBoardIsNotAnError, IsReadOnly, FlagsGluedTail, CleanSingleObjectLineNotGlued, BlockedWithReasonIsAllowed, ParkedSpellingsStillFail + 7 subtests, AllowedSetMatchesPythonGate), final line 'ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s', exit 0. The merge diff is board-only: `git diff e301e18e 84c7124f --stat` = .coding-hermes/board/tasks.jsonl, 2 insertions/2 deletions."
+              },
+              {
+                "criterion": "The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.",
+                "status": "PASS",
+                "detail": "Board lines 891 (PERF-007) and 892 (PERF-001-R3-R4) both now carry status=pending while retaining the failure record: each row's JSON contains c1a71bbf (1x), a3369593, f7ab1f0b (1x), 'passed=false', 'degraded' and 'failed' text; PERF-007 keeps worker_status=complete, guard_result=PASS, ci_result=SKIP and a foreman_note describing the failed recovery. This matches RELEASE-059's acceptance criterion (5) that the failure history not be silently erased.",
+                "derived": true
+              },
+              {
+                "criterion": "The fix normalises the board rows only \u2014 the vocabulary itself (internal/scheduler/board_vocab.go allowed set and check 8 of ops/check-fleet-invariants.py) is unchanged, so the gate was not loosened to pass.",
+                "status": "PASS",
+                "detail": "`git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py` produces no output (untouched). BoardAllowedStatuses (internal/scheduler/board_vocab.go:51) and BoardLegacyClosedStatuses (:60) still equal the Python tuples at ops/check-fleet-invariants.py:394-395, and TestBoardVocabValidator_AllowedSetMatchesPythonGate passes, pinning that parity.",
+                "derived": true
+              },
+              {
+                "criterion": "The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.",
+                "status": "PASS",
+                "detail": "On HEAD 84c7124f: `go build ./...` exit 0 with no output; `go vet ./internal/scheduler/` exit 0 with no output.",
+                "derived": true
+              },
+              {
+                "criterion": "The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.",
+                "status": "PASS",
+                "detail": "HEAD blob statuses are complete 753, pending 142, blocked 8, in_progress 1 \u2014 every value is a member of BOARD_ALLOWED_STATUSES (internal/scheduler/board_vocab.go:51). Running the gate on the extracted HEAD blob (/tmp/head_board.jsonl) gives 'PASS \u2014 0 violation(s)' exit 0, so the green result is not an artefact of the working tree (whose only delta vs HEAD is the .gitreins/tasks.yaml bookkeeping row).",
+                "derived": true
+              }
+            ],
+            "summary": "The merged tree 84c7124f is clean on all three named checks \u2014 no failed board statuses, board-only invariant PASS with 0 violations on the HEAD blob, and all TestBoardVocabValidator tests pass \u2014 with the vocabulary untouched and the failure history preserved; only the hosted-CI confirmation of RELEASE-059 remains outstanding. [uncovered failure paths: failure mode 0 (RELEASE-059's own acceptance criterion (4) \u2014 a non-[ci skip] push whose hosted CI run supersedes the RED baseline 43560452603 \u2014 is not evidenced in the merged tree; the commit body itself says 'Hosted CI remains pending'.): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"RELEASE-059-MERGED\"}",
+          "exit_code": 0,
+          "output_sha": "fcc1f65ea507cda4a43c7bf8933c88ca86d0945a69ce1a7d86af96099f71c813"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /workspace 2>/dev/null || cd .; pwd; ls -la; git log --oneline -15",
+          "exit_code": 0,
+          "output_sha": "070722459bd8552a983e41cc1b691b2e1eaf8dc26119d1777f4540a82b2ec27f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git status --short | head -20; echo \"---HEAD---\"; git rev-parse HEAD; echo \"---diff of merge---\"; git show --stat 84c7124f | head -40",
+          "exit_code": 0,
+          "output_sha": "a9ceb5231f9d65965c04d5f60f920cfe4e9434101d59483f0b48c12218a1b113"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; cat .gitreins/config.yaml 2>/dev/null; ls .gitreins",
+          "exit_code": 0,
+          "output_sha": "23edf6b1e80055319a083e145ac646c715993245a25fbd36dc44e3f8d1604844"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git show 84c7124f -- .coding-hermes/board/tasks.jsonl; echo \"=== ec79d638 ===\"; git show ec79d638 --stat",
+          "exit_code": 0,
+          "output_sha": "279d0e1552d10feda3453c87d9bc94196f97b0b9450945f39761977b585db239"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; grep -rn \"TestBoardVocabValidator\" --include=*.go . | head; echo \"---\"; grep -rn \"board-only\\|boardOnly\\|board_only\" --include=*.go . | head -20",
+          "exit_code": 0,
+          "output_sha": "0eaf5d47bc50022cf99ff3eae4126b2e9f2b2da6fe6e34050c01b77b251cfbab"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git show ec79d638 -- .coding-hermes/board/tasks.jsonl | cat",
+          "exit_code": 0,
+          "output_sha": "6078a458eaf556a38c3920b037f05970556974deaae9dece6b96c95306618f4f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"internal/scheduler/board_vocab_test.go\"}",
+          "exit_code": 0,
+          "output_sha": "049878a892645be69579175e0c3d49f2bc197c8cc204c375fe6f400431909fdf"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git show ec79d638 -- .coding-hermes/board/tasks.jsonl | grep -o 'PERF-007[^\\\\]*' | head -5; echo \"=== statuses in board ===\"; python3 -c \"\nimport json,collections\nc=collections.Counter()\nbad=[]\nfor i,l in enumerate(open('.coding-hermes/board/tasks.jsonl')):\n    l=l.strip()\n    if not l: continue\n    try: o=json.loads(l)\n    except Exception as e:\n        bad.append((i+1,'PARSE',l[:80])); continue\n    if not isinstance(o,dict): bad.append((i+1,'NOTOBJ',str(o)[:80])); continue\n    c[o.get('status')]+=1\nprint(c)\nprint('bad lines:',len(bad))\nfor b in bad[:10]: print(b)\n\"",
+          "exit_code": 0,
+          "output_sha": "8714db265914950a125491b29b19860cb2159b777fca8d4060c5cf1690110ce5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; grep -n \"BOARD_ALLOWED_STATUSES\\|BOARD_LEGACY_CLOSED_STATUSES\" ops/check-fleet-invariants.py | head; echo \"=== board-only invariant ===\"; grep -n \"board.only\\|board_only\\|board-only\" ops/check-fleet-invariants.py | head -20",
+          "exit_code": 0,
+          "output_sha": "44fc33eeb56effda2721dc7fa9f079dded0be18720e4bfa6a08476611a1ca445"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; grep -rn \"BoardAllowedStatuses\\s*=\\|BoardLegacyClosedStatuses\\s*=\" --include=*.go . ",
+          "exit_code": 0,
+          "output_sha": "092d82da54af37c15281b4230830e75dba47556aeb15c45055a9f6af6d942df7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; go test ./internal/scheduler/ -run 'TestBoardVocabValidator' -count=1 -v 2>&1 | tail -40",
+          "exit_code": 0,
+          "output_sha": "0362830356702dfad5bc6e6036a669f8d1b07f190d148098b329ea9594f59c6e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only 2>&1 | tail -40; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "4b96075f949ad085fbc5bdb79501f476bab695664fe3b7cdfa27e4e52583611d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: HEAD=84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). Board statuses: Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \\u2014 zero 'failed'. `python3 ops/check-fleet-invariants.py --board .coding-hermes/board/tasks.jsonl --board-only` -> \\\"PASS \\u2014 0 violation(s) (board-only mode...)\\\" exit 0. `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> all 10 top-level tests PASS, \\\"ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s\\\".\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "bfc66d6b585fbd68ae73e8224f8f6e898a4944973d499d415dd7135de393dcf9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git diff HEAD --stat; echo \"=== working tree board statuses ===\"; python3 -c \"\nimport json,collections\nc=collections.Counter()\nfor l in open('.coding-hermes/board/tasks.jsonl'):\n    l=l.strip()\n    if not l: continue\n    o=json.loads(l); c[o.get('status')]+=1\nprint(c)\n\"; echo \"=== failed rows in HEAD tree ===\"; git show HEAD:.coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json,collections\nc=collections.Counter()\nfor l in sys.stdin:\n    l=l.strip()\n    if not l: continue\n    o=json.loads(l); c[o.get('status')]+=1\nprint(c)\n\"",
+          "exit_code": 0,
+          "output_sha": "0496893cf5173b6736747802c426a401be1114992849a48be60969c14e50bd39"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git show HEAD:.coding-hermes/board/tasks.jsonl > /tmp/head_board.jsonl; python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only 2>&1 | tail -10; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "d83adfb7fadd01c0838cc5013517469f1129cc8fcbc7638ce9c3a3ebb64ccf5e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; grep -n \"PERF-007\\|PERF-001-R3-R4\" .coding-hermes/board/tasks.jsonl | cut -c1-200",
+          "exit_code": 0,
+          "output_sha": "1bf91b23f7a84ef8c4f94278b57aff3f512dd9876ac18f85004ff6e1205cf036"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; sed -n '891,892p;902p' .coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\nfor l in sys.stdin:\n    o=json.loads(l)\n    print(o['id'], '| status=',o.get('status'), '| worker_status=',o.get('worker_status'), '| ci_result=',o.get('ci_result'), '| guard=',o.get('guard_result'))\n    print('   note:', (o.get('foreman_note') or '')[:300].replace(chr(10),' '))\n\"",
+          "exit_code": 0,
+          "output_sha": "0c90a1ca0a4d09c99d2beef2cb180520fb7d369d487ca10900d333af031e3780"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; sed -n '902p' .coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\no=json.loads(sys.stdin.read())\nfor k,v in o.items():\n    print(k,'=',str(v)[:600])\n\"",
+          "exit_code": 0,
+          "output_sha": "c64419e2c177d63f3e7c8c0826bcd58024fbfcc54b4802c7643748f5e6c016aa"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; sed -n '902p' .coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\no=json.loads(sys.stdin.read())\nprint(o['acceptance_criteria'])\n\"",
+          "exit_code": 0,
+          "output_sha": "3740430d2125ac090e7cbc8900a7a7e4b0608752e797c97a246323b2a1358a92"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; echo \"grep -c failed:\"; grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl; echo \"---\"; grep -c '\"status\":\"failed\"' .coding-hermes/board/tasks.jsonl; echo \"=== rows mention c1a71bbf / a3369593 / f7ab1f0b ===\"; sed -n '891,892p' .coding-hermes/board/tasks.jsonl | grep -o 'c1a71bbf\\|a3369593\\|f7ab1f0b\\|passed=false\\|degraded' | sort | uniq -c",
+          "exit_code": 0,
+          "output_sha": "4130a6406afb66b07aa8bf793c314031c84b510a6ccff0752133d4c91162d00e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git log --oneline -3 -- .coding-hermes/board/tasks.jsonl; echo \"=== is ec79d638 [ci skip]? ===\"; git log -1 --format='%s%n%b' ec79d638 | head -5; echo \"=== merge commit msg ===\"; git log -1 --format='%s%n%b' 84c7124f",
+          "exit_code": 0,
+          "output_sha": "18987eb907d8a05a7d6db2f98239bdcae264d9b057d9dfe2a4e2797cfc739a7d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; git diff e301e18e 84c7124f --stat; echo \"=== board_vocab.go / python gate touched? ===\"; git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py | head -5; echo \"(empty above = untouched)\"",
+          "exit_code": 0,
+          "output_sha": "9f82f985c290b3800e75c744f3143c0bcc2707b3bc98b836c00c165c2336caee"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; go build ./... 2>&1 | tail -5; echo \"BUILD_EXIT=$?\"; go vet ./internal/scheduler/ 2>&1 | tail -5; echo \"VET_EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "e1afd5a7c39d3b4e49673bb5e70b16f741edeecf055ee7f976ef35f8f102977d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived criteria:\\nd0: The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.\\nd1: The fix normalises the board rows only \\u2014 the vocabulary itself (internal/scheduler/board_vocab.go allowed set and check 8 of ops/check-fleet-invariants.py) is unchanged, so the gate was not loosened to pass.\\nd2: The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.\\nd3: The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "76e069efc5701472a41cb9829e527e5e17323caff1f099e30307bdf74fd5a455"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/coding-hermes-scheduler-foreman-2026-11-14-16-32-16/attempt-1/integration-wt; sed -n '891,892p' .coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\nfor l in sys.stdin:\n    o=json.loads(l)\n    txt=json.dumps(o)\n    print(o['id'],'status=',o.get('status'))\n    for tok in ['c1a71bbf','a3369593','f7ab1f0b','passed=false','degraded','failed']:\n        print('   ',tok,'->',txt.count(tok))\n\"",
+          "exit_code": 0,
+          "output_sha": "10c30d5ba1a319009600f59fdb00f71c9a7c5e331d41112a3fd4b06bcd486119"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: Both rows carry the failure history. PERF-007 (line 891) and PERF-001-R3-R4 (line 892) each contain c1a71bbf (1x), a3369593, f7ab1f0b (1x), passed=false, degraded, and 'failed' text; status moved to 'pending' with worker_status=complete, guard_result=PASS, ci_result=SKIP. Nothing erased.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "d27acaf4ab0fe18c2cdcf60dc9f7304d4d739b33090a340e2364dccb626fa84c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `git diff e301e18e 84c7124f --stat` = only .coding-hermes/board/tasks.jsonl (2 insertions, 2 deletions). `git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py` is empty \\u2014 allowed set (board_vocab.go:51,60) and Python gate (check-fleet-invariants.py:394-395) untouched.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "2aa60406b96d86e1fa67f91ea20bfd451180c652cb54bb412458dbc8577d50e3"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `go build ./...` exit 0 (no output); `go vet ./internal/scheduler/` exit 0 (no output) on the merged tree at HEAD 84c7124f.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "ba3aa797b168778f2e24524d05d3f4b52e2dbee0b96db3635b228d1139a42dba"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: HEAD blob extracted via `git show HEAD:.coding-hermes/board/tasks.jsonl` -> /tmp/head_board.jsonl; `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` -> \\\"INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)\\\" / \\\"PASS \\u2014 0 violation(s)\\\" exit 0. Statuses on HEAD blob: complete 753, pending 142, blocked 8, in_progress 1 \\u2014 all in BOARD_ALLOWED_STATUSES (board_vocab.go:51). `grep -c '\\\"status\\\": *\\\"failed\\\"'` = 0.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "14082bbbca4d098724afaa9c4ad12eb9257866073d8f3a4a18de16d12ec1882c"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a completed task record to the .gitreins/tasks.yaml ledger, with no code, wiring, or test changes to review."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 guard: WARN: hook_timeout=300s <= test_timeout=1800s in /home/kara/.hermes/cache/scratch/coding-hermes-sche\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Merged tree 84c7124f has no failed board statuses, board-only invariant passes, and TestBoardVocabValidator passes; judge the merged tree.: HEAD = 84c7124f8c3efb0c4dd71239aff7af254cb00485 (merge of e301e18e + ec79d638). (a) No failed statuses: parsing the HEAD blob (`git show HEAD:.coding-hermes/board/tasks.jsonl`) yields Counter({'complete':753,'pending':142,'blocked':8,'in_progress':1}) \u2014 zero 'failed'; `grep -c '\"status\": *\"failed\"' .coding-hermes/board/tasks.jsonl` = 0. (b) Board-only invariant: `python3 ops/check-fleet-invariants.py --board /tmp/head_board.jsonl --board-only` (blob extracted from HEAD) prints 'INFO board-vocab ...: 904 row(s) scanned, 0 legacy closed spelling(s)' and 'PASS \u2014 0 violation(s) (board-only mode: fleet checks 1-7 not run)', exit 0; same command against the working-tree board also exits 0. (c) `go test ./internal/scheduler/ -run TestBoardVocabValidator -count=1 -v` -> every test PASS (FlagsOffVocabulary, InProgressIsAllowed, VocabularyCoverage, MissingBoardIsNotAnError, IsReadOnly, FlagsGluedTail, CleanSingleObjectLineNotGlued, BlockedWithReasonIsAllowed, ParkedSpellingsStillFail + 7 subtests, AllowedSetMatchesPythonGate), final line 'ok github.com/coding-hermes/scheduler/internal/scheduler 0.008s', exit 0. The merge diff is board-only: `git diff e301e18e 84c7124f --stat` = .coding-hermes/board/tasks.jsonl, 2 insertions/2 deletions.\n  \u2713 The two normalised rows (PERF-007, PERF-001-R3-R4) preserve their failed outcome as evidence (prior status=failed, introducing commit c1a71bbf, referenced verdicts a3369593 passed=false / f7ab1f0b degraded) rather than silently erasing the failure history.: Board lines 891 (PERF-007) and 892 (PERF-001-R3-R4) both now carry status=pending while retaining the failure record: each row's JSON contains c1a71bbf (1x), a3369593, f7ab1f0b (1x), 'passed=false', 'degraded' and 'failed' text; PERF-007 keeps worker_status=complete, guard_result=PASS, ci_result=SKIP and a foreman_note describing the failed recovery. This matches RELEASE-059's acceptance criterion (5) that the failure history not be silently erased.\n  \u2713 The fix normalises the board rows only \u2014 the vocabulary itself (internal/scheduler/board_vocab.go allowed set and check 8 of ops/check-fleet-invariants.py) is unchanged, so the gate was not loosened to pass.: `git diff e301e18e 84c7124f -- internal/scheduler/board_vocab.go ops/check-fleet-invariants.py` produces no output (untouched). BoardAllowedStatuses (internal/scheduler/board_vocab.go:51) and BoardLegacyClosedStatuses (:60) still equal the Python tuples at ops/check-fleet-invariants.py:394-395, and TestBoardVocabValidator_AllowedSetMatchesPythonGate passes, pinning that parity.\n  \u2713 The merged tree still builds and vets cleanly (go build ./... / go vet) so the board-only change did not break the product tree.: On HEAD 84c7124f: `go build ./...` exit 0 with no output; `go vet ./internal/scheduler/` exit 0 with no output.\n  \u2713 The normalised statuses are dispatchable/legitimate (pending/in_progress/blocked/complete/duplicate) and the board-vocab gate reports 0 violations on the exact HEAD blob, not just the working tree.: HEAD blob statuses are complete 753, pending 142, blocked 8, in_progress 1 \u2014 every value is a member of BOARD_ALLOWED_STATUSES (internal/scheduler/board_vocab.go:51). Running the gate on the extracted HEAD blob (/tmp/head_board.jsonl) gives 'PASS \u2014 0 violation(s)' exit 0, so the green result is not an artefact of the working tree (whose only delta vs HEAD is the .gitreins/tasks.yaml bookkeeping row).\nThe merged tree 84c7124f is clean on all three named checks \u2014 no failed board statuses, board-only invariant PASS with 0 violations on the HEAD blob, and all TestBoardVocabValidator tests pass \u2014 with the vocabulary untouched and the failure history preserved; only the hosted-CI confirmation of RELEASE-059 remains outstanding. [uncovered failure paths: failure mode 0 (RELEASE-059's own acceptance criterion (4) \u2014 a non-[ci skip] push whose hosted CI run supersedes the RED baseline 43560452603 \u2014 is not evidenced in the merged tree; the commit body itself says 'Hosted CI remains pending'.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-14T17:03:53.811133",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-14T17:03:53.852368+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 445,
+        "truncated": false,
+        "source": "git show 84c7124f8c3e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 640,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "RELEASE-059-MERGED"
+  }
+}

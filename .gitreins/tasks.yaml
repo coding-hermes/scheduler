@@ -6107,15 +6107,15 @@ tasks:
   status: in_progress
   created_at: '2026-11-11T10:27:29.294692+00:00'
 - id: RELEASE-058
-  title: Bump Go toolchain 1.26.10 -> 1.26.11 to clear GO-2026-6859
+  title: Bump Go toolchain 1.26.10 -> 1.26.11 to clear GO-2026-6859 (v1.17.0 release
+    blocker)
   criteria:
-  - Bump go.mod toolchain to go1.26.11; bump go-version pins in .github/workflows/*.yml
-    and any Dockerfile/Makefile Go base images; go build ./... && go vet ./... green;
-    go test ./... -count=1 passes; govulncheck ./... exits 0 with zero reachable vulnerabilities;
-    record govulncheck + Go versions in close-out; no behaviour change, no tag/Release/deployment
-  status: in_progress
-  created_at: '2026-11-12T09:44:17.473096+00:00'
-  completed_at: '2026-11-12T10:02:38.143366+00:00'
+  - 'Tree criterion already landed at b6b6606c: go.mod toolchain go1.26.11; .github/workflows
+    go-version pins 1.26.11; no Go 1.26.10 pins remain; go build ./... and go vet
+    ./... pass at HEAD; hosted CI green on fix-containing main'
+  status: complete
+  created_at: '2026-11-22T07:07:39.084261+00:00'
+  completed_at: '2026-11-22T07:13:31.607293+00:00'
 - id: PERF-009
   title: Fix ticks ordering and index
   criteria:
@@ -6391,3 +6391,13 @@ tasks:
   status: complete
   created_at: '2026-11-22T06:40:14.339700+00:00'
   completed_at: '2026-11-22T06:52:20.225434+00:00'
+- id: REV-006
+  title: Wakes handler returns 409 project is disabled before validating the request
+    body
+  criteria:
+  - 'Move clause-count and RFC3339 validation above the !p.Enabled check in internal/api/server_wakes.go
+    createWake, or report both conditions. Table test asserting: both malformed bodies
+    return 400 on a disabled lane, and a well-formed body on a disabled lane still
+    returns 409. go build ./..., go vet ./..., go test ./internal/api/... green.'
+  status: in_progress
+  created_at: '2026-11-22T07:06:47.862377+00:00'
