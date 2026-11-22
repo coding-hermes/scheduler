@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-hermes/scheduler/internal/clock"
 	"github.com/coding-hermes/scheduler/internal/database"
 )
 
@@ -153,8 +154,67 @@ func TestWakeTableBusyLaneIsSkippedNotFailed(t *testing.T) {
 
 	runner.pollOnce(ctx)
 	state, _ := wakeState(t, db, id)
-	if state != database.WakeStateSkipped {
-		t.Fatalf("state = %q, want skipped (a busy lane is an attempt with no spawn, not an error)", state)
+	if state != database.WakeStatePending {
+		t.Fatalf("state = %q, want pending (a busy lane is retried, not consumed)", state)
+	}
+}
+
+/*
+ch:trace row=REV-003 spec=none:board-row wave=none:worker-local test=internal/scheduler/wake_table_test.go::TestWakeTableBusyLaneRetriesAndThrottles doc=none:implementation-docs-if-needed prompt=none:foreman-dispatch-brief evidence=local-focused-tests witness=none:foreman-verifies verdict=none:pending-foreman commit=none:pending-worker memory=none:not-written
+STATUS: complete
+TIER: T1
+*/
+func TestWakeTableBusyLaneRetriesAndThrottles(t *testing.T) {
+	db := newWakeTestDB(t)
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	sim := clock.NewManualSimClock(now)
+	defer sim.Close()
+	ctx := clock.WithClock(context.Background(), sim)
+	busyCalls := 0
+	runner := NewWakeTableRunner(db, func(p database.Project, wakeID string) (string, error) {
+		busyCalls++
+		return "", ErrProjectRunning
+	})
+	runner.SetClock(sim)
+
+	first := now.Add(-time.Minute)
+	id, err := database.CreateWake(ctx, db, &database.Wake{
+		Project: "wake-lane", Kind: database.WakeKindDaily, DailyHHMM: "11:59", AtTime: &first,
+	}, now)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		runner.pollOnce(ctx)
+		sim.Advance(15 * time.Second)
+	}
+	if busyCalls != 1 {
+		t.Fatalf("busy spawn attempts = %d in the 60-second window, want exactly 1 retry", busyCalls)
+	}
+
+	var retries int
+	var retryAt string
+	if err := db.QueryRow(`SELECT COUNT(*), at_time FROM wakes WHERE id = ? AND state = ?`, id, database.WakeStatePending).Scan(&retries, &retryAt); err != nil {
+		t.Fatalf("read retried wake: %v", err)
+	}
+	if retries != 1 {
+		t.Fatalf("pending wake rows = %d, want exactly 1 retrying wake", retries)
+	}
+	retryTime, err := time.Parse(time.RFC3339Nano, retryAt)
+	if err != nil {
+		t.Fatalf("retry at_time %q does not parse: %v", retryAt, err)
+	}
+	if !retryTime.Equal(now.Add(5 * time.Minute)) {
+		t.Fatalf("retry at_time = %v, want %v", retryTime, now.Add(5*time.Minute))
+	}
+
+	var events int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE component = 'wake_table' AND details LIKE ?`, "%"+id+"%").Scan(&events); err != nil {
+		t.Fatalf("count wake events: %v", err)
+	}
+	if events > 2 {
+		t.Fatalf("busy wake emitted %d events in the 60-second window, want at most 2", events)
 	}
 }
 

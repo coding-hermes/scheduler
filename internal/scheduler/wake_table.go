@@ -181,10 +181,27 @@ func (r *WakeTableRunner) settleWake(ctx context.Context, w *database.Wake, sour
 				r.emit(ctx, w, "wake_deferred_blackout", "wake deferred — inside a blackout window", nil)
 				return
 			}
-			// ErrProjectRunning (the SCHED-GAP-030 dedup) is a BUSY lane,
-			// not a failure: the record shows the attempt either way.
 			log.Printf("WAKE-TABLE: %s (%s->%s): spawn refused: %v", w.ID, source, w.Project, err)
-			r.emit(ctx, w, "wake_skipped", "spawn refused", map[string]any{"reason": err.Error()})
+			if errors.Is(err, ErrProjectRunning) {
+				// ErrProjectRunning (the SCHED-GAP-030 dedup) is a BUSY
+				// lane, not a failure: keep the wake pending and retry
+				// after the same five-minute delay used by the blackout
+				// path. The skip/fired pair is throttled so a daily wake
+				// cannot emit on every poll while its lane remains busy.
+				if perr := database.PushWakeRetry(ctx, r.db, w.ID, 5*time.Minute, r.clock().Now()); perr != nil {
+					log.Printf("WAKE-TABLE: %s busy retry push failed: %v", w.ID, perr)
+				}
+				if r.recentlyEmitted(ctx, w, 30*time.Minute) {
+					return
+				}
+				r.emit(ctx, w, "wake_skipped", "spawn refused", map[string]any{"reason": err.Error()})
+				r.emit(ctx, w, "wake_fired", fmt.Sprintf("wake %s fired (%s)", w.ID, source),
+					map[string]any{"spawned": false, "tick_id": "", "source": source, "severity_override": string(SeverityMedium)})
+				return
+			}
+			// Any other spawn error is an honest skip, never an endless
+			// retry loop: record the refusal and settle skipped below
+			// (the attempt is visible, nothing is hidden).
 		} else {
 			tickID, spawned = id, true
 		}
