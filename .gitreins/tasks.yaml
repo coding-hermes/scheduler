@@ -6399,5 +6399,6 @@ tasks:
     createWake, or report both conditions. Table test asserting: both malformed bodies
     return 400 on a disabled lane, and a well-formed body on a disabled lane still
     returns 409. go build ./..., go vet ./..., go test ./internal/api/... green.'
-  status: in_progress
+  status: complete
   created_at: '2026-11-22T07:06:47.862377+00:00'
+  completed_at: '2026-11-22T10:08:38.003147+00:00'
