@@ -72,15 +72,6 @@ func (s *Server) createWake(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "project is required")
 		return
 	}
-	p, err := database.GetProject(r.Context(), s.db, req.Project)
-	if err != nil {
-		writeError(w, 404, "project not found: "+req.Project)
-		return
-	}
-	if !p.Enabled {
-		writeError(w, 409, "project is disabled — a wake for a disabled lane would be a promise the runner has to skip")
-		return
-	}
 
 	wake := database.Wake{
 		Project:   req.Project,
@@ -144,6 +135,19 @@ func (s *Server) createWake(w http.ResponseWriter, r *http.Request) {
 		wake.AtTime = &first
 	default:
 		wake.Kind = database.WakeKindExternal
+	}
+
+	// REV-006 — body-shape validation above happens BEFORE admission: a
+	// disabled project with a malformed body answers 400 with the actual
+	// validation error, not a misleading "project is disabled" 409.
+	p, err := database.GetProject(r.Context(), s.db, req.Project)
+	if err != nil {
+		writeError(w, 404, "project not found: "+req.Project)
+		return
+	}
+	if !p.Enabled {
+		writeError(w, 409, "project is disabled — a wake for a disabled lane would be a promise the runner has to skip")
+		return
 	}
 
 	id, err := database.CreateWake(r.Context(), s.db, &wake, now)

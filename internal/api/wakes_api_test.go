@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,5 +189,80 @@ func TestWakeAPIExternalFireViaWiredRunner(t *testing.T) {
 	}
 	if fires != 2 {
 		t.Fatalf("firer called %d times after the second fire, want 2 (asked, refused)", fires)
+	}
+}
+
+// REV-006 — a malformed body for a DISABLED project must answer 400 with the
+// real validation error, not the misleading 409 "project is disabled" the old
+// ordering produced (the Enabled check ran before body-shape validation).
+// Ordering under test, against a disabled lane:
+// zero clauses -> 400; two clauses -> 400; non-RFC3339 at -> 400; and only a
+// well-formed body reaches admission and gets the 409.
+func TestWakeAPIDisabledProjectBodyShapeBefore409(t *testing.T) {
+	db, ts, _ := newWakeAPITest(t)
+	ctx := context.Background()
+	p := database.Project{
+		Name: "wake-disabled", Workdir: t.TempDir(), Weight: 1, Priority: 5,
+		CooldownS: 600, Enabled: false,
+		CreatedAt: "2026-11-07T00:00:00Z", UpdatedAt: "2026-11-07T00:00:00Z",
+	}
+	if err := database.CreateProject(ctx, db, &p); err != nil {
+		t.Fatalf("create disabled project: %v", err)
+	}
+
+	futureAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	const disabledMsg = "project is disabled"
+	tests := []struct {
+		name     string
+		body     map[string]any
+		wantCode int
+		wantErr  string // substring of the error message
+	}{
+		{
+			name:     "zero scheduling clauses",
+			body:     map[string]any{"project": "wake-disabled"},
+			wantCode: 400,
+			wantErr:  "exactly one of at | in_minutes | daily | external is required",
+		},
+		{
+			name: "two scheduling clauses (at + daily)",
+			body: map[string]any{
+				"project": "wake-disabled",
+				"at":      futureAt,
+				"daily":   "02:00",
+			},
+			wantCode: 400,
+			wantErr:  "exactly one of at | in_minutes | daily | external is required",
+		},
+		{
+			name: "non-RFC3339 at",
+			body: map[string]any{
+				"project": "wake-disabled",
+				"at":      "tomorrow",
+			},
+			wantCode: 400,
+			wantErr:  "at must be RFC3339",
+		},
+		{
+			name: "well-formed body still reaches the disabled-project 409",
+			body: map[string]any{
+				"project": "wake-disabled",
+				"at":      futureAt,
+			},
+			wantCode: 409,
+			wantErr:  disabledMsg,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := wakeRequest(t, http.MethodPost, ts.URL+"/api/v1/wakes", tc.body)
+			if code != tc.wantCode {
+				t.Fatalf("%s: status = %d %v, want %d", tc.name, code, out, tc.wantCode)
+			}
+			got, _ := out["error"].(string)
+			if !strings.Contains(got, tc.wantErr) {
+				t.Errorf("%s: error = %q, want it to contain %q", tc.name, got, tc.wantErr)
+			}
+		})
 	}
 }
