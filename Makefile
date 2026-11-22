@@ -1,4 +1,4 @@
-.PHONY: build test test-full run install clean lint fmt migrate deploy deploy-install release-prep tag
+.PHONY: build test test-full vuln run install clean lint fmt migrate deploy deploy-install release-prep tag
 
 # Build identity: use `make build` as the canonical daemon build path. Bare
 # `go build` may stamp an enclosing repository's VCS metadata in a linked
@@ -58,6 +58,41 @@ build:
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/schedulerd" ./cmd/schedulerd/
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/migrate" ./cmd/migrate/
 	go build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/retention-deferrals" ./cmd/retention-deferrals/
+
+# RELEASE-061: toolchain/stdlib vulnerability gate. `vuln` runs the exact
+# commands CI's `govulncheck` job runs (pinned scanner, source mode over
+# ./..., then binary mode on this checkout's bin/schedulerd artifact) so a
+# release sweep and CI agree. The scanner version is pinned because the
+# verdict is scanner-version sensitive: on a go1.26.11-built tree, govulncheck
+# v1.7.0 source mode and v1.9.0 binary mode report clean while v1.9.0 SOURCE
+# mode resolves the stdlib as go1.26.5 and reports 19 affected entries.
+# govulncheck exits non-zero on any finding, which fails the target.
+GOVULN_VERSION := 1.7.0
+GOVULN_BIN     := $(HOME)/.cache/govulncheck-bin/v$(GOVULN_VERSION)/govulncheck
+
+# Cache layout matches the lint job's pinned-binary convention
+# (~/.cache/golangci-lint-bin/<version>): install-if-missing into a versioned
+# dir, then always invoke the pinned copy — never whatever an older
+# govulncheck sits in $(HOME)/go/bin. On an offline host the `go install`
+# fails and the target prints the pinned command to run manually.
+vuln:
+	@echo "== go version =="
+	@go version
+	@if [ ! -x "$(GOVULN_BIN)" ]; then \
+	  echo "== installing pinned govulncheck v$(GOVULN_VERSION) =="; \
+	  GOBIN="$$(dirname "$(GOVULN_BIN)")" go install golang.org/x/vuln/cmd/govulncheck@v$(GOVULN_VERSION) \
+	    || { echo "ERROR: could not install pinned govulncheck v$(GOVULN_VERSION). Run manually:" >&2; \
+	         echo "  GOBIN=$$(dirname "$(GOVULN_BIN)")" go install golang.org/x/vuln/cmd/govulncheck@v$(GOVULN_VERSION) >&2; \
+	         exit 2; }; \
+	fi
+	@echo "== pinned govulncheck identity (scanner-version evidence) =="
+	@go version -m "$(GOVULN_BIN)"
+	@echo "== govulncheck v$(GOVULN_VERSION): source mode ./... =="
+	@"$(GOVULN_BIN)" ./...
+	@test -x bin/schedulerd || $(MAKE) --no-print-directory -s build
+	@echo "== govulncheck v$(GOVULN_VERSION): binary mode bin/schedulerd =="
+	@"$(GOVULN_BIN)" -mode=binary bin/schedulerd
+	@echo "== vuln gate PASS (pinned govulncheck v$(GOVULN_VERSION): source + binary clean) =="
 
 test:
 	go test -short -count=1 ./...
