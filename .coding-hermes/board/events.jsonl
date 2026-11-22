@@ -1983,3 +1983,5 @@
 {"id":1794849899552600056,"timestamp":"2026-11-22 05:25:41.359329","event_type":"task_completed","task_id":"INT-CI-4197","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
 {"id":1794849899552600057,"timestamp":"2026-11-22 05:35:40.463551","event_type":"task_completed","task_id":"INT-CI-4190","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
 {"id":1794849899552600058,"timestamp":"2026-11-22 06:26:25.280972","event_type":"task_updated","task_id":"INT-CI-4189","actor":"foreman","detail":"{\"status\":\"in_progress\"}","tick_number":null}
+{"id":1794849899552600059,"timestamp":"2026-11-22 06:38:18.929552","event_type":"task_completed","task_id":"SCHED-SHUTDOWN-002","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
+{"id":1794849899552600060,"timestamp":"2026-11-22 06:52:19.585796","event_type":"task_completed","task_id":"INT-CI-4189","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}

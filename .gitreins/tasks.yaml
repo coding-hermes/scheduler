@@ -6327,8 +6327,9 @@ tasks:
     baseline (p99A-scaled with documented factor and floor) instead of the absolute
     window/2 bound; structural checks (sawWindow, single window, fixture floor, surface
     pins) retained; local green normal + under synthetic load; go build+vet green
-  status: in_progress
+  status: complete
   created_at: '2026-11-21T16:34:09.287177+00:00'
+  completed_at: '2026-11-22T05:32:09.795723+00:00'
 - id: INT-CI-4191
   title: Pin go 1.26.11 in ci.yaml + release.yaml, harden lint install
   criteria:
@@ -6355,8 +6356,9 @@ tasks:
     (in-window max 935.7ms vs idle max 77.9ms must not be a violation) while still
     failing a read that tracks the pass; TestPERF001R2LatencyContract covers both
     directions with the measured CI shape.
-  status: in_progress
+  status: complete
   created_at: '2026-11-21T18:34:07.022048+00:00'
+  completed_at: '2026-11-22T05:32:12.477129+00:00'
 - id: INT-CI-4191-V
   title: Verify the CI toolchain pin landed on main (INT-CI-4191)
   criteria:
@@ -6367,3 +6369,25 @@ tasks:
     \ fail; the CI All Clear gate still requires build and test legs."
   status: in_progress
   created_at: '2026-11-21T18:37:04.880616+00:00'
+- id: INT-CI-4197
+  title: Close the transient multiarch darwin/arm64 failure on evidence
+  criteria:
+  - Cite failing run 44933115101 job 136935042423, the same-SHA control run 44933114315,
+    and >=3 consecutive green hosted runs of the darwin/arm64 job; state that no workflow
+    input changed in-repo and that the multiarch job is a reusable workflow pinned
+    @main
+  status: complete
+  created_at: '2026-11-22T05:24:44.859033+00:00'
+  completed_at: '2026-11-22T05:32:15.122131+00:00'
+- id: INT-CI-4189
+  title: 'CI lint leg 504 hardening: golangci-lint-action fetch at run time (fix 2b841986)'
+  criteria:
+  - 'go test ./... must exit 0. The workflow lint installation must use a cached or
+    pinned tool artifact or classify a download 504 as infrastructure while preserving
+    the code gate; quote the exact workflow lines. The documented lint command must
+    print PASS or exit 0. failure_condition: any leg red or the workflow still downloads
+    the tool bare without pin/retry-classification. proof: quote exact workflow lines
+    and test output in the verdict'
+  status: complete
+  created_at: '2026-11-22T06:40:14.339700+00:00'
+  completed_at: '2026-11-22T06:52:20.225434+00:00'
