@@ -1,0 +1,40 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-11-22-23-28-43",
+  "project": "coding-hermes-scheduler",
+  "workdir": "/home/kara/coding-hermes-scheduler/coding-herms-scheduler",
+  "mode": "serial",
+  "wave_size": 1,
+  "sizing": {
+    "nproc": 16,
+    "loadavg_1m": 23.19,
+    "slots_formula": "max(1, min(6, nproc - ceil(loadavg)))",
+    "slots": 1,
+    "wave_budget": 3,
+    "reason": "load 23.19 > 16 cores -> slots=1; serial path per box sizing (WAVE_BUDGET 3 not binding)"
+  },
+  "block": {
+    "id": "REV-006",
+    "resume_basis": "last tick board event (coding-hermes-scheduler-foreman-2026-11-22-13-46-56, 14:16Z) named block REV-006 for resume; REV-003 closed by PM-cycle sibling at 15:59; REV-004 is the block's last ready row (5/6 done)",
+    "pending_rows": ["REV-004"]
+  },
+  "rows": [
+    {
+      "id": "REV-004",
+      "priority": "P2",
+      "title": "A wake whose spawn is deferred is recorded as fired at INFO and its daily occurrence is consumed",
+      "worktree": "/home/kara/worktrees/coding-hermes-scheduler-REV-004",
+      "branch": "wt/REV-004",
+      "base": "f5fbe321",
+      "base_is_origin_main_tip": true,
+      "worker_model": "glm-5.3-flash",
+      "worker_provider": "ollama-cloud",
+      "brief_path": "/tmp/brief-REV-004-sched-20261122-232843.txt",
+      "adopted_state": "crashed 17:40Z sibling session left gitreins task REV-004 in_progress + STAGED uncommitted implementation in this worktree (wake_table.go, wake_table_test.go, docs/wake-tables.md); foreman red/green-classified it: build rc=0, vet rc=0, focused go test ./internal/scheduler/ -run TestWake -count=1 ok 1.079s; worker adopts, verifies full ACs, gates, commits",
+      "ownership_check": "/proc exact-cwd sweep clean; no gitreins evaluator; no hermes worker; no rebase/merge operation dirs"
+    }
+  ],
+  "residue_disclosure": [
+    "stale bare .git/REBASE_HEAD (6c118748) from a completed rebase 07:41:07-07:41:37 -05 (reflog: start->continue->finish->5adf7889); no operation dirs; cleanup-ineligible, left for owner per recovery-preflight reference",
+    "dirty .gitreins/tasks.yaml (+12: REV-004 in_progress entry) and untracked .gitreins/review-state.json from the crashed sibling; adopted, will be committed with tick bookkeeping"
+  ]
+}
