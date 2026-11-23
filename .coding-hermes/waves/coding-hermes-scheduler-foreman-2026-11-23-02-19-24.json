@@ -34,5 +34,7 @@
       "premise_check": "live board /home/kara/Hermes-DAGger/hermes-dagger/.coding-hermes/board/tasks.jsonl = 19 owner-flavored rows (row title said 26; worker classifies the live 19); classification doc lives in THIS repo at docs/lane-authority.md; dagger repo clean, origin/master parity 0",
       "ownership_check": "/proc cwd sweep clean (only self/transient); no gitreins evaluator targeting hermes-dagger; pgrep shows evaluators for TR-290 (task-router) and HARDEN-DUCKBRAIN-010 only"
     }
-  ]
+  ],
+  "finished_at": "2026-11-23T14:20:00Z",
+  "recovery_close": "recovered by tick 2026-11-23-14-13-51: TRIAGE-006 already complete on board (commit 263beee2, tier-2 PASS run 8670fa80); no worker branches/worktrees existed"
 }
