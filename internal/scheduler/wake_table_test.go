@@ -3,8 +3,10 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -342,5 +344,208 @@ func TestWakeValidation(t *testing.T) {
 		if !c.want && err == nil {
 			t.Errorf("case %d (%s): accepted, want rejection", i, c.why)
 		}
+	}
+}
+
+// insertTickRow stands in for the production spawn's synchronous enqueue:
+// the tick row exists the moment the spawn hook returns its id (loop.go —
+// "the returned id is a real, stored row"), and the gateway stamps the
+// terminal status moments later. outcome "" inserts NULL (a queued/running
+// row has no outcome yet — the column's CHECK rejects non-terminal values).
+func insertTickRow(t *testing.T, db *sql.DB, project, tickID, status, outcome, reason string, now time.Time) {
+	t.Helper()
+	var oc any
+	if outcome != "" {
+		oc = outcome
+	}
+	_, err := db.Exec(`INSERT INTO ticks (id, project_name, status, outcome, error, created_at)
+		VALUES (?,?,?,?,?,?)`,
+		tickID, project, status, oc, reason, now.UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("insert tick row %s: %v", tickID, err)
+	}
+}
+
+// wakeEventCensus reads every wake_table event and counts, per row: events
+// claiming spawned=true (the settlement lie REV-004 forbids) and events
+// carrying the MEDIUM override with the given reason text.
+func wakeEventCensus(t *testing.T, db *sql.DB, reason string) (spawnedTrue, mediumReason int) {
+	t.Helper()
+	rows, err := db.Query(`SELECT details FROM events WHERE component = 'wake_table'`)
+	if err != nil {
+		t.Fatalf("read wake events: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var details string
+		if err := rows.Scan(&details); err != nil {
+			t.Fatalf("scan event details: %v", err)
+		}
+		var d map[string]any
+		if err := json.Unmarshal([]byte(details), &d); err != nil {
+			t.Fatalf("event details %q do not parse: %v", details, err)
+		}
+		if v, ok := d["spawned"].(bool); ok && v {
+			spawnedTrue++
+		}
+		if sev, _ := d["severity_override"].(string); sev == string(SeverityMedium) && strings.Contains(details, reason) {
+			mediumReason++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate wake events: %v", err)
+	}
+	return spawnedTrue, mediumReason
+}
+
+/*
+ch:trace row=REV-004 spec=none:board-row wave=none:worker-local test=internal/scheduler/wake_table_test.go::TestWakeTableDeferredSpawnKeepsOccurrence doc=docs/wake-tables.md prompt=none:foreman-dispatch-brief evidence=local-focused-tests witness=none:foreman-verifies verdict=none:pending-foreman commit=none:pending-worker memory=none:not-written
+STATUS: complete
+TIER: T1
+*/
+func TestWakeTableDeferredSpawnKeepsOccurrence(t *testing.T) {
+	db := newWakeTestDB(t)
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	sim := clock.NewManualSimClock(now)
+	defer sim.Close()
+	ctx := clock.WithClock(context.Background(), sim)
+
+	const tickID = "tick-deferred-1"
+	const reason = "no gateway client and exec fallback disabled"
+	runner := NewWakeTableRunner(db, func(p database.Project, wakeID string) (string, error) {
+		// The deferral has already landed by the time settleWake reads —
+		// the observed live ordering under a gateway outage.
+		insertTickRow(t, db, p.Name, tickID, string(database.StatusDeferred), "deferred", reason, now)
+		return tickID, nil
+	})
+	runner.SetClock(sim)
+
+	// A DAILY wake due one minute ago — exactly the shape whose occurrence
+	// the old code consumed: settle-as-fired re-armed at_time to TOMORROW.
+	first := now.Add(-time.Minute)
+	id, err := database.CreateWake(ctx, db, &database.Wake{
+		Project: "wake-lane", Kind: database.WakeKindDaily, DailyHHMM: first.Format("15:04"), AtTime: &first,
+	}, now)
+	if err != nil {
+		t.Fatalf("create daily: %v", err)
+	}
+
+	runner.pollOnce(ctx)
+
+	var state, at, firedAt, firedTick sql.NullString
+	if err := db.QueryRow(`SELECT state, at_time, fired_at, fired_tick_id FROM wakes WHERE id = ?`, id).
+		Scan(&state, &at, &firedAt, &firedTick); err != nil {
+		t.Fatalf("read wake: %v", err)
+	}
+	if state.String != database.WakeStatePending {
+		t.Fatalf("state = %q, want pending — a deferred spawn keeps the wake on its occurrence", state.String)
+	}
+	if firedAt.Valid || firedTick.Valid {
+		t.Fatalf("fired_at=%v fired_tick_id=%v must stay NULL — the deferred tick never fired the wake", firedAt, firedTick)
+	}
+	atT, err := time.Parse(time.RFC3339Nano, at.String)
+	if err != nil {
+		t.Fatalf("at_time %q does not parse: %v", at.String, err)
+	}
+	if want := now.Add(5 * time.Minute); !atT.Equal(want) {
+		t.Fatalf("at_time = %v, want %v (retry armed on the SAME occurrence, 5 minutes out)", atT, want)
+	}
+	nextOccurrence := time.Date(2026, 11, 23, first.Hour(), first.Minute(), 0, 0, time.UTC)
+	if !atT.Before(nextOccurrence) {
+		t.Fatalf("at_time = %v reached past the next occurrence %v — the day's occurrence was consumed", atT, nextOccurrence)
+	}
+
+	spawnedTrue, mediumReason := wakeEventCensus(t, db, reason)
+	if spawnedTrue != 0 {
+		t.Fatalf("%d wake event(s) claim spawned=true — a deferred spawn must never settle the wake as fired", spawnedTrue)
+	}
+	if mediumReason != 1 {
+		t.Fatalf("MEDIUM events naming the deferral reason = %d, want exactly 1", mediumReason)
+	}
+	var mediumRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE component = 'wake_table' AND severity = ?`,
+		string(SeverityMedium)).Scan(&mediumRows); err != nil {
+		t.Fatalf("count MEDIUM events: %v", err)
+	}
+	if mediumRows != 1 {
+		t.Fatalf("MEDIUM-severity wake events = %d, want exactly 1", mediumRows)
+	}
+}
+
+func TestWakeTableDeferredOneShotRetriesNotSkips(t *testing.T) {
+	db := newWakeTestDB(t)
+	now := time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC)
+	sim := clock.NewManualSimClock(now)
+	defer sim.Close()
+	ctx := clock.WithClock(context.Background(), sim)
+
+	const tickID = "tick-deferred-2"
+	runner := NewWakeTableRunner(db, func(p database.Project, wakeID string) (string, error) {
+		insertTickRow(t, db, p.Name, tickID, string(database.StatusFailed), "failed", "gateway connect refused", now)
+		return tickID, nil
+	})
+	runner.SetClock(sim)
+
+	past := now.Add(-time.Minute)
+	id, err := database.CreateWake(ctx, db, &database.Wake{Project: "wake-lane", Kind: database.WakeKindAt, AtTime: &past}, now)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	runner.pollOnce(ctx)
+
+	state, tick := wakeState(t, db, id)
+	if state != database.WakeStatePending {
+		t.Fatalf("state = %q, want pending — a one-shot whose tick failed retries too (not skipped, not fired)", state)
+	}
+	if tick.Valid {
+		t.Fatalf("fired_tick_id = %v must stay NULL for a not-fired tick", tick)
+	}
+	var at string
+	if err := db.QueryRow(`SELECT at_time FROM wakes WHERE id = ?`, id).Scan(&at); err != nil {
+		t.Fatalf("read at_time: %v", err)
+	}
+	atT, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		t.Fatalf("at_time %q does not parse: %v", at, err)
+	}
+	if want := now.Add(5 * time.Minute); !atT.Equal(want) {
+		t.Fatalf("at_time = %v, want %v (the retry is pushed 5 minutes out)", atT, want)
+	}
+	spawnedTrue, _ := wakeEventCensus(t, db, "gateway connect refused")
+	if spawnedTrue != 0 {
+		t.Fatalf("%d wake event(s) claim spawned=true for a failed tick", spawnedTrue)
+	}
+}
+
+func TestWakeTableRunningTickSettlesFiredToday(t *testing.T) {
+	db := newWakeTestDB(t)
+	ctx := context.Background()
+
+	const tickID = "tick-still-running"
+	runner := NewWakeTableRunner(db, func(p database.Project, wakeID string) (string, error) {
+		insertTickRow(t, db, p.Name, tickID, string(database.StatusRunning), "", "", time.Now())
+		return tickID, nil
+	})
+	past := time.Now().Add(-time.Minute)
+	id, err := database.CreateWake(ctx, db, &database.Wake{Project: "wake-lane", Kind: database.WakeKindAt, AtTime: &past}, time.Now())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The tick never leaves 'running' inside the observation window: the
+	// wake must settle exactly as today — fired, tick recorded, spawned=true
+	// event emitted. This guards the live production seam.
+	runner.pollOnce(ctx)
+	state, tick := wakeState(t, db, id)
+	if state != database.WakeStateFired {
+		t.Fatalf("state = %q, want fired — a tick still in flight settles as fired (happy path unchanged)", state)
+	}
+	if !tick.Valid || tick.String != tickID {
+		t.Fatalf("fired_tick_id = %v, want %s", tick, tickID)
+	}
+	spawnedTrue, _ := wakeEventCensus(t, db, "")
+	if spawnedTrue != 1 {
+		t.Fatalf("spawned=true wake events = %d, want exactly 1", spawnedTrue)
 	}
 }
