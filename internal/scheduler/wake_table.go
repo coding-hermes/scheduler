@@ -204,6 +204,44 @@ func (r *WakeTableRunner) settleWake(ctx context.Context, w *database.Wake, sour
 			// (the attempt is visible, nothing is hidden).
 		} else {
 			tickID, spawned = id, true
+			// REV-004: a spawn that returned a tick id is not yet a KEPT
+			// promise. The tick row's terminal status lands moments after the
+			// spawn returns, and under --no-exec-fallback every gateway outage
+			// stamps it deferred almost immediately (observed live:
+			// outcome=deferred, error="no gateway client and exec fallback
+			// disabled"). Observe briefly; a not-fired verdict must NOT settle
+			// the wake as fired — a daily that did would re-arm to tomorrow
+			// while the audit trail claimed success, silently losing the day's
+			// scheduled run.
+			if st, oc, reason, notFired := r.tickVerdict(ctx, tickID); notFired {
+				log.Printf("WAKE-TABLE: %s (%s->%s): spawned tick %s settled %s (%s) — wake NOT fired, retry pushed 5m",
+					w.ID, source, w.Project, tickID, st, reason)
+				// The REV-003 busy-lane pattern: keep the wake pending on the
+				// SAME occurrence with a 5-minute backoff — never touch
+				// fired_at or fired_tick_id for the deferred tick.
+				if perr := database.PushWakeRetry(ctx, r.db, w.ID, 5*time.Minute, r.clock().Now()); perr != nil {
+					log.Printf("WAKE-TABLE: %s not-fired retry push failed: %v", w.ID, perr)
+				}
+				if r.recentlyEmitted(ctx, w, 30*time.Minute) {
+					return
+				}
+				msg := fmt.Sprintf("wake %s spawn %s: tick %s settled %s — occurrence kept, retry pushed 5m",
+					w.ID, source, tickID, st)
+				if reason != "" {
+					msg += ": " + reason
+				}
+				r.emitSev(ctx, w, SeverityMedium, "wake_spawn_not_fired", msg,
+					map[string]any{
+						"spawned":           false,
+						"tick_id":           tickID,
+						"tick_status":       st,
+						"tick_outcome":      oc,
+						"reason":            reason,
+						"source":            source,
+						"severity_override": string(SeverityMedium),
+					})
+				return
+			}
 		}
 	} else {
 		log.Printf("WAKE-TABLE: %s (%s->%s): no spawn hook wired — skipped", w.ID, source, w.Project)
@@ -219,6 +257,68 @@ func (r *WakeTableRunner) settleWake(ctx context.Context, w *database.Wake, sour
 	_ = database.SettleFiredWake(ctx, r.db, w, database.WakeSettlement{Spawned: spawned, TickID: tickID}, r.clock().Now())
 }
 
+// REV-004 — the tick verdict observation. A spawn that returned a tick id is
+// not yet a kept promise: the tick row exists (the spawn enqueues it
+// synchronously before returning), but its TERMINAL status lands moments
+// later, and under --no-exec-fallback every gateway outage stamps the tick
+// deferred almost immediately. settleWake therefore observes the row briefly
+// before settling; these bounds keep that observation cheap (it runs inside
+// the wake poll loop): one immediate read, then up to three re-reads ~300ms
+// apart (~0.9s worst case).
+const (
+	tickVerdictReads   = 4
+	tickVerdictPollGap = 300 * time.Millisecond
+)
+
+// notFiredTickStatuses are the tick statuses that mean the lane's run did
+// NOT happen. A tick still queued/running after the window — or completed —
+// reads as fired, exactly as before this check existed.
+var notFiredTickStatuses = map[string]bool{
+	string(database.StatusDeferred): true,
+	string(database.StatusFailed):   true,
+	string(database.StatusTimeout):  true,
+	string(database.StatusAborted):  true,
+}
+
+// tickVerdict briefly observes the tick row a successful spawn produced.
+// Returns the last observed status, outcome and error text; notFired is true
+// only when a terminal not-fired verdict was READ. Everything else — no row
+// visible (a spawn hook that never enqueued one), a read failure, still
+// queued/running after the window — reads notFired=false so the settlement
+// is exactly today's: the happy path is unchanged, and observation can never
+// invent a verdict the row does not carry.
+func (r *WakeTableRunner) tickVerdict(ctx context.Context, tickID string) (status, outcome, reason string, notFired bool) {
+	for i := 0; i < tickVerdictReads; i++ {
+		if i > 0 {
+			timer := r.clock().NewTimer(tickVerdictPollGap)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return status, outcome, reason, false
+			case <-timer.C:
+			}
+		}
+		var st, oc, errCol sql.NullString
+		err := r.db.QueryRowContext(ctx, `SELECT status, outcome, error FROM ticks WHERE id = ?`, tickID).
+			Scan(&st, &oc, &errCol)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("WAKE-TABLE: tick %s verdict read failed (fail-open, settling as fired): %v", tickID, err)
+			}
+			return status, outcome, reason, false
+		}
+		status, outcome, reason = st.String, oc.String, errCol.String
+		if status == string(database.StatusCompleted) {
+			return status, outcome, reason, false
+		}
+		if notFiredTickStatuses[status] {
+			return status, outcome, reason, true
+		}
+		// queued/running (or an unknown status): keep observing.
+	}
+	return status, outcome, reason, false
+}
+
 // recentlyEmitted reports whether this runner already wrote an event for
 // wake w within lookback — the blackout-retry throttle. One indexed query on a
 // rare path; a failure reads as "not recent" (fail-open, one extra event).
@@ -232,6 +332,13 @@ func (r *WakeTableRunner) recentlyEmitted(ctx context.Context, w *database.Wake,
 }
 
 func (r *WakeTableRunner) emit(ctx context.Context, w *database.Wake, eventType, message string, extra map[string]any) {
+	r.emitSev(ctx, w, SeverityInfo, eventType, message, extra)
+}
+
+// emitSev is emit with an explicit severity (REV-004): a not-fired spawn is
+// an operator-visible failure, so its event reads MEDIUM at the severity
+// column, not only as an override hint in the details JSON.
+func (r *WakeTableRunner) emitSev(ctx context.Context, w *database.Wake, severity EventSeverity, eventType, message string, extra map[string]any) {
 	if r.events == nil {
 		return
 	}
@@ -245,7 +352,7 @@ func (r *WakeTableRunner) emit(ctx context.Context, w *database.Wake, eventType,
 	for k, v := range extra {
 		details[k] = v
 	}
-	r.events.Emit(ctx, SeverityInfo, "wake_table", message, details)
+	r.events.Emit(ctx, severity, "wake_table", message, details)
 }
 
 // WakeKindError is the semantic refusal for firing a wake whose kind is not

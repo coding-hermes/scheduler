@@ -39,14 +39,16 @@ Exactly **one** scheduling clause per wake (`at` | `in_minutes` | `daily` | `ext
 
 1. **Claim** — the runner claims the row (`pending → firing`) with a conditional UPDATE, so the runner and an API `/fire` can never both fire the same wake. Once-only is structural, not hopeful.
 2. **Spawn** — through the **operator path**: the manual bypass (e), the one always-granted, always-logged bypass. The wake is a pre-authorized operator instruction, so cooldowns don't block it — but it never *wears* the manual name: the tick row records `nudge_source = wake_table`, and the log names the wake id. "Who spawned this at 2am?" answers with the wake, not a generic manual.
-3. **Settle** — `fired` with the produced `fired_tick_id` (dailies re-arm to their next occurrence instead). Every outcome is on the row.
+3. **Observe** — a spawn that returned a tick id is not yet a kept promise: the tick row's terminal status lands moments later, and under `--no-exec-fallback` every gateway outage stamps it `deferred` almost immediately. The runner reads the tick row (bounded: one read + up to three re-reads ~300 ms apart) before settling.
+4. **Settle** — `fired` with the produced `fired_tick_id` (dailies re-arm to their next occurrence instead) **only when the observed tick verdict is completed — or still queued/running after the window**. A tick that came back `deferred` / `failed` / `timeout` / `aborted` does NOT settle the wake: it stays pending on the SAME occurrence with a 5-minute retry backoff, `fired_at`/`fired_tick_id` stay NULL, and a MEDIUM `wake_spawn_not_fired` event names the tick's reason (throttled to one per 30 min). Without this, a gateway outage produced an audit trail that said "fired" while a daily silently lost its day. Every outcome is on the row.
 
-## The two refusals that matter
+## The refusals that matter
 
 | Condition | Behaviour |
 |---|---|
 | **Blackout window** | The wake **stays pending** and retries (pushed 5 minutes out per attempt, events throttled to one per 30 min). Operator time-of-day intent defers — it does not override the fleet's do-not-spawn windows. |
 | **Lane busy / spawn refused** (`ErrProjectRunning` dedup) | The wake **stays pending** and retries, pushed 5 minutes out per attempt (same deferral as the blackout path). The lane is mid-tick, so hammering the gate every poll buys nothing; the skip/fired event pair is throttled to one per 30 min. |
+| **Spawned tick comes back not-fired** (`deferred` / `failed` / `timeout` / `aborted`) | The wake **stays pending on the same occurrence** and retries 5 minutes out (REV-004). The spawned tick is observed before settlement; a not-fired verdict keeps `fired_at`/`fired_tick_id` NULL, emits a MEDIUM `wake_spawn_not_fired` event naming the tick's reason, and never re-arms a daily to its next occurrence — the occurrence is retried, not consumed. |
 
 A wake whose lane is disabled or unreadable also settles `skipped` with an event: a wake that dies silently is a lie the operator eventually pays for.
 
@@ -58,6 +60,6 @@ A wake whose lane is disabled or unreadable also settles `skipped` with an event
 
 ## Verification
 
-- `internal/scheduler/wake_table_test.go` — due fires exactly once; cancelled never fires; daily re-arms forward (never into the past); external wakes never fire from the scheduled pass; a refused external fire leaves the schedule standing; busy → pending retry +5m (throttled); blackout → re-pend with a pushed retry; spawn-hook errors settle skipped; validation table.
+- `internal/scheduler/wake_table_test.go` — due fires exactly once; cancelled never fires; daily re-arms forward (never into the past); external wakes never fire from the scheduled pass; a refused external fire leaves the schedule standing; busy → pending retry +5m (throttled); blackout → re-pend with a pushed retry; spawn-hook errors settle skipped; a spawned tick that reads back deferred/failed keeps the occurrence pending with a 5-minute retry, NULL fire stamps and no `spawned=true` event (MEDIUM event names the reason); a still-running tick settles as fired today; validation table.
 - `internal/api/wakes_api_test.go` — real-handler round-trips: create/list/cancel/fire over a real SQLite, the exactly-one-clause law, past-`at` 400, unknown-lane 404, unwired-runner 503, wired-fire 202 then 409.
 - Run: `go test ./internal/scheduler/ -run TestWake -count=1` and `go test ./internal/api/ -run TestWake -count=1`
