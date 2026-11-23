@@ -15,7 +15,9 @@
   "block": {
     "id": "REV-006",
     "resume_basis": "last tick board event (coding-hermes-scheduler-foreman-2026-11-22-13-46-56, 14:16Z) named block REV-006 for resume; REV-003 closed by PM-cycle sibling at 15:59; REV-004 is the block's last ready row (5/6 done)",
-    "pending_rows": ["REV-004"]
+    "pending_rows": [
+      "REV-004"
+    ]
   },
   "rows": [
     {
@@ -36,5 +38,7 @@
   "residue_disclosure": [
     "stale bare .git/REBASE_HEAD (6c118748) from a completed rebase 07:41:07-07:41:37 -05 (reflog: start->continue->finish->5adf7889); no operation dirs; cleanup-ineligible, left for owner per recovery-preflight reference",
     "dirty .gitreins/tasks.yaml (+12: REV-004 in_progress entry) and untracked .gitreins/review-state.json from the crashed sibling; adopted, will be committed with tick bookkeeping"
-  ]
+  ],
+  "finished_at": "2026-11-23T02:25:00Z",
+  "recovery_note": "RECOVERED by tick coding-hermes-scheduler-foreman-2026-11-23-02-19-24: work was landed by the wave itself (product c622c707 merged as 3d5d91ac; row REV-004 complete with tier-2 PASS f55bda4b/9ae4ddce; block REV-006 6/6). No branches/worktrees left behind: wt/REV-004 worktree removed, merged branch deleted."
 }

@@ -1,0 +1,38 @@
+{
+  "tick_id": "coding-hermes-scheduler-foreman-2026-11-23-02-19-24",
+  "project": "coding-hermes-scheduler",
+  "workdir": "/home/kara/coding-hermes-scheduler/coding-herms-scheduler",
+  "mode": "serial",
+  "wave_size": 1,
+  "sizing": {
+    "nproc": 16,
+    "loadavg_1m": 28.96,
+    "slots_formula": "max(1, min(6, nproc - ceil(loadavg)))",
+    "slots": 1,
+    "wave_budget": 3,
+    "reason": "load 28.96 > 16 cores -> slots=1; serial path per box sizing (WAVE_BUDGET 3 not binding)"
+  },
+  "recovery": {
+    "manifest": "coding-hermes-scheduler-foreman-2026-11-22-23-28-43.json",
+    "outcome": "work already landed by that wave: REV-004 complete (merge 3d5d91ac; tier-2 PASS), block REV-006 6/6; manifest finished_at set; merged worktree removed, branch deleted"
+  },
+  "block": {
+    "id": "TRIAGE-006",
+    "resume_basis": "last complete tick's board event named TRIAGE-006 among next DRIVE blocks; block_drive top: CFG-SITREP-1/CFG-LIVESVC-1 owner-gated (defer_review_by 2026-11-24), TRIAGE-006 P1 with 6 mutually independent rows (one per target repo)"
+  },
+  "rows": [
+    {
+      "id": "TRIAGE-006",
+      "priority": "P1",
+      "title": "Re-triage 26 (live 19) owner-flavored rows on Hermes-DAGger/hermes-dagger against docs/lane-authority.md",
+      "worktree": "(shared product repo) /home/kara/Hermes-DAGger/hermes-dagger",
+      "branch": "master",
+      "base": "b866d0cd",
+      "worker_model": "glm-5.3-flash",
+      "worker_provider": "ollama-cloud",
+      "brief_path": "/tmp/brief-TRIAGE-006-sched-20261123.txt",
+      "premise_check": "live board /home/kara/Hermes-DAGger/hermes-dagger/.coding-hermes/board/tasks.jsonl = 19 owner-flavored rows (row title said 26; worker classifies the live 19); classification doc lives in THIS repo at docs/lane-authority.md; dagger repo clean, origin/master parity 0",
+      "ownership_check": "/proc cwd sweep clean (only self/transient); no gitreins evaluator targeting hermes-dagger; pgrep shows evaluators for TR-290 (task-router) and HARDEN-DUCKBRAIN-010 only"
+    }
+  ]
+}
