@@ -6464,3 +6464,13 @@ tasks:
   status: complete
   created_at: '2026-11-22T22:40:10.465386+00:00'
   completed_at: '2026-11-23T00:54:00.881265+00:00'
+- id: TRIAGE-006
+  title: Re-triage owner-flavored rows on Hermes-DAGger/hermes-dagger against lane-authority
+  criteria:
+  - Every owner-flavored open row in hermes-dagger's board (19 live) carries a triage
+    disposition note naming exactly one class (lane-authority/owner-gated/blocked-elsewhere/chain);
+    counts sum to the flavor count; no row re-statused without dispatchable criteria;
+    board JSONL edited line-wise; committed and pushed
+  status: complete
+  created_at: '2026-11-23T02:22:32.268437+00:00'
+  completed_at: '2026-11-23T02:46:10.961480+00:00'
