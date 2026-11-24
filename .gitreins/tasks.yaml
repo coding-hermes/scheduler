@@ -6474,3 +6474,16 @@ tasks:
   status: complete
   created_at: '2026-11-23T02:22:32.268437+00:00'
   completed_at: '2026-11-23T02:46:10.961480+00:00'
+- id: CF-355
+  title: scheduler never reads result status ok; absent ok recorded as success
+  criteria:
+  - 'In internal/scheduler, a dispatch completion reply that omits ok is never treated
+    as success: dispatchReplyVerdict refuses a result carrying neither a boolean ok
+    nor a recognised status, status=failed with no ok is recorded as FAIL, the ENVELOPE
+    mapping (completed iff ok true; failed/refused implies ok false plus reason) is
+    validated on receipt with a mismatch rejection, and unit tests cover ok-absent
+    refusal, failed-no-ok-as-FAIL, and the mismatch case - the scheduler dispatch
+    package tests pass.'
+  status: complete
+  created_at: '2026-11-23T22:30:17.922626+00:00'
+  completed_at: '2026-11-24T20:50:27.444885+00:00'
