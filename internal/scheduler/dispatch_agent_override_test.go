@@ -102,6 +102,10 @@ func TestResolveSpawnTargetOverride(t *testing.T) {
 // records ZERO requests.
 func TestDispatchLeg_TargetedOverrideHandsWorkToNamedAgent(t *testing.T) {
 	relay := newFakeRelay(t, "test-sched-inbox", "tick-agent", "TARGETED ANSWER: done")
+	// CF-355: the live dispatcher always sends a boolean ok; a bare answer is
+	// now modelled as a nonconforming reply, so this fixture conforms.
+	yes := true
+	relay.agentOK = &yes
 	_, pool, _, gatewayHits, _ := newDispatchTestRig(t, relay, true)
 	// Replace the rig's lane row with an EMPTY file: the override must be the
 	// only reason this tick is remote.

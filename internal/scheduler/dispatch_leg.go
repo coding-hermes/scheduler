@@ -446,10 +446,14 @@ func (p *SlotPool) awaitDispatchReply(ctx context.Context, proj PackedProject, t
 						ok, why := dispatchReplyVerdict(payload)
 						text := dispatchReplyText(payload)
 						if !ok {
-							if strings.TrimSpace(text) == "" {
-								text = why
+							// CF-355: a failed verdict is recorded with its
+							// NAMED reason. A real answer string the reply
+							// carried still wins (the legacy shape); the
+							// opaque payload dump never buries the refusal.
+							replyText, replyOK = why, false
+							if s := dispatchReplyStringText(payload); strings.TrimSpace(s) != "" {
+								replyText = s
 							}
-							replyText, replyOK = text, false
 						} else {
 							replyText, replyOK = text, true
 						}
@@ -724,23 +728,65 @@ func correlateDispatchReply(msg bus.InboxMessage, receipt bus.DispatchReceipt) (
 	return nil, false
 }
 
-// dispatchReplyVerdict reads the answering agent's own verdict when it sent
-// one. Absence of a verdict is a SUCCESS (the agent answered): the scheduler
-// has no basis to call an answer a failure just because it did not carry a
-// flag.
+// dispatchReplyStatuses is the result field set the scheduler reads from a
+// dispatch reply (CF-355, mirroring code-factory specs/ENVELOPE.md — "`ok` is
+// the verdict; `status` is the node's own classification"). `ok` stays the
+// verdict; a `status` a reply claims must not contradict it, and a result
+// carrying neither is refused — never silently recorded as a pass.
+var dispatchReplyStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"refused":   true,
+}
+
+// dispatchReplyVerdict reads the answering agent's own verdict under the
+// agreed result-field mapping (CF-355, code-factory specs/ENVELOPE.md):
+// status "completed" requires ok=true; "failed"/"refused" require ok=false
+// plus a reason; a contradicting pair (ok=false with "completed", ok=true
+// with "failed"/"refused") is refused with the contradiction named; and a
+// reply carrying NEITHER a boolean ok NOR a recognised status is a refusal —
+// silence is never laundered into a success.
 func dispatchReplyVerdict(payload map[string]any) (bool, string) {
-	if v, ok := payload["ok"].(bool); ok && !v {
-		if s := decodedReplyField(payload, "error_b64"); s != "" {
-			return false, s
+	okVal, okPresent := payload["ok"].(bool)
+	status, _ := payload["status"].(string)
+	statusRecognised := dispatchReplyStatuses[status]
+
+	if okPresent && !okVal {
+		// ok=false is a failure unless status claims completion.
+		if statusRecognised && status == "completed" {
+			return false, `refused: ok=false contradicts status="completed"`
 		}
-		for _, k := range []string{"error", "err", "reply", "text", "message"} {
-			if s, ok := payload[k].(string); ok && strings.TrimSpace(s) != "" {
-				return false, s
-			}
-		}
-		return false, "the agent reported ok=false"
+		return false, dispatchReplyFailureReason(payload, "the agent reported ok=false")
 	}
-	return true, ""
+	if okPresent {
+		// ok=true is a success unless status claims failure or refusal.
+		if statusRecognised && status != "completed" {
+			return false, fmt.Sprintf("refused: ok=true contradicts status=%q", status)
+		}
+		return true, ""
+	}
+	// No boolean ok: the status member is the only possible verdict carrier.
+	if statusRecognised {
+		if status == "completed" {
+			return false, `refused: status="completed" requires ok=true, ok absent`
+		}
+		return false, dispatchReplyFailureReason(payload, "the agent reported status="+status+" with no ok field")
+	}
+	return false, "refused: reply carries neither ok nor a recognised status"
+}
+
+// dispatchReplyFailureReason digs the agent's own failure description out of
+// the reply, falling back to the named default when it carried none.
+func dispatchReplyFailureReason(payload map[string]any, fallback string) string {
+	if s := decodedReplyField(payload, "error_b64"); s != "" {
+		return s
+	}
+	for _, k := range []string{"error", "err", "reply", "text", "message"} {
+		if s, ok := payload[k].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return fallback
 }
 
 // decodedReplyField returns the base64-encoded member `key` as text, or "".
@@ -760,6 +806,21 @@ func decodedReplyField(payload map[string]any, key string) string {
 // string is rendered as JSON rather than dropped: an opaque reply is still a
 // reply, and the operator can read it.
 func dispatchReplyText(payload map[string]any) string {
+	if s := dispatchReplyStringText(payload); s != "" {
+		return s
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// dispatchReplyStringText extracts only a REAL string answer member of the
+// reply (reply_b64 / reply / answer / text / message / output) — "" when none
+// exists, with no payload dump fallback (CF-355: the failure path uses it to
+// keep the named verdict reason ahead of an opaque JSON blob).
+func dispatchReplyStringText(payload map[string]any) string {
 	// The completion travels base64 (reply_b64) when the agent's own answer
 	// quotes JSON — a foreman report names board rows and curl bodies, and the
 	// relay's pre-match refuses that shape 403 GUARD_BLOCKED on the way home.
@@ -774,11 +835,7 @@ func dispatchReplyText(payload map[string]any) string {
 			return s
 		}
 	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return string(raw)
+	return ""
 }
 
 // recordDispatchReceipt persists one receipt write. Best-effort by contract in

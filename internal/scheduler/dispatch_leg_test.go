@@ -66,8 +66,9 @@ type fakeRelay struct {
 	schedulerInbox string
 	targetAgent    string
 	replyText      string
-	agentOK        *bool // nil = no verdict member (a plain answer)
-	holdReply      bool  // leave accepted work unanswered to exercise cancel/timeout exits
+	agentOK        *bool  // nil = no verdict member (a plain answer)
+	agentStatus    string // the reply's `status` member ("" = none) — CF-355 fixtures
+	holdReply      bool   // leave accepted work unanswered to exercise cancel/timeout exits
 	// preseed (SCHED-GAP-16984): foreign messages dropped into the
 	// scheduler's inbox once, before the answer materialises, so the first
 	// retrieve leases them together.
@@ -174,6 +175,9 @@ func (f *fakeRelay) handleRetrieve(agent string, r *http.Request, w http.Respons
 			if f.agentOK != nil {
 				answer["ok"] = *f.agentOK
 			}
+			if f.agentStatus != "" {
+				answer["status"] = f.agentStatus
+			}
 			f.inbox[agent] = append(f.inbox[agent], fakeMsg{
 				id: "reply-1", sender: d.agent, payload: mustJSON(f.t, answer),
 			})
@@ -272,7 +276,13 @@ func newDispatchTestRig(t *testing.T, relay *fakeRelay, withIdentity bool) (*fak
 	targetFile := writeDispatchTargets(t, `{"lane":"helix","agent":"`+relay.targetAgent+`","workdir":"/agent/helix"}`+"\n")
 	t.Setenv(EnvDispatchTargets, targetFile)
 
+	// CF-355: the rig's loop is stopped at test end. Any tick path that
+	// reaches ForceEvaluate starts the evalDrain goroutine (SCHED-GAP-1575-A),
+	// which parks on stopCh until Stop closes it — an unstopped rig loop
+	// parks that goroutine for the rest of the binary and the SCHED-GAP-1726
+	// suite-exit census counts it.
 	loop := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+	t.Cleanup(loop.Stop)
 	loop.SetSchedulerBus(NewSchedulerBus(client))
 	pool := loop.slotPool
 	pool.spawner.SetGatewayClient(NewGatewayClient(gw.URL, "k", 5*time.Second))
@@ -301,6 +311,10 @@ func writeFileHelper(path, body string) error {
 // ever reaching the shared gateway.
 func TestDispatchLeg_HandsWorkToNamedAgentAndCorrelatesTheAnswer(t *testing.T) {
 	relay := newFakeRelay(t, "test-sched-inbox", "helix-agent", "AGENT ANSWER: shipped the fix")
+	// CF-355: the live dispatcher always sends a boolean ok; a bare answer is
+	// now modelled as a nonconforming reply, so this fixture conforms.
+	yes := true
+	relay.agentOK = &yes
 	_, pool, _, gatewayHits, _ := newDispatchTestRig(t, relay, true)
 
 	db := pool.spawner.db
@@ -488,6 +502,10 @@ func TestCorrelateDispatchReply_IdentityNotArrival(t *testing.T) {
 // counts, and is acked so the inbox cannot accumulate unclassifiable residue.
 func TestDispatchLeg_NamesAndAcksUncorrelatableReply(t *testing.T) {
 	relay := newFakeRelay(t, "test-sched-inbox", "helix-agent", "AGENT ANSWER: shipped the fix")
+	// CF-355: the live dispatcher always sends a boolean ok; a bare answer is
+	// now modelled as a nonconforming reply, so this fixture conforms.
+	yes := true
+	relay.agentOK = &yes
 	relay.preseed = []fakeMsg{{
 		id:     "stray-1",
 		sender: "helix-agent",

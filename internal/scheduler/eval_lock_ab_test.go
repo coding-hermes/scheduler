@@ -175,6 +175,10 @@ func TestPERF001R2EvalPassAB(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	seedPerf001r2Projects(t, db, perf001r2ABProjects)
 	loop := NewLoop(db, time.Minute, time.Hour, 10, 1, 5)
+	// CF-355: ForceEvaluate below starts the evalDrain goroutine, which parks
+	// until Stop — the pre-fix leak the SCHED-GAP-1726 suite-exit census counts
+	// at the end of every full-suite run.
+	defer loop.Stop()
 	defer perf001r2QuietLogs()()
 
 	type sample struct {

@@ -250,6 +250,11 @@ func TestUsagePoolLeaseReleaseAcrossRemoteCompletionCancelAndTimeout(t *testing.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			relay := newFakeRelay(t, "usage-pool-scheduler", "usage-pool-agent", "completed")
+			// CF-355: the live dispatcher always sends a boolean ok; a bare
+			// answer is now modelled as a nonconforming reply, so this
+			// fixture conforms (the completion arm must complete).
+			yes := true
+			relay.agentOK = &yes
 			relay.holdReply = tc.holdReply
 			_, pool, _, _, _ := newDispatchTestRig(t, relay, true)
 			db := pool.spawner.db
