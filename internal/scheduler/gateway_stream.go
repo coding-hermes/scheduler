@@ -289,6 +289,18 @@ func mergePostTrace(dst **GatewayPOSTTrace, next *GatewayPOSTTrace) {
 	d.Classification = next.Classification
 	d.IdleFired = next.IdleFired
 	d.Events += next.Events
+	// SCHED-GAP-1641 (fallback-hop parity): fold the FINAL attempt's usage
+	// the same way its classification wins. A failed attempt never records
+	// usage, so without this fold a merged multi-attempt trace kept the
+	// first attempt's zeros and the instant-one-shot classifier's "zero
+	// means absent" fail-open clause swallowed the gate — a one-shot
+	// FALLBACK turn booked a healthy COMPLETED tick (review probe
+	// 2026-11-24: primary 401 → fallback answered events=3 tokens 3/5).
+	// Zero stays "absent": an attempt that recorded no usage leaves any
+	// earlier reading intact, so the fail-open contract is unchanged.
+	if next.TokensIn != 0 || next.TokensOut != 0 {
+		d.TokensIn, d.TokensOut = next.TokensIn, next.TokensOut
+	}
 	if next.SessionID != "" {
 		d.SessionID = next.SessionID
 	}
