@@ -32,10 +32,10 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 
 > **Note:** releases are published on the
 > [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
-> checkout of `main` passes `make test` (28 packages; a 29th, the
-> root `integration_test.go` package, is `//go:build integration`-tagged —
-> it is not exercised by `make test` and passes green only via
-> `go test -tags integration -short -count=1 .`) and `make build`,
+> checkout of `main` passes `make test` (29 packages by `go list ./...`;
+> the root package's `integration_test.go` is `//go:build integration`-tagged,
+> so `make test` exercises 28 of them — the root package runs green only
+> via `go test -tags integration -short -count=1 .`) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
 > run both on a fresh checkout before trusting any step here. Past flaky-CI
 > episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
