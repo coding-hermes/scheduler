@@ -440,3 +440,43 @@ func measureTerminalWindow(db *sql.DB, project string, started, finished time.Ti
 	}
 	return countGitChanges(workdir, started, finished)
 }
+
+// measureGatewayWindow is the gateway COMPLETED path's measurement
+// (SCHED-GAP-17044): it resolves the git workdir exactly like
+// resolveMeasureWorkdir — the registered workdir when it IS a git checkout,
+// else the repo_url local: checkout — then counts the [start, end] window
+// there, instead of measuring the registered workdir blind.
+//
+// Why: stand-in workdirs are deliberately NOT git roots (the pulse-pm lane
+// runs in ~/.hermes/stand-in/<lane>/<project> while its product — commits the
+// gateway session pushes — lands in the checkout repo_url names). Measuring
+// the registered dir returned (0,0) for those lanes and lifecycle stamped a
+// real commit-and-push tick dry_run/no_changes (pulse-pm-2026-11-25-10-13-20:
+// 3.2M in-tokens counted as dry burn).
+//
+// Resolution contract:
+//   - a resolvable git repo is measured there; a git error in a RESOLVED repo
+//     is UNMEASURED (-1/-1, the SCHED-GAP-1652 sentinel — direction of error:
+//     commits must never be lost, and a fabricated 0 reads as no work);
+//   - nothing resolvable (missing projects row, repo_url not local: or not a
+//     git repo, nil db) falls back to the registered workdir's legacy shape —
+//     countGitChanges there yields (0,0) for a non-git dir, exactly the
+//     pre-17044 behavior for lanes with no measurable repo.
+//
+// The projects-table lookup is resolveMeasureWorkdir's own query, so the
+// failed/timeout half (measureTerminalWindow) and this completed half can
+// never resolve differently for the same row.
+func measureGatewayWindow(db *sql.DB, registeredWorkdir, project string, start, end time.Time) (commits, files int) {
+	if db != nil {
+		if dir, ok := resolveMeasureWorkdir(db, project); ok {
+			c, f, err := countGitChangesErr(dir, start, end)
+			if err != nil {
+				log.Printf("WARN: %s git window measurement failed in resolved workdir %s — stamping unmeasured -1/-1 (SCHED-GAP-17044): %v",
+					project, dir, err)
+				return -1, -1
+			}
+			return c, f
+		}
+	}
+	return countGitChanges(registeredWorkdir, start, end)
+}

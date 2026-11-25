@@ -241,16 +241,25 @@ func stickerCostUSD(provider, model string, tokensIn, tokensOut int) float64 {
 // attributed by every concurrent tick's window. Commits are never lost; they
 // may be counted more than once.
 func gitCommitCountInWindow(ctx context.Context, workdir, since, until string) int {
+	n, _ := gitCommitCountInWindowErr(ctx, workdir, since, until)
+	return n
+}
+
+// gitCommitCountInWindowErr is gitCommitCountInWindow with the error
+// preserved (SCHED-GAP-17044): a git failure and an unparseable count both
+// return an error instead of the silent 0, so the gateway completed path can
+// stamp the -1 unmeasured sentinel rather than a fabricated zero.
+func gitCommitCountInWindowErr(ctx context.Context, workdir, since, until string) (int, error) {
 	out, err := runGit(ctx, workdir, "rev-list", "--all", "--count",
 		"--since="+since, "--until="+until)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return n
+	return n, nil
 }
 
 // gitFilesChanged returns the number of unique files changed by commits in
@@ -340,6 +349,28 @@ func countGitChanges(workdir string, start, end time.Time) (int, int) {
 	commits := gitCommitCountInWindow(ctx, workdir, since, until)
 	files := gitFilesChanged(ctx, workdir, since, until)
 	return commits, files
+}
+
+// countGitChangesErr is the error-reporting variant of countGitChanges
+// (SCHED-GAP-17044): the gateway COMPLETED path must be able to tell a
+// MEASURED zero from a BROKEN measurement — a resolved repo whose git
+// invocation fails must stamp the unmeasured -1/-1 sentinel, never a
+// fabricated 0 (a 0 here is what let real commit-and-push ticks read as
+// dry_run). Only the commit-count leg is gated: once the count succeeds the
+// window is measured, and the file-diff leg keeps countGitChanges' silent-0
+// contract (a counted window with an errored diff still reports its real
+// commit figure).
+func countGitChangesErr(workdir string, start, end time.Time) (int, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	since := start.Format(time.RFC3339)
+	until := end.Format(time.RFC3339)
+	commits, err := gitCommitCountInWindowErr(ctx, workdir, since, until)
+	if err != nil {
+		return 0, 0, err
+	}
+	files := gitFilesChanged(ctx, workdir, since, until)
+	return commits, files, nil
 }
 
 // formatCostSummary returns a one-line log-friendly summary string.

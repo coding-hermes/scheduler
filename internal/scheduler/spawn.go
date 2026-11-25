@@ -3289,6 +3289,17 @@ type SpawnedTick struct {
 	gwAttempts int
 }
 
+// spawnerDB returns the Spawner's *sql.DB for the completed path's
+// measurement resolution (SCHED-GAP-17044). Nil-safe for the tests and
+// tooling that build a SpawnedTick without a spawner; a nil result makes
+// measureGatewayWindow fall back to the registered-workdir shape.
+func (st *SpawnedTick) spawnerDB() *sql.DB {
+	if st == nil || st.spawner == nil {
+		return nil
+	}
+	return st.spawner.db
+}
+
 // Wait blocks until the process exits and returns the outcome.
 // For gateway-completed ticks (HTTP spawn), returns immediately.
 func (st *SpawnedTick) Wait() TickOutcome {
@@ -3538,7 +3549,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		// from the call — no shared completion-path global (see
 		// computeCostUSDWithAsOf).
 		cost, priceAsOf := computeCostUSDWithAsOf(st.provider, st.model, st.rate, tokensIn, tokensOut)
-		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
+		// SCHED-GAP-17044: resolve the measurement workdir like
+		// resolveMeasureWorkdir — workdir-if-git else repo_url's local:
+		// checkout — never st.workdir blind. A stand-in workdir (a plain
+		// non-git dir; the lane's commits land in the repo_url checkout the
+		// gateway session pushed to) measured (0,0) here, and lifecycle
+		// stamped a real commit-and-push tick dry_run/no_changes.
+		commits, files := measureGatewayWindow(st.spawnerDB(), st.workdir, st.Project, st.reqStart, st.completeAt)
 		// SCHED-GAP-085: closure-evidence gate. A row closed within this
 		// tick's window with NO reasoning/commit_hash/worker_summary rejects
 		// the tick (lifecycle.Complete records status=failed/outcome=failed).
