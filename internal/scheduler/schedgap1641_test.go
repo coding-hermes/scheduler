@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -257,5 +258,148 @@ func TestSCHEDGAP1641_MissingTraceFieldsStayHealthy(t *testing.T) {
 	}
 	if got := failureReasonClass(outcome.Error); got == FailureReasonInstantTurn {
 		t.Errorf("legacy trace classified instant_turn — the sentinel must only fire on PRESENT fields")
+	}
+}
+
+// ── SCHED-GAP-1641 review follow-up (2026-11-24): the FALLBACK hop ─────────
+//
+// The instant-one-shot gate was wired only around the PRIMARY attempt's
+// completion. When the gateway rejected the primary pair (HTTP 401
+// ErrGatewayKeyRejected, the TASK-ROUTER-002 pair-rejection message) and the
+// FALLBACK hop answered, the merged trace carried the fingerprint
+// (classification=completed, events=3, attempts=2) but the classifier still
+// failed open: mergePostTrace folds attempts/events/classification from every
+// attempt yet never folds the usage fields, so the first (failed, usage-less)
+// attempt's zeros survived and the "zero means absent" fail-open clause
+// swallowed the gate. A one-shot fallback turn booked a healthy COMPLETED
+// tick (tokens_in=3 / tokens_out=5, no instant-turn WARN) — the exact burst
+// shape 1641 was written to stop, one hop over.
+
+// sse1641FallbackGateway serves the reviewer's probe shape: every dispatch
+// for reject-model is answered with a 401 PAIR rejection ("provider rejected"
+// — deliberately NOT the terminal "Invalid gateway API key" message, so the
+// spawn advances to the fallback hop), and the fallback pair gets the
+// instant-fingerprint SSE turn (3 events, tokens_in=3, tokens_out=5). Every
+// dispatch is recorded for the census assertions.
+type sse1641FallbackGateway struct {
+	mu         sync.Mutex
+	dispatches []dispatchRecord
+}
+
+func (g *sse1641FallbackGateway) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model    string `json:"model"`
+			Provider string `json:"provider"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		g.mu.Lock()
+		g.dispatches = append(g.dispatches, dispatchRecord{model: req.Model, provider: req.Provider})
+		g.mu.Unlock()
+		if req.Model == "reject-model" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]string{"type": "auth_error", "message": "provider rejected"},
+			})
+			return
+		}
+		sse1641Handler(3, 3, 5)(w, r)
+	}
+}
+
+func (g *sse1641FallbackGateway) snapshot() []dispatchRecord {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]dispatchRecord(nil), g.dispatches...)
+}
+
+// TestSCHEDGAP1641_FallbackHopInstantTurnFailed — the fallback hop's
+// completion must route through the SAME instant-one-shot gate as the
+// primary path: primary 401-rejected, fallback answers the one-shot
+// fingerprint, and the tick must book failed with failure_reason=instant_turn
+// and the same WARN — never a healthy completed tick. Full stack through the
+// slot pool + lifecycle.Complete, mirroring TestSCHEDGAP1641_InstantTurnNotCommitted.
+func TestSCHEDGAP1641_FallbackHopInstantTurnFailed(t *testing.T) {
+	gw := &sse1641FallbackGateway{}
+	db := newTestDB(t)
+	srv := httptest.NewServer(gw.handler())
+	t.Cleanup(srv.Close)
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.SetNoDeliver(true)
+	loop.SetGatewayClient(NewGatewayClient(srv.URL, "test-key", 30*time.Second))
+	loop.SetNoExecFallback(true)
+	loop.SetTickTimeout(30 * time.Second)
+	loop.SetGatewayResponseTimeout(20 * time.Second) // knob < tick deadline → supervised SSE path
+	t.Cleanup(func() { _ = db.Close() })
+
+	// The WARN is part of the classification contract (the operator signal
+	// that caught the 2026-09-25 burst) — capture it like AC 5 does.
+	buf := &admitLogBuf{}
+	prev := log.Writer()
+	log.SetOutput(buf)
+	defer log.SetOutput(prev)
+
+	const projectName = "gap1641-fallback-instant"
+	mustCreateProjectINFRA012(t, loop.db, projectName)
+	project := PackedProject{
+		Name:             projectName,
+		Workdir:          t.TempDir(),
+		Model:            "reject-model",
+		Provider:         "reject-provider",
+		FallbackModel:    "fallback-model",
+		FallbackProvider: "fallback-provider",
+	}
+	tickID := loop.slotPool.Spawn(project, time.Now(), true, loop.db)
+	status, ok := waitForTickTerminal(t, loop.db, tickID, 10*time.Second)
+	if !ok {
+		t.Fatalf("tick %s never reached a terminal state within 10s", tickID)
+	}
+
+	// Premise: the instant fingerprint is the FALLBACK hop's, not the
+	// primary's — exactly two dispatches, primary rejected then fallback 200.
+	dispatches := gw.snapshot()
+	if len(dispatches) != 2 {
+		t.Fatalf("dispatch count = %d, want exactly 2 (primary 401 + fallback 200)", len(dispatches))
+	}
+	if dispatches[0].model != "reject-model" || dispatches[0].provider != "reject-provider" {
+		t.Errorf("dispatch 1 = (%q, %q), want the rejected primary (reject-model, reject-provider)",
+			dispatches[0].model, dispatches[0].provider)
+	}
+	if dispatches[1].model != "fallback-model" || dispatches[1].provider != "fallback-provider" {
+		t.Errorf("dispatch 2 = (%q, %q), want the fallback hop (fallback-model, fallback-provider)",
+			dispatches[1].model, dispatches[1].provider)
+	}
+
+	var outcome, errText, failureReason string
+	if err := loop.db.QueryRow(`SELECT outcome, COALESCE(error,''), failure_reason FROM ticks WHERE id = ?`, tickID).Scan(&outcome, &errText, &failureReason); err != nil {
+		t.Fatalf("query tick row: %v", err)
+	}
+
+	if status != string(TickFailed) {
+		t.Errorf("ticks.status = %q, want %q — a one-shot FALLBACK turn must not account healthy (pre-fix this row read completed)", status, TickFailed)
+	}
+	if outcome != "failed" {
+		t.Errorf("ticks.outcome = %q, want failed (pre-fix this row read completed)", outcome)
+	}
+	if !strings.Contains(errText, GatewayInstantTurnSentinel) {
+		t.Errorf("ticks.error = %q, want the instant-turn sentinel %q", errText, GatewayInstantTurnSentinel)
+	}
+	if failureReason != FailureReasonInstantTurn {
+		t.Errorf("failure_reason = %q, want %q (same classification as the primary-path gate)", failureReason, FailureReasonInstantTurn)
+	}
+	if !strings.Contains(buf.b.String(), "WARN: GATEWAY INSTANT TURN") {
+		t.Errorf("log capture missing the WARN: GATEWAY INSTANT TURN line:\n%s", buf.b.String())
+	}
+
+	// The fix's mechanism, pinned: the merged trace now carries the FINAL
+	// attempt's usage (3 in / 5 out), so the classifier sees the fingerprint
+	// instead of the failed first attempt's zeros.
+	var traceStr string
+	if err := loop.db.QueryRow(`SELECT gateway_trace FROM ticks WHERE id = ?`, tickID).Scan(&traceStr); err != nil {
+		t.Fatalf("query gateway_trace: %v", err)
+	}
+	if !strings.Contains(traceStr, `"tokens_in":3`) || !strings.Contains(traceStr, `"tokens_out":5`) {
+		t.Errorf("gateway_trace = %s, want the fallback attempt's usage folded in (tokens_in=3, tokens_out=5)", traceStr)
 	}
 }
