@@ -6504,3 +6504,14 @@ tasks:
   status: complete
   created_at: '2026-11-25T05:41:26.593950+00:00'
   completed_at: '2026-11-25T06:16:47.534838+00:00'
+- id: SCHEDGAP-000001
+  title: Watchdog must alert on refused :9090 listener and db!=connected, not silently
+    ride out
+  criteria:
+  - With SCHEDULER pointed at a refused port (127.0.0.1:1) the watchdog prints a fired
+    alert line and exits non-zero rather than a silent exit 0; against the healthy
+    daemon it exits 0; a db!=connected health payload alerts without restarting the
+    provably-live daemon
+  status: complete
+  created_at: '2026-11-25T15:48:32.811398+00:00'
+  completed_at: '2026-11-25T16:16:03.662941+00:00'
