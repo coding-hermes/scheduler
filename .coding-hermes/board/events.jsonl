@@ -2014,3 +2014,4 @@
 {"id":1795553617728757006,"timestamp":"2026-11-25 15:43:59","event_type":"task_created","task_id":"INT-CI-4198","actor":"foreman","detail":"{\"id\":\"INT-CI-4198\",\"status\":\"pending\"}","tick_number":null}
 {"id":1795553617728757007,"timestamp":"2026-11-25 15:48:22","event_type":"task_created","task_id":"SCHED-GAP-17042","actor":"coding-hermes-scheduler-ops","detail":"{\"id\":\"SCHED-GAP-17042\",\"status\":\"pending\"}","tick_number":null}
 {"id":1795553617728757008,"timestamp":"2026-11-25 15:48:22","event_type":"task_created","task_id":"SCHED-GAP-17043","actor":"coding-hermes-scheduler-ops","detail":"{\"id\":\"SCHED-GAP-17043\",\"status\":\"pending\"}","tick_number":null}
+{"id":1795553617728757009,"timestamp":"2026-11-25 16:12:38","event_type":"task_completed","task_id":"SCHEDGAP-000001","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
