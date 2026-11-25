@@ -28,6 +28,12 @@
 #      restart a provably-live daemon (same spirit as the 2026-09-21
 #      false-CRITICAL repair in watchdog.sh — DB-backed endpoints queue on
 #      the single serialized SQLite connection; /api/v1/live never does).
+#      Case c also reads the /api/v1/health PAYLOAD (SCHEDGAP-000001): when
+#      the scheduler and gateway are both up but the payload's `db` field is
+#      present and != "connected", an alert fires and the script exits
+#      non-zero WITHOUT restarting the provably-live daemon — never restart
+#      a live daemon over a DB-backed probe (2026-09-21 false-CRITICAL
+#      guard). An unreadable health payload keeps the case-c NOTE behavior.
 #   d. BOTH DEAD (SCHED-GAP-16971) — /api/v1/live fails AND the gateway
 #      health probe fails → the gateway is brought up FIRST and verified,
 #      and only then is the scheduler restarted. On 2026-11-03 13:41 the
@@ -50,27 +56,46 @@
 #   SCHED_LIVE_URL        (default http://127.0.0.1:9090/api/v1/live)
 #   GATEWAY_HEALTH_URL    (default http://127.0.0.1:8642/health)
 #   SCHED_PROJECTS_URL    (default http://127.0.0.1:9090/api/v1/projects)
+#   SCHED_HEALTH_URL      (default http://127.0.0.1:9090/api/v1/health)
+#   SCHEDULER             (back-compat alias, deployed runtime / gate arms:
+#                          base URL that seeds SCHED_LIVE_URL / SCHED_PROJECTS_URL /
+#                          SCHED_HEALTH_URL when they are unset; only
+#                          SCHEDULER=<base> is honored, and the per-URL vars win)
+#   STATE_FILE            (accepted for deployed-runtime compatibility; unused —
+#                          this verdict is stateless, see the env block below)
 #   SCHED_RESTART_CMD     (default systemctl --user restart coding-hermes-scheduler)
 #   GATEWAY_RESTART_CMD   (default systemctl --user restart
 #                          coding-hermes-scheduler-gateway) — reached ONLY
 #                          from the both-dead branch; a tick where the
 #                          gateway answered 200 never runs it.
 # Exit codes: 0 healthy/verified restart (incl. both-dead recovery with BOTH
-# endpoints answering 200) · 1 restart failed or 0-projects warning (a
-# both-dead failure names its blocker: gateway or scheduler) · 2 gateway
-# dead while scheduler alive (no restart performed).
+# endpoints answering 200) · 1 restart failed or 0-projects warning or db
+# != "connected" alert (a both-dead failure names its blocker: gateway or
+# scheduler) · 2 gateway dead while scheduler alive (no restart performed).
 
+SCHEDULER_BASE="${SCHEDULER:-}"   # back-compat alias (deployed runtime / gate arms): base URL seeding the three scheduler probe URLs below; GATEWAY_HEALTH_URL keeps its own default
+if [ -n "$SCHEDULER_BASE" ]; then
+    SCHED_LIVE_URL="${SCHED_LIVE_URL:-$SCHEDULER_BASE/api/v1/live}"
+    SCHED_PROJECTS_URL="${SCHED_PROJECTS_URL:-$SCHEDULER_BASE/api/v1/projects}"
+    SCHED_HEALTH_URL="${SCHED_HEALTH_URL:-$SCHEDULER_BASE/api/v1/health}"
+fi
 SCHED_LIVE_URL="${SCHED_LIVE_URL:-http://127.0.0.1:9090/api/v1/live}"
 GATEWAY_HEALTH_URL="${GATEWAY_HEALTH_URL:-http://127.0.0.1:8642/health}"
 SCHED_PROJECTS_URL="${SCHED_PROJECTS_URL:-http://127.0.0.1:9090/api/v1/projects}"
+SCHED_HEALTH_URL="${SCHED_HEALTH_URL:-http://127.0.0.1:9090/api/v1/health}"
 SCHED_RESTART_CMD="${SCHED_RESTART_CMD:-systemctl --user restart coding-hermes-scheduler}"
 GATEWAY_RESTART_CMD="${GATEWAY_RESTART_CMD:-systemctl --user restart coding-hermes-scheduler-gateway}"
+# STATE_FILE (deployed-runtime convention) is accepted but unused: the
+# four-case verdict is stateless — each run re-probes from scratch instead of
+# tracking consecutive-failure streaks (the old script's streak file is what
+# silently rode out the 11-23 5.6h wedge).
 
 LIVE_TIMEOUT=5            # /api/v1/live is DB-free (<10ms); 5s is ~500x headroom
 GATEWAY_PROBE_ATTEMPTS="${GATEWAY_PROBE_ATTEMPTS:-3}"
 GATEWAY_PROBE_INTERVAL="${GATEWAY_PROBE_INTERVAL:-15}"  # secs between probes; 3 probes over ~30s
 GATEWAY_PROBE_TIMEOUT=5
 PROJECTS_TIMEOUT=25       # DB-backed handler; must exceed the pool busy_timeout (5s)
+HEALTH_TIMEOUT=25         # DB-backed handler; same class as /projects (must exceed the pool busy_timeout)
 RESTART_SETTLE_SECS=5
 
 http_code() { # url timeout → HTTP code ("000" = refused/timeout/no answer)
@@ -110,6 +135,19 @@ project_count() { # → count of projects, or empty when payload unreadable
 try:
     d = json.load(sys.stdin)
     print(len(d.get("projects", [])))
+except Exception:
+    print("")' 2>/dev/null
+}
+
+sched_db_status() { # → value of the health payload's `db` field, or empty when unreadable/absent
+    curl -s --max-time "$HEALTH_TIMEOUT" "$SCHED_HEALTH_URL" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    if "db" in d:
+        print(str(d["db"]))
+    else:
+        print("")
 except Exception:
     print("")' 2>/dev/null
 }
@@ -184,7 +222,23 @@ if [ "$GW" != "200" ]; then
     exit 2
 fi
 
-# ── Case c: alive (scheduler + gateway) — project-count warning path ──
+# ── Case c: alive (scheduler + gateway) — db-health + project-count paths ──
+
+# DB-backed health payload (SCHEDGAP-000001): a live daemon whose health
+# endpoint says db != "connected" is alert-worthy, but NEVER a restart —
+# DB-backed endpoints queue on the serialized SQLite connection (2026-09-21
+# false-CRITICAL guard), so a live daemon must not be killed over one. An
+# unreadable/absent payload keeps the case-c NOTE behavior (no alert).
+DB=$(sched_db_status)
+if [ -z "$DB" ]; then
+    echo "NOTE: scheduler live + gateway healthy, but $SCHED_HEALTH_URL gave no readable payload (or no db field) — not restarting a provably-live daemon (2026-09-21 false-CRITICAL gate); re-checking next cycle."
+    exit 0
+fi
+if [ "$DB" != "connected" ]; then
+    echo "⚠️ SCHEDULER ALIVE BUT DB NOT CONNECTED — GET $SCHED_HEALTH_URL -> {\"db\":\"$DB\"} at $(date -Iseconds). NOT restarting the provably-live daemon (a DB-backed probe must never restart a live daemon; 2026-09-21 false-CRITICAL guard). Attend to the scheduler's database path/connection."
+    exit 1
+fi
+
 COUNT=$(project_count)
 if [ -z "$COUNT" ]; then
     # Payload unreadable while the daemon is provably live: slow/queueing

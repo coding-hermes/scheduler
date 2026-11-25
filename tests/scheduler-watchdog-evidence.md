@@ -268,3 +268,100 @@ Harness location at run time:
 from this section as needed: stub_server.py, sched-restart-stub.sh,
 gw-restart-stub.sh, and a driver that asserts every invariant above and
 exits non-zero on any failure).
+
+---
+
+# SCHEDGAP-000001 — db!=connected alert + SCHEDULER/STATE_FILE back-compat evidence
+
+Gate runs (2026-11-25 ~10:52-10:53 -05) against the updated
+`scripts/scheduler-watchdog.sh` (case c now also reads the /api/v1/health
+payload). New verdict arms, in the case-c position (scheduler live + gateway
+up):
+
+- health payload readable and `db` field present and != "connected" → fired
+  alert line naming the value, exit 1, NO restart of the provably-live
+  daemon (2026-09-21 false-CRITICAL guard preserved: DB-backed probes must
+  never restart a live daemon; the slow/queueing probe stays silent/NOTE).
+- health payload unreadable (or no `db` field) → NOTE + exit 0, same shape
+  as the existing projects-unreadable NOTE (not turned into an alert).
+- `db` == "connected" → unchanged: fall through to the project-count check,
+  silent exit 0 when healthy.
+
+Back-compat (deployed runtime / gate-arm env names): `SCHEDULER=<base>` is
+accepted as an alias seeding SCHED_LIVE_URL / SCHED_PROJECTS_URL /
+SCHED_HEALTH_URL (per-URL vars win; GATEWAY_HEALTH_URL keeps its own
+default). `STATE_FILE` is accepted but unused — the four-case verdict is
+stateless (the old streak file is what silently rode out the 11-23 5.6h
+wedge). All pre-existing env names keep working.
+
+Every run below used STUB restart commands (`restart-stub.sh`, which only
+appends `STUB-RESTART-INVOKED role=<role>` to a log) and injected URLs; no
+real systemd unit was touched. `bash -n scripts/scheduler-watchdog.sh` →
+clean. Live scheduler MainPID 3547044 before AND after every run.
+
+## G1 — refused-port arm (SCHEDULER alias) → fired alert, exit 1, NOT silent
+
+```
+$ STUB_LOG=$SCRATCH SCHEDULER=http://127.0.0.1:1 \
+  GATEWAY_HEALTH_URL=http://127.0.0.1:8642/health \
+  SCHED_RESTART_CMD=$SCRATCH/restart-stub.sh \
+  GATEWAY_RESTART_CMD=$SCRATCH/restart-stub.sh \
+  STATE_FILE=$SCRATCH/watchdog-state.txt \
+  bash scripts/scheduler-watchdog.sh
+Scheduler unresponsive at 2026-11-25T10:52:25-05:00 (GET http://127.0.0.1:1/api/v1/live -> HTTP 000 within 5s) — probing the gateway BEFORE any restart (SCHED-GAP-16971)...
+Gateway probe result: GET http://127.0.0.1:8642/health -> HTTP 200 after up to 3 probe(s) x 15s.
+Gateway is up (GET http://127.0.0.1:8642/health -> HTTP 200); the scheduler is the blocker — restarting via systemd...
+FAILED: Scheduler did not come back up at 2026-11-25T10:52:30-05:00 (GET http://127.0.0.1:1/api/v1/live -> HTTP 000)
+exit=1
+```
+
+Fired alert lines present (Scheduler unresponsive + FAILED), exit non-zero —
+the pre-change deployed script's silent-exit-0 wedge is closed. Restart
+stub invocations: exactly 1 (the `systemctl` default was overridden by the
+stub; no real unit touched). STATE_FILE accepted, nothing written.
+
+## G2 — healthy arm (default URLs, live daemon :9090 + gateway :8642) → exit 0
+
+```
+$ bash scripts/scheduler-watchdog.sh
+exit=0
+```
+
+No output — healthy watchdog stays quiet; the live daemon's
+/api/v1/health reports db=connected, so the payload check falls through to
+the project-count check and the existing silent exit. Scheduler MainPID
+unchanged (3547044).
+
+## G3 — db!=connected arm → alert naming db=disconnected, exit 1, ZERO restarts
+
+Stub scheduler on 127.0.0.1:18991: /api/v1/live → 200, /api/v1/health →
+`{"db":"disconnected","status":"degraded"}`, /api/v1/projects →
+`{"projects":[{"id":"stub-project"}]}` (>=1 project). Live gateway URL
+(8642) answered 200.
+
+```
+$ STUB_LOG=$SCRATCH SCHEDULER=http://127.0.0.1:18991 \
+  GATEWAY_HEALTH_URL=http://127.0.0.1:8642/health \
+  SCHED_RESTART_CMD=$SCRATCH/restart-stub.sh \
+  GATEWAY_RESTART_CMD=$SCRATCH/restart-stub.sh \
+  STATE_FILE=$SCRATCH/watchdog-state.txt \
+  bash scripts/scheduler-watchdog.sh
+⚠️ SCHEDULER ALIVE BUT DB NOT CONNECTED — GET http://127.0.0.1:18991/api/v1/health -> {"db":"disconnected"} at 2026-11-25T10:52:58-05:00. NOT restarting the provably-live daemon (a DB-backed probe must never restart a live daemon; 2026-09-21 false-CRITICAL guard). Attend to the scheduler's database path/connection.
+exit=1
+```
+
+Restart stub invocations: 0 (`grep -c STUB-RESTART restarts.log` → 0) —
+proof that no restart of a live daemon occurred on this arm.
+
+## Deployment + invariants
+
+- Deployed copy: `cp scripts/scheduler-watchdog.sh
+  /home/kara/.hermes/scripts/watchdog.sh` (kept executable, mode 755).
+  `bash -n` → clean. One healthy-arm run of the DEPLOYED copy → exit 0.
+  sha256 of deployed == repo script:
+  `b2d304af660fb03c06c57eefb5a3bb86b311c829bf71320366c84bafab242543`.
+- `deploy/watchdog.service` ExecStart points at exactly that deployed path
+  (`/home/kara/.hermes/scripts/watchdog.sh`) — the fix is live for the
+  timer that runs it. No systemd unit was restarted.
+- Exit-code legend: 1 now also covers the db!=connected alert; 0/2 arms
+  unchanged from SCHED-GAP-1643/16971.
