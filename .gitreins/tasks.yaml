@@ -6487,3 +6487,20 @@ tasks:
   status: complete
   created_at: '2026-11-23T22:30:17.922626+00:00'
   completed_at: '2026-11-24T20:50:27.444885+00:00'
+- id: QA-CODING-HERMES-SCHEDULER-REVIEW-002
+  title: Fallback-hop instant-one-shot gate bypass
+  criteria:
+  - Fallback hop with instant one-shot fingerprint books tick failed/instant_turn,
+    not completed; reproducing unit test added; go build+vet+test -short ./internal/scheduler/...
+    pass
+  status: complete
+  created_at: '2026-11-25T05:41:25.789675+00:00'
+  completed_at: '2026-11-25T06:41:28.308265+00:00'
+- id: QA-CODING-HERMES-SCHEDULER-REVIEW-003
+  title: README quickstart test-count claim fix
+  criteria:
+  - README states make test runs 28 packages plus 1 integration-tagged package (go
+    list ./... = 29); command sequence reproduces the corrected claim
+  status: complete
+  created_at: '2026-11-25T05:41:26.593950+00:00'
+  completed_at: '2026-11-25T06:16:47.534838+00:00'
