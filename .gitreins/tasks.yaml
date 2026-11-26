@@ -6546,3 +6546,12 @@ tasks:
   status: complete
   created_at: '2026-11-26T04:25:17.532198+00:00'
   completed_at: '2026-11-26T04:55:51.789782+00:00'
+- id: SCHED-GAP-16980
+  title: commit guard fail-open after hook timeout
+  criteria:
+  - 'A guard run cut off by hook_timeout never reports PASS: passed=False, DEGRADED
+    exit 2, and the budget mismatch (implicit hook_timeout <= test_timeout) is derived
+    away'
+  status: complete
+  created_at: '2026-11-26T05:53:17.869022+00:00'
+  completed_at: '2026-11-26T06:08:38.641498+00:00'
