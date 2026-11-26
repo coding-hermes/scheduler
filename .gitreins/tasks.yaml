@@ -6537,3 +6537,12 @@ tasks:
   status: complete
   created_at: '2026-11-26T02:10:16.367918+00:00'
   completed_at: '2026-11-26T03:51:23.223384+00:00'
+- id: SCHED-GAP-17040
+  title: "tasks-admitted lanes bypass cooldown \u2014 no-op tick costs nothing"
+  criteria:
+  - A no-op/dry tick on a tasks-admitted lane defers the next spawn by at least cooldown_floor_s;
+    consecutive no-ops escalate; new Go test fails on parent commit and passes at
+    the fixed tip; no schedulerd restart (deploy pending)
+  status: complete
+  created_at: '2026-11-26T04:25:17.532198+00:00'
+  completed_at: '2026-11-26T04:55:51.789782+00:00'
