@@ -6555,3 +6555,15 @@ tasks:
   status: complete
   created_at: '2026-11-26T05:53:17.869022+00:00'
   completed_at: '2026-11-26T06:08:38.641498+00:00'
+- id: SCHED-GAP-16953
+  title: 'Scheduler row SCHED-GAP-16953: live router serves stale build (TR-354 +
+    coverage block not live)'
+  criteria:
+  - 'Evidence-only close is tree-true: router reloaded 2026-11-23 (commit 216a7bd8)
+    contains TR-354 fix 080f695e (verified ancestor), live /health exposes the coverage
+    block with outcome-floor gate active (coverage 0.039 < floor 0.5, price-first
+    reason string); board row SCHED-GAP-16953 closed complete with live evidence and
+    the events.jsonl entry names the residual (repo tip 78a6b14c is 3 days newer than
+    the loaded build).'
+  status: in_progress
+  created_at: '2026-11-26T14:30:25.852392+00:00'
