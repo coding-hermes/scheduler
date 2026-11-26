@@ -591,10 +591,15 @@ func classifyGitCommitsBounded(workdir string, since, until time.Time, claimed i
 // tick row carries the explicit unmeasured marker (code_commits = -1,
 // board_commits = -1) instead of being left at the schema default 0, so an
 // unmeasured tick is never indistinguishable from a zero-commit tick.
-// Returns (code, board, measured); measured=false means the caller must fall
-// back to legacy behavior (all commits count as progress).
+// SCHED-GAP-17045: the split is measured against the RESOLVED workdir
+// (resolveWorkdirOrDefault — registered dir when it IS a git checkout, else
+// the repo_url local: checkout), not the registered stand-in dir blind, so a
+// resolved-repo tick stamps its real code/board anatomy instead of -1/-1.
+// The -1/-1 marker survives only when measurement genuinely fails in the
+// resolved dir. Returns (code, board, measured); measured=false means the
+// caller must fall back to legacy behavior (all commits count as progress).
 func persistGitCommitSignals(db *sql.DB, outcome TickOutcome, workdir string) (code, board int, measured bool) {
-	code, board, measured = classifyGitCommits(workdir, outcome.Started, outcome.Commits)
+	code, board, measured = classifyGitCommits(resolveWorkdirOrDefault(db, outcome.Project, workdir), outcome.Started, outcome.Commits)
 	if !measured {
 		code, board = -1, -1 // explicit unmeasured marker — a legal sentinel (columns are NOT NULL DEFAULT 0)
 	}

@@ -3616,7 +3616,13 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		if commits > 0 {
 			if st.spawner != nil && st.spawner.tickPushDisabled {
 				log.Printf("TICK: %s %s → push skipped (tick-push disabled, web-primary; SCHED-GAP-1594)", st.Project, st.TickID)
-			} else if ok, detail := pushTickWork(st.workdir); ok {
+				// SCHED-GAP-17045: push the RESOLVED repo workdir, not the
+				// registered stand-in dir blind — a stand-in workdir is deliberately
+				// non-git, so a lane that committed but did not push itself logged
+				// STRANDED even though its commits exist in the repo_url checkout.
+				// Unresolvable projects keep the legacy registered-dir behavior;
+				// best-effort either way — a push failure never fails the tick.
+			} else if ok, detail := pushTickWork(resolveWorkdirOrDefault(st.spawnerDB(), st.Project, st.workdir)); ok {
 				log.Printf("TICK: %s %s → push %s", st.Project, st.TickID, detail)
 			} else {
 				log.Printf("TICK: %s %s → push STRANDED (%s)", st.Project, st.TickID, detail)

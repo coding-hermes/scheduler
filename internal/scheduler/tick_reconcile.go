@@ -441,6 +441,24 @@ func measureTerminalWindow(db *sql.DB, project string, started, finished time.Ti
 	return countGitChanges(workdir, started, finished)
 }
 
+// resolveWorkdirOrDefault returns the git workdir a project's git accounting
+// (measurement, push, commit-split) must operate on: the resolved
+// resolveMeasureWorkdir checkout when one is resolvable, else the registered
+// workdir unchanged. SCHED-GAP-17045 shared seam — the completed path's
+// measurement (measureGatewayWindow), its push (Wait), and the code/board
+// split (persistGitCommitSignals) must never resolve differently for the
+// same row: a stand-in workdir is deliberately non-git, so every site that
+// aims at the registered dir blind strands real pushes or stamps -1/-1
+// splits for work that exists in the repo_url checkout.
+func resolveWorkdirOrDefault(db *sql.DB, project, registeredWorkdir string) string {
+	if db != nil {
+		if dir, ok := resolveMeasureWorkdir(db, project); ok {
+			return dir
+		}
+	}
+	return registeredWorkdir
+}
+
 // measureGatewayWindow is the gateway COMPLETED path's measurement
 // (SCHED-GAP-17044): it resolves the git workdir exactly like
 // resolveMeasureWorkdir — the registered workdir when it IS a git checkout,
