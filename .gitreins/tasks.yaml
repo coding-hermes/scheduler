@@ -6568,11 +6568,10 @@ tasks:
     repo) passes with route_outcome=served and a served_by_hop ledger row (session
     schedgap16953-restart-*); the board row SCHED-GAP-16953 is closed complete citing
     the evidence file .coding-hermes/evidence/SCHED-GAP-16953-redeploy-2026-11-26.md
-    which is tracked in the tree; pre/post loaded commits are recorded
-    (216a7bd8@11-23 -> 78a6b14c@11-26) and SCHED-GAP-16938 is named as the outstanding
-    recurrence-protection residual (cross-repo ancestry of TR-354 fix 080f695e was
-    verified in the task-router checkout and is recorded in the evidence file, not
-    gradeable from this repo).'
+    which is tracked in the tree; pre/post loaded commits are recorded (216a7bd8@11-23
+    -> 78a6b14c@11-26) and SCHED-GAP-16938 is named as the outstanding recurrence-protection
+    residual (cross-repo ancestry of TR-354 fix 080f695e was verified in the task-router
+    checkout and is recorded in the evidence file, not gradeable from this repo).'
   status: complete
   created_at: '2026-11-26T14:30:25.852392+00:00'
-  completed_at: '2026-11-26T14:44:54.079771+00:00'
+  completed_at: '2026-11-26T14:48:05.732207+00:00'
