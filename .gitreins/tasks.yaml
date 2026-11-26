@@ -6575,3 +6575,45 @@ tasks:
   status: complete
   created_at: '2026-11-26T14:30:25.852392+00:00'
   completed_at: '2026-11-26T14:48:05.732207+00:00'
+- id: README-11
+  title: 'README release-freshness staleness: fix README so no stale release claim
+    remains'
+  criteria:
+  - git grep -n 'before trusting any step here' README.md returns exit 1 (no match)
+    and the README release claim names the current release state with evidence; git
+    rev-list origin/main..HEAD clean
+  status: complete
+  created_at: '2026-11-26T15:15:08.383754+00:00'
+  completed_at: '2026-11-26T15:55:56.036077+00:00'
+- id: SCHED-GAP-16974
+  title: spawn-level test covers the fallback chain walk (401/403 or 503 refusal)
+  criteria:
+  - A hermetic spawn-level test in internal/scheduler drives the real spawn path with
+    a stub gateway answering the first pair with the configured error and the second
+    with a valid response, asserting exactly two dispatches in chain order, a successful
+    tick, the recorded model and provider of the pair that ran, no circuit failure
+    recorded for a router refusal; go test ./internal/scheduler/... exit 0 with the
+    test present quoting both table arms
+  status: complete
+  created_at: '2026-11-26T15:15:09.302510+00:00'
+  completed_at: '2026-11-26T16:13:59.296118+00:00'
+- id: SCHED-GAP-16976
+  title: GET /api/v1/status returns 504 under host load
+  criteria:
+  - status handler serves 200 within budget under sustained load via a bounded-staleness
+    cache or named partial field, body keeps active_ticks/paused/build sha; go test
+    ./internal/api/... exit 0 with the new test present
+  status: complete
+  created_at: '2026-11-26T15:15:10.161350+00:00'
+  completed_at: '2026-11-26T15:38:46.514234+00:00'
+- id: DOGFOOD-031
+  title: PUT/POST /api/v1/projects accept a negative cooldown_s while weight/priority
+    are validated
+  criteria:
+  - Both write routes reject a negative cooldown_s with a bounds error naming the
+    field (PUT 400, POST 400); a table test in internal/api covers create+update with
+    -1, 0 and a positive value asserting reject/reject/accept; the cooldown_s:0 semantics
+    are documented in docs/api.md; go test ./internal/api -count=1 exit 0
+  status: complete
+  created_at: '2026-11-26T15:26:25.165695+00:00'
+  completed_at: '2026-11-26T16:00:25.211062+00:00'
