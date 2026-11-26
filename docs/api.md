@@ -467,7 +467,7 @@ Full Project model (response shape, snake_case):
 | `workdir` | string | Absolute path to the working copy |
 | `weight` | int | Budget units consumed per tick (1..100, default 10) |
 | `priority` | int | Base urgency multiplier (1..10, default 5) |
-| `cooldown_s` | int | Seconds between successive ticks (default 900) |
+| `cooldown_s` | int | Seconds between successive ticks (default 900). `0` = no cooldown (lane eligible immediately after a tick); a negative value is rejected with 400 naming the field |
 | `decay_rate` | float | Urgency decay rate (default 1.0; must be > 0) |
 | `model`, `provider` | string | LLM model/provider passed to the spawned agent |
 | `worker_model`, `worker_provider` | string | Optional suggested worker model/provider |
@@ -557,7 +557,7 @@ where the satellite auto-arm (SCHED-GAP-138) and the admission law
 | `name`, `repo_url`, `workdir` | **yes** | — |
 | `weight` | no | 10 |
 | `priority` | no | 5 |
-| `cooldown_s` | no | 900 |
+| `cooldown_s` | no | 900 (`0` = no cooldown on update; on create `0`/omitted takes this default; negative is rejected with 400 naming the field) |
 | `decay_rate` | no | 1.0 |
 | `enabled` | no | **false** (creating never auto-enables) |
 | `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command`, `namespace_id`, `deliver` | no | zero value / null |
@@ -776,7 +776,7 @@ curl -s http://127.0.0.1:9090/api/v1/projects/9router | jq '{name: .project.name
 | `repo_url`, `workdir`, `model`, `provider`, `worker_model`, `worker_provider`, `gateway_key`, `gateway_url`, `command` | String fields; `gateway_key` `""` clears back to the shared key, `gateway_url` `""` clears back to the namespace endpoint, then the global gateway (SCHED-GAP-1712) |
 | `weight` | 1..100 |
 | `priority` | 1..10 |
-| `cooldown_s` | Seconds |
+| `cooldown_s` | Seconds; `0` = no cooldown (stored verbatim, lane eligible immediately); negative values are rejected with 400 naming the field |
 | `decay_rate` | **must be > 0** — see guard below |
 | `namespace_id` | Set to `""` to unassign from a namespace |
 | `enabled` | `false` = disable (stamps `disabled_at`/`disabled_by`/`disabled_reason`, defaults `now`/`"api"`/`"disabled via API update"`, and writes an events entry); `true` = resume (clears provenance) |

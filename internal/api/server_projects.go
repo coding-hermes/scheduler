@@ -241,6 +241,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name, repo_url, workdir are required")
 		return
 	}
+	// DOGFOOD-031: cooldown_s has no DB CHECK constraint (weight/priority do),
+	// so a negative value used to reach the row and made the lane perpetually
+	// eligible — the exact opposite of pacing. Refuse it at the socket,
+	// before any DB write, naming the field in the same message style as the
+	// weight/priority constraint body. 0 stays valid here (create defaults it
+	// to 900 below); on the PUT path 0 is honored as "no cooldown".
+	if p.CooldownS < 0 {
+		writeError(w, 400, cooldownSBoundsMessage)
+		return
+	}
 	// SCHED-GAP-150: a retired dagger-era driver must never be registered on a
 	// project row — reject before any DB write. The Python fleet gate
 	// (ops/check-fleet-invariants.py check #4) catches an already-enabled row;
@@ -327,6 +337,13 @@ func isCheckConstraint(err error) bool {
 // projectConstraintMessage is the actionable 400 body for projects-table
 // CHECK violations (weight/priority/decay_rate ranges).
 const projectConstraintMessage = "invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"
+
+// cooldownSBoundsMessage is the 400 body for a negative cooldown_s on project
+// create/update (DOGFOOD-031 — the field has no DB CHECK constraint, so the
+// bound is API-level). Same "invalid project fields:" style as the
+// weight/priority constraint body above. 0 is NOT negative: on update it is
+// stored verbatim and means "no cooldown"; on create it takes the 900 default.
+const cooldownSBoundsMessage = "invalid project fields: cooldown_s must be >= 0 (0 = no cooldown); a negative cooldown_s would make the lane perpetually eligible"
 
 // handleProjectByID handles GET, PUT, POST on /projects/:name and sub-routes.
 func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
@@ -489,6 +506,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	// with a valid namespace + 900s cooldown because decay_rate was 0.
 	if updates.DecayRate != nil && *updates.DecayRate <= 0 {
 		writeError(w, 400, "decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)")
+		return
+	}
+	// DOGFOOD-031: same bound at the update edge — an explicit negative
+	// cooldown_s is refused before the DB write. An explicit 0 is honored
+	// (pointer semantics: it means "no cooldown", lane eligible immediately).
+	if updates.CooldownS != nil && *updates.CooldownS < 0 {
+		writeError(w, 400, cooldownSBoundsMessage)
 		return
 	}
 	// SCHED-GAP-17000: a dry_run_throttle below the warn streak would suspend
