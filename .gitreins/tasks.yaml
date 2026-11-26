@@ -6515,3 +6515,24 @@ tasks:
   status: complete
   created_at: '2026-11-25T15:48:32.811398+00:00'
   completed_at: '2026-11-25T16:16:03.662941+00:00'
+- id: SCHED-GAP-17044
+  title: Outcome classifier misses stand-in-resolved commits (pulse-pm dry_run misclassification)
+  criteria:
+  - 'Unit test reproduces: tick whose gateway session commits+pushes to the resolved
+    board repo while the registered workdir is a stand-in (non-git) classifies as
+    committed or records board_commits>0, not dry_run/no_changes; and classification
+    for the pulse-pm shape no longer emits dry_run/no_changes'
+  status: complete
+  created_at: '2026-11-25T22:33:04.232692+00:00'
+  completed_at: '2026-11-25T23:26:04.257671+00:00'
+- id: SCHED-GAP-17045
+  title: pushTickWork and code/board split resolve stand-in workdir via repo_url
+  criteria:
+  - 'Unit test reproduces: a completed tick whose registered workdir is a stand-in
+    (non-git dir) but whose repo_url resolves to a real local repo (a) pushes from
+    the resolved repo at tick exit instead of logging push STRANDED, and (b) records
+    a real code_commits/board_commits split from the resolved repo instead of -1/-1
+    unmeasured; unresolvable cases keep the legacy registered-workdir behavior; full
+    scheduler package tests green'
+  status: in_progress
+  created_at: '2026-11-26T02:10:16.367918+00:00'
