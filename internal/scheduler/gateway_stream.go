@@ -90,6 +90,19 @@ WHERE p.name = ?`, project).Scan(&raw)
 // (no bytes at all — the GAP-117 signature) never resets the timer, so it
 // aborts at the same deadline as before.
 //
+// SCHED-GAP-1762: TOOL-ACTIVE turns count as progress. A long tool
+// execution (skill loads, board reads, live probes) produces a silent gap
+// in the SSE stream between the tool-call item event and its result event
+// — no deltas, no items — and the idle deadline read that productive
+// silence as a hang (14 of 22 terminal pm-family ticks in 24h died
+// mid-tool with the GAP-117 "stalled" text). The stream now tracks tool
+// activity: when the most recent real event marks a tool call in flight
+// (the GAP-1655 item-type list arriving as output_item.added/done, or the
+// equivalent function_call/custom_tool_call argument events), the idle
+// timer is armed to a BOUNDED tool-execution window (toolGraceMultiple ×
+// the deadline) instead of the deadline itself. The tool's result event —
+// the next real event of any kind — restores normal semantics.
+//
 // Fail-open (AC 3): a server that answers non-SSE (JSON — an older gateway
 // or a route that ignores stream:true) provides no activity signal; the
 // timer then never resets and behaves EXACTLY like the GAP-117 wall clock.
@@ -170,6 +183,11 @@ type GatewayPOSTTrace struct {
 	// TokensIn is the PROMPT side of the usage. Same absent-means-zero
 	// fail-open contract as TokensOut.
 	TokensIn int `json:"tokens_in,omitempty"`
+	// ToolEvents (SCHED-GAP-1762) counts the real SSE events that marked a
+	// tool call in flight (the stream-level tool-activity gate). It is a
+	// SUBSET of Events — never repurposed. 0 means the turn showed no
+	// stream-level tool activity (legacy traces, JSON fallback).
+	ToolEvents int `json:"tool_events,omitempty"`
 }
 
 // SCHED-GAP-1641 named thresholds — the ONE-SHOT instant-turn fingerprint.
@@ -205,15 +223,56 @@ const (
 // classifier must under-count (leave a acted-on tick honestly classified
 // by its artifacts) rather than over-count (hide a real zero-tool tick
 // behind an unrecognized type name).
+// isToolItemType reports whether an output item type names a tool call —
+// the canonical SCHED-GAP-1655 list, shared by the terminal-envelope
+// classifier (responseHasToolCall) and the SCHED-GAP-1762 stream-level
+// tool-activity gate (sseEventIsToolActivity).
+func isToolItemType(itemType string) bool {
+	switch itemType {
+	case "function_call", "tool_use", "custom_tool_call",
+		"local_shell_call", "apply_patch_call":
+		return true
+	}
+	return false
+}
+
 func responseHasToolCall(resp *Response) bool {
 	if resp == nil {
 		return false
 	}
 	for _, item := range resp.Output {
-		switch item.Type {
-		case "function_call", "tool_use", "custom_tool_call",
-			"local_shell_call", "apply_patch_call":
+		if isToolItemType(item.Type) {
 			return true
+		}
+	}
+	return false
+}
+
+// sseEventIsToolActivity (SCHED-GAP-1762) reports whether one real SSE
+// event marks a tool call in flight: an output_item.added / output_item.done
+// event whose item carries a tool item type (the GAP-1655 list), or one of
+// the streamed tool-argument events (function_call_arguments.*,
+// custom_tool_call_input.*). When true the idle watch arms the bounded
+// tool-execution window (toolGraceMultiple × deadline) instead of the
+// normal deadline.
+//
+// Under-counting an unrecognized future shape reads as PLAIN activity —
+// the conservative direction: it keeps the normal deadline, never grants
+// the tool window. Same under-count doctrine as responseHasToolCall.
+func sseEventIsToolActivity(eventType, data string) bool {
+	switch {
+	case strings.HasPrefix(eventType, "response.function_call_arguments."),
+		strings.HasPrefix(eventType, "response.custom_tool_call_input."):
+		return true
+	}
+	if eventType == "response.output_item.added" || eventType == "response.output_item.done" {
+		var probe struct {
+			Item struct {
+				Type string `json:"type"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal([]byte(data), &probe); err == nil {
+			return isToolItemType(probe.Item.Type)
 		}
 	}
 	return false
@@ -289,6 +348,8 @@ func mergePostTrace(dst **GatewayPOSTTrace, next *GatewayPOSTTrace) {
 	d.Classification = next.Classification
 	d.IdleFired = next.IdleFired
 	d.Events += next.Events
+	// SCHED-GAP-1762: fold the tool-activity accounting the same way.
+	d.ToolEvents += next.ToolEvents
 	// SCHED-GAP-1641 (fallback-hop parity): fold the FINAL attempt's usage
 	// the same way its classification wins. A failed attempt never records
 	// usage, so without this fold a merged multi-attempt trace kept the
@@ -310,11 +371,33 @@ func mergePostTrace(dst **GatewayPOSTTrace, next *GatewayPOSTTrace) {
 // watcher goroutine owns a child context; when the deadline fires (no
 // activity for `deadline`) it marks fired and cancels the context, which
 // aborts the in-flight POST. Every real SSE event resets the timer.
+//
+// SCHED-GAP-1762: the poke carries the event kind. A TOOL-CALL event arms
+// the tool-execution window (toolGrace = toolGraceMultiple × deadline) so
+// a silent tool run between the tool-call event and its result is progress,
+// not a stall; every other real event arms the normal deadline. The bound
+// is real (arm-C tested): a tool-active silence beyond toolGrace still
+// aborts, and the session context (tick deadline) remains the absolute
+// backstop.
+//
+// toolGraceMultiple is the documented bound on the tool-execution window:
+// 3× a 30m per-turn deadline tolerates a 90m silent tool run; anything
+// longer still aborts with the GAP-117 stalled classification (a genuinely
+// wedged tool must free its slot). Never unbounded.
+const toolGraceMultiple = 3
+
 type turnWatch struct {
-	deadline time.Duration
-	fired    atomic.Bool
-	events   atomic.Int64
-	activity chan struct{}
+	deadline  time.Duration
+	toolGrace time.Duration
+	fired     atomic.Bool
+	events    atomic.Int64
+	// toolEvents counts the real SSE events that marked a tool call in
+	// flight (SCHED-GAP-1762 trace accounting; a subset of events).
+	toolEvents atomic.Int64
+	// activity carries the arming kind of the most recent real event:
+	// true = tool-call event (tool-grace arm), false = plain activity
+	// (normal deadline arm). Keepalive comments never poke.
+	activity chan bool
 	stopped  chan struct{}
 	cancel   context.CancelFunc
 }
@@ -323,10 +406,16 @@ type turnWatch struct {
 // is the request context: canceled by the watcher when the deadline fires,
 // or by Stop when the POST resolves. deadline must be > 0.
 func startTurnWatch(parent context.Context, deadline time.Duration) (*turnWatch, context.Context) {
+	// Saturate rather than overflow for unusually large configured durations.
+	toolGrace := time.Duration(1<<63 - 1)
+	if deadline <= toolGrace/toolGraceMultiple {
+		toolGrace = toolGraceMultiple * deadline
+	}
 	w := &turnWatch{
-		deadline: deadline,
-		activity: make(chan struct{}, 1),
-		stopped:  make(chan struct{}),
+		deadline:  deadline,
+		toolGrace: toolGrace,
+		activity:  make(chan bool, 1),
+		stopped:   make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
@@ -340,11 +429,17 @@ func startTurnWatch(parent context.Context, deadline time.Duration) (*turnWatch,
 				w.fired.Store(true)
 				cancel()
 				return
-			case <-w.activity:
+			case toolActive := <-w.activity:
 				// Sole resetter: the only exits from this select are the
 				// timer firing or ctx cancellation, so Reset is race-free
-				// per the time package docs.
-				t.Reset(deadline)
+				// per the time package docs. The kind rides the poke, so
+				// a non-tool event can never leave the tool window armed
+				// behind it (no stale-flag race).
+				d := w.deadline
+				if toolActive {
+					d = w.toolGrace
+				}
+				t.Reset(d)
 			case <-ctx.Done():
 				return
 			}
@@ -354,12 +449,35 @@ func startTurnWatch(parent context.Context, deadline time.Duration) (*turnWatch,
 }
 
 // notify records one real SSE event and pokes the watcher so the idle
-// timer resets. Non-blocking: a dropped poke only means the timer resets on
-// the next event.
+// timer resets at the normal deadline.
 func (w *turnWatch) notify() {
 	w.events.Add(1)
+	w.poke(false)
+}
+
+// notifyTool records one real SSE event that marks a tool call in flight
+// (SCHED-GAP-1762) and pokes the watcher so the idle timer is armed at the
+// tool-execution window (toolGrace) instead of the normal deadline. The
+// window is bounded — toolGraceMultiple × deadline, and the session
+// context still bounds the absolute wall time — so a wedged tool cannot
+// hold a slot forever.
+func (w *turnWatch) notifyTool() {
+	w.events.Add(1)
+	w.toolEvents.Add(1)
+	w.poke(true)
+}
+
+// poke delivers one arming-kind token to the watcher. Drain-then-send: an
+// unconsumed stale poke is discarded so the queued token always reflects
+// the most recent real event's kind (a later non-tool event can never be
+// masked by an older tool poke, and vice versa). Non-blocking both ways.
+func (w *turnWatch) poke(toolActive bool) {
 	select {
-	case w.activity <- struct{}{}:
+	case <-w.activity:
+	default:
+	}
+	select {
+	case w.activity <- toolActive:
 	default:
 	}
 }
@@ -485,6 +603,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 		r, err := readSSEResponse(resp.Body, watch)
 		if watch != nil {
 			trace.Events = int(watch.events.Load())
+			trace.ToolEvents = int(watch.toolEvents.Load())
 			if err != nil {
 				if werr := watch.abortErr(err); werr != err {
 					// The watch fired — this is the idle abort.
@@ -530,6 +649,7 @@ func (g *GatewayClient) SendResponseStream(ctx context.Context, prompt, model, p
 	}
 	if watch != nil {
 		trace.Events = int(watch.events.Load())
+		trace.ToolEvents = int(watch.toolEvents.Load())
 	}
 	if trace.SessionID == "" && result.ID != "" {
 		trace.SessionID = result.ID
@@ -551,6 +671,11 @@ func readSSEResponse(body io.Reader, watch *turnWatch) (*Response, error) {
 	notify := func() {
 		if watch != nil {
 			watch.notify()
+		}
+	}
+	notifyTool := func() {
+		if watch != nil {
+			watch.notifyTool()
 		}
 	}
 	handleEvent := func() (*Response, bool, error) {
@@ -599,7 +724,16 @@ func readSSEResponse(body io.Reader, watch *turnWatch) (*Response, error) {
 		default:
 			// Any other typed event (response.created, output_text.delta,
 			// output_item.added/done, ...) is real activity.
-			notify()
+			// SCHED-GAP-1762: an event marking a tool call in flight arms the
+			// bounded tool-execution window instead of the normal deadline —
+			// a silent tool run after it is progress, not a stall. The next
+			// real event of any other kind (the tool's result) restores
+			// normal semantics.
+			if sseEventIsToolActivity(evt, data) {
+				notifyTool()
+			} else {
+				notify()
+			}
 			return nil, false, nil
 		}
 	}
