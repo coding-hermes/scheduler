@@ -31,15 +31,17 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 ## Getting Started (5 minutes)
 
 > **Note:** releases are published on the
-> [releases page](https://github.com/coding-hermes/scheduler/releases). A fresh
+> [releases page](https://github.com/coding-hermes/scheduler/releases). The
+> newest tag is v1.16.0 (2026-11-09); `main` has moved past it — see the
+> CHANGELOG's [Unreleased] section for what landed since. A fresh
 > checkout of `main` passes `make test` (29 packages by `go list ./...`;
 > 28 of them carry tests — the root package's `integration_test.go` is
 > `//go:build integration`-tagged, so it is absent from `make test` and
 > runs green only via `go test -tags integration -short -count=1 .`) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
-> run both on a fresh checkout before trusting any step here. Past flaky-CI
-> episodes (e.g. INT-CI-181, closed 2026-10-06) are tracked on the project
-> board and do not affect this guide.
+> verify on a fresh checkout with `make test` and `make build` before
+> reporting issues. Past flaky-CI episodes (e.g. INT-CI-181, closed
+> 2026-10-06) are tracked on the project board and do not affect this guide.
 >
 > The fleet's internal checkout can move ahead of this public repo between
 > pushes. If a step misbehaves, open a
