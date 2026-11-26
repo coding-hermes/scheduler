@@ -16,6 +16,12 @@ guards:
     tests: true
 evaluator:
   max_iterations: 100
+  # SCHED-GAP-17045: the tier-2 judge's per-tool-call probe budget. The 30s
+  # default SIGTERMs `go test ./internal/scheduler` mid-run on this repo (the
+  # package alone needs ~160s at load), so every judge verdict failed on
+  # "full scheduler-package tests green not established" while the judge itself
+  # confirmed the code was correct. 300s > measured 180s wall at fleet load.
+  command_timeout: 300
   max_time: "120m"
   max_input_tokens: "8M"
   max_output_tokens: "0.5M"
