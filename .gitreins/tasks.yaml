@@ -6617,3 +6617,13 @@ tasks:
   status: complete
   created_at: '2026-11-26T15:26:25.165695+00:00'
   completed_at: '2026-11-26T16:00:25.211062+00:00'
+- id: SCHED-GAP-1762
+  title: Tool-active turns count as progress in the 30m per-turn no-progress gate
+  criteria:
+  - 'Regression test pins that a turn issuing tool calls and receiving results does
+    not trip ''stalled: no progress'' even with no model text between calls; go test
+    ./internal/scheduler/ ./internal/api/ -short -p 1 -count=1 exits 0 with the new
+    test included'
+  status: complete
+  created_at: '2026-11-26T17:17:48.923478+00:00'
+  completed_at: '2026-11-27T13:05:04.580703+00:00'
