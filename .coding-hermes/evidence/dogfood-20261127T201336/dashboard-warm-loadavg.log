@@ -1,0 +1,8 @@
+20.51 19.60 17.88 9/8797 1112166
+Benchmark 1: curl -s -m 15 -o /dev/null http://127.0.0.1:9090/
+  Time (mean ± σ):     292.7 ms ± 734.1 ms    [User: 2.8 ms, System: 6.5 ms]
+  Range (min … max):    17.8 ms … 2515.8 ms    15 runs
+ 
+  Warning: The first benchmarking run for this command was significantly slower than the rest (2.516 s). This could be caused by (filesystem) caches that were not filled until after the first run. You are already using the '--warmup' option which helps to fill these caches before the actual benchmark. You can either try to increase the warmup count further or re-run this benchmark on a quiet system in case it was a random outlier. Alternatively, consider using the '--prepare' option to clear the caches before each timing run.
+ 
+19.33 19.38 17.82 19/8790 1116945

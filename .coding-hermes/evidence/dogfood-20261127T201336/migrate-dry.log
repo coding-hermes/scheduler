@@ -1,0 +1,261 @@
+17.72 18.87 17.75 11/8802 1134091
+2026/11/27 15:36:16 Loaded 253 jobs from /home/kara/.hermes/cron/jobs.json
+2026/11/27 15:36:16 SKIP Daily Summary Report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP OpenCode Daily Tracker: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Daily Relationship Update: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP AI Intelligence Digest (daily + weekly + monthly tiers): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP skill-map-rebuild: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Context Sync — DuckBrain: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Git Secret Scanner: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Daily CVE Scanner: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Dreaming — Overnight Memory Synthesis: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Deep Reflection — 12h Pattern Synthesis: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Cloudflared Tunnel Monitor: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Frontiers Ghost — Character Sheet Verification: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP speclang-wakeup — Kara works the list: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP H4F Silent Health Watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Chrome version watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP consensus-watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Weekly Anti-Trump Developments Monitor: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Scan DuckBrain memory and recent chat sessions for: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Model Research Pipeline (benchmarks + stealth + sub-scout + slop): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP H4F E2E Provision Cycle: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP coding-hermes-supervisor: no workdir found in prompt
+2026/11/27 15:36:16 SKIP Apocalyptic News Tracker: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP totalstack-shape-validator: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Daily Free Exploration: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Chimera Model Sync (Weekly): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain Master Watchdog — auto-wires new projects: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP infra-namespace-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP skills-namespace-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP obsidian-namespace-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP chimera-v2-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP hivemind-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP temporal-vector-index-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP asce-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP consensus-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dexdat-core-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dexdat-memory-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP eduos-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP frontiers-ghost-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP gitreins-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP helios-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP helix-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP kobayashi-maru-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP mafia-benchmark-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP muster-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP musterflow-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP mythos-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP off-by-one-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP speclang-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP totalstack-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP warpfs-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dexdat-usability-tester: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Imhotep Namespace Sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP crier-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP hermes-dagger DuckBrain namespace sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP EduOS Chrome CDP Watchdog (:9223): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet Daily Report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP duckbrain-namespace-health-check: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP h3-umbrella-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP off-by-one-problem-feeder: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Tailscale Auth Key Renewal: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Tailscale Health Watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dagger-reliability-watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP eduos-f2b/b2f-test-executor: no workdir found in prompt
+2026/11/27 15:36:16 SKIP axiom-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP blog-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP duckbrain-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP heading-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP hermes-canopy-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP rethinkdb-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP terminal-jail-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP uhlp-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP deepseek-dashboard-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP inference-estimator-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP bunker-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP ai-plays-poke-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP rabbit-hole-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP escalation-doctrine-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP hermes4friends-infra-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP coding-hermes-duckbrain-sync: no workdir found in prompt
+2026/11/27 15:36:16 SKIP fleet-value-report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dogfood-field-test: no workdir found in prompt
+2026/11/27 15:36:16 SKIP ring-runner-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP reports-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP ob1-distribute (answers + public catalog): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP rabbit-hole CI watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP 9router-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP KaraHermes daily chat summary → DuckBrain: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP OpenAI-HF Incident Monitor: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Hermes telemetry → DuckBrain: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Obsidian vault git+S3 sync (daily): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP GitReins Daily Check (merged): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP hermes-agent-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP eduos-agent-weekly-renewal: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP TMP Manager — smart /tmp lifecycle: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Gateway Memory Watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP temple-runner-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP 9router-upstream-backport: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP deepseek-payg-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Docker Orphan Audit: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP temple-runner-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Skill Health Watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-cost-digest-weekly: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain S3 unified backup (15min): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-quality-review (SCHED-GAP-069): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP provider-health-probe: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP reports-s3-git-push: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Cron Output Archive → DuckBrain: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Infra Fleet Watchdog (all managed machines): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP qa-foreman: no workdir found in prompt
+2026/11/27 15:36:16 SKIP pi-agent binary watchdog (off-by-one): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP model-router-refresh-(merged:-reconfigure-+-data-quality-+-profile-refresh): no workdir found in prompt
+2026/11/27 15:36:16 SKIP task-router-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dagger-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dagger-qa-audit: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet TOML namespace regression watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP state.db backup v3 → HDD (28) + 3-2-1 text ship: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP N100 remote state.db backup → S3: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP dagger-error-scanner: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP usage-dashboard-rebuild: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP observatory-hourly-update: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP cube-eduos tool currency: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP task-router-registry-research (weekly filer): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP state-db-sentinel: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP mahoyo-availability-watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP jnsq-duckbrain-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-arming-tripwire: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP desktop-las-01-online-watch: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet watchdog (quiet unless wrong): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Tick digest (24h vs 24h): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-topology-warden: no workdir found in prompt
+2026/11/27 15:36:16 SKIP daily-project-review-—-single-pane: no workdir found in prompt
+2026/11/27 15:36:16 SKIP heading CI re-board: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP aipp-hourly-run-report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP destination-coverage-check: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP gitreins-mirror-sync-(github-canon-→-coding-hermes-mirror): no workdir found in prompt
+2026/11/27 15:36:16 SKIP cx53-hunter: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain agent-leg watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP scheduler-watchdog (SCHED-GAP-1643 fix, gateway-aware): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP soak-brief-trouble: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-strand-push (close-out push net): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP duckbrain-ci-test-quality-audit: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet run-rate audit (silent unless a lane beats its cadence): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-ttl-warn: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet agent TTL renewal + expiry warning: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet agent-repo guard sweep: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP flip-watch: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain S3 backup alert (S3-ALERT-001): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP fleet-inventory-sweep: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP GitLab Mirror Sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP task-router null census watch (TR-201): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Storytold GitHub Archive to S3: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet cooldown policy daily check (SCHED-GAP-1663): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Board criteria backfill (dispatchability): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet quality audit (dry runs + dispatchability): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP current-models-reference-(weekly): no workdir found in prompt
+2026/11/27 15:36:16 SKIP pipeline-hardening-loop: no workdir found in prompt
+2026/11/27 15:36:16 SKIP Daily review — thermal summary print (RP850): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP code-factory-foreman-slot-watch: no workdir found in prompt
+2026/11/27 15:36:16 SKIP home-git-watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP worktree-compact: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP worktree-verify-agent: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Fleet SRE daily — observability stack audit: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP capacity-guard: scheduler/proxy/gateway admission bounds: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP backup alignment drill (weekly: xz vs binary + 3-2-1 census): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP GitReins daily usage: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain Daily Usage Report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain Hardening Loop: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP GitReins hourly usage (print + HTML): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP worktree-hygiene-weekly: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP DuckBrain Usage Receipt (printer): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP GOCACHE headroom bound (SCHED-GAP-16929): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Provider watchdog (Fireworks spot primary): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP unblock-agent: no workdir found in prompt
+2026/11/27 15:36:16 SKIP unblock-daily-html-report: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP scheduler-xkiro-pin-enforce: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP foreman-health-checkin-3h: no workdir found in prompt
+2026/11/27 15:36:16 SKIP foreman-health-checkin-6h: no workdir found in prompt
+2026/11/27 15:36:16 SKIP foreman-health-checkin-9h: no workdir found in prompt
+2026/11/27 15:36:16 SKIP fleet-hosts maintenance (weekly): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP kanban-morph-worker: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP mythos-local-ci: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP skill-lock-enforce: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP cos-—-chief-of-staff-daily: no workdir found in prompt
+2026/11/27 15:36:16 SKIP COS report — thermal print (RP850): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP cube-las-00 backup watchdog (self-heal when host returns): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP cos-state-sync: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP logsey-hardening-checkin: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-9router-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-kobayashi-maru-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-ai-plays-poke-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-asce-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-auger-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-boardctl-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-bunker-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-chimera-v2-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-coding-hermes-scheduler-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-coding-hermes-tools-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-consensus-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-crier-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-deepseek-dashboard-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-dexdat-core-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-dexdat-memory-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-digest-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-doc-writer-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-duckbrain-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-eduos.dexdat.com.co-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-escalation-doctrine-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-gitreins-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-gitreins-rs-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-guard-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-h3-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-heading-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-helios-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-helix-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-hermes-canopy-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-hermes-dagger-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-hermes-rs-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-hermes4friends-infra-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-hivemind-work-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-imhotep-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-inference-estimator-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-logsey-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-lore-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-mafia-ai-benchmark-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-mischief-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-monitoring-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-muster-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-musterflow-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-rabbit-hole-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-speclang-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-task-router-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-terminal-jail-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-trouble-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-voice-mode-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-warpfs-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-wojons-mythos-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-off-by-one-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-pulse-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-qa-audit-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-rethinkdb-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP cos-ring-runner-cards: no workdir found in prompt
+2026/11/27 15:36:16 SKIP dagger-qa-base-test: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP auger-chd-hardening: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP consensus-scenario-hardening: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP chd-spec-dispatch: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP cos-gateway-refire-watchdog: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Process leak watchdog (node/bun/tsc OOM backstop): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Model-chain steward: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP Model-chain CoS weekly audit: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 DRY-RUN: operator (w=10 p=5 workdir=/home/kara/operator model=glm-5.3-flash provider=zai-glm enabled=true schedule=45 9 * * *)
+2026/11/27 15:36:16 SKIP Composite watchdog (5-in-1 load relief): not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP mythos-stall-alarm: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 SKIP QA ledger JSONL line guard: not a coding-hermes job (name/skills must mention coding-hermes/foreman)
+2026/11/27 15:36:16 Done: 1 imported, 252 skipped
+
+Run without --dry-run to perform the import.
+real 0.05
+user 0.01
+sys 0.01
