@@ -732,3 +732,20 @@ Residue at closeout: scratch daemon killed (port 9913 free, graceful shutdown lo
 
 Landing: board+evidence commit 4386da38 pushed as c0b78614 after rebase onto sibling tip 1d6df683 (append-only union resolution on events.jsonl: sibling blob bytes + this fire's 4 appended lines, first-2043-lines byte-verified == origin blob; sibling's appended line untouched; disclosed: origin tip's own appended region carries a duplicate event id 1795553617728757031). Log entry committed separately; HEAD==origin/main re-verified after push.
 
+## 2026-11-27 no-op provenance — delivery 4 | coding-hermes-scheduler | provenance check only, product untouched
+
+Tick id: coding-hermes-scheduler-dogfood-2026-11-27-20-13-36 (body, not heading).
+
+Dispatch attribution: raw census = 5 DISTINCT `inbound message` timestamps for the exact tick id across gateway.log* AND agent.log* (union deduped, sorted): 15:13:39,878 + 15:26:32,628 (attributed by delivery 1's entry as ONE delivery — fallback retry), then 16:09:26,967 + 16:10:45,335 + 16:12:31,950. Each new timestamp carries its own fresh `agent.turn_context` with history=0 on chat 14c967cb (16:09:27,675 model zai-org/GLM-5.3 → 404 → fallback; 16:10:46,224 model cline-pass/glm-5.3; 16:12:32,196 model z-ai/glm-5.3-flash) and the gaps are 79 s and 106 s — not a tight burst, so each is its own fire. Attributed deliveries = 4 (delivery 1 = the committed run; 2 = 16:09 fire; 3 = 16:10 fire; 4 = this fire). Raw-count ambiguity disclosed per prior convention: 5 raw distinct timestamps vs 4 attributed deliveries.
+
+Parity/delta proof: fetched origin; `git rev-list --left-right --count HEAD...origin/main` = 0 0 at HEAD 543a726f. Product delta since the run record 894cf3ab (delivery 1's committed run record, followed by its own 8fc4c108 board-events and 543a726f evidence commits, all landed 16:07-16:09) is 0 non-.coding-hermes files — `git diff --name-only 894cf3ab..HEAD | grep -vc '^\.coding-hermes/'` = 0. The 16:09/16:10 fires landed no product or board change (board mtime 15:47:16 = delivery 1's board commit c0b78614; no commits between 16:09:07 and this fire).
+
+Board state at this delivery: tasks.jsonl 976 rows, mtime 2026-11-27 15:47:16; whole-stream jq parse 0 errors; duplicate-id census 0; 147 pending rows (foreman work, not a dogfood re-walk trigger); DOGFOOD-031 complete, DOGFOOD-032..038 pending exactly as delivery 1 left them.
+
+Perf NOT re-measured: tree byte-identical at product level to the one delivery 1 measured (GET /api/v1/status warm 529.4 ms ± 60.2 at loadavg 21-22.5/16c, paired scratch control 22.8-33.8 ms); an unchanged tree re-driven measures the host. Cold-cache build arm remains UNVERIFIED (dropping OS caches needs root on a shared saturated host — unmeasurable this fire, disclosed in delivery 1, no row owns it; it is a measurement limitation, not a finding). DuckBrain leg: namespace convention is git-entry-only (no per-fire run-record key convention in this namespace) — this git log entry is the durable record, unchanged from delivery 1.
+
+Dispatch defect classification: the same label refiring 3× within ~59 min after its delivery completed (543a726f 16:09:07, then fires at 16:09:26 and 16:10:45 — the first two fires started while the prior delivery's tail was still landing) is a scheduler/gateway dispatch defect, NOT a product defect. Owning surface: the scheduler fleet's own lane config / spawn path. Nothing filed on this product board; the count is stated here and in the tick report.
+
+Residue scan: /proc cmdline keyed on the product workdir path — only the live fleet schedulerd (pid 2452456, etime 1-06:18:47, serving :9090, predates every delivery of this tick; systemd-deployed service) matched; run-1's scratch daemon port 9913 has no listener; scratch tree /home/kara/.hermes/cache/scratch/sched-df-20261127-201336 still present inside its 24 h prune window (disclosed by delivery 1, left for the prune).
+
+Artifacts: NONE new. This entry is the only write of this delivery. Evidence dir .coding-hermes/evidence/dogfood-20261127T201336/ remains committed at 543a726f.
