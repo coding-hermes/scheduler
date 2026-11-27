@@ -7,18 +7,18 @@ import (
 )
 
 // DestinationPolicy is an explicitly approved candidate for one deploy group.
-// This value is only an input to the read-only inventory; it does not enable
-// delivery or persist a policy. An exception must itself be approved.
+// It is persisted with the group and does not itself modify delivery.
+// An exception must itself be approved.
 type DestinationPolicy struct {
-	Destination string
-	Approved    bool
-	Exceptions  map[string]DestinationException
+	Destination string                          `json:"destination"`
+	Approved    bool                            `json:"approved"`
+	Exceptions  map[string]DestinationException `json:"exceptions,omitempty"`
 }
 
 // DestinationException is a project-specific candidate destination.
 type DestinationException struct {
-	Destination string
-	Approved    bool
+	Destination string `json:"destination"`
+	Approved    bool   `json:"approved"`
 }
 
 // DestinationProject is the minimal project data needed by the inventory.

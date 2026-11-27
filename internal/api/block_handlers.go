@@ -93,6 +93,9 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	if groups == nil {
 		groups = []blocks.Group{}
 	}
+	for i := range groups {
+		groups[i].DestinationPolicy = nil
+	}
 	writeJSON(w, 200, map[string]interface{}{"groups": groups})
 }
 
@@ -118,6 +121,7 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 		blocksStoreError(w, err)
 		return
 	}
+	g.DestinationPolicy = nil
 	writeJSON(w, 201, g)
 }
 
@@ -180,6 +184,7 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, name string) {
 		blocksStoreError(w, err)
 		return
 	}
+	g.DestinationPolicy = nil
 	writeJSON(w, 200, g)
 }
 
@@ -216,6 +221,7 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request, name string
 		blocksStoreError(w, err)
 		return
 	}
+	updated.DestinationPolicy = nil
 	writeJSON(w, 200, updated)
 }
 
@@ -370,8 +376,17 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, name str
 
 // deployRequest is the POST /api/v1/groups/{name}/deploy body.
 type deployRequest struct {
-	Template string `json:"template"`
-	DryRun   bool   `json:"dry_run"`
+	Template           string                     `json:"template"`
+	DryRun             bool                       `json:"dry_run"`
+	DestinationPreview *destinationPreviewRequest `json:"destination_preview,omitempty"`
+}
+
+type destinationPreviewRequest struct {
+	Approvals []struct {
+		Project string `json:"project"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+	} `json:"approvals"`
 }
 
 // deployGroup resolves a group to its member projects (workdirs from the
@@ -386,14 +401,17 @@ func (s *Server) deployGroup(w http.ResponseWriter, r *http.Request, groupName s
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(body.Template) == "" {
-		writeError(w, 400, "template is required")
-		return
-	}
-
 	group, err := s.blocksStore.GetGroup(groupName)
 	if err != nil {
 		blocksStoreError(w, err)
+		return
+	}
+	if body.DestinationPreview != nil {
+		s.previewDestinations(w, r, group, body.DestinationPreview)
+		return
+	}
+	if strings.TrimSpace(body.Template) == "" {
+		writeError(w, 400, "template is required")
 		return
 	}
 	template, err := s.blocksStore.GetTemplate(body.Template)
