@@ -1,0 +1,6 @@
+{
+  "sample_limit": 40,
+  "rows_with_nonempty_error": 40,
+  "error_len_max": 4165,
+  "error_len_avg": 2533.6
+}

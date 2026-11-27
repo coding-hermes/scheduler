@@ -1,0 +1,8 @@
+18.31 16.81 16.68 19/8769 1048736
+mkdir -p "bin"
+go build -ldflags "-s -w -X github.com/coding-hermes/scheduler/internal/version.Version=dev-733fe05b -X github.com/coding-hermes/scheduler/internal/version.Commit=733fe05b -X github.com/coding-hermes/scheduler/internal/version.BuildDate=2026-11-27T20:30:31Z" -o "bin/schedulerd" ./cmd/schedulerd/
+go build -ldflags "-s -w -X github.com/coding-hermes/scheduler/internal/version.Version=dev-733fe05b -X github.com/coding-hermes/scheduler/internal/version.Commit=733fe05b -X github.com/coding-hermes/scheduler/internal/version.BuildDate=2026-11-27T20:30:31Z" -o "bin/migrate" ./cmd/migrate/
+go build -ldflags "-s -w -X github.com/coding-hermes/scheduler/internal/version.Version=dev-733fe05b -X github.com/coding-hermes/scheduler/internal/version.Commit=733fe05b -X github.com/coding-hermes/scheduler/internal/version.BuildDate=2026-11-27T20:30:31Z" -o "bin/retention-deferrals" ./cmd/retention-deferrals/
+real 6.79
+user 13.39
+sys 1.99

@@ -1,0 +1,42 @@
+# Dogfood 2026-11-27 API arms — fresh build dev-733fe05b on 127.0.0.1:9913 (scratch DB, isolated DuckBrain URL)
+# All numbers local-epoch; loadavg = /proc/loadavg 1m/5m/15m on 16 cores (host: karaHermes-mde-7840hs)
+
+== Milestone timings (clean data, /usr/bin/time -p) ==
+git archive HEAD -> scratch tree           (setup)
+make build (3 binaries, cold GOCACHE-free tree, loadavg 18.31/16c)  real 6.79s user 13.39s sys 1.99s
+  artifacts: bin/schedulerd 18,903,305 B; bin/migrate 7,201,033 B; bin/retention-deferrals 6,717,705 B
+  version stamp inside binary: dev-733fe05b / commit 733fe05b / BuildDate 2026-11-27T20:30:31Z
+boot -> /health 200 ok                     ~4s wall (first health poll after start returned ok at uptime 6.66s)
+migrate --dry-run (253 jobs inventoried)   real 0.05s
+
+== Documented arms (all against the scratch daemon) ==
+POST /api/v1/projects, no credential            -> 503 {"error":"mutations disabled: no operator credential configured (set SCHEDULER_OPERATOR_TOKEN / [api] operator_token)"} (1.8ms)
+POST /api/v1/projects, valid operator token     -> 201, defaults weight=10 priority=5 cooldown_s=900 enabled=false (documented split SCHED-GAP-195)
+POST /api/v1/projects, wrong token              -> 401 (no body leakage)
+PUT  /api/v1/projects/dogfood-probe cooldown_s=1800 -> 200, persisted (GET read-back: cooldown_s=1800)
+PUT  .../cooldown_s=-900 (DOGFOOD-031 fix arm)  -> 400 {"error":"invalid project fields: cooldown_s must be >= 0 (0 = no cooldown); a negative cooldown_s would make the lane perpetually eligible"}
+POST /api/v1/projects cooldown_s=-5 (create arm)-> 400, same message
+POST /api/v1/projects/dogfood-probe/spawn (disabled project) -> 409 {"error":"project is disabled — resume it before spawning"}
+POST /api/v1/projects/dogfood-probe/pause       -> 200, GET shows disabled=false + disabled_reason "paused via POST /projects/{name}/pause" + disabled_by api-pause
+POST /api/v1/projects/dogfood-probe/resume      -> 200, GET shows enabled=true
+POST /api/v1/evaluate                           -> 200 {"status":"evaluation triggered"}
+GET  /api/v1/projects/no-such-project           -> 404 {"error":"project not found"}
+POST /api/v1/projects, invalid JSON body        -> 400 {"error":"invalid JSON: invalid character 'b' looking for beginning of object key string"}
+
+== Restart persistence (kill -TERM via process manage, graceful shutdown logs: "all in-flight ticks completed") ==
+project survived restart with exact values (cooldown_s=1800, created_at unchanged)  YES
+
+== Scratch floors (same binary, 1 project DB) ==
+GET /api/v1/health   n=5: 0.639-0.675 ms
+GET /api/v1/status   n=3: 22.8-33.8 ms
+GET /                -> dashboard HTML served (dark theme, Fleet Overview)
+
+== Live fleet-scale warm reads (deployed daemon :9090, NOT this fire's build) ==
+GET /api/v1/status  hyperfine --warmup 2 --runs 20: mean 529.4ms ± 60.2, min 426.1, max 646.9, all exit 0
+  loadavg before 22.54 19.92 17.95, after 21.25 19.73 17.91 (16 cores) — PERF-001 load-contention model window
+GET / (dashboard)   hyperfine --warmup 2 --runs 15: mean 292.7ms ± 734.1 (!), min 17.8, max 2515.8
+  loadavg before 20.51 19.60 17.88, after 19.33 19.38 17.82 — sigma 2.5x mean = PERF-001-R3-R2 lock-starvation variance shape
+MCP POST /mcp tools/list: 81 tools (matches README's documented count)
+
+== Live corroboration of pending rows (read-only, no bodies committed) ==
+/api/v1/ticks?limit=40&status=failed : 40/40 rows carry nonempty error field, len avg 2533.6 B, max 4165 B (DOGFOOD-036 premise)

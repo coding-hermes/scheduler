@@ -1,0 +1,6 @@
+22.54 19.92 17.95 26/8802 1111088
+Benchmark 1: curl -s -m 10 http://127.0.0.1:9090/api/v1/status
+  Time (mean ± σ):     529.4 ms ±  60.2 ms    [User: 2.5 ms, System: 6.0 ms]
+  Range (min … max):   426.1 ms … 646.9 ms    20 runs
+ 
+21.25 19.73 17.91 20/8828 1111844
