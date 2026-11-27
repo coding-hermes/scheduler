@@ -49,17 +49,19 @@ var (
 // be deployed to in a single operation. Projects are referenced by scheduler
 // project NAME (the projects table primary key).
 type Group struct {
-	Name        string   `json:"name"`
-	Projects    []string `json:"projects"`
-	Description string   `json:"description"`
+	Name              string             `json:"name"`
+	Projects          []string           `json:"projects"`
+	Description       string             `json:"description"`
+	DestinationPolicy *DestinationPolicy `json:"destination_policy,omitempty"`
 }
 
 // GroupUpdate is a partial group update — only non-nil fields are applied
 // (same pointer semantics as database.NamespacePatch). The name is immutable
 // and always comes from the URL path.
 type GroupUpdate struct {
-	Projects    *[]string `json:"projects,omitempty"`
-	Description *string   `json:"description,omitempty"`
+	Projects          *[]string          `json:"projects,omitempty"`
+	Description       *string            `json:"description,omitempty"`
+	DestinationPolicy *DestinationPolicy `json:"destination_policy,omitempty"`
 }
 
 // TemplateTask is a single task definition inside a Template.

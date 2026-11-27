@@ -106,6 +106,9 @@ func (s *Store) UpdateGroup(name string, patch GroupUpdate) (Group, error) {
 		if patch.Description != nil {
 			groups[i].Description = *patch.Description
 		}
+		if patch.DestinationPolicy != nil {
+			groups[i].DestinationPolicy = patch.DestinationPolicy
+		}
 		if err := ValidateGroup(groups[i]); err != nil {
 			return Group{}, err
 		}

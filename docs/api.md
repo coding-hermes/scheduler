@@ -222,6 +222,22 @@ carry no whitespace):
 defaults to `[]` when omitted. PUT applies only the keys supplied (pointer
 semantics), so an absent key is left untouched rather than cleared.
 
+**Destination preview (read-only).** An operator may set `destination_policy`
+via group POST or PUT, for example `{"destination_policy":{"approved":true,
+"destination":"telegram:-123:10","exceptions":{}}}`. Exceptions are keyed by
+project name and have their own `approved` and `destination` fields. The policy
+is stored in the groups JSONL file, which uses the store's usual 0644 mode;
+restrict access to that file if destinations are sensitive. Group responses omit
+the policy values. This policy does not change project destinations or delivery.
+
+POST to the existing group deploy endpoint with `{"destination_preview":
+{"approvals":[{"project":"example","from":"","to":"telegram:-123:10"}]}}`
+returns `{dry_run:true,destination_plan:[...]}` instead of deploying a template,
+regardless of the `dry_run` field. The plan contains no destination values;
+all groups are considered when checking conflicting memberships. Approvals are
+request-local, not persisted, and `ready` is only a preview: apply, rollback,
+write protection and inheritance are not implemented.
+
 **Deploy body.** `{"template": "<required template name>", "dry_run": false}`.
 `dry_run: true` returns the plan without writing to any board. 400 for a body
 without `template`, or for an empty group; 404 when the group or template is
