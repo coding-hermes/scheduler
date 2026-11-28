@@ -6648,5 +6648,6 @@ tasks:
     ./internal/api ./internal/scheduler exit 0; e2e test-transport delivery incl.
     wrong-thread negative control and exception/unknown/conflict controls failing
     on deliberate violations; sanitized evidence recorded; no live settings modified.
-  status: in_progress
+  status: complete
   created_at: '2026-11-28T06:17:56.712007+00:00'
+  completed_at: '2026-11-28T10:27:41.919002+00:00'
