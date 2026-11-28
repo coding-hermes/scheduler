@@ -546,7 +546,7 @@ whatever mechanism its operator chooses; this row makes the divergence visible
 and leaves the transport out of scope, stating the reason rather than inventing
 a sync path inside a delivery-guard row.
 
-### 7.5 Gate (green, verbatim)
+### 7.5 Gate (green at the delivered commit `8fc15b27`)
 
 ```
 $ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go build ./...
@@ -554,14 +554,14 @@ build_rc=0
 $ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go vet ./...
 vet_rc=0
 $ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go test ./internal/blocks ./internal/api ./internal/scheduler -count=1
-ok  github.com/coding-hermes/scheduler/internal/blocks    0.151s
-ok  github.com/coding-hermes/scheduler/internal/api       92.018s
-ok  github.com/coding-hermes/scheduler/internal/scheduler 168.970s
+ok  github.com/coding-hermes/scheduler/internal/blocks    0.114s
+ok  github.com/coding-hermes/scheduler/internal/api       94.004s
+ok  github.com/coding-hermes/scheduler/internal/scheduler 171.669s
 test_rc=0
 ```
 
-Also green on this tree: `go test ./internal/mcp -count=1` (returns 0 after the
-MCP ledger-strip guard), `go test ./cmd/destaudit -count=1`, and
+Also green on this tree: `go test ./internal/mcp -count=1`, `go test ./cmd/destaudit
+-count=1`, `go test ./internal/clock -count=1` (the stdlib-clock guard) and
 `golangci-lint run ./...` → `0 issues`. The `cmd/queueprobe` guard file-scope
 warning named in the brief is pre-existing and untouched.
 
@@ -621,3 +621,47 @@ CHANGELOG.md                                       [Unreleased] entry for the ap
   pins it.
 * **Write protection on the policy does not exist**: an operator PUT can still
   replace an approval (it now logs `DEST-OVERWRITE`). Out of this rework's scope.
+
+### 7.9 Commit-time guard: one refusal, the fix, and the re-run
+
+The first `git commit` of this rework was **refused** by the Tier-1 guard —
+recorded here because a refusal is evidence, not friction:
+
+```
+Tier 1 Guards: FAIL  (test mode: full, scope: staged (index))
+  ✓ secrets — clean (gitleaks + builtin cross-check)
+  ✓ go_build — ok
+  ✓ go_lint — ok
+  ✗ go_tests — FAIL
+  guard log: .gitreins/logs/guard-20261128T092645.376080Z.log
+```
+
+The finding was real and mine: `internal/clock`'s anti-rot guard
+(`TestNoDirectStdlibClockCallsOutsideClock`) refuses any direct `time.Now()`
+outside the `internal/clock` package, and both new handlers stamped the ledger
+record with it:
+
+```
+    stdlib_guard_test.go:80: 2 direct stdlib clock call(s) outside internal/clock
+        internal/api/destination_migrate.go:94: At: time.Now(),
+        internal/api/destination_migrate.go:137: At: time.Now(),
+```
+
+Fix: both sites now read the **server's clock seam** (`s.clock().Now()`), which
+is the same seam the rest of `internal/api` uses for sim-clock testability — not
+`clock.Real()`, which would have satisfied the guard while ignoring a sim clock.
+The `time` import was dropped, the guard's own package test was re-run
+(`ok internal/clock 0.480s`), and the next commit attempt passed all of Tier 1
+(`✓ go_tests — passed`, `lint-guard: PASS — golangci-lint exit=0`,
+`[SCHED-PERF-006] policy script deploy hash OK`).
+
+**Concurrent-writer disclosure.** Two edits appeared in this worktree that this
+agent did not author: the `time.Now()` → `s.clock().Now()` substitution at
+`internal/api/destination_migrate.go:94` and a trailing-newline change in this
+file. The tool layer attributes them to a sibling subagent on the same worktree.
+Both were verified before adoption — the clock substitution is the correct seam
+(and this agent made the identical change at the second site, line 137), the
+newline change is cosmetic — and the full gate was re-run on the resulting tree
+(§7.5), so nothing landed unverified. No sibling content was reverted or
+overwritten.
+
