@@ -1358,6 +1358,19 @@ func main() {
 	scheduler.SetDestinationPolicySource(func() ([]blocks.Group, error) {
 		return deliveryGroups.ListGroups()
 	})
+	// SCHED-GAP-17084 rework: there is NO sync path for groups.jsonl — the file
+	// IS the source of truth, so a node started with a different --groups-file
+	// (or an older copy of the same file) enforces a different mapping with no
+	// signal at all. Log the resolved path and the sanitized policy fingerprint
+	// at boot: two nodes with the same fingerprint enforce the same mapping, and
+	// a mismatch is visible instead of silent. Nothing here prints a
+	// destination (the fingerprint is a one-way <sha256:16> digest).
+	if bootGroups, bootErr := deliveryGroups.ListGroups(); bootErr != nil {
+		log.Printf("DEST-STORE: groups=%s UNREADABLE (%v) — delivery falls back to configured targets", groupsPath, bootErr)
+	} else {
+		log.Printf("DEST-STORE: groups=%s approved_policies=%d policy_fingerprint=%s",
+			groupsPath, countApprovedPolicies(bootGroups), blocks.DestinationPolicyFingerprint(bootGroups))
+	}
 	// SCHED-GAP-219: the config_drift probe reads the seed file the daemon
 	// actually booted from (the same --config resolution as above).
 	apiServer.SetFleetTomlPath(*configFile)
@@ -2022,4 +2035,16 @@ func printStatus(d *sql.DB) {
 	_ = d.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&n)
 	log.Printf("Active ticks: %d", n)
 	log.Print(sep)
+}
+
+// countApprovedPolicies counts the groups carrying an APPROVED destination
+// policy — the ones the delivery guard treats as authoritative (SCHED-GAP-17084).
+func countApprovedPolicies(groups []blocks.Group) int {
+	approved := 0
+	for _, group := range groups {
+		if group.DestinationPolicy != nil && group.DestinationPolicy.Approved {
+			approved++
+		}
+	}
+	return approved
 }

@@ -235,10 +235,62 @@ POST to the existing group deploy endpoint with `{"destination_preview":
 returns `{dry_run:true,destination_plan:[...]}` instead of deploying a template,
 regardless of the `dry_run` field. The plan contains no destination values;
 all groups are considered when checking conflicting memberships. Approvals are
-request-local, not persisted, and `ready` is only a preview: no apply or rollback
-verb exists (a rollback is a file-level restore of the groups JSONL), and write
-protection does not exist. Delivery DOES honour an approved policy — see the
-enforcement section below.
+request-local, not persisted, and `ready` is only a preview — see the apply verb
+below. Write protection on the policy itself does not exist. Delivery DOES honour
+an approved policy — see the enforcement section below.
+
+**Approved destination migration: apply and rollback (SCHED-GAP-17084).** Two
+further verbs on the same endpoint act on an ALREADY-APPROVED policy. Both
+require the operator credential (the endpoint is a mutation), both are
+all-or-nothing, and neither is ever a second writer: the project delivery target
+goes through the same writer `PUT /api/v1/projects/{name}` uses
+(`database.UpdateProject`), and the change ledger is written into the same
+groups JSONL file by the deploy-block store.
+
+```
+POST /api/v1/groups/{name}/deploy  {"destination_apply":{"approvals":[
+  {"project":"example","from":"<current target>","to":"<approved target>"}]}}
+→ 200 {"dry_run":false,"applied":1,"already_applied":0,
+       "plan_digest":"sha256:…","moves":[{"project":"example",
+       "prior_ref":"<sha256:8>","next_ref":"<sha256:8>"}],"change":{…}}
+
+POST /api/v1/groups/{name}/deploy  {"destination_rollback":{"plan_digest":"sha256:…"}}
+→ 200 {"dry_run":false,"rolled_back":1,"plan_digest":"sha256:…","moves":[…],"change":{…}}
+```
+
+Rules, all enforced at apply time against the CURRENT store (a plan the operator
+saw earlier cannot be applied to a store that moved since):
+
+| situation | result |
+| --- | --- |
+| every approval's `from`/`to` still matches the plan | applied; every lane written |
+| an approval no longer matches (`stale_approval`), names a non-member, or duplicates another | **409**, `code: "not_ready"`, `refused:[{project,status}]`; nothing written |
+| the group has no APPROVED policy | **409**, `code: "not_ready"`; nothing written |
+| applying the same approvals again (lanes already on the target) | **200**, `applied:0`, `already_applied:N`, **no write at all** (groups JSONL stays byte-identical) |
+| a project write fails mid-batch | the already-written lanes are restored, then 500; no ledger record |
+| rollback with no apply captured (never applied, or the newest change is already a rollback) | **409**, `code: "nothing_captured"`; nothing written |
+| rollback whose `plan_digest` names a different migration | **409**, `code: "digest_mismatch"`; nothing written |
+| a lane's target changed after the apply | **409**, `code: "state_diverged"` with the affected lanes; nothing written — rollback never clobbers a newer decision |
+
+Each apply and each rollback appends a ledger record inside the group row
+(`destination_history`, newest 20 kept) holding who (`actor`, the authenticated
+identity), when (RFC3339 UTC), the plan digest, and the moved `project` +
+`prior`/`next` pair. That pair IS the rollback capture; every response, log line
+(`DEST-APPLY` / `DEST-ROLLBACK`) and event-log entry renders only
+`<sha256:8>` references. Group read/create/update responses omit both the policy
+and the ledger, and a create body cannot inject a ledger record.
+
+Rollback reverses the migration, not the approval: the policy still names the
+migrated target, so a rolled-back lane reads as `drift` (refused) until the
+operator re-approves or applies a fresh plan.
+
+`groups.jsonl` has **no sync path** — the file is the source of truth for the
+node that owns it. Two nodes started with different `--groups-file` values (or
+different copies) enforce different mappings, so both `schedulerd` (a
+`DEST-STORE` boot line) and `cmd/destaudit` print a sanitized
+`policy_fingerprint` (`sha256:<16>` over the approved mapping set): equal
+fingerprints mean equal enforcement, and a mismatch is visible instead of
+silent.
 
 **Destination enforcement (SCHED-GAP-17084).** An APPROVED `destination_policy`
 is authoritative for delivery. `schedulerd` reads the same groups JSONL file at
@@ -264,7 +316,8 @@ the group owns.
 `go run ./cmd/destaudit --db <scheduler.db> [--groups <groups.jsonl>]` prints the
 same classification for the whole fleet, read-only (`mode=ro`), with every
 destination reduced to a `T<n>/<sha256:8>` reference; it exits 1 when any lane
-would be refused. It never prints a destination value.
+would be refused. It never prints a destination value, and it prints the store's
+`policy_fingerprint` so two nodes' groups files can be compared directly.
 
 **Deploy body.** `{"template": "<required template name>", "dry_run": false}`.
 `dry_run: true` returns the plan without writing to any board. 400 for a body
