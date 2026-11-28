@@ -31,7 +31,14 @@ review. Nothing below is invented — every line traces to a commit subject or a
 range cited under its heading. The rollover itself is done by
 `make release-prep VERSION=vX.Y.Z`; see `docs/releases.md`.
 
-## [Unreleased] — 2026-11-11
+## [Unreleased] — 2026-11-28
+
+### Features
+- scheduler: an APPROVED deploy-group `destination_policy` is now authoritative for tick delivery instead of stored-and-ignored. On every tick report and timeout alert the daemon resolves the project's owning group and either delivers to the approved destination, INHERITS it when the lane has no target of its own (lane inheritance), or refuses with a sanitized `DEST-DRIFT` / `DEST-CONFLICT` / `DEST-UNAPPROVED` / `DEST-INVALID` line (one per project per UTC day). No approved policy — or an unreadable groups file — leaves delivery byte-identical to before, so existing lanes are unaffected. Addresses SCHED-GAP-17084.
+- cmd: add `destaudit`, a read-only fleet audit that classifies every lane against its group's approved destination (the same decision the daemon applies), printing each distinct destination as a `T<n>/<sha256:8>` reference rather than a chat id, and exiting 1 when any lane would be refused. Addresses SCHED-GAP-17084.
+
+### Fixes
+- api: replacing, withdrawing or redefining an existing destination approval now logs `DEST-OVERWRITE` naming which part of the approval moved (without quoting a destination), because rewriting an approval re-routes every lane the group owns. Addresses SCHED-GAP-17084.
 
 ## [1.17.0] — 2026-11-11
 

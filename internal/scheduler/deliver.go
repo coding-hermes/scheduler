@@ -355,6 +355,16 @@ func deliverOutputWithMode(clk clock.Clock, project, tickID, deliver, trigger st
 		return
 	}
 
+	// SCHED-GAP-17084: the approved group destination is authoritative when one
+	// exists. An empty target INHERITS it (lane inheritance); a target that
+	// disagrees with the approval is refused here rather than posted to the
+	// wrong thread. No approved policy → the target passes through unchanged.
+	target, allowed := resolveDeliveryDestination(clk, project, tickID, deliver)
+	if !allowed {
+		return
+	}
+	deliver = target
+
 	if deliver == "" {
 		log.Printf("DELIVER: %s tick=%s — no delivery target configured", project, tickID)
 		return
@@ -493,6 +503,14 @@ func deliverAlert(deliver, project, tickID, reason string) {
 
 // deliverAlertWith is deliverAlert on an explicit clock (SCHED-GAP-169).
 func deliverAlertWith(clk clock.Clock, deliver, project, tickID, reason string) {
+	// SCHED-GAP-17084: alerts pass the same destination guard as reports — a
+	// timeout alert must land in the approved thread too, and an alert is
+	// never a licence to post to a drifted target.
+	target, allowed := resolveDeliveryDestination(clk, project, tickID, deliver)
+	if !allowed {
+		return
+	}
+	deliver = target
 	if deliver == "" {
 		log.Printf("ALERT: %s tick=%s — %s (no delivery target configured)", project, tickID, reason)
 		return

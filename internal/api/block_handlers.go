@@ -216,6 +216,12 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request, name string
 		writeError(w, 400, err.Error())
 		return
 	}
+	// SCHED-GAP-17084: an approved destination_policy is authoritative for
+	// delivery, so replacing it re-routes every lane the group owns. Name the
+	// change in the daemon log (the write itself is unchanged).
+	if override := destinationPolicyOverwrite(current.DestinationPolicy, patch.DestinationPolicy); override != "" {
+		log.Printf("DEST-OVERWRITE: group %s — %s (previous approval superseded)", name, override)
+	}
 	updated, err := s.blocksStore.UpdateGroup(name, patch)
 	if err != nil {
 		blocksStoreError(w, err)

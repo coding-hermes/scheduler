@@ -1350,6 +1350,14 @@ func main() {
 		templatesPath = filepath.Join(filepath.Dir(*dbPath), "templates.jsonl")
 	}
 	apiServer.SetBlocksStore(blocks.NewStore(groupsPath, templatesPath))
+	// SCHED-GAP-17084: the delivery-time destination guard reads the SAME
+	// groups.jsonl the deploy-block API writes, so an APPROVED destination_policy
+	// is enforced on every tick report and timeout alert. No approved policy →
+	// delivery is unchanged (the guard passes the configured target through).
+	deliveryGroups := blocks.NewStore(groupsPath, templatesPath)
+	scheduler.SetDestinationPolicySource(func() ([]blocks.Group, error) {
+		return deliveryGroups.ListGroups()
+	})
 	// SCHED-GAP-219: the config_drift probe reads the seed file the daemon
 	// actually booted from (the same --config resolution as above).
 	apiServer.SetFleetTomlPath(*configFile)

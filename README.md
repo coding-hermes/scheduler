@@ -34,8 +34,8 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 > [releases page](https://github.com/coding-hermes/scheduler/releases). The
 > newest tag is v1.16.0 (2026-11-09); `main` has moved past it — see the
 > CHANGELOG's [Unreleased] section for what landed since. A fresh
-> checkout of `main` passes `make test` (29 packages by `go list ./...`;
-> 28 of them carry tests — the root package's `integration_test.go` is
+> checkout of `main` passes `make test` (30 packages by `go list ./...`;
+> 29 of them carry tests — the root package's `integration_test.go` is
 > `//go:build integration`-tagged, so it is absent from `make test` and
 > runs green only via `go test -tags integration -short -count=1 .`) and `make build`,
 > which produces `bin/schedulerd` + `bin/migrate` as used in the steps below —
@@ -960,6 +960,25 @@ go build -tags schedgap1589probe -o /tmp/queueprobe ./cmd/queueprobe/
 the live database — the probe is not written for concurrent access with the
 running daemon.)
 
+**`destaudit`** (`cmd/destaudit/main.go`) is the read-only destination-policy
+audit (SCHED-GAP-17084). It classifies every scheduler lane against the approved
+`destination_policy` of the deploy group that owns it — the same decision
+`schedulerd` applies to a tick report — and prints the result. Nothing is
+written: the scheduler database is opened with `mode=ro` and the groups JSONL is
+only read. Destination values are never printed; each distinct one becomes a
+`T<n>/<sha256:8>` reference so two runs can be compared without publishing a chat
+id.
+
+```bash
+go run ./cmd/destaudit --db ~/.hermes/coding-hermes/scheduler.db
+go run ./cmd/destaudit --db <db> --groups <groups.jsonl> --all --json
+```
+
+Flags: `--db` (required), `--groups` (default: `groups.jsonl` beside `--db`),
+`--all` (include disabled lanes), `--json`. Exit codes: `0` every lane
+classified and none refused, `1` at least one lane would be refused (drift,
+conflict, unapproved exception, invalid approval), `2` usage/IO error.
+
 **`scheduler-query`** and **`scheduler-dispatch`** are the two operator surfaces
 that ship as sources only. Their complete contracts — every positional, flag,
 environment variable, exit code, wire body, and the places the help text and the
@@ -987,7 +1006,8 @@ Full tracked layout — every top-level entry, verified against `git ls-files`
 ```
 cmd/            # schedulerd (daemon), migrate, backfill-commit-signals, queueprobe,
                 # scheduler-query (federation read), scheduler-dispatch (work dispatch),
-                # reason-code-repair (tick reason-code repair pass)
+                # reason-code-repair (tick reason-code repair pass),
+                # destaudit (read-only destination-policy audit)
 internal/       # api, dashboard, database, blocks, clock, config, mcp, scheduler,
                 # sync, version, agentlog
 ops/            # fleet invariant checker (check-fleet-invariants.py) + testdata,

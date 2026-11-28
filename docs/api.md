@@ -228,15 +228,43 @@ via group POST or PUT, for example `{"destination_policy":{"approved":true,
 project name and have their own `approved` and `destination` fields. The policy
 is stored in the groups JSONL file, which uses the store's usual 0644 mode;
 restrict access to that file if destinations are sensitive. Group responses omit
-the policy values. This policy does not change project destinations or delivery.
+the policy values.
 
 POST to the existing group deploy endpoint with `{"destination_preview":
 {"approvals":[{"project":"example","from":"","to":"telegram:-123:10"}]}}`
 returns `{dry_run:true,destination_plan:[...]}` instead of deploying a template,
 regardless of the `dry_run` field. The plan contains no destination values;
 all groups are considered when checking conflicting memberships. Approvals are
-request-local, not persisted, and `ready` is only a preview: apply, rollback,
-write protection and inheritance are not implemented.
+request-local, not persisted, and `ready` is only a preview: no apply or rollback
+verb exists (a rollback is a file-level restore of the groups JSONL), and write
+protection does not exist. Delivery DOES honour an approved policy — see the
+enforcement section below.
+
+**Destination enforcement (SCHED-GAP-17084).** An APPROVED `destination_policy`
+is authoritative for delivery. `schedulerd` reads the same groups JSONL file at
+startup and, on every tick report and timeout alert, resolves the project's
+owning group:
+
+| state | delivery |
+| --- | --- |
+| project target equals the approved destination (or its approved exception) | delivered |
+| project target is empty | delivered to the group's approved destination (lane inheritance) |
+| project target differs from the approved destination | REFUSED — one `DEST-DRIFT` log line per project per UTC day |
+| project belongs to more than one group and an approved policy exists | REFUSED — `DEST-CONFLICT` (ownership is ambiguous) |
+| the project's exception exists but is not approved | REFUSED — `DEST-UNAPPROVED` |
+| the approved destination is not `telegram:<chat>:<thread>` | REFUSED — `DEST-INVALID` |
+| no approved policy owns the project (or none is set at all) | delivered to the configured target, unchanged |
+| the groups file cannot be read | delivered unchanged, with a `DEST-UNAVAILABLE` log line |
+
+Refusals never quote a destination. A PUT that replaces, withdraws or redefines
+an existing approval is still applied, and logs `DEST-OVERWRITE` naming which
+part of the approval moved, because rewriting an approval re-routes every lane
+the group owns.
+
+`go run ./cmd/destaudit --db <scheduler.db> [--groups <groups.jsonl>]` prints the
+same classification for the whole fleet, read-only (`mode=ro`), with every
+destination reduced to a `T<n>/<sha256:8>` reference; it exits 1 when any lane
+would be refused. It never prints a destination value.
 
 **Deploy body.** `{"template": "<required template name>", "dry_run": false}`.
 `dry_run: true` returns the plan without writing to any board. 400 for a body
