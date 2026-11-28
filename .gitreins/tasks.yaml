@@ -6627,3 +6627,26 @@ tasks:
   status: complete
   created_at: '2026-11-26T17:17:48.923478+00:00'
   completed_at: '2026-11-27T13:05:04.580703+00:00'
+- id: SCHED-GAP-17083
+  title: Add auditable group-based Telegram destination inheritance
+  criteria:
+  - 'PROOF: go test ./internal/blocks ./internal/api ./internal/scheduler -count=1
+    passes and the new integration tests exercise cross-namespace group setup, precedence/conflict/unknown/exception
+    handling, dry-run/apply/rollback, drift/overwrite detection, restart/sync persistence,
+    and test-transport delivery with wrong-thread negative controls. FAILIF: the implementation
+    guesses ownership, changes unapproved live destinations, lacks reversible/idempotent
+    application, or any deliberate violation does not fail its assertion.'
+  status: in_progress
+  created_at: '2026-11-27T22:08:00.827739+00:00'
+- id: SCHED-GAP-17084
+  title: Re-audit group Telegram destination alignment end to end
+  criteria:
+  - Independently inventory group membership and effective destinations, compare approved
+    authoritative mappings/exceptions, classify unknown+conflicting ownership without
+    changing them, verify lane inheritance + drift/overwrite alerts + restart/sync
+    persistence + non-destructive migration with rollback; go test ./internal/blocks
+    ./internal/api ./internal/scheduler exit 0; e2e test-transport delivery incl.
+    wrong-thread negative control and exception/unknown/conflict controls failing
+    on deliberate violations; sanitized evidence recorded; no live settings modified.
+  status: in_progress
+  created_at: '2026-11-28T06:17:56.712007+00:00'

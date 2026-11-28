@@ -71,6 +71,15 @@ tmp/
 .gitreins/logs/
 .gitreins/*.lock
 
+# gitreins review bookkeeping: rewritten by every judge/task-complete run, so a
+# tracked copy churns the tree on every tick and is never repo truth (the
+# verdicts live in .gitreins/history/). Same arm the sibling fleet repos take.
+.gitreins/review-state.json
+
+# Stray DuckDB board cache left at the repo root by a board run that used the
+# default path; the real cache is .coding-hermes/board/board.db (ignored above).
+/board.db
+
 # RELEASE-048 arm 3: the release claim marker is RUNTIME state, not repo
 # truth — a marker present in the tree would also fail `make tag`'s
 # clean-tree precondition. The claim protocol lives in
