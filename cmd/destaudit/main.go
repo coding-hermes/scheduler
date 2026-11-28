@@ -29,8 +29,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -110,19 +108,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	rows := buildRows(groups, projects)
 	if *asJSON {
 		out := struct {
-			Groups   int            `json:"groups"`
-			Policies int            `json:"approved_policies"`
-			Projects int            `json:"projects"`
-			Rows     []auditRow     `json:"rows"`
-			Summary  map[string]int `json:"status_counts"`
-			ExitCode int            `json:"exit_code"`
+			Groups            int            `json:"groups"`
+			Policies          int            `json:"approved_policies"`
+			Projects          int            `json:"projects"`
+			PolicyFingerprint string         `json:"policy_fingerprint"`
+			Rows              []auditRow     `json:"rows"`
+			Summary           map[string]int `json:"status_counts"`
+			ExitCode          int            `json:"exit_code"`
 		}{
-			Groups:   len(groups),
-			Policies: approvedPolicies(groups),
-			Projects: len(projects),
-			Rows:     rows,
-			Summary:  statusCounts(rows),
-			ExitCode: auditExitCode(rows),
+			Groups:            len(groups),
+			Policies:          approvedPolicies(groups),
+			Projects:          len(projects),
+			PolicyFingerprint: blocks.DestinationPolicyFingerprint(groups),
+			Rows:              rows,
+			Summary:           statusCounts(rows),
+			ExitCode:          auditExitCode(rows),
 		}
 		encoded, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
@@ -184,10 +184,10 @@ func referenceTargets(rows []auditRow) {
 }
 
 // fingerprint is the first 8 hex characters of SHA-256 of the destination —
-// enough to compare runs, not enough to reconstruct a chat id.
+// enough to compare runs, not enough to reconstruct a chat id. The primitive
+// lives in internal/blocks so the ledger, the API and this audit all agree.
 func fingerprint(target string) string {
-	sum := sha256.Sum256([]byte(target))
-	return hex.EncodeToString(sum[:])[:8]
+	return blocks.DestinationFingerprint(target)
 }
 
 func approvedPolicies(groups []blocks.Group) int {
@@ -240,7 +240,14 @@ func writeReport(w io.Writer, groups []blocks.Group, rows []auditRow, groupsPath
 		scope = "enabled + disabled"
 	}
 	printf(w, "  lanes audited:     %d (%s)\n", len(rows), scope)
-	printf(w, "  destination refs:  T<n>/<sha256:8> — values are never printed\n\n")
+	printf(w, "  destination refs:  T<n>/<sha256:8> — values are never printed\n")
+	// SCHED-GAP-17084: the policy fingerprint is what makes two nodes
+	// comparable. groups.jsonl has no sync path (the file IS the source of
+	// truth), so a node pointed at a different file — or holding an older
+	// copy — is detectable by a fingerprint mismatch instead of silently
+	// enforcing a different mapping.
+	printf(w, "  policy fingerprint: %s (compare across nodes; no sync path exists)\n\n",
+		blocks.DestinationPolicyFingerprint(groups))
 
 	counts := statusCounts(rows)
 	statuses := make([]string, 0, len(counts))

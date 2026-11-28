@@ -364,3 +364,260 @@ the repository root (it held a real destination value from the DB copy). It was
 deleted before staging; the staged set below contains no destination value —
 `grep` over every added/changed file shows only the synthetic `-100777` /
 `-100999` fixtures and the `telegram:<chat>:<thread>` grammar in docs.
+
+---
+
+## 7. Rework (apply/rollback + sync)
+
+The first delivery was graded **INCOMPLETE** on two criteria. Verbatim from run
+`14aa71ac`:
+
+> "No approved migration apply exists. `internal/blocks/destination_plan.go:21-26`
+> only previews and never persists; `internal/api/destination_preview.go:47-49`
+> always returns `dry_run:true`; `docs/api.md:232-236` explicitly says no apply or
+> rollback verb exists. The rollback test at
+> `internal/blocks/destination_persistence_test.go:108-148` manually restores
+> `groups.jsonl` bytes. Restart persistence is covered at lines 45-70, but no
+> sync-path writer or sync persistence test exists, as recorded in audit.md
+> sections 3.3 and F5."
+
+…with the two uncovered failure modes:
+
+0. "An operator can obtain a ready destination migration preview but cannot apply
+   it through a reversible, idempotent migration path; rollback requires manually
+   replacing `groups.jsonl`."
+1. "Approved destination policy is not demonstrated to survive configuration
+   synchronization, and nodes using different groups files can silently enforce
+   different mappings."
+
+Sections 1–6 are unchanged and still stand (the inventory, the guard matrix, the
+sanitized evidence). Section 7 adds the missing half and re-checks the one
+property of failure mode 1 that this product can actually execute.
+
+### 7.1 What was built (and where the line is drawn)
+
+Two verbs on the **existing** identity-gated deploy endpoint, as body keys — the
+same shape `destination_preview` already uses, so no route was added and the
+documented route table (`internal/api/server_test.go` documentedPaths) is
+unchanged:
+
+```
+POST /api/v1/groups/{name}/deploy {"destination_apply":{"approvals":[{project,from,to}…]}}
+POST /api/v1/groups/{name}/deploy {"destination_rollback":{"plan_digest":"sha256:…"}}
+```
+
+The writes are the ones that already exist. **No second writer, no second store,
+no second source of truth:**
+
+| what moves | writer |
+| --- | --- |
+| the lane's delivery target (`projects.deliver`) | `database.UpdateProject` — the exact writer `PUT /api/v1/projects/{name}` uses |
+| the change ledger | `blocks.Store` → `writeJSONL` into `groups.jsonl`, the store's only writer |
+
+The ledger lives in the group row (`destination_history`, newest 20 kept) for
+three reasons: it is written by the store that already owns the file, a fresh
+process reads it back with the policy (so a rollback capture cannot be lost by a
+restart), and it keeps the rollback capture next to the approval that authorized
+it. That record holds `kind`/`actor`/`at`/`plan_digest` plus the moved
+`project` and its `prior`/`next` pair — the pair **is** the rollback capture, and
+it is the same confidentiality class as the policy destination already stored in
+that file. Every rendered surface (API response, `DEST-APPLY` / `DEST-ROLLBACK`
+log line, event-log details, MCP group read, audit CLI) shows only
+`<sha256:8>` refs; group read/create/update responses omit both the policy and
+the ledger, and a create body (REST or MCP) cannot inject a ledger record.
+
+Contract, all enforced against the **current** store at apply time:
+
+* **all-or-nothing** — one refused approval refuses the batch; a stale plan is
+  refused (`code:"not_ready"`, per-item status) instead of applied;
+* **idempotent** — when every approved lane already carries its target there is
+  nothing to move, and the call performs *zero writes*, so `groups.jsonl` stays
+  byte-identical (proved by digest, not by inspection);
+* **non-destructive** — the prior value of every moved lane is captured before
+  the write, a mid-batch write failure is compensated back, and every other group
+  row / lane / column is asserted byte-identical;
+* **reversible** — rollback restores the captured prior values (including an
+  unset lane), refuses when nothing is captured, when the digest names another
+  migration, or when a lane changed since the apply (it never clobbers a newer
+  decision);
+* **auditable** — each apply and each rollback appends a record with who (the
+  authenticated operator identity), when (RFC3339 UTC), the plan digest, and the
+  prior→new refs.
+
+One honest semantic consequence, stated rather than buried: **rollback reverses
+the migration, not the approval.** The policy still names the migrated target, so
+a rolled-back lane reads as `drift` (refused) until the operator re-approves or
+applies a fresh plan. That is the visible direction — the alternative (silently
+delivering to a target the approval does not name) is the bug this row exists to
+remove.
+
+### 7.2 Executed tests (names + result)
+
+`internal/blocks` (`go test ./internal/blocks -run 'TestDestination(Apply|Rollback|Ledger|PolicyFingerprint)' -v`, exit 0, 13 pass):
+
+| test | proves |
+| --- | --- |
+| `TestDestinationApplyMovesLanesAndRecordsTheChange` | drift + unset lane both move; prior captured per lane; ledger record has kind/actor/at/plan digest/moves; policy untouched |
+| `TestDestinationApplyIsIdempotent` | second apply: `applied=0 already=2`, **zero writer calls**, `groups.jsonl` digest identical |
+| `TestDestinationApplyLeavesTheRestOfTheStoreUntouched` | every group row (minus the ledger field) byte-identical; `templates.jsonl` digest identical; unrelated lane never written |
+| `TestDestinationApplyRefusesAStalePlan` (3 sub-tests) | `from` no longer matches → `stale_approval`; `to` is not the approved target → `stale_approval`; non-member → `not_a_member`; zero writes, store digest unchanged in all three |
+| `TestDestinationApplyRefusesWithoutAnApprovedPolicy` | an unapproved policy authorizes nothing |
+| `TestDestinationRollbackRestoresPriorTargets` | prior targets restored (incl. the empty one); mapping digest returns to its pre-apply value; ledger gains a rollback record naming the same plan digest; policy untouched |
+| `TestDestinationRollbackRefusesWhenNothingCaptured` | never-applied → `nothing_captured`; apply→rollback→rollback → `nothing_captured` again, zero writes, store digest unchanged |
+| `TestDestinationRollbackRefusesDivergedLane` | lane changed after the apply → `state_diverged` with the lane named; zero writes |
+| `TestDestinationRollbackPlanDigestMustMatch` | a digest naming another migration → `digest_mismatch`; zero writes |
+| `TestDestinationApplyCompensatesAFailedLaneWrite` | second lane write fails → first lane restored to its prior value, no ledger record, reported as an IO fault (not a refusal) |
+| `TestDestinationApplySurvivesAFreshStoreInstance` | **B**: after the apply, a *second* Store over the same path (restarted daemon shape) classifies the lane `aligned`, inherits for the empty lane, agrees on the policy fingerprint, and a different approved mapping produces a different fingerprint |
+| `TestDestinationLedgerNeverRendersRawDestinations` | the sanitized view carries refs only; the store still holds the capture (asserted explicitly, not implied) |
+| `TestDestinationPolicyFingerprintIsStableAndSanitized` | order-independent, mapping-sensitive, no destination inside |
+
+`internal/api` (`go test ./internal/api -run 'TestDestination(Apply|Rollback|GroupCreateCan)' -v`, exit 0, 8 pass) — the same properties through the real handlers, a real SQLite DB and a real `groups.jsonl` on disk:
+
+| test | proves |
+| --- | --- |
+| `TestDestinationApplyThroughTheAPI` | 200 with `applied:2`; `projects.deliver` really changed (read back via `database.GetProject`); weight/cooldown/model/provider/enabled/decay untouched ("without overwriting unrelated settings"); ledger present in the store, absent from every group body |
+| `TestDestinationApplyOverHTTPNeverLeaksDestinations` | response bytes carry no chat id and no `telegram:` string; only `next_ref` refs |
+| `TestDestinationApplyIsIdempotentOverHTTP` | repeat POST → `applied:0 already_applied:2`, `groups.jsonl` digest identical, still one ledger record |
+| `TestDestinationRollbackThroughTheAPI` | both lanes restored (incl. the cleared one); ledger gains the rollback; policy untouched; a fresh store sees the restored state and classifies it `drift` against the still-approved policy |
+| `TestDestinationApplyRefusesAStalePlanOverHTTP` | 409 `code:"not_ready"` + `refused:[{api-a,stale_approval}]`; lane unmoved; store digest unchanged; no destination in the refusal |
+| `TestDestinationRollbackRefusesWhenNothingCapturedOverHTTP` | 409 `code:"nothing_captured"`; lane unmoved; store digest unchanged |
+| `TestDestinationApplyRequiresAnApprovedPolicy` | unapproved policy → 409, lane unmoved |
+| `TestDestinationGroupCreateCannotInjectALedgerRecord` | a create body carrying `destination_history` is dropped before the store sees it |
+
+`internal/scheduler` (`go test ./internal/scheduler -run TestDestinationGuardEnforcesAnAppliedMigration -v`, exit 0):
+
+* `TestDestinationGuardEnforcesAnAppliedMigration` — drives the real delivery
+  path (`deliverOutput` → fake `hermes` transport) across an apply: **before**
+  the lane is refused (drift against the approval, nothing captured by the
+  transport), **after** a *fresh* Store over the same file delivers to the
+  migrated target, and the fingerprint prefix is the `sha256:` form the daemon
+  logs.
+
+`cmd/destaudit` (`go test ./cmd/destaudit -v`, exit 0, 7 pass) — two new:
+`TestReportPrintsThePolicyFingerprint`, `TestFingerprintIgnoresUnapprovedPolicies`.
+
+### 7.3 Red proofs (each violation reintroduced, then restored)
+
+| mutation | tests that went RED (verbatim) | restored |
+| --- | --- | --- |
+| stale-plan refusal disabled (`if false && len(refused) > 0`) | `TestDestinationApplyRefusesAStalePlan`: `apply err = <nil>, want a refusal` (all 3 sub-tests) · `TestDestinationApplyRefusesAStalePlanOverHTTP`: `stale apply = 200 map[applied:0 …], want 409` | `sha256 64ac6f46…` (identical to pre-mutation copy) |
+| nothing-captured refusal disabled (`return DestinationRollbackResult{}, nil`) | `TestDestinationRollbackRefusesWhenNothingCaptured`: `rollback without a capture: err = <nil>, want code "nothing_captured"` · `…OverHTTP`: `rollback without a capture = 200 map[… rolled_back:0], want 409` | same digest |
+| idempotent early return disabled (ledger written with zero moves) | `TestDestinationApplyIsIdempotent`: `repeat apply changed the store: 727e5f8a… → ddeac995…` · `…OverHTTP`: `repeat apply changed groups.jsonl: f5b80ab9 → e46228d0` | same digest |
+
+Each mutation was applied to one file, the two affected test arms run, the file
+restored from the pre-mutation copy, and the digest compared (`sha256sum`,
+identical); the full gate was re-run green afterwards (7.5).
+
+### 7.4 Failure mode 1 — sync persistence, executed vs. out of scope
+
+**Finding (unchanged, now with the grep):** there is **no sync path** for
+`groups.jsonl` in this repo. Its only writer is `internal/blocks.Store`
+(`writeJSONL`); everything else reads or constructs. No script, cron, deploy or
+`fleet-sync` path copies it — `grep -rn "groups.jsonl|GroupsPath|blocks.NewStore"`
+returns `internal/blocks/store.go` (the store), `internal/api/*` (handlers),
+`internal/mcp/server.go` + `cmd/schedulerd/main.go` (read/construct), docs and
+the audit CLI. The file **is** the source of truth for the node that owns it.
+
+**Executed instead — the property that matters here:** the applied state must be
+what a process that did not perform the apply enforces, and the two states must
+be distinguishable when they differ. Both are tests, not claims:
+
+* `TestDestinationApplySurvivesAFreshStoreInstance` — a second `Store` over the
+  same path reads the applied policy + ledger and classifies the lane `aligned`
+  (and the empty lane as inheriting the approved destination);
+* `TestDestinationGuardEnforcesAnAppliedMigration` — the same fact at the
+  delivery layer: refusal before the migration, delivery to the migrated target
+  after it, through the transport the fleet actually uses;
+* `TestDestinationRollbackThroughTheAPI` — the restored state is what a fresh
+  store enforces afterwards.
+
+**The "silently different mappings" half is now observable, not solved:**
+`blocks.DestinationPolicyFingerprint` digests the approved mapping set
+(`sha256:16`, no destination recoverable), and it is printed by **both** surfaces
+an operator runs — `schedulerd` at boot (`DEST-STORE: groups=<path>
+approved_policies=<n> policy_fingerprint=<digest>`) and `cmd/destaudit` (report
+line + `policy_fingerprint` in `--json`). Equal fingerprints = equal
+enforcement; a node started with a different `--groups-file` (or an older copy)
+is detectable instead of silent.
+
+**Not claimed:** no cross-node convergence test exists, because the product has
+no cross-node propagation to test. A node still has to be given the file by
+whatever mechanism its operator chooses; this row makes the divergence visible
+and leaves the transport out of scope, stating the reason rather than inventing
+a sync path inside a delivery-guard row.
+
+### 7.5 Gate (green, verbatim)
+
+```
+$ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go build ./...
+build_rc=0
+$ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go vet ./...
+vet_rc=0
+$ env -u SCHEDULER_OPERATOR_RESTART_APPROVED go test ./internal/blocks ./internal/api ./internal/scheduler -count=1
+ok  github.com/coding-hermes/scheduler/internal/blocks    0.151s
+ok  github.com/coding-hermes/scheduler/internal/api       92.018s
+ok  github.com/coding-hermes/scheduler/internal/scheduler 168.970s
+test_rc=0
+```
+
+Also green on this tree: `go test ./internal/mcp -count=1` (returns 0 after the
+MCP ledger-strip guard), `go test ./cmd/destaudit -count=1`, and
+`golangci-lint run ./...` → `0 issues`. The `cmd/queueprobe` guard file-scope
+warning named in the brief is pre-existing and untouched.
+
+### 7.6 Live-shape re-check (read-only)
+
+Same command as §2, re-run after the rework, on the live stores opened `mode=ro`:
+
+```
+$ destaudit --db ~/.hermes/coding-hermes/scheduler.db --groups ~/.hermes/coding-hermes/groups.jsonl
+  groups:             ~/.hermes/coding-hermes/groups.jsonl (1 groups, 0 approved policies, 0 unapproved)
+  scheduler db:       ~/.hermes/coding-hermes/scheduler.db (mode=ro)
+  lanes audited:      321 (enabled only)
+  policy fingerprint: sha256:e3b0c44298fc1c14 (compare across nodes; no sync path exists)
+  STATUS COUNTS: unknown 321 · UNRESOLVED DRIFT (0) · audit_rc=0
+```
+
+`sha256:e3b0c442…` is the digest of an **empty** approved-mapping set: today the
+fleet has no approval at all, so an apply against live state refuses with
+`not_ready` ("no APPROVED destination policy") rather than migrating anything —
+F1/F7 remain true and untouched by this rework.
+
+### 7.7 Files added / changed by the rework
+
+```
+internal/blocks/destination_migrate.go             apply/rollback engine, ledger, refs, fingerprint
+internal/blocks/destination_migrate_test.go        13 tests (idempotent/non-destructive/reversible/refusals)
+internal/blocks/blocks.go                          Group.DestinationHistory (ledger field)
+internal/api/destination_migrate.go                the two verbs, sanitized responses, refusal mapping
+internal/api/destination_migrate_test.go           8 HTTP tests incl. both refusal arms
+internal/api/block_handlers.go                     body keys, ledger/policy hidden from group bodies, create-ingest guard
+internal/mcp/handlers.go                           ledger stripped from MCP group reads + create ingest
+internal/scheduler/deliver_destination_migrate_test.go  delivery-layer proof across an apply (fresh store)
+cmd/destaudit/main.go                              policy_fingerprint in report + --json; shared fingerprint primitive
+cmd/destaudit/policy_fingerprint_test.go           2 tests
+cmd/schedulerd/main.go                             DEST-STORE boot line (path + approved count + fingerprint)
+docs/api.md                                        apply/rollback contract, refusal table, sync scope note
+CHANGELOG.md                                       [Unreleased] entry for the apply/rollback verbs
+```
+
+### 7.8 What was still not executed (named, not papered over)
+
+* **No live-daemon HTTP rehearsal of the verbs.** The apply path is exercised
+  through the real handlers against a real SQLite DB and a real `groups.jsonl`,
+  but not against a running `schedulerd` pointed at a copy of the live DB: that
+  needs a second daemon on a scratch port and a scratch store, and the live fleet
+  has zero approved policies (so the only honest live result would be the
+  `not_ready` refusal already covered by tests). Left out deliberately; nothing
+  in this section claims otherwise.
+* **No cross-node sync test** — no sync surface exists (§7.4).
+* **Approvals themselves are still request-local.** The *migration* now has an
+  audit trail (who/when/plan digest/prior→new), but the approval that authorized
+  it is still just the `destination_policy` write; there is no separate
+  approval record with its own evidence. F3 is narrowed, not closed.
+* **A policy still cannot be cleared** via any verb (F4's second half:
+  `GroupUpdate.DestinationPolicy` is a pointer, `nil` means "not supplied"). Apply
+  and rollback do not change that, and `TestGroupUpdateCannotClearPolicy` still
+  pins it.
+* **Write protection on the policy does not exist**: an operator PUT can still
+  replace an approval (it now logs `DEST-OVERWRITE`). Out of this rework's scope.

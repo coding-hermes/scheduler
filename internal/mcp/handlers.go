@@ -733,6 +733,12 @@ func (s *Server) toolGroupsList(ctx context.Context) (string, error) {
 	if groups == nil {
 		groups = []blocks.Group{}
 	}
+	// SCHED-GAP-17084: the migration ledger holds the raw rollback capture;
+	// it is never rendered (the ledger is readable only through the apply /
+	// rollback verbs' sanitized responses).
+	for i := range groups {
+		groups[i].DestinationHistory = nil
+	}
 	return jsonString(map[string]interface{}{"groups": groups}), nil
 }
 
@@ -749,6 +755,7 @@ func (s *Server) toolGroupsGet(ctx context.Context, args map[string]interface{})
 	if err != nil {
 		return "", friendlyBlocksError(err)
 	}
+	g.DestinationHistory = nil // SCHED-GAP-17084: never render the rollback capture
 	return jsonString(g), nil
 }
 
@@ -764,6 +771,9 @@ func (s *Server) toolGroupsCreate(ctx context.Context, args map[string]interface
 	if g.Projects == nil {
 		g.Projects = []string{}
 	}
+	// SCHED-GAP-17084: the migration ledger is written only by the store's
+	// apply/rollback engine — a create call cannot inject a rollback capture.
+	g.DestinationHistory = nil
 	if err := blocks.ValidateGroup(g); err != nil {
 		return "", err
 	}

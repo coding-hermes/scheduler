@@ -94,7 +94,7 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 		groups = []blocks.Group{}
 	}
 	for i := range groups {
-		groups[i].DestinationPolicy = nil
+		hideDestinationState(&groups[i])
 	}
 	writeJSON(w, 200, map[string]interface{}{"groups": groups})
 }
@@ -117,11 +117,14 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	// The migration ledger is written only by the apply/rollback engine: a
+	// create body cannot inject a rollback capture.
+	g.DestinationHistory = nil
 	if err := s.blocksStore.CreateGroup(g); err != nil {
 		blocksStoreError(w, err)
 		return
 	}
-	g.DestinationPolicy = nil
+	hideDestinationState(&g)
 	writeJSON(w, 201, g)
 }
 
@@ -184,7 +187,7 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, name string) {
 		blocksStoreError(w, err)
 		return
 	}
-	g.DestinationPolicy = nil
+	hideDestinationState(&g)
 	writeJSON(w, 200, g)
 }
 
@@ -227,7 +230,7 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request, name string
 		blocksStoreError(w, err)
 		return
 	}
-	updated.DestinationPolicy = nil
+	hideDestinationState(&updated)
 	writeJSON(w, 200, updated)
 }
 
@@ -381,10 +384,24 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, name str
 // ── Deploy ────────────────────────────────────────────────────────────────
 
 // deployRequest is the POST /api/v1/groups/{name}/deploy body.
+//
+// The endpoint multiplexes four verbs: a template deploy (default), a
+// destination PREVIEW (read-only), and — SCHED-GAP-17084 rework — an approved
+// destination APPLY and its ROLLBACK. Exactly one body key selects the verb.
 type deployRequest struct {
-	Template           string                     `json:"template"`
-	DryRun             bool                       `json:"dry_run"`
-	DestinationPreview *destinationPreviewRequest `json:"destination_preview,omitempty"`
+	Template            string                      `json:"template"`
+	DryRun              bool                        `json:"dry_run"`
+	DestinationPreview  *destinationPreviewRequest  `json:"destination_preview,omitempty"`
+	DestinationApply    *destinationApplyRequest    `json:"destination_apply,omitempty"`
+	DestinationRollback *destinationRollbackRequest `json:"destination_rollback,omitempty"`
+}
+
+// hideDestinationState strips the two destination-bearing parts of a group
+// record before it is rendered: the approved policy and the migration ledger
+// (which holds the rollback capture). Neither is ever part of an API response.
+func hideDestinationState(group *blocks.Group) {
+	group.DestinationPolicy = nil
+	group.DestinationHistory = nil
 }
 
 type destinationPreviewRequest struct {
@@ -414,6 +431,14 @@ func (s *Server) deployGroup(w http.ResponseWriter, r *http.Request, groupName s
 	}
 	if body.DestinationPreview != nil {
 		s.previewDestinations(w, r, group, body.DestinationPreview)
+		return
+	}
+	if body.DestinationApply != nil {
+		s.applyDestinationMigration(w, r, group, body.DestinationApply)
+		return
+	}
+	if body.DestinationRollback != nil {
+		s.rollbackDestinationMigration(w, r, group, body.DestinationRollback)
 		return
 	}
 	if strings.TrimSpace(body.Template) == "" {

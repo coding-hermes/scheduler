@@ -48,11 +48,18 @@ var (
 // Group is a named, ordered list of scheduler projects that a template can
 // be deployed to in a single operation. Projects are referenced by scheduler
 // project NAME (the projects table primary key).
+//
+// DestinationHistory is the applied-migration ledger (SCHED-GAP-17084): one
+// record per apply/rollback, holding the captured prior delivery targets that
+// make a rollback possible and the who/when/plan-digest audit trail. It is
+// written only by the store's apply/rollback engine and is never accepted from
+// a group create/update body — see the ingest guard in internal/api.
 type Group struct {
-	Name              string             `json:"name"`
-	Projects          []string           `json:"projects"`
-	Description       string             `json:"description"`
-	DestinationPolicy *DestinationPolicy `json:"destination_policy,omitempty"`
+	Name               string              `json:"name"`
+	Projects           []string            `json:"projects"`
+	Description        string              `json:"description"`
+	DestinationPolicy  *DestinationPolicy  `json:"destination_policy,omitempty"`
+	DestinationHistory []DestinationChange `json:"destination_history,omitempty"`
 }
 
 // GroupUpdate is a partial group update — only non-nil fields are applied
